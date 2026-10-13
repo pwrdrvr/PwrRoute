@@ -1,0 +1,31 @@
+{
+  "name": "pwrroute-workspace",
+  "version": "0.0.1-alpha.0",
+  "private": true,
+  "description": "Default-browser router: every link to the right browser and profile (Pwr family)",
+  "author": "PwrDrvr LLC",
+  "license": "MIT",
+  "copyright": "Copyright © 2026 PwrDrvr LLC",
+  "packageManager": "pnpm@12.9.1+sha512.06b055fff5cd20dc12781de173ced3310ce0951bf2ec620211a16045d5444d5c93a663210764ef29a653a610459ba0368f0e74f84d80c54723cf95aae7bc0d6d",
+  "scripts": {
+    "preinstall": "node ./scripts/check-node-version.mjs",
+    "build": "pnpm --filter @pwrroute/desktop build",
+    "dev": "pnpm --filter @pwrroute/desktop dev",
+    "lint": "pnpm lint:syntax && pnpm licenses:check && pnpm typecheck",
+    "lint:syntax": "oxlint",
+    "licenses:allowlist": "node ./scripts/check-third-party-license-allowlist.mjs",
+    "licenses:check": "node ./scripts/check-package-license-policy.mjs && node ./scripts/check-third-party-license-allowlist.mjs && node ./scripts/generate-third-party-licenses.mjs --check",
+    "licenses:generate": "node ./scripts/generate-third-party-licenses.mjs",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "release:check": "node ./scripts/check-desktop-release-metadata.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "oxlint": "1.85.0",
+    "typescript": "^6.0.2",
+    "typescript-native": "npm:typescript@7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

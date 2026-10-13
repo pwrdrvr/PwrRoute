@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          .desk { position: relative; width: 760px; height: 520px; background: #0b0a09; overflow: hidden; }
+          .mbar { position: absolute; left: 0; right: 0; top: 0; height: 24px; background: rgba(20,18,16,0.9); border-bottom: 1px solid var(--border-faint); display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 12px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .mbar .mi { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 18px; border-radius: 4px; }
+          .mbar .mi.on { background: rgba(247,243,235,0.14); }
+          .tray { position: absolute; top: 28px; right: 84px; width: 300px; background: rgba(16,16,16,0.98); border: 1px solid var(--border-default); border-radius: 10px; box-shadow: var(--shadow-popover); overflow: hidden; display: flex; flex-direction: column; }
+          .tray .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-faint); }
+          .tray .th .wordmark { font-size: 14px; }
+          .tray .th .chip { margin-left: auto; }
+          .tray .sec { padding: 6px 6px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; }
+          .tray .sec:last-child { border-bottom: none; }
+          .tray .cap { padding: 4px 6px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .mi-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 6px; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi-row.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+          .mi-row .kbd { margin-left: auto; }
+          .mi-row .sub { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); margin-left: auto; }
+          .mi-row.quit { color: var(--text-secondary); }
+          .rec { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 10px; padding: 5px 6px; border-radius: 6px; }
+          .rec .h { grid-column: 1; grid-row: 1; font: 500 11.5px/1.2 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .rec .b { grid-column: 1; grid-row: 2; font: 500 10px/1.2 var(--font-sans); color: var(--text-muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+          .rec .ago { grid-column: 2; grid-row: 1 / 3; align-self: center; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .pause { display: flex; align-items: center; gap: 10px; padding: 7px 6px; }
+          .pause .pt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+          .pause .pt b { font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .pause .pt span { font: 400 10px/1.4 var(--font-sans); color: var(--text-muted); }
+          .faux { position: absolute; left: 24px; right: 24px; top: 48px; bottom: 24px; display: grid; grid-template-columns: repeat(8, 1fr); gap: 20px; opacity: 0.25; }
+          .faux i { aspect-ratio: 1; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); }
+          .native { width: 260px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; box-shadow: var(--shadow-popover); }
+          .native .mi-row { border-radius: 4px; }
+          .native .sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+          .ck2 { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border-strong); display: inline-flex; flex: 0 0 auto; }
+          /* first run */
+          .fr { padding: 26px 28px 22px; display: flex; flex-direction: column; gap: 16px; }
+          .steps { display: flex; flex-direction: column; gap: 10px; }
+          .step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); }
+          .step.cur { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .step.todo { opacity: 0.6; }
+          .step .sn { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--font-mono); border: 1px solid var(--border-default); color: var(--text-muted); background: var(--bg-panel-elevated); }
+          .step.done .sn { background: var(--success-soft); border-color: transparent; color: var(--success-text); }
+          .step.cur .sn { background: var(--accent); border-color: transparent; color: var(--accent-on); }
+          .step .sb { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+          .step .sb b { font: 600 13px/1.3 var(--font-sans); color: var(--text-primary); }
+          .step .sb p { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .step .sb .inp { width: 300px; }
+          .frfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        </style>
+      </helmet>
+
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Menu bar and tray</span></div>
+        <p class="dv-sub">The router is resident and the window is optional, so the menu bar item is the surface people see most. It answers three questions without opening anything: is routing on, where did my last links go, and how do I stop routing for a minute. <b>Pause routing</b> sends everything to one browser until switched back; it exists because "open this one in Chrome" is the most common reason to fight a rule.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a macOS menu bar">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>macOS. 300px dropdown from a template-image mark. Recent shows hosts, not full URLs, since this surface is visible to whoever is looking at the screen.</span></div>
+            <div class="dv-card">
+              <div class="desk">
+                <div class="mbar"><span class="mi on"><svg viewBox="188 188 648 648" width="16" height="16" aria-hidden="true" style="color: var(--text-primary);"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><span class="mi"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg></span><span>Mon 09:41</span></div>
+                <div class="faux"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="tray">
+                  <div class="th"><svg class="mark" viewBox="188 188 648 648" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip ok">default</span></div>
+                  <div class="sec">
+                    <span class="cap">Recent</span>
+                    <div class="rec"><span class="h">pwrdrvr.atlassian.net</span><span class="ago">1m</span><span class="b"><span class="bi">Ch</span>Google Chrome · Work · handler 2</span></div>
+                    <div class="rec"><span class="h">xcancel.com <span style="color: var(--text-subtle);">&larr; x.com</span></span><span class="ago">2m</span><span class="b"><span class="bi">Ff</span>Firefox · rewritten · handler 3</span></div>
+                    <div class="rec"><span class="h">localhost:5173</span><span class="ago">4m</span><span class="b"><span class="bi">Ar</span>Arc · handler 5</span></div>
+                    <div class="mi-row" style="color: var(--text-muted); font-size: 11px;">Open Activity<span class="sub">1,412 today</span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="pause"><div class="pt"><b>Pause routing</b><span>Send every link to Google Chrome · Personal until switched back.</span></div><span class="sw"></span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="mi-row hov">Test a link&hellip;<span class="kbd">&#8984;T</span></div>
+                    <div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div>
+                    <div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="mi-row quit">Quit PwrRoute<span class="kbd">&#8984;Q</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Paused">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Paused. The header chip turns to a warning, the recents say which rule was skipped, and the strip in the main window shows the same chip.</span></div>
+            <div class="dv-card" style="width: 300px;">
+              <div class="tray" style="position: static; width: 100%; border: none; box-shadow: none; border-radius: 0;">
+                <div class="th"><svg class="mark" viewBox="188 188 648 648" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip warn">paused</span></div>
+                <div class="sec">
+                  <span class="cap">Recent</span>
+                  <div class="rec"><span class="h">bsky.app</span><span class="ago">now</span><span class="b"><span class="bi">Ch</span>Google Chrome · paused · skipped handler 4</span></div>
+                  <div class="rec"><span class="h">pwrdrvr.atlassian.net</span><span class="ago">1m</span><span class="b"><span class="bi">Ch</span>Google Chrome · Work · handler 2</span></div>
+                </div>
+                <div class="sec">
+                  <div class="pause"><div class="pt"><b>Pause routing</b><span>Everything goes to Google Chrome · Personal. Rewrites still run.</span></div><span class="sw on"></span></div>
+                </div>
+                <div class="sec">
+                  <div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div>
+                  <div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div>
+                  <div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div>
+                </div>
+                <div class="sec"><div class="mi-row quit">Quit PwrRoute<span class="kbd">&#8984;Q</span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Windows Linux tray">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Windows and Linux use the native context menu, so no recents: the same actions as a plain list, with Pause as a checkable item.</span></div>
+            <div class="dv-card" style="width: 300px; padding: 16px; background: #0b0a09;">
+              <div class="native">
+                <div class="mi-row">Open PwrRoute</div>
+                <div class="mi-row">Test a link&hellip;</div>
+                <div class="sep"></div>
+                <div class="mi-row"><span class="ck2"></span>Pause routing</div>
+                <div class="sep"></div>
+                <div class="mi-row">Settings&hellip;</div>
+                <div class="mi-row">About PwrRoute</div>
+                <div class="sep"></div>
+                <div class="mi-row quit">Quit</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "add Open last link in&hellip; with a browser submenu" &middot; "should Pause have a timer" &middot; "show the menu bar item while a config error is active"</p>
+      </section>
+
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">First run</span></div>
+        <p class="dv-sub">Three steps in one window, in the order that makes the third one safe: a fallback so nothing can get lost, an import so existing Finicky users keep what they have, and only then the OS default. Nothing routes until step 3, and the window says so.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a First run">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Step 1 done, step 2 current with a Finicky config found, step 3 waiting. The OS consent dialog belongs to the OS and is not drawn.</span></div>
+            <div class="dv-card win" style="width: 680px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <div class="strip-fill"></div>
+                <span class="strip-chip off"><span class="dot"></span>not routing yet</span>
+              </div>
+              <div class="fr">
+                <div><div class="eyebrow">First run</div><h1 class="ttl" style="font-size: 21px;">Three steps, then links start routing</h1><p class="help">Nothing changes on this Mac until the last step. You can close this window and come back from the menu bar.</p></div>
+                <div class="steps">
+                  <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Fallback browser</b><p>Where links go when no rule matches. Also what Pause routing uses.</p><div class="inp"><span class="bi">Ch</span>Google Chrome · Personal<span class="caret">&#9662;</span></div></div></div>
+                  <div class="step cur"><span class="sn">2</span><div class="sb"><b>Bring your Finicky rules</b><p>Found <span class="tag">~/.finicky.ts</span> with 2 rewrites and 6 handlers. Import what the visual rules can hold, keep the file in charge as it is, or start empty. The file is never modified.</p><div class="row-actions"><span class="btn primary">Import 5 rules</span><span class="btn">Keep using ~/.finicky.ts</span><span class="btn quiet">Start empty</span></div></div></div>
+                  <div class="step todo"><span class="sn">3</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Google Chrome as they do now.</p><div class="row-actions"><span class="btn">Set as default browser</span></div></div></div>
+                </div>
+                <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "no Finicky config found variant" &middot; "Windows variant with the system chooser note" &middot; "collapse to one step for people without Finicky"</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

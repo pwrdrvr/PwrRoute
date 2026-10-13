@@ -1,0 +1,8 @@
+/* Self-hosted Geist Sans / Geist Mono via @fontsource, bundled by Vite: no
+   network font loads. Only the weights the chrome uses. */
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-sans/700.css";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/600.css";

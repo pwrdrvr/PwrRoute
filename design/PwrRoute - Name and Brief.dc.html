@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          .name-tile { width: 300px; display: flex; flex-direction: column; }
+          .name-tile .strip { padding-right: 14px; }
+          .name-tile .why { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+          .name-tile .why p { margin: 0; font: 400 11.5px/1.6 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .name-tile .why .cli { font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); }
+          .name-tile.pick { border-color: var(--accent-border); }
+          .verdict { display: flex; align-items: center; gap: 8px; }
+          .mark-stage { display: grid; grid-template-columns: 200px 1fr; }
+          .mark-big { display: flex; align-items: center; justify-content: center; padding: 26px; border-right: 1px solid var(--border-faint); }
+          .mark-sizes { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; }
+          .mark-row { display: flex; align-items: center; gap: 14px; }
+          .mark-row .lbl { width: 150px; font: 500 10.5px/1.4 var(--font-mono); color: var(--text-subtle); }
+          .mark-row .strip { width: 300px; border: 1px solid var(--border-subtle); border-radius: 6px; }
+          .mark-row .tray { display: flex; align-items: center; gap: 10px; height: 24px; padding: 0 10px; background: var(--bg-titlebar); border: 1px solid var(--border-subtle); border-radius: 6px; font: 500 11px/1 var(--font-sans); color: var(--text-secondary); }
+          .icon-tile { width: 64px; height: 64px; border-radius: 14px; background: #0e1a2b; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-subtle); }
+          .icon-tile.dark { background: #000; }
+          .tagline { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+          .tagline .line { font: 700 22px/1.2 var(--font-sans); letter-spacing: -0.01em; color: var(--text-primary); }
+          .tagline .alt { font: 500 12.5px/1.5 var(--font-sans); color: var(--text-muted); }
+          .tagline .alt b { color: var(--text-secondary); font-weight: 600; }
+          .brief { padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; font: 400 12px/1.65 var(--font-sans); color: var(--text-secondary); }
+          .brief h3 { margin: 6px 0 0; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+          .brief p { margin: 0; text-wrap: pretty; }
+          .brief ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+          .ia { display: flex; gap: 14px; padding: 18px 20px; align-items: flex-start; }
+          .ia-col { display: flex; flex-direction: column; gap: 8px; width: 190px; }
+          .ia-win { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); overflow: hidden; }
+          .ia-win .h { padding: 8px 10px; border-bottom: 1px solid var(--border-faint); font: 600 11px/1.2 var(--font-sans); color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+          .ia-win .h i { font: 500 9.5px/1 var(--font-mono); color: var(--text-subtle); font-style: normal; margin-left: auto; }
+          .ia-win .r { padding: 6px 10px; font: 500 11px/1.3 var(--font-sans); color: var(--text-secondary); border-bottom: 1px solid var(--border-faint); display: flex; align-items: center; gap: 6px; }
+          .ia-win .r:last-child { border-bottom: none; }
+          .ia-win .r small { font: 400 10px/1.3 var(--font-sans); color: var(--text-subtle); margin-left: auto; }
+          .ia-win.daemon { border-style: dashed; }
+          .ia-note { font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); padding: 0 2px; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — the name ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">The name: PwrRoute</span></div>
+        <p class="dv-sub">A fourth PwrSuite app, next to PwrSnap, PwrGit and PwrAgnt. The job is routing: every link that hits the OS default browser is rewritten and sent to the browser (and profile) the rules say. Four candidates were drawn in the family wordmark; <b>PwrRoute</b> is the pick because it names the mechanism, reads as infrastructure, and its domain is unregistered. PwrLink was dropped first: <code>pwrlink.com</code> already has nameservers. Finicky is credited, not cloned: <i>inspired by Finicky, tested for compatibility with Finicky configs.</i></p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a PwrRoute">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The pick. Mechanism-named like PwrGit; "route" is also the verb in the activity log and the MCP tool names.</span></div>
+            <div class="dv-card name-tile pick">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div></div>
+              <div class="why">
+                <div class="verdict"><span class="chip acc">Pick</span><span class="chip ok">pwrroute.com · no NS</span></div>
+                <p>Rules route links. Rewrites, handlers and a default fall-through are all "the route". Pairs with the mark: one link in, two browsers out, one path lit.</p>
+                <span class="cli">pwrroute test https://x.com/...</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b PwrOpen">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Runner-up. Reads best as a CLI verb, says less about rules and rewrites.</span></div>
+            <div class="dv-card name-tile">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Open</b></p></div></div>
+              <div class="why">
+                <div class="verdict"><span class="chip">Runner-up</span><span class="chip ok">pwropen.com · no NS</span></div>
+                <p>"Open the right browser" is the one-line pitch, and <code>pwropen</code> is a natural command. But it describes the OS hook, not the product.</p>
+                <span class="cli">pwropen https://x.com/...</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c PwrHop">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Shortest. Playful, which the family voice is not.</span></div>
+            <div class="dv-card name-tile">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Hop</b></p></div></div>
+              <div class="why">
+                <div class="verdict"><span class="chip">Passed</span><span class="chip ok">pwrhop.com · no NS</span></div>
+                <p>Four letters, easy to say. "Hop" is a network term too, but it suggests bouncing between browsers rather than deciding once.</p>
+                <span class="cli">pwrhop https://x.com/...</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1d" data-screen-label="1d PwrPick">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>Browserosaurus territory: a picker prompts, PwrRoute decides.</span></div>
+            <div class="dv-card name-tile">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Pick</b></p></div></div>
+              <div class="why">
+                <div class="verdict"><span class="chip">Passed</span><span class="chip ok">pwrpick.com · no NS</span></div>
+                <p>Implies a prompt on every link. That is the tool Finicky recommends pairing with, not the tool itself.</p>
+                <span class="cli">pwrpick https://x.com/...</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1e" data-screen-label="1e The mark">
+            <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span>The mark, drawn the way PwrGit's is: a 1024 box, 56 stroke, r=84 nodes, one tier at 0.55. One link in, two browsers out, the route taken at full strength.</span></div>
+            <div class="dv-card" style="width: 640px;">
+              <div class="mark-stage">
+                <div class="mark-big"><svg class="mark" viewBox="188 188 648 648" width="148" height="148" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></div>
+                <div class="mark-sizes">
+                  <div class="mark-row"><span class="lbl">title strip · 20px</span><div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div></div></div>
+                  <div class="mark-row"><span class="lbl">menu bar · 16px template</span><div class="tray"><svg viewBox="188 188 648 648" width="16" height="16" aria-hidden="true" style="color: var(--text-primary);"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><span>Mon 09:41</span></div></div>
+                  <div class="mark-row"><span class="lbl">app icon · placeholder tiles</span><div style="display: flex; gap: 10px;"><div class="icon-tile"><svg viewBox="188 188 648 648" width="40" height="40" aria-hidden="true" style="color: #e8743a;"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></div><div class="icon-tile dark"><svg viewBox="188 188 648 648" width="40" height="40" aria-hidden="true" style="color: #e8743a;"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></div></div></div>
+                  <div class="mark-row"><span class="lbl">light theme</span><div class="strip light" style="background: #f7f4ef; border-color: rgba(0,0,0,0.08);"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1f" data-screen-label="1f Tagline">
+            <div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a><span>README header line, in the family voice: terse, no exclamation mark.</span></div>
+            <div class="dv-card" style="width: 400px;">
+              <div class="tagline">
+                <span class="line">Every link to the right browser.</span>
+                <span class="alt"><b>Alternates:</b> &ldquo;Links, routed.&rdquo; &middot; &ldquo;One default browser. Many destinations.&rdquo; &middot; &ldquo;The default browser that reads the rules.&rdquo;</span>
+                <span class="alt"><b>Credit line:</b> Inspired by Finicky. Reads Finicky v4 configs and is tested against them.</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "go with <a class="dv-oid" href="#1b">1b</a> instead" &middot; "three more names" &middot; "make the mark's second branch solid, not dim"</p>
+      </section>
+
+      <!-- ================= TURN 2 — the brief ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Brief, assumptions and the window map</span></div>
+        <p class="dv-sub">What the rough cut in the <code>finicky</code> worktree already decided, what this design assumes on top of it, and where each surface lives. The other three files in this project draw the surfaces: <b>PwrRoute App Baseline</b> (rules, test, activity), <b>PwrRoute Settings</b> (browsers, configuration, local agents) and <b>PwrRoute Tray and First Run</b>.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Assumptions">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Assumptions this design is built on. Each one is cheap to reverse now.</span></div>
+            <div class="dv-card" style="width: 520px;">
+              <div class="brief">
+                <h3>Carried from the rough cut</h3>
+                <ul>
+                  <li>A resident <b>Go router</b> owns URL dispatch and keeps working with the Electron window closed. Electron is the settings and diagnostics app, as in the <code>apps/pwrfinicky</code> rough cut.</li>
+                  <li>Visual rules live in <code>rules.json</code> under the platform config directory. A Finicky <code>.js</code>/<code>.ts</code> config is used only when selected, runs first, and owns the default browser while active.</li>
+                  <li>Full URLs stay in memory; disk logs carry timings, never URL contents. The Activity view says so in place.</li>
+                  <li>Default-browser registration is an explicit action. Nothing changes the OS default at launch.</li>
+                </ul>
+                <h3>Decided here</h3>
+                <ul>
+                  <li><b>JSON for visual rules, JS/TS for power.</b> Finicky's move to JSON is adopted for what a UI can edit (wildcard and regex matchers, browser and profile, static rewrites). Function matchers and URL transformers stay JS/TS, surfaced as <span class="tag fn">fn</span> chips, never silently dropped.</li>
+                  <li><b>Rewrites and handlers are two lists</b>, as in Finicky v4: every matching rewrite runs in order, then the first matching handler wins, then the default. The UI keeps that order visible instead of merging them.</li>
+                  <li><b>Trace, not just result.</b> Test a link shows each step that fired. The same trace is what Activity expands and what the MCP tool returns.</li>
+                  <li><b>Opener-aware rules</b> match on the sending app (name or bundle id). Window title is drawn as unavailable on the first host, matching the README.</li>
+                  <li><b>MCP over loopback with OAuth</b>, the PwrSnap/PwrGit door: Settings &rsaquo; Local agents, roles, sessions, Revoke. Port is a placeholder; PwrSnap holds 51729.</li>
+                  <li>Family chrome: 40px strip, stoplights at (16, 13), brand at x=96, 20px mark, 17px wordmark with the app half in <code>--accent</code>. Settings is its own window, as in PwrSnap and PwrGit.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Window map">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>Every surface and where it lives. Dashed is headless.</span></div>
+            <div class="dv-card" style="width: 680px;">
+              <div class="ia">
+                <div class="ia-col">
+                  <div class="ia-win"><div class="h">Main window<i>App Baseline</i></div><div class="r">Rules<small>rewrites · handlers · default</small></div><div class="r">Test a link<small>trace</small></div><div class="r">Activity<small>recent dispatches</small></div></div>
+                  <div class="ia-win daemon"><div class="h">Router<i>Go · resident</i></div><div class="r">Dispatch, hot reload, RPC</div><div class="r">CLI: <span class="tag">pwrroute test</span></div></div>
+                </div>
+                <div class="ia-col">
+                  <div class="ia-win"><div class="h">Settings window<i>Settings</i></div><div class="r">General<small>launch · theme · updates</small></div><div class="r">Browsers<small>detected · profiles · hidden</small></div><div class="r">Configuration<small>JSON vs Finicky config</small></div><div class="r">Local agents<small>MCP · sessions · roles</small></div><div class="r">Diagnostics<small>logs · data folder</small></div><div class="r">About</div></div>
+                </div>
+                <div class="ia-col">
+                  <div class="ia-win"><div class="h">Menu bar / tray<i>Tray</i></div><div class="r">Status, recent links</div><div class="r">Pause routing</div><div class="r">Rules&hellip; Settings&hellip; Quit</div></div>
+                  <div class="ia-win"><div class="h">First run<i>Tray and First Run</i></div><div class="r">Fallback browser</div><div class="r">Import Finicky config</div><div class="r">Set as default browser</div></div>
+                  <span class="ia-note">Linux and Windows draw their caption buttons on the right; the strip keeps its gutter only on macOS.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2c" data-screen-label="2c Finicky compatibility">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>What the visual rules can hold from a Finicky v4 config, from <code>packages/config-api/src/configSchema.ts</code>. The import flow in Settings uses this table verbatim.</span></div>
+            <div class="dv-card" style="width: 720px;">
+              <div class="tbl" style="grid-template-columns: 200px 120px 1fr; border: none; border-radius: 0;">
+                <div class="tr head"><span>Finicky construct</span><span>Visual rules</span><span>Note</span></div>
+                <div class="tr"><span>Wildcard matcher <code>"*.google.com*"</code></span><span><span class="chip ok">Imports</span></span><span>Same matcher, same escaping rules (<code>wildcard.ts</code>).</span></div>
+                <div class="tr"><span>Regex matcher <code>/^https:\/\/x\.com/</code></span><span><span class="chip ok">Imports</span></span><span>Shown as a <span class="tag re">re</span> chip; edited as source text.</span></div>
+                <div class="tr"><span>Function matcher <code>(url, {opener}) =&gt; …</code></span><span><span class="chip warn">Stays JS</span></span><span>Listed read-only with an <span class="tag fn">fn</span> chip and the first line of source. The config stays selected.</span></div>
+                <div class="tr"><span>Browser string <code>"Firefox"</code></span><span><span class="chip ok">Imports</span></span><span>Resolved against detected browsers; unknown names keep a warning dot.</span></div>
+                <div class="tr"><span>Browser object <code>{name, profile, args, openInBackground}</code></span><span><span class="chip ok">Imports</span></span><span><code>appType</code> of <code>bundleId</code> or <code>path</code> becomes an &ldquo;Other app&rdquo; destination.</span></div>
+                <div class="tr"><span>Browser resolver function</span><span><span class="chip warn">Stays JS</span></span><span>Same <span class="tag fn">fn</span> treatment on the destination side.</span></div>
+                <div class="tr"><span>Rewrite with string / URL</span><span><span class="chip ok">Imports</span></span><span>Visual rewrite: set host, set scheme, drop query keys, replace path.</span></div>
+                <div class="tr"><span>Rewrite with transformer function</span><span><span class="chip warn">Stays JS</span></span><span>Most real-world <code>url: (url) =&gt; …</code> rewrites are host swaps; the importer offers the visual form when it can prove equivalence, otherwise keeps JS.</span></div>
+                <div class="tr"><span><code>opener.name</code> / <code>opener.bundleId</code></span><span><span class="chip ok">Supported</span></span><span>&ldquo;Sent from&rdquo; condition on a rule. macOS first; Windows and Linux report what the host can.</span></div>
+                <div class="tr"><span><code>opener.windowTitle</code></span><span><span class="chip bad">Unavailable</span></span><span>Not provided by the first host. Rules that read it are flagged in Activity when they run.</span></div>
+                <div class="tr"><span><code>options.urlShorteners</code></span><span><span class="chip ok">Imports</span></span><span>Settings &rsaquo; General &rsaquo; Expand short links, with the list editable.</span></div>
+                <div class="tr"><span><code>options.logRequests</code> / <code>checkForUpdates</code></span><span><span class="chip">Settings</span></span><span>Map to Diagnostics and General. <code>hideIcon</code> and <code>keepRunning</code> are not applicable: the router is always resident.</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2d" data-screen-label="2d MCP surface">
+            <div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a><span>The tool surface an agent gets, named like PwrGit's (<code>pwrgit_app_open</code>). Three roles, additive permissions, Revoke per session.</span></div>
+            <div class="dv-card" style="width: 720px;">
+              <div class="tbl" style="grid-template-columns: 220px 1fr 96px 96px 96px; border: none; border-radius: 0;">
+                <div class="tr head"><span>Tool</span><span>What it does</span><span>Reader</span><span>Opener</span><span>Editor</span></div>
+                <div class="tr"><span><code>pwrroute_resolve</code></span><span>Resolve a URL (and optional opener) to its trace and destination. Never launches.</span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span></div>
+                <div class="tr"><span><code>pwrroute_open</code></span><span>Dispatch a URL through the router, as a click would. Recorded in Activity against the session.</span><span><span class="pin">&mdash;</span></span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span></div>
+                <div class="tr"><span><code>pwrroute_browsers</code></span><span>Detected browsers, profiles, which one is the OS default.</span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span></div>
+                <div class="tr"><span><code>pwrroute_rules_list</code></span><span>Rewrites, handlers and default as the visual model, with <code>fn</code> entries marked opaque.</span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span></div>
+                <div class="tr"><span><code>pwrroute_rules_apply</code></span><span>Validate and write a rules.json patch. Refused while a Finicky config is selected.</span><span><span class="pin">&mdash;</span></span><span><span class="pin">&mdash;</span></span><span><span class="pin ok">&#10003;</span></span></div>
+                <div class="tr"><span><code>pwrroute_activity</code></span><span>Recent dispatches with traces. Reader sees hosts only; Opener and Editor see full URLs.</span><span><span class="pin q">host</span></span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span></div>
+                <div class="tr"><span><code>status://router</code> resource</span><span>Running, config source, default-browser state, rule counts. Live-updated.</span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span><span><span class="pin ok">&#10003;</span></span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "merge rewrites and handlers into one list" &middot; "drop the Opener role" &middot; "add a Windows caption-button variant of the strip"</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

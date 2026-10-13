@@ -1,0 +1,124 @@
+appId: com.pwrdrvr.pwrroute
+productName: PwrRoute
+copyright: "Copyright © 2026 PwrDrvr LLC."
+
+# Pinned so packaging never guesses the runtime from node_modules.
+# Keep this in sync with apps/desktop/package.json devDependencies.electron.
+electronVersion: 44.5.1
+
+# Nothing native ships yet. The resident Go router arrives with the port and
+# will be added under extraResources, signed by the same deep-sign pass.
+npmRebuild: false
+
+asar: true
+compression: normal
+
+# electron-vite bundles main, preload and renderer (React included) into out/,
+# so the app needs no node_modules at runtime. Packaging runs straight from
+# this pnpm workspace through scripts/package.mjs; PwrGit's pnpm-deploy stage
+# (release.mjs) is not needed until a runtime dependency has to ship unbundled.
+files:
+  - "out/**/*"
+  - "package.json"
+  - "!**/node_modules/**"
+  - "!**/*.map"
+
+extraResources:
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: ../../THIRD_PARTY_LICENSES
+    to: THIRD_PARTY_LICENSES
+  - from: ../../CHANGELOG.md
+    to: CHANGELOG.md
+
+# Electron fuses — ASAR integrity is NOT on by default in electron-builder.
+# Enable it explicitly so the runtime aborts if the .asar is tampered with.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: true
+
+mac:
+  category: public.app-category.productivity
+  # No app icon yet: the design draws placeholder tiles only. Until one lands,
+  # electron-builder uses Electron's default icon.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # mac.notarize: true reads APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER
+  # from the environment. scripts/package.mjs turns it off when those are
+  # absent, so an unsigned build still packages. Do NOT commit credentials.
+  notarize: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Note: the field is helperGPUBundleId (capital GPU) per electron-builder
+  # source; lowercase 'gpu' silently no-ops.
+  helperBundleId: com.pwrdrvr.pwrroute.helper
+  helperRendererBundleId: com.pwrdrvr.pwrroute.helper.Renderer
+  helperGPUBundleId: com.pwrdrvr.pwrroute.helper.GPU
+  helperPluginBundleId: com.pwrdrvr.pwrroute.helper.Plugin
+  extendInfo:
+    NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
+    # Electron 44 requires macOS 13 (Ventura); it no longer runs on 12.
+    LSMinimumSystemVersion: "13.0"
+    LSApplicationCategoryType: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [universal, arm64]
+    - target: zip
+      arch: [universal, arm64]
+  # Always include the architecture, even when it matches the build host.
+  artifactName: "${productName}-${version}-${arch}-mac.${ext}"
+
+dmg:
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  writeUpdateInfo: false
+
+win:
+  requestedExecutionLevel: asInvoker
+  signAndEditExecutable: true
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: PwrRoute
+  uninstallDisplayName: PwrRoute
+  artifactName: "${productName}-${version}-windows-${arch}-setup.${ext}"
+
+linux:
+  executableName: pwrroute
+  category: Network
+  maintainer: PwrDrvr LLC <harold@pwrdrvr.com>
+  synopsis: Every link to the right browser
+  description: PwrRoute becomes the default browser and routes every link to the right browser and profile by rules.
+  artifactName: "${productName}-${version}-linux-${arch}.${ext}"
+  target:
+    - target: deb
+    - target: tar.gz
+  desktop:
+    entry:
+      Name: PwrRoute
+      Comment: Every link to the right browser
+      StartupWMClass: PwrRoute
+
+deb:
+  packageName: pwrroute
+  priority: optional
+
+# GitHub Releases are the canonical desktop artifact channel. Every
+# CI-published build is born as a GitHub Pre-release; promotion to Latest is a
+# separate operator action. release.yml publishes; electron-builder never does
+# (every package script passes --publish never).
+publish:
+  provider: github
+  owner: pwrdrvr
+  repo: PwrRoute
+  releaseType: prerelease

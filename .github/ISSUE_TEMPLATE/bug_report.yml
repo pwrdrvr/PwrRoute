@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a reproducible PwrRoute problem.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include full URLs you would not share, credentials, tokens, or
+        other private data. Report vulnerabilities through the security policy.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add a rule ...
+        2. Open a link from ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PwrRoute version
+      description: Find this in the About window or the downloaded release name.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other source build
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: Operating system version
+      placeholder: "macOS 15.6 or Windows 11 24H2"
+    validations:
+      required: true
+  - type: dropdown
+    id: config-source
+    attributes:
+      label: Configuration source
+      options:
+        - Visual rules (rules.json)
+        - Finicky .js / .ts config
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: trace
+    attributes:
+      label: Trace
+      description: The Test a link trace for the URL, with private hosts and paths replaced.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots
+      description: Attach only sanitized evidence with secrets and private URLs removed.

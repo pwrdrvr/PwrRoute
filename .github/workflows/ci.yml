@@ -1,0 +1,227 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    # Do not add `labeled` here. Dependabot applies labels to dependency PRs,
+    # and label-triggered CI creates skipped check suites that can make those
+    # PRs appear to have no real status checks. Label-gated builds live in
+    # preview-build.yml.
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+concurrency:
+  # Supersede older runs for the same PR, while keeping every main commit.
+  # Group pushes by SHA: a shared branch group can discard pending commits
+  # even with cancel-in-progress disabled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # Keep the pull_request trigger path-unfiltered so the required check jobs
+  # exist on every PR. Docs/Dependabot-only PRs skip those jobs below instead.
+  changes:
+    name: Classify Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code_impacting: ${{ steps.classify.outputs.code_impacting }}
+    steps:
+      - name: Classify changed files
+        id: classify
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fullCi = (reason) => {
+              core.setOutput("code_impacting", "true");
+              core.notice(`Running full CI: ${reason}`);
+            };
+
+            if (context.eventName !== "pull_request") {
+              fullCi(`${context.eventName} events always run full CI`);
+              return;
+            }
+
+            let files;
+            try {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100,
+              });
+            } catch (error) {
+              fullCi(`changed-file lookup failed (${error.message})`);
+              return;
+            }
+
+            const reportedCount = context.payload.pull_request.changed_files;
+            if (files.length === 0 || files.length !== reportedCount) {
+              fullCi(
+                `changed-file list was incomplete (received ${files.length} of ${reportedCount})`,
+              );
+              return;
+            }
+
+            const isNonCodePath = (path) =>
+              path === ".github/dependabot.yml" ||
+              path.startsWith("docs/") || path.toLowerCase().endsWith(".md");
+            const codeImpactingFile = files.find((file) => {
+              const paths = [file.filename, file.previous_filename].filter(Boolean);
+              return paths.some((path) => !isNonCodePath(path));
+            });
+            const nonCodeOnly = codeImpactingFile === undefined;
+
+            core.setOutput("code_impacting", String(!nonCodeOnly));
+            await core.summary
+              .addHeading("Changed-file classification")
+              .addTable([
+                [{data: "Classification", header: true}, {data: "Files", header: true}],
+                [nonCodeOnly ? "Non-code only" : "Code impacting", String(files.length)],
+              ])
+              .addRaw(
+                nonCodeOnly
+                  ? "Only documentation or Dependabot configuration changed; expensive CI jobs are skipped."
+                  : `Full CI runs because \`${codeImpactingFile.filename}\` requires it.`,
+              )
+              .write();
+
+  # Cache-priming gate. `lookup-only` makes this ~1s on a hit; on a miss it
+  # pays one cold install and saves the cache inline (not in a post step), so
+  # the fan-out below restores instead of each job installing from scratch.
+  # The cache key includes runner OS and arch, so Windows needs its own gate —
+  # see `windows-install-deps`. Gate and consumers must agree on every
+  # key-forming input (`node-version` major, `working-directory`, …).
+  install-deps:
+    name: Install Dependencies
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        with:
+          node-version: 24.x
+          lookup-only: "true"
+
+  windows-install-deps:
+    name: Install Dependencies (Windows)
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        with:
+          node-version: 24.x
+          lookup-only: "true"
+
+  typecheck:
+    # The job `name:` is pinned: the "Protect main" ruleset lists `Typecheck`
+    # as a required status check, so renaming this job would leave that check
+    # permanently pending and block every PR. The job runs the whole
+    # `pnpm lint` chain (typecheck is its last and slowest link). Build and
+    # Test are pinned the same way.
+    name: Typecheck
+    runs-on: ubuntu-latest
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        with:
+          node-version: 24.x
+
+      # One aggregate step on purpose: `pnpm lint` chains the checks
+      # cheapest-first (syntax, licenses, typecheck), so a new check is added
+      # to the chain in package.json and picked up here automatically instead
+      # of having to be remembered as another step.
+      - name: Lint (syntax, licenses, typecheck)
+        run: pnpm lint
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        with:
+          node-version: 24.x
+
+      - name: Build
+        run: pnpm run build
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        with:
+          node-version: 24.x
+
+      - name: Test
+        run: pnpm run test
+
+  windows:
+    name: Windows (typecheck + build + test)
+    runs-on: windows-latest
+    needs: [changes, windows-install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Same action as the Linux jobs: it runs natively on Windows (no bash
+      # assumptions) and activates the pnpm version pinned in package.json's
+      # `packageManager` field via Corepack, so there's no second pnpm pin to
+      # drift on upgrade.
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        with:
+          node-version: 24.x
+
+      # Deliberately NOT `pnpm lint`. This job exists to catch Windows-specific
+      # breakage, and the rest of the lint chain is platform-independent static
+      # analysis. `licenses:check` is the exception worth keeping here: it
+      # normalizes path separators (`split(sep).join("/")`) and CRLF line
+      # endings while diffing the checked-in THIRD_PARTY_LICENSES, and that
+      # normalization code only actually gets exercised on Windows.
+      - name: Check package license policy and third-party notices
+        run: pnpm licenses:check
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Test
+        run: pnpm run test

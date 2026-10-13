@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          .snav { flex: 0 0 208px; }
+          .snav .rail-item { font-size: 13px; }
+          .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+          .spane > .card { flex: 0 0 auto; max-width: 760px; width: 100%; }
+          .spane > .pane-head { max-width: 760px; }
+          .cmd { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font: 500 11px/1.5 var(--font-mono); color: var(--text-secondary); }
+          .cmd span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+          .cmd b { color: var(--text-muted); font-weight: 500; }
+          .sess { display: grid; grid-template-columns: minmax(0, 1fr) 120px 110px 70px; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .sess:last-child { border-bottom: none; }
+          .sess.head { padding: 7px 16px; background: var(--bg-panel-elevated); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .sess .nm { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+          .sess .nm b { font: 600 12px/1.3 var(--font-sans); color: var(--text-primary); }
+          .sess .nm small { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); }
+          .sess.rev .nm b { color: var(--text-muted); text-decoration: line-through; }
+          .sess .inp { min-height: 26px; font-size: 11.5px; }
+          .roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 14px 16px; }
+          .role { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+          .role.sel { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .role .rh { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+          .role .rh b { font: 600 12.5px/1.2 var(--font-sans); color: var(--text-primary); }
+          .role .rh i { font: 500 9.5px/1 var(--font-mono); color: var(--text-subtle); font-style: normal; }
+          .role p { margin: 0; font: 400 10.5px/1.5 var(--font-sans); color: var(--text-muted); }
+          .perm { display: flex; align-items: center; gap: 7px; font: 500 10.5px/1.3 var(--font-mono); color: var(--text-secondary); }
+          .perm.no { color: var(--text-subtle); }
+          .perm .ck { width: 12px; height: 12px; border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; background: var(--success-soft); color: var(--success-text); flex: 0 0 auto; }
+          .perm.no .ck { background: var(--bg-panel-elevated); color: var(--text-subtle); }
+          .perm.part .ck { background: var(--warn-soft); color: var(--warn-text); }
+          .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+          .slot { display: flex; flex-direction: column; gap: 6px; padding: 11px 12px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 8px; }
+          .slot.sel { background: var(--bg-row-active); border-color: var(--accent-border); }
+          .slot .sv { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .slot.sel .sv { color: var(--accent-bright); }
+          .slot .sp { font: 500 10.5px/1.3 var(--font-mono); color: var(--text-muted); }
+          .slot .ss { font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          .imp { display: grid; grid-template-columns: 24px minmax(0, 1fr) 100px; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1.4 var(--font-sans); color: var(--text-secondary); width: 100%; }
+          .imp:last-child { border-bottom: none; }
+          .imp .srcline { font: 400 10.5px/1.3 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .ck2 { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; font-size: 9px; }
+          .ck2.on { background: var(--accent); border-color: transparent; color: var(--accent-on); }
+          .ck2.na { opacity: 0.4; }
+          .brow { display: grid; grid-template-columns: 22px minmax(0, 1fr) minmax(0, 220px) 90px 36px; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .brow:last-child { border-bottom: none; }
+          .brow .bi { width: 20px; height: 20px; font-size: 9px; border-radius: 5px; }
+          .brow .nm { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+          .brow .nm b { font: 600 12.5px/1.2 var(--font-sans); color: var(--text-primary); }
+          .brow .nm small { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .brow .pfs { display: flex; flex-wrap: wrap; gap: 4px; }
+          .brow.hid > * { opacity: 0.5; }
+          .hosts { display: flex; flex-wrap: wrap; gap: 5px; }
+          .lognote { font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); max-width: 760px; }
+        </style>
+      </helmet>
+
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Settings window</span></div>
+        <p class="dv-sub">Its own window, as in PwrSnap and PwrGit: 208px nav, panes of disclosure cards at most 760px wide, field rows with the label column on the left. Three panes drawn: <b>Local agents</b> (the MCP door, modelled on PwrSnap's and PwrGit's), <b>Configuration</b> (visual rules vs a Finicky config, and the importer) and <b>Browsers</b> (OS default registration, detected apps, profiles). General, Diagnostics and About follow the family's existing panes and are not redrawn here.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Local agents">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Local agents. One door: loopback MCP with OAuth 2.1 and PwrRoute's own approval window. Sessions carry a role; roles are additive; Revoke is per session. Port is a placeholder (PwrSnap holds 51729).</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Access control</div><h1 class="ttl">Local agents</h1><p class="help">Authorize agents in PwrRoute’s approval window, then manage their sessions and roles here. Revocation applies to every tool and resource request.</p></div><div class="actions"><span class="btn sm quiet">Collapse all</span></div></div>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Local agent access</p><h2 class="card-title">MCP server</h2></div><span class="chip ok">Listening</span></div>
+                    <div class="field"><div class="field-l"><span>Enable local-agent access</span><span class="field-sub">Serves MCP on loopback only. Off stops the listener and keeps sessions for next time.</span></div><div class="field-c"><span class="sw on"></span></div></div>
+                    <div class="field"><div class="field-l"><span>Endpoint</span><span class="field-sub">Fixed port. OAuth metadata is published at the usual well-known paths.</span></div><div class="field-c"><div class="cmd"><span>http://127.0.0.1:51731/mcp</span><span class="btn sm">Copy</span></div><span class="field-help">An unauthenticated request gets a 401 that points at the authorization server, which is how a client finds the approval flow on its own.</span></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Connect an agent</p><h2 class="card-title">Claude Code and Codex</h2><p class="card-desc">Run one of these. The approval window opens in PwrRoute; the browser page only waits.</p></div></div>
+                    <div class="field"><div class="field-l"><span>Claude Code</span><span class="field-sub"><code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">--scope user</code> registers it for every project.</span></div><div class="field-c"><div class="cmd"><span>claude mcp add --scope user --transport http pwrroute http://127.0.0.1:51731/mcp<br />claude mcp login pwrroute</span><span class="btn sm">Copy</span></div></div></div>
+                    <div class="field"><div class="field-l"><span>Codex CLI</span><span class="field-sub">Starts the OAuth flow during add.</span></div><div class="field-c"><div class="cmd"><span>codex mcp add pwrroute --url http://127.0.0.1:51731/mcp --oauth-client-registration dcr</span><span class="btn sm">Copy</span></div></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Authorization</p><h2 class="card-title">Sessions</h2></div><span class="chip ok">2 active</span></div>
+                    <div class="sess head"><span>Session</span><span>Role</span><span>Last used</span><span></span></div>
+                    <div class="sess"><div class="nm"><b>Claude Code · MacBook Pro</b><small>approved 2026-10-02 · 14 calls today</small></div><div class="inp">Opener<span class="caret">&#9662;</span></div><span>2 min ago</span><span class="btn sm quiet danger">Revoke</span></div>
+                    <div class="sess"><div class="nm"><b>PwrAgnt · thread tools</b><small>approved 2026-10-09 · 3 calls today</small></div><div class="inp">Editor<span class="caret">&#9662;</span></div><span>31 min ago</span><span class="btn sm quiet danger">Revoke</span></div>
+                    <div class="sess rev"><div class="nm"><b>Codex CLI · lab-mini</b><small>revoked 2026-10-11</small></div><div class="inp" style="opacity: 0.5;">Reader<span class="caret">&#9662;</span></div><span class="chip">Revoked</span><span></span></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Permissions</p><h2 class="card-title">Roles</h2><p class="card-desc">Built-in roles cover the three things an agent can want. Permissions are additive; a custom role starts from a copy.</p></div><span class="btn sm">New custom role</span></div>
+                    <div class="roles">
+                      <div class="role"><div class="rh"><b>Reader</b><i>built-in</i></div><p>Can ask where a link would go. Sees hosts, not full URLs.</p><span class="perm"><span class="ck">&#10003;</span>resolve</span><span class="perm"><span class="ck">&#10003;</span>browsers</span><span class="perm"><span class="ck">&#10003;</span>rules_list</span><span class="perm part"><span class="ck">~</span>activity · hosts only</span><span class="perm no"><span class="ck">&mdash;</span>open</span><span class="perm no"><span class="ck">&mdash;</span>rules_apply</span></div>
+                      <div class="role sel"><div class="rh"><b>Opener</b><i>built-in</i></div><p>Reader, plus opening links through the router. Every open is logged against the session.</p><span class="perm"><span class="ck">&#10003;</span>resolve</span><span class="perm"><span class="ck">&#10003;</span>browsers</span><span class="perm"><span class="ck">&#10003;</span>rules_list</span><span class="perm"><span class="ck">&#10003;</span>activity</span><span class="perm"><span class="ck">&#10003;</span>open</span><span class="perm no"><span class="ck">&mdash;</span>rules_apply</span></div>
+                      <div class="role"><div class="rh"><b>Editor</b><i>built-in</i></div><p>Opener, plus writing rules.json. Refused while a Finicky config is selected.</p><span class="perm"><span class="ck">&#10003;</span>resolve</span><span class="perm"><span class="ck">&#10003;</span>browsers</span><span class="perm"><span class="ck">&#10003;</span>rules_list</span><span class="perm"><span class="ck">&#10003;</span>activity</span><span class="perm"><span class="ck">&#10003;</span>open</span><span class="perm"><span class="ck">&#10003;</span>rules_apply</span></div>
+                    </div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Activity</p><h2 class="card-title">Recent agent actions</h2></div><span class="btn sm quiet">Open Activity</span></div>
+                    <div class="sess" style="grid-template-columns: 64px 150px minmax(0, 1fr) 160px;"><span class="chip" style="font: 500 10px var(--font-mono);">09:40</span><span>Claude Code</span><span class="srcline" style="font: 500 11px var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">pwrroute_open · https://github.com/pwrdrvr/PwrGit/pull/361</span><span class="st"><i></i>Google Chrome · Work</span></div>
+                    <div class="sess" style="grid-template-columns: 64px 150px minmax(0, 1fr) 160px;"><span class="chip" style="font: 500 10px var(--font-mono);">09:12</span><span>PwrAgnt</span><span class="srcline" style="font: 500 11px var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">pwrroute_rules_apply · added handler 6 (zoom.us/j/*)</span><span class="st"><i></i>saved · reloaded</span></div>
+                    <div class="sess" style="grid-template-columns: 64px 150px minmax(0, 1fr) 160px;"><span class="chip" style="font: 500 10px var(--font-mono);">08:55</span><span>Claude Code</span><span class="srcline" style="font: 500 11px var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">pwrroute_resolve · https://x.com/… · from Slack</span><span class="st"><i></i>Firefox · dry run</span></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Configuration">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Configuration. Two sources drawn as slot tiles, with the importer below: it reads the Finicky file, says per rule what it can hold, and never writes to the file it read.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item on">Configuration</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Rules source</div><h1 class="ttl">Configuration</h1><p class="help">Where the router reads its rules from. Visual rules are the default. A Finicky config, when selected, runs first and owns the default browser.</p></div></div>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Where rules come from</p><h2 class="card-title">Source</h2></div><span class="chip ok">Visual rules</span></div>
+                    <div class="field"><div class="field-l"><span>Active source</span><span class="field-sub">Switching takes effect on the next link. Nothing is deleted either way.</span></div><div class="field-c">
+                      <div class="slots">
+                        <div class="slot sel"><div class="sv">Visual rules<span class="radio on"></span></div><span class="sp">rules.json · 3 rewrites · 7 handlers</span><span class="ss">Edited in the Rules view and by Editor agents. Hot-reloaded by the router.</span></div>
+                        <div class="slot"><div class="sv">Finicky config<span class="radio"></span></div><span class="sp">~/.finicky.ts · 2 rewrites · 6 handlers</span><span class="ss">Found in the home folder. Runs as written, with its imports watched for changes.</span></div>
+                      </div>
+                      <div class="row-actions"><span class="btn sm">Choose another file&hellip;</span><span class="field-help">.js or .ts, Finicky v4 shape.</span></div>
+                    </div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Migration</p><h2 class="card-title">Import from Finicky</h2><p class="card-desc">Reads ~/.finicky.ts and offers what the visual rules can hold. The file itself is not changed.</p></div><span class="chip warn">2 stay JS</span></div>
+                    <div class="field"><div class="field-l"><span>Rules found</span><span class="field-sub">Checked rows become visual rules. Unchecked ones keep running from the config if it stays selected.</span></div><div class="field-c">
+                      <div class="imp"><span class="ck2 on">&#10003;</span><span>rewrite · <span class="tag">x.com/*</span> &rarr; <span class="tag" style="color: var(--accent-bright);">host xcancel.com</span></span><span class="chip ok">Imports</span></div>
+                      <div class="imp"><span class="ck2 on">&#10003;</span><span>rewrite · <span class="tag">*</span> &rarr; <span class="tag" style="color: var(--accent-bright);">drop utm_*</span> <span class="field-help">proved equal to <span class="srcline" style="display: inline;">url.searchParams.delete(…)</span></span></span><span class="chip ok">Imports</span></div>
+                      <div class="imp"><span class="ck2 on">&#10003;</span><span>handler · <span class="tag">bsky.app/*</span> &rarr; Firefox</span><span class="chip ok">Imports</span></div>
+                      <div class="imp"><span class="ck2 on">&#10003;</span><span>handler · <span class="tag">google.com/*</span> <span class="tag">*.google.com*</span> &rarr; Google Chrome</span><span class="chip ok">Imports</span></div>
+                      <div class="imp"><span class="ck2 na"></span><span class="srcline"><span class="tag fn">fn</span> (url, { opener }) =&gt; url.host.includes("workplace") &rarr; Firefox</span><span class="chip warn">Stays JS</span></div>
+                      <div class="imp"><span class="ck2 na"></span><span class="srcline"><span class="tag fn">fn</span> (url, { opener }) =&gt; opener?.name.includes("Slack") &rarr; Firefox <span class="field-help">could be &ldquo;sent from Slack&rdquo;; not proved</span></span><span class="chip warn">Stays JS</span></div>
+                      <div class="imp"><span class="ck2 on">&#10003;</span><span>defaultBrowser &rarr; Google Chrome</span><span class="chip ok">Imports</span></div>
+                      <div class="row-actions" style="margin-top: 6px;"><span class="btn primary">Import 5 rules</span><span class="btn">Import and keep the config for the rest</span></div>
+                      <span class="field-help">The second button leaves ~/.finicky.ts selected so the two function matchers keep working, with the imported rules running after it.</span>
+                    </div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Options</p><h2 class="card-title">Short links</h2></div></div>
+                    <div class="field"><div class="field-l"><span>Expand short links before matching</span><span class="field-sub">Follows one redirect for these hosts so rules see the real destination. Finicky’s <code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">urlShorteners</code>.</span></div><div class="field-c"><span class="sw on"></span><div class="hosts"><span class="tag">t.co</span><span class="tag">bit.ly</span><span class="tag">tinyurl.com</span><span class="tag">lnkd.in</span><span class="tag">buff.ly</span><span class="addp">+ host</span></div></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">On disk</p><h2 class="card-title">Files</h2></div></div>
+                    <div class="field"><div class="field-l"><span>rules.json</span><span class="field-sub">Validated before publication; a bad edit keeps the last good snapshot.</span></div><div class="field-c"><div class="cmd"><span>~/Library/Application Support/PwrRoute/rules.json</span></div><div class="row-actions"><span class="btn sm">Reveal</span><span class="btn sm">Open data folder</span><span class="btn sm">Reload now</span></div></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Browsers">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Browsers. OS registration is one explicit button with the consent step named; detected apps list their profiles as chips; hidden apps stay in the list, dimmed, so a rule that names one still resolves.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item on">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Destinations</div><h1 class="ttl">Browsers</h1><p class="help">What PwrRoute can open, and whether the OS hands it links in the first place.</p></div></div>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">OS registration</p><h2 class="card-title">Default browser</h2></div><span class="chip ok">PwrRoute is default</span></div>
+                    <div class="field"><div class="field-l"><span>Handle http and https</span><span class="field-sub">Registration is explicit and never happens at launch. macOS asks you to confirm; Windows opens its chooser.</span></div><div class="field-c"><div class="row-actions"><span class="btn" style="opacity: 0.6;">PwrRoute is the default browser</span><span class="btn sm quiet">Open System Settings</span></div><span class="field-help">Confirmed 2026-10-13 09:02. If another app takes the default, the strip shows a warning dot and this button comes back.</span></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Applications</p><h2 class="card-title">Detected browsers</h2><p class="card-desc">Scanned at launch and on demand. Profiles are read from each browser’s own files.</p></div><span class="btn sm">Rescan</span></div>
+                    <div class="brow"><span class="bi">Ch</span><div class="nm"><b>Google Chrome</b><small>com.google.Chrome · /Applications/Google Chrome.app</small></div><div class="pfs"><span class="tag">Personal</span><span class="tag">Work</span></div><span class="st"><i></i>in 4 rules</span><span class="sw on"></span></div>
+                    <div class="brow"><span class="bi">Ff</span><div class="nm"><b>Firefox</b><small>org.mozilla.firefox</small></div><div class="pfs"><span class="tag">default-release</span><span class="tag">dev-edition</span></div><span class="st"><i></i>in 2 rules</span><span class="sw on"></span></div>
+                    <div class="brow"><span class="bi">Ar</span><div class="nm"><b>Arc</b><small>company.thebrowser.Browser</small></div><div class="pfs"><span class="note">no profiles</span></div><span class="st"><i></i>in 1 rule</span><span class="sw on"></span></div>
+                    <div class="brow"><span class="bi">Sa</span><div class="nm"><b>Safari</b><small>com.apple.Safari</small></div><div class="pfs"><span class="tag">Personal</span><span class="tag">Work</span></div><span class="st off"><i></i>unused</span><span class="sw on"></span></div>
+                    <div class="brow hid"><span class="bi">Bn</span><div class="nm"><b>Brave Browser Nightly</b><small>com.brave.Browser.nightly</small></div><div class="pfs"><span class="tag">Default</span></div><span class="st off"><i></i>hidden</span><span class="sw"></span></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">By bundle id or path</p><h2 class="card-title">Other apps</h2><p class="card-desc">Anything that accepts a URL. Finicky’s <code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">appType: bundleId | path</code>.</p></div><span class="btn sm">Add app&hellip;</span></div>
+                    <div class="brow"><span class="bi">Zm</span><div class="nm"><b>zoom.us</b><small>us.zoom.xos</small></div><div class="pfs"><span class="note">opens meeting links natively</span></div><span class="st bad"><i></i>not installed</span><span class="sw on"></span></div>
+                    <div class="brow"><span class="bi">Fg</span><div class="nm"><b>Figma</b><small>com.figma.Desktop</small></div><div class="pfs"></div><span class="st"><i></i>in 1 rule (off)</span><span class="sw on"></span></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "draw General and Diagnostics too" &middot; "show the agent approval window" &middot; "what happens in Browsers when Chrome is uninstalled but rules name it"</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

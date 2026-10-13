@@ -1,0 +1,316 @@
+name: Release Desktop (macOS + Windows + Linux)
+
+# Reduced from PwrGit's release.yml for the scaffold. What it keeps: the tag
+# trigger, the metadata gate, one packaging job per platform, the Apple and
+# Azure signing steps, and a publish job that runs only after every platform
+# succeeds. Signing steps run only when their credentials are present, and an
+# unsigned lane says so in a warning, so adding the secrets is all it takes to
+# light them up. See README.md beside this file for what was left out.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*" # pre-release tags like v0.0.1-alpha.0
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.0.1-alpha.1). Must already exist on the repo."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: none
+
+jobs:
+  prepare:
+    name: Check release metadata and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        timeout-minutes: 10
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: 24.x
+
+      - name: Check release metadata
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: pnpm release:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+  macos:
+    name: Package macOS (sign and notarize when configured)
+    needs: prepare
+    # Matches PwrGit: macOS 26 hosts the Xcode 26 actool an Icon Composer app
+    # icon will need once one lands.
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: apple-signing
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        timeout-minutes: 10
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: 24.x
+
+      # Secrets cannot appear in `if:` expressions, so read them into env and
+      # publish one boolean for the steps below.
+      - name: Detect Apple signing credentials
+        id: creds
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_API_KEY_BASE64" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sign, notarize, package macOS
+        if: steps.creds.outputs.signed == 'true'
+        env:
+          # These come from the apple-signing GitHub Environment.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: T44CNHC4UH
+        run: pnpm --filter @pwrroute/desktop package:mac --require-signing
+
+      - name: Verify macOS signature and notarization
+        if: steps.creds.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          for app in apps/desktop/dist/mac-universal/PwrRoute.app apps/desktop/dist/mac-arm64/PwrRoute.app; do
+            codesign --verify --deep --strict --all-architectures "$app"
+            xcrun stapler validate "$app"
+          done
+
+      - name: Package macOS (ad hoc signed, not notarized)
+        if: steps.creds.outputs.signed != 'true'
+        run: |
+          echo "::warning::Apple signing secrets are not configured; packaging an ad hoc signed, unnotarized macOS build."
+          pnpm --filter @pwrroute/desktop package:mac
+
+      - name: Upload macOS release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-macos
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.blockmap
+          if-no-files-found: error
+          retention-days: 90
+
+  windows:
+    name: Package Windows (sign when configured)
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 45
+    environment: windows-signing
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        timeout-minutes: 10
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: 24.x
+
+      - name: Detect Azure signing configuration
+        id: creds
+        shell: bash
+        env:
+          WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
+          WIN_AZURE_SIGN_ENDPOINT: ${{ vars.WIN_AZURE_SIGN_ENDPOINT }}
+          WIN_AZURE_SIGN_ACCOUNT: ${{ vars.WIN_AZURE_SIGN_ACCOUNT }}
+          WIN_AZURE_SIGN_PROFILE: ${{ vars.WIN_AZURE_SIGN_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          if [ -n "$WIN_AZURE_SIGN_PUBLISHER_NAME" ] && [ -n "$WIN_AZURE_SIGN_ENDPOINT" ] && [ -n "$WIN_AZURE_SIGN_ACCOUNT" ] && [ -n "$WIN_AZURE_SIGN_PROFILE" ] \
+            && [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install TrustedSigning
+        if: steps.creds.outputs.signed == 'true'
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        run: ./scripts/release/install-trusted-signing.ps1
+
+      # electron-builder signs the app executables, generated uninstaller, and
+      # final NSIS installer.
+      - name: Sign and package Windows installer
+        if: steps.creds.outputs.signed == 'true'
+        env:
+          WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
+          WIN_AZURE_SIGN_ENDPOINT: ${{ vars.WIN_AZURE_SIGN_ENDPOINT }}
+          WIN_AZURE_SIGN_ACCOUNT: ${{ vars.WIN_AZURE_SIGN_ACCOUNT }}
+          WIN_AZURE_SIGN_PROFILE: ${{ vars.WIN_AZURE_SIGN_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: pnpm --filter @pwrroute/desktop package:win --require-signing
+
+      - name: Verify Authenticode signatures
+        if: steps.creds.outputs.signed == 'true'
+        shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
+        run: |
+          $dist = "apps/desktop/dist"
+          $installer = Get-ChildItem $dist -File -Filter "*-setup.exe" | Select-Object -First 1
+          $app = Get-ChildItem $dist -Recurse -File -Filter "PwrRoute.exe" | Select-Object -First 1
+          foreach ($target in @($installer, $app)) {
+            if ($null -eq $target) {
+              throw "Expected signed Windows executable is missing."
+            }
+            $signature = Get-AuthenticodeSignature $target.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Authenticode signature is not valid for $($target.FullName): $($signature.Status)"
+            }
+            if ($signature.SignerCertificate.Subject -notlike "*CN=$env:EXPECTED_PUBLISHER*") {
+              throw "Unexpected Authenticode signer for $($target.FullName): $($signature.SignerCertificate.Subject)"
+            }
+          }
+
+      - name: Package Windows installer (unsigned)
+        if: steps.creds.outputs.signed != 'true'
+        shell: bash
+        run: |
+          echo "::warning::Azure signing is not configured; packaging an unsigned Windows installer."
+          pnpm --filter @pwrroute/desktop package:win
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-windows
+          path: |
+            apps/desktop/dist/*-setup.exe
+            apps/desktop/dist/*-setup.exe.blockmap
+          if-no-files-found: error
+          retention-days: 90
+
+  linux:
+    name: Package Linux (${{ matrix.arch }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        timeout-minutes: 10
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: 24.x
+
+      # Linux packages are not signed, matching PwrGit.
+      - name: Package DEB and tar.gz
+        run: pnpm --filter @pwrroute/desktop package:linux
+
+      - name: Write SHA-256 manifest
+        run: |
+          set -euo pipefail
+          cd apps/desktop/dist
+          sha256sum -- *.deb *.tar.gz > PwrRoute-linux-${{ matrix.arch }}-SHA256SUMS
+          cat PwrRoute-linux-${{ matrix.arch }}-SHA256SUMS
+
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-linux-${{ matrix.arch }}
+          path: |
+            apps/desktop/dist/*.deb
+            apps/desktop/dist/*.tar.gz
+            apps/desktop/dist/*-SHA256SUMS
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    name: Create release and publish platform assets
+    runs-on: ubuntu-24.04
+    needs: [macos, windows, linux]
+    timeout-minutes: 20
+    concurrency:
+      group: desktop-release-${{ github.event.inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-release-*
+          merge-multiple: true
+          path: release-assets
+
+      # Every CI-published build is born as a GitHub Pre-release; promote to
+      # Latest manually after validation.
+      - name: Create pre-release with changelog notes
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/RELEASE_NOTES.md"
+          node scripts/check-desktop-release-metadata.mjs --tag "$RELEASE_TAG" --notes-file "$notes"
+          ls -l release-assets
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --prerelease \
+            --title "PwrRoute $RELEASE_TAG" \
+            --notes-file "$notes" \
+            release-assets/*
