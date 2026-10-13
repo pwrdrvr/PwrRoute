@@ -83,7 +83,10 @@ fn licenses(check: bool) -> Result<()> {
             "about.toml",
             "licenses/about.hbs",
             "--workspace",
-            "--frozen",
+            // --locked, not --frozen: on a fresh runner the crates for the
+            // other release targets are not downloaded yet, and their
+            // license files are what this reads. Cargo.lock still pins them.
+            "--locked",
             "--fail",
             "-o",
         ])
