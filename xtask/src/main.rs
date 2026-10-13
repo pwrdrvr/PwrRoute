@@ -71,6 +71,10 @@ fn lint() -> Result<()> {
 /// (`licenses/bundled.txt`), then every shipped crate from cargo-about.
 fn licenses(check: bool) -> Result<()> {
     let root = root();
+    // Written to a file, not read from stdout: under PowerShell, cargo-about
+    // refuses to write to a pipe (to dodge PowerShell's re-encoding).
+    let generated = root.join("target/cargo-about.txt");
+    fs::create_dir_all(root.join("target"))?;
     let out = Command::new("cargo")
         .args([
             "about",
@@ -81,7 +85,9 @@ fn licenses(check: bool) -> Result<()> {
             "--workspace",
             "--frozen",
             "--fail",
+            "-o",
         ])
+        .arg(&generated)
         .current_dir(&root)
         .output()
         .context("cargo-about is required: `cargo install --locked cargo-about`")?;
@@ -91,7 +97,7 @@ fn licenses(check: bool) -> Result<()> {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    let crates = String::from_utf8(out.stdout)?;
+    let crates = read(&generated)?;
     let bundled = read(&root.join("licenses/bundled.txt"))?;
     let notice = format!(
         "PwrRoute Third-Party Licenses\n\
