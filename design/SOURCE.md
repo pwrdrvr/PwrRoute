@@ -19,6 +19,9 @@ the project and re-export here.
   been reconciled against code yet; the fork's Electron rough cut under
   `apps/pwrfinicky` predates the design and still carries the working name
   PwrFinicky.
+- Updated **2026-10-13**: `pwrroute.css` re-exported after the strip gutter
+  was narrowed to 68px, which puts the brand at x=96, the family spec. The
+  GPUI app uses the same value.
 
 ## Files
 

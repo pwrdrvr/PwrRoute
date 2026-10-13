@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PwrRoute
+Comment=Every link to the right browser
+Exec=pwrroute
+Terminal=false
+Categories=Network;
+StartupWMClass=PwrRoute

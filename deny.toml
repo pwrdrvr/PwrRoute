@@ -1,0 +1,57 @@
+# cargo-deny: licenses, advisories, bans and sources for everything we ship.
+# `cargo xtask lint` runs `cargo deny check`, so CI fails on any of these.
+
+[graph]
+# The platforms releases are built for. Dependencies that only exist for other
+# targets never ship, so they are not judged.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+all-features = false
+
+[licenses]
+# Adding an id here is a deliberate legal decision. Make it explicitly, in a
+# commit that says why; never add one to make CI green. The Pwr family's
+# shared list comes first; ids the Rust port needed follow, each with its
+# reason.
+allow = [
+    # The Pwr family allowlist (PwrGit, reconciled there).
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Python-2.0",
+    "Unlicense",
+
+]
+confidence-threshold = 0.9
+# The family list is shared across apps; ids no crate uses today are fine.
+unused-allowed-license = "allow"
+
+
+[advisories]
+# RustSec. A yanked crate or an unmaintained notice is a warning to act on in
+# its own change, not a reason to block every PR.
+yanked = "warn"
+unmaintained = "workspace"
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

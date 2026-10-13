@@ -1,41 +1,39 @@
 version: 2
 updates:
-  - package-ecosystem: "npm"
-    # One pnpm workspace, one shared lockfile. The root scan discovers member
-    # manifests through pnpm-workspace.yaml; separate scans duplicate updates
-    # and can change a member manifest without updating the shared lockfile.
+  - package-ecosystem: "cargo"
+    # One workspace, one Cargo.lock.
     directory: "/"
     schedule:
       interval: "weekly"
-    # Do not propose a release until it has cleared the same seven-day window
-    # `minimumReleaseAge` enforces in pnpm-workspace.yaml. Without this,
-    # Dependabot opens a PR the day a version lands, CI's frozen-lockfile
-    # install never re-checks the age, the bump merges — and then the release,
-    # whose `pnpm deploy` does re-resolve, refuses to package it days later.
-    # PwrGit hit exactly that with zod 4.5.1. Keeping the two windows
-    # equal is what makes the gate a non-event rather than a release blocker.
-    # One value on purpose: `default-days` covers every semver type, and what
-    # matters is that it equals `minimumReleaseAge`. Per-type overrides would
-    # be redundant at best (minor/patch) and dead at worst (majors are ignored
-    # outright below) — and a `semver-major-days` a reader could believe in
-    # while nothing acts on it is worse than no entry.
+    # A version has to be a week old before it is proposed: the same
+    # supply-chain window the pnpm workspace enforced before the Rust port.
     cooldown:
       default-days: 7
     groups:
-      npm-security:
+      cargo-security:
         applies-to: security-updates
         patterns:
           - "*"
-      react-runtime:
+      # GPUI and its kit move together; a split bump does not build.
+      gpui:
         patterns:
-          - "react"
-          - "react-dom"
-          - "@types/react"
-          - "@types/react-dom"
-        update-types:
-          - "minor"
-          - "patch"
+          - "gpui*"
+      # The config engine's JS stack: one bump, one compatibility test run.
+      js-engine:
+        patterns:
+          - "rquickjs*"
+          - "oxc*"
     ignore:
+      # gpui-kit is pinned with `=`; it is upgraded on purpose, with a look at
+      # the window, not by a bot.
+      - dependency-name: "gpui-kit"
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

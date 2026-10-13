@@ -1,0 +1,592 @@
+{
+  "about": "Expected results for tests/finicky_compat.rs, recorded from the PwrFinicky Go host (goja), one URL per run. Cases with a goHost note are where that host is wrong.",
+  "configs": {
+    "finicky-example.ts": [
+      {
+        "input": "https://corp.example.com/wiki",
+        "url": "https://corp.example.com/wiki",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://jira.example.com/browse/X-1?utm_source=slack&keep=1",
+        "url": "https://jira.example.com/browse/X-1?utm_source=slack&keep=1",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://github.com/pwrdrvr/PwrRoute",
+        "url": "https://github.com/pwrdrvr/PwrRoute",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://gist.github.com/x",
+        "url": "https://gist.github.com/x",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://linear.app/pwrdrvr/issue/1",
+        "url": "https://linear.app/pwrdrvr/issue/1",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.notion.so/page",
+        "url": "https://www.notion.so/page",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://example.com/insecure",
+        "url": "http://example.com/insecure",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://acme.zoom.us/j/123456789?pwd=abc",
+        "url": "https://acme.zoom.us/j/123456789?pwd=abc",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.youtube.com/watch?v=1",
+        "url": "https://www.youtube.com/watch?v=1",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.youtube.com/shorts/abc",
+        "url": "https://www.youtube.com/shorts/abc",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.figma.com/file/xyz",
+        "url": "https://www.figma.com/file/xyz",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://someone.medium.com/post-123",
+        "url": "https://someone.medium.com/post-123",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://old.example.net/anything",
+        "url": "http://old.example.net/anything",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://printer.local/",
+        "url": "https://printer.local/",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://example.org/?fbclid=zzz&a=b",
+        "url": "https://example.org/?fbclid=zzz&a=b",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://xn--bcher-kva.example/",
+        "url": "https://xn--bcher-kva.example/",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://user:pw@example.com:8443/p?q=1#frag",
+        "url": "https://user:pw@example.com:8443/p?q=1#frag",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "mailto:someone@example.com",
+        "url": "mailto:someone@example.com",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      }
+    ],
+    "finicky-example.js": [
+      {
+        "input": "https://corp.example.com/wiki",
+        "url": "https://corp.example.com/wiki",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://jira.example.com/browse/X-1?utm_source=slack&keep=1",
+        "url": "https://jira.example.com/browse/X-1?utm_source=slack&keep=1",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://github.com/pwrdrvr/PwrRoute",
+        "url": "https://github.com/pwrdrvr/PwrRoute",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://gist.github.com/x",
+        "url": "https://gist.github.com/x",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://linear.app/pwrdrvr/issue/1",
+        "url": "https://linear.app/pwrdrvr/issue/1",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.notion.so/page",
+        "url": "https://www.notion.so/page",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://example.com/insecure",
+        "url": "http://example.com/insecure",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://acme.zoom.us/j/123456789?pwd=abc",
+        "url": "https://acme.zoom.us/j/123456789?pwd=abc",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.youtube.com/watch?v=1",
+        "url": "https://www.youtube.com/watch?v=1",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.youtube.com/shorts/abc",
+        "url": "https://www.youtube.com/shorts/abc",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.figma.com/file/xyz",
+        "url": "https://www.figma.com/file/xyz",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://someone.medium.com/post-123",
+        "url": "https://someone.medium.com/post-123",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://old.example.net/anything",
+        "url": "http://old.example.net/anything",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://printer.local/",
+        "url": "https://printer.local/",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://example.org/?fbclid=zzz&a=b",
+        "url": "https://example.org/?fbclid=zzz&a=b",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://xn--bcher-kva.example/",
+        "url": "https://xn--bcher-kva.example/",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://user:pw@example.com:8443/p?q=1#frag",
+        "url": "https://user:pw@example.com:8443/p?q=1#frag",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "mailto:someone@example.com",
+        "url": "mailto:someone@example.com",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      }
+    ],
+    "legacy-commonjs.js": [
+      {
+        "input": "https://corp.example.com/wiki",
+        "url": "https://corp.example.com/wiki",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://jira.example.com/browse/X-1?utm_source=slack&keep=1",
+        "url": "https://jira.example.com/browse/X-1?utm_source=slack&keep=1",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://github.com/pwrdrvr/PwrRoute",
+        "url": "https://github.com/pwrdrvr/PwrRoute",
+        "browser": "Google Chrome",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://gist.github.com/x",
+        "url": "https://gist.github.com/x",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://linear.app/pwrdrvr/issue/1",
+        "url": "https://linear.app/pwrdrvr/issue/1",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.notion.so/page",
+        "url": "https://www.notion.so/page",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://example.com/insecure",
+        "url": "http://example.com/insecure",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://acme.zoom.us/j/123456789?pwd=abc",
+        "url": "https://acme.zoom.us/j/123456789?pwd=abc",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.youtube.com/watch?v=1",
+        "url": "https://www.youtube.com/watch?v=1",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.youtube.com/shorts/abc",
+        "url": "https://www.youtube.com/shorts/abc",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.figma.com/file/xyz",
+        "url": "https://www.figma.com/file/xyz",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://someone.medium.com/post-123",
+        "url": "https://someone.medium.com/post-123",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://old.example.net/anything",
+        "url": "http://old.example.net/anything",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://printer.local/",
+        "url": "https://printer.local/",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://example.org/?fbclid=zzz&a=b",
+        "url": "https://example.org/?fbclid=zzz&a=b",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://xn--bcher-kva.example/",
+        "url": "https://xn--bcher-kva.example/",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://user:pw@example.com:8443/p?q=1#frag",
+        "url": "https://user:pw@example.com:8443/p?q=1#frag",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "mailto:someone@example.com",
+        "url": "mailto:someone@example.com",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      }
+    ],
+    "stress.ts": [
+      {
+        "input": "https://corp.example.com/wiki",
+        "url": "https://corp.example.com/wiki",
+        "browser": "Google Chrome",
+        "profile": "Profile 1",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://jira.example.com/browse/X-1?utm_source=slack&keep=1",
+        "url": "https://jira.example.com/browse/X-1?keep=1",
+        "browser": "Google Chrome",
+        "profile": "Profile 1",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://github.com/pwrdrvr/PwrRoute",
+        "url": "https://github.com/pwrdrvr/PwrRoute",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [
+          "--new-tab"
+        ],
+        "openInBackground": false
+      },
+      {
+        "input": "https://gist.github.com/x",
+        "url": "https://gist.github.com/x",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://linear.app/pwrdrvr/issue/1",
+        "url": "https://linear.app/pwrdrvr/issue/1",
+        "browser": "Arc",
+        "profile": "",
+        "args": [],
+        "openInBackground": true
+      },
+      {
+        "input": "https://www.notion.so/page",
+        "url": "https://www.notion.so/page",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://example.com/insecure",
+        "url": "https://example.com/insecure",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://acme.zoom.us/j/123456789?pwd=abc",
+        "url": "zoommtg://zoom.us/join?confno=123456789&org=acme",
+        "browser": "us.zoom.xos",
+        "profile": "",
+        "args": [],
+        "openInBackground": false,
+        "goHost": "Go host differs: goja leaves RegExp named groups undefined, so the rewrite throws and the link falls to the default browser."
+      },
+      {
+        "input": "https://www.youtube.com/watch?v=1",
+        "url": "https://www.youtube.com/watch?v=1",
+        "browser": "Google Chrome",
+        "profile": "Default",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.youtube.com/shorts/abc",
+        "url": "https://www.youtube.com/shorts/abc",
+        "browser": "Brave Browser",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://www.figma.com/file/xyz",
+        "url": "https://www.figma.com/file/xyz",
+        "browser": "/Applications/Figma.app",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://someone.medium.com/post-123",
+        "url": "https://scribe.rip/post-123",
+        "browser": "Firefox",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "http://old.example.net/anything",
+        "url": "https://new.example.net/",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://printer.local/",
+        "url": "https://printer.local/",
+        "browser": "",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://example.org/?fbclid=zzz&a=b",
+        "url": "https://example.org/?a=b",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://xn--bcher-kva.example/",
+        "url": "https://xn--bcher-kva.example/",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "https://user:pw@example.com:8443/p?q=1#frag",
+        "url": "https://user:pw@example.com:8443/p?q=1#frag",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      },
+      {
+        "input": "mailto:someone@example.com",
+        "url": "mailto:someone@example.com",
+        "browser": "Safari",
+        "profile": "",
+        "args": [],
+        "openInBackground": false
+      }
+    ]
+  }
+}

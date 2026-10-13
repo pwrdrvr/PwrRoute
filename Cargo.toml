@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["crates/pwrroute-app", "crates/pwrroute-engine", "xtask"]
+
+[workspace.package]
+# The release version. `cargo xtask release-check` compares it with the tag
+# and CHANGELOG.md, so bump all three together.
+version = "0.0.1-alpha.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+repository = "https://github.com/pwrdrvr/PwrRoute"
+authors = ["PwrDrvr LLC"]
+
+[workspace.dependencies]
+pwrroute-engine = { path = "crates/pwrroute-engine" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# `cargo xtask lint` runs clippy with `-D warnings`, so every warn below fails
+# CI. clippy::pedantic is not on yet; turning it on is a deliberate change of
+# its own, with its allow-list written down here.
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_lifetimes = "warn"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.dev]
+debug = "limited"
+opt-level = 1
+
+# Dependencies (QuickJS, oxc, GPUI) optimized even in dev, so debug builds
+# render and resolve at a usable speed.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# gpui-pre-macros leaves a helper ungated in release builds while its module is
+# gated on debug_assertions; enable it for the host proc-macro only. From
+# disktree, which ships the same gpui-kit.
+[profile.release.package.gpui-pre-macros]
+debug-assertions = true

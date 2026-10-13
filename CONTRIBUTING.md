@@ -8,36 +8,31 @@ Use [GitHub Issues](https://github.com/pwrdrvr/PwrRoute/issues) for
 reproducible bugs and focused feature proposals. Do not report vulnerabilities
 publicly; follow [SECURITY.md](SECURITY.md) instead.
 
-PwrRoute is pre-release, and the repository is a scaffold that app code is
-being ported into. Read [AGENTS.md](AGENTS.md) before starting a change.
+PwrRoute is pre-release, and app code is still being ported in. Read
+[AGENTS.md](AGENTS.md) before starting a change.
 
 ## Development setup
 
-PwrRoute is a pnpm workspace. It requires Node.js 24 through nvm (the version
-in `.nvmrc`) and uses the pnpm version pinned in the root `package.json`. A
-fresh checkout or worktree needs its own install:
+PwrRoute is a Cargo workspace. `rust-toolchain.toml` pins Rust 1.97, and rustup
+installs it on first use. The lint chain needs cargo-deny and cargo-about.
 
 ```bash
 git clone https://github.com/pwrdrvr/PwrRoute.git
 cd PwrRoute
-source ~/.nvm/nvm.sh
-nvm install
-nvm use
-corepack enable
-pnpm install
-pnpm dev
+cargo install --locked cargo-deny cargo-about
+cargo run -p pwrroute-app
 ```
 
-Do not assume `nvm` is initialized in a non-interactive shell. A root
-`preinstall` guard refuses an install under the wrong Node.
+On Linux, install GPUI's system libraries first with
+`scripts/ci/install-linux-deps.sh` (Debian and Ubuntu).
 
 ## Repository map
 
-- `apps/desktop` — Electron main, preload, renderer and packaging.
-- `packages/shared` — the only shared contracts allowed across desktop process
-  boundaries.
-- `packages/mcp-server` — the local-agent MCP server.
-- `scripts` — repository-wide license and release checks.
+- `crates/pwrroute-app` — the GPUI window, binary `pwrroute`.
+- `crates/pwrroute-engine` — the rules engine: Finicky v4 configs in QuickJS.
+- `xtask` — lint, test, license notices, release checks and packaging.
+- `packaging` — the macOS `Info.plist` template and the Linux desktop entry.
+- `licenses`, `about.toml`, `deny.toml` — license gate and notice generation.
 - `design` — the checked-in mirror of the Claude Design project; see
   `design/SOURCE.md`.
 
@@ -45,37 +40,35 @@ Do not assume `nvm` is initialized in a non-interactive shell. A root
 
 | Layer | Stack | Where it lives |
 |---|---|---|
-| Desktop shell | Electron + TypeScript + React + electron-vite | `apps/desktop/` |
-| Shared contracts | Typed commands, events and domain types | `packages/shared/` |
-| Local agent access | MCP over OAuth-protected loopback HTTP | `packages/mcp-server/` |
+| Desktop app | Rust + GPUI (gpui-kit) | `crates/pwrroute-app/` |
+| Rules engine | Rust + QuickJS (rquickjs) + oxc, running Finicky's config API | `crates/pwrroute-engine/` |
+| Local agent access | MCP over OAuth-protected loopback HTTP | not ported yet |
 
-The resident router (Go, from the rough cut) and the rules engine are not
-ported yet.
+The resident router, the browser launcher and the MCP server are not ported
+yet.
 
 ## Checks
 
 Run the checks from the repository root:
 
 ```bash
-pnpm lint
-pnpm test
-pnpm build
+cargo xtask lint
+cargo xtask test
 ```
 
-`pnpm lint` runs every check CI's Typecheck job runs, cheapest first: syntax
-lint, third-party license checks and workspace typecheck. Add a new
-repository-wide check to that chain in the root `package.json`, not as a
-separate CI step.
+`cargo xtask lint` runs every check CI's Typecheck job runs, cheapest first:
+rustfmt, clippy with warnings denied, cargo-deny and the THIRD_PARTY_LICENSES
+check. Add a new repository-wide check to that chain in `xtask/src/main.rs`,
+not as a separate CI step.
 
-For a documentation-only change, `pnpm lint` is the expected baseline. If you
-skip a broader check, explain why in the pull request.
+For a documentation-only change, `cargo xtask lint` is the expected baseline.
+If you skip a broader check, explain why in the pull request.
 
 ## Architecture and conventions
 
-- Keep Electron main, preload, and renderer as separate bundles. Shared code
-  belongs in `@pwrroute/shared`.
-- Keep renderer windows sandboxed with context isolation enabled and Node
-  integration disabled.
+- Routing decisions come from Finicky's configuration API, run unchanged in
+  the engine. Change routing behavior there, not in a Rust reimplementation.
+- No `unsafe` outside a module that exists for it and says why.
 - Treat URLs as private data. Keep full URLs in memory; logs on disk carry
   timings, never URL contents.
 - Never change the OS default browser except through the explicit action in
@@ -83,16 +76,16 @@ skip a broader check, explain why in the pull request.
 
 ## Releases
 
-Releases are cut by pushing a `vX.Y.Z` tag that matches
-`apps/desktop/package.json` and a `CHANGELOG.md` section; `pnpm release:check`
-verifies both. CI, preview builds, and signing secrets are in
+Releases are cut by pushing a `vX.Y.Z` tag that matches the workspace version
+in `Cargo.toml` and a `CHANGELOG.md` section; `cargo xtask release-check --tag
+vX.Y.Z` verifies both. CI, preview builds, and signing secrets are in
 [.github/workflows/README.md](.github/workflows/README.md).
 
 ## Pull requests
 
 - Keep each PR focused on one coherent change.
 - Use a Conventional Commit-style title: `type(scope): description`.
-- Prefer `desktop`, `router`, `rules`, `mcp`, `release`, `docs`, or `tests`
+- Prefer `app`, `engine`, `router`, `rules`, `mcp`, `release`, `docs`, or `tests`
   when one of those scopes describes the change.
 - Include tests for behavior changes, or state why the change is
   documentation-only.
@@ -101,9 +94,12 @@ verifies both. CI, preview builds, and signing secrets are in
 If a dependency changes, regenerate and review the committed notices:
 
 ```bash
-pnpm licenses:generate
-pnpm licenses:check
+cargo xtask licenses
+cargo xtask licenses --check
 ```
+
+A new license id in `deny.toml` is a legal decision; make it in its own
+commit and say why.
 
 ## Code derived from Finicky
 
