@@ -34,11 +34,29 @@ allow = [
     "Python-2.0",
     "Unlicense",
 
+    # Added with the Rust port (2026-10-13). Each is permissive; each is still
+    # a legal decision recorded here for review.
+    # Unicode License v3: the ICU4X crates (via oxc's diagnostics and url's
+    # IDNA) and unicode-ident, which every proc-macro build pulls in.
+    "Unicode-3.0",
+    # zlib License: foldhash (hashbrown, serde_json) and slotmap (GPUI).
+    "Zlib",
 ]
 confidence-threshold = 0.9
 # The family list is shared across apps; ids no crate uses today are fine.
 unused-allowed-license = "allow"
 
+# Licenses allowed for one crate only, rather than tree-wide.
+[[licenses.exceptions]]
+# Boost Software License 1.0 (not the Business Source License). The crate is
+# dual-licensed with Apache-2.0 WITH LLVM-exception; either is permissive.
+crate = "dragonbox_ecma"
+allow = ["BSL-1.0"]
+
+[[licenses.exceptions]]
+# The bzip2 license, BSD-like, for the Rust port of libbzip2.
+crate = "libbz2-rs-sys"
+allow = ["bzip2-1.0.6"]
 
 [advisories]
 # RustSec. A yanked crate or an unmaintained notice is a warning to act on in
