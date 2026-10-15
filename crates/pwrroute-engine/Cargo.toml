@@ -1,0 +1,18 @@
+[package]
+name = "pwrroute-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Loads Finicky v4 JS/TS configs and resolves URLs to a browser, in QuickJS"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rquickjs = { version = "0.14", features = ["loader"] }
+oxc = { version = "0.154", features = ["transformer", "codegen", "semantic"] }

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by `cargo xtask bundle`, which fills in @SHORT_VERSION@: the version without any
+     prerelease suffix, because macOS wants three numbers here.
+     No CFBundleURLTypes yet: declaring http/https makes macOS offer PwrRoute
+     as a default browser, and nothing routes links until the router lands.
+     No icon yet either; the design draws placeholder tiles only. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.pwrdrvr.pwrroute</string>
+	<key>CFBundleName</key>
+	<string>PwrRoute</string>
+	<key>CFBundleDisplayName</key>
+	<string>PwrRoute</string>
+	<key>CFBundleExecutable</key>
+	<string>pwrroute</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@SHORT_VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@SHORT_VERSION@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 PwrDrvr LLC.</string>
+</dict>
+</plist>

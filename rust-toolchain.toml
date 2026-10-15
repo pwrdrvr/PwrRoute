@@ -1,0 +1,6 @@
+# Pinned so rustup provisions it on a fresh clone. CI pins the same version
+# (.github/workflows); a newer clippy's new lints are a change to make on
+# purpose, not by surprise.
+[toolchain]
+channel = "1.97"
+components = ["clippy", "rustfmt"]

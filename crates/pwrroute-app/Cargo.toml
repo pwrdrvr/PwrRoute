@@ -1,0 +1,26 @@
+[package]
+name = "pwrroute-app"
+description = "PwrRoute's desktop window: the rules list and its editor, drawn with GPUI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "pwrroute"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui-kit = { version = "=0.6.6", default-features = false, features = ["assets"] }
+
+[dev-dependencies]
+# The window harness: lets the smoke test open a real window and draw a frame.
+gpui-kit = { version = "=0.6.6", default-features = false, features = [
+    "assets",
+    "test-support",
+] }

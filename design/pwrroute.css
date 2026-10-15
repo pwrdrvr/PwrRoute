@@ -56,7 +56,7 @@ button, input, select, textarea { font-family: inherit; }
 /* ---- the Pwr-family window ---- */
 .win { background: var(--bg-app); color: var(--text-primary); display: flex; flex-direction: column; overflow: hidden; font-family: var(--font-sans); }
 .strip { height: 41px; flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--bg-titlebar); border-bottom: 1px solid var(--border-subtle); position: relative; }
-.strip-gutter { width: 80px; flex: 0 0 auto; }
+.strip-gutter { width: 68px; flex: 0 0 auto; } /* 16px pad + 68px + 12px gap puts the brand at x=96, the family spec */
 .lights { position: absolute; left: 16px; top: 13px; display: flex; gap: 6px; }
 .lights span { width: 14px; height: 14px; border-radius: 50%; background: #3a3734; }
 .lights .r { background: #ff5f57; } .lights .y { background: #febc2e; } .lights .g { background: #28c840; }

@@ -1,0 +1,4 @@
+# Stable options only: the lint gate runs on the pinned stable toolchain.
+edition = "2024"
+use_field_init_shorthand = true
+use_try_shorthand = true

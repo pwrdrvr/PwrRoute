@@ -25,6 +25,9 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   # Keep the pull_request trigger path-unfiltered so the required check jobs
   # exist on every PR. Docs/Dependabot-only PRs skip those jobs below instead.
@@ -93,135 +96,145 @@ jobs:
               )
               .write();
 
-  # Cache-priming gate. `lookup-only` makes this ~1s on a hit; on a miss it
-  # pays one cold install and saves the cache inline (not in a post step), so
-  # the fan-out below restores instead of each job installing from scratch.
-  # The cache key includes runner OS and arch, so Windows needs its own gate —
-  # see `windows-install-deps`. Gate and consumers must agree on every
-  # key-forming input (`node-version` major, `working-directory`, …).
-  install-deps:
-    name: Install Dependencies
-    runs-on: ubuntu-latest
-    needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
-        with:
-          node-version: 24.x
-          lookup-only: "true"
-
-  windows-install-deps:
-    name: Install Dependencies (Windows)
-    runs-on: windows-latest
-    needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
-        with:
-          node-version: 24.x
-          lookup-only: "true"
-
+  # The three required checks run on Linux. The `name:` of each is pinned:
+  # the "Protect main" ruleset lists `Typecheck`, `Build` and `Test` as
+  # required status checks, so renaming one leaves that check permanently
+  # pending and blocks every PR. `Typecheck` kept its name from the Electron
+  # scaffold; it now runs the whole `cargo xtask lint` chain.
   typecheck:
-    # The job `name:` is pinned: the "Protect main" ruleset lists `Typecheck`
-    # as a required status check, so renaming this job would leave that check
-    # permanently pending and block every PR. The job runs the whole
-    # `pnpm lint` chain (typecheck is its last and slowest link). Build and
-    # Test are pinned the same way.
     name: Typecheck
-    runs-on: ubuntu-latest
-    needs: [changes, install-deps]
+    runs-on: ubuntu-24.04
+    needs: changes
     if: needs.changes.outputs.code_impacting == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
-        with:
-          node-version: 24.x
+      - name: Install GPUI system libraries
+        run: ./scripts/ci/install-linux-deps.sh
 
-      # One aggregate step on purpose: `pnpm lint` chains the checks
-      # cheapest-first (syntax, licenses, typecheck), so a new check is added
-      # to the chain in package.json and picked up here automatically instead
-      # of having to be remembered as another step.
-      - name: Lint (syntax, licenses, typecheck)
-        run: pnpm lint
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.97"
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-deny and cargo-about
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-deny,cargo-about
+
+      # One aggregate step on purpose: `cargo xtask lint` chains the checks
+      # cheapest-first (rustfmt, clippy, cargo-deny, THIRD_PARTY_LICENSES), so
+      # a new check is added to xtask and picked up here automatically.
+      - name: Lint (rustfmt, clippy, cargo-deny, notices)
+        run: cargo xtask lint
 
   build:
     name: Build
-    runs-on: ubuntu-latest
-    needs: [changes, install-deps]
+    runs-on: ubuntu-24.04
+    needs: changes
     if: needs.changes.outputs.code_impacting == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
-        with:
-          node-version: 24.x
+      - name: Install GPUI system libraries
+        run: ./scripts/ci/install-linux-deps.sh
 
-      - name: Build
-        run: pnpm run build
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.97"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build (release)
+        run: cargo build --release --locked --workspace
 
   test:
     name: Test
-    runs-on: ubuntu-latest
-    needs: [changes, install-deps]
+    runs-on: ubuntu-24.04
+    needs: changes
     if: needs.changes.outputs.code_impacting == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+      - name: Install GPUI system libraries
+        run: ./scripts/ci/install-linux-deps.sh
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          node-version: 24.x
+          toolchain: "1.97"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Test
-        run: pnpm run test
+        run: cargo xtask test
+
+  macos:
+    name: macOS (test + bundle)
+    # Apple silicon. gpui-kit compiles Metal shaders at runtime, so no Metal
+    # toolchain is needed here.
+    runs-on: macos-26
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.97"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Test
+        run: cargo xtask test
+
+      # Ad hoc signed: catches a broken Info.plist or signature before a
+      # release does.
+      - name: Bundle
+        run: cargo xtask bundle
 
   windows:
-    name: Windows (typecheck + build + test)
-    runs-on: windows-latest
-    needs: [changes, windows-install-deps]
+    name: Windows (test + build)
+    runs-on: windows-2025
+    needs: changes
     if: needs.changes.outputs.code_impacting == 'true'
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
+      # .gitattributes forces LF; this keeps Git for Windows from fighting it.
+      - run: git config --global core.autocrlf false
+
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Same action as the Linux jobs: it runs natively on Windows (no bash
-      # assumptions) and activates the pnpm version pinned in package.json's
-      # `packageManager` field via Corepack, so there's no second pnpm pin to
-      # drift on upgrade.
-      - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          node-version: 24.x
+          toolchain: "1.97"
 
-      # Deliberately NOT `pnpm lint`. This job exists to catch Windows-specific
-      # breakage, and the rest of the lint chain is platform-independent static
-      # analysis. `licenses:check` is the exception worth keeping here: it
-      # normalizes path separators (`split(sep).join("/")`) and CRLF line
-      # endings while diffing the checked-in THIRD_PARTY_LICENSES, and that
-      # normalization code only actually gets exercised on Windows.
-      - name: Check package license policy and third-party notices
-        run: pnpm licenses:check
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Type check
-        run: pnpm typecheck
+      - name: Install cargo-about
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-about
 
-      - name: Build
-        run: pnpm run build
+      # The notice check is the one lint worth repeating here: it normalizes
+      # CRLF, and that code only really runs on Windows.
+      - name: Check THIRD_PARTY_LICENSES
+        run: cargo xtask licenses --check
 
       - name: Test
-        run: pnpm run test
+        run: cargo xtask test
+
+      - name: Build (release)
+        run: cargo build --release --locked -p pwrroute-app

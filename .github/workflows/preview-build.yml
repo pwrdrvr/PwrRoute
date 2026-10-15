@@ -1,4 +1,4 @@
-name: Preview Build (macOS universal + arm64 DMGs + Windows installer)
+name: Preview Build (macOS universal + Windows x64)
 
 on:
   pull_request:
@@ -8,15 +8,21 @@ on:
     #                 re-add the label.
     types: [labeled, synchronize]
   # Not in PwrGit. Lets a maintainer exercise packaging from a branch without
-  # opening a PR, which is the only way to run it while main has no PRs yet.
+  # opening a PR.
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # `0.0.1-pr.12` on a PR, `0.0.1-dev.34` on dispatch. xtask stamps packages
+  # with it; Cargo.toml is left alone so `--locked` still holds.
+  PREVIEW_SUFFIX: ${{ github.event.pull_request.number && format('pr.{0}', github.event.pull_request.number) || format('dev.{0}', github.run_number) }}
+
 jobs:
-  preview:
-    name: Build preview DMG
+  preview-macos:
+    name: Build preview DMG (macOS universal)
     # Run when the just-applied label is build-preview (labeled event), OR when
     # build-preview is already on the PR (synchronize event), OR on dispatch.
     if: |
@@ -29,110 +35,89 @@ jobs:
       - name: Checkout branch
         uses: actions/checkout@v5
 
-      - name: Install Node.js and dependencies
-        timeout-minutes: 10
-        uses: pwrdrvr/configure-nodejs@v1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          node-version: 24.x
+          toolchain: "1.97"
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Compute preview version
         id: version
-        env:
-          PREVIEW_SUFFIX: ${{ github.event.pull_request.number && format('pr.{0}', github.event.pull_request.number) || format('dev.{0}', github.run_number) }}
         run: |
-          raw=$(node -p "require('./apps/desktop/package.json').version")
-          base="${raw%%-*}"
+          base=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\.[0-9]*\).*"/\1/p' Cargo.toml | head -1)
           preview="${base}-${PREVIEW_SUFFIX}"
           echo "version=${preview}" >> "$GITHUB_OUTPUT"
           echo "Preview version: ${preview}"
 
-      - name: Set preview version in package.json
-        env:
-          PREVIEW_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          cd apps/desktop
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = process.env.PREVIEW_VERSION;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-
       # No signing secrets here on purpose: previews are ad hoc signed and not
-      # notarized (scripts/package.mjs decides from the environment).
-      - name: Build preview package (unsigned)
-        run: pnpm --filter @pwrroute/desktop package:mac
+      # notarized.
+      - name: Build preview package (ad hoc signed)
+        env:
+          PWRROUTE_VERSION: ${{ steps.version.outputs.version }}
+        run: cargo xtask bundle --universal
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v7
         with:
-          name: PwrRoute-${{ steps.version.outputs.version }}-preview
+          name: PwrRoute-${{ steps.version.outputs.version }}-preview-macos
           path: |
-            apps/desktop/dist/*.dmg
-            apps/desktop/dist/*.zip
-            apps/desktop/dist/*.blockmap
+            target/bundle/*.dmg
+            target/bundle/*.zip
           if-no-files-found: error
           retention-days: 14
 
   preview-windows:
-    name: Build preview installer (Windows)
-    # Same gate as the macOS preview above. Keeps the Windows pack off every
-    # PR/push.
+    name: Build preview zip (Windows x64)
+    # Same gate as the macOS preview above.
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event.action == 'labeled' && github.event.label.name == 'build-preview') ||
       (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'build-preview'))
-    runs-on: windows-latest
-    timeout-minutes: 30
+    runs-on: windows-2025
+    timeout-minutes: 40
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
     steps:
+      - run: git config --global core.autocrlf false
+
       - name: Checkout branch
         uses: actions/checkout@v5
 
-      # Same action as the macOS preview above; it runs natively on Windows.
-      # No cache-priming gate job here (unlike ci.yml): this is a label-gated
-      # one-off build, so there is no fan-out to prime for.
-      - name: Install Node.js and dependencies
-        timeout-minutes: 10
-        uses: pwrdrvr/configure-nodejs@v1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          node-version: 24.x
+          toolchain: "1.97"
 
-      # windows-latest defaults to pwsh; force bash for the version-stamp steps
-      # so they stay identical to the macOS preview job above.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
       - name: Compute preview version
         id: version
         shell: bash
-        env:
-          PREVIEW_SUFFIX: ${{ github.event.pull_request.number && format('pr.{0}', github.event.pull_request.number) || format('dev.{0}', github.run_number) }}
         run: |
-          raw=$(node -p "require('./apps/desktop/package.json').version")
-          base="${raw%%-*}"
+          base=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\.[0-9]*\).*"/\1/p' Cargo.toml | head -1)
           preview="${base}-${PREVIEW_SUFFIX}"
           echo "version=${preview}" >> "$GITHUB_OUTPUT"
           echo "Preview version: ${preview}"
 
-      - name: Set preview version in package.json
-        shell: bash
+      - name: Build (unsigned)
+        run: cargo build --release --locked -p pwrroute-app
+
+      - name: Package zip
+        shell: pwsh
         env:
           PREVIEW_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cd apps/desktop
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = process.env.PREVIEW_VERSION;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
+          $name = "PwrRoute-$env:PREVIEW_VERSION-windows-x64"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
 
-      - name: Build preview installer (unsigned)
-        run: pnpm --filter @pwrroute/desktop package:win
-
-      - name: Upload Windows installer artifact
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
         with:
-          name: PwrRoute-${{ steps.version.outputs.version }}-windows-installer
-          path: |
-            apps/desktop/dist/*-setup.exe
-            apps/desktop/dist/*-setup.exe.blockmap
+          name: PwrRoute-${{ steps.version.outputs.version }}-preview-windows
+          path: dist/*.zip
           if-no-files-found: error
           retention-days: 14

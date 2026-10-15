@@ -25,9 +25,10 @@ SOFTWARE.
 Finicky
 
 Portions of PwrRoute are derived from Finicky
-(https://github.com/johnste/finicky): the URL resolver and browser launcher,
-the config API's wildcard matcher and configuration schema, and the browser
-list in browsers.json. Those portions are used under the following license:
+(https://github.com/johnste/finicky): Finicky's configuration API, embedded
+as crates/pwrroute-engine/assets/finickyConfigAPI.js, and the test configs
+taken from Finicky's examples. Those portions are used under the following
+license:
 
 The MIT License (MIT)
 

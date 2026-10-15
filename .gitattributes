@@ -3,9 +3,9 @@
 # `core.autocrlf=true`, so without this a Windows contributor's very first
 # clone rewrites every text file and their first commit is an unreviewable
 # whole-tree diff. It also keeps CRLF out of files that break on a trailing
-# CR — notably the shebang line of the `.mjs` build scripts under scripts/,
-# which esbuild and vitest reject as "SyntaxError: Invalid or unexpected
-# token". This repo builds and tests on Windows in CI, so that path is real.
+# CR, such as the shell scripts under scripts/ and the generated
+# THIRD_PARTY_LICENSES that CI compares byte for byte. This repo builds and
+# tests on Windows in CI, so that path is real.
 * text=auto eol=lf
 
 # Windows batch files are only meaningful with CRLF. None exist today; the
@@ -14,8 +14,9 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
-# Binary assets — never normalize or diff as text. Covers the packaging
-# icons and screenshots under apps/desktop/build/, plus formats a desktop app tends to acquire later.
+# Binary assets — never normalize or diff as text. Covers the embedded fonts
+# under crates/pwrroute-app/assets/, plus formats a desktop app tends to
+# acquire later.
 *.png   binary
 *.jpg   binary
 *.jpeg  binary

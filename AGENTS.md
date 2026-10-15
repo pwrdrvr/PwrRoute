@@ -1,106 +1,101 @@
 # AGENTS.md
 
-Guidance for coding agents (and humans) in PwrRoute — a cross-platform
-Electron app in the Pwr family (siblings: PwrSnap, PwrGit, PwrAgnt) that
-becomes the OS default browser and routes each link to a browser and profile
-by rules. Keep this file short; see **Docs & conventions** below.
+Guidance for coding agents (and humans) in PwrRoute — a cross-platform Rust
+app in the Pwr family (siblings: PwrSnap, PwrGit, PwrAgnt) that becomes the
+OS default browser and routes each link to a browser and profile by rules.
+Keep this file short; see **Docs & conventions** below.
 
-## Status: scaffold
+## Status: early port
 
-The workspace, CI, release pipeline and license checks are in place; the app
-is not. `apps/desktop` shows the family title strip and nothing else, and
-`packages/shared` and `packages/mcp-server` are empty. App code is ported in
-from the PwrFinicky rough cut (a fork of Finicky) in later changes. Until then:
+A Cargo workspace with a GPUI window and a Finicky-compatible rules engine.
+Neither is wired to the other yet, and nothing receives links from the OS.
 
-- Port, don't invent. The design in `design/` and the rough cut decide the
-  shape; read `design/PwrRoute - Name and Brief.dc.html` first.
-- Code derived from Finicky (the Go URL resolver and browser launcher,
-  config-api's wildcard matcher and schema, `browsers.json`) is MIT, Copyright
-  (c) 2015-2025 John Sterling. Its notice is reproduced in `LICENSE`; keep it
-  there, and keep any per-file copyright headers the source carries.
-- Finicky's name and icon are not PwrRoute branding. The icon is by @uetchy
-  and is not ours to reuse.
+- `crates/pwrroute-engine` — loads Finicky v4 `.js`/`.ts` configs in QuickJS
+  (rquickjs) with oxc for TypeScript, and resolves URLs. See its `AGENTS.md`.
+- `crates/pwrroute-app` — the GPUI window (binary `pwrroute`). It draws the
+  design's Rules screen from contrived fixture data.
+- `xtask` — lint, test, license notices, release checks and packaging.
 
-## Set up a new checkout or worktree
+Port, don't invent: the design in `design/` decides the shape. Read
+`design/PwrRoute - Name and Brief.dc.html` first. The PwrFinicky rough cut (a
+fork of Finicky, Go + Electron) is reference only; Go and Electron are gone.
 
-Enter the repo through nvm, then install. **Do not assume `nvm` is
-initialized** — it is a shell function, and a non-interactive agent shell
-usually does not have it, so `node` is whatever the machine defaults to:
+Code derived from Finicky (its configuration API in
+`crates/pwrroute-engine/assets`, and anything later ported from its resolver
+or launcher) is MIT, Copyright (c) 2015-2025 John Sterling. Its notice is in
+`LICENSE`; keep it there, and keep any per-file copyright headers. Finicky's
+name and icon are not PwrRoute branding; the icon is by @uetchy and is not
+ours to reuse.
+
+## Set up a checkout
+
+`rust-toolchain.toml` pins Rust 1.97, and rustup installs it on first use.
+Linux also needs GPUI's system libraries: `scripts/ci/install-linux-deps.sh`.
+The lint chain needs two cargo tools:
 
 ```bash
-source ~/.nvm/nvm.sh   # agent shells: nvm is undefined until you source it
-nvm install            # first time on a machine
-nvm use                # reads .nvmrc (Node 24)
-pnpm i                 # every fresh checkout/worktree needs its own
+cargo install --locked cargo-deny cargo-about   # or: brew install cargo-deny cargo-about
 ```
-
-A root `preinstall` guard ([scripts/check-node-version.mjs](scripts/check-node-version.mjs))
-fails the install under a Node that does not match `.nvmrc`, or one that is not
-nvm's on a machine that has nvm.
 
 ## Common commands
 
 ```bash
-pnpm dev        # run the app (electron-vite dev)
-pnpm build      # production build
-pnpm test       # vitest across the workspace
-pnpm typecheck  # TypeScript 7 native compiler across packages
-pnpm lint       # every check CI's Typecheck job runs, cheapest-first
+cargo run -p pwrroute-app        # the window
+cargo xtask lint                 # everything CI's Typecheck job runs
+cargo xtask test                 # every workspace test
+cargo xtask licenses             # regenerate THIRD_PARTY_LICENSES
+cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG
+cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
 ```
 
-`pnpm lint` chains `lint:syntax` → `licenses:check` → `typecheck`, ordered so a
-fast failure doesn't wait on the slow one. CI's Typecheck job runs exactly this
-one command, so **add new repo-wide checks to the chain in the root
-`package.json`**, not as another CI step.
+`cargo xtask lint` chains rustfmt → clippy `-D warnings` → `cargo deny check`
+→ the THIRD_PARTY_LICENSES check, cheapest first. CI's Typecheck job runs
+exactly this one command, so **add new repo-wide checks to the chain in
+`xtask/src/main.rs`**, not as another CI step.
 
-`licenses:check` chains three scripts copied from PwrGit:
-`check-package-license-policy.mjs` (our own package.json files and `LICENSE`),
-`check-third-party-license-allowlist.mjs` (judges every shipped dependency's
-license against an explicit allowlist) and
-`generate-third-party-licenses.mjs --check` (the committed
-`THIRD_PARTY_LICENSES` matches the tree). After a dependency change run
-`pnpm licenses:generate` and commit the result. **Adding a dependency under an
-unfamiliar license, or an id to the allowlist, is a legal decision — do not do
-it to make CI green.**
+Workspace lints (root `Cargo.toml`) deny `unsafe_code` and `clippy::all`.
+clippy::pedantic is not on yet; turning it on is its own change, with its
+allow-list written down.
 
-`typecheck` selects the exact-pinned `typescript-native` alias through
-`scripts/typecheck.mjs`. Both `typescript` and `typescript-native` publish
-`tsc`, so do not rely on whichever binary wins `node_modules/.bin/tsc`. For a
-comparison, run `PWRROUTE_TYPECHECK_COMPILER=typescript pnpm typecheck`.
-`tsconfig.base.json` sets `noUnusedLocals` and `noUnusedParameters`, so dead
-imports and locals fail typecheck.
+## Licenses
 
-`pnpm-workspace.yaml` sets a seven-day `minimumReleaseAge`, matching the
-Dependabot cooldown. Exempting a package from it is a supply-chain decision.
+`deny.toml` is the gate: its `[licenses] allow` list judges every crate that
+ships on a release target. **Adding an id there, or a crate exception, is a
+legal decision — do not do it to make CI green.** The first block is the Pwr
+family's shared list; ids the Rust port needed follow, each with its reason.
 
-## Launch the dev app
+`THIRD_PARTY_LICENSES` is generated by `cargo xtask licenses` from cargo-about
+(`about.toml`, `licenses/about.hbs`) plus `licenses/bundled.txt`, which lists
+what ships but is not a crate: the npm packages inside Finicky's config API
+bundle and the Geist fonts. After a dependency change run `cargo xtask
+licenses` and commit the result; when a bundled asset changes, edit
+`licenses/bundled.txt` by hand. Keep `about.toml`'s `accepted` list in step
+with `deny.toml`.
+
+Dependabot proposes a version only after it is seven days old. `gpui-kit` is
+pinned with `=` and upgraded by hand, with a look at the window.
+
+## Launch the app
 
 Before launching, check whether a window titled `PwrRoute` already exists and
-reuse it when suitable. For Computer Use, never target the generic `Electron`
-display name or the shared `com.github.Electron` bundle ID; resolve this
-checkout's Electron path instead.
-
-Agent shells hosted by another Electron Pwr app can inherit that parent's
-`ELECTRON_EXEC_PATH`, `ELECTRON_CLI_ARGS`, or `ELECTRON_MAJOR_VER`. Clear them:
-
-```bash
-node --version # must match .nvmrc
-corepack enable
-env -u ELECTRON_EXEC_PATH -u ELECTRON_CLI_ARGS -u ELECTRON_MAJOR_VER pnpm dev
-```
+reuse it when suitable. A dev build runs as a bare binary (`target/*/pwrroute`);
+`cargo xtask bundle` makes a real `.app` with bundle id
+`com.pwrdrvr.pwrroute`.
 
 PwrRoute will register as the OS default browser. Registration is an explicit
 action in the app; never change the default browser on a developer machine as
-a side effect of a test or launch.
+a side effect of a test or launch. Until the router lands, the bundle declares
+no URL schemes on purpose (see `packaging/macos/Info.plist.in`).
 
 ## Packaging & releases
 
-`apps/desktop/scripts/package.mjs` wraps electron-builder and decides signed or
-unsigned from the environment (`pnpm --filter @pwrroute/desktop package:mac`
-for a local ad hoc signed build). Releases are cut by pushing a `vX.Y.Z` tag
-that matches `apps/desktop/package.json` and a `CHANGELOG.md` section
-(`pnpm release:check` verifies). CI, preview builds, and signing secrets are
-documented in `.github/workflows/README.md`.
+`cargo xtask bundle [--universal] [--sign IDENTITY] [--notarize]` builds the
+macOS app, zip and DMG, ad hoc signed unless an identity is given.
+`cargo xtask package-linux` builds the tar.gz and .deb. Windows packaging is
+inline in the workflows. Releases are cut by pushing a `vX.Y.Z` tag that
+matches the workspace version in `Cargo.toml` and a `CHANGELOG.md` section
+(`cargo xtask release-check --tag vX.Y.Z` verifies). CI, preview builds, and
+signing secrets are documented in `.github/workflows/README.md`.
 
 ## Pull Requests
 

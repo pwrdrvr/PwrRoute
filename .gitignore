@@ -1,22 +1,9 @@
-# Dependencies
-node_modules/
-.pnpm-store/
+# Build output (cargo, xtask packaging)
+/target/
+/target-*/
+/dist/
 
-# Build output
-dist/
-out/
-build/
-*.tsbuildinfo
-# A stray bundle at the workspace root: this repo has no root entry point, so
-# an index.js here is always something a build wrote by accident.
-/index.js
-
-# electron-builder buildResources (entitlements, icons) are source, not output —
-# carve them out of the blanket build/ ignore above.
-!apps/desktop/build/
-
-# Electron packaging / distributables
-apps/desktop/release/
+# Distributables
 *.app
 *.dmg
 *.exe
@@ -27,13 +14,10 @@ apps/desktop/release/
 
 # Logs
 *.log
-npm-debug.log*
-pnpm-debug.log*
 
-# Test / coverage
+# Coverage
 coverage/
-playwright-report/
-test-results/
+*.profraw
 
 # OS cruft
 .DS_Store
@@ -61,3 +45,4 @@ design/uploads/
 
 # Local task artifacts and PR descriptions
 .local/
+

@@ -14,11 +14,13 @@ macOS first, then Windows and Linux.</p>
 
 ## Status
 
-This repository is a scaffold. It has the workspace, CI, release pipeline,
-license checks and the design, and a desktop stub that shows the window chrome.
-The router, rules, Finicky config support and the MCP server are being ported
-in from a rough cut. There are no releases, and the behavior described below
-is the design, not the current build.
+PwrRoute is an early port. It is a Rust workspace with a native window built
+on [GPUI](https://www.gpui.rs) and a rules engine that runs Finicky v4 configs
+in QuickJS. The window draws the Rules screen from sample data. The engine
+resolves URLs the way Finicky does and is tested against it. Neither is wired
+to the other yet, and PwrRoute does not receive links from the OS. There are
+no releases, and the behavior described below is the design, not the current
+build.
 
 ## What it does
 
@@ -46,15 +48,14 @@ The design lives in [design/](design/); start with
 
 ## Development
 
-PwrRoute is a pnpm workspace on Node.js 24 (`.nvmrc`). See
+PwrRoute is a Cargo workspace on Rust 1.97 (`rust-toolchain.toml`). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 
 ```bash
-pnpm install
-pnpm dev        # run the desktop stub
-pnpm lint       # syntax, license checks, typecheck
-pnpm test
-pnpm build
+cargo run -p pwrroute-app   # the window
+cargo xtask lint            # rustfmt, clippy, cargo-deny, license notices
+cargo xtask test
+cargo xtask bundle          # macOS app, zip and DMG
 ```
 
 ## Thanks, Finicky
