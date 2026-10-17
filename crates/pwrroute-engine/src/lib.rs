@@ -26,13 +26,17 @@ use rquickjs::{
     CatchResultExt, CaughtError, Context, Ctx, Function, Module, Object, Runtime, Value,
     function::Rest,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use host::{DefaultHost, Host, LogLevel, ModifierKeys, PowerInfo, SystemInfo};
 
 /// Finicky's configuration API, as the Go host embeds it. See
 /// `assets/README.md` for where it comes from.
 const CONFIG_API: &str = include_str!("../assets/finickyConfigAPI.js");
+
+/// PwrRoute's traced `openUrl`: Finicky's own, on a view of the config that
+/// records which rules fired. See [`Engine::resolve_traced`].
+const TRACED_OPEN_URL: &str = include_str!("traced_open_url.js");
 
 /// The global a config's exports land on. `getConfiguration` reads
 /// `self[namespace]`, preferring its `default` export.
@@ -99,6 +103,38 @@ pub struct Browser {
     pub open_in_background: Option<bool>,
 }
 
+/// A [`Resolution`] with the rules that produced it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TracedResolution {
+    /// Exactly what [`Engine::resolve`] returns for the same URL.
+    pub resolution: Resolution,
+    /// Every `rewrite` entry that matched, in the order it ran.
+    pub rewrites: Vec<RewriteStep>,
+    /// What chose the browser.
+    pub chosen_by: ChosenBy,
+}
+
+/// One `rewrite` entry that matched.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RewriteStep {
+    /// Its index in the config's `rewrite` array.
+    pub rule: usize,
+    /// The URL after it ran. It can equal the URL before.
+    pub url: String,
+}
+
+/// What chose the browser in a [`TracedResolution`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ChosenBy {
+    /// `handlers[index]` matched first.
+    Handler { index: usize },
+    /// `defaultBrowser`: no handler matched, or a rule threw (then
+    /// [`Resolution::error`] says why).
+    Default,
+}
+
 /// How [`Browser::name`] identifies the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,6 +196,42 @@ impl Engine {
 
     /// Resolves one URL. `opener` is the app the link came from, when known.
     pub fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolution> {
+        self.open_url(
+            "JSON.stringify(finickyConfigAPI.openUrl(url, opener, originalUrl, finalConfig))",
+            url,
+            opener,
+        )
+    }
+
+    /// Resolves one URL as [`resolve`](Self::resolve) does, and reports
+    /// which `rewrite` entries matched and what chose the browser.
+    ///
+    /// This is still Finicky's `openUrl`, not a copy of it: it runs on a
+    /// view of the config that passes every read through, except that a
+    /// rule's `url` or `browser` (read only when that rule fired) and
+    /// `defaultBrowser` come back wrapped in a function that notes the rule
+    /// and then does what `openUrl` would have done with the real value.
+    /// Matchers are not touched, and every config function runs once, in the
+    /// same order, with the same arguments. `src/traced_open_url.js` gives
+    /// the argument in full; `tests/finicky_compat.rs` holds both paths to
+    /// the same results. An `Err` carries the same message; only the JS stack
+    /// quoted under it differs.
+    pub fn resolve_traced(&self, url: &str, opener: Option<&Opener>) -> Result<TracedResolution> {
+        self.open_url(
+            "JSON.stringify(pwrrouteOpenUrlTraced(url, opener, originalUrl, finalConfig))",
+            url,
+            opener,
+        )
+    }
+
+    /// Sets the globals `openUrl` reads, evaluates `script` under the
+    /// resolve deadline and parses the JSON it returns.
+    fn open_url<T: DeserializeOwned>(
+        &self,
+        script: &'static str,
+        url: &str,
+        opener: Option<&Opener>,
+    ) -> Result<T> {
         self.with_deadline(self.limits.resolve, |ctx| {
             let globals = ctx.globals();
             globals.set("url", url)?;
@@ -170,9 +242,7 @@ impl Engine {
             };
             globals.set("opener", opener)?;
             let json: String = ctx
-                .eval(
-                    "JSON.stringify(finickyConfigAPI.openUrl(url, opener, originalUrl, finalConfig))",
-                )
+                .eval(script)
                 .catch(&ctx)
                 .map_err(|e| js_error("resolving the URL", &e))?;
             Ok(serde_json::from_str(&json)?)
@@ -200,6 +270,9 @@ fn install_globals(ctx: &Ctx<'_>, host: &Rc<dyn Host>) -> Result<()> {
     ctx.eval::<(), _>(CONFIG_API)
         .catch(ctx)
         .map_err(|e| js_error("evaluating the config API", &e))?;
+    ctx.eval::<(), _>(TRACED_OPEN_URL)
+        .catch(ctx)
+        .map_err(|e| js_error("evaluating the traced resolve", &e))?;
 
     // `finicky` is the API's utilities plus the host's native functions, as
     // the Go host assembled it.

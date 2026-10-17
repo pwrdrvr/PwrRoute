@@ -49,8 +49,10 @@ pub enum Step {
     Received {
         url: String,
     },
-    /// A rewrite changed the URL. `rule` is `None` when the resolver only
-    /// reports the final URL; `url` is then the URL after every rewrite.
+    /// A rewrite rule matched and ran; `url` is the URL after it, which can
+    /// equal the URL before. `rule` is `None` when the resolver only reports
+    /// the final URL; the step then means the URL changed, and `url` is the
+    /// URL after every rewrite.
     Rewrite {
         rule: Option<usize>,
         url: String,
@@ -100,8 +102,8 @@ pub enum Matched {
     Handler { index: usize },
     /// No handler matched; `defaultBrowser` applied.
     Default,
-    /// The resolver did not say. The current engine reports the browser, not
-    /// the rule; the trace fills in when it does.
+    /// The resolver did not say. The engine always does; a resolver that
+    /// returns no rule steps gets this.
     Unreported,
 }
 

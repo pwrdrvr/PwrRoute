@@ -12,6 +12,11 @@ contract, so most rules here protect it.
   `console`, the `finicky` global (the API's utilities plus the `Host`
   trait's native functions), module loading with oxc, and the `url`,
   `originalUrl`, `opener`, `finalConfig` globals `openUrl` reads.
+- **The trace is a view, not a copy.** `Engine::resolve_traced`
+  (`src/traced_open_url.js`) runs Finicky's `openUrl` on a Proxy of the
+  config that notes which rules fired. Keep it that way: never copy
+  `openUrl`'s loop. The compat test runs every case through both paths and
+  requires identical results.
 - **`tests/finicky_compat.rs` is the gate.** `tests/configs/expected.json`
   was recorded from the PwrFinicky Go host (goja), one URL per process. A case
   carrying a `goHost` note is one where that host is wrong and the engine is

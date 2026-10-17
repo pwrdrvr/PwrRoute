@@ -70,7 +70,7 @@ fn a_handler_routes_the_link_and_the_launcher_opens_it() {
                 url: "https://team.slack.com/archives/1".into()
             },
             Step::Matched {
-                by: Matched::Unreported
+                by: Matched::Handler { index: 0 }
             },
             Step::Browser { browser },
             Step::Launched { dry_run: true },
@@ -88,10 +88,18 @@ fn a_rewrite_shows_in_the_trace_and_reaches_the_launcher() {
         .dispatch_and_wait(link("https://example.com/old/page"))
         .unwrap();
     assert_eq!(record.final_url.as_deref(), Some("https://example.com/new"));
-    assert!(record.steps.contains(&Step::Rewrite {
-        rule: None,
-        url: "https://example.com/new".into()
-    }));
+    assert_eq!(
+        record.steps[1..3],
+        [
+            Step::Rewrite {
+                rule: Some(0),
+                url: "https://example.com/new".into()
+            },
+            Step::Matched {
+                by: Matched::Default
+            },
+        ]
+    );
     assert_eq!(launcher.launched()[0].url, "https://example.com/new");
     assert_eq!(launcher.launched()[0].name, "Safari");
 }
@@ -136,6 +144,9 @@ fn browser_null_opens_nothing() {
     assert_eq!(record.outcome, Outcome::NotOpened);
     assert!(record.browser.is_none());
     assert_eq!(record.steps.last(), Some(&Step::NotOpened));
+    assert!(record.steps.contains(&Step::Matched {
+        by: Matched::Handler { index: 2 }
+    }));
     assert!(launcher.launched().is_empty());
 }
 

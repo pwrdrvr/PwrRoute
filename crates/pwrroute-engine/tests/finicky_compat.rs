@@ -1,5 +1,6 @@
 //! Finicky v4 compatibility: every config in `tests/configs` resolves every URL
-//! in `urls.txt` the way the Go host did (see `expected.json`).
+//! in `urls.txt` the way the Go host did (see `expected.json`), through both
+//! `Engine::resolve` and `Engine::resolve_traced`.
 
 use std::{
     cell::RefCell,
@@ -9,7 +10,9 @@ use std::{
     time::Duration,
 };
 
-use pwrroute_engine::{AppType, Engine, Host, Limits, LogLevel, ModifierKeys, Opener};
+use pwrroute_engine::{
+    AppType, ChosenBy, Engine, Host, Limits, LogLevel, ModifierKeys, Opener, RewriteStep,
+};
 use serde::Deserialize;
 
 fn configs() -> PathBuf {
@@ -55,6 +58,17 @@ fn matches_the_go_host() {
             let got = engine
                 .resolve(&case.input, None)
                 .unwrap_or_else(|e| panic!("{config} {}: {e:#}", case.input));
+            // The traced path must give exactly openUrl's result, error text
+            // included.
+            let traced = engine
+                .resolve_traced(&case.input, None)
+                .unwrap_or_else(|e| panic!("{config} {} (traced): {e:#}", case.input));
+            if traced.resolution != got {
+                failures.push(format!(
+                    "{config} {}\n  openUrl {got:?}\n  traced  {:?}",
+                    case.input, traced.resolution
+                ));
+            }
             let b = &got.browser;
             let actual = (
                 b.url.as_str(),
@@ -96,6 +110,192 @@ fn matches_on_the_opener() {
     let from_nowhere = engine.resolve("https://example.org/", None).unwrap();
     assert_eq!(from_slack.browser.name, "Firefox");
     assert_eq!(from_nowhere.browser.name, "Google Chrome");
+}
+
+#[test]
+fn the_traced_resolve_names_the_rules_that_fired() {
+    let engine = load("stress.ts");
+    let rewrite = |rule: usize, url: &str| RewriteStep {
+        rule,
+        url: url.to_owned(),
+    };
+
+    // rewrite[0] strips tracking, rewrite[1] upgrades to https, rewrite[3]
+    // sends medium.com to scribe.rip, and handlers[6] takes scribe.rip.
+    let t = engine
+        .resolve_traced("http://blog.medium.com/post?utm_source=x", None)
+        .unwrap();
+    assert_eq!(
+        t.rewrites,
+        [
+            rewrite(0, "http://blog.medium.com/post"),
+            rewrite(1, "https://blog.medium.com/post"),
+            rewrite(3, "https://scribe.rip/post"),
+        ]
+    );
+    assert_eq!(t.chosen_by, ChosenBy::Handler { index: 6 });
+    assert_eq!(t.resolution.browser.name, "Firefox");
+
+    let t = engine
+        .resolve_traced("https://nothing.example/", None)
+        .unwrap();
+    assert!(t.rewrites.is_empty());
+    assert_eq!(t.chosen_by, ChosenBy::Default);
+
+    // handlers[7] chooses `browser: null`.
+    let t = engine
+        .resolve_traced("https://printer.local/", None)
+        .unwrap();
+    assert_eq!(t.chosen_by, ChosenBy::Handler { index: 7 });
+    assert_eq!(t.resolution.browser.app_type, AppType::None);
+}
+
+#[test]
+fn a_rule_that_throws_is_traced_to_the_default() {
+    let path = write_config(
+        "throwing-rules.js",
+        r#"export default {
+  defaultBrowser: "Safari",
+  rewrite: [
+    { match: "*", url: (url) => url.href.replace("a.example", "b.example") },
+    { match: (url) => url.pathname === "/rewrite-throws", url: () => { throw new Error("rewrite failed"); } },
+  ],
+  handlers: [
+    { match: "never", browser: "Opera" },
+    { match: (url) => url.pathname === "/browser-throws", browser: () => { throw new Error("browser failed"); } },
+    { match: (url) => url.pathname === "/matcher-throws" && missing.value, browser: "Firefox" },
+    { match: "*", browser: "Google Chrome" },
+  ],
+};"#,
+    );
+    let engine = Engine::load(
+        &path,
+        Rc::new(pwrroute_engine::DefaultHost),
+        Limits::default(),
+    )
+    .unwrap();
+    for (path, error) in [
+        ("/rewrite-throws", "rewrite failed"),
+        ("/browser-throws", "browser failed"),
+        ("/matcher-throws", "missing"),
+        ("/fine", ""),
+    ] {
+        let url = format!("https://a.example{path}");
+        let plain = engine.resolve(&url, None).unwrap();
+        let traced = engine.resolve_traced(&url, None).unwrap();
+        assert_eq!(traced.resolution, plain, "{path}");
+        assert_eq!(
+            traced.rewrites[0],
+            RewriteStep {
+                rule: 0,
+                url: format!("https://b.example{path}"),
+            },
+            "{path}"
+        );
+        if error.is_empty() {
+            assert_eq!(traced.chosen_by, ChosenBy::Handler { index: 3 });
+            assert_eq!(traced.resolution.error, None);
+        } else {
+            assert_eq!(traced.chosen_by, ChosenBy::Default, "{path}");
+            assert_eq!(traced.resolution.browser.name, "Safari", "{path}");
+            let message = traced.resolution.error.unwrap_or_default();
+            assert!(message.contains(error), "{path}: {message}");
+        }
+    }
+}
+
+#[test]
+fn the_traced_resolve_runs_each_config_function_as_open_url_does() {
+    let path = write_config(
+        "logging-rules.js",
+        r#"export default {
+  defaultBrowser: (url) => { console.log("default", url.href); return "Safari"; },
+  rewrite: [
+    { match: (url) => { console.log("rewrite 0 match", url.href); return true; }, url: (url) => { console.log("rewrite 0 url"); return url.href + "x"; } },
+    { match: (url) => { console.log("rewrite 1 match", url.href); return false; }, url: () => { console.log("rewrite 1 url"); return "https://never.example/"; } },
+  ],
+  handlers: [
+    { match: (url) => { console.log("handler 0 match", url.href); return url.pathname === "/ax"; }, browser: (url) => { console.log("handler 0 browser"); return "Firefox"; } },
+    { match: (url) => { console.log("handler 1 match", url.href); return false; }, browser: "Opera" },
+  ],
+};"#,
+    );
+    let host = Rc::new(RecordingHost {
+        logs: RefCell::default(),
+    });
+    let engine = Engine::load(&path, host.clone(), Limits::default()).unwrap();
+    for url in ["https://a.example/a", "https://a.example/b"] {
+        engine.resolve(url, None).unwrap();
+        let plain = host.logs.take();
+        engine.resolve_traced(url, None).unwrap();
+        let traced = host.logs.take();
+        assert!(!plain.is_empty());
+        assert_eq!(traced, plain, "{url}");
+    }
+}
+
+#[test]
+fn a_config_made_invalid_at_runtime_fails_the_same_way_traced() {
+    let path = write_config(
+        "self-breaking.js",
+        r#"const config = {
+  defaultBrowser: "Safari",
+  handlers: [{ match: (url) => { if (url.host === "break.example") config.defaultBrowser = 42; return false; }, browser: "Firefox" }],
+};
+export default config;"#,
+    );
+    // Each path on its own engine: the first call breaks its config. The
+    // matcher sets defaultBrowser to 42, which then fails as a browser; after
+    // that the config is invalid before any rule runs.
+    let errors = |traced: bool| {
+        let engine = Engine::load(
+            &path,
+            Rc::new(pwrroute_engine::DefaultHost),
+            Limits::default(),
+        )
+        .unwrap();
+        ["https://break.example/", "https://other.example/"].map(|url| {
+            let err = if traced {
+                engine.resolve_traced(url, None).map(|_| ())
+            } else {
+                engine.resolve(url, None).map(|_| ())
+            };
+            // The JS stack after the message names different frames.
+            let err = err.unwrap_err().to_string();
+            err.split("\n    at ").next().unwrap().to_owned()
+        })
+    };
+    let plain = errors(false);
+    assert!(plain[0].contains("Invalid browser option"), "{}", plain[0]);
+    assert!(plain[1].contains("Invalid config"), "{}", plain[1]);
+    assert_eq!(errors(true), plain);
+}
+
+#[test]
+fn the_traced_resolve_honours_the_deadline() {
+    let path = write_config(
+        "spin-traced.js",
+        r#"export default {
+  defaultBrowser: "Safari",
+  handlers: [
+    { match: (url) => url.host === "spin.example", browser: () => { while (true) {} } },
+  ],
+};"#,
+    );
+    let limits = Limits {
+        resolve: Duration::from_millis(200),
+        ..Limits::default()
+    };
+    let engine = Engine::load(&path, Rc::new(pwrroute_engine::DefaultHost), limits).unwrap();
+    let err = engine
+        .resolve_traced("https://spin.example/", None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("timed out"), "{err}");
+    let ok = engine
+        .resolve_traced("https://other.example/", None)
+        .unwrap();
+    assert_eq!(ok.chosen_by, ChosenBy::Default);
 }
 
 #[test]

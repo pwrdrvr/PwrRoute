@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::Result;
-use pwrroute_engine::{AppType, Browser, Engine, Opener};
+use pwrroute_engine::{AppType, Browser, ChosenBy, Engine, Opener};
 
 use crate::{
     ipc::{Request, Response},
@@ -54,13 +54,25 @@ pub struct Resolved {
 
 impl Resolver for Engine {
     fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved> {
-        // The engine reports the destination, not the rules that chose it, so
-        // the router derives the trace from the result.
-        let resolution = Engine::resolve(self, url, opener)?;
+        let traced = self.resolve_traced(url, opener)?;
+        let mut rule_steps: Vec<Step> = traced
+            .rewrites
+            .into_iter()
+            .map(|r| Step::Rewrite {
+                rule: Some(r.rule),
+                url: r.url,
+            })
+            .collect();
+        rule_steps.push(Step::Matched {
+            by: match traced.chosen_by {
+                ChosenBy::Handler { index } => Matched::Handler { index },
+                ChosenBy::Default => Matched::Default,
+            },
+        });
         Ok(Resolved {
-            browser: resolution.browser,
-            error: resolution.error,
-            rule_steps: Vec::new(),
+            browser: traced.resolution.browser,
+            error: traced.resolution.error,
+            rule_steps,
         })
     }
 }
