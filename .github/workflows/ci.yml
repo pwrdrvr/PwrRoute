@@ -27,6 +27,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # No debug info in CI builds: nobody reads it here, and writing it (PDBs
+  # on Windows above all) is a large share of compile and link time.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   # Keep the pull_request trigger path-unfiltered so the required check jobs
@@ -204,11 +208,17 @@ jobs:
         run: cargo xtask bundle
 
   windows:
-    name: Windows (test + build)
+    # No separate build step: the tests compile every module of the app, and
+    # a plain `cargo build` drops the test-only gpui-kit feature, which made
+    # it recompile the whole GPUI stack a second time. A cold run compiles
+    # for about 30 minutes; the limit leaves room for that one run, after
+    # which the saved cache makes it a few minutes. release.yml builds the
+    # Windows release exe.
+    name: Windows (test)
     runs-on: windows-2025
     needs: changes
     if: needs.changes.outputs.code_impacting == 'true'
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       # .gitattributes forces LF; this keeps Git for Windows from fighting it.
       - run: git config --global core.autocrlf false
@@ -236,9 +246,3 @@ jobs:
       - name: Test
         run: cargo xtask test
 
-      # A dev build, reusing what the tests just compiled. The release build
-      # (thin LTO, one codegen unit) ran past this job's limit on a cold
-      # cache, and a cancelled job never saves its cache, so it never warmed.
-      # Linux's Build job and release.yml cover the release profile.
-      - name: Build
-        run: cargo build --locked -p pwrroute-app

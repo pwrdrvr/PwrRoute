@@ -6,7 +6,7 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that checks the notice, tests and builds the app in the dev profile. Docs/Dependabot-only PRs skip everything after Classify Changes (see below). |
+| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that checks the notice and runs the tests. Docs/Dependabot-only PRs skip everything after Classify Changes (see below). |
 | `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, uploaded as workflow artifacts. |
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, packages macOS universal, Windows x64 and Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets. Signing and notarization run only when their credentials are configured (see below). |
 
@@ -25,7 +25,7 @@ Jobs and the names the "Protect main" ruleset requires:
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
 | `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
 | `macos` | macOS (test + bundle) | macos-26 | Tests, then `cargo xtask bundle` (ad hoc signed). |
-| `windows` | Windows (test + build) | windows-2025 | `cargo xtask licenses --check`, tests, a dev build of the app. |
+| `windows` | Windows (test) | windows-2025 | `cargo xtask licenses --check`, then the tests, which compile every module of the app. |
 
 The required check names are pinned. Renaming the `Typecheck`, `Build` or
 `Test` job leaves that check permanently pending and blocks every PR.
