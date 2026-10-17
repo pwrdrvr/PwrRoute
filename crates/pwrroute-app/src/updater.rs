@@ -1,0 +1,188 @@
+//! Installs and updates through Velopack.
+//!
+//! [`run_startup_hooks`] is Velopack's startup logic, which every Velopack
+//! app runs before anything else. [`check_in_background`] asks GitHub
+//! Releases for a newer version, at startup and from "Check for Updates…",
+//! and downloads it into Velopack's package cache. The next launch applies
+//! it: `VelopackApp::run` finds the downloaded package, swaps it in and
+//! restarts. Until the update design lands, a log line is the whole UI.
+//!
+//! Only a copy Velopack installed can update. `cargo run`, the .deb and the
+//! tar.gz have no Velopack manifest, so their check logs that and stops.
+
+use std::{
+    fmt,
+    sync::atomic::{AtomicBool, Ordering},
+    thread,
+};
+
+use velopack::{UpdateCheck, UpdateManager, VelopackApp, sources::GithubSource};
+
+/// Where releases are published. `release.yml` uploads Velopack's feed
+/// (`releases.<channel>.json` and the `.nupkg` packages) to each release.
+const RELEASES: &str = "https://github.com/pwrdrvr/PwrRoute";
+
+/// One check at a time: a second "Check for Updates…" while the startup
+/// check is still downloading would only contend for Velopack's lock.
+static CHECKING: AtomicBool = AtomicBool::new(false);
+
+/// Velopack's startup logic. Call it first in `main`, before the window.
+///
+/// Setup, updates and the uninstaller start `pwrroute.exe` with a hook
+/// argument; this runs that hook and exits the process. When an update was
+/// downloaded on a previous run, this applies it and restarts into the new
+/// version. Otherwise it returns at once, also for builds Velopack did not
+/// install.
+pub fn run_startup_hooks() {
+    let mut app = VelopackApp::build();
+    // Windows only: Velopack has no install or uninstall step on macOS or
+    // Linux. Each hook runs in a process of its own, which Velopack kills
+    // after 30 s (install, uninstall) or 15 s (update): no UI, no network. Registering makes PwrRoute one of the browsers the
+    // user can pick; it never makes PwrRoute the default.
+    #[cfg(target_os = "windows")]
+    {
+        use crate::browser_registration::{register_browser, unregister_browser};
+        app = app
+            .on_after_install_fast_callback(|_| register_browser())
+            // An update may change what is registered, so it re-registers.
+            .on_after_update_fast_callback(|_| register_browser())
+            .on_before_uninstall_fast_callback(|_| unregister_browser());
+    }
+    app.run();
+}
+
+/// What asked for the check, for the log line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    Startup,
+    Menu,
+}
+
+/// Check for an update, and download it, on a thread of its own: Velopack's
+/// client blocks, and a download can take a while.
+pub fn check_in_background(trigger: Trigger) {
+    if CHECKING.swap(true, Ordering::AcqRel) {
+        log(trigger, &Outcome::AlreadyChecking);
+        return;
+    }
+    let spawned = thread::Builder::new()
+        .name("pwrroute-updater".to_owned())
+        .spawn(move || {
+            let outcome = check_and_download();
+            CHECKING.store(false, Ordering::Release);
+            log(trigger, &outcome);
+        });
+    if let Err(error) = spawned {
+        CHECKING.store(false, Ordering::Release);
+        log(trigger, &Outcome::Failed(error.to_string()));
+    }
+}
+
+fn check_and_download() -> Outcome {
+    let source = GithubSource::new(
+        RELEASES,
+        None,
+        includes_prereleases(env!("CARGO_PKG_VERSION")),
+    );
+    let manager = match UpdateManager::new(source, None, None) {
+        Ok(manager) => manager,
+        Err(error) => return Outcome::NotInstalled(error.to_string()),
+    };
+    if let Some(pending) = manager.get_update_pending_restart() {
+        return Outcome::Pending(pending.Version);
+    }
+    match manager.check_for_updates() {
+        Ok(UpdateCheck::UpdateAvailable(update)) => {
+            let version = update.TargetFullRelease.Version.clone();
+            match manager.download_updates(&update, None) {
+                Ok(()) => Outcome::Downloaded(version),
+                Err(error) => Outcome::Failed(error.to_string()),
+            }
+        }
+        Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
+            Outcome::UpToDate(manager.get_current_version_as_string())
+        }
+        Err(error) => Outcome::Failed(error.to_string()),
+    }
+}
+
+/// Releases are born as GitHub Pre-releases and promoted to Latest by hand.
+/// A prerelease build follows every release; a stable build only promoted
+/// ones.
+fn includes_prereleases(version: &str) -> bool {
+    version.contains('-')
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    AlreadyChecking,
+    NotInstalled(String),
+    UpToDate(String),
+    Downloaded(String),
+    Pending(String),
+    Failed(String),
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyChecking => write!(f, "a check is already running"),
+            Self::NotInstalled(why) => {
+                write!(f, "not a Velopack install, so no updates here ({why})")
+            }
+            Self::UpToDate(version) => write!(f, "{version} is the latest"),
+            Self::Downloaded(version) => {
+                write!(
+                    f,
+                    "downloaded {version}; it installs when PwrRoute restarts"
+                )
+            }
+            Self::Pending(version) => {
+                write!(
+                    f,
+                    "{version} is downloaded and installs when PwrRoute restarts"
+                )
+            }
+            Self::Failed(why) => write!(f, "check failed: {why}"),
+        }
+    }
+}
+
+fn log(trigger: Trigger, outcome: &Outcome) {
+    let trigger = match trigger {
+        Trigger::Startup => "startup",
+        Trigger::Menu => "menu",
+    };
+    eprintln!("pwrroute: updates ({trigger}): {outcome}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prerelease_builds_follow_prereleases() {
+        assert!(includes_prereleases("0.0.1-alpha.0"));
+        assert!(includes_prereleases("1.2.0-beta.3"));
+        assert!(!includes_prereleases("1.2.0"));
+    }
+
+    #[test]
+    fn a_dev_build_reports_it_is_not_installed() {
+        // The test binary is not in a Velopack layout, so the manager cannot
+        // load and nothing reaches the network.
+        assert!(matches!(check_and_download(), Outcome::NotInstalled(_)));
+    }
+
+    #[test]
+    fn outcomes_read_as_log_lines() {
+        assert_eq!(
+            Outcome::AlreadyChecking.to_string(),
+            "a check is already running"
+        );
+        assert_eq!(
+            Outcome::Downloaded("0.0.2".to_owned()).to_string(),
+            "downloaded 0.0.2; it installs when PwrRoute restarts"
+        );
+    }
+}

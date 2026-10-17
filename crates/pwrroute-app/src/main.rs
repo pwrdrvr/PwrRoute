@@ -10,6 +10,8 @@
 mod app;
 mod app_menu;
 mod assets;
+#[cfg(target_os = "windows")]
+mod browser_registration;
 mod chrome;
 mod editor;
 mod fixtures;
@@ -17,6 +19,7 @@ mod rules_view;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod updater;
 mod widgets;
 
 use gpui_kit::{
@@ -34,6 +37,8 @@ const WINDOW_SIZE: (f32, f32) = (1240.0, 820.0);
 const TRAFFIC_LIGHTS: (f32, f32) = (16.0, 13.0);
 
 fn main() {
+    // First: Velopack's install, update and uninstall hooks run here and exit.
+    updater::run_startup_hooks();
     gpui_kit::application()
         .with_assets(assets::Assets)
         // Until the menu-bar item exists there is no way back to a closed
@@ -69,5 +74,6 @@ fn main() {
                 window.focus(&focus, cx);
             });
             cx.activate(true);
+            updater::check_in_background(updater::Trigger::Startup);
         });
 }
