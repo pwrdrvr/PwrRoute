@@ -42,10 +42,11 @@ On Linux, install GPUI's system libraries first with
 |---|---|---|
 | Desktop app | Rust + GPUI (gpui-kit) | `crates/pwrroute-app/` |
 | Rules engine | Rust + QuickJS (rquickjs) + oxc, running Finicky's config API | `crates/pwrroute-engine/` |
+| Resident router | Rust: dispatch, trace buffer, single instance, IPC | `crates/pwrroute-router/` |
+| OS edge | Rust + objc2 (macOS), registry (Windows), xdg (Linux) | `crates/pwrroute-os/` |
 | Local agent access | MCP over OAuth-protected loopback HTTP | not ported yet |
 
-The resident router, the browser launcher and the MCP server are not ported
-yet.
+The browser launcher and the MCP server are not ported yet.
 
 ## Checks
 

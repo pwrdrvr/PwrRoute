@@ -7,13 +7,19 @@ Keep this file short; see **Docs & conventions** below.
 
 ## Status: early port
 
-A Cargo workspace with a GPUI window and a Finicky-compatible rules engine.
-Neither is wired to the other yet, and nothing receives links from the OS.
+A Cargo workspace with a GPUI window, a Finicky-compatible rules engine and a
+resident router that receives links from the OS. The router resolves and
+records every link, but cannot open a browser until the launcher crate lands
+(run with `--dry-run` to see dispatches succeed).
 
 - `crates/pwrroute-engine` — loads Finicky v4 `.js`/`.ts` configs in QuickJS
   (rquickjs) with oxc for TypeScript, and resolves URLs. See its `AGENTS.md`.
+- `crates/pwrroute-router` — the dispatch pipeline, the in-memory trace of
+  recent dispatches, single instance and IPC. See its `AGENTS.md`.
+- `crates/pwrroute-os` — link receipt and default-browser registration per
+  OS; the one crate with `unsafe`. See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI window (binary `pwrroute`). It draws the
-  design's Rules screen from contrived fixture data.
+  design's Rules screen from contrived fixture data and hosts the router.
 - `xtask` — lint, test, license notices, release checks and packaging.
 
 Port, don't invent: the design in `design/` decides the shape. Read
@@ -82,10 +88,16 @@ reuse it when suitable. A dev build runs as a bare binary (`target/*/pwrroute`);
 `cargo xtask bundle` makes a real `.app` with bundle id
 `com.pwrdrvr.pwrroute`.
 
-PwrRoute will register as the OS default browser. Registration is an explicit
-action in the app; never change the default browser on a developer machine as
-a side effect of a test or launch. Until the router lands, the bundle declares
-no URL schemes on purpose (see `packaging/macos/Info.plist.in`).
+The first launch becomes the router and stays running with its windows
+closed; a later launch forwards its links (or asks for the window) and exits.
+Quit from the app menu, or kill the process, to stop it.
+
+PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in`,
+`packaging/linux/pwrroute.desktop`), so the OS can offer it as a browser.
+Becoming the default is an explicit action in the app; never change the
+default browser on a developer machine as a side effect of a test or launch,
+and never call `pwrroute_os::set_default_browser` or `register_browser` from
+one.
 
 ## Packaging & releases
 
