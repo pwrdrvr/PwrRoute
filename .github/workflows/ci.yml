@@ -208,6 +208,10 @@ jobs:
         run: cargo xtask bundle
 
   windows:
+    # No license-notice check here: it is CPU-bound (cargo-about matches every
+    # crate's license text) and took about 4 minutes on this runner, while the
+    # only platform-specific part, line-ending normalization, is unit tested.
+    # Typecheck runs it on Linux.
     # No separate build step: the tests compile every module of the app, and
     # a plain `cargo build` drops the test-only gpui-kit feature, which made
     # it recompile the whole GPUI stack a second time. A cold run compiles
@@ -232,16 +236,6 @@ jobs:
           toolchain: "1.97"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Install cargo-about
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-about
-
-      # The notice check is the one lint worth repeating here: it normalizes
-      # CRLF, and that code only really runs on Windows.
-      - name: Check THIRD_PARTY_LICENSES
-        run: cargo xtask licenses --check
 
       - name: Test
         run: cargo xtask test
