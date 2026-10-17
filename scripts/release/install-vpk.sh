@@ -24,10 +24,12 @@ package="$feed/vpk.$VPK_VERSION.nupkg"
 curl -fsSL --retry 3 -o "$package" \
   "https://api.nuget.org/v3-flatcontainer/vpk/$VPK_VERSION/vpk.$VPK_VERSION.nupkg"
 
+# From stdin: given a Windows path, GNU sha512sum escapes its backslashes and
+# prefixes the hash with "\".
 if command -v sha512sum >/dev/null; then
-  actual=$(sha512sum "$package" | awk '{print $1}')
+  actual=$(sha512sum < "$package" | awk '{print $1}')
 else
-  actual=$(shasum -a 512 "$package" | awk '{print $1}')
+  actual=$(shasum -a 512 < "$package" | awk '{print $1}')
 fi
 if [ "$actual" != "$VPK_SHA512" ]; then
   echo "::error::vpk $VPK_VERSION package SHA-512 mismatch: expected $VPK_SHA512, got $actual" >&2
