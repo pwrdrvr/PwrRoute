@@ -760,6 +760,7 @@ MIT License (184)
 - core_maths@0.1.1 | https://github.com/robertbastian/core_maths
 - convert_case@0.10.0 | https://github.com/rutrum/convert-case
 - pwrroute-app@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-browsers@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-engine@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
 - xtask@0.0.1-alpha.0
 - base64-simd@0.8.0 | https://github.com/Nugine/simd
@@ -14745,6 +14746,7 @@ MIT License (MIT)
 
 Applies to:
 - pwrroute-app@0.0.1-alpha.0
+- pwrroute-browsers@0.0.1-alpha.0
 - pwrroute-engine@0.0.1-alpha.0
 - xtask@0.0.1-alpha.0
 - base64-simd@0.8.0

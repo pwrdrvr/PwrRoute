@@ -7,11 +7,16 @@ Keep this file short; see **Docs & conventions** below.
 
 ## Status: early port
 
-A Cargo workspace with a GPUI window and a Finicky-compatible rules engine.
-Neither is wired to the other yet, and nothing receives links from the OS.
+A Cargo workspace with a GPUI window, a Finicky-compatible rules engine and
+a browser launcher. None is wired to the others yet, and nothing receives
+links from the OS.
 
 - `crates/pwrroute-engine` — loads Finicky v4 `.js`/`.ts` configs in QuickJS
   (rquickjs) with oxc for TypeScript, and resolves URLs. See its `AGENTS.md`.
+- `crates/pwrroute-browsers` — the browser catalog (`data/browsers.json`,
+  from Finicky's `browsers.json` plus Windows, Linux and more browsers),
+  detection, Chromium/Firefox profiles, and launch commands with a dry run.
+  See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI window (binary `pwrroute`). It draws the
   design's Rules screen from contrived fixture data.
 - `xtask` — lint, test, license notices, release checks and packaging.
@@ -21,8 +26,8 @@ Port, don't invent: the design in `design/` decides the shape. Read
 fork of Finicky, Go + Electron) is reference only; Go and Electron are gone.
 
 Code derived from Finicky (its configuration API in
-`crates/pwrroute-engine/assets`, and anything later ported from its resolver
-or launcher) is MIT, Copyright (c) 2015-2025 John Sterling. Its notice is in
+`crates/pwrroute-engine/assets`, its `browsers.json` and launcher in
+`crates/pwrroute-browsers`, and anything later ported from its resolver) is MIT, Copyright (c) 2015-2025 John Sterling. Its notice is in
 `LICENSE`; keep it there, and keep any per-file copyright headers. Finicky's
 name and icon are not PwrRoute branding; the icon is by @uetchy and is not
 ours to reuse.

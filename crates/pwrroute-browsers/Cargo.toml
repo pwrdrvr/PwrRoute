@@ -1,0 +1,27 @@
+[package]
+name = "pwrroute-browsers"
+description = "PwrRoute's browser catalog, installed-browser detection, profile listing and launching"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+pwrroute-engine = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# macOS Info.plist files are XML. Already shipped (GPUI's usvg uses it).
+roxmltree = "0.21"
+
+[target.'cfg(windows)'.dependencies]
+# StartMenuInternet and App Paths. Already shipped (GPUI's Windows platform
+# uses it); its API is safe, so this crate needs no `unsafe`.
+windows-registry = "0.6"
+
+[dev-dependencies]
+tempfile = "3"

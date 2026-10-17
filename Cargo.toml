@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/pwrroute-app", "crates/pwrroute-engine", "xtask"]
+members = [
+    "crates/pwrroute-app",
+    "crates/pwrroute-browsers",
+    "crates/pwrroute-engine",
+    "xtask",
+]
 
 [workspace.package]
 # The release version. `cargo xtask release-check` compares it with the tag

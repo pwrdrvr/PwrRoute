@@ -3,5 +3,6 @@
 ## Unreleased
 
 - Installer and updates - Windows installs per user from a Velopack Setup.exe or MSI; macOS ships a DMG of the Velopack-packed app. Both check GitHub Releases at startup and from Check for Updates… (macOS menu), download a newer release and apply it on the next launch. Linux keeps the .deb and tar.gz.
+- Browsers - Added `pwrroute-browsers`: a catalog of 33 browsers for macOS, Windows and Linux built on Finicky's `browsers.json`, installed-browser detection, Chromium and Firefox profile listing, and launch commands for the engine's result, with a dry run.
 - Rust port - Replaced the Electron and pnpm scaffold with a Cargo workspace: a GPUI window that draws the Rules screen, a rules engine that runs Finicky v4 `.js` and `.ts` configs in QuickJS and is tested against Finicky, and `cargo xtask` tasks for lint, license notices and packaging on macOS, Windows and Linux.
 - Scaffold - Added the workspace, CI, release pipeline, license checks, design mirror and a desktop stub that shows the PwrRoute title strip. No app code yet.

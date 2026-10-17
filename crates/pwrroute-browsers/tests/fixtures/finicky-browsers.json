@@ -1,0 +1,116 @@
+[
+  {
+    "config_dir_relative": "BraveSoftware/Brave-Browser",
+    "id": "com.brave.Browser",
+    "type": "Chromium",
+    "app_name": "Brave Browser"
+  },
+  {
+    "config_dir_relative": "BraveSoftware/Brave-Browser-Nightly",
+    "id": "com.brave.Browser.nightly",
+    "type": "Chromium",
+    "app_name": "Brave Browser Nightly"
+  },
+  {
+    "config_dir_relative": "Google/Chrome",
+    "id": "com.google.Chrome",
+    "type": "Chromium",
+    "app_name": "Google Chrome"
+  },
+  {
+    "config_dir_relative": "Google/Chrome Beta",
+    "id": "com.google.Chrome.beta",
+    "type": "Chromium",
+    "app_name": "Google Chrome Beta"
+  },
+  {
+    "config_dir_relative": "Google/Chrome Canary",
+    "id": "com.google.Chrome.canary",
+    "type": "Chromium",
+    "app_name": "Google Chrome Canary"
+  },
+  {
+    "config_dir_relative": "Chromium",
+    "id": "org.chromium.Chromium",
+    "type": "Chromium",
+    "app_name": "Chromium"
+  },
+  {
+    "config_dir_relative": "Microsoft Edge",
+    "id": "com.microsoft.edgemac",
+    "type": "Chromium",
+    "app_name": "Microsoft Edge"
+  },
+  {
+    "config_dir_relative": "Vivaldi",
+    "id": "com.vivaldi.Vivaldi",
+    "type": "Chromium",
+    "app_name": "Vivaldi"
+  },
+  {
+    "config_dir_relative": "WaveboxApp",
+    "id": "com.bookry.wavebox",
+    "type": "Chromium",
+    "app_name": "Wavebox"
+  },
+  {
+    "config_dir_relative": "net.imput.helium",
+    "id": "net.imput.helium",
+    "type": "Chromium",
+    "app_name": "Helium"
+  },
+  {
+    "config_dir_relative": "Comet",
+    "id": "ai.perplexity.comet",
+    "type": "Chromium",
+    "app_name": "Comet"
+  },
+  {
+    "config_dir_relative": "Yandex/YandexBrowser",
+    "id": "ru.yandex.desktop.yandex-browser",
+    "type": "Chromium",
+    "app_name": "Yandex"
+  },
+  {
+    "config_dir_relative": "com.operasoftware.Opera",
+    "id": "com.operasoftware.Opera",
+    "type": "Chromium",
+    "app_name": "Opera"
+  },
+  {
+    "config_dir_relative": "com.operasoftware.OperaGX",
+    "id": "com.operasoftware.OperaGX",
+    "type": "Chromium",
+    "app_name": "Opera GX"
+  },
+  {
+    "config_dir_relative": "",
+    "id": "com.apple.Safari",
+    "type": "Safari",
+    "app_name": "Safari"
+  },
+  {
+    "config_dir_relative": "Firefox",
+    "id": "org.mozilla.firefox",
+    "type": "Firefox",
+    "app_name": "Firefox"
+  },
+  {
+    "config_dir_relative": "Firefox",
+    "id": "org.mozilla.firefoxdeveloperedition",
+    "type": "Firefox",
+    "app_name": "Firefox Developer Edition"
+  },
+  {
+    "config_dir_relative": "zen",
+    "id": "app.zen-browser.zen",
+    "type": "Firefox",
+    "app_name": "Zen"
+  },
+  {
+    "config_dir_relative": "EcosiaBrowser",
+    "id": "org.ecosia.browser",
+    "type": "Chromium",
+    "app_name": "Ecosia Browser"
+  }
+]
