@@ -7,8 +7,8 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that checks the notice, tests and builds. Docs/Dependabot-only PRs skip everything after Classify Changes (see below). |
-| `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, uploaded as workflow artifacts. |
-| `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, packages macOS universal, Windows x64 and Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets. Signing and notarization run only when their credentials are configured (see below). |
+| `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, Velopack Setup.exe and MSI, uploaded as workflow artifacts. |
+| `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
 Every job pins Rust 1.97, the same version `rust-toolchain.toml` pins. A newer
 clippy's new lints are a change to make on purpose. Linux jobs install GPUI's
@@ -53,8 +53,11 @@ without a PR. PR builds are versioned `<base>-pr.<number>`, dispatched builds
 `PWRROUTE_VERSION`; `Cargo.toml` is never edited, so `--locked` holds.
 
 No secrets reach this workflow. macOS previews are ad hoc signed and not
-notarized, so a downloaded copy needs "Open Anyway" once. The Windows zip is
-unsigned.
+notarized, so a downloaded copy needs "Open Anyway" once. They are
+`cargo xtask bundle` output, without Velopack's updater. The Windows zip,
+`PwrRoute-win-Setup.exe` and `PwrRoute-win.msi` are unsigned, so SmartScreen
+warns; Setup.exe comes from the same `vpk pack` arguments as the release,
+minus signing, release notes and deltas.
 
 ## release.yml
 
@@ -68,44 +71,120 @@ protected by the "Protect v* release tags" ruleset (signed tags only).
 
 | Platform | Built on | Assets |
 |---|---|---|
-| macOS | macos-26, both architectures, joined with `lipo` | `PwrRoute-<v>-universal.dmg`, `PwrRoute-<v>-universal-mac.zip` |
-| Windows | windows-2025, static C runtime | `PwrRoute-<v>-windows-x64.zip` and its `.sha256` |
+| macOS | macos-26, both architectures, joined with `lipo`; packed by `vpk` | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
+| Windows | windows-2025, static C runtime; packed by `vpk` | `PwrRoute-win-Setup.exe`, `PwrRoute-win.msi`, `PwrRoute-win-Portable.zip`, `PwrRoute-<v>-full.nupkg` (and `-delta`), `releases.win.json`, `assets.win.json`, `RELEASES`, `PwrRoute-<v>-windows-SHA256SUMS` |
 | Linux | ubuntu-22.04 and ubuntu-22.04-arm, for the oldest glibc floor | `PwrRoute-<v>-linux-<arch>.tar.gz`, `.deb`, `-SHA256SUMS` |
+
+Velopack's installer and portable names carry no version, so
+`releases/latest/download/PwrRoute-win-Setup.exe` is a stable link once a
+release is promoted to Latest. The publish job downloads each platform's
+artifact into its own directory and fails if two platforms produced the same
+file name, rather than letting one overwrite the other.
+
+### Jobs
+
+Signed platforms follow PwrGit's hand-off: a prepare job with the checkout
+and the toolchain builds and uploads a signing-input archive, and passes its
+SHA-256 as a job output; the sign job, the only one in the signing
+environment, downloads it, checks both the job output and the archive's
+`.sha256`, and works from the archive alone. It never checks out source,
+runs cargo or installs project dependencies.
+
+| Job | Environment | Does |
+|---|---|---|
+| `distribution-audit` | — | Stub (see below). |
+| `prepare` | — | `cargo xtask release-check`, `lint`, `test` on Linux. |
+| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `macos-dmg.sh` and the release notes. |
+| `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
+| `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES and the release notes. |
+| `windows-sign` | windows-signing | `vpk pack` with Setup.exe and MSI; verifies. |
+| `linux` | — | `cargo xtask package-linux` on x64 and arm64. |
+| `publish` | — (`contents: write`) | Creates the Pre-release with every platform's assets. |
+| `distribution-audit-after` | — | Stub (see below). |
+
+### Velopack
+
+PwrRoute installs and updates through [Velopack](https://docs.velopack.io).
+The app runs Velopack's startup hooks first in `main` and checks the GitHub
+Releases feed (`crates/pwrroute-app/src/updater.rs`). The `vpk` CLI is a
+.NET tool; the sign jobs install .NET 8 with `actions/setup-dotnet` and
+`vpk` at `VPK_VERSION`, which must equal the `velopack` crate's pinned
+version. Upgrade both together.
+
+- **Feed.** Each release carries `releases.<channel>.json` (`win`, `osx`).
+  The app lists the ten newest GitHub releases, merges their feeds and
+  downloads a package from whichever release has it, so a release uploads
+  only its own version's packages. Before packing, each sign job fetches the
+  newest published full package (`vpk download github --pre`) so `vpk` can
+  write a delta against it; the first release packs full only.
+- **Prereleases.** A build whose version has a prerelease suffix follows
+  GitHub Pre-releases; a stable build sees only releases promoted out of
+  Pre-release.
+- **Private repository.** The app reads releases without a token, so updates
+  need the repository (or a release mirror) to be public. Until then a check
+  fails with HTTP 404.
+- **Windows.** Installs per user into `%LocalAppData%\PwrRoute` with a Start
+  menu shortcut. The MSI is `--instLocation PerUser`: browser registration is
+  HKCU, and vpk's default dual-scope MSI preselects per-machine. Install and
+  update hooks call `register_browser()`, uninstall `unregister_browser()`;
+  registering never changes the default browser.
+- **macOS.** `vpk` adds `UpdateMac` and `sq.version` to the app, so only the
+  packed app can update; the DMG is cut from it. It signs with
+  `packaging/macos/PwrRoute.entitlements` (none): vpk's default allows JIT,
+  unsigned executable memory and `DYLD_*` variables and turns off library
+  validation. No `.pkg` installer (`--noInst`): it needs a Developer ID
+  Installer certificate, which apple-signing does not hold.
+- **Linux.** Not used. `vpk`'s only Linux output is an AppImage, and its
+  updater only runs from one; the `.deb` updates through the package
+  manager and the tar.gz by hand.
 
 ### Signing setup (secrets and variables)
 
 Two GitHub Environments, as in PwrGit. The secret names did not change in the
 Rust port. Add required reviewers and a `v*` tag deployment policy before
-adding secrets.
+adding secrets. Each sign job detects its credentials first; with any missing
+it packs anyway, unsigned (ad hoc on macOS), and says so in a warning.
 
 - **apple-signing** — `CSC_LINK` (Developer ID .p12, base64),
   `CSC_KEY_PASSWORD`, `APPLE_API_KEY_BASE64` (App Store Connect .p8, base64),
-  `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`. With all of them present the macOS
-  job imports the certificate into a throwaway keychain, picks the
-  `Developer ID Application` identity for team `T44CNHC4UH`, signs with the
-  hardened runtime, notarizes and staples the app and the DMG, then verifies
-  with `codesign --verify`, `xcrun stapler validate` and `spctl --assess`.
+  `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`. With all of them present
+  `macos-sign` imports the certificate into a throwaway keychain, picks the
+  `Developer ID Application` identity for team `T44CNHC4UH` and stores the
+  API key there as the notarytool profile `pwrroute-notary`. `vpk pack` signs
+  the app with the hardened runtime, notarizes and staples it;
+  `macos-dmg.sh` signs, notarizes and staples the DMG. The job then checks
+  `codesign --verify`, the team identifier, `xcrun stapler validate` and
+  `spctl --assess` for both.
 - **windows-signing** — environment variables
   `WIN_AZURE_SIGN_PUBLISHER_NAME`, `WIN_AZURE_SIGN_ENDPOINT`,
   `WIN_AZURE_SIGN_ACCOUNT`, `WIN_AZURE_SIGN_PROFILE`; environment secrets
   `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. With all of them
-  present the Windows job installs TrustedSigning, signs `pwrroute.exe`
-  through Azure Artifact Signing and verifies its Authenticode signer.
+  present `windows-sign` writes the Artifact Signing `metadata.json` and
+  passes it to `vpk pack --azureTrustedSignFile`; vpk ships signtool and the
+  Azure dlib, which reads the service principal from `AZURE_*`. It signs
+  `pwrroute.exe`, `Update.exe` and the launcher stub before packing, then
+  `PwrRoute-win-Setup.exe` and `PwrRoute-win.msi`. The job checks each one's
+  Authenticode status and signer.
 
 Optional repository secret `RELEASES_PAT` overrides `github.token` for creating
-the release.
+the release. The sign jobs read the previous release with `github.token`.
 
 ### Not in release.yml yet
 
-- **A Windows installer.** The Electron scaffold built NSIS; Windows ships a
-  zip of the signed exe until an installer (MSI or NSIS) is chosen.
+- **Winget and Homebrew.** `distribution-audit` and
+  `distribution-audit-after` are stubs that print a notice. PwrGit's
+  `package-distribution.yml` compares both package managers with the release
+  before and after publication; port it when PwrRoute has a manifest in
+  either.
+- **PR signing smoke runs.** PwrGit runs its Windows sign job on PRs labeled
+  `ci:windows-signing`. Not ported; dispatch `release.yml` with a test tag
+  instead.
 - **Windows arm64.** disktree builds it on `windows-11-arm`; add it when there
-  is a user for it.
-- **An app icon.** The design draws placeholder tiles only.
-- **The signing-input hand-off** between an unprivileged build job and a
-  credentialed signing job that never checks out source, as in PwrGit. Worth
-  restoring before the first signed release.
-- **Updater manifests, Homebrew and Winget.**
+  is a user for it. vpk would pack it as its own channel.
+- **An app icon.** The design draws placeholder tiles only; `vpk pack
+  --icon` will take it.
+- **Update UI.** A log line and the macOS "Check for Updates…" menu item
+  until the update design lands.
 
 ## PR labels
 
@@ -113,7 +192,7 @@ Keep label names namespaced when they start, skip, or narrow CI work.
 
 | Label | Workflow | Effect |
 |---|---|---|
-| `build-preview` | `preview-build.yml` | Builds the macOS DMG and Windows zip for the PR. Applied label triggers a run; later pushes to a labeled PR re-run it. |
+| `build-preview` | `preview-build.yml` | Builds the macOS DMG and the Windows zip, Setup.exe and MSI for the PR. Applied label triggers a run; later pushes to a labeled PR re-run it. |
 
 If you add another label-influenced workflow path, document it here in the
 same change as the workflow update.
