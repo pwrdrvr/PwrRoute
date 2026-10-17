@@ -2,7 +2,8 @@
 Type=Application
 Name=PwrRoute
 Comment=Every link to the right browser
-Exec=pwrroute
+Exec=pwrroute %u
 Terminal=false
-Categories=Network;
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
 StartupWMClass=PwrRoute
