@@ -522,6 +522,8 @@ jobs:
             "--skip-updates", "pack",
             "--packId", "PwrRoute",
             "--packVersion", $env:RELEASE_TAG.TrimStart("v"),
+            # Without it vpk defaults to x86 Setup.exe and Update.exe.
+            "--runtime", "win-x64",
             "--packDir", "input/app",
             "--mainExe", "pwrroute.exe",
             "--packTitle", "PwrRoute",
@@ -549,6 +551,7 @@ jobs:
             "releases/PwrRoute-win-Setup.exe",
             "releases/PwrRoute-win.msi",
             (Join-Path $portable "Update.exe"),
+            (Join-Path $portable "PwrRoute.exe"),
             (Join-Path $portable "current/pwrroute.exe")
           )
           foreach ($target in $targets) {

@@ -137,6 +137,7 @@ jobs:
           & vpk --skip-updates pack `
             --packId PwrRoute `
             --packVersion $env:PREVIEW_VERSION `
+            --runtime win-x64 `
             --packDir vpk-input `
             --mainExe pwrroute.exe `
             --packTitle PwrRoute `
