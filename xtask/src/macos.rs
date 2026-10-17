@@ -1,6 +1,9 @@
 //! `cargo xtask bundle`: PwrRoute.app, signed (ad hoc unless an identity is
 //! given), optionally notarized, then zipped and put in a DMG.
 //!
+//! `--app-only` stops at the ad hoc signed app. release.yml hands that app to
+//! `vpk pack`, which adds Velopack's updater, signs and notarizes it.
+//!
 //! Notarizing reads an App Store Connect API key from the environment:
 //! `APPLE_API_KEY_PATH` (the .p8 file), `APPLE_API_KEY_ID` and
 //! `APPLE_API_ISSUER`.
@@ -22,6 +25,7 @@ struct Options {
     universal: bool,
     identity: Option<String>,
     notarize: bool,
+    app_only: bool,
 }
 
 fn parse(args: &[String]) -> Result<Options> {
@@ -37,12 +41,17 @@ fn parse(args: &[String]) -> Result<Options> {
                 options.identity = Some(identity.clone());
             }
             "--notarize" => options.notarize = true,
+            "--app-only" => options.app_only = true,
             other => bail!("bundle: unknown argument `{other}`"),
         }
     }
     ensure!(
         !options.notarize || options.identity.is_some(),
         "--notarize needs --sign: Apple notarizes Developer ID signatures only"
+    );
+    ensure!(
+        !(options.app_only && options.notarize),
+        "--app-only stops before notarizing; drop --notarize"
     );
     Ok(options)
 }
@@ -93,6 +102,10 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
         .arg(contents.join("Info.plist")))?;
 
     sign(&app, options.identity.as_deref())?;
+    if options.app_only {
+        println!("{}", app.display());
+        return Ok(());
+    }
 
     let stem = format!("PwrRoute-{version}-{arch}-mac");
     let zip = out.join(format!("{stem}.zip"));
@@ -223,6 +236,16 @@ mod tests {
         assert!(parse(&args(&["--notarize"])).is_err());
         assert!(parse(&args(&["--sign"])).is_err());
         assert!(parse(&args(&["--sign", ""])).is_err());
+    }
+
+    #[test]
+    fn app_only_stops_before_notarizing() {
+        assert!(
+            parse(&args(&["--universal", "--app-only"]))
+                .unwrap()
+                .app_only
+        );
+        assert!(parse(&args(&["--app-only", "--sign", "X", "--notarize"])).is_err());
     }
 
     #[test]
