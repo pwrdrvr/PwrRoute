@@ -19,7 +19,7 @@ use pwrroute_router::{
     Browser, DispatchRecord, DryRunLauncher, Launcher, Link, Options, Resolver, ResolverFactory,
     Router, RouterHandle, Source,
     instance::{self, Claim, Endpoint, Server},
-    ipc::{Request, Response},
+    ipc::Request,
 };
 
 /// How long a second launch waits for the running router to answer.
@@ -118,7 +118,9 @@ pub fn start(args: &Args) -> Start {
                 Err(e) => eprintln!("pwrroute: the running router did not answer: {e}"),
             }
             // Never lose a link to a stuck router: route it here, then go.
-            route_here_and_exit(args, links);
+            if !links.is_empty() {
+                route_here_and_exit(args, links);
+            }
             return Start::Exit;
         }
         Some(Err(e)) => {
@@ -137,7 +139,11 @@ pub fn start(args: &Args) -> Start {
     let server = primary.and_then(|primary| {
         let handle = handle.clone();
         primary
-            .serve(move |request| answer(&handle, &activate_tx, request))
+            .serve(move |request| {
+                handle.answer(request, || {
+                    let _ = activate_tx.try_send(());
+                })
+            })
             .map_err(|e| eprintln!("pwrroute: cannot listen for other launches: {e}"))
             .ok()
     });
@@ -167,30 +173,6 @@ pub fn dispatch_os_links(handle: &RouterHandle, urls: Vec<String>) {
     }
 }
 
-fn answer(
-    handle: &RouterHandle,
-    activate: &async_channel::Sender<()>,
-    request: Request,
-) -> Response {
-    match request {
-        Request::Open { links } => {
-            let mut response = Response::ok();
-            for link in links {
-                match handle.dispatch_forwarded(link) {
-                    Ok(id) => response.dispatched.push(id),
-                    Err(e) => return Response::error(e.to_string()),
-                }
-            }
-            response
-        }
-        Request::Activate => {
-            let _ = activate.try_send(());
-            Response::ok()
-        }
-        Request::Ping => Response::ok(),
-    }
-}
-
 /// Routes the links in this process without the lock or a window, waits for
 /// each to finish, and returns.
 fn route_here_and_exit(args: &Args, links: Vec<Link>) {
@@ -217,8 +199,9 @@ fn spawn_router(args: &Args) -> Router {
     } else {
         Box::new(UnwiredLauncher)
     };
+    let report_all = env::var_os("PWRROUTE_DIAGNOSTICS").is_some_and(|v| v == "1");
     let options = Options {
-        on_dispatch: Some(Arc::new(report_timing)),
+        on_dispatch: Some(Arc::new(move |record| report_timing(record, report_all))),
         ..Options::default()
     };
     Router::spawn(options, factory, launcher).expect("start the dispatch thread")
@@ -236,9 +219,8 @@ impl Launcher for UnwiredLauncher {
 
 /// Slow dispatches, or all with `PWRROUTE_DIAGNOSTICS=1`, as one line of
 /// URL-free JSON on stderr.
-fn report_timing(record: &DispatchRecord) {
-    let slow = record.timings.total_us >= SLOW_DISPATCH_US;
-    if (slow || env::var_os("PWRROUTE_DIAGNOSTICS").is_some_and(|v| v == "1"))
+fn report_timing(record: &DispatchRecord, report_all: bool) {
+    if (report_all || record.timings.total_us >= SLOW_DISPATCH_US)
         && let Ok(json) = serde_json::to_string(&record.timing())
     {
         eprintln!("pwrroute dispatch {json}");

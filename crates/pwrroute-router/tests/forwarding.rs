@@ -21,7 +21,6 @@ use pwrroute_router::{
     DispatchRecord, DryRunLauncher, Link, Options, Outcome, Resolver, ResolverFactory, Router,
     RouterHandle, Source,
     instance::{self, Claim, Endpoint},
-    ipc::{Request, Response},
 };
 
 const ENDPOINT_VAR: &str = "PWRROUTE_TEST_ENDPOINT";
@@ -53,22 +52,6 @@ fn engine_factory(dir: &Path) -> ResolverFactory {
         let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default())?;
         Ok(Box::new(engine) as Box<dyn Resolver>)
     })
-}
-
-/// What the app's IPC server does with a request.
-fn answer(handle: &RouterHandle, request: Request) -> Response {
-    match request {
-        Request::Open { links } => {
-            let mut response = Response::ok();
-            for link in links {
-                response
-                    .dispatched
-                    .push(handle.dispatch_forwarded(link).unwrap());
-            }
-            response
-        }
-        Request::Activate | Request::Ping => Response::ok(),
-    }
 }
 
 /// Runs `child` from this test binary as a separate process.
@@ -130,7 +113,7 @@ fn a_second_launch_forwards_its_links_to_the_running_router() {
     let server = {
         let handle = handle.clone();
         primary
-            .serve(move |request| answer(&handle, request))
+            .serve(move |request| handle.answer(request, || ()))
             .unwrap()
     };
 
@@ -242,7 +225,7 @@ fn child_cold_start() {
     let _server = {
         let handle = handle.clone();
         primary
-            .serve(move |request| answer(&handle, request))
+            .serve(move |request| handle.answer(request, || ()))
             .unwrap()
     };
     for link in links {

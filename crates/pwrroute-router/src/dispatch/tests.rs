@@ -5,6 +5,8 @@ use std::{
 
 use pwrroute_engine::{DefaultHost, Limits};
 
+use anyhow::anyhow;
+
 use super::*;
 use crate::{
     launcher::DryRunLauncher,
@@ -434,4 +436,56 @@ fn dropping_the_router_stops_it() {
         handle.dispatch(link("https://example.com/")),
         Err(RouterGone)
     );
+}
+
+#[test]
+fn a_re_serialized_url_is_not_a_rewrite() {
+    let (_dir, router, _launcher) = engine_router(Options::default());
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://example.org"))
+        .unwrap();
+    // The engine hands back `https://example.org/`; no rewrite ran.
+    assert!(
+        !record
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Rewrite { .. })),
+        "{:?}",
+        record.steps
+    );
+    assert_eq!(record.timing().rewrites, 0);
+}
+
+#[test]
+fn answer_queues_forwarded_links_and_reports_activate() {
+    use crate::ipc::Request;
+
+    let router = Router::spawn(Options::default(), None, DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
+    let response = handle.answer(
+        Request::Open {
+            links: vec![link("https://example.com/a"), link("https://example.com/b")],
+        },
+        || panic!("not an activate"),
+    );
+    assert!(response.ok);
+    assert_eq!(response.dispatched.len(), 2);
+    handle
+        .dispatch_and_wait(link("https://example.com/c"))
+        .unwrap();
+    assert!(handle.get(response.dispatched[0]).unwrap().forwarded);
+
+    let mut activated = false;
+    assert!(handle.answer(Request::Activate, || activated = true).ok);
+    assert!(activated);
+
+    drop(router);
+    let response = handle.answer(
+        Request::Open {
+            links: vec![link("https://example.com/d")],
+        },
+        || (),
+    );
+    assert!(!response.ok);
 }

@@ -204,11 +204,13 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        // Wake the blocking accept so the thread sees the flag.
-        if let Ok(name) = self.endpoint.name() {
-            let _ = Stream::connect(name);
-        }
-        if let Some(thread) = self.thread.take() {
+        // Wake the blocking accept so the thread sees the flag. If the wake
+        // can't connect, the accept may never return: leave the thread to the
+        // process exit rather than hang here.
+        let woke = self.endpoint.name().and_then(Stream::connect).is_ok();
+        if let Some(thread) = self.thread.take()
+            && woke
+        {
             let _ = thread.join();
         }
     }
