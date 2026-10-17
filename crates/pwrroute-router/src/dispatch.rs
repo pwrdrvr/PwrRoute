@@ -10,10 +10,11 @@ use std::{
     time::{Instant, SystemTime},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use pwrroute_engine::{AppType, Browser, Engine, Opener};
 
 use crate::{
+    ipc::{Request, Response},
     launcher::Launcher,
     link::{Link, normalize_url},
     recent::RecentDispatches,
@@ -112,11 +113,11 @@ pub struct RouterStatus {
 
 enum Command {
     Dispatch {
-        request: Request,
+        request: Queued,
         reply: Option<mpsc::Sender<DispatchRecord>>,
     },
     Test {
-        request: Request,
+        request: Queued,
         reply: mpsc::Sender<DispatchRecord>,
     },
     Replace {
@@ -129,7 +130,7 @@ enum Command {
     Shutdown,
 }
 
-struct Request {
+struct Queued {
     id: DispatchId,
     link: Link,
     forwarded: bool,
@@ -288,6 +289,29 @@ impl RouterHandle {
         self.recent.clear();
     }
 
+    /// Answers a second launch's IPC request: queues forwarded links, and
+    /// calls `on_activate` when it asks for the window. The app's IPC server
+    /// is `move |request| handle.answer(request, …)`.
+    pub fn answer(&self, request: Request, on_activate: impl FnOnce()) -> Response {
+        match request {
+            Request::Open { links } => {
+                let mut response = Response::ok();
+                for link in links {
+                    match self.dispatch_forwarded(link) {
+                        Ok(id) => response.dispatched.push(id),
+                        Err(e) => return Response::error(e.to_string()),
+                    }
+                }
+                response
+            }
+            Request::Activate => {
+                on_activate();
+                Response::ok()
+            }
+            Request::Ping => Response::ok(),
+        }
+    }
+
     fn submit(&self, link: Link, forwarded: bool) -> std::result::Result<DispatchId, RouterGone> {
         let request = self.request(link, forwarded);
         let id = request.id;
@@ -298,8 +322,8 @@ impl RouterHandle {
         Ok(id)
     }
 
-    fn request(&self, link: Link, forwarded: bool) -> Request {
-        Request {
+    fn request(&self, link: Link, forwarded: bool) -> Queued {
+        Queued {
             id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)),
             link,
             forwarded,
@@ -369,7 +393,7 @@ impl Worker {
         }
     }
 
-    fn process(&mut self, request: Request, mode: Mode) -> DispatchRecord {
+    fn process(&mut self, request: Queued, mode: Mode) -> DispatchRecord {
         let dequeued = Instant::now();
         let mut record = DispatchRecord {
             id: request.id,
@@ -426,17 +450,20 @@ impl Worker {
 
     /// The browser for `url`, with every step that chose it.
     fn resolve(&self, url: &str, link: &Link, steps: &mut Vec<Step>) -> Browser {
-        let resolved = match &self.resolver {
-            Ok(resolver) => {
-                let opener = link.opener.as_ref().map(Opener::from);
-                resolver.resolve(url, opener.as_ref())
+        let resolver = match &self.resolver {
+            Ok(resolver) => resolver,
+            Err(reason) => {
+                steps.push(Step::Fallback {
+                    reason: reason.clone(),
+                });
+                return self.fallback(url);
             }
-            Err(reason) => Err(anyhow!("{reason}")),
         };
-        let mut browser = match resolved {
+        let opener = link.opener.as_ref().map(Opener::from);
+        let mut browser = match resolver.resolve(url, opener.as_ref()) {
             Ok(resolved) => {
                 if resolved.rule_steps.is_empty() {
-                    if resolved.browser.url != url {
+                    if !same_url(&resolved.browser.url, url) {
                         steps.push(Step::Rewrite {
                             rule: None,
                             url: resolved.browser.url.clone(),
@@ -454,19 +481,12 @@ impl Worker {
                 resolved.browser
             }
             Err(e) => {
-                match &self.resolver {
-                    Ok(_) => {
-                        steps.push(Step::ConfigError {
-                            message: format!("{e:#}"),
-                        });
-                        steps.push(Step::Fallback {
-                            reason: "the config could not resolve the link".into(),
-                        });
-                    }
-                    Err(reason) => steps.push(Step::Fallback {
-                        reason: reason.clone(),
-                    }),
-                }
+                steps.push(Step::ConfigError {
+                    message: format!("{e:#}"),
+                });
+                steps.push(Step::Fallback {
+                    reason: "the config could not resolve the link".into(),
+                });
                 self.fallback(url)
             }
         };
@@ -515,6 +535,13 @@ impl Worker {
             open_in_background: None,
         }
     }
+}
+
+/// Whether two URLs are the same once parsed. The engine re-serializes
+/// every URL (`https://example.com` comes back with a trailing slash), so a
+/// string comparison would report a rewrite that never ran.
+fn same_url(a: &str, b: &str) -> bool {
+    a == b || matches!((url::Url::parse(a), url::Url::parse(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 /// Whether a browser is PwrRoute, by name, bundle id or path. Routing a link

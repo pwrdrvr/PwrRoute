@@ -225,7 +225,8 @@ mod imp {
             // Already gone is fine.
             let _ = CURRENT_USER.remove_tree(key);
         }
-        if let Ok(apps) = CURRENT_USER.create(REGISTERED_APPS_KEY) {
+        // Open, never create: uninstall must not leave a key behind.
+        if let Ok(apps) = CURRENT_USER.options().write().open(REGISTERED_APPS_KEY) {
             let _ = apps.remove_value(REGISTERED_NAME);
         }
         Ok(())

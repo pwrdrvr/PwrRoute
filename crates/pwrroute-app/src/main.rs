@@ -26,11 +26,8 @@ mod updater;
 mod widgets;
 
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
 };
 
 use gpui_kit::{
@@ -47,9 +44,38 @@ const WINDOW_SIZE: (f32, f32) = (1240.0, 820.0);
 /// spec: 16px in, centered in the 40px strip.
 const TRAFFIC_LIGHTS: (f32, f32) = (16.0, 13.0);
 
-/// How long a macOS launch waits for an Apple Event before it opens the
-/// window: a cold launch for a link must not show it.
+/// How long a macOS launch, or a reopen, waits for an Apple Event before it
+/// opens the window: a launch for a link must not show it.
 const LINK_GRACE: Duration = Duration::from_millis(250);
+
+/// LaunchServices can send a reopen beside a link's Apple Event, before or
+/// after it. A reopen this close to a link is part of that link, not a
+/// request for the window (as the PwrFinicky router coalesced them).
+const REOPEN_AFTER_LINK: Duration = Duration::from_millis(750);
+
+/// When the OS last handed the app a link.
+#[derive(Clone, Default)]
+struct LastLink(Arc<Mutex<Option<Instant>>>);
+
+impl LastLink {
+    fn mark(&self) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+    }
+
+    fn within(&self, window: Duration) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some_and(|at| at.elapsed() < window)
+    }
+
+    fn ever(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+}
 
 /// Keeps the router alive for the life of the app.
 struct ResidentRouter(#[allow(dead_code, reason = "held for its Drop")] Resident);
@@ -66,19 +92,32 @@ fn main() {
         router::Start::Resident(resident) => resident,
     };
     let handle = resident.handle();
-    let got_link = Arc::new(AtomicBool::new(resident.launched_with_links));
+    let last_link = LastLink::default();
+    if resident.launched_with_links {
+        last_link.mark();
+    }
 
     let app = gpui_kit::application()
         .with_assets(assets::Assets)
         // The router owns dispatch, so the process outlives its windows. A
         // second launch, the Dock icon or the tray brings the window back.
         .with_quit_mode(QuitMode::Explicit);
-    let seen = Arc::clone(&got_link);
+    let seen = last_link.clone();
     app.on_open_urls(move |urls| {
-        seen.store(true, Ordering::Release);
+        seen.mark();
         router::dispatch_os_links(&handle, urls);
     });
-    app.on_reopen(show_main_window);
+    let reopened = last_link.clone();
+    app.on_reopen(move |cx| {
+        let last_link = reopened.clone();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(LINK_GRACE).await;
+            if !last_link.within(REOPEN_AFTER_LINK) {
+                cx.update(show_main_window);
+            }
+        })
+        .detach();
+    });
     app.run(move |cx| {
         assets::load_fonts(cx);
         app_menu::install(cx);
@@ -93,7 +132,7 @@ fn main() {
         .detach();
         cx.set_global(ResidentRouter(resident));
 
-        if got_link.load(Ordering::Acquire) {
+        if last_link.ever() {
             return;
         }
         if cfg!(target_os = "macos") {
@@ -102,7 +141,7 @@ fn main() {
             // window.
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(LINK_GRACE).await;
-                if !got_link.load(Ordering::Acquire) {
+                if !last_link.ever() {
                     cx.update(show_main_window);
                 }
             })

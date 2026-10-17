@@ -62,7 +62,7 @@ impl Response {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct Envelope<T> {
     v: u32,
     #[serde(flatten)]
@@ -90,9 +90,13 @@ pub fn write_message<T: Serialize>(w: &mut impl Write, message: &T) -> io::Resul
 /// kind `InvalidData` that says so.
 pub fn read_message<T: DeserializeOwned>(r: &mut impl BufRead) -> io::Result<T> {
     let mut line = Vec::new();
+    // The body plus its newline: the writer allows a body of MAX_MESSAGE.
     r.by_ref()
         .take(MAX_MESSAGE + 1)
         .read_until(b'\n', &mut line)?;
+    if line.last() == Some(&b'\n') {
+        line.pop();
+    }
     if line.len() as u64 > MAX_MESSAGE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -105,22 +109,20 @@ pub fn read_message<T: DeserializeOwned>(r: &mut impl BufRead) -> io::Result<T> 
             "the connection closed before a message",
         ));
     }
-    #[derive(Deserialize)]
-    struct Version {
-        v: u32,
-    }
-    let version: Version = serde_json::from_slice(&line)?;
-    if version.v != PROTOCOL_VERSION {
+    // Parsed once; the version is checked before the body is interpreted.
+    let mut message: serde_json::Value = serde_json::from_slice(&line)?;
+    let version = message.get("v").and_then(serde_json::Value::as_u64);
+    if version != Some(u64::from(PROTOCOL_VERSION)) {
+        let version = version.map_or_else(|| "missing".to_owned(), |v| v.to_string());
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!(
-                "protocol version {} (expected {PROTOCOL_VERSION})",
-                version.v
-            ),
+            format!("protocol version {version} (expected {PROTOCOL_VERSION})"),
         ));
     }
-    let envelope: Envelope<T> = serde_json::from_slice(&line)?;
-    Ok(envelope.body)
+    if let Some(object) = message.as_object_mut() {
+        object.remove("v");
+    }
+    Ok(serde_json::from_value(message)?)
 }
 
 #[cfg(test)]
@@ -172,6 +174,19 @@ mod tests {
         let err = read_message::<Request>(&mut reader).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("99"));
+    }
+
+    #[test]
+    fn a_message_of_exactly_the_limit_is_read() {
+        let (head, tail) = (
+            r#"{"v":1,"op":"open","links":[{"url":"https://e.com/"#,
+            r#""}]}"#,
+        );
+        let pad = usize::try_from(MAX_MESSAGE).unwrap() - head.len() - tail.len();
+        let body = format!("{head}{}{tail}", "a".repeat(pad));
+        assert_eq!(body.len() as u64, MAX_MESSAGE);
+        let read: Request = read_message(&mut Cursor::new(format!("{body}\n"))).unwrap();
+        assert!(matches!(read, Request::Open { links } if links[0].url.len() == 14 + pad));
     }
 
     #[test]
