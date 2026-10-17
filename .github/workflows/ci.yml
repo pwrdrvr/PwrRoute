@@ -208,7 +208,7 @@ jobs:
     runs-on: windows-2025
     needs: changes
     if: needs.changes.outputs.code_impacting == 'true'
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       # .gitattributes forces LF; this keeps Git for Windows from fighting it.
       - run: git config --global core.autocrlf false
@@ -236,5 +236,9 @@ jobs:
       - name: Test
         run: cargo xtask test
 
-      - name: Build (release)
-        run: cargo build --release --locked -p pwrroute-app
+      # A dev build, reusing what the tests just compiled. The release build
+      # (thin LTO, one codegen unit) ran past this job's limit on a cold
+      # cache, and a cancelled job never saves its cache, so it never warmed.
+      # Linux's Build job and release.yml cover the release profile.
+      - name: Build
+        run: cargo build --locked -p pwrroute-app
