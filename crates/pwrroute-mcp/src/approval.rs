@@ -1,14 +1,31 @@
-//! The in-app approval step.
-//!
-//! `/authorize` decides nothing itself. It asks the app, which shows
-//! PwrRoute's own approval window, and the browser page only waits: it has
-//! no form, script or parameter that can approve anything. This is the
-//! PwrSnap and PwrGit door.
+//! The in-app approval step. The first time a client name connects, the app
+//! shows PwrRoute's approval window and the person picks a role or denies.
+//! The answer is remembered per name in [`Agents`]; nothing an agent sends
+//! can approve.
 
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+use rmcp::model::Implementation;
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
 
-use crate::roles::{Permission, Role};
+use crate::{
+    agents::{Agents, clean_name},
+    roles::Role,
+};
+
+/// How long a prompt may stay open before it counts as a denial.
+pub(crate) const PROMPT_TTL: Duration = Duration::from_secs(5 * 60);
+/// Approval windows open at once, one per client name. More are denied.
+const MAX_PROMPTS: usize = 8;
 
 /// What the approval window shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,30 +33,21 @@ use crate::roles::{Permission, Role};
 pub struct ApprovalRequest {
     /// Identifies this prompt; [`Approver::cancel`] names it.
     pub id: String,
-    /// The name the client registered with, or "Local MCP client". Display
-    /// only: any local process can claim any name, which is why a person
-    /// approves.
+    /// The `clientInfo.name` the agent sent, which approvals are filed
+    /// under. Self-reported: the window should say so.
     pub client_name: String,
-    /// A Session Name not already used by an active session.
-    pub suggested_session_name: String,
-    /// Where the authorization code will go.
-    pub redirect_uri: String,
-    /// The scopes the client asked for.
-    pub requested: Vec<Permission>,
-    /// The roles that fit within `requested`. The person picks one of these.
+    /// The client's display title, when it sent one.
+    pub client_title: Option<String>,
+    pub client_version: String,
+    /// The roles to choose from.
     pub roles: Vec<Role>,
 }
 
 /// The person's answer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "decision")]
 pub enum ApprovalDecision {
-    Approve {
-        /// 1 to 200 characters once trimmed, unique among active sessions.
-        session_name: String,
-        /// One of [`ApprovalRequest::roles`].
-        role: Role,
-    },
+    Approve { role: Role },
     Deny,
 }
 
@@ -50,8 +58,8 @@ pub trait Approver: Send + Sync + 'static {
     /// any thread, through `reply`. Dropping `reply` unanswered denies.
     fn request(&self, request: ApprovalRequest, reply: ApprovalReply);
 
-    /// The request expired or the listener stopped: close its window. A
-    /// late answer through its reply is ignored.
+    /// The prompt expired or the server stopped: close its window. A late
+    /// answer through its reply is ignored.
     fn cancel(&self, id: &str) {
         let _ = id;
     }
@@ -62,16 +70,8 @@ pub trait Approver: Send + Sync + 'static {
 pub struct ApprovalReply(oneshot::Sender<ApprovalDecision>);
 
 impl ApprovalReply {
-    pub(crate) fn channel() -> (Self, oneshot::Receiver<ApprovalDecision>) {
-        let (tx, rx) = oneshot::channel();
-        (Self(tx), rx)
-    }
-
-    pub fn approve(self, session_name: impl Into<String>, role: Role) {
-        self.send(ApprovalDecision::Approve {
-            session_name: session_name.into(),
-            role,
-        });
+    pub fn approve(self, role: Role) {
+        self.send(ApprovalDecision::Approve { role });
     }
 
     pub fn deny(self) {
@@ -79,13 +79,109 @@ impl ApprovalReply {
     }
 
     pub fn send(self, decision: ApprovalDecision) {
-        // The request may have expired; there is no one to tell then.
+        // The prompt may have expired; there is no one to tell then.
         let _ = self.0.send(decision);
     }
 
-    /// Whether the request still waits for an answer.
+    /// Whether the prompt still waits for an answer.
     #[must_use]
     pub fn is_pending(&self) -> bool {
         !self.0.is_closed()
+    }
+}
+
+/// The current answer for a client name: `None` while the window is up.
+pub(crate) type Answer = watch::Receiver<Option<ApprovalDecision>>;
+
+/// Raises at most one prompt per client name and shares its answer with
+/// every connection waiting on it.
+pub(crate) struct Approvals {
+    approver: Arc<dyn Approver>,
+    agents: Agents,
+    pending: Mutex<HashMap<String, Answer>>,
+    next_id: AtomicU64,
+    closed: CancellationToken,
+}
+
+impl Approvals {
+    pub(crate) fn new(approver: Arc<dyn Approver>, agents: Agents) -> Self {
+        Self {
+            approver,
+            agents,
+            pending: Mutex::default(),
+            next_id: AtomicU64::new(1),
+            closed: CancellationToken::new(),
+        }
+    }
+
+    /// The answer for `client`, asking the person if no prompt for its name
+    /// is up yet.
+    pub(crate) fn ask(self: &Arc<Self>, client: &Implementation) -> Answer {
+        let name = clean_name(&client.name);
+        let (tx, rx) = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(answer) = pending.get(&name) {
+                return answer.clone();
+            }
+            if pending.len() >= MAX_PROMPTS || self.closed.is_cancelled() {
+                return watch::channel(Some(ApprovalDecision::Deny)).1;
+            }
+            let (tx, rx) = watch::channel(None);
+            pending.insert(name.clone(), rx.clone());
+            (tx, rx)
+        };
+
+        let id = format!("approval-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        let (reply, answer) = oneshot::channel();
+        self.approver.request(
+            ApprovalRequest {
+                id: id.clone(),
+                client_name: name.clone(),
+                client_title: client.title.clone(),
+                client_version: client.version.clone(),
+                roles: Role::ALL.to_vec(),
+            },
+            ApprovalReply(reply),
+        );
+
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let decision = tokio::select! {
+                answer = tokio::time::timeout(PROMPT_TTL, answer) => match answer {
+                    Ok(Ok(decision)) => Some(decision),
+                    // The app dropped the reply: a denial.
+                    Ok(Err(_)) => Some(ApprovalDecision::Deny),
+                    Err(_) => None,
+                },
+                () = this.closed.cancelled() => None,
+            };
+            let decision = match decision {
+                Some(ApprovalDecision::Approve { role }) => match this.agents.allow(&name, role) {
+                    Ok(()) => ApprovalDecision::Approve { role },
+                    // Not recorded means not approved.
+                    Err(_) => ApprovalDecision::Deny,
+                },
+                Some(ApprovalDecision::Deny) => ApprovalDecision::Deny,
+                None => {
+                    this.approver.cancel(&id);
+                    ApprovalDecision::Deny
+                }
+            };
+            // Answer the waiters before the next connection could ask again.
+            let _ = tx.send(Some(decision));
+            this.pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&name);
+        });
+        rx
+    }
+
+    /// Closes every open prompt, as a denial.
+    pub(crate) fn close(&self) {
+        self.closed.cancel();
     }
 }

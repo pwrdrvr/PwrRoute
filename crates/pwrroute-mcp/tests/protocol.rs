@@ -1,23 +1,24 @@
-//! MCP over the wire: an rmcp client against a running server, plus the
-//! HTTP-level guards and the privacy rules.
+//! MCP over the local link: rmcp clients against a running server, the
+//! `pwrroute mcp` proxy end to end, the socket's ownership rules, and the
+//! privacy rules.
 
 mod support;
 
-use std::fs;
+use std::{fs, time::Duration};
 
-use pwrroute_mcp::{Outcome, Role};
-use reqwest::{StatusCode, header};
-use serde_json::{Value, json};
-use support::{ALL_SCOPES, Harness, call, text};
+use pwrroute_mcp::{Config, McpServer, MemoryAudit, Outcome, Role, fake};
+use serde_json::json;
+use support::{Harness, call, eventually, private_endpoint, proxy_command, text};
+
+use pwrroute_mcp::fake::FakeAnswer;
 
 /// A URL nothing else in the test produces, to look for afterwards.
 const SECRET_URL: &str = "https://docs.example.org/private/7f3a9c-do-not-persist?token=abc";
 
 #[tokio::test]
-async fn an_mcp_client_lists_and_calls_tools() {
-    let h = Harness::start(Role::Reader).await;
-    let token = h.login(None).await;
-    let client = h.client(&token).await;
+async fn a_client_on_the_link_lists_and_calls_tools() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Reader)).await;
+    let client = h.client("test-agent").await;
 
     let info = client.peer_info().expect("server info");
     assert_eq!(info.server_info.as_ref().unwrap().name, "PwrRoute");
@@ -62,8 +63,10 @@ async fn an_mcp_client_lists_and_calls_tools() {
     assert_eq!(trace["steps"][0]["kind"], "rewrite");
 
     let result = call(&client, "pwrroute_browsers", json!({})).await;
-    let browsers = result.structured_content.unwrap();
-    assert_eq!(browsers["browsers"][0]["name"], "Safari");
+    assert_eq!(
+        result.structured_content.unwrap()["browsers"][0]["name"],
+        "Safari"
+    );
 
     let result = call(
         &client,
@@ -85,190 +88,139 @@ async fn an_mcp_client_lists_and_calls_tools() {
 }
 
 #[tokio::test]
-async fn the_transport_is_stateless_json() {
-    let h = Harness::start(Role::Reader).await;
-    let token = h.login(None).await;
-    let response = h
-        .http
-        .post(h.resource())
-        .bearer_auth(&token)
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": { "name": "raw", "version": "0" }
-            }
-        }))
-        .send()
+async fn the_proxy_carries_a_client_end_to_end() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Opener)).await;
+    let (client, mut child) = h.client_via_proxy("claude-code").await;
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 6);
+    let result = call(
+        &client,
+        "pwrroute_open",
+        json!({ "url": "https://docs.example.org/a" }),
+    )
+    .await;
+    assert_eq!(result.is_error, Some(false), "{}", text(&result));
+    assert_eq!(h.router.opened()[0].0.name, "claude-code");
+    assert_eq!(h.approver.asked()[0].client_name, "claude-code");
+
+    // The client hanging up ends the proxy cleanly.
+    client.cancel().await.unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
         .await
+        .expect("the proxy exits")
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().get("mcp-session-id").is_none());
+    assert!(status.success(), "{status}");
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn the_proxy_exits_when_the_app_stops() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Reader)).await;
+    let (client, child) = h.client_via_proxy("claude-code").await;
+    h.finish().await;
+    let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+        .await
+        .expect("the proxy exits")
+        .unwrap();
     assert!(
-        response.headers()[header::CONTENT_TYPE]
-            .to_str()
-            .unwrap()
-            .starts_with("application/json")
+        output.status.success(),
+        "{}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
     );
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(body["result"]["serverInfo"]["name"], "PwrRoute");
-
-    // No session to carry: the next POST stands alone, as Claude Code and
-    // Codex send it on the 2025 protocol versions.
-    let response = h
-        .http
-        .post(h.resource())
-        .bearer_auth(&token)
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .header("mcp-protocol-version", "2025-06-18")
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": { "name": "pwrroute_resolve", "arguments": { "url": "https://example.org/" } }
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(body["result"]["isError"], false, "{body}");
-    assert_eq!(
-        body["result"]["structuredContent"]["browser"]["name"],
-        "Firefox"
-    );
-
-    for method in [reqwest::Method::GET, reqwest::Method::DELETE] {
-        let response = h
-            .http
-            .request(method.clone(), h.resource())
-            .bearer_auth(&token)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::METHOD_NOT_ALLOWED,
-            "{method}"
-        );
-        assert_eq!(response.headers()[header::ALLOW], "POST");
-    }
-    h.finish().await;
+    drop(client);
 }
 
 #[tokio::test]
-async fn host_and_origin_must_be_loopback() {
-    let h = Harness::start(Role::Reader).await;
-    let port = h.server.as_ref().unwrap().local_addr().port();
-    let get = |host: String, origin: Option<&'static str>| {
-        let h = &h;
-        async move {
-            let mut request = h
-                .http
-                .get(h.url("/.well-known/oauth-authorization-server"))
-                .header(header::HOST, host);
-            if let Some(origin) = origin {
-                request = request.header(header::ORIGIN, origin);
-            }
-            let response = request.send().await.unwrap();
-            let status = response.status();
-            let body = response.json::<Value>().await.unwrap_or(Value::Null);
-            (status, body)
-        }
-    };
-    let host = format!("127.0.0.1:{port}");
-    assert_eq!(get(host.clone(), None).await.0, StatusCode::OK);
-    assert_eq!(
-        get(host.clone(), Some("http://localhost:6274")).await.0,
-        StatusCode::OK
+async fn the_proxy_says_so_when_pwrroute_is_not_running() {
+    let output = proxy_command(&private_endpoint())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .output()
+        .await
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("PwrRoute is not running"), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_second_server_does_not_take_over_the_endpoint() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Reader)).await;
+    let (backends, _, _) = fake::backends();
+    let second = McpServer::start(
+        Config {
+            endpoint: h.endpoint.clone(),
+            approval_wait: Duration::from_secs(1),
+        },
+        h.agents.clone(),
+        backends,
+        h.approver.clone(),
+        std::sync::Arc::new(MemoryAudit::default()),
+    )
+    .await;
+    let error = second.expect_err("the endpoint is taken");
+    assert!(
+        format!("{error:#}").contains("already serving"),
+        "{error:#}"
     );
-    // A DNS-rebinding page arrives with its own name as the Host.
-    for bad_host in [
-        format!("localhost:{port}"),
-        format!("attacker.example:{port}"),
-        "127.0.0.1".to_owned(),
-    ] {
-        let (status, body) = get(bad_host, None).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(body["error"], "invalid_host");
-    }
-    for origin in [
-        "https://attacker.example",
-        "null",
-        "file://",
-        "ftp://localhost",
-    ] {
-        let (status, body) = get(host.clone(), Some(origin)).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{origin}");
-        assert_eq!(body["error"], "invalid_origin");
-    }
+    // The first still answers.
+    let client = h.client("test-agent").await;
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 6);
+    client.cancel().await.unwrap();
     h.finish().await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
-async fn oversized_and_encoded_bodies_are_refused() {
-    let h = Harness::start(Role::Reader).await;
-    let token = h.login(None).await;
-    let huge = "x".repeat(1024 * 1024 + 1);
-    let response = h
-        .http
-        .post(h.resource())
-        .bearer_auth(&token)
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(huge)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+async fn the_socket_is_owner_only_replaces_a_stale_one_and_is_removed_on_stop() {
+    use std::os::unix::fs::PermissionsExt as _;
 
-    let response = h
-        .http
-        .post(h.resource())
-        .bearer_auth(&token)
-        .header(header::CONTENT_ENCODING, "gzip")
-        .body("{}")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let endpoint = private_endpoint();
+    // A socket file left behind by a PwrRoute that crashed: nothing answers.
+    drop(std::os::unix::net::UnixListener::bind(endpoint.path()).unwrap());
+    assert!(endpoint.path().exists());
+    // A process another test is spawning can hold a copy of that listener
+    // until it execs; wait until the file is truly stale.
+    let path = endpoint.path().to_path_buf();
+    eventually(|| std::os::unix::net::UnixStream::connect(&path).is_err()).await;
+
+    let h = Harness::start_in(
+        std::env::temp_dir().join(format!("pwrroute-mcp-stale-{}", std::process::id())),
+        endpoint.clone(),
+        std::sync::Arc::new(fake::FakeApprover::new(FakeAnswer::Approve(Role::Reader))),
+        Duration::from_secs(10),
+    )
+    .await;
+    let mode = fs::metadata(endpoint.path()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let client = h.client("test-agent").await;
+    client.cancel().await.unwrap();
     h.finish().await;
+    assert!(!endpoint.path().exists());
 }
 
 #[tokio::test]
-async fn an_unknown_token_gets_the_401_challenge() {
-    let h = Harness::start(Role::Reader).await;
-    for auth in ["Bearer prmcp_not-a-token", "Basic Zm9vOmJhcg==", "Bearer "] {
-        let response = h
-            .http
-            .post(h.resource())
-            .header(header::AUTHORIZATION, auth)
-            .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{auth}");
-        assert!(response.headers().contains_key(header::WWW_AUTHENTICATE));
-    }
+async fn stopping_hangs_up_on_connected_clients() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Reader)).await;
+    let client = h.client("test-agent").await;
+    assert!(client.list_all_tools().await.is_ok());
     h.finish().await;
+    let after = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
+        .await
+        .expect("the call fails rather than hangs");
+    assert!(after.is_err());
 }
 
 #[tokio::test]
 async fn urls_stay_off_disk_and_out_of_the_audit_log() {
-    let h = Harness::start(Role::Opener).await;
-    let token = h.login(Some(ALL_SCOPES)).await;
-    let client = h.client(&token).await;
+    let h = Harness::start(FakeAnswer::Approve(Role::Opener)).await;
+    let client = h.client("test-agent").await;
     for tool in ["pwrroute_resolve", "pwrroute_open"] {
         let result = call(&client, tool, json!({ "url": SECRET_URL })).await;
         assert_eq!(result.is_error, Some(false), "{}", text(&result));
     }
     let result = call(&client, "pwrroute_activity", json!({})).await;
     assert!(text(&result).contains(SECRET_URL), "Opener sees full URLs");
-    client.cancel().await.unwrap();
 
     let records = h.audit.records();
     let tools: Vec<&str> = records.iter().map(|r| r.tool.as_str()).collect();
@@ -276,11 +228,12 @@ async fn urls_stay_off_disk_and_out_of_the_audit_log() {
         tools,
         ["pwrroute_resolve", "pwrroute_open", "pwrroute_activity"]
     );
-    let session = &h.access.sessions()[0];
-    assert!(records.iter().all(|r| r.session_id == session.id));
+    assert!(records.iter().all(|r| r.agent == "test-agent"));
     assert!(records.iter().all(|r| r.outcome == Outcome::Ok));
-    assert_eq!(session.calls, 3);
-    assert!(session.last_used_at.is_some());
+    let agent = &h.agents.agents()[0];
+    assert_eq!(agent.calls, 3);
+    assert_eq!(agent.connections, 1);
+    assert!(agent.last_used_at.is_some());
     let serialized = serde_json::to_string(&records).unwrap();
     assert!(!serialized.contains("example.org"), "{serialized}");
     // Sorted: the workspace build turns on serde_json's preserve_order.
@@ -294,18 +247,74 @@ async fn urls_stay_off_disk_and_out_of_the_audit_log() {
     fields.sort();
     assert_eq!(
         fields,
-        ["duration", "outcome", "sessionId", "started", "tool"]
+        [
+            "agent",
+            "connection",
+            "duration",
+            "outcome",
+            "started",
+            "tool"
+        ]
     );
 
+    client.cancel().await.unwrap();
+    let agents = h.agents.clone();
+    eventually(|| agents.agents()[0].connections == 0).await;
     let dir = h.stop().await;
-    let mut files = 0;
+    let mut files = Vec::new();
     for entry in fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         let contents = fs::read_to_string(&path).unwrap();
         assert!(!contents.contains("example.org"), "{}", path.display());
-        assert!(!contents.contains(&token), "{}", path.display());
-        files += 1;
+        files.push(path.file_name().unwrap().to_string_lossy().into_owned());
     }
-    assert_eq!(files, 2, "only the client and session stores");
+    assert_eq!(files, ["mcp-agents.json"], "only the approval store");
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_2025_protocol_client_speaks_plain_json_lines() {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+    let h = Harness::start(FakeAnswer::Approve(Role::Reader)).await;
+    let stream = pwrroute_mcp::link::connect(&h.endpoint).await.unwrap();
+    let (read, mut write) = tokio::io::split(stream);
+    let mut lines = BufReader::new(read).lines();
+    let mut send = async |message: serde_json::Value| {
+        write
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .unwrap();
+    };
+
+    send(json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "claude-code", "version": "2.1.0" }
+        }
+    }))
+    .await;
+    let reply: serde_json::Value =
+        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(reply["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(reply["result"]["serverInfo"]["name"], "PwrRoute");
+
+    send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await;
+    send(json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": { "name": "pwrroute_resolve", "arguments": { "url": "https://example.org/" } }
+    }))
+    .await;
+    let reply: serde_json::Value =
+        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(reply["id"], 2);
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    assert_eq!(
+        reply["result"]["structuredContent"]["browser"]["name"],
+        "Firefox"
+    );
+    assert_eq!(h.approver.asked()[0].client_version, "2.1.0");
+    h.finish().await;
 }

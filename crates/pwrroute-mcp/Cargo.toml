@@ -1,6 +1,6 @@
 [package]
 name = "pwrroute-mcp"
-description = "PwrRoute's local-agent door: MCP over loopback streamable HTTP, behind OAuth 2.1 and an in-app approval"
+description = "PwrRoute's local-agent door: MCP served by the app over a per-user socket or pipe, reached through `pwrroute mcp`, with an in-app approval"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,30 +16,21 @@ pwrroute-engine = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rmcp = { version = "3.5.1", default-features = false, features = [
-    "server",
-    "transport-streamable-http-server",
+rmcp = { version = "3.5.1", default-features = false, features = ["server"] }
+tokio = { version = "1", features = [
+    "rt",
+    "net",
+    "io-util",
+    "io-std",
+    "macros",
+    "sync",
+    "time",
 ] }
-axum = { version = "0.8", default-features = false, features = [
-    "tokio",
-    "http1",
-    "json",
-    "query",
-    "form",
-] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
 tokio-util = "0.7"
 schemars = "1"
 thiserror = "2"
 url = "2"
-sha2 = "0.10"
-base64 = "0.22"
-getrandom = "0.3"
 
 [dev-dependencies]
-rmcp = { version = "3.5.1", default-features = false, features = [
-    "client",
-    "transport-streamable-http-client-reqwest",
-] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "form"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+rmcp = { version = "3.5.1", default-features = false, features = ["client"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process"] }

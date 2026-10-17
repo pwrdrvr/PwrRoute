@@ -2,9 +2,9 @@
 
 mod support;
 
-use pwrroute_mcp::{Outcome, Role, RulesSource};
+use pwrroute_mcp::{Outcome, Role, RulesSource, fake::FakeAnswer};
 use serde_json::{Value, json};
-use support::{ALL_SCOPES, Harness, call, text};
+use support::{Harness, call, text};
 
 const LINK: &str = "https://docs.example.org/page?q=1";
 
@@ -19,9 +19,8 @@ fn denied(result: &rmcp::model::CallToolResult, permission: &str) {
 
 #[tokio::test]
 async fn a_reader_can_look_but_not_open_or_edit() {
-    let h = Harness::start(Role::Reader).await;
-    let token = h.login(Some(ALL_SCOPES)).await;
-    let client = h.client(&token).await;
+    let h = Harness::start(FakeAnswer::Approve(Role::Reader)).await;
+    let client = h.client("test-agent").await;
 
     for (tool, args) in [
         ("pwrroute_resolve", json!({ "url": LINK })),
@@ -56,13 +55,8 @@ async fn a_reader_can_look_but_not_open_or_edit() {
 
 #[tokio::test]
 async fn a_reader_sees_activity_as_hosts_only() {
-    let h = Harness::start(Role::Opener).await;
-    let opener_token = h.login(Some(ALL_SCOPES)).await;
-    h.approver
-        .set(pwrroute_mcp::fake::FakeAnswer::Approve(Role::Reader));
-    let reader_token = h.login(Some(ALL_SCOPES)).await;
-
-    let opener = h.client(&opener_token).await;
+    let h = Harness::start(FakeAnswer::Approve(Role::Opener)).await;
+    let opener = h.client("opener-agent").await;
     let result = call(&opener, "pwrroute_open", json!({ "url": LINK })).await;
     assert_eq!(result.is_error, Some(false), "{}", text(&result));
     let full = call(&opener, "pwrroute_activity", json!({})).await;
@@ -70,7 +64,8 @@ async fn a_reader_sees_activity_as_hosts_only() {
     assert_eq!(full["fullUrls"], true);
     assert_eq!(full["entries"][0]["trace"]["url"], LINK);
 
-    let reader = h.client(&reader_token).await;
+    h.approver.set(FakeAnswer::Approve(Role::Reader));
+    let reader = h.client("reader-agent").await;
     let hosts = call(&reader, "pwrroute_activity", json!({})).await;
     assert!(!text(&hosts).contains("/page"), "{}", text(&hosts));
     let hosts = hosts.structured_content.unwrap();
@@ -86,10 +81,9 @@ async fn a_reader_sees_activity_as_hosts_only() {
 }
 
 #[tokio::test]
-async fn an_opener_opens_through_the_router_against_its_session() {
-    let h = Harness::start(Role::Opener).await;
-    let token = h.login(Some(ALL_SCOPES)).await;
-    let client = h.client(&token).await;
+async fn an_opener_opens_through_the_router_against_its_agent() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Opener)).await;
+    let client = h.client("test-agent").await;
 
     let result = call(
         &client,
@@ -104,9 +98,8 @@ async fn an_opener_opens_through_the_router_against_its_session() {
     );
     let opened = h.router.opened();
     assert_eq!(opened.len(), 1);
-    let session = &h.access.sessions()[0];
-    assert_eq!(opened[0].0.id, session.id);
-    assert_eq!(opened[0].0.name, "Test agent");
+    assert_eq!(opened[0].0.name, "test-agent");
+    assert_eq!(opened[0].1.via.as_deref(), Some("test-agent"));
 
     denied(
         &call(
@@ -123,9 +116,8 @@ async fn an_opener_opens_through_the_router_against_its_session() {
 
 #[tokio::test]
 async fn an_editor_changes_rules_by_revision() {
-    let h = Harness::start(Role::Editor).await;
-    let token = h.login(Some(ALL_SCOPES)).await;
-    let client = h.client(&token).await;
+    let h = Harness::start(FakeAnswer::Approve(Role::Editor)).await;
+    let client = h.client("test-agent").await;
 
     let listed = call(&client, "pwrroute_rules_list", json!({})).await;
     let listed = listed.structured_content.unwrap();
@@ -171,52 +163,6 @@ async fn an_editor_changes_rules_by_revision() {
         text(&refused).starts_with("finicky_config_selected"),
         "{}",
         text(&refused)
-    );
-    client.cancel().await.unwrap();
-    h.finish().await;
-}
-
-#[tokio::test]
-async fn a_role_change_applies_to_the_next_call_but_never_exceeds_consent() {
-    let h = Harness::start(Role::Opener).await;
-    let token = h.login(Some(ALL_SCOPES)).await;
-    let client = h.client(&token).await;
-    let id = h.access.sessions()[0].id.clone();
-
-    assert_eq!(
-        call(&client, "pwrroute_open", json!({ "url": LINK }))
-            .await
-            .is_error,
-        Some(false)
-    );
-    // Settings narrows the session to Reader.
-    h.access.assign_role(&id, Role::Reader).unwrap();
-    denied(
-        &call(&client, "pwrroute_open", json!({ "url": LINK })).await,
-        "links.open",
-    );
-    client.cancel().await.unwrap();
-
-    // A session approved for the Reader's scopes stays a Reader in effect,
-    // whatever role Settings gives it later.
-    h.approver
-        .set(pwrroute_mcp::fake::FakeAnswer::Approve(Role::Reader));
-    let token = h.login(None).await;
-    let narrow = h.access.sessions()[0].id.clone();
-    h.access.assign_role(&narrow, Role::Editor).unwrap();
-    let client = h.client(&token).await;
-    denied(
-        &call(&client, "pwrroute_open", json!({ "url": LINK })).await,
-        "links.open",
-    );
-    denied(
-        &call(
-            &client,
-            "pwrroute_rules_apply",
-            json!({ "baseRevision": "1", "patch": {} }),
-        )
-        .await,
-        "rules.write",
     );
     client.cancel().await.unwrap();
     h.finish().await;

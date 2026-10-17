@@ -1,93 +1,140 @@
-//! A running server on an ephemeral port with fake backends, and an OAuth
-//! client that walks the flow the way Claude Code and Codex do: 401,
-//! discovery, registration, authorize, wait, token.
+//! A running server on a private socket (a pipe on Windows) with fake
+//! backends and a fake approver, and MCP clients that reach it over the
+//! link directly or through the `pwrroute mcp` proxy binary.
 
 #![allow(dead_code)]
 
 use std::{
-    collections::HashMap,
     path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant},
+    process::Stdio,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use pwrroute_mcp::{
-    AccessControl, Config, McpServer, MemoryAudit, Role,
-    fake::{self, FakeApprover, FakeRouter, FakeRules},
+    Agents, Config, Endpoint, McpServer, MemoryAudit,
+    fake::{self, FakeAnswer, FakeApprover, FakeRouter, FakeRules},
+    link::{self, ENDPOINT_ENV},
 };
-use reqwest::{StatusCode, header};
 use rmcp::{
     RoleClient, ServiceExt as _,
-    model::{CallToolRequestParams, CallToolResult},
-    service::RunningService,
-    transport::{
-        StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
+    model::{
+        CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
     },
+    service::RunningService,
 };
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde_json::Value;
 
-pub const REDIRECT_URI: &str = "http://127.0.0.1:9/callback";
+pub type Client = RunningService<RoleClient, ClientConfig>;
 
 pub struct Harness {
     pub server: Option<McpServer>,
-    pub base: String,
-    pub access: AccessControl,
+    pub endpoint: Endpoint,
+    pub agents: Agents,
     pub approver: Arc<FakeApprover>,
     pub audit: Arc<MemoryAudit>,
     pub router: Arc<FakeRouter>,
     pub rules: Arc<FakeRules>,
-    pub http: reqwest::Client,
     pub state_dir: PathBuf,
 }
 
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+fn unique(tag: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    format!(
+        "{tag}-{}-{}-{nanos}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// A fresh endpoint no other test uses. Socket paths stay short: macOS
+/// allows about 100 bytes.
+pub fn private_endpoint() -> Endpoint {
+    if cfg!(windows) {
+        Endpoint::new(format!(r"\\.\pipe\{}", unique("pwrroute-mcp-test")))
+    } else {
+        Endpoint::new(std::env::temp_dir().join(format!("{}.sock", unique("prm"))))
+    }
+}
+
 impl Harness {
-    pub async fn start(role: Role) -> Self {
-        let state_dir = std::env::temp_dir().join(format!(
-            "pwrroute-mcp-test-{}-{}",
-            std::process::id(),
-            URL_SAFE_NO_PAD.encode(rand_bytes())
-        ));
-        Self::start_in(state_dir, Arc::new(FakeApprover::approving(role))).await
+    pub async fn start(answer: FakeAnswer) -> Self {
+        Self::start_with(answer, Duration::from_secs(10)).await
     }
 
-    pub async fn start_in(state_dir: PathBuf, approver: Arc<FakeApprover>) -> Self {
-        let access = AccessControl::open(Some(&state_dir)).expect("open the state dir");
+    pub async fn start_with(answer: FakeAnswer, approval_wait: Duration) -> Self {
+        let state_dir = std::env::temp_dir().join(unique("pwrroute-mcp-state"));
+        Self::start_in(
+            state_dir,
+            private_endpoint(),
+            Arc::new(FakeApprover::new(answer)),
+            approval_wait,
+        )
+        .await
+    }
+
+    pub async fn start_in(
+        state_dir: PathBuf,
+        endpoint: Endpoint,
+        approver: Arc<FakeApprover>,
+        approval_wait: Duration,
+    ) -> Self {
+        let agents = Agents::open(Some(&state_dir)).expect("open the state dir");
         let (backends, router, rules) = fake::backends();
         let audit = Arc::new(MemoryAudit::default());
         let server = McpServer::start(
-            Config { port: 0 },
-            access.clone(),
+            Config {
+                endpoint: endpoint.clone(),
+                approval_wait,
+            },
+            agents.clone(),
             backends,
             approver.clone(),
             audit.clone(),
         )
         .await
         .expect("start the server");
-        let base = format!("http://{}", server.local_addr());
         Self {
             server: Some(server),
-            base,
-            access,
+            endpoint,
+            agents,
             approver,
             audit,
             router,
             rules,
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap(),
             state_dir,
         }
     }
 
-    pub fn url(&self, path: &str) -> String {
-        format!("{}{path}", self.base)
+    /// An MCP client named `name`, connected over the link and initialized.
+    pub async fn client(&self, name: &str) -> Client {
+        let stream = link::connect(&self.endpoint).await.expect("connect");
+        client_config(name).serve(stream).await.expect("initialize")
     }
 
-    pub fn resource(&self) -> String {
-        self.url("/mcp")
+    /// An MCP client named `name` that reaches the server the way Claude
+    /// Code does: by launching `pwrroute mcp` and speaking over its stdio.
+    pub async fn client_via_proxy(&self, name: &str) -> (Client, tokio::process::Child) {
+        let mut child = proxy_command(&self.endpoint)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn the proxy");
+        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let client = client_config(name)
+            .serve((stdout, stdin))
+            .await
+            .expect("initialize through the proxy");
+        (client, child)
     }
 
     pub async fn stop(mut self) -> PathBuf {
@@ -102,127 +149,25 @@ impl Harness {
         let dir = self.stop().await;
         let _ = std::fs::remove_dir_all(dir);
     }
-
-    pub async fn register(&self) -> String {
-        let response = self
-            .http
-            .post(self.url("/register"))
-            .json(&json!({
-                "redirect_uris": [REDIRECT_URI],
-                "client_name": "Test agent",
-                "token_endpoint_auth_method": "none",
-            }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body: Value = response.json().await.unwrap();
-        body["client_id"].as_str().unwrap().to_owned()
-    }
-
-    /// `GET /authorize`, then polls the waiting page until it redirects.
-    /// Returns the redirect's query parameters.
-    pub async fn authorize(
-        &self,
-        client_id: &str,
-        pkce: &Pkce,
-        scope: Option<&str>,
-    ) -> HashMap<String, String> {
-        let mut query = vec![
-            ("response_type", "code"),
-            ("client_id", client_id),
-            ("redirect_uri", REDIRECT_URI),
-            ("code_challenge", &pkce.challenge),
-            ("code_challenge_method", "S256"),
-            ("state", "xyz"),
-        ];
-        let resource = self.resource();
-        query.push(("resource", &resource));
-        if let Some(scope) = scope {
-            query.push(("scope", scope));
-        }
-        let response = self.get_with_query("/authorize", &query).await;
-        self.follow_waiting_page(response).await
-    }
-
-    pub async fn get_with_query(&self, path: &str, query: &[(&str, &str)]) -> reqwest::Response {
-        let mut url = url::Url::parse(&self.url(path)).unwrap();
-        url.query_pairs_mut().extend_pairs(query);
-        self.http.get(url).send().await.unwrap()
-    }
-
-    /// Follows the meta refresh until the status URL redirects to the
-    /// client, as a browser would.
-    pub async fn follow_waiting_page(
-        &self,
-        mut response: reqwest::Response,
-    ) -> HashMap<String, String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if response.status() == StatusCode::FOUND {
-                return redirect_params(&response);
-            }
-            assert_eq!(response.status(), StatusCode::OK, "waiting page");
-            let page = response.text().await.unwrap();
-            let id = waiting_id(&page).expect("a waiting page");
-            assert!(Instant::now() < deadline, "approval never finished");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            response = self
-                .get_with_query("/authorize/status", &[("id", &id)])
-                .await;
-        }
-    }
-
-    pub async fn exchange(&self, client_id: &str, code: &str, pkce: &Pkce) -> reqwest::Response {
-        let resource = self.resource();
-        self.http
-            .post(self.url("/token"))
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("client_id", client_id),
-                ("code", code),
-                ("code_verifier", &pkce.verifier),
-                ("redirect_uri", REDIRECT_URI),
-                ("resource", &resource),
-            ])
-            .send()
-            .await
-            .unwrap()
-    }
-
-    /// The whole flow; returns the access token.
-    pub async fn login(&self, scope: Option<&str>) -> String {
-        let client_id = self.register().await;
-        let pkce = Pkce::new();
-        let params = self.authorize(&client_id, &pkce, scope).await;
-        let code = params.get("code").expect("a code");
-        let response = self.exchange(&client_id, code, &pkce).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body: Value = response.json().await.unwrap();
-        assert_eq!(body["token_type"], "bearer");
-        assert!(body.get("refresh_token").is_none());
-        assert!(body.get("expires_in").is_none());
-        body["access_token"].as_str().unwrap().to_owned()
-    }
-
-    /// An rmcp client, connected and initialized with `token`.
-    pub async fn client(&self, token: &str) -> RunningService<RoleClient, ()> {
-        let mut config = StreamableHttpClientTransportConfig::with_uri(self.resource());
-        config.auth_header = Some(token.to_owned());
-        let transport = StreamableHttpClientTransport::from_config(config);
-        ().serve(transport).await.expect("initialize")
-    }
 }
 
-/// Every scope: the client asks for all, so every role can be offered.
-pub const ALL_SCOPES: &str =
-    "links.resolve browsers.read rules.read activity.hosts activity.urls links.open rules.write";
+pub fn client_config(name: &str) -> ClientConfig {
+    ClientConfig::new(
+        ClientCapabilities::default(),
+        Implementation::new(name.to_owned(), "1.0.0"),
+    )
+}
 
-pub async fn call(
-    client: &RunningService<RoleClient, ()>,
-    tool: &str,
-    args: Value,
-) -> CallToolResult {
+pub fn proxy_command(endpoint: &Endpoint) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_pwrroute-mcp-proxy"));
+    command
+        .env(ENDPOINT_ENV, endpoint.path())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
+}
+
+pub async fn call(client: &Client, tool: &str, args: Value) -> CallToolResult {
     let params = CallToolRequestParams::new(tool.to_owned())
         .with_arguments(args.as_object().cloned().unwrap_or_default());
     client.call_tool(params).await.expect("tools/call")
@@ -237,40 +182,13 @@ pub fn text(result: &CallToolResult) -> String {
         .join("\n")
 }
 
-pub struct Pkce {
-    pub verifier: String,
-    pub challenge: String,
-}
-
-impl Pkce {
-    pub fn new() -> Self {
-        let verifier = URL_SAFE_NO_PAD.encode(rand_bytes());
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        Self {
-            verifier,
-            challenge,
+/// Waits until `check` holds, for things another task finishes.
+pub async fn eventually(mut check: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if check() {
+            return;
         }
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
-}
-
-fn rand_bytes() -> [u8; 32] {
-    let mut bytes = [0; 32];
-    getrandom::fill(&mut bytes).unwrap();
-    bytes
-}
-
-pub fn waiting_id(page: &str) -> Option<String> {
-    let start = page.find("/authorize/status?id=")? + "/authorize/status?id=".len();
-    let rest = &page[start..];
-    Some(rest[..rest.find('"')?].to_owned())
-}
-
-pub fn redirect_params(response: &reqwest::Response) -> HashMap<String, String> {
-    let location = response.headers()[header::LOCATION].to_str().unwrap();
-    assert!(location.starts_with(REDIRECT_URI), "{location}");
-    url::Url::parse(location)
-        .unwrap()
-        .query_pairs()
-        .into_owned()
-        .collect()
+    assert!(check(), "condition never held");
 }

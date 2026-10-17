@@ -1,18 +1,12 @@
-//! Permissions, the roles that bundle them, and the OAuth scopes that name
-//! them (the brief's 2d matrix, Settings 1a).
-//!
-//! As in PwrSnap and PwrGit, a scope is one permission, and a role is a named
-//! set of permissions. A client asks for scopes, the person picks a role in
-//! the approval window, and the session can do what the role allows within
-//! what was asked: `role ∩ consented scopes`. Changing a session's role later
-//! can narrow it but never widen it past that consent.
+//! Permissions and the roles that bundle them (the brief's 2d matrix,
+//! Settings 1a). Built-in roles are additive: Opener is Reader plus opening
+//! links, Editor is Opener plus writing rules.
 
 use std::{collections::BTreeSet, fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-/// One thing a session may be allowed to do. The serialized form is the
-/// OAuth scope.
+/// One thing an agent may be allowed to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Permission {
     /// `pwrroute_resolve`.
@@ -49,16 +43,8 @@ impl Permission {
         Self::RulesWrite,
     ];
 
-    /// The scopes a client gets when it asks for none: what a Reader needs.
-    pub const DEFAULT_SCOPES: [Self; 4] = [
-        Self::Resolve,
-        Self::Browsers,
-        Self::RulesRead,
-        Self::ActivityHosts,
-    ];
-
     #[must_use]
-    pub fn scope(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Resolve => "links.resolve",
             Self::Browsers => "browsers.read",
@@ -68,11 +54,6 @@ impl Permission {
             Self::Open => "links.open",
             Self::RulesWrite => "rules.write",
         }
-    }
-
-    #[must_use]
-    pub fn from_scope(scope: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.scope() == scope)
     }
 
     /// How the approval window names it.
@@ -92,7 +73,7 @@ impl Permission {
 
 impl fmt::Display for Permission {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.scope())
+        f.write_str(self.name())
     }
 }
 
@@ -132,16 +113,6 @@ impl Role {
         self.permissions().contains(&permission)
     }
 
-    /// Roles a client that asked for `scopes` can be given: those that ask
-    /// for nothing beyond them.
-    #[must_use]
-    pub fn offered_for(scopes: &Permissions) -> Vec<Self> {
-        Self::ALL
-            .into_iter()
-            .filter(|r| r.permissions().is_subset(scopes))
-            .collect()
-    }
-
     #[must_use]
     pub fn description(self) -> &'static str {
         match self {
@@ -179,7 +150,7 @@ impl FromStr for Role {
 
 #[cfg(test)]
 mod tests {
-    use super::{Permission as P, Permissions, Role};
+    use super::{Permission as P, Role};
 
     #[test]
     fn roles_match_the_brief() {
@@ -200,22 +171,12 @@ mod tests {
     }
 
     #[test]
-    fn scopes_round_trip() {
+    fn names_are_the_serialized_form() {
         for p in P::ALL {
-            assert_eq!(P::from_scope(p.scope()), Some(p));
             assert_eq!(
                 serde_json::to_value(p).unwrap(),
-                serde_json::json!(p.scope())
+                serde_json::json!(p.name())
             );
         }
-    }
-
-    #[test]
-    fn only_roles_within_the_request_are_offered() {
-        let reader = Permissions::from(P::DEFAULT_SCOPES);
-        assert_eq!(Role::offered_for(&reader), [Role::Reader]);
-        let all = Permissions::from(P::ALL);
-        assert_eq!(Role::offered_for(&all), Role::ALL);
-        assert!(Role::offered_for(&Permissions::from([P::Open])).is_empty());
     }
 }

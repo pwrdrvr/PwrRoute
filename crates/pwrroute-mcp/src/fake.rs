@@ -13,9 +13,9 @@ use serde_json::{Value, json};
 use crate::{
     approval::{ApprovalDecision, ApprovalReply, ApprovalRequest, Approver},
     backend::{
-        ActivityEntry, ActivityLog, Backends, BrowserCatalog, BrowserList, DetectedBrowser,
-        Resolver, Router, RulesError, RulesSnapshot, RulesSource, RulesStore, SessionRef, StepKind,
-        Trace, TraceStep,
+        ActivityEntry, ActivityLog, AgentRef, Backends, BrowserCatalog, BrowserList,
+        DetectedBrowser, Resolver, Router, RulesError, RulesSnapshot, RulesSource, RulesStore,
+        StepKind, Trace, TraceStep,
     },
     roles::Role,
 };
@@ -77,30 +77,25 @@ impl Resolver for FakeResolver {
 /// what it "opened" in memory for [`FakeActivity`] and for assertions.
 #[derive(Debug, Default)]
 pub struct FakeRouter {
-    opened: Mutex<Vec<(SessionRef, ActivityEntry)>>,
+    opened: Mutex<Vec<(AgentRef, ActivityEntry)>>,
 }
 
 impl FakeRouter {
-    /// Every open so far, oldest first, with the session it was charged to.
-    pub fn opened(&self) -> Vec<(SessionRef, ActivityEntry)> {
+    /// Every open so far, oldest first, with the agent it was charged to.
+    pub fn opened(&self) -> Vec<(AgentRef, ActivityEntry)> {
         lock(&self.opened).clone()
     }
 }
 
 impl Router for FakeRouter {
-    fn open(
-        &self,
-        url: &str,
-        opener: Option<&Opener>,
-        session: &SessionRef,
-    ) -> anyhow::Result<Trace> {
+    fn open(&self, url: &str, opener: Option<&Opener>, agent: &AgentRef) -> anyhow::Result<Trace> {
         let trace = FakeResolver.resolve(url, opener)?;
         let entry = ActivityEntry {
             at_ms: now_ms(),
-            via: Some(session.name.clone()),
+            via: Some(agent.name.clone()),
             trace: trace.clone(),
         };
-        lock(&self.opened).push((session.clone(), entry));
+        lock(&self.opened).push((agent.clone(), entry));
         Ok(trace)
     }
 }
@@ -245,7 +240,6 @@ pub fn backends() -> (Backends, Arc<FakeRouter>, Arc<FakeRules>) {
 /// How [`FakeApprover`] answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FakeAnswer {
-    /// Approve with this role, under the suggested Session Name.
     Approve(Role),
     /// Approve with this exact decision, valid or not.
     Decide(ApprovalDecision),
@@ -300,7 +294,7 @@ impl Approver for FakeApprover {
     fn request(&self, request: ApprovalRequest, reply: ApprovalReply) {
         lock(&self.asked).push(request.clone());
         match lock(&self.answer).clone() {
-            FakeAnswer::Approve(role) => reply.approve(request.suggested_session_name, role),
+            FakeAnswer::Approve(role) => reply.approve(role),
             FakeAnswer::Decide(decision) => reply.send(decision),
             FakeAnswer::Deny => reply.deny(),
             FakeAnswer::Hold => lock(&self.held).push((request, reply)),

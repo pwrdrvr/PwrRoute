@@ -86,13 +86,14 @@ pub(crate) fn host_of(url: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The MCP session a call came from, as Activity records it.
+/// The agent a call came from, as Activity records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionRef {
-    pub id: String,
-    /// The Session Name as approved, e.g. "Claude Code · MacBook Pro".
+pub struct AgentRef {
+    /// The approved client name, e.g. `claude-code`.
     pub name: String,
+    /// Which of its connections, counted from 1 since PwrRoute started.
+    pub connection: u64,
 }
 
 /// Resolves a URL without opening anything.
@@ -101,14 +102,9 @@ pub trait Resolver: Send + Sync + 'static {
 }
 
 /// The router: dispatches a URL as a click would, and records it in
-/// Activity against `session`.
+/// Activity against `agent`.
 pub trait Router: Send + Sync + 'static {
-    fn open(
-        &self,
-        url: &str,
-        opener: Option<&Opener>,
-        session: &SessionRef,
-    ) -> anyhow::Result<Trace>;
+    fn open(&self, url: &str, opener: Option<&Opener>, agent: &AgentRef) -> anyhow::Result<Trace>;
 }
 
 /// Detected browsers and the OS default.
@@ -202,7 +198,7 @@ pub trait ActivityLog: Send + Sync + 'static {
 pub struct ActivityEntry {
     /// Milliseconds since the Unix epoch.
     pub at_ms: u64,
-    /// The app the link came from, or the agent session that opened it.
+    /// The app the link came from, or the agent that opened it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
     pub trace: Trace,

@@ -1,4 +1,4 @@
-//! The audit trail: which session called which tool, when, for how long,
+//! The audit trail: which agent called which tool, when, for how long,
 //! and whether it was allowed. Never the arguments or the result: those
 //! carry URLs, and URLs that pass through MCP are not written anywhere.
 
@@ -14,7 +14,7 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub enum Outcome {
     Ok,
-    /// The session's role does not allow the tool.
+    /// The agent's role does not allow the tool, or it is not approved.
     Denied,
     /// The tool ran and failed, or its input was rejected.
     Failed,
@@ -25,7 +25,10 @@ pub enum Outcome {
 #[serde(rename_all = "camelCase")]
 pub struct AuditRecord {
     pub tool: String,
-    pub session_id: String,
+    /// The approved client name.
+    pub agent: String,
+    /// Which of its connections, counted from 1 since PwrRoute started.
+    pub connection: u64,
     #[serde(with = "unix_ms")]
     pub started: SystemTime,
     #[serde(with = "millis")]

@@ -1,14 +1,18 @@
 //! The MCP tools (the brief's 2d), each gated on a permission.
 //!
-//! Every tool is listed to every session, as in PwrSnap and PwrGit; calling
-//! one the session's role does not allow answers with an `isError` result
-//! naming the missing permission. The check runs against the session as it
-//! is at call time, so a role change or revocation applies to the next
-//! call.
+//! Every tool is listed to every agent, as in PwrSnap and PwrGit; calling
+//! one the agent's role does not allow answers with an `isError` result
+//! naming the missing permission. The role is read at call time, so a
+//! change or revocation in Settings applies to the next call. A client
+//! name not yet approved raises the approval window, and its first call
+//! waits for the answer.
 
 use std::{
-    sync::Arc,
-    time::{Instant, SystemTime},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant, SystemTime},
 };
 
 use pwrroute_engine::Opener;
@@ -16,8 +20,8 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
-        Tool, ToolAnnotations,
+        InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
     },
     service::RequestContext,
 };
@@ -26,10 +30,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    access::{AccessControl, Denied, Principal},
+    agents::{Agents, Standing, clean_name},
+    approval::{Answer as Decision, ApprovalDecision, Approvals},
     audit::{AuditRecord, AuditSink, Outcome},
-    backend::{Backends, RulesError},
-    roles::Permission,
+    backend::{AgentRef, Backends, RulesError},
+    roles::{Permission, Role},
 };
 
 /// The longest URL a tool accepts.
@@ -39,10 +44,10 @@ const MAX_ACTIVITY: usize = 200;
 
 const INSTRUCTIONS: &str = "PwrRoute is the OS default browser and routes each link to a browser and profile by rules. \
 Use pwrroute_resolve to see where a link would go and why; it never opens anything. \
-pwrroute_open dispatches a link through the router as a click would, and is recorded in Activity against this session. \
+pwrroute_open dispatches a link through the router as a click would, and is recorded in Activity against this agent. \
 Read the rules with pwrroute_rules_list; change them with pwrroute_rules_apply, naming the revision you read. \
-Which tools work depends on the role the user approved for this session; a refused call names the permission it needs. \
-This HTTP transport is stateless.";
+The first call from a new client waits while the user approves it in PwrRoute's window. \
+Which tools work depends on the role the user chose; a refused call names the permission it needs.";
 
 /// Where a link came from, as rules that match on the sending app see it.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -137,7 +142,7 @@ fn specs() -> Vec<Spec> {
             "pwrroute_open",
             Permission::Open,
             "Open a link",
-            "Dispatch a URL through PwrRoute's router, as a click would: it is rewritten and opened in the browser the rules choose. Recorded in Activity against this session. Returns the trace.",
+            "Dispatch a URL through PwrRoute's router, as a click would: it is rewritten and opened in the browser the rules choose. Recorded in Activity against this agent. Returns the trace.",
             ToolAnnotations::new()
                 .read_only(false)
                 .destructive(false)
@@ -173,19 +178,97 @@ fn specs() -> Vec<Spec> {
             "pwrroute_activity",
             Permission::ActivityHosts,
             "Recent activity",
-            "Recent dispatches with their traces, newest first. Sessions without full-URL access see hosts only.",
+            "Recent dispatches with their traces, newest first. Agents without full-URL access see hosts only.",
             read_only(),
         ),
     ]
 }
 
-/// The MCP handler. One is built per request (the transport is
-/// stateless); it is a few `Arc`s.
+/// What every connection's handler shares.
 #[derive(Clone)]
 pub(crate) struct Tools {
     pub(crate) backends: Backends,
-    pub(crate) access: AccessControl,
+    pub(crate) agents: Agents,
     pub(crate) audit: Arc<dyn AuditSink>,
+    pub(crate) approvals: Arc<Approvals>,
+    pub(crate) approval_wait: Duration,
+}
+
+impl Tools {
+    pub(crate) fn for_connection(&self, connection: Connection) -> Handler {
+        Handler {
+            tools: self.clone(),
+            connection: Arc::new(connection),
+        }
+    }
+}
+
+/// One link connection: which client it turned out to be, the approval it
+/// is waiting on or got, and whether the person denied it.
+pub(crate) struct Connection {
+    id: u64,
+    agents: Agents,
+    name: OnceLock<String>,
+    answer: Mutex<Option<Decision>>,
+    denied: AtomicBool,
+}
+
+impl Connection {
+    pub(crate) fn new(id: u64, agents: Agents) -> Self {
+        Self {
+            id,
+            agents,
+            name: OnceLock::new(),
+            answer: Mutex::new(None),
+            denied: AtomicBool::new(false),
+        }
+    }
+
+    /// Files the connection under its client's name, the first time it
+    /// says one.
+    fn identify(&self, client: &Implementation) -> String {
+        let name = clean_name(&client.name);
+        let mut first = false;
+        let filed = self.name.get_or_init(|| {
+            first = true;
+            name.clone()
+        });
+        if first {
+            self.agents.connected(filed);
+        }
+        filed.clone()
+    }
+
+    /// The answer this connection waits on: the one asked for when it
+    /// connected, unless that was an approval since forgotten in Settings,
+    /// in which case the person is asked again.
+    fn answer(&self, approvals: &Arc<Approvals>, client: &Implementation) -> Decision {
+        let mut slot = self
+            .answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match slot.as_ref() {
+            Some(answer) if !matches!(*answer.borrow(), Some(ApprovalDecision::Approve { .. })) => {
+                answer.clone()
+            }
+            _ => slot.insert(approvals.ask(client)).clone(),
+        }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Some(name) = self.name.get() {
+            self.agents.disconnected(name);
+        }
+    }
+}
+
+/// The MCP handler for one connection.
+#[derive(Clone)]
+pub(crate) struct Handler {
+    tools: Tools,
+    connection: Arc<Connection>,
 }
 
 /// A tool's answer before it becomes a `CallToolResult`.
@@ -195,21 +278,51 @@ enum Answer {
     Failed(String),
 }
 
-impl Tools {
-    async fn run(&self, name: &str, args: Value, principal: &Principal) -> Answer {
+impl Handler {
+    /// The agent's role now, asking the person first if its name is new.
+    async fn authorize(&self, client: &Implementation) -> Result<Role, String> {
+        let name = self.connection.identify(client);
+        if self.connection.denied.load(Ordering::Relaxed) {
+            return Err(denied_message(&name));
+        }
+        match self.tools.agents.standing(&name) {
+            Standing::Allowed(role) => return Ok(role),
+            Standing::Revoked => {
+                return Err(format!(
+                    "revoked: PwrRoute access for {name} was revoked; the user can allow it again in Settings › Local agents"
+                ));
+            }
+            Standing::Unknown => {}
+        }
+        let mut answer = self.connection.answer(&self.tools.approvals, client);
+        let decided =
+            tokio::time::timeout(self.tools.approval_wait, answer.wait_for(Option::is_some))
+                .await
+                .map(|seen| seen.ok().and_then(|d| *d));
+        match decided {
+            Ok(Some(ApprovalDecision::Approve { role })) => Ok(role),
+            Ok(_) => {
+                self.connection.denied.store(true, Ordering::Relaxed);
+                Err(denied_message(&name))
+            }
+            Err(_) => Err(format!(
+                "approval_pending: the user has not yet approved {name} in PwrRoute's window; call again once they have"
+            )),
+        }
+    }
+
+    async fn run(&self, name: &str, args: Value, agent: &AgentRef, role: Role) -> Answer {
         let Some(spec) = specs().into_iter().find(|s| s.name == name) else {
             return Answer::Failed(format!("unknown_tool: PwrRoute has no tool named {name}"));
         };
-        if !principal.permissions.contains(&spec.permission) {
-            return Answer::Denied(
-                Denied::MissingPermission {
-                    tool: spec.name,
-                    permission: spec.permission,
-                }
-                .to_string(),
-            );
+        let permissions = role.permissions();
+        if !permissions.contains(&spec.permission) {
+            return Answer::Denied(format!(
+                "missing_permission: the {role} role does not allow {} (needs {})",
+                spec.name, spec.permission
+            ));
         }
-        let b = self.backends.clone();
+        let b = self.tools.backends.clone();
         let result = match spec.name {
             "pwrroute_resolve" => match parse::<LinkInput>(args).and_then(link) {
                 Ok((url, opener)) => {
@@ -219,8 +332,8 @@ impl Tools {
             },
             "pwrroute_open" => match parse::<LinkInput>(args).and_then(link) {
                 Ok((url, opener)) => {
-                    let session = principal.session.clone();
-                    blocking(move || b.router.open(&url, opener.as_ref(), &session).map(to_json))
+                    let agent = agent.clone();
+                    blocking(move || b.router.open(&url, opener.as_ref(), &agent).map(to_json))
                         .await
                 }
                 Err(e) => return e,
@@ -239,7 +352,7 @@ impl Tools {
             },
             "pwrroute_activity" => match parse::<ActivityInput>(args) {
                 Ok(input) => {
-                    let full = principal.permissions.contains(&Permission::ActivityUrls);
+                    let full = permissions.contains(&Permission::ActivityUrls);
                     let limit = input
                         .limit
                         .unwrap_or(DEFAULT_ACTIVITY)
@@ -344,19 +457,31 @@ async fn blocking(
     tokio::task::spawn_blocking(f).await?
 }
 
-/// The caller of this request, as the HTTP layer authenticated it, checked
-/// again against the store now.
-fn principal(access: &AccessControl, context: &RequestContext<RoleServer>) -> Option<Principal> {
-    let parts = context.extensions.get::<axum::http::request::Parts>()?;
-    let authenticated = parts.extensions.get::<Principal>()?;
-    access.principal(&authenticated.session.id).ok()
+fn denied_message(name: &str) -> String {
+    format!("access_denied: the user did not approve {name} in PwrRoute")
 }
 
-impl ServerHandler for Tools {
+impl ServerHandler for Handler {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("PwrRoute", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
+    }
+
+    /// Raises the approval window as the client connects, so it is up
+    /// before the first tool call waits on it.
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        context.peer.set_peer_info(request.clone());
+        let name = self.connection.identify(&request.client_info);
+        if self.tools.agents.standing(&name) == Standing::Unknown {
+            self.connection
+                .answer(&self.tools.approvals, &request.client_info);
+        }
+        self.negotiate_initialize(&request)
     }
 
     async fn list_tools(
@@ -377,20 +502,28 @@ impl ServerHandler for Tools {
     ) -> Result<CallToolResponse, ErrorData> {
         let started = SystemTime::now();
         let clock = Instant::now();
-        let Some(principal) = principal(&self.access, &context) else {
-            return Ok(error_result(&Denied::InvalidSession.to_string()).into());
+        let client = context
+            .client_info()
+            .unwrap_or_else(|| Implementation::new("", ""));
+        let agent = AgentRef {
+            name: self.connection.identify(&client),
+            connection: self.connection.id,
         };
         let args = Value::Object(request.arguments.unwrap_or_default());
-        let answer = self.run(&request.name, args, &principal).await;
+        let answer = match self.authorize(&client).await {
+            Ok(role) => self.run(&request.name, args, &agent, role).await,
+            Err(message) => Answer::Denied(message),
+        };
         let outcome = match &answer {
             Answer::Ok(_) => Outcome::Ok,
             Answer::Denied(_) => Outcome::Denied,
             Answer::Failed(_) => Outcome::Failed,
         };
-        self.access.record_use(&principal.session.id);
-        self.audit.record(AuditRecord {
+        self.tools.agents.record_use(&agent.name);
+        self.tools.audit.record(AuditRecord {
             tool: request.name.to_string(),
-            session_id: principal.session.id.clone(),
+            agent: agent.name.clone(),
+            connection: agent.connection,
             started,
             duration: clock.elapsed(),
             outcome,
