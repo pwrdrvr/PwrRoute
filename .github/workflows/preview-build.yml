@@ -19,6 +19,8 @@ env:
   # `0.0.1-pr.12` on a PR, `0.0.1-dev.34` on dispatch. xtask stamps packages
   # with it; Cargo.toml is left alone so `--locked` still holds.
   PREVIEW_SUFFIX: ${{ github.event.pull_request.number && format('pr.{0}', github.event.pull_request.number) || format('dev.{0}', github.run_number) }}
+  # Must equal the velopack crate version in crates/pwrroute-app/Cargo.toml.
+  VPK_VERSION: "1.2.161"
 
 jobs:
   preview-macos:
@@ -69,7 +71,7 @@ jobs:
           retention-days: 14
 
   preview-windows:
-    name: Build preview zip (Windows x64)
+    name: Build preview Setup.exe and zip (Windows x64)
     # Same gate as the macOS preview above.
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -114,10 +116,49 @@ jobs:
           Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES "dist/$name/"
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
 
+      - name: Install .NET for vpk
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install vpk
+        shell: bash
+        run: dotnet tool install --global vpk --version "$VPK_VERSION"
+
+      # The same vpk arguments as release.yml's windows-sign job, minus
+      # signing, release notes and deltas.
+      - name: Pack unsigned Setup.exe and MSI
+        shell: pwsh
+        env:
+          PREVIEW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Force vpk-input | Out-Null
+          Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES vpk-input/
+          & vpk --skip-updates pack `
+            --packId PwrRoute `
+            --packVersion $env:PREVIEW_VERSION `
+            --packDir vpk-input `
+            --mainExe pwrroute.exe `
+            --packTitle PwrRoute `
+            --packAuthors "PwrDrvr LLC" `
+            --shortcuts StartMenuRoot `
+            --msi --instLocation PerUser `
+            --outputDir releases
+          if ($LASTEXITCODE -ne 0) { throw "vpk pack failed (exit code $LASTEXITCODE)." }
+          Get-ChildItem releases | Format-Table Name, Length
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $portable = [IO.Compression.ZipFile]::OpenRead((Resolve-Path releases/PwrRoute-win-Portable.zip).Path)
+          $portable.Entries | Format-Table FullName, Length
+          $portable.Dispose()
+          Copy-Item releases/PwrRoute-win-Setup.exe, releases/PwrRoute-win.msi dist/ -ErrorAction Stop
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
         with:
           name: PwrRoute-${{ steps.version.outputs.version }}-preview-windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/*.msi
           if-no-files-found: error
           retention-days: 14
