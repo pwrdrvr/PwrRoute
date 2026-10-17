@@ -58,6 +58,14 @@ allow = ["BSL-1.0"]
 crate = "libbz2-rs-sys"
 allow = ["bzip2-1.0.6"]
 
+[[licenses.exceptions]]
+# Community Data License Agreement Permissive 2.0, for Mozilla's root
+# certificate list. Added 2026-10-17 with Velopack: velopack depends on ureq
+# with its default features, which always include webpki-roots, and Cargo
+# cannot turn a dependency's features off. Allowed for this crate only.
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [advisories]
 # RustSec. A yanked crate or an unmaintained notice is a warning to act on in
 # its own change, not a reason to block every PR.
