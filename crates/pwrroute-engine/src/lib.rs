@@ -2,21 +2,39 @@
 //!
 //! The engine evaluates Finicky's own configuration API
 //! (`assets/finickyConfigAPI.js`, unchanged) in QuickJS, loads a user's
-//! `.js` or `.ts` config into it, and asks the API which browser a URL goes
-//! to. Matching, rewriting and validation are therefore Finicky's code, and
-//! the compatibility tests in `tests/` hold the results to the Go host's.
+//! `.js` or `.ts` config and the visual rules in `rules.json` into it, and
+//! asks the API which browser a URL goes to. Matching, rewriting and
+//! validation are therefore Finicky's code, and the compatibility tests in
+//! `tests/` hold the results to the Go host's.
+//!
+//! - [`Engine`] loads [`Sources`] and resolves a [`Link`], or returns a
+//!   [`Trace`] of how it did.
+//! - [`RulesFile`] is `rules.json`, the visual rules editor's model.
+//! - [`ShortLinks`] expands short links over a [`Network`] before resolving.
+//! - [`discovery`] finds the config and `rules.json` the way Finicky does.
+//! - [`Reloader`] watches them and swaps in a new [`Engine`] only once it has
+//!   loaded and validated.
+//! - [`NativeHost`] answers the `finicky.*` native functions from the OS.
 //!
 //! An [`Engine`] is single-threaded (QuickJS runtimes are not `Send`): create
 //! one per config on the thread that resolves links, and replace it on reload.
 
+pub mod discovery;
 mod host;
+#[cfg(feature = "http")]
+mod http;
 mod loader;
+mod native;
+mod reload;
+mod rules;
+mod shortlinks;
+mod trace;
 mod transform;
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -29,10 +47,23 @@ use rquickjs::{
 use serde::{Deserialize, Serialize};
 
 pub use host::{DefaultHost, Host, LogLevel, ModifierKeys, PowerInfo, SystemInfo};
+#[cfg(feature = "http")]
+pub use http::HttpNetwork;
+pub use native::NativeHost;
+pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
+pub use rules::{
+    FALLBACK_BROWSER, Place, Problem, Rewrite, RewriteAction, Rule, RulesFile, RulesOptions,
+};
+pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
+pub use trace::{Matcher, Source, Stage, Step, Trace};
 
 /// Finicky's configuration API, as the Go host embeds it. See
 /// `assets/README.md` for where it comes from.
 const CONFIG_API: &str = include_str!("../assets/finickyConfigAPI.js");
+
+/// PwrRoute's glue: `rules.json` as Finicky objects, the merged config, and
+/// the trace. Uses only the API's exports.
+const HOST_GLUE: &str = include_str!("js/host.js");
 
 /// The global a config's exports land on. `getConfiguration` reads
 /// `self[namespace]`, preferring its `default` export.
@@ -61,8 +92,8 @@ impl Default for Limits {
 
 /// The app that handed the link to the OS, as matchers see it in
 /// `options.opener`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Opener {
     pub name: String,
     pub bundle_id: String,
@@ -110,6 +141,17 @@ pub enum AppType {
     None,
 }
 
+/// What an [`Engine`] is built from: a JS or TS config, `rules.json`, or
+/// both. With both, the config's rewrites and handlers run first and it owns
+/// the default browser and options; the rules' rewrites and handlers follow
+/// its own, as the Go host appended them. With neither, the default browser
+/// is [`FALLBACK_BROWSER`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sources {
+    pub config: Option<PathBuf>,
+    pub rules: RulesFile,
+}
+
 /// A loaded config, ready to resolve URLs.
 pub struct Engine {
     // Field order is drop order: the context must go before its runtime.
@@ -117,11 +159,15 @@ pub struct Engine {
     _runtime: Runtime,
     deadline: Rc<Cell<Option<Instant>>>,
     limits: Limits,
+    config: Option<PathBuf>,
+    imports: Rc<RefCell<Vec<PathBuf>>>,
+    short_links: ShortLinks,
 }
 
 impl std::fmt::Debug for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Engine")
+            .field("config", &self.config)
             .field("limits", &self.limits)
             .finish_non_exhaustive()
     }
@@ -132,12 +178,37 @@ impl Engine {
     /// `.mjs` config may be an ES module (`export default { … }`) or legacy
     /// CommonJS (`module.exports = { … }`).
     pub fn load(path: &Path, host: Rc<dyn Host>, limits: Limits) -> Result<Self> {
-        let path = fs::canonicalize(path).with_context(|| path.display().to_string())?;
-        let source = fs::read_to_string(&path).with_context(|| path.display().to_string())?;
+        Self::from_sources(
+            &Sources {
+                config: Some(path.to_path_buf()),
+                rules: RulesFile::default(),
+            },
+            host,
+            limits,
+        )
+    }
+
+    /// Loads a config, `rules.json`, or both, and validates the result.
+    pub fn from_sources(sources: &Sources, host: Rc<dyn Host>, limits: Limits) -> Result<Self> {
+        let config = match &sources.config {
+            Some(path) => {
+                let path = fs::canonicalize(path).with_context(|| path.display().to_string())?;
+                let source =
+                    fs::read_to_string(&path).with_context(|| path.display().to_string())?;
+                Some((path, source))
+            }
+            None => None,
+        };
 
         let runtime = Runtime::new()?;
         runtime.set_memory_limit(limits.memory_bytes);
-        runtime.set_loader(loader::FsResolver, loader::OxcLoader);
+        let imports = Rc::new(RefCell::new(Vec::new()));
+        runtime.set_loader(
+            loader::FsResolver,
+            loader::OxcLoader {
+                loaded: Rc::clone(&imports),
+            },
+        );
         let deadline = Rc::new(Cell::new(None::<Instant>));
         let watch = Rc::clone(&deadline);
         runtime.set_interrupt_handler(Some(Box::new(move || {
@@ -145,37 +216,115 @@ impl Engine {
         })));
         let context = Context::full(&runtime)?;
 
-        let engine = Self {
+        let mut engine = Self {
             context,
             _runtime: runtime,
             deadline,
             limits,
+            config: config.as_ref().map(|(path, _)| path.clone()),
+            imports,
+            short_links: ShortLinks::default(),
         };
-        engine.with_deadline(limits.load, |ctx| {
+        let shorteners = engine.with_deadline(limits.load, |ctx| {
             install_globals(&ctx, &host)?;
-            load_config(&ctx, &path, &source)
+            let base = match &config {
+                Some(_) => serde_json::Value::Null,
+                None => sources.rules.base_config(),
+            };
+            let setup: Function<'_> = ctx.eval("__pwrroute.setup")?;
+            setup
+                .call::<_, ()>((
+                    ctx.json_parse(sources.rules.plan().to_string())?,
+                    ctx.json_parse(base.to_string())?,
+                ))
+                .catch(&ctx)
+                .map_err(|e| js_error("loading rules.json", &e))?;
+            if let Some((path, source)) = &config {
+                load_config(&ctx, path, source)?;
+            }
+            adopt_config(&ctx, config.is_some())?;
+            let list: Vec<String> = ctx
+                .eval::<Vec<String>, _>("__pwrroute.shorteners()")
+                .catch(&ctx)
+                .map_err(|e| js_error("reading options.urlShorteners", &e))?;
+            Ok(list)
         })?;
+        engine.short_links = ShortLinks::with_domains(shorteners);
         Ok(engine)
     }
 
-    /// Resolves one URL. `opener` is the app the link came from, when known.
+    /// The config file in charge, canonicalized, when there is one.
+    pub fn config_path(&self) -> Option<&Path> {
+        self.config.as_deref()
+    }
+
+    /// The config file and every file it imported, so a watcher can reload
+    /// when any of them changes.
+    pub fn dependencies(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self.config.iter().cloned().collect();
+        for path in self.imports.borrow().iter() {
+            if !paths.contains(path) {
+                paths.push(path.clone());
+            }
+        }
+        paths
+    }
+
+    /// Which links this config expands before resolving: the built-in
+    /// shorteners plus the config's `options.urlShorteners`. Cloneable and
+    /// `Send`, so expansion can run off the engine's thread.
+    pub fn short_links(&self) -> &ShortLinks {
+        &self.short_links
+    }
+
+    /// Resolves one URL as it is, without short-link expansion. `opener` is
+    /// the app the link came from, when known.
     pub fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolution> {
+        self.resolve_link(&Link::new(url), opener)
+    }
+
+    /// Expands `url` if it is a short link, then resolves it, as the Go host
+    /// did for every link.
+    pub fn expand_and_resolve(
+        &self,
+        url: &str,
+        opener: Option<&Opener>,
+        network: &dyn Network,
+    ) -> Result<Resolution> {
+        self.resolve_link(&self.short_links.expand(url, network), opener)
+    }
+
+    /// Resolves a link whose short link (if any) was already expanded.
+    pub fn resolve_link(&self, link: &Link, opener: Option<&Opener>) -> Result<Resolution> {
         self.with_deadline(self.limits.resolve, |ctx| {
-            let globals = ctx.globals();
-            globals.set("url", url)?;
-            globals.set("originalUrl", url)?;
-            let opener = match opener {
-                Some(o) => ctx.json_parse(serde_json::to_string(o)?)?,
-                None => Value::new_null(ctx.clone()),
-            };
-            globals.set("opener", opener)?;
+            set_link(&ctx, link, opener)?;
             let json: String = ctx
                 .eval(
-                    "JSON.stringify(finickyConfigAPI.openUrl(url, opener, originalUrl, finalConfig))",
+                    "JSON.stringify(finickyConfigAPI.openUrl(url, opener, originalUrl, __pwrroute.config()))",
                 )
                 .catch(&ctx)
                 .map_err(|e| js_error("resolving the URL", &e))?;
             Ok(serde_json::from_str(&json)?)
+        })
+    }
+
+    /// Resolves a link and returns every step on the way: the rewrites and
+    /// handlers evaluated, which matched, and which won. Nothing is opened;
+    /// the resolution is the one [`Engine::resolve_link`] returns.
+    pub fn trace(&self, link: &Link, opener: Option<&Opener>) -> Result<Trace> {
+        self.with_deadline(self.limits.resolve, |ctx| {
+            set_link(&ctx, link, opener)?;
+            let json: String = ctx
+                .eval("JSON.stringify(__pwrroute.trace(url, opener, originalUrl))")
+                .catch(&ctx)
+                .map_err(|e| js_error("resolving the URL", &e))?;
+            let raw: trace::Raw = serde_json::from_str(&json)?;
+            Ok(Trace {
+                url: link.url.clone(),
+                original_url: link.original_url.clone(),
+                steps: raw.steps,
+                resolution: raw.result,
+            })
         })
     }
 
@@ -191,6 +340,19 @@ impl Engine {
     }
 }
 
+/// The `url`, `originalUrl` and `opener` globals `openUrl` reads.
+fn set_link(ctx: &Ctx<'_>, link: &Link, opener: Option<&Opener>) -> Result<()> {
+    let globals = ctx.globals();
+    globals.set("url", link.url.as_str())?;
+    globals.set("originalUrl", link.original_url.as_str())?;
+    let opener = match opener {
+        Some(o) => ctx.json_parse(serde_json::to_string(o)?)?,
+        None => Value::new_null(ctx.clone()),
+    };
+    globals.set("opener", opener)?;
+    Ok(())
+}
+
 /// `self`, `console` and the `finicky` global, then the config API itself.
 fn install_globals(ctx: &Ctx<'_>, host: &Rc<dyn Host>) -> Result<()> {
     let globals = ctx.globals();
@@ -200,6 +362,9 @@ fn install_globals(ctx: &Ctx<'_>, host: &Rc<dyn Host>) -> Result<()> {
     ctx.eval::<(), _>(CONFIG_API)
         .catch(ctx)
         .map_err(|e| js_error("evaluating the config API", &e))?;
+    ctx.eval::<(), _>(HOST_GLUE)
+        .catch(ctx)
+        .map_err(|e| js_error("evaluating the host glue", &e))?;
 
     // `finicky` is the API's utilities plus the host's native functions, as
     // the Go host assembled it.
@@ -298,8 +463,7 @@ fn display<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> String {
         .unwrap_or_else(|| format!("{value:?}"))
 }
 
-/// Evaluates the config and leaves the validated `finalConfig` on the global
-/// object, the same end state as the Go host's VM setup.
+/// Evaluates the config and leaves its exports on `self[NAMESPACE]`.
 fn load_config(ctx: &Ctx<'_>, path: &Path, source: &str) -> Result<()> {
     let globals = ctx.globals();
     let transformed = transform::transform(path, source)?;
@@ -335,13 +499,35 @@ fn load_config(ctx: &Ctx<'_>, path: &Path, source: &str) -> Result<()> {
         globals.set(NAMESPACE, exports)?;
     }
 
-    globals.set("namespace", NAMESPACE)?;
+    Ok(())
+}
+
+/// Leaves the validated `finalConfig` on the global object, the same end
+/// state as the Go host's VM setup, and hands it to the glue. The config is
+/// validated on its own first, so its errors read as they did under Go; then
+/// with `rules.json` appended, so a bad rule fails the load rather than every
+/// resolve.
+fn adopt_config(ctx: &Ctx<'_>, has_config: bool) -> Result<()> {
+    ctx.globals().set("namespace", NAMESPACE)?;
     ctx.eval::<(), _>(
         "var finalConfig = finickyConfigAPI.getConfiguration(namespace);\
-         finickyConfigAPI.assertValidConfig(finalConfig);",
+         finickyConfigAPI.assertValidConfig(finalConfig);\
+         __pwrroute.adopt(finalConfig);",
     )
     .catch(ctx)
-    .map_err(|e| js_error("validating the config", &e))?;
+    .map_err(|e| {
+        js_error(
+            if has_config {
+                "validating the config"
+            } else {
+                "validating rules.json"
+            },
+            &e,
+        )
+    })?;
+    ctx.eval::<(), _>("finickyConfigAPI.assertValidConfig(__pwrroute.config());")
+        .catch(ctx)
+        .map_err(|e| js_error("validating rules.json", &e))?;
     Ok(())
 }
 

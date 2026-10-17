@@ -1,5 +1,7 @@
 //! Finicky v4 compatibility: every config in `tests/configs` resolves every URL
-//! in `urls.txt` the way the Go host did (see `expected.json`).
+//! in `urls.txt` the way the Go host did, and so does every suite (a config,
+//! `rules.json`, or both, with openers) in `expected.json`. Every case is also
+//! traced, and the trace must end where `resolve` does.
 
 use std::{
     cell::RefCell,
@@ -9,7 +11,9 @@ use std::{
     time::Duration,
 };
 
-use pwrroute_engine::{AppType, Engine, Host, Limits, LogLevel, ModifierKeys, Opener};
+use pwrroute_engine::{
+    AppType, Engine, Host, Limits, Link, LogLevel, ModifierKeys, Opener, RulesFile, Sources,
+};
 use serde::Deserialize;
 
 fn configs() -> PathBuf {
@@ -28,6 +32,34 @@ fn load(name: &str) -> Engine {
 #[derive(Deserialize)]
 struct Expected {
     configs: std::collections::BTreeMap<String, Vec<Case>>,
+    suites: Vec<Suite>,
+}
+
+fn expected() -> Expected {
+    serde_json::from_str(&fs::read_to_string(configs().join("expected.json")).unwrap()).unwrap()
+}
+
+#[derive(Deserialize)]
+struct Suite {
+    name: String,
+    config: Option<String>,
+    rules: Option<String>,
+    cases: Vec<SuiteCase>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteCase {
+    input: String,
+    opener: Option<Opener>,
+    url: String,
+    browser: String,
+    profile: String,
+    args: Vec<String>,
+    open_in_background: bool,
+    /// Finicky reported this error. The Go host then substituted its own
+    /// fallback browser, so only the error is compared.
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -43,9 +75,7 @@ struct Case {
 
 #[test]
 fn matches_the_go_host() {
-    let expected: Expected =
-        serde_json::from_str(&fs::read_to_string(configs().join("expected.json")).unwrap())
-            .unwrap();
+    let expected = expected();
     let mut failures = Vec::new();
     let mut checked = 0;
     for (config, cases) in &expected.configs {
@@ -55,6 +85,12 @@ fn matches_the_go_host() {
             let got = engine
                 .resolve(&case.input, None)
                 .unwrap_or_else(|e| panic!("{config} {}: {e:#}", case.input));
+            let traced = engine
+                .trace(&Link::new(&case.input), None)
+                .unwrap_or_else(|e| panic!("{config} {} trace: {e:#}", case.input));
+            if traced.resolution != got {
+                failures.push(format!("{config} {}: the trace ends elsewhere", case.input));
+            }
             let b = &got.browser;
             let actual = (
                 b.url.as_str(),
@@ -79,6 +115,79 @@ fn matches_the_go_host() {
         }
     }
     assert_eq!(checked, 72, "expected.json lost cases");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn suites_match_the_go_host_and_their_traces() {
+    let expected = expected();
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for suite in &expected.suites {
+        let sources = Sources {
+            config: suite.config.as_ref().map(|c| configs().join(c)),
+            rules: suite
+                .rules
+                .as_ref()
+                .map(|r| RulesFile::load(&configs().join(r)).unwrap())
+                .unwrap_or_default(),
+        };
+        let engine = Engine::from_sources(
+            &sources,
+            Rc::new(pwrroute_engine::DefaultHost),
+            Limits::default(),
+        )
+        .unwrap_or_else(|e| panic!("{}: {e:#}", suite.name));
+        for case in &suite.cases {
+            checked += 1;
+            let label = format!("{} {} {:?}", suite.name, case.input, case.opener);
+            let got = engine
+                .resolve(&case.input, case.opener.as_ref())
+                .unwrap_or_else(|e| panic!("{label}: {e:#}"));
+            let trace = engine
+                .trace(&Link::new(&case.input), case.opener.as_ref())
+                .unwrap_or_else(|e| panic!("{label} trace: {e:#}"));
+            if trace.resolution != got {
+                failures.push(format!(
+                    "{label}\n  trace ends {:?}\n  resolve   {got:?}",
+                    trace.resolution
+                ));
+            }
+            if trace.winner().is_none() {
+                failures.push(format!("{label}: the trace names no winner"));
+            }
+            if let Some(error) = &case.error {
+                if got.error.as_deref() != Some(error.as_str()) {
+                    failures.push(format!(
+                        "{label}\n  want error {error:?}\n  got {:?}",
+                        got.error
+                    ));
+                }
+                continue;
+            }
+            let b = &got.browser;
+            let actual = (
+                b.url.as_str(),
+                b.name.as_str(),
+                b.profile.as_str(),
+                b.args.as_slice(),
+                b.open_in_background.unwrap_or(false),
+                got.error.as_deref(),
+            );
+            let wanted = (
+                case.url.as_str(),
+                case.browser.as_str(),
+                case.profile.as_str(),
+                case.args.as_slice(),
+                case.open_in_background,
+                None,
+            );
+            if actual != wanted {
+                failures.push(format!("{label}\n  want {wanted:?}\n  got  {actual:?}"));
+            }
+        }
+    }
+    assert_eq!(checked, 75, "expected.json lost suite cases");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

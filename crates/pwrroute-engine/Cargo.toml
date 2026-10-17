@@ -10,9 +10,36 @@ description = "Loads Finicky v4 JS/TS configs and resolves URLs to a browser, in
 [lints]
 workspace = true
 
+[features]
+default = ["http"]
+# `HttpNetwork`, the real short-link resolver (ureq over rustls with the OS
+# certificate verifier). Without it the engine never touches the network.
+http = ["dep:ureq", "dep:rustls"]
+
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rquickjs = { version = "0.14", features = ["loader"] }
 oxc = { version = "0.154", features = ["transformer", "codegen", "semantic"] }
+url = "2"
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"], optional = true }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSRunningApplication", "NSWorkspace"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Power",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[[example]]
+name = "resolve"
+required-features = ["http"]

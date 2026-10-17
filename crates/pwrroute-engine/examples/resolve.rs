@@ -2,18 +2,23 @@
 //!
 //! ```text
 //! cargo run --release -p pwrroute-engine --example resolve -- \
-//!     --config path/to/config.ts [--opener NAME:BUNDLE_ID] [--timings] URL...
+//!     [--config path/to/config.ts] [--rules rules.json] \
+//!     [--opener NAME:BUNDLE_ID] [--expand] [--trace] [--timings] URL...
 //! ```
 //!
 //! Prints one JSON line per URL in the shape the Go host's `--test` printed,
-//! so the two can be diffed. Config `console` output goes to stderr.
+//! so the two can be diffed; with `--trace`, the whole trace instead.
+//! `--expand` follows short links over the network first. Config `console`
+//! output goes to stderr.
 
 use std::{path::PathBuf, rc::Rc, time::Instant};
 
 use anyhow::{Context as _, Result};
-use pwrroute_engine::{Engine, Host, Limits, LogLevel, Opener};
+use pwrroute_engine::{
+    Engine, Host, HttpNetwork, Limits, Link, LogLevel, Opener, RulesFile, Sources,
+};
 
-const USAGE: &str = "usage: resolve --config PATH [--opener NAME:BUNDLE_ID] [--timings] URL...";
+const USAGE: &str = "usage: resolve [--config PATH] [--rules PATH] [--opener NAME:BUNDLE_ID] [--expand] [--trace] [--timings] URL...";
 
 struct StderrHost;
 
@@ -26,12 +31,18 @@ impl Host for StderrHost {
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let mut config = None;
+    let mut rules = None;
     let mut opener = None;
     let mut timings = false;
+    let mut trace = false;
+    let mut expand = false;
     let mut urls = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => config = args.next().map(PathBuf::from),
+            "--rules" => rules = args.next().map(PathBuf::from),
+            "--trace" => trace = true,
+            "--expand" => expand = true,
             "--opener" => {
                 let spec = args.next().context(USAGE)?;
                 let (name, bundle_id) = spec.split_once(':').unwrap_or((&spec, ""));
@@ -49,13 +60,37 @@ fn main() -> Result<()> {
             _ => urls.push(arg),
         }
     }
-    let config = config.context(USAGE)?;
+    if config.is_none() && rules.is_none() {
+        anyhow::bail!(USAGE);
+    }
+    let rules = match &rules {
+        Some(path) => RulesFile::load(path)?,
+        None => RulesFile::default(),
+    };
 
     let started = Instant::now();
-    let engine = Engine::load(&config, Rc::new(StderrHost), Limits::default())?;
+    let engine = Engine::from_sources(
+        &Sources { config, rules },
+        Rc::new(StderrHost),
+        Limits::default(),
+    )
+    .context("loading")?;
     let loaded = started.elapsed();
+    let network = HttpNetwork::new();
     for url in &urls {
-        let r = engine.resolve(url, opener.as_ref())?;
+        let link = if expand {
+            engine.short_links().expand(url, &network)
+        } else {
+            Link::new(url.as_str())
+        };
+        if trace {
+            println!(
+                "{}",
+                serde_json::to_string(&engine.trace(&link, opener.as_ref())?)?
+            );
+            continue;
+        }
+        let r = engine.resolve_link(&link, opener.as_ref())?;
         let mut line = serde_json::json!({
             "url": r.browser.url,
             "browser": r.browser.name,

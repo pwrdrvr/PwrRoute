@@ -1,5 +1,5 @@
 {
-  "about": "Expected results for tests/finicky_compat.rs, recorded from the PwrFinicky Go host (goja), one URL per run. Cases with a goHost note are where that host is wrong.",
+  "about": "Expected results for tests/finicky_compat.rs, recorded from the PwrFinicky Go host (goja), one URL per run (tests/oracle/record.py records `suites`). Cases with a goHost note are where that host is wrong; they hold the engine's answer. A case with `error` is one where Finicky reported an error: the Go host then replaced the result with com.apple.Safari and the unrewritten URL, so only the error is compared.",
   "configs": {
     "finicky-example.ts": [
       {
@@ -588,5 +588,724 @@
         "openInBackground": false
       }
     ]
-  }
+  },
+  "suites": [
+    {
+      "name": "functions",
+      "config": "functions.js",
+      "cases": [
+        {
+          "input": "https://chain.example/start",
+          "url": "https://chain.example/start/one?two=2",
+          "browser": "Firefox",
+          "profile": "chain",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://legacy.example/old",
+          "url": "https://modern.example/from-legacy?a=1",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://boom.example/x",
+          "url": "https://boom.example/x",
+          "browser": "com.apple.Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false,
+          "error": "rewrite matcher threw"
+        },
+        {
+          "input": "https://static.example/anything",
+          "url": "https://static-target.example/landing",
+          "browser": "Microsoft Edge",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://case.example/x",
+          "url": "https://case.example/x",
+          "browser": "Google Chrome",
+          "profile": "Profile 2",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://bundle.example/",
+          "url": "https://bundle.example/",
+          "browser": "com.google.Chrome",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://path.example/",
+          "url": "https://path.example/",
+          "browser": "/Applications/Firefox.app",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://undefined.example/",
+          "url": "https://undefined.example/",
+          "browser": "com.apple.Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false,
+          "error": "{\n  \"message\": \"Browser config cannot be undefined\",\n  \"error\": \"Browser config must be a string, object, or null\"\n}"
+        },
+        {
+          "input": "https://invalid.example/",
+          "url": "https://invalid.example/",
+          "browser": "com.apple.Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false,
+          "error": "{\n  \"message\": \"Invalid browser option\",\n  \"browser\": {\n    \"name\": 42\n  },\n  \"error\": \"Validation error: Expected null, received object, or Expected string, received object, or Expected string, received number at \\\"name\\\", or Expected function, received object\"\n}"
+        },
+        {
+          "input": "https://args.example/?q=hello",
+          "url": "https://args.example/?q=hello",
+          "browser": "Google Chrome",
+          "profile": "",
+          "args": [
+            "--incognito",
+            "hello"
+          ],
+          "openInBackground": true
+        },
+        {
+          "input": "https://api.service.example/v1",
+          "url": "https://api.service.example/v1",
+          "browser": "Arc",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://exact.example/",
+          "url": "https://exact.example/",
+          "browser": "Arc",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://second.example/page",
+          "url": "https://second.example/page",
+          "browser": "Brave Browser",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://handler-boom.example/",
+          "url": "https://handler-boom.example/",
+          "browser": "com.apple.Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false,
+          "error": "handler matcher threw"
+        },
+        {
+          "input": "https://site.dev/",
+          "url": "https://site.dev/",
+          "browser": "Firefox Developer Edition",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://other.example/",
+          "url": "https://other.example/",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "wildcards",
+      "config": "wildcards.ts",
+      "cases": [
+        {
+          "input": "https://exact.example/",
+          "url": "https://exact.example/",
+          "browser": "Exact Full",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://exact.example",
+          "url": "https://exact.example/",
+          "browser": "Exact Full",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://a.sub.example/x",
+          "url": "https://a.sub.example/x",
+          "browser": "Sub Https",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "http://a.sub.example/x",
+          "url": "http://a.sub.example/x",
+          "browser": "Sub Any Scheme",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://sub.example/x",
+          "url": "https://sub.example/x",
+          "browser": "Everything Else",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "HTTPS://UPPER.SUB.EXAMPLE/Path",
+          "url": "https://upper.sub.example/Path",
+          "browser": "Sub Https",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://user:pw@a.sub.example:8443/p?q=1#frag",
+          "url": "https://user:pw@a.sub.example:8443/p?q=1#frag",
+          "browser": "Everything Else",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://scheme.example/a",
+          "url": "https://scheme.example/a",
+          "browser": "Scheme Glob",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "http://scheme.example/a",
+          "url": "http://scheme.example/a",
+          "browser": "Scheme Glob",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "ftp://scheme.example/a",
+          "url": "ftp://scheme.example/a",
+          "browser": "Everything Else",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://path.example/docs/intro",
+          "url": "https://path.example/docs/intro",
+          "browser": "Path Prefix",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://path.example/blog",
+          "url": "https://path.example/blog",
+          "browser": "Everything Else",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://any.example/p?share=1",
+          "url": "https://any.example/p?share=1",
+          "browser": "Query Anywhere",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://port.example:8443/x",
+          "url": "https://port.example:8443/x",
+          "browser": "With Port",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://port.example/x",
+          "url": "https://port.example/x",
+          "browser": "Everything Else",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://literal.example/a*b",
+          "url": "https://literal.example/a*b",
+          "browser": "Escaped Star",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://literal.example/aXb",
+          "url": "https://literal.example/aXb",
+          "browser": "Everything Else",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://bücher.example/",
+          "url": "https://xn--bcher-kva.example/",
+          "browser": "Punycode",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "mailto:dev@team.example",
+          "url": "mailto:dev@team.example",
+          "browser": "Mail",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://x.example/case/1",
+          "url": "https://x.example/case/1",
+          "browser": "Path Anywhere",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "rules only",
+      "rules": "rules/go-schema.json",
+      "cases": [
+        {
+          "input": "https://github.com/pwrdrvr/PwrRoute",
+          "url": "https://github.com/pwrdrvr/PwrRoute",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://acme.atlassian.net/browse/X-1",
+          "url": "https://acme.atlassian.net/browse/X-1",
+          "browser": "Google Chrome",
+          "profile": "Work",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://linear.app/pwrdrvr/issue/1",
+          "url": "https://linear.app/pwrdrvr/issue/1",
+          "browser": "Google Chrome",
+          "profile": "Work",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://acme.zoom.us/j/123456789",
+          "url": "https://acme.zoom.us/j/123456789",
+          "browser": "us.zoom.xos",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://www.example.org/?utm_source=slack&keep=1",
+          "url": "https://www.example.org/?utm_source=slack&keep=1",
+          "browser": "Arc",
+          "profile": "Personal",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.org/page",
+          "url": "https://example.org/page",
+          "browser": "/Applications/Brave Browser.app",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "http://example.com/insecure",
+          "url": "http://example.com/insecure",
+          "browser": "Firefox",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://other.example/",
+          "url": "https://other.example/",
+          "browser": "Firefox",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "rules after a CommonJS config",
+      "config": "legacy-commonjs.js",
+      "rules": "rules/go-schema.json",
+      "cases": [
+        {
+          "input": "https://github.com/pwrdrvr/PwrRoute",
+          "url": "https://github.com/pwrdrvr/PwrRoute",
+          "browser": "Google Chrome",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://acme.atlassian.net/browse/X-1",
+          "url": "https://acme.atlassian.net/browse/X-1",
+          "browser": "Google Chrome",
+          "profile": "Work",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://linear.app/pwrdrvr/issue/1",
+          "url": "https://linear.app/pwrdrvr/issue/1",
+          "browser": "Firefox",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://acme.zoom.us/j/123456789",
+          "url": "https://acme.zoom.us/j/123456789",
+          "browser": "us.zoom.xos",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://www.example.org/?utm_source=slack&keep=1",
+          "url": "https://www.example.org/?utm_source=slack&keep=1",
+          "browser": "Arc",
+          "profile": "Personal",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.org/page",
+          "url": "https://example.org/page",
+          "browser": "/Applications/Brave Browser.app",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "http://example.com/insecure",
+          "url": "http://example.com/insecure",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://other.example/",
+          "url": "https://other.example/",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "rules after a TS config with rewrites",
+      "config": "stress.ts",
+      "rules": "rules/go-schema.json",
+      "cases": [
+        {
+          "input": "https://github.com/pwrdrvr/PwrRoute",
+          "url": "https://github.com/pwrdrvr/PwrRoute",
+          "browser": "Firefox",
+          "profile": "",
+          "args": [
+            "--new-tab"
+          ],
+          "openInBackground": false
+        },
+        {
+          "input": "https://acme.atlassian.net/browse/X-1",
+          "url": "https://acme.atlassian.net/browse/X-1",
+          "browser": "Google Chrome",
+          "profile": "Work",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://linear.app/pwrdrvr/issue/1",
+          "url": "https://linear.app/pwrdrvr/issue/1",
+          "browser": "Arc",
+          "profile": "",
+          "args": [],
+          "openInBackground": true
+        },
+        {
+          "input": "https://acme.zoom.us/j/123456789",
+          "url": "zoommtg://zoom.us/join?confno=123456789&org=acme",
+          "browser": "us.zoom.xos",
+          "profile": "",
+          "args": [],
+          "openInBackground": false,
+          "goHost": "Go host differs: goja leaves RegExp named groups undefined, so the rewrite throws and the link falls to com.apple.Safari."
+        },
+        {
+          "input": "https://www.example.org/?utm_source=slack&keep=1",
+          "url": "https://www.example.org/?keep=1",
+          "browser": "Arc",
+          "profile": "Personal",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.org/page",
+          "url": "https://example.org/page",
+          "browser": "/Applications/Brave Browser.app",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "http://example.com/insecure",
+          "url": "https://example.com/insecure",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://other.example/",
+          "url": "https://other.example/",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "rules with a default profile",
+      "rules": "rules/default-profile.json",
+      "cases": [
+        {
+          "input": "https://printer.local/status",
+          "url": "https://printer.local/status",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.com/",
+          "url": "https://example.com/",
+          "browser": "Google Chrome",
+          "profile": "Default",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "openers",
+      "config": "opener.js",
+      "cases": [
+        {
+          "input": "https://example.com/a",
+          "opener": {
+            "name": "Slack",
+            "bundleId": "com.tinyspeck.slackmacgap",
+            "path": "/Applications/Slack.app/Contents/MacOS/Slack"
+          },
+          "url": "https://example.com/a",
+          "browser": "Google Chrome",
+          "profile": "Work",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.com/a",
+          "url": "https://example.com/a",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "http://localhost:3000/",
+          "opener": {
+            "name": "Terminal",
+            "bundleId": "com.apple.Terminal",
+            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+          },
+          "url": "http://localhost:3000/",
+          "browser": "Firefox Developer Edition",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.com/",
+          "opener": {
+            "name": "Terminal",
+            "bundleId": "com.apple.Terminal",
+            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+          },
+          "url": "https://example.com/",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.com/",
+          "opener": {
+            "name": "Microsoft Outlook",
+            "bundleId": "com.microsoft.Outlook",
+            "path": "/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook"
+          },
+          "url": "https://example.com/",
+          "browser": "Microsoft Edge",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://direct.example/",
+          "url": "https://direct.example/",
+          "browser": "Arc",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://direct.example/",
+          "opener": {
+            "name": "Slack",
+            "bundleId": "com.tinyspeck.slackmacgap",
+            "path": "/Applications/Slack.app/Contents/MacOS/Slack"
+          },
+          "url": "https://direct.example/",
+          "browser": "Google Chrome",
+          "profile": "Work",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://direct.example/",
+          "opener": {
+            "name": "",
+            "bundleId": "",
+            "path": ""
+          },
+          "url": "https://direct.example/",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "opener in the Finicky example",
+      "config": "finicky-example.ts",
+      "cases": [
+        {
+          "input": "https://example.org/",
+          "opener": {
+            "name": "Slack",
+            "bundleId": "com.tinyspeck.slackmacgap",
+            "path": "/Applications/Slack.app/Contents/MacOS/Slack"
+          },
+          "url": "https://example.org/",
+          "browser": "Firefox",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://example.org/",
+          "opener": {
+            "name": "Mail",
+            "bundleId": "com.apple.mail",
+            "path": "/System/Applications/Mail.app/Contents/MacOS/Mail"
+          },
+          "url": "https://example.org/",
+          "browser": "Google Chrome",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://workplace.example/",
+          "opener": {
+            "name": "Slack",
+            "bundleId": "com.tinyspeck.slackmacgap",
+            "path": "/Applications/Slack.app/Contents/MacOS/Slack"
+          },
+          "url": "https://workplace.example/",
+          "browser": "Firefox",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    },
+    {
+      "name": "opener with rules",
+      "config": "finicky-example.ts",
+      "rules": "rules/go-schema.json",
+      "cases": [
+        {
+          "input": "https://github.com/x",
+          "opener": {
+            "name": "Slack",
+            "bundleId": "com.tinyspeck.slackmacgap",
+            "path": "/Applications/Slack.app/Contents/MacOS/Slack"
+          },
+          "url": "https://github.com/x",
+          "browser": "Firefox",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        },
+        {
+          "input": "https://github.com/x",
+          "url": "https://github.com/x",
+          "browser": "Safari",
+          "profile": "",
+          "args": [],
+          "openInBackground": false
+        }
+      ]
+    }
+  ]
 }
