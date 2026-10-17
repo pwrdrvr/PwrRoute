@@ -94,9 +94,9 @@ runs cargo or installs project dependencies.
 |---|---|---|
 | `distribution-audit` | — | Stub (see below). |
 | `prepare` | — | `cargo xtask release-check`, `lint`, `test` on Linux. |
-| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `macos-dmg.sh` and the release notes. |
+| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
 | `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
-| `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES and the release notes. |
+| `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1` and the release notes. |
 | `windows-sign` | windows-signing | `vpk pack` with Setup.exe and MSI; verifies. |
 | `linux` | — | `cargo xtask package-linux` on x64 and arm64. |
 | `publish` | — (`contents: write`) | Creates the Pre-release with every platform's assets. |
@@ -107,9 +107,13 @@ runs cargo or installs project dependencies.
 PwrRoute installs and updates through [Velopack](https://docs.velopack.io).
 The app runs Velopack's startup hooks first in `main` and checks the GitHub
 Releases feed (`crates/pwrroute-app/src/updater.rs`). The `vpk` CLI is a
-.NET tool; the sign jobs install .NET 8 with `actions/setup-dotnet` and
-`vpk` at `VPK_VERSION`, which must equal the `velopack` crate's pinned
-version. Upgrade both together.
+.NET tool. The sign jobs run vpk beside the signing credentials, so
+`scripts/release/install-vpk.sh` installs it only from a nupkg whose
+SHA-512 matches the one pinned in the script (NuGet's catalog hash), after
+`actions/setup-dotnet` installs .NET 8. The script's `VPK_VERSION` must
+equal the `velopack` crate's `=` pin; upgrade both, and the hash, together.
+`scripts/release/vpk-pack-windows.ps1` holds the Windows `vpk pack` flags,
+shared by `windows-sign` and the preview.
 
 - **Feed.** Each release carries `releases.<channel>.json` (`win`, `osx`).
   The app lists the ten newest GitHub releases, merges their feeds and
@@ -117,9 +121,9 @@ version. Upgrade both together.
   only its own version's packages. Before packing, each sign job fetches the
   newest published full package (`vpk download github --pre`) so `vpk` can
   write a delta against it; the first release packs full only.
-- **Prereleases.** A build whose version has a prerelease suffix follows
-  GitHub Pre-releases; a stable build sees only releases promoted out of
-  Pre-release.
+- **Prereleases.** An install whose version (Velopack's `sq.version`) has a
+  prerelease suffix follows GitHub Pre-releases; a stable install sees only
+  releases promoted out of Pre-release.
 - **Private repository.** The app reads releases without a token, so updates
   need the repository (or a release mirror) to be public. Until then a check
   fails with HTTP 404.
@@ -135,8 +139,8 @@ version. Upgrade both together.
   validation. No `.pkg` installer (`--noInst`): it needs a Developer ID
   Installer certificate, which apple-signing does not hold.
 - **Linux.** Not used. `vpk`'s only Linux output is an AppImage, and its
-  updater only runs from one; the `.deb` updates through the package
-  manager and the tar.gz by hand.
+  updater only runs from one. There is no apt repository either, so `.deb`
+  and tar.gz installs update only by downloading the next release.
 
 ### Signing setup (secrets and variables)
 

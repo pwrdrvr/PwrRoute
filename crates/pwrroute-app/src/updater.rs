@@ -16,7 +16,11 @@ use std::{
     thread,
 };
 
-use velopack::{UpdateCheck, UpdateManager, VelopackApp, sources::GithubSource};
+use velopack::{
+    UpdateCheck, UpdateManager, VelopackApp,
+    locator::{self, LocationContext},
+    sources::GithubSource,
+};
 
 /// Where releases are published. `release.yml` uploads Velopack's feed
 /// (`releases.<channel>.json` and the `.nupkg` packages) to each release.
@@ -37,8 +41,9 @@ pub fn run_startup_hooks() {
     let mut app = VelopackApp::build();
     // Windows only: Velopack has no install or uninstall step on macOS or
     // Linux. Each hook runs in a process of its own, which Velopack kills
-    // after 30 s (install, uninstall) or 15 s (update): no UI, no network. Registering makes PwrRoute one of the browsers the
-    // user can pick; it never makes PwrRoute the default.
+    // after 30 s (install, uninstall) or 15 s (update): no UI, no network.
+    // Registering makes PwrRoute one of the browsers the user can pick; it
+    // never makes PwrRoute the default.
     #[cfg(target_os = "windows")]
     {
         use crate::browser_registration::{register_browser, unregister_browser};
@@ -79,11 +84,13 @@ pub fn check_in_background(trigger: Trigger) {
 }
 
 fn check_and_download() -> Outcome {
-    let source = GithubSource::new(
-        RELEASES,
-        None,
-        includes_prereleases(env!("CARGO_PKG_VERSION")),
-    );
+    // The installed version (Velopack's sq.version), not the one compiled
+    // in: packages are stamped separately from Cargo.toml.
+    let installed = match locator::auto_locate_app_manifest(LocationContext::FromCurrentExe) {
+        Ok(locator) => locator.get_manifest_version().to_string(),
+        Err(error) => return Outcome::NotInstalled(error.to_string()),
+    };
+    let source = GithubSource::new(RELEASES, None, includes_prereleases(&installed));
     let manager = match UpdateManager::new(source, None, None) {
         Ok(manager) => manager,
         Err(error) => return Outcome::NotInstalled(error.to_string()),
@@ -107,8 +114,8 @@ fn check_and_download() -> Outcome {
 }
 
 /// Releases are born as GitHub Pre-releases and promoted to Latest by hand.
-/// A prerelease build follows every release; a stable build only promoted
-/// ones.
+/// A prerelease install follows every release; a stable install only
+/// promoted ones.
 fn includes_prereleases(version: &str) -> bool {
     version.contains('-')
 }

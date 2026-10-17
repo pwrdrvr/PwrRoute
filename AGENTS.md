@@ -93,8 +93,10 @@ no URL schemes on purpose (see `packaging/macos/Info.plist.in`).
 macOS app, zip and DMG, ad hoc signed unless an identity is given.
 `cargo xtask package-linux` builds the tar.gz and .deb. Windows and macOS
 releases install and update through Velopack: release.yml packs them with
-`vpk`, whose `VPK_VERSION` must equal the `velopack` crate's `=` pin. A dev
-build is not a Velopack install, so its update check only logs that. Releases are cut by pushing a `vX.Y.Z` tag that
+`vpk`, installed by `scripts/release/install-vpk.sh` from a pinned version
+and SHA-512; that version must equal the `velopack` crate's `=` pin. A dev
+build is not a Velopack install, so its update check only logs that.
+Releases are cut by pushing a `vX.Y.Z` tag that
 matches the workspace version in `Cargo.toml` and a `CHANGELOG.md` section
 (`cargo xtask release-check --tag vX.Y.Z` verifies). CI, preview builds, and
 signing secrets are documented in `.github/workflows/README.md`.

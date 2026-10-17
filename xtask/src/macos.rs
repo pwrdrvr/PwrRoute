@@ -173,30 +173,13 @@ fn archive(app: &Path, zip: &Path) -> Result<()> {
         .arg(zip))
 }
 
+/// The DMG layout comes from scripts/release/macos-dmg.sh, which release.yml
+/// also runs on the vpk-packed app, so both build the same image. Called
+/// without an identity: signing and notarizing the DMG stay here.
 fn disk_image(app: &Path, dmg: &Path) -> Result<()> {
-    if dmg.exists() {
-        fs::remove_file(dmg)?;
-    }
-    let staging = dmg.with_extension("staging");
-    if staging.exists() {
-        fs::remove_dir_all(&staging)?;
-    }
-    fs::create_dir_all(&staging)?;
-    run(Command::new("ditto")
+    run(Command::new(root().join("scripts/release/macos-dmg.sh"))
         .arg(app)
-        .arg(staging.join("PwrRoute.app")))?;
-    // The drag-to-install target. Gated so xtask still compiles on Windows.
-    #[cfg(unix)]
-    std::os::unix::fs::symlink("/Applications", staging.join("Applications"))?;
-    let result = run(Command::new("hdiutil")
-        .args([
-            "create", "-volname", "PwrRoute", "-fs", "HFS+", "-format", "UDZO",
-        ])
-        .arg("-srcfolder")
-        .arg(&staging)
-        .arg(dmg));
-    fs::remove_dir_all(&staging)?;
-    result
+        .arg(dmg))
 }
 
 fn notarize(file: &Path) -> Result<()> {

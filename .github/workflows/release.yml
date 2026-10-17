@@ -26,8 +26,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Must equal the velopack crate version in crates/pwrroute-app/Cargo.toml.
-  VPK_VERSION: "1.2.161"
 
 jobs:
   # Stub. PwrGit's equivalent compares Winget and Homebrew with the release
@@ -116,7 +114,8 @@ jobs:
           stage="$RUNNER_TEMP/macos-release-input"
           mkdir -p "$stage"
           ditto target/bundle/PwrRoute.app "$stage/PwrRoute.app"
-          cp packaging/macos/PwrRoute.entitlements scripts/release/macos-dmg.sh "$stage/"
+          cp packaging/macos/PwrRoute.entitlements scripts/release/macos-dmg.sh \
+            scripts/release/install-vpk.sh "$stage/"
           cargo xtask release-check --notes-file "$stage/RELEASE_NOTES.md"
 
       - name: Archive signing input
@@ -175,8 +174,9 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      # From the signing input: pinned version, SHA-512-verified package.
       - name: Install vpk
-        run: dotnet tool install --global vpk --version "$VPK_VERSION"
+        run: input/install-vpk.sh
 
       # Secrets cannot appear in `if:` expressions, so read them into env and
       # publish one boolean for the steps below.
@@ -333,8 +333,11 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          cp releases/PwrRoute-"$version"-osx-*.nupkg releases/PwrRoute-osx-Portable.zip \
+          cp "releases/PwrRoute-$version-osx-full.nupkg" releases/PwrRoute-osx-Portable.zip \
             releases/releases.osx.json releases/assets.osx.json releases/RELEASES-osx dist/
+          if [ -f "releases/PwrRoute-$version-osx-delta.nupkg" ]; then
+            cp "releases/PwrRoute-$version-osx-delta.nupkg" dist/
+          fi
           (cd dist && shasum -a 256 -- * > "PwrRoute-$version-macos-SHA256SUMS")
           ls -l dist
 
@@ -386,6 +389,7 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP "windows-release-input"
           New-Item -ItemType Directory -Force "$stage/app" | Out-Null
           Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES "$stage/app/"
+          Copy-Item scripts/release/install-vpk.sh, scripts/release/vpk-pack-windows.ps1 "$stage/"
           cargo xtask release-check --notes-file "$stage/RELEASE_NOTES.md"
           if ($LASTEXITCODE -ne 0) { throw "release-check failed (exit code $LASTEXITCODE)." }
 
@@ -453,9 +457,10 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      # From the signing input: pinned version, SHA-512-verified package.
       - name: Install vpk
         shell: bash
-        run: dotnet tool install --global vpk --version "$VPK_VERSION"
+        run: input/install-vpk.sh
 
       - name: Detect Azure signing configuration
         id: creds
@@ -505,10 +510,8 @@ jobs:
             echo "::warning::Could not fetch the previous Windows release; packing without a delta."
           fi
 
-      # vpk signs pwrroute.exe, Update.exe and the launcher stub before
-      # packing, then Setup.exe and the MSI, all through Azure Artifact
-      # Signing. The MSI is per-user only: browser registration is HKCU, and
-      # vpk's default dual-scope MSI preselects per-machine in its dialog.
+      # The flags, and why, are in vpk-pack-windows.ps1, shared with
+      # preview-build.yml.
       - name: Pack with vpk
         shell: pwsh
         env:
@@ -518,26 +521,16 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
-          $vpkArgs = @(
-            "--skip-updates", "pack",
-            "--packId", "PwrRoute",
-            "--packVersion", $env:RELEASE_TAG.TrimStart("v"),
-            # Without it vpk defaults to x86 Setup.exe and Update.exe.
-            "--runtime", "win-x64",
-            "--packDir", "input/app",
-            "--mainExe", "pwrroute.exe",
-            "--packTitle", "PwrRoute",
-            "--packAuthors", "PwrDrvr LLC",
-            "--releaseNotes", "input/RELEASE_NOTES.md",
-            "--shortcuts", "StartMenuRoot",
-            "--msi", "--instLocation", "PerUser",
-            "--outputDir", "releases"
-          )
-          if ($env:SIGNED -eq "true") {
-            $vpkArgs += @("--azureTrustedSignFile", (Join-Path $env:RUNNER_TEMP "azure-signing.json"))
+          $pack = @{
+            Version = $env:RELEASE_TAG.TrimStart("v")
+            PackDir = "input/app"
+            OutputDir = "releases"
+            ReleaseNotes = "input/RELEASE_NOTES.md"
           }
-          & vpk @vpkArgs
-          if ($LASTEXITCODE -ne 0) { throw "vpk pack failed (exit code $LASTEXITCODE)." }
+          if ($env:SIGNED -eq "true") {
+            $pack.AzureSignFile = Join-Path $env:RUNNER_TEMP "azure-signing.json"
+          }
+          ./input/vpk-pack-windows.ps1 @pack
 
       - name: Verify Authenticode signatures
         if: steps.creds.outputs.signed == 'true'
@@ -577,10 +570,14 @@ jobs:
         run: |
           $version = $env:RELEASE_TAG.TrimStart("v")
           New-Item -ItemType Directory -Force dist | Out-Null
-          $packages = @(Get-ChildItem releases -File -Filter "PwrRoute-$version-*.nupkg")
-          if ($packages.Count -eq 0) { throw "vpk wrote no PwrRoute-$version-*.nupkg." }
-          $packages | Copy-Item -Destination dist
+          # Exact names: a prefix glob would also catch the previous
+          # prerelease's package (PwrRoute-0.0.1-alpha.3-full.nupkg for 0.0.1).
+          $delta = "PwrRoute-$version-delta.nupkg"
+          if (Test-Path -LiteralPath (Join-Path releases $delta)) {
+            Copy-Item -LiteralPath (Join-Path releases $delta) -Destination dist
+          }
           foreach ($name in @(
+            "PwrRoute-$version-full.nupkg",
             "PwrRoute-win-Setup.exe", "PwrRoute-win.msi", "PwrRoute-win-Portable.zip",
             "releases.win.json", "assets.win.json", "RELEASES"
           )) {

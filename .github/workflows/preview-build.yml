@@ -19,8 +19,6 @@ env:
   # `0.0.1-pr.12` on a PR, `0.0.1-dev.34` on dispatch. xtask stamps packages
   # with it; Cargo.toml is left alone so `--locked` still holds.
   PREVIEW_SUFFIX: ${{ github.event.pull_request.number && format('pr.{0}', github.event.pull_request.number) || format('dev.{0}', github.run_number) }}
-  # Must equal the velopack crate version in crates/pwrroute-app/Cargo.toml.
-  VPK_VERSION: "1.2.161"
 
 jobs:
   preview-macos:
@@ -123,10 +121,10 @@ jobs:
 
       - name: Install vpk
         shell: bash
-        run: dotnet tool install --global vpk --version "$VPK_VERSION"
+        run: scripts/release/install-vpk.sh
 
-      # The same vpk arguments as release.yml's windows-sign job, minus
-      # signing, release notes and deltas.
+      # The script release.yml's windows-sign job runs, minus signing,
+      # release notes and deltas.
       - name: Pack unsigned Setup.exe and MSI
         shell: pwsh
         env:
@@ -134,18 +132,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force vpk-input | Out-Null
           Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES vpk-input/
-          & vpk --skip-updates pack `
-            --packId PwrRoute `
-            --packVersion $env:PREVIEW_VERSION `
-            --runtime win-x64 `
-            --packDir vpk-input `
-            --mainExe pwrroute.exe `
-            --packTitle PwrRoute `
-            --packAuthors "PwrDrvr LLC" `
-            --shortcuts StartMenuRoot `
-            --msi --instLocation PerUser `
-            --outputDir releases
-          if ($LASTEXITCODE -ne 0) { throw "vpk pack failed (exit code $LASTEXITCODE)." }
+          ./scripts/release/vpk-pack-windows.ps1 -Version $env:PREVIEW_VERSION -PackDir vpk-input -OutputDir releases
           Get-ChildItem releases | Format-Table Name, Length
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $portable = [IO.Compression.ZipFile]::OpenRead((Resolve-Path releases/PwrRoute-win-Portable.zip).Path)
