@@ -1,0 +1,32 @@
+{
+  "defaultBrowser": "Firefox",
+  "options": {
+    "logRequests": false
+  },
+  "rules": [
+    {
+      "match": "github.com/*",
+      "browser": "Safari"
+    },
+    {
+      "match": [
+        "*.atlassian.net/*",
+        "linear.app/*"
+      ],
+      "browser": "Google Chrome",
+      "profile": "Work"
+    },
+    {
+      "match": "https://*.zoom.us/j/*",
+      "browser": "us.zoom.xos"
+    },
+    {
+      "match": "*.example.org/*",
+      "browser": "Arc:Personal"
+    },
+    {
+      "match": "https://example.org/*",
+      "browser": "/Applications/Brave Browser.app"
+    }
+  ]
+}

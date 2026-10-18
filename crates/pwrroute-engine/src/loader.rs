@@ -5,8 +5,10 @@
 //! oxc on the way in, so a config can import its own `.ts` helpers.
 
 use std::{
+    cell::RefCell,
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use rquickjs::{
@@ -59,7 +61,11 @@ fn find(candidate: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-pub(crate) struct OxcLoader;
+/// Loads imports through oxc and records each file, so a reload can watch
+/// everything the config was built from.
+pub(crate) struct OxcLoader {
+    pub loaded: Rc<RefCell<Vec<PathBuf>>>,
+}
 
 impl Loader for OxcLoader {
     fn load<'js>(
@@ -69,6 +75,13 @@ impl Loader for OxcLoader {
         _attributes: Option<ImportAttributes<'js>>,
     ) -> rquickjs::Result<Module<'js, Declared>> {
         let path = Path::new(name);
+        {
+            let mut loaded = self.loaded.borrow_mut();
+            let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            if !loaded.contains(&canonical) {
+                loaded.push(canonical);
+            }
+        }
         let source = fs::read_to_string(path)
             .map_err(|e| rquickjs::Error::new_loading_message(name, e.to_string()))?;
         let transformed = transform(path, &source)
