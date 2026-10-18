@@ -7,11 +7,17 @@
 //! codex mcp add pwrroute -- pwrroute mcp
 //! ```
 
-use std::{io, process::ExitCode};
+use std::{io, process::ExitCode, time::Duration};
 
 use tokio::io::{AsyncWriteExt as _, copy};
 
 use crate::link::{self, Endpoint};
+
+/// After the client closes stdin, how long replies still in flight may take
+/// to arrive. On Unix the app sees the half-close and hangs up sooner; a
+/// Windows named pipe cannot half-close, so there the app only learns the
+/// client is gone when the proxy exits.
+const DRAIN: Duration = Duration::from_secs(2);
 
 /// Pipes stdio to the app at `endpoint` until either side hangs up.
 pub async fn proxy(endpoint: &Endpoint) -> io::Result<()> {
@@ -35,7 +41,7 @@ pub async fn proxy(endpoint: &Endpoint) -> io::Result<()> {
     let up = async {
         let copied = copy(&mut stdin, &mut to_app).await;
         // The client is done: tell the app, which answers what is in
-        // flight and then hangs up, ending `down`.
+        // flight and then hangs up, ending `down`. (A no-op on a pipe.)
         let _ = to_app.shutdown().await;
         copied
     };
@@ -45,7 +51,10 @@ pub async fn proxy(endpoint: &Endpoint) -> io::Result<()> {
         result = &mut down => ended(result),
         result = up => {
             ended(result)?;
-            ended(down.await)
+            match tokio::time::timeout(DRAIN, &mut down).await {
+                Ok(result) => ended(result),
+                Err(_) => Ok(()),
+            }
         }
     }
 }
