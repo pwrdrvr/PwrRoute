@@ -202,7 +202,7 @@ for. Workspace crates (PwrRoute's own, MIT) are not listed.
 Dependency Summary
 ~~~~~~~~~~~~~~~~~~
 
-Apache License 2.0 (472)
+Apache License 2.0 (477)
 - xkeysym@0.2.1 | https://github.com/notgull/xkeysym
 - powerfmt@0.2.1 | https://github.com/jhpratt/powerfmt
 - deranged@0.5.9 | https://github.com/jhpratt/deranged
@@ -263,6 +263,7 @@ Apache License 2.0 (472)
 - moxcms@0.8.1 | https://github.com/awxkee/moxcms.git
 - pxfm@0.1.30 | https://github.com/awxkee/pxfm
 - codespan-reporting@0.13.1 | https://github.com/brendanzab/codespan
+- rustls-platform-verifier@0.7.1 | https://github.com/rustls/rustls-platform-verifier
 - self_cell@1.3.0 | https://github.com/Voultapher/self_cell
 - sys-locale@0.3.2 | https://github.com/1Password/sys-locale
 - unicode-linebreak@0.1.5 | https://github.com/axelf4/unicode-linebreak
@@ -405,6 +406,7 @@ Apache License 2.0 (472)
 - num_cpus@1.17.0 | https://github.com/seanmonstar/num_cpus
 - object@0.37.3 | https://github.com/gimli-rs/object
 - once_cell@1.21.4 | https://github.com/matklad/once_cell
+- openssl-probe@0.2.1 | https://github.com/rustls/openssl-probe
 - ordered-stream@0.2.0 | https://github.com/danieldg/ordered-stream
 - parking@2.2.1 | https://github.com/smol-rs/parking
 - parking_lot@0.12.5 | https://github.com/Amanieu/parking_lot
@@ -430,9 +432,12 @@ Apache License 2.0 (472)
 - rustc-demangle@0.1.28 | https://github.com/rust-lang/rustc-demangle
 - rustc-hash@1.1.0 | https://github.com/rust-lang-nursery/rustc-hash
 - rustix@1.1.5 | https://github.com/bytecodealliance/rustix
+- rustls-native-certs@0.8.5 | https://github.com/rustls/rustls-native-certs
 - rustls@0.23.46 | https://github.com/rustls/rustls
 - scoped-tls@1.0.1 | https://github.com/alexcrichton/scoped-tls
 - scopeguard@1.2.0 | https://github.com/bluss/scopeguard
+- security-framework-sys@2.17.0 | https://github.com/kornelski/rust-security-framework
+- security-framework@3.7.0 | https://github.com/kornelski/rust-security-framework
 - serde_fmt@1.1.0 | https://github.com/KodrAus/serde_fmt.git
 - shellexpand@3.1.2 | https://gitlab.com/ijackson/rust-shellexpand
 - signal-hook-registry@1.4.8 | https://github.com/vorner/signal-hook
@@ -676,7 +681,7 @@ Apache License 2.0 (472)
 - chrono@0.4.45 | https://github.com/chronotope/chrono
 - nonmax@0.5.5 | https://github.com/LPGhatguy/nonmax
 
-MIT License (185)
+MIT License (186)
 - rustybuzz@0.20.1 | https://github.com/harfbuzz/rustybuzz
 - uds_windows@1.2.1 | https://github.com/haraldh/rust_uds_windows
 - freetype-sys@0.20.1 | https://github.com/PistonDevelopers/freetype-sys.git
@@ -703,6 +708,7 @@ MIT License (185)
 - ordered-float@5.5.0 | https://github.com/reem/rust-ordered-float
 - dlib@0.5.3 | https://github.com/elinorbgr/dlib
 - which@8.0.6 | https://github.com/harryfei/which-rs.git
+- schannel@0.1.29 | https://github.com/steffengy/schannel-rs
 - xkbcommon@0.8.0 | https://github.com/rust-x-bindings/xkbcommon-rs
 - memoffset@0.9.1 | https://github.com/Gilnaa/memoffset
 - ropey@1.6.1 | https://github.com/cessen/ropey
@@ -3685,6 +3691,7 @@ Apache License 2.0 (Apache-2.0)
 
 Applies to:
 - codespan-reporting@0.13.1
+- rustls-platform-verifier@0.7.1
 - self_cell@1.3.0
 - sys-locale@0.3.2
 - unicode-linebreak@0.1.5
@@ -6937,6 +6944,7 @@ Applies to:
 - num_cpus@1.17.0
 - object@0.37.3
 - once_cell@1.21.4
+- openssl-probe@0.2.1
 - ordered-stream@0.2.0
 - parking@2.2.1
 - parking_lot@0.12.5
@@ -6962,9 +6970,12 @@ Applies to:
 - rustc-demangle@0.1.28
 - rustc-hash@1.1.0
 - rustix@1.1.5
+- rustls-native-certs@0.8.5
 - rustls@0.23.46
 - scoped-tls@1.0.1
 - scopeguard@1.2.0
+- security-framework-sys@2.17.0
+- security-framework@3.7.0
 - serde_fmt@1.1.0
 - shellexpand@3.1.2
 - signal-hook-registry@1.4.8
@@ -13617,6 +13628,21 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+
+MIT License (MIT)
+-----------------------------------------------------------
+
+Applies to:
+- schannel@0.1.29
+
+Copyright (c) 2015 steffengy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 MIT License (MIT)
