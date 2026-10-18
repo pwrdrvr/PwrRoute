@@ -58,11 +58,14 @@ fn browser(reloader: &Reloader) -> String {
         .name
 }
 
+/// The app's limits. A load evaluates Finicky's whole config API, which on a
+/// loaded CI runner (Windows, every test in parallel) can take well over a
+/// short deadline: only the test that wants a load to time out shortens it.
 fn reloader(choice: ConfigChoice, rules: Option<PathBuf>) -> Reloader {
-    let limits = Limits {
-        load: Duration::from_millis(500),
-        ..Limits::default()
-    };
+    reloader_with(choice, rules, Limits::default())
+}
+
+fn reloader_with(choice: ConfigChoice, rules: Option<PathBuf>, limits: Limits) -> Reloader {
     Reloader::new(choice, rules, Rc::new(DefaultHost), limits).unwrap()
 }
 
@@ -111,7 +114,13 @@ fn an_invalid_config_keeps_the_working_engine() {
 fn a_config_that_hangs_on_load_keeps_the_working_engine() {
     let home = Home::new("hang");
     let path = home.write(".finicky.js", &config("Firefox"));
-    let mut r = reloader(home.candidates(), None);
+    // Short enough to keep the test quick, long enough for the first,
+    // working load on a slow runner.
+    let limits = Limits {
+        load: Duration::from_secs(2),
+        ..Limits::default()
+    };
+    let mut r = reloader_with(home.candidates(), None, limits);
     fs::write(&path, "while (true) {}\nexport default {};").unwrap();
     let err = settle(&mut r).unwrap().unwrap_err().to_string();
     assert!(err.contains("timed out"), "{err}");
