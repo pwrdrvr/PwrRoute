@@ -15,8 +15,8 @@ runs on every platform.
   stays in memory too.
 - **The trace is the product.** Activity, Test a link and the MCP tool all
   read `DispatchRecord`. The engine names the rules that fired through
-  `Engine::resolve_traced`, which becomes `Resolved::rule_steps`; report more
-  that way rather than by changing `Step`.
+  `Engine::trace`, which becomes `Resolved::rule_steps`; report more that way
+  rather than by changing `Step`.
 - **IPC:** one JSON line each way per connection (`ipc.rs`). Bump
   `PROTOCOL_VERSION` on any incompatible change; a mismatched launch routes
   its own links rather than lose them.

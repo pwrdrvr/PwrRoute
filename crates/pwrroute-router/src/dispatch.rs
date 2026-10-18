@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::Result;
-use pwrroute_engine::{AppType, Browser, ChosenBy, Engine, Opener};
+use pwrroute_engine::{AppType, Browser, Engine, Opener, Source, Stage, Step as TraceStep, Trace};
 
 use crate::{
     ipc::{Request, Response},
@@ -54,28 +54,37 @@ pub struct Resolved {
 
 impl Resolver for Engine {
     fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved> {
-        let traced = self.resolve_traced(url, opener)?;
-        let mut rule_steps: Vec<Step> = traced
-            .rewrites
-            .into_iter()
-            .map(|r| Step::Rewrite {
-                rule: Some(r.rule),
-                url: r.url,
-            })
-            .collect();
-        rule_steps.push(Step::Matched {
-            by: match traced.chosen_by {
-                Some(ChosenBy::Handler { index }) => Matched::Handler { index },
-                Some(ChosenBy::Default) => Matched::Default,
-                None => Matched::Unreported,
-            },
-        });
+        let trace = self.trace(&pwrroute_engine::Link::new(url), opener)?;
         Ok(Resolved {
-            browser: traced.resolution.browser,
-            error: traced.resolution.error,
-            rule_steps,
+            rule_steps: rule_steps(&trace),
+            browser: trace.resolution.browser,
+            error: trace.resolution.error,
         })
     }
+}
+
+/// The router's rule steps from the engine's trace: each rewrite that ran,
+/// then what chose the browser. Rule numbers index the config's own lists;
+/// `rules.json` entries, which follow them, are traced without a number
+/// (`Step` cannot say which list a number belongs to).
+fn rule_steps(trace: &Trace) -> Vec<Step> {
+    let numbered = |s: &TraceStep| (s.source == Source::Config).then_some(s.index);
+    let mut steps: Vec<Step> = trace
+        .rewrites_applied()
+        .filter_map(|s| {
+            Some(Step::Rewrite {
+                rule: numbered(s),
+                url: s.rewritten_to.clone()?,
+            })
+        })
+        .collect();
+    let by = match trace.winner() {
+        Some(s) if s.stage == Stage::Default => Matched::Default,
+        Some(s) => numbered(s).map_or(Matched::Unreported, |index| Matched::Handler { index }),
+        None => Matched::Unreported,
+    };
+    steps.push(Step::Matched { by });
+    steps
 }
 
 /// Builds the resolver on the dispatch thread. An error leaves the router on

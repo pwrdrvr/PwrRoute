@@ -51,8 +51,9 @@ pub enum Step {
     },
     /// A rewrite rule matched and ran; `url` is the URL after it, which can
     /// equal the URL before. `rule` is `None` when the resolver only reports
-    /// the final URL; the step then means the URL changed, and `url` is the
-    /// URL after every rewrite.
+    /// the final URL (the step then means the URL changed, and `url` is the
+    /// URL after every rewrite), or for a `rules.json` rewrite, which has no
+    /// number in the config's list.
     Rewrite {
         rule: Option<usize>,
         url: String,
@@ -103,7 +104,7 @@ pub enum Matched {
     /// No handler matched; `defaultBrowser` applied.
     Default,
     /// The resolver did not say: a resolver that returns no rule steps, or
-    /// the engine in the rare case it cannot (`TracedResolution::chosen_by`).
+    /// a `rules.json` handler, which has no number in the config's list.
     Unreported,
 }
 

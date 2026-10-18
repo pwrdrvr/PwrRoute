@@ -1,0 +1,10 @@
+{
+  "defaultBrowser": "Google Chrome",
+  "defaultProfile": "Default",
+  "rules": [
+    {
+      "match": "*.local/*",
+      "browser": "Safari"
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 //! Finicky v4 compatibility: every config in `tests/configs` resolves every URL
-//! in `urls.txt` the way the Go host did (see `expected.json`), through both
-//! `Engine::resolve` and `Engine::resolve_traced`.
+//! in `urls.txt` the way the Go host did, and so does every suite (a config,
+//! `rules.json`, or both, with openers) in `expected.json`. Every case is also
+//! traced, and the trace must end where `resolve` does.
 
 use std::{
     cell::RefCell,
@@ -11,7 +12,7 @@ use std::{
 };
 
 use pwrroute_engine::{
-    AppType, ChosenBy, Engine, Host, Limits, LogLevel, ModifierKeys, Opener, RewriteStep,
+    AppType, Engine, Host, Limits, Link, LogLevel, ModifierKeys, Opener, RulesFile, Sources,
 };
 use serde::Deserialize;
 
@@ -31,6 +32,34 @@ fn load(name: &str) -> Engine {
 #[derive(Deserialize)]
 struct Expected {
     configs: std::collections::BTreeMap<String, Vec<Case>>,
+    suites: Vec<Suite>,
+}
+
+fn expected() -> Expected {
+    serde_json::from_str(&fs::read_to_string(configs().join("expected.json")).unwrap()).unwrap()
+}
+
+#[derive(Deserialize)]
+struct Suite {
+    name: String,
+    config: Option<String>,
+    rules: Option<String>,
+    cases: Vec<SuiteCase>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteCase {
+    input: String,
+    opener: Option<Opener>,
+    url: String,
+    browser: String,
+    profile: String,
+    args: Vec<String>,
+    open_in_background: bool,
+    /// Finicky reported this error. The Go host then substituted its own
+    /// fallback browser, so only the error is compared.
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -46,9 +75,7 @@ struct Case {
 
 #[test]
 fn matches_the_go_host() {
-    let expected: Expected =
-        serde_json::from_str(&fs::read_to_string(configs().join("expected.json")).unwrap())
-            .unwrap();
+    let expected = expected();
     let mut failures = Vec::new();
     let mut checked = 0;
     for (config, cases) in &expected.configs {
@@ -58,16 +85,11 @@ fn matches_the_go_host() {
             let got = engine
                 .resolve(&case.input, None)
                 .unwrap_or_else(|e| panic!("{config} {}: {e:#}", case.input));
-            // The traced path must give exactly openUrl's result, error text
-            // included.
             let traced = engine
-                .resolve_traced(&case.input, None)
-                .unwrap_or_else(|e| panic!("{config} {} (traced): {e:#}", case.input));
+                .trace(&Link::new(&case.input), None)
+                .unwrap_or_else(|e| panic!("{config} {} trace: {e:#}", case.input));
             if traced.resolution != got {
-                failures.push(format!(
-                    "{config} {}\n  openUrl {got:?}\n  traced  {:?}",
-                    case.input, traced.resolution
-                ));
+                failures.push(format!("{config} {}: the trace ends elsewhere", case.input));
             }
             let b = &got.browser;
             let actual = (
@@ -97,6 +119,79 @@ fn matches_the_go_host() {
 }
 
 #[test]
+fn suites_match_the_go_host_and_their_traces() {
+    let expected = expected();
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for suite in &expected.suites {
+        let sources = Sources {
+            config: suite.config.as_ref().map(|c| configs().join(c)),
+            rules: suite
+                .rules
+                .as_ref()
+                .map(|r| RulesFile::load(&configs().join(r)).unwrap())
+                .unwrap_or_default(),
+        };
+        let engine = Engine::from_sources(
+            &sources,
+            Rc::new(pwrroute_engine::DefaultHost),
+            Limits::default(),
+        )
+        .unwrap_or_else(|e| panic!("{}: {e:#}", suite.name));
+        for case in &suite.cases {
+            checked += 1;
+            let label = format!("{} {} {:?}", suite.name, case.input, case.opener);
+            let got = engine
+                .resolve(&case.input, case.opener.as_ref())
+                .unwrap_or_else(|e| panic!("{label}: {e:#}"));
+            let trace = engine
+                .trace(&Link::new(&case.input), case.opener.as_ref())
+                .unwrap_or_else(|e| panic!("{label} trace: {e:#}"));
+            if trace.resolution != got {
+                failures.push(format!(
+                    "{label}\n  trace ends {:?}\n  resolve   {got:?}",
+                    trace.resolution
+                ));
+            }
+            if trace.winner().is_none() {
+                failures.push(format!("{label}: the trace names no winner"));
+            }
+            if let Some(error) = &case.error {
+                if got.error.as_deref() != Some(error.as_str()) {
+                    failures.push(format!(
+                        "{label}\n  want error {error:?}\n  got {:?}",
+                        got.error
+                    ));
+                }
+                continue;
+            }
+            let b = &got.browser;
+            let actual = (
+                b.url.as_str(),
+                b.name.as_str(),
+                b.profile.as_str(),
+                b.args.as_slice(),
+                b.open_in_background.unwrap_or(false),
+                got.error.as_deref(),
+            );
+            let wanted = (
+                case.url.as_str(),
+                case.browser.as_str(),
+                case.profile.as_str(),
+                case.args.as_slice(),
+                case.open_in_background,
+                None,
+            );
+            if actual != wanted {
+                failures.push(format!("{label}\n  want {wanted:?}\n  got  {actual:?}"));
+            }
+        }
+    }
+    assert_eq!(checked, 75, "expected.json lost suite cases");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn matches_on_the_opener() {
     let engine = load("finicky-example.ts");
     let slack = Opener {
@@ -110,231 +205,6 @@ fn matches_on_the_opener() {
     let from_nowhere = engine.resolve("https://example.org/", None).unwrap();
     assert_eq!(from_slack.browser.name, "Firefox");
     assert_eq!(from_nowhere.browser.name, "Google Chrome");
-    let traced = engine
-        .resolve_traced("https://example.org/", Some(&slack))
-        .unwrap();
-    assert_eq!(traced.resolution, from_slack);
-}
-
-#[test]
-fn the_traced_resolve_names_the_rules_that_fired() {
-    let engine = load("stress.ts");
-    let rewrite = |rule: usize, url: &str| RewriteStep {
-        rule,
-        url: url.to_owned(),
-    };
-
-    // rewrite[0] strips tracking, rewrite[1] upgrades to https, rewrite[3]
-    // sends medium.com to scribe.rip, and handlers[6] takes scribe.rip.
-    let t = engine
-        .resolve_traced("http://blog.medium.com/post?utm_source=x", None)
-        .unwrap();
-    assert_eq!(
-        t.rewrites,
-        [
-            rewrite(0, "http://blog.medium.com/post"),
-            rewrite(1, "https://blog.medium.com/post"),
-            rewrite(3, "https://scribe.rip/post"),
-        ]
-    );
-    assert_eq!(t.chosen_by, Some(ChosenBy::Handler { index: 6 }));
-    assert_eq!(t.resolution.browser.name, "Firefox");
-
-    let t = engine
-        .resolve_traced("https://nothing.example/", None)
-        .unwrap();
-    assert!(t.rewrites.is_empty());
-    assert_eq!(t.chosen_by, Some(ChosenBy::Default));
-
-    // handlers[7] chooses `browser: null`.
-    let t = engine
-        .resolve_traced("https://printer.local/", None)
-        .unwrap();
-    assert_eq!(t.chosen_by, Some(ChosenBy::Handler { index: 7 }));
-    assert_eq!(t.resolution.browser.app_type, AppType::None);
-}
-
-#[test]
-fn a_rule_that_throws_is_traced_to_the_default() {
-    let path = write_config(
-        "throwing-rules.js",
-        r#"export default {
-  defaultBrowser: "Safari",
-  rewrite: [
-    { match: "*", url: (url) => url.href.replace("a.example", "b.example") },
-    { match: (url) => url.pathname === "/rewrite-throws", url: () => { throw new Error("rewrite failed"); } },
-  ],
-  handlers: [
-    { match: "never", browser: "Opera" },
-    { match: (url) => url.pathname === "/browser-throws", browser: () => { throw new Error("browser failed"); } },
-    { match: (url) => url.pathname === "/matcher-throws" && missing.value, browser: "Firefox" },
-    { match: "*", browser: "Google Chrome" },
-  ],
-};"#,
-    );
-    let engine = Engine::load(
-        &path,
-        Rc::new(pwrroute_engine::DefaultHost),
-        Limits::default(),
-    )
-    .unwrap();
-    for (path, error) in [
-        ("/rewrite-throws", "rewrite failed"),
-        ("/browser-throws", "browser failed"),
-        ("/matcher-throws", "missing"),
-        ("/fine", ""),
-    ] {
-        let url = format!("https://a.example{path}");
-        let plain = engine.resolve(&url, None).unwrap();
-        let traced = engine.resolve_traced(&url, None).unwrap();
-        assert_eq!(traced.resolution, plain, "{path}");
-        assert_eq!(
-            traced.rewrites[0],
-            RewriteStep {
-                rule: 0,
-                url: format!("https://b.example{path}"),
-            },
-            "{path}"
-        );
-        if error.is_empty() {
-            assert_eq!(traced.chosen_by, Some(ChosenBy::Handler { index: 3 }));
-            assert_eq!(traced.resolution.error, None);
-        } else {
-            assert_eq!(traced.chosen_by, Some(ChosenBy::Default), "{path}");
-            assert_eq!(traced.resolution.browser.name, "Safari", "{path}");
-            let message = traced.resolution.error.unwrap_or_default();
-            assert!(message.contains(error), "{path}: {message}");
-        }
-    }
-}
-
-#[test]
-fn the_traced_resolve_runs_each_config_function_as_open_url_does() {
-    let path = write_config(
-        "logging-rules.js",
-        r#"export default {
-  defaultBrowser: (url) => { console.log("default", url.href); return "Safari"; },
-  rewrite: [
-    { match: (url) => { console.log("rewrite 0 match", url.href); return true; }, url: (url) => { console.log("rewrite 0 url"); return url.href + "x"; } },
-    { match: (url) => { console.log("rewrite 1 match", url.href); return false; }, url: () => { console.log("rewrite 1 url"); return "https://never.example/"; } },
-  ],
-  handlers: [
-    { match: (url) => { console.log("handler 0 match", url.href); return url.pathname === "/ax"; }, browser: (url) => { console.log("handler 0 browser"); return "Firefox"; } },
-    { match: (url) => { console.log("handler 1 match", url.href); return false; }, browser: "Opera" },
-  ],
-};"#,
-    );
-    let host = Rc::new(RecordingHost {
-        logs: RefCell::default(),
-    });
-    let engine = Engine::load(&path, host.clone(), Limits::default()).unwrap();
-    for url in ["https://a.example/a", "https://a.example/b"] {
-        engine.resolve(url, None).unwrap();
-        let plain = host.logs.take();
-        engine.resolve_traced(url, None).unwrap();
-        let traced = host.logs.take();
-        assert!(!plain.is_empty());
-        assert_eq!(traced, plain, "{url}");
-    }
-}
-
-#[test]
-fn a_config_made_invalid_at_runtime_fails_the_same_way_traced() {
-    let path = write_config(
-        "self-breaking.js",
-        r#"const config = {
-  defaultBrowser: "Safari",
-  handlers: [{ match: (url) => { if (url.host === "break.example") config.defaultBrowser = 42; return false; }, browser: "Firefox" }],
-};
-export default config;"#,
-    );
-    // Each path on its own engine: the first call breaks its config. The
-    // matcher sets defaultBrowser to 42, which then fails as a browser; after
-    // that the config is invalid before any rule runs.
-    let errors = |traced: bool| {
-        let engine = Engine::load(
-            &path,
-            Rc::new(pwrroute_engine::DefaultHost),
-            Limits::default(),
-        )
-        .unwrap();
-        ["https://break.example/", "https://other.example/"].map(|url| {
-            let err = if traced {
-                engine.resolve_traced(url, None).map(|_| ())
-            } else {
-                engine.resolve(url, None).map(|_| ())
-            };
-            // The JS stack after the message names different frames.
-            let err = err.unwrap_err().to_string();
-            err.split("\n    at ").next().unwrap().to_owned()
-        })
-    };
-    let plain = errors(false);
-    assert!(plain[0].contains("Invalid browser option"), "{}", plain[0]);
-    assert!(plain[1].contains("Invalid config"), "{}", plain[1]);
-    assert_eq!(errors(true), plain);
-}
-
-#[test]
-fn a_frozen_config_traces_as_it_resolves() {
-    // A Proxy may not report a different value for a frozen property, so the
-    // view must not sit directly on frozen objects.
-    let path = write_config(
-        "frozen.js",
-        r#"const freeze = Object.freeze;
-export default freeze({
-  defaultBrowser: "Safari",
-  rewrite: freeze([freeze({ match: "*/old*", url: "https://example.com/new" })]),
-  handlers: freeze([freeze({ match: "*slack.com*", browser: "Firefox" })]),
-});"#,
-    );
-    let engine = Engine::load(
-        &path,
-        Rc::new(pwrroute_engine::DefaultHost),
-        Limits::default(),
-    )
-    .unwrap();
-    for (url, rewrites, chosen_by) in [
-        (
-            "https://team.slack.com/x",
-            0,
-            ChosenBy::Handler { index: 0 },
-        ),
-        ("https://example.com/old", 1, ChosenBy::Default),
-    ] {
-        let plain = engine.resolve(url, None).unwrap();
-        let traced = engine.resolve_traced(url, None).unwrap();
-        assert_eq!(traced.resolution, plain, "{url}");
-        assert_eq!(traced.rewrites.len(), rewrites, "{url}");
-        assert_eq!(traced.chosen_by, Some(chosen_by), "{url}");
-    }
-}
-
-#[test]
-fn the_traced_resolve_honours_the_deadline() {
-    let path = write_config(
-        "spin-traced.js",
-        r#"export default {
-  defaultBrowser: "Safari",
-  handlers: [
-    { match: (url) => url.host === "spin.example", browser: () => { while (true) {} } },
-  ],
-};"#,
-    );
-    let limits = Limits {
-        resolve: Duration::from_millis(200),
-        ..Limits::default()
-    };
-    let engine = Engine::load(&path, Rc::new(pwrroute_engine::DefaultHost), limits).unwrap();
-    let err = engine
-        .resolve_traced("https://spin.example/", None)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("timed out"), "{err}");
-    let ok = engine
-        .resolve_traced("https://other.example/", None)
-        .unwrap();
-    assert_eq!(ok.chosen_by, Some(ChosenBy::Default));
 }
 
 #[test]

@@ -27,6 +27,13 @@ export default {
     },
     { match: "https://blocked.example.com/*", browser: null },
     { match: "https://loop.example.com/*", browser: "PwrRoute" },
+    {
+      match: (url) => {
+        if (url.host === "throws.example.com") throw new Error("matcher failed");
+        return false;
+      },
+      browser: "Opera",
+    },
   ],
 };
 "#;
@@ -101,6 +108,27 @@ fn a_rewrite_shows_in_the_trace_and_reaches_the_launcher() {
         ]
     );
     assert_eq!(launcher.launched()[0].url, "https://example.com/new");
+    assert_eq!(launcher.launched()[0].name, "Safari");
+}
+
+#[test]
+fn a_rule_that_throws_is_traced_to_the_default() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://throws.example.com/x"))
+        .unwrap();
+    assert_eq!(
+        record.steps[1],
+        Step::Matched {
+            by: Matched::Default
+        }
+    );
+    assert!(
+        record.steps.iter().any(
+            |s| matches!(s, Step::ConfigError { message } if message.contains("matcher failed"))
+        )
+    );
     assert_eq!(launcher.launched()[0].name, "Safari");
 }
 
