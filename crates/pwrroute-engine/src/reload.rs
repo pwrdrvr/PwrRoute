@@ -95,8 +95,14 @@ impl WatchSet {
     }
 
     /// Replaces the paths and records their current fingerprint as loaded.
-    fn replace(&self, paths: Vec<PathBuf>) -> u64 {
-        let loaded = fingerprint_of(&paths);
+    /// `stale` means the files changed while they were being loaded, so the
+    /// recorded fingerprint is made to differ from theirs and the next check
+    /// reloads.
+    fn replace(&self, paths: Vec<PathBuf>, stale: bool) -> u64 {
+        let mut loaded = fingerprint_of(&paths);
+        if stale {
+            loaded = loaded.wrapping_add(1);
+        }
         if let Ok(mut guard) = self.0.lock() {
             *guard = Watched { paths, loaded };
         }
@@ -165,19 +171,27 @@ impl Reloader {
         host: Rc<dyn Host>,
         limits: Limits,
     ) -> Result<Self> {
-        let fallback = Engine::from_sources(&Sources::default(), Rc::clone(&host), limits)?;
+        let attempt = attempt(&choice, rules_path.as_deref(), &host, limits, None, &[]);
+        let (engine, result) = match attempt.result {
+            Ok(engine) => (engine, Ok(None)),
+            // The fallback is built only when it is needed.
+            Err(e) => (
+                Engine::from_sources(&Sources::default(), Rc::clone(&host), limits)?,
+                Err(e),
+            ),
+        };
         let mut reloader = Self {
             choice,
             rules_path,
             host,
             limits,
-            engine: fallback,
+            engine,
             status: Status::default(),
             watch: WatchSet::default(),
             seen: 0,
             pending: None,
         };
-        let _ = reloader.reload();
+        let _ = reloader.finish(result, attempt.read, attempt.stale);
         Ok(reloader)
     }
 
@@ -235,17 +249,34 @@ impl Reloader {
     /// On failure the active engine stays and the error is returned and kept
     /// in [`Status::error`].
     pub fn reload(&mut self) -> Result<()> {
-        let result = self.try_load();
-        let mut watched = match &self.choice {
-            ConfigChoice::Discover(candidates) => candidates.clone(),
-            ConfigChoice::Path(path) => vec![path.clone()],
-            ConfigChoice::None => Vec::new(),
-        };
+        let attempt = attempt(
+            &self.choice,
+            self.rules_path.as_deref(),
+            &self.host,
+            self.limits,
+            self.status.config.as_deref(),
+            &self.engine.dependencies(),
+        );
+        self.finish(attempt.result.map(Some), attempt.read, attempt.stale)
+    }
+
+    /// Records a load attempt: swaps in its engine (`Some`; `None` keeps the
+    /// one in place as the loaded one), updates the status, and watches the
+    /// choice's paths, what the active engine and the attempt read, and
+    /// `rules.json`.
+    fn finish(
+        &mut self,
+        result: Result<Option<Engine>>,
+        read: Vec<PathBuf>,
+        stale: bool,
+    ) -> Result<()> {
         let outcome = match result {
-            Ok((engine, config)) => {
-                self.engine = engine;
+            Ok(loaded) => {
+                if let Some(engine) = loaded {
+                    self.engine = engine;
+                }
                 self.status = Status {
-                    config,
+                    config: self.engine.config_path().map(Path::to_path_buf),
                     rules: self.rules_path.clone(),
                     error: None,
                     generation: self.status.generation + 1,
@@ -258,7 +289,14 @@ impl Reloader {
                 Err(anyhow!(message))
             }
         };
-        for path in self.engine.dependencies() {
+        let mut watched = match &self.choice {
+            ConfigChoice::Discover(candidates) => candidates.clone(),
+            ConfigChoice::Path(path) => vec![path.clone()],
+            ConfigChoice::None => Vec::new(),
+        };
+        // A failed attempt's imports are watched too, so fixing a broken
+        // helper reloads.
+        for path in self.engine.dependencies().into_iter().chain(read) {
             if !watched.contains(&path) {
                 watched.push(path);
             }
@@ -266,31 +304,63 @@ impl Reloader {
         if let Some(rules) = &self.rules_path {
             watched.push(rules.clone());
         }
-        self.seen = self.watch.replace(watched);
+        self.seen = self.watch.replace(watched, stale);
         outcome
     }
+}
 
-    fn try_load(&self) -> Result<(Engine, Option<PathBuf>)> {
-        let config = match &self.choice {
-            ConfigChoice::Path(path) => Some(path.clone()),
-            ConfigChoice::None => None,
-            ConfigChoice::Discover(candidates) => match discovery::find_config(candidates) {
-                Some(path) => Some(path),
-                // A config that was in charge and is gone may be mid-save,
-                // or deleted by mistake: keep it, as the Go host did, until
-                // the user chooses otherwise.
-                None => {
-                    if let Some(gone) = &self.status.config {
-                        return Err(anyhow!(
+/// One load attempt.
+struct Attempt {
+    result: Result<Engine>,
+    /// The config and the files it imported, read whether or not it loaded.
+    read: Vec<PathBuf>,
+    /// A file the load read changed while it ran, so the engine may hold an
+    /// older version than the files now on disk.
+    stale: bool,
+}
+
+/// Loads the files as they are now. `in_charge` is the config the active
+/// engine was built from; `previously_read` is what it read, used to notice
+/// writes that land during this load.
+fn attempt(
+    choice: &ConfigChoice,
+    rules_path: Option<&Path>,
+    host: &Rc<dyn Host>,
+    limits: Limits,
+    in_charge: Option<&Path>,
+    previously_read: &[PathBuf],
+) -> Attempt {
+    let config = match choice {
+        ConfigChoice::Path(path) => Some(path.clone()),
+        ConfigChoice::None => None,
+        ConfigChoice::Discover(candidates) => match discovery::find_config(candidates) {
+            Some(path) => Some(path),
+            // A config that was in charge and is gone may be mid-save, or
+            // deleted by mistake: keep it, as the Go host did, until the user
+            // chooses otherwise.
+            None => {
+                if let Some(gone) = in_charge {
+                    return Attempt {
+                        result: Err(anyhow!(
                             "{} is gone; keeping the last working config",
                             gone.display()
-                        ));
-                    }
-                    None
+                        )),
+                        read: Vec::new(),
+                        stale: false,
+                    };
                 }
-            },
-        };
-        let rules = match &self.rules_path {
+                None
+            }
+        },
+    };
+    let mut known: Vec<PathBuf> = previously_read.to_vec();
+    known.extend(config.iter().cloned());
+    known.extend(rules_path.map(Path::to_path_buf));
+    let before = fingerprint_of(&known);
+
+    let imports = Rc::default();
+    let result = (|| {
+        let rules = match rules_path {
             Some(path) => RulesFile::load(path)?,
             None => RulesFile::default(),
         };
@@ -298,9 +368,14 @@ impl Reloader {
             config: config.clone(),
             rules,
         };
-        let engine = Engine::from_sources(&sources, Rc::clone(&self.host), self.limits)?;
-        let config = engine.config_path().map(Path::to_path_buf);
-        Ok((engine, config))
+        Engine::from_sources_reading(&sources, Rc::clone(host), limits, &imports)
+    })();
+    let mut read: Vec<PathBuf> = config.into_iter().collect();
+    read.extend(imports.borrow().iter().cloned());
+    Attempt {
+        result,
+        read,
+        stale: fingerprint_of(&known) != before,
     }
 }
 

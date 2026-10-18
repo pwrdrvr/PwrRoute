@@ -76,12 +76,11 @@ fn main() -> Result<()> {
     )
     .context("loading")?;
     let loaded = started.elapsed();
-    let network = HttpNetwork::new();
+    let network = expand.then(HttpNetwork::new);
     for url in &urls {
-        let link = if expand {
-            engine.short_links().expand(url, &network)
-        } else {
-            Link::new(url.as_str())
+        let link = match &network {
+            Some(network) => engine.short_links().expand(url, network),
+            None => Link::new(url.as_str()),
         };
         if trace {
             println!(

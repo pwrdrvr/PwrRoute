@@ -210,6 +210,17 @@ var __pwrroute = (function (api) {
     });
 
     var result = api.openUrl(url, opener, originalUrl, traced);
+    // A handler's browser is marked when openUrl asks for it, before
+    // resolveBrowser validates it. If the default was used after all, that
+    // handler's browser failed: it did not win, and the error is its own.
+    if (steps.some(function (s) { return s.stage === "default"; })) {
+      steps.forEach(function (s) {
+        if (s.stage !== "default" && s.won) {
+          s.won = false;
+          if (result.error) s.error = result.error;
+        }
+      });
+    }
     return { steps: steps, result: result };
   }
 

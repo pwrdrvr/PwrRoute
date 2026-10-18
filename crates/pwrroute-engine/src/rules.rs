@@ -355,7 +355,6 @@ fn enabled() -> bool {
     true
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
 fn is_enabled(enabled: &bool) -> bool {
     *enabled
 }

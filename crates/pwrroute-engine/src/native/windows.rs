@@ -60,9 +60,10 @@ pub(super) fn computer_names() -> (String, String) {
 }
 
 pub(super) fn power_info() -> PowerInfo {
-    // SAFETY: SYSTEM_POWER_STATUS is plain data, so all-zero is valid, and
-    // the call fills it.
+    // SAFETY: SYSTEM_POWER_STATUS is plain data, so all-zero is valid.
     let mut status: SYSTEM_POWER_STATUS = unsafe { zeroed() };
+    // SAFETY: `status` is a valid, writable SYSTEM_POWER_STATUS for the call
+    // to fill.
     if unsafe { GetSystemPowerStatus(&mut status) } == 0 {
         return PowerInfo::default();
     }

@@ -440,3 +440,30 @@ fn an_unreachable_shortener_routes_the_short_link() {
     assert_eq!(r.browser.url, "https://bit.ly/unknown");
     assert_eq!(r.browser.name, "Safari");
 }
+
+#[test]
+fn a_handler_whose_browser_fails_does_not_win() {
+    // functions.js handler 4 matches but its browser function returns
+    // undefined; Finicky then opens the default browser.
+    let e = engine(Some("functions.js"), RulesFile::default());
+    let trace = e
+        .trace(&Link::new("https://undefined.example/"), None)
+        .unwrap();
+    let winners: Vec<_> = trace.steps.iter().filter(|s| s.won).collect();
+    assert_eq!(winners.len(), 1, "{:?}", trace.steps);
+    assert_eq!(winners[0].stage, Stage::Default);
+    let failed = trace
+        .steps
+        .iter()
+        .find(|s| s.stage == Stage::Handler && s.matched)
+        .unwrap();
+    assert_eq!(failed.index, 4);
+    assert_eq!(failed.error, trace.resolution.error);
+    assert!(
+        failed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("cannot be undefined")
+    );
+}

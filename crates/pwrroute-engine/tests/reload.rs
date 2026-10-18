@@ -297,3 +297,22 @@ fn the_watcher_reports_a_change_made_before_it_started() {
         "a loaded state is not reported again"
     );
 }
+
+#[test]
+fn fixing_a_broken_import_reloads() {
+    let home = Home::new("broken-import");
+    home.write("helpers.ts", "export const BROWSER: string = ;\n");
+    home.write(
+        ".finicky.ts",
+        "import { BROWSER } from \"./helpers\";\nexport default { defaultBrowser: BROWSER };\n",
+    );
+    let mut r = reloader(home.candidates(), None);
+    assert!(r.status().error.is_some());
+    assert!(
+        r.watch_set().paths().contains(&home.path("helpers.ts")),
+        "the failed load's import is watched"
+    );
+    home.write("helpers.ts", "export const BROWSER: string = \"Arc\";\n");
+    settle(&mut r).unwrap().unwrap();
+    assert_eq!(browser(&r), "Arc");
+}

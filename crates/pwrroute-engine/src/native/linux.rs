@@ -79,18 +79,19 @@ pub(super) fn is_app_running(identifier: &str) -> bool {
     let Ok(entries) = fs::read_dir("/proc") else {
         return false;
     };
-    // comm is the executable name cut to 15 bytes.
-    let short: String = identifier.chars().take(15).collect();
+    // comm is the executable name cut to 15 bytes, possibly mid-character,
+    // so it is compared as bytes.
+    let wanted = identifier.as_bytes();
+    let short = &wanted[..wanted.len().min(15)];
     entries.flatten().any(|entry| {
         let pid = entry.file_name();
         if !pid.to_string_lossy().bytes().all(|b| b.is_ascii_digit()) {
             return false;
         }
         let dir = entry.path();
-        let comm_matches = fs::read_to_string(dir.join("comm")).is_ok_and(|comm| {
-            let comm = comm.trim_end_matches('\n');
-            comm.eq_ignore_ascii_case(identifier)
-                || (identifier.len() > 15 && comm.eq_ignore_ascii_case(&short))
+        let comm_matches = fs::read(dir.join("comm")).is_ok_and(|comm| {
+            let comm = comm.strip_suffix(b"\n").unwrap_or(&comm);
+            comm.eq_ignore_ascii_case(wanted) || comm.eq_ignore_ascii_case(short)
         });
         comm_matches
             || fs::read_link(dir.join("exe")).is_ok_and(|exe| {

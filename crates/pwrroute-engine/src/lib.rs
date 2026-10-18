@@ -190,6 +190,18 @@ impl Engine {
 
     /// Loads a config, `rules.json`, or both, and validates the result.
     pub fn from_sources(sources: &Sources, host: Rc<dyn Host>, limits: Limits) -> Result<Self> {
+        Self::from_sources_reading(sources, host, limits, &Rc::default())
+    }
+
+    /// [`Engine::from_sources`], recording each file the config imports in
+    /// `imports` as it is read, so a caller still knows them when the load
+    /// fails.
+    pub(crate) fn from_sources_reading(
+        sources: &Sources,
+        host: Rc<dyn Host>,
+        limits: Limits,
+        imports: &Rc<RefCell<Vec<PathBuf>>>,
+    ) -> Result<Self> {
         let config = match &sources.config {
             Some(path) => {
                 let path = fs::canonicalize(path).with_context(|| path.display().to_string())?;
@@ -202,7 +214,7 @@ impl Engine {
 
         let runtime = Runtime::new()?;
         runtime.set_memory_limit(limits.memory_bytes);
-        let imports = Rc::new(RefCell::new(Vec::new()));
+        let imports = Rc::clone(imports);
         runtime.set_loader(
             loader::FsResolver,
             loader::OxcLoader {
