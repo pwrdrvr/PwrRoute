@@ -111,8 +111,10 @@ pub struct TracedResolution {
     pub resolution: Resolution,
     /// Every `rewrite` entry that matched, in the order it ran.
     pub rewrites: Vec<RewriteStep>,
-    /// What chose the browser.
-    pub chosen_by: ChosenBy,
+    /// What chose the browser. `None` only when the config's validity
+    /// changed between two reads, so `openUrl` ran on the config itself,
+    /// without the view that names the rule.
+    pub chosen_by: Option<ChosenBy>,
 }
 
 /// One `rewrite` entry that matched.

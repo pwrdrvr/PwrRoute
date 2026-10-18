@@ -65,8 +65,9 @@ impl Resolver for Engine {
             .collect();
         rule_steps.push(Step::Matched {
             by: match traced.chosen_by {
-                ChosenBy::Handler { index } => Matched::Handler { index },
-                ChosenBy::Default => Matched::Default,
+                Some(ChosenBy::Handler { index }) => Matched::Handler { index },
+                Some(ChosenBy::Default) => Matched::Default,
+                None => Matched::Unreported,
             },
         });
         Ok(Resolved {

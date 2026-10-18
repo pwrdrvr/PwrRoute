@@ -102,8 +102,8 @@ pub enum Matched {
     Handler { index: usize },
     /// No handler matched; `defaultBrowser` applied.
     Default,
-    /// The resolver did not say. The engine always does; a resolver that
-    /// returns no rule steps gets this.
+    /// The resolver did not say: a resolver that returns no rule steps, or
+    /// the engine in the rare case it cannot (`TracedResolution::chosen_by`).
     Unreported,
 }
 

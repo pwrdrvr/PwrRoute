@@ -110,6 +110,10 @@ fn matches_on_the_opener() {
     let from_nowhere = engine.resolve("https://example.org/", None).unwrap();
     assert_eq!(from_slack.browser.name, "Firefox");
     assert_eq!(from_nowhere.browser.name, "Google Chrome");
+    let traced = engine
+        .resolve_traced("https://example.org/", Some(&slack))
+        .unwrap();
+    assert_eq!(traced.resolution, from_slack);
 }
 
 #[test]
@@ -133,20 +137,20 @@ fn the_traced_resolve_names_the_rules_that_fired() {
             rewrite(3, "https://scribe.rip/post"),
         ]
     );
-    assert_eq!(t.chosen_by, ChosenBy::Handler { index: 6 });
+    assert_eq!(t.chosen_by, Some(ChosenBy::Handler { index: 6 }));
     assert_eq!(t.resolution.browser.name, "Firefox");
 
     let t = engine
         .resolve_traced("https://nothing.example/", None)
         .unwrap();
     assert!(t.rewrites.is_empty());
-    assert_eq!(t.chosen_by, ChosenBy::Default);
+    assert_eq!(t.chosen_by, Some(ChosenBy::Default));
 
     // handlers[7] chooses `browser: null`.
     let t = engine
         .resolve_traced("https://printer.local/", None)
         .unwrap();
-    assert_eq!(t.chosen_by, ChosenBy::Handler { index: 7 });
+    assert_eq!(t.chosen_by, Some(ChosenBy::Handler { index: 7 }));
     assert_eq!(t.resolution.browser.app_type, AppType::None);
 }
 
@@ -193,10 +197,10 @@ fn a_rule_that_throws_is_traced_to_the_default() {
             "{path}"
         );
         if error.is_empty() {
-            assert_eq!(traced.chosen_by, ChosenBy::Handler { index: 3 });
+            assert_eq!(traced.chosen_by, Some(ChosenBy::Handler { index: 3 }));
             assert_eq!(traced.resolution.error, None);
         } else {
-            assert_eq!(traced.chosen_by, ChosenBy::Default, "{path}");
+            assert_eq!(traced.chosen_by, Some(ChosenBy::Default), "{path}");
             assert_eq!(traced.resolution.browser.name, "Safari", "{path}");
             let message = traced.resolution.error.unwrap_or_default();
             assert!(message.contains(error), "{path}: {message}");
@@ -272,6 +276,41 @@ export default config;"#,
 }
 
 #[test]
+fn a_frozen_config_traces_as_it_resolves() {
+    // A Proxy may not report a different value for a frozen property, so the
+    // view must not sit directly on frozen objects.
+    let path = write_config(
+        "frozen.js",
+        r#"const freeze = Object.freeze;
+export default freeze({
+  defaultBrowser: "Safari",
+  rewrite: freeze([freeze({ match: "*/old*", url: "https://example.com/new" })]),
+  handlers: freeze([freeze({ match: "*slack.com*", browser: "Firefox" })]),
+});"#,
+    );
+    let engine = Engine::load(
+        &path,
+        Rc::new(pwrroute_engine::DefaultHost),
+        Limits::default(),
+    )
+    .unwrap();
+    for (url, rewrites, chosen_by) in [
+        (
+            "https://team.slack.com/x",
+            0,
+            ChosenBy::Handler { index: 0 },
+        ),
+        ("https://example.com/old", 1, ChosenBy::Default),
+    ] {
+        let plain = engine.resolve(url, None).unwrap();
+        let traced = engine.resolve_traced(url, None).unwrap();
+        assert_eq!(traced.resolution, plain, "{url}");
+        assert_eq!(traced.rewrites.len(), rewrites, "{url}");
+        assert_eq!(traced.chosen_by, Some(chosen_by), "{url}");
+    }
+}
+
+#[test]
 fn the_traced_resolve_honours_the_deadline() {
     let path = write_config(
         "spin-traced.js",
@@ -295,7 +334,7 @@ fn the_traced_resolve_honours_the_deadline() {
     let ok = engine
         .resolve_traced("https://other.example/", None)
         .unwrap();
-    assert_eq!(ok.chosen_by, ChosenBy::Default);
+    assert_eq!(ok.chosen_by, Some(ChosenBy::Default));
 }
 
 #[test]

@@ -30,11 +30,34 @@ var pwrrouteOpenUrlTraced = (function (api) {
     };
   }
 
-  // A view of `target` whose `key` reads through `replace(value)`.
+  // What a Proxy over `target` can stand on. A Proxy may not report a
+  // different value for a property that cannot change (non-configurable and
+  // non-writable, as on a frozen object), so when one of `keys` is such a
+  // property the Proxy gets a configurable copy as its target. Reads still go
+  // to `target` itself; the copy only answers the Proxy's invariant checks.
+  function proxyTarget(target, keys) {
+    const pinned = keys.some((key) => {
+      const d = Reflect.getOwnPropertyDescriptor(target, key);
+      return d !== undefined && !d.configurable && ("value" in d ? !d.writable : d.get === undefined);
+    });
+    if (!pinned) return target;
+    const isArray = Array.isArray(target);
+    const copy = Object.setPrototypeOf(isArray ? [] : {}, Object.getPrototypeOf(target));
+    for (const key of Reflect.ownKeys(target)) {
+      if (isArray && key === "length") continue;
+      const d = Reflect.getOwnPropertyDescriptor(target, key);
+      Object.defineProperty(copy, key, { ...d, configurable: true });
+    }
+    if (isArray) copy.length = target.length;
+    return copy;
+  }
+
+  // A view of `target` whose properties named in `replacements` read through
+  // `replacements[key](value)`.
   function replacing(target, replacements) {
-    return new Proxy(target, {
-      get(t, key) {
-        const value = Reflect.get(t, key);
+    return new Proxy(proxyTarget(target, Object.keys(replacements)), {
+      get(_, key) {
+        const value = Reflect.get(target, key);
         return Object.prototype.hasOwnProperty.call(replacements, key)
           ? replacements[key](value)
           : value;
@@ -45,9 +68,10 @@ var pwrrouteOpenUrlTraced = (function (api) {
   // A view of a rules array whose entries read through `rule(entry, index)`.
   function rules(list, rule) {
     if (!Array.isArray(list)) return list;
-    return new Proxy(list, {
-      get(t, key) {
-        const value = Reflect.get(t, key);
+    const indexes = Array.from({ length: list.length }, (_, i) => String(i));
+    return new Proxy(proxyTarget(list, indexes), {
+      get(_, key) {
+        const value = Reflect.get(list, key);
         return isIndex(key) && value !== null && typeof value === "object"
           ? rule(value, Number(key))
           : value;
