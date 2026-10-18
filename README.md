@@ -17,10 +17,11 @@ macOS first, then Windows and Linux.</p>
 PwrRoute is an early port. It is a Rust workspace with a native window built
 on [GPUI](https://www.gpui.rs) and a rules engine that runs Finicky v4 configs
 in QuickJS. The window draws the Rules screen from sample data. The engine
-resolves URLs the way Finicky does and is tested against it. Neither is wired
-to the other yet, and PwrRoute does not receive links from the OS. There are
-no releases, and the behavior described below is the design, not the current
-build.
+resolves URLs the way Finicky does and is tested against it. A resident
+router receives links from the OS and resolves each one with the engine, but
+it cannot open a browser yet, and the window still shows sample rules. There
+are no releases, and the behavior described below is the design, not the
+current build.
 
 ## What it does
 

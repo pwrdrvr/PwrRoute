@@ -202,7 +202,7 @@ for. Workspace crates (PwrRoute's own, MIT) are not listed.
 Dependency Summary
 ~~~~~~~~~~~~~~~~~~
 
-Apache License 2.0 (475)
+Apache License 2.0 (477)
 - xkeysym@0.2.1 | https://github.com/notgull/xkeysym
 - powerfmt@0.2.1 | https://github.com/jhpratt/powerfmt
 - deranged@0.5.9 | https://github.com/jhpratt/deranged
@@ -590,6 +590,7 @@ Apache License 2.0 (475)
 - objc2-core-image@0.3.2 | https://github.com/madsmtm/objc2
 - objc2-core-location@0.3.2 | https://github.com/madsmtm/objc2
 - objc2-core-media@0.3.2 | https://github.com/madsmtm/objc2
+- objc2-core-services@0.3.2 | https://github.com/madsmtm/objc2
 - objc2-core-text@0.3.2 | https://github.com/madsmtm/objc2
 - objc2-core-video@0.3.2 | https://github.com/madsmtm/objc2
 - objc2-metal@0.3.2 | https://github.com/madsmtm/objc2
@@ -653,6 +654,7 @@ Apache License 2.0 (475)
 - wgpu-naga-bridge@29.0.4 | https://github.com/gfx-rs/wgpu
 - wgpu-types@29.0.4 | https://github.com/gfx-rs/wgpu
 - wgpu@29.0.4 | https://github.com/gfx-rs/wgpu
+- widestring@1.2.1 | https://github.com/VoidStarKat/widestring-rs
 - zune-inflate@0.2.54
 - gpui-pre-apple@0.3.6 | https://github.com/zed-industries/zed
 - gpui-pre-collections@0.3.6 | https://github.com/zed-industries/zed
@@ -679,7 +681,7 @@ Apache License 2.0 (475)
 - chrono@0.4.45 | https://github.com/chronotope/chrono
 - nonmax@0.5.5 | https://github.com/LPGhatguy/nonmax
 
-MIT License (184)
+MIT License (186)
 - rustybuzz@0.20.1 | https://github.com/harfbuzz/rustybuzz
 - uds_windows@1.2.1 | https://github.com/haraldh/rust_uds_windows
 - freetype-sys@0.20.1 | https://github.com/PistonDevelopers/freetype-sys.git
@@ -761,6 +763,8 @@ MIT License (184)
 - convert_case@0.10.0 | https://github.com/rutrum/convert-case
 - pwrroute-app@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-engine@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-os@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-router@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
 - xtask@0.0.1-alpha.0
 - base64-simd@0.8.0 | https://github.com/Nugine/simd
 - block2@0.6.2 | https://github.com/madsmtm/objc2
@@ -925,6 +929,12 @@ BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License (10)
 - sha1_smol@1.0.1 | https://github.com/mitsuhiko/sha1-smol
 - encoding_rs@0.8.42 | https://github.com/hsivonen/encoding_rs
 
+BSD Zero Clause License (4)
+- interprocess@2.4.6 | https://github.com/kotauskas/interprocess
+- recvmsg@1.0.0
+- doctest-file@1.1.1 | https://codeberg.org/Goat7658/doctest-file
+- adler2@2.0.1 | https://github.com/oyvindln/adler2
+
 zlib License (4)
 - zlib-rs@0.6.8 | https://github.com/trifectatechfoundation/zlib-rs
 - slotmap@1.1.1 | https://github.com/orlp/slotmap
@@ -939,9 +949,6 @@ Mozilla Public License 2.0 (2)
 - dwrote@0.11.5 | https://github.com/servo/dwrote-rs
 - option-ext@0.2.0 | https://github.com/soc/option-ext.git
 
-BSD Zero Clause License (1)
-- adler2@2.0.1 | https://github.com/oyvindln/adler2
-
 BSD 2-Clause &quot;Simplified&quot; License (1)
 - arrayref@0.3.9 | https://github.com/droundy/arrayref
 
@@ -953,6 +960,71 @@ bzip2 and libbzip2 License v1.0.6 (1)
 
 License Texts
 ~~~~~~~~~~~~~
+
+BSD Zero Clause License (0BSD)
+-----------------------------------------------------------
+
+Applies to:
+- interprocess@2.4.6
+
+BSD Zero Clause License
+
+Copyright (c) 2020-2026 Goat
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+
+BSD Zero Clause License (0BSD)
+-----------------------------------------------------------
+
+Applies to:
+- recvmsg@1.0.0
+
+BSD Zero Clause License
+
+Copyright (c) 2023 kotauskas
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+BSD Zero Clause License (0BSD)
+-----------------------------------------------------------
+
+Applies to:
+- doctest-file@1.1.1
+
+BSD Zero Clause License
+
+Copyright (c) 2024 kotauskas
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
 
 BSD Zero Clause License (0BSD)
 -----------------------------------------------------------
@@ -10599,6 +10671,7 @@ Applies to:
 - objc2-core-image@0.3.2
 - objc2-core-location@0.3.2
 - objc2-core-media@0.3.2
+- objc2-core-services@0.3.2
 - objc2-core-text@0.3.2
 - objc2-core-video@0.3.2
 - objc2-metal@0.3.2
@@ -10662,6 +10735,7 @@ Applies to:
 - wgpu-naga-bridge@29.0.4
 - wgpu-types@29.0.4
 - wgpu@29.0.4
+- widestring@1.2.1
 - zune-inflate@0.2.54
 
 Apache License
@@ -14746,6 +14820,8 @@ MIT License (MIT)
 Applies to:
 - pwrroute-app@0.0.1-alpha.0
 - pwrroute-engine@0.0.1-alpha.0
+- pwrroute-os@0.0.1-alpha.0
+- pwrroute-router@0.0.1-alpha.0
 - xtask@0.0.1-alpha.0
 - base64-simd@0.8.0
 - block2@0.6.2

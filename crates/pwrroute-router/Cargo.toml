@@ -1,0 +1,24 @@
+[package]
+name = "pwrroute-router"
+description = "PwrRoute's resident router: dispatch, the recent-dispatch buffer, single instance and IPC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+pwrroute-engine = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Unix domain sockets and Windows named pipes behind one safe API.
+interprocess = "2.4"
+url = "2.5"
+
+[dev-dependencies]
+tempfile = "3"

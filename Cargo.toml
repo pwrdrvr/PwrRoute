@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/pwrroute-app", "crates/pwrroute-engine", "xtask"]
+members = [
+    "crates/pwrroute-app",
+    "crates/pwrroute-engine",
+    "crates/pwrroute-os",
+    "crates/pwrroute-router",
+    "xtask",
+]
 
 [workspace.package]
 # The release version. `cargo xtask release-check` compares it with the tag
@@ -14,6 +20,8 @@ authors = ["PwrDrvr LLC"]
 
 [workspace.dependencies]
 pwrroute-engine = { path = "crates/pwrroute-engine" }
+pwrroute-os = { path = "crates/pwrroute-os" }
+pwrroute-router = { path = "crates/pwrroute-router" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
