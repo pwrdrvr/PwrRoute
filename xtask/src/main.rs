@@ -114,12 +114,11 @@ fn licenses(check: bool) -> Result<()> {
          \n\
          {bundled}\n{crates}"
     );
-    // Some crates ship CRLF license files; the notice is LF throughout.
-    let notice = notice.replace("\r\n", "\n").trim_end().to_owned() + "\n";
+    let notice = normalize(&notice);
     let path = root.join("THIRD_PARTY_LICENSES");
     if check {
-        // Compared without carriage returns: a Windows checkout may have them.
-        let current = read(&path)?.replace("\r\n", "\n");
+        // Normalized the same way, in case a checkout has CRLF.
+        let current = normalize(&read(&path)?);
         if current != notice {
             let fresh = root.join("target/THIRD_PARTY_LICENSES.generated");
             fs::create_dir_all(root.join("target"))?;
@@ -136,6 +135,12 @@ fn licenses(check: bool) -> Result<()> {
         println!("wrote {}", path.display());
     }
     Ok(())
+}
+
+/// LF line endings and exactly one trailing newline. Some crates ship CRLF
+/// license files, and a Windows checkout without .gitattributes would too.
+fn normalize(text: &str) -> String {
+    text.replace("\r\n", "\n").trim_end().to_owned() + "\n"
 }
 
 fn release_check(args: &[String]) -> Result<()> {
@@ -247,6 +252,14 @@ mod tests {
             Some("- Second.\n")
         );
         assert_eq!(changelog_section(CHANGELOG, "0.3.0"), None);
+    }
+
+    #[test]
+    fn notices_compare_equal_across_line_endings() {
+        let lf = "A\n\nB\n";
+        assert_eq!(normalize("A\r\n\r\nB\r\n"), lf);
+        assert_eq!(normalize("A\n\nB\n\n\n"), lf);
+        assert_eq!(normalize(lf), lf);
     }
 
     #[test]
