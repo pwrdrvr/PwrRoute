@@ -215,7 +215,9 @@ impl Env {
         }
         let from_var = |name: &str| self.var(name).map(PathBuf::from);
         // XDG base directories must be absolute; relative values are ignored.
-        let xdg_var = |name: &str| from_var(name).filter(|p| p.is_absolute());
+        // `has_root` too: a Linux fixture on a Windows host has `/cfg`, which
+        // Windows does not call absolute (no drive).
+        let xdg_var = |name: &str| from_var(name).filter(|p| p.is_absolute() || p.has_root());
         // No home directory (HOME unset) means no home-relative paths, rather
         // than paths relative to whatever the current directory is.
         let home = Some(self.home.clone()).filter(|h| !h.as_os_str().is_empty());
