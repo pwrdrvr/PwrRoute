@@ -28,3 +28,7 @@ targets = [
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 ignore-transitive-dependencies = false
+
+# Per-crate exceptions, mirroring deny.toml's [[licenses.exceptions]].
+[webpki-roots]
+accepted = ["CDLA-Permissive-2.0"]

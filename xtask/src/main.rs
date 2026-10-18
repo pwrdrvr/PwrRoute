@@ -22,8 +22,9 @@ usage: cargo xtask <task>
   release-check --tag vX.Y.Z [--notes-file PATH]
                        the tag, Cargo.toml version and CHANGELOG.md agree;
                        optionally write that version's notes
-  bundle [--universal] [--sign IDENTITY] [--notarize]
+  bundle [--universal] [--sign IDENTITY] [--notarize] [--app-only]
                        macOS: target/bundle/PwrRoute.app, its zip and DMG
+                       (--app-only: the app alone, for vpk pack)
   package-linux        Linux: target/package/*.tar.gz and *.deb";
 
 fn main() -> Result<()> {

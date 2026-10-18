@@ -17,6 +17,10 @@ workspace = true
 
 [dependencies]
 gpui-kit = { version = "=0.6.6", default-features = false, features = ["assets"] }
+# Installer and auto-updater. Pinned with `=` because the `vpk` CLI that
+# packs releases must be the same version: VPK_VERSION (and its SHA-512) in
+# scripts/release/install-vpk.sh. Upgrade them together.
+velopack = "=1.2.161"
 
 [dev-dependencies]
 # The window harness: lets the smoke test open a real window and draw a frame.
