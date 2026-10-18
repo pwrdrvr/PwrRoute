@@ -15,6 +15,13 @@ them. Edit licenses/bundled.txt when one changes.
   (crates/pwrroute-app/assets/fonts), converted to TTF/OTF from the
   @fontsource/geist-sans and @fontsource/geist-mono webfonts.
   SIL Open Font License 1.1 | https://github.com/vercel/geist-font
+- Velopack's native binaries, added to release packages by `vpk pack`
+  1.2.161: Update.exe, Setup.exe and the launcher stub (Windows), the MSI's
+  velopack_wix custom-action DLL, and UpdateMac (macOS). MIT, Copyright (c)
+  2021 Caelan Sayler, Copyright (c) 2024 Velopack Ltd.; the same license
+  text as the velopack crate listed below. | https://github.com/velopack/velopack
+  vpk's build-time tools (signtool, zstd, the WiX fork, mksquashfs) do not
+  ship.
 
 core-js@3.49.0 (MIT)
 -----------------------------------------------------------

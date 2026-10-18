@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout branch
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
@@ -69,7 +69,7 @@ jobs:
           retention-days: 14
 
   preview-windows:
-    name: Build preview zip (Windows x64)
+    name: Build preview Setup.exe and zip (Windows x64)
     # Same gate as the macOS preview above.
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -83,7 +83,7 @@ jobs:
       - run: git config --global core.autocrlf false
 
       - name: Checkout branch
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
@@ -114,10 +114,39 @@ jobs:
           Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES "dist/$name/"
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
 
+      - name: Install .NET for vpk
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install vpk
+        shell: bash
+        run: scripts/release/install-vpk.sh
+
+      # The script release.yml's windows-sign job runs, minus signing,
+      # release notes and deltas.
+      - name: Pack unsigned Setup.exe and MSI
+        shell: pwsh
+        env:
+          PREVIEW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Force vpk-input | Out-Null
+          Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES vpk-input/
+          ./scripts/release/vpk-pack-windows.ps1 -Version $env:PREVIEW_VERSION -PackDir vpk-input -OutputDir releases
+          Get-ChildItem releases | Format-Table Name, Length
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $portable = [IO.Compression.ZipFile]::OpenRead((Resolve-Path releases/PwrRoute-win-Portable.zip).Path)
+          $portable.Entries | Format-Table FullName, Length
+          $portable.Dispose()
+          Copy-Item releases/PwrRoute-win-Setup.exe, releases/PwrRoute-win.msi dist/ -ErrorAction Stop
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
         with:
           name: PwrRoute-${{ steps.version.outputs.version }}-preview-windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/*.msi
           if-no-files-found: error
           retention-days: 14

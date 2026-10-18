@@ -5,6 +5,8 @@
 
 use gpui_kit::{App, KeyBinding, Menu, MenuItem, SystemMenuType};
 
+use crate::updater;
+
 pub use menu_actions::*;
 
 #[allow(
@@ -27,6 +29,8 @@ mod menu_actions {
             ShowAll,
             /// Close the focused window.
             CloseWindow,
+            /// Check GitHub Releases for a newer PwrRoute and download it.
+            CheckForUpdates,
         ]
     );
 }
@@ -34,6 +38,11 @@ mod menu_actions {
 /// Install the menus and shortcuts.
 pub fn install(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| cx.quit());
+    // Registered on every platform so other surfaces can dispatch it; only
+    // the macOS menu bar shows it today.
+    cx.on_action(|_: &CheckForUpdates, _| {
+        updater::check_in_background(updater::Trigger::Menu);
+    });
     cx.on_action(|_: &CloseWindow, cx| {
         if let Some(window) = cx.active_window() {
             let _ = window.update(cx, |_, window, _| window.remove_window());
@@ -57,6 +66,8 @@ pub fn install(cx: &mut App) {
     ]);
     cx.set_menus([
         Menu::new("PwrRoute").items([
+            MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
             MenuItem::action("Hide PwrRoute", Hide),

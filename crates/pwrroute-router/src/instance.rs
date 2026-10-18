@@ -15,6 +15,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -174,9 +175,24 @@ impl Primary {
     }
 }
 
+/// Socket timeouts where the OS has them. Windows named pipes do not, so
+/// there a stalled peer holds only its own connection thread, and the client
+/// bounds its wait itself (see [`Client::send`]).
+fn set_io_timeouts(conn: &Stream) -> io::Result<()> {
+    for set in [
+        conn.set_recv_timeout(Some(IO_TIMEOUT)),
+        conn.set_send_timeout(Some(IO_TIMEOUT)),
+    ] {
+        match set {
+            Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
+            other => other?,
+        }
+    }
+    Ok(())
+}
+
 fn answer(conn: Stream, handler: &dyn Fn(Request) -> Response) {
-    let _ = conn.set_recv_timeout(Some(IO_TIMEOUT));
-    let _ = conn.set_send_timeout(Some(IO_TIMEOUT));
+    let _ = set_io_timeouts(&conn);
     let mut conn = BufReader::new(conn);
     let response = match ipc::read_message::<Request>(&mut conn) {
         Ok(request) => handler(request),
@@ -229,7 +245,8 @@ impl Client {
 
     /// Sends one request and reads the answer, retrying the connection until
     /// `timeout` passes: the router holds the lock a moment before it
-    /// listens.
+    /// listens. Once connected, the exchange gets [`IO_TIMEOUT`]; a router
+    /// that accepts but never answers is an error of kind `TimedOut`.
     pub fn send(&self, request: &Request, timeout: Duration) -> io::Result<Response> {
         let deadline = Instant::now() + timeout;
         let conn = loop {
@@ -242,11 +259,28 @@ impl Client {
                 Err(_) => thread::sleep(Duration::from_millis(25)),
             }
         };
-        conn.set_recv_timeout(Some(IO_TIMEOUT))?;
-        conn.set_send_timeout(Some(IO_TIMEOUT))?;
-        let mut conn = BufReader::new(conn);
-        ipc::write_message(conn.get_mut(), request)?;
-        ipc::read_message(&mut conn)
+        set_io_timeouts(&conn)?;
+        // On a thread with a deadline, because a named pipe cannot time out
+        // its own reads. A stuck exchange leaves its thread to the process
+        // exit, which a forwarding launch reaches right after.
+        let (tx, rx) = mpsc::channel();
+        let request = request.clone();
+        thread::Builder::new()
+            .name("pwrroute-ipc-send".into())
+            .spawn(move || {
+                let mut conn = BufReader::new(conn);
+                let result = ipc::write_message(conn.get_mut(), &request)
+                    .and_then(|()| ipc::read_message(&mut conn));
+                let _ = tx.send(result);
+            })?;
+        let timed_out =
+            || io::Error::new(io::ErrorKind::TimedOut, "the router did not answer in time");
+        match rx.recv_timeout(IO_TIMEOUT) {
+            // A Unix socket's own timeout reports `WouldBlock`.
+            Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => Err(timed_out()),
+            Ok(result) => result,
+            Err(_) => Err(timed_out()),
+        }
     }
 
     /// Forwards links to the router. Fails unless the router accepted them.
@@ -266,8 +300,6 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
     use super::*;
     use crate::link::Source;
 
@@ -334,6 +366,26 @@ mod tests {
                 .is_err()
         );
         assert!(matches!(claim(&endpoint).unwrap(), Claim::Primary(_)));
+    }
+
+    #[test]
+    fn a_router_that_never_answers_times_out() {
+        let (_dir, endpoint) = endpoint();
+        let Claim::Primary(primary) = claim(&endpoint).unwrap() else {
+            panic!("first claim should be primary");
+        };
+        let _server = primary
+            .serve(|_| {
+                thread::sleep(IO_TIMEOUT * 3);
+                Response::ok()
+            })
+            .unwrap();
+        let started = Instant::now();
+        let err = Client::new(endpoint)
+            .send(&Request::Ping, Duration::from_secs(2))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < IO_TIMEOUT * 2);
     }
 
     #[test]
