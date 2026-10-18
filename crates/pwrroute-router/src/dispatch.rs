@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::Result;
-use pwrroute_engine::{AppType, Browser, Engine, Opener};
+use pwrroute_engine::{AppType, Browser, Engine, Opener, Source, Stage, Step as TraceStep, Trace};
 
 use crate::{
     ipc::{Request, Response},
@@ -54,15 +54,37 @@ pub struct Resolved {
 
 impl Resolver for Engine {
     fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved> {
-        // The engine reports the destination, not the rules that chose it, so
-        // the router derives the trace from the result.
-        let resolution = Engine::resolve(self, url, opener)?;
+        let trace = self.trace(&pwrroute_engine::Link::new(url), opener)?;
         Ok(Resolved {
-            browser: resolution.browser,
-            error: resolution.error,
-            rule_steps: Vec::new(),
+            rule_steps: rule_steps(&trace),
+            browser: trace.resolution.browser,
+            error: trace.resolution.error,
         })
     }
+}
+
+/// The router's rule steps from the engine's trace: each rewrite that ran,
+/// then what chose the browser. Rule numbers index the config's own lists;
+/// `rules.json` entries, which follow them, are traced without a number
+/// (`Step` cannot say which list a number belongs to).
+fn rule_steps(trace: &Trace) -> Vec<Step> {
+    let numbered = |s: &TraceStep| (s.source == Source::Config).then_some(s.index);
+    let mut steps: Vec<Step> = trace
+        .rewrites_applied()
+        .filter_map(|s| {
+            Some(Step::Rewrite {
+                rule: numbered(s),
+                url: s.rewritten_to.clone()?,
+            })
+        })
+        .collect();
+    let by = match trace.winner() {
+        Some(s) if s.stage == Stage::Default => Matched::Default,
+        Some(s) => numbered(s).map_or(Matched::Unreported, |index| Matched::Handler { index }),
+        None => Matched::Unreported,
+    };
+    steps.push(Step::Matched { by });
+    steps
 }
 
 /// Builds the resolver on the dispatch thread. An error leaves the router on
