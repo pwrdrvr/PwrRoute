@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened runtime with no exceptions: the signEntitlements option of
+     `vpk pack` in release.yml. Without it vpk applies its .NET default, which allows
+     JIT, unsigned executable memory and DYLD_* variables and turns off
+     library validation. PwrRoute needs none of them. -->
+<plist version="1.0">
+<dict/>
+</plist>

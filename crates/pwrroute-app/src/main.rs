@@ -12,6 +12,8 @@
 mod app;
 mod app_menu;
 mod assets;
+#[cfg(target_os = "windows")]
+mod browser_registration;
 mod chrome;
 mod editor;
 mod fixtures;
@@ -20,6 +22,7 @@ mod rules_view;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod updater;
 mod widgets;
 
 use std::{
@@ -80,6 +83,9 @@ struct ResidentRouter(#[allow(dead_code, reason = "held for its Drop")] Resident
 impl Global for ResidentRouter {}
 
 fn main() {
+    // First: Velopack's install, update and uninstall hooks run here and
+    // exit, before this process could take the router lock.
+    updater::run_startup_hooks();
     let args = router::Args::from_env();
     let resident = match router::start(&args) {
         router::Start::Exit => return,
@@ -115,6 +121,7 @@ fn main() {
     app.run(move |cx| {
         assets::load_fonts(cx);
         app_menu::install(cx);
+        updater::check_in_background(updater::Trigger::Startup);
 
         let activate = resident.activate.clone();
         cx.spawn(async move |cx| {
