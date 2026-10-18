@@ -163,6 +163,25 @@ impl Catalog {
         })
     }
 
+    /// The entry with this macOS bundle id (or an alias, which is how older
+    /// bundle ids are listed). Unlike [`Catalog::find`], a display name or
+    /// another platform's id does not match.
+    pub fn find_bundle_id(&self, bundle_id: &str) -> Option<&BrowserInfo> {
+        let eq = |s: &str| s.eq_ignore_ascii_case(bundle_id);
+        self.browsers
+            .iter()
+            .find(|b| {
+                b.macos
+                    .as_ref()
+                    .is_some_and(|m| m.bundle_id.as_deref().is_some_and(eq))
+            })
+            .or_else(|| {
+                self.browsers
+                    .iter()
+                    .find(|b| b.macos.is_some() && b.aliases.iter().any(|a| eq(a)))
+            })
+    }
+
     /// The entry an app path belongs to on `platform`: a `.app` bundle by
     /// its name, a Windows executable by its install path, or a Linux
     /// executable or desktop file by its file name.

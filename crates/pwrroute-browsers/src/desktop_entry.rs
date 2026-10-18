@@ -14,12 +14,15 @@ pub(crate) struct DesktopEntry {
     pub mime_types: Vec<String>,
     /// `Hidden=true`: the entry is deleted, as far as the user is concerned.
     pub hidden: bool,
+    /// `TryExec`: a program that must exist for the entry to be usable.
+    pub try_exec: Option<String>,
 }
 
 impl DesktopEntry {
     pub fn parse(text: &str) -> Option<Self> {
         let mut in_main = false;
         let (mut name, mut exec, mut mime, mut hidden, mut kind) = (None, None, "", false, "");
+        let mut try_exec = None;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('[') {
@@ -37,6 +40,7 @@ impl DesktopEntry {
                 "Exec" => exec = Some(value.trim()),
                 "MimeType" => mime = value.trim(),
                 "Hidden" => hidden = value.trim() == "true",
+                "TryExec" => try_exec = Some(unescape_string(value.trim())),
                 "Type" => kind = value.trim(),
                 _ => {}
             }
@@ -53,7 +57,22 @@ impl DesktopEntry {
                 .map(str::to_owned)
                 .collect(),
             hidden,
+            try_exec,
         })
+    }
+
+    /// Not hidden, and its `TryExec` program (if any) exists. The spec says
+    /// an entry whose `TryExec` is missing should be ignored: it is what an
+    /// uninstalled package or a stale per-user copy leaves behind.
+    pub fn usable(&self, env: &Env) -> bool {
+        !self.hidden
+            && self.try_exec.as_deref().is_none_or(|t| {
+                if t.starts_with('/') {
+                    env.system_path(t).is_file()
+                } else {
+                    env.which(t).is_some()
+                }
+            })
     }
 
     /// Registers for `https:` links.
@@ -99,7 +118,7 @@ pub(crate) fn find(env: &Env, id: &str) -> Option<(PathBuf, DesktopEntry)> {
     application_dirs(env).into_iter().find_map(|dir| {
         let path = dir.join(&id);
         let entry = DesktopEntry::parse(&std::fs::read_to_string(&path).ok()?)?;
-        (!entry.hidden).then_some((path, entry))
+        entry.usable(env).then_some((path, entry))
     })
 }
 
@@ -253,5 +272,25 @@ mod tests {
         );
         assert!(e.handles_https());
         assert!(DesktopEntry::parse("[Desktop Entry]\nType=Link\nName=x\nExec=y\n").is_none());
+    }
+
+    #[test]
+    fn try_exec_must_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Env::fixture(crate::Platform::Linux, dir.path());
+        let entry = |try_exec: &str| {
+            DesktopEntry::parse(&format!(
+                "[Desktop Entry]\nType=Application\nName=x\nExec=x %u\nTryExec={try_exec}\n"
+            ))
+            .unwrap()
+        };
+        assert!(!entry("gone-browser").usable(&env));
+        assert!(!entry("/usr/bin/gone-browser").usable(&env));
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::write(dir.path().join("bin/here-browser"), "").unwrap();
+        assert!(entry("here-browser").usable(&env));
+        std::fs::create_dir_all(dir.path().join("usr/bin")).unwrap();
+        std::fs::write(dir.path().join("usr/bin/abs-browser"), "").unwrap();
+        assert!(entry("/usr/bin/abs-browser").usable(&env));
     }
 }

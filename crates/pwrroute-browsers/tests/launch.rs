@@ -375,6 +375,24 @@ fn linux_falls_back_to_path_and_desktop_ids() {
 }
 
 #[test]
+fn linux_skips_desktop_entries_whose_program_is_gone() {
+    let fx = Fixture::new(Platform::Linux);
+    fx.write(
+        "home/.local/share/applications/chromium.desktop",
+        "[Desktop Entry]\nType=Application\nName=Chromium\n\
+         Exec=chromium %U\nTryExec=chromium\n",
+    );
+    fx.write(
+        "var/lib/flatpak/exports/share/applications/org.chromium.Chromium.desktop",
+        "[Desktop Entry]\nType=Application\nName=Chromium\n\
+         Exec=/usr/bin/flatpak run org.chromium.Chromium @@u %U @@\n",
+    );
+    let p = plan(&fx, &browser("Chromium", AppType::AppName));
+    assert_eq!(p.program, PathBuf::from("/usr/bin/flatpak"));
+    assert_eq!(p.args, strings(&["run", "org.chromium.Chromium", URL]));
+}
+
+#[test]
 fn command_line_quotes_for_reading() {
     let fx = Fixture::new(Platform::MacOs);
     let mut b = browser("Google Chrome", AppType::AppName);

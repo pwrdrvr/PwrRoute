@@ -165,6 +165,14 @@ fn linux_desktop_entries_and_path() {
             https,
         ),
     );
+    // ...and not brought back by the PATH fallback.
+    fx.write("bin/vivaldi-stable", "");
+    // A stale copy whose TryExec program is gone.
+    fx.write(
+        "home/.local/share/applications/google-chrome.desktop",
+        "[Desktop Entry]\nType=Application\nName=Google Chrome\n\
+         Exec=/usr/bin/google-chrome-stable %U\nTryExec=google-chrome-stable\n",
+    );
     // On PATH only.
     fx.write("bin/chromium", "");
 

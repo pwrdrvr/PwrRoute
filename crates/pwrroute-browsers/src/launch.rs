@@ -140,8 +140,9 @@ impl Plan {
         std::iter::once(self.program.to_string_lossy().into_owned())
             .chain(self.args.iter().cloned())
             .map(|a| {
+                // Not `{a:?}`: Debug doubles a Windows path's backslashes.
                 if a.is_empty() || a.contains([' ', '"', '\'', '\t']) {
-                    format!("{a:?}")
+                    format!("\"{}\"", a.replace('"', "\\\""))
                 } else {
                     a
                 }
@@ -490,6 +491,24 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn command_line_keeps_backslashes() {
+        let plan = Plan {
+            program: PathBuf::from(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            args: vec![
+                "--profile-directory=Profile 1".into(),
+                r#"say "hi""#.into(),
+                "ü".into(),
+            ],
+            notes: Vec::new(),
+            platform: Platform::Windows,
+        };
+        assert_eq!(
+            plan.command_line(),
+            r#""C:\Program Files\Google\Chrome\Application\chrome.exe" "--profile-directory=Profile 1" "say \"hi\"" ü"#
+        );
     }
 
     #[test]

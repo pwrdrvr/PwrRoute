@@ -100,6 +100,27 @@ fn every_identifier_finds_its_own_entry() {
 }
 
 #[test]
+fn bundle_ids_find_only_macos_entries() {
+    for b in catalog().browsers() {
+        if let Some(id) = b.macos.as_ref().and_then(|m| m.bundle_id.as_deref()) {
+            let found = catalog().find_bundle_id(id).map(|f| f.id.as_str());
+            assert_eq!(found, Some(b.id.as_str()), "{id}");
+        }
+    }
+    // Names and other platforms' ids are not bundle ids.
+    for name in [
+        "Google Chrome",
+        "chrome",
+        "ChromeHTML",
+        "google-chrome.desktop",
+    ] {
+        assert!(catalog().find_bundle_id(name).is_none(), "{name}");
+    }
+    let old = catalog().find_bundle_id("io.gitlab.librewolf-community.librewolf");
+    assert_eq!(old.map(|b| b.id.as_str()), Some("librewolf"));
+}
+
+#[test]
 fn paths_find_their_own_entry() {
     let env = Env::fixture(Platform::Windows, "/fixture");
     for b in catalog().browsers() {

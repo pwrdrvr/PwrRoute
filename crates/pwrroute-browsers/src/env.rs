@@ -48,7 +48,11 @@ impl Env {
     /// process environment and, on Windows, the registry.
     pub fn system() -> Self {
         let platform = Platform::current();
-        let vars: HashMap<String, String> = std::env::vars().collect();
+        // Not std::env::vars(): it panics on a variable that is not UTF-8.
+        // Such variables are skipped; none this crate reads is ever one.
+        let vars: Vec<(String, String)> = std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect();
         let home_var = if platform == Platform::Windows {
             "USERPROFILE"
         } else {
@@ -210,16 +214,21 @@ impl Env {
             return None;
         }
         let from_var = |name: &str| self.var(name).map(PathBuf::from);
+        // XDG base directories must be absolute; relative values are ignored.
+        let xdg_var = |name: &str| from_var(name).filter(|p| p.is_absolute());
+        // No home directory (HOME unset) means no home-relative paths, rather
+        // than paths relative to whatever the current directory is.
+        let home = Some(self.home.clone()).filter(|h| !h.as_os_str().is_empty());
         match token {
-            "home" => Some(self.home.clone()),
-            "app_support" => Some(self.home.join("Library").join("Application Support")),
+            "home" => home,
+            "app_support" => home.map(|h| h.join("Library").join("Application Support")),
             "appdata" => from_var("APPDATA"),
             "localappdata" => from_var("LOCALAPPDATA"),
             "programfiles" => from_var("PROGRAMFILES"),
             "programfiles_x86" => from_var("PROGRAMFILES(X86)"),
-            "xdg_config" => from_var("XDG_CONFIG_HOME").or_else(|| Some(self.home.join(".config"))),
+            "xdg_config" => xdg_var("XDG_CONFIG_HOME").or_else(|| home.map(|h| h.join(".config"))),
             "xdg_data" => {
-                from_var("XDG_DATA_HOME").or_else(|| Some(self.home.join(".local").join("share")))
+                xdg_var("XDG_DATA_HOME").or_else(|| home.map(|h| h.join(".local").join("share")))
             }
             _ => None,
         }
@@ -283,6 +292,19 @@ mod tests {
             env.expand("{xdg_config}/chromium"),
             Some(PathBuf::from("/cfg/chromium"))
         );
+        env.set_var("XDG_CONFIG_HOME", "relative/cfg".into());
+        assert_eq!(
+            env.expand("{xdg_config}/chromium"),
+            Some(PathBuf::from("/r/home/.config/chromium"))
+        );
+    }
+
+    #[test]
+    fn no_home_means_no_home_paths() {
+        let mut env = Env::fixture(Platform::MacOs, "/r");
+        env.home = PathBuf::new();
+        assert_eq!(env.expand("{app_support}/Google/Chrome"), None);
+        assert_eq!(env.expand("{home}/x"), None);
     }
 
     #[test]

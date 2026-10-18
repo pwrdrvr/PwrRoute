@@ -27,10 +27,10 @@ fork of Finicky, Go + Electron) is reference only; Go and Electron are gone.
 
 Code derived from Finicky (its configuration API in
 `crates/pwrroute-engine/assets`, its `browsers.json` and launcher in
-`crates/pwrroute-browsers`, and anything later ported from its resolver) is MIT, Copyright (c) 2015-2025 John Sterling. Its notice is in
-`LICENSE`; keep it there, and keep any per-file copyright headers. Finicky's
-name and icon are not PwrRoute branding; the icon is by @uetchy and is not
-ours to reuse.
+`crates/pwrroute-browsers`, and anything later ported from its resolver) is
+MIT, Copyright (c) 2015-2025 John Sterling. Its notice is in `LICENSE`; keep
+it there, and keep any per-file copyright headers. Finicky's name and icon are
+not PwrRoute branding; the icon is by @uetchy and is not ours to reuse.
 
 ## Set up a checkout
 

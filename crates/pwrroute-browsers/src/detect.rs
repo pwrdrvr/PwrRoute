@@ -101,10 +101,7 @@ pub(crate) fn macos_app(catalog: &'static Catalog, app: &Path) -> Option<Install
             if id.as_deref().is_some_and(is_router) {
                 return None;
             }
-            let browser = id
-                .as_deref()
-                .and_then(|id| catalog.find(id))
-                .filter(|b| b.macos.is_some());
+            let browser = id.as_deref().and_then(|id| catalog.find_bundle_id(id));
             if browser.is_none() && !info.is_likely_browser() {
                 return None;
             }
@@ -183,6 +180,9 @@ pub(crate) fn windows_exe(env: &Env, b: &BrowserInfo) -> Option<PathBuf> {
 fn linux(env: &Env, catalog: &'static Catalog) -> Vec<InstalledBrowser> {
     let mut found: Vec<InstalledBrowser> = Vec::new();
     let mut ids = std::collections::HashSet::new();
+    // Catalog browsers whose desktop entry is hidden or unusable: the PATH
+    // fallback below must not bring them back.
+    let mut unusable = std::collections::HashSet::new();
     for dir in desktop_entry::application_dirs(env) {
         for path in sorted_entries(&dir, "desktop") {
             let Some(id) = desktop_entry::id_of(&path).map(str::to_owned) else {
@@ -201,7 +201,11 @@ fn linux(env: &Env, catalog: &'static Catalog) -> Vec<InstalledBrowser> {
             let browser = catalog
                 .find_by_path(Platform::Linux, &path)
                 .or_else(|| exec_browser(catalog, &entry));
-            if entry.hidden || (browser.is_none() && !entry.handles_https()) {
+            if !entry.usable(env) {
+                unusable.extend(browser.map(|b| b.id.as_str()));
+                continue;
+            }
+            if browser.is_none() && !entry.handles_https() {
                 continue;
             }
             found.push(InstalledBrowser {
@@ -213,9 +217,10 @@ fn linux(env: &Env, catalog: &'static Catalog) -> Vec<InstalledBrowser> {
         }
     }
     for b in catalog.browsers() {
-        if found
-            .iter()
-            .any(|f| f.browser.is_some_and(|f| f.id == b.id))
+        if unusable.contains(b.id.as_str())
+            || found
+                .iter()
+                .any(|f| f.browser.is_some_and(|f| f.id == b.id))
         {
             continue;
         }

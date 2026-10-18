@@ -25,12 +25,12 @@ SOFTWARE.
 Finicky
 
 Portions of PwrRoute are derived from Finicky
-(https://github.com/johnste/finicky): Finicky's configuration API, embedded
-as crates/pwrroute-engine/assets/finickyConfigAPI.js; the test configs
-taken from Finicky's examples; and Finicky's browsers.json and launcher, the
-basis of crates/pwrroute-browsers (its data/browsers.json, the copy in
-tests/fixtures/finicky-browsers.json, and its profile and launch code). Those portions are used under the following
-license:
+(https://github.com/johnste/finicky): Finicky's configuration API, embedded as
+crates/pwrroute-engine/assets/finickyConfigAPI.js; the test configs taken from
+Finicky's examples; and Finicky's browsers.json and launcher, the basis of
+crates/pwrroute-browsers (its data/browsers.json, the copy in
+tests/fixtures/finicky-browsers.json, and its profile and launch code). Those
+portions are used under the following license:
 
 The MIT License (MIT)
 
