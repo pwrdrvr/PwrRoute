@@ -1,0 +1,28 @@
+Dependency Summary
+~~~~~~~~~~~~~~~~~~
+{{#each overview}}
+
+{{name}} ({{count}})
+{{#each indices}}
+{{#with (lookup ../../licenses this)}}
+{{#each used_by}}
+- {{crate.name}}@{{crate.version}}{{#if crate.repository}} | {{crate.repository}}{{/if}}
+{{/each}}
+{{/with}}
+{{/each}}
+{{/each}}
+
+License Texts
+~~~~~~~~~~~~~
+{{#each licenses}}
+
+{{name}} ({{id}})
+-----------------------------------------------------------
+
+Applies to:
+{{#each used_by}}
+- {{crate.name}}@{{crate.version}}
+{{/each}}
+
+{{{text}}}
+{{/each}}
