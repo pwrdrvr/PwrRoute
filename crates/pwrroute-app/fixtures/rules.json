@@ -1,0 +1,53 @@
+{
+  "defaultBrowser": "Google Chrome",
+  "defaultProfile": "Personal",
+  "rewrites": [
+    {
+      "match": ["x.com/*", "twitter.com/*"],
+      "actions": [{ "setHost": "xcancel.com" }]
+    },
+    {
+      "match": "*",
+      "actions": [{ "dropQuery": ["utm_*", "fbclid"] }]
+    },
+    {
+      "match": "http://*.internal/*",
+      "actions": [{ "setScheme": "https" }]
+    }
+  ],
+  "rules": [
+    {
+      "match": ["meet.google.com/*", "*.google.com/*"],
+      "browser": "Google Chrome",
+      "profile": "Work"
+    },
+    {
+      "match": ["*.atlassian.net/*", "github.com/pwrdrvr/*"],
+      "browser": "Google Chrome",
+      "profile": "Work"
+    },
+    {
+      "match": "*",
+      "browser": "Firefox",
+      "profile": "default-release",
+      "opener": ["com.tinyspeck.slackmacgap"]
+    },
+    {
+      "match": ["bsky.app/*", "*.reddit.com/*", "news.ycombinator.com/*"],
+      "browser": "Firefox"
+    },
+    {
+      "match": ["localhost:*", "127.0.0.1:*", "*.localhost/*"],
+      "browser": "Arc"
+    },
+    {
+      "match": ["zoom.us/j/*", "*.zoom.us/j/*"],
+      "browser": "us.zoom.xos"
+    },
+    {
+      "match": "figma.com/*",
+      "browser": "com.figma.Desktop",
+      "enabled": false
+    }
+  ]
+}

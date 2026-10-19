@@ -4,6 +4,7 @@ members = [
     "crates/pwrroute-app",
     "crates/pwrroute-browsers",
     "crates/pwrroute-engine",
+    "crates/pwrroute-mcp",
     "crates/pwrroute-os",
     "crates/pwrroute-router",
     "xtask",

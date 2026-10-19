@@ -1,0 +1,200 @@
+//! The in-app approval step. The first time a client name connects, the app
+//! shows PwrRoute's approval window and the person picks a role or denies.
+//! The answer is remembered per name in [`Agents`]; nothing an agent sends
+//! can approve.
+
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+use rmcp::model::Implementation;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    agents::{Agents, clean_name},
+    roles::Role,
+};
+
+/// How long a prompt may stay open before it counts as a denial.
+pub(crate) const PROMPT_TTL: Duration = Duration::from_secs(5 * 60);
+/// Approval windows open at once, one per client name. More are denied.
+const MAX_PROMPTS: usize = 8;
+
+/// What the approval window shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequest {
+    /// Identifies this prompt; [`Approver::cancel`] names it.
+    pub id: String,
+    /// The `clientInfo.name` the agent sent, which approvals are filed
+    /// under. Self-reported: the window should say so.
+    pub client_name: String,
+    /// The client's display title, when it sent one.
+    pub client_title: Option<String>,
+    pub client_version: String,
+    /// The roles to choose from.
+    pub roles: Vec<Role>,
+}
+
+/// The person's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "decision")]
+pub enum ApprovalDecision {
+    Approve { role: Role },
+    Deny,
+}
+
+/// The app's side of approval. The app implements it by showing its
+/// window; tests use [`crate::fake::FakeApprover`].
+pub trait Approver: Send + Sync + 'static {
+    /// Shows the prompt and returns at once. The app answers later, from
+    /// any thread, through `reply`. Dropping `reply` unanswered denies.
+    fn request(&self, request: ApprovalRequest, reply: ApprovalReply);
+
+    /// The prompt expired or the server stopped: close its window. A late
+    /// answer through its reply is ignored.
+    fn cancel(&self, id: &str) {
+        let _ = id;
+    }
+}
+
+/// Answers one approval prompt.
+#[derive(Debug)]
+pub struct ApprovalReply(oneshot::Sender<ApprovalDecision>);
+
+impl ApprovalReply {
+    pub fn approve(self, role: Role) {
+        self.send(ApprovalDecision::Approve { role });
+    }
+
+    pub fn deny(self) {
+        self.send(ApprovalDecision::Deny);
+    }
+
+    pub fn send(self, decision: ApprovalDecision) {
+        // The prompt may have expired; there is no one to tell then.
+        let _ = self.0.send(decision);
+    }
+
+    /// Whether the prompt still waits for an answer.
+    #[must_use]
+    pub fn is_pending(&self) -> bool {
+        !self.0.is_closed()
+    }
+}
+
+/// The current answer for a client name: `None` while the window is up.
+pub(crate) type Answer = watch::Receiver<Option<ApprovalDecision>>;
+
+/// Raises at most one prompt per client name and shares its answer with
+/// every connection waiting on it.
+pub(crate) struct Approvals {
+    approver: Arc<dyn Approver>,
+    agents: Agents,
+    pending: Mutex<HashMap<String, Answer>>,
+    next_id: AtomicU64,
+    closed: CancellationToken,
+}
+
+impl Approvals {
+    pub(crate) fn new(approver: Arc<dyn Approver>, agents: Agents) -> Self {
+        Self {
+            approver,
+            agents,
+            pending: Mutex::default(),
+            next_id: AtomicU64::new(1),
+            closed: CancellationToken::new(),
+        }
+    }
+
+    /// The answer for `client`, asking the person if no prompt for its name
+    /// is up yet. `None` when no prompt can be raised: too many are open,
+    /// or the server is stopping. Nobody was asked then, so it is not a
+    /// denial.
+    pub(crate) fn ask(self: &Arc<Self>, client: &Implementation) -> Option<Answer> {
+        let name = clean_name(&client.name);
+        let (tx, rx) = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // A prompt answered a moment ago is not this connection's.
+            if let Some(answer) = pending.get(&name)
+                && answer.borrow().is_none()
+            {
+                return Some(answer.clone());
+            }
+            pending.remove(&name);
+            if pending.len() >= MAX_PROMPTS || self.closed.is_cancelled() {
+                return None;
+            }
+            let (tx, rx) = watch::channel(None);
+            pending.insert(name.clone(), rx.clone());
+            (tx, rx)
+        };
+
+        let id = format!("approval-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        let (reply, answer) = oneshot::channel();
+        self.approver.request(
+            ApprovalRequest {
+                id: id.clone(),
+                client_name: name.clone(),
+                client_title: client.title.clone(),
+                client_version: client.version.clone(),
+                roles: Role::ALL.to_vec(),
+            },
+            ApprovalReply(reply),
+        );
+
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let decision = tokio::select! {
+                answer = tokio::time::timeout(PROMPT_TTL, answer) => match answer {
+                    Ok(Ok(decision)) => Some(decision),
+                    // The app dropped the reply: a denial.
+                    Ok(Err(_)) => Some(ApprovalDecision::Deny),
+                    Err(_) => None,
+                },
+                () = this.closed.cancelled() => None,
+            };
+            let decision = match decision {
+                Some(ApprovalDecision::Approve { role }) => match this.agents.allow(&name, role) {
+                    Ok(()) => ApprovalDecision::Approve { role },
+                    // Not recorded means not approved.
+                    Err(_) => ApprovalDecision::Deny,
+                },
+                Some(ApprovalDecision::Deny) => ApprovalDecision::Deny,
+                None => {
+                    this.approver.cancel(&id);
+                    ApprovalDecision::Deny
+                }
+            };
+            // Answer the waiters, then drop the prompt unless a newer one
+            // for the name has taken its place.
+            let _ = tx.send(Some(decision));
+            let mut pending = this
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending
+                .get(&name)
+                .is_some_and(|a| a.same_channel(&tx.subscribe()))
+            {
+                pending.remove(&name);
+            }
+        });
+        Some(rx)
+    }
+
+    /// Closes every open prompt, as a denial.
+    pub(crate) fn close(&self) {
+        self.closed.cancel();
+    }
+}
