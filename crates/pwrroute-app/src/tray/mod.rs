@@ -22,6 +22,7 @@ use gpui_kit::{App, AppContext as _, Entity, Global, WindowHandle};
 use self::dropdown::Dropdown;
 use self::model::TrayModel;
 use self::native::{NativeTray, TrayEvent};
+use crate::app::{PwrRoute, Screen};
 
 /// What a tray row or menu item does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,23 +227,34 @@ fn dropdown_closed(cx: &mut App) {
 
 /// Do what a row or menu item says.
 ///
-/// Test a link, Activity, Settings and About open the main window for now:
-/// those screens and the Settings window land separately, and each gets its
-/// own line here when it does.
+/// Settings and About open the main window for now: the Settings window
+/// lands separately and gets its own line here when it does.
 pub fn run(command: TrayCommand, cx: &mut App) {
     match command {
-        TrayCommand::OpenMain
-        | TrayCommand::Rules
-        | TrayCommand::TestLink
-        | TrayCommand::Activity
-        | TrayCommand::Settings
-        | TrayCommand::About => crate::show_main_window(cx),
+        TrayCommand::OpenMain | TrayCommand::Settings | TrayCommand::About => {
+            crate::show_main_window(cx);
+        }
+        TrayCommand::Rules => show_screen(Screen::Rules, cx),
+        TrayCommand::TestLink => show_screen(Screen::TestLink, cx),
+        TrayCommand::Activity => show_screen(Screen::Activity, cx),
         TrayCommand::TogglePause => {
             if let Some(model) = model(cx) {
                 toggle_pause(&model, cx);
             }
         }
         TrayCommand::Quit => cx.quit(),
+    }
+}
+
+/// Bring the main window forward, opening it if need be, on `screen`.
+fn show_screen(screen: Screen, cx: &mut App) {
+    crate::show_main_window(cx);
+    let main = cx
+        .windows()
+        .iter()
+        .find_map(|window| window.downcast::<PwrRoute>());
+    if let Some(main) = main {
+        let _ = main.update(cx, |app, window, cx| app.navigate(screen, window, cx));
     }
 }
 
