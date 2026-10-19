@@ -2,32 +2,40 @@
 //! switches. Each mirrors one class in `design/pwrroute.css`.
 
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{Div, Hsla, ParentElement as _, Styled as _, div, px};
+use gpui_kit::{Div, Hsla, ParentElement as _, SharedString, Styled as _, div, px};
 
 use crate::theme::{self, icon, mono, text};
 
 /// `.tag`: a mono chip for a pattern or identifier.
-pub fn tag(label: &'static str) -> Div {
+pub fn tag(label: impl Into<SharedString>) -> Div {
     tag_frame().child(mono(label, 10.5, 500.0, theme::text_secondary()))
 }
 
 /// `.tag.re`: a regex pattern.
-pub fn regex_tag(label: &'static str) -> Div {
+pub fn regex_tag(label: impl Into<SharedString>) -> Div {
     tag_frame()
         .bg(theme::info_soft())
         .border_color(theme::transparent())
         .child(mono(label, 10.5, 500.0, theme::info_text()))
 }
 
+/// `.tag.fn`: a JS function matcher or transformer.
+pub fn fn_tag() -> Div {
+    tag_frame()
+        .bg(theme::accent_soft())
+        .border_color(theme::transparent())
+        .child(mono("fn", 10.5, 500.0, theme::accent_bright()))
+}
+
 /// `.tag.app`: an app, with its badge.
-pub fn app_tag(badge_label: &'static str, name: &'static str) -> Div {
+pub fn app_tag(badge_label: impl Into<SharedString>, name: impl Into<SharedString>) -> Div {
     tag_frame()
         .child(badge(badge_label))
         .child(mono(name, 10.5, 500.0, theme::text_primary()))
 }
 
 /// `.tag.act`: a rewrite action, `kind` dimmed before the value.
-pub fn action_tag(kind: &'static str, value: &'static str) -> Div {
+pub fn action_tag(kind: impl Into<SharedString>, value: impl Into<SharedString>) -> Div {
     tag_frame()
         .child(mono(kind, 10.5, 500.0, theme::text_subtle()))
         .child(mono(value, 10.5, 500.0, theme::accent_bright()))
@@ -49,7 +57,7 @@ pub fn tag_frame() -> Div {
 }
 
 /// `.bi`: a browser or app's two-letter badge.
-pub fn badge(label: &'static str) -> Div {
+pub fn badge(label: impl Into<SharedString>) -> Div {
     div()
         .flex()
         .flex_none()
@@ -64,11 +72,33 @@ pub fn badge(label: &'static str) -> Div {
         .text_size(px(7.0))
         .line_height(px(7.0))
         .text_color(theme::text_muted())
-        .child(label)
+        .child(label.into())
+}
+
+/// A `.chip`'s colors.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tone {
+    #[default]
+    Plain,
+    /// `.chip.warn`
+    Warn,
 }
 
 /// `.chip`: a count or state in a card header.
-pub fn chip(label: &'static str) -> Div {
+pub fn chip(label: impl Into<SharedString>) -> Div {
+    toned_chip(label, Tone::Plain)
+}
+
+/// `.chip` in one of its tones.
+pub fn toned_chip(label: impl Into<SharedString>, tone: Tone) -> Div {
+    let (background, border, foreground) = match tone {
+        Tone::Plain => (
+            theme::bg_elevated(),
+            theme::border_subtle(),
+            theme::text_muted(),
+        ),
+        Tone::Warn => (theme::warn_soft(), theme::transparent(), theme::warn_text()),
+    };
     div()
         .flex()
         .flex_none()
@@ -77,40 +107,80 @@ pub fn chip(label: &'static str) -> Div {
         .py(px(4.0))
         .rounded_full()
         .border_1()
-        .border_color(theme::border_subtle())
-        .bg(theme::bg_elevated())
-        .child(text(label, 10.0, 600.0, theme::text_muted()))
+        .border_color(border)
+        .bg(background)
+        .child(text(label, 10.0, 600.0, foreground))
 }
 
 /// `.btn` with a plus icon; `.btn.primary` when `primary`.
 pub fn add_button(label: &'static str, primary: bool) -> Div {
-    let foreground = if primary {
-        theme::accent_on()
+    let kind = if primary {
+        ButtonKind::Primary
     } else {
-        theme::text_primary()
+        ButtonKind::Default
     };
+    let foreground = kind.foreground();
+    button_frame(kind, false)
+        .child(icon("pwrroute/plus.svg", 13.0, foreground))
+        .child(text(label, 11.5, 550.0, foreground))
+}
+
+/// Which `.btn` variant.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    Default,
+    /// `.btn.primary`
+    Primary,
+    /// `.btn.quiet`
+    Quiet,
+    /// `.btn.quiet.danger`
+    Danger,
+}
+
+impl ButtonKind {
+    fn foreground(self) -> Hsla {
+        match self {
+            Self::Default => theme::text_primary(),
+            Self::Primary => theme::accent_on(),
+            Self::Quiet => theme::text_secondary(),
+            Self::Danger => theme::danger_text(),
+        }
+    }
+}
+
+fn button_frame(kind: ButtonKind, small: bool) -> Div {
     div()
         .flex()
         .flex_none()
         .items_center()
         .gap(px(6.0))
-        .py(px(7.0))
-        .px(px(12.0))
-        .border_1()
-        .rounded(px(7.0))
         .map(|button| {
-            if primary {
-                button
-                    .bg(theme::accent())
-                    .border_color(theme::transparent())
+            if small {
+                button.py(px(5.0)).px(px(9.0))
             } else {
-                button
-                    .bg(theme::bg_elevated())
-                    .border_color(theme::border_default())
+                button.py(px(7.0)).px(px(12.0))
             }
         })
-        .child(icon("pwrroute/plus.svg", 13.0, foreground))
-        .child(text(label, 11.5, 550.0, foreground))
+        .border_1()
+        .rounded(px(7.0))
+        .cursor_pointer()
+        .map(|button| match kind {
+            ButtonKind::Primary => button
+                .bg(theme::accent())
+                .border_color(theme::transparent()),
+            ButtonKind::Default => button
+                .bg(theme::bg_elevated())
+                .border_color(theme::border_default()),
+            ButtonKind::Quiet | ButtonKind::Danger => button
+                .bg(theme::transparent())
+                .border_color(theme::transparent()),
+        })
+}
+
+/// `.btn`, `.btn.sm` when `small`.
+pub fn button(label: impl Into<SharedString>, kind: ButtonKind, small: bool) -> Div {
+    let size = if small { 11.0 } else { 11.5 };
+    button_frame(kind, small).child(text(label, size, 550.0, kind.foreground()))
 }
 
 /// `.inp`: a field's box. Content goes in as children.
@@ -179,8 +249,37 @@ pub fn switch(on: bool) -> Div {
         )
 }
 
-/// `.strip-chip`: a status chip in the title strip.
-pub fn status_chip(label: &'static str) -> Div {
+/// `.seg`: a segmented control's frame. Segments go in as children.
+pub fn segmented() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .gap(px(1.0))
+        .p(px(2.0))
+        .bg(theme::bg_input())
+        .border_1()
+        .border_color(theme::border_subtle())
+        .rounded(px(7.0))
+}
+
+/// `.seg span`; `.on` when `selected`.
+pub fn segment(label: impl Into<SharedString>, selected: bool) -> Div {
+    let foreground = if selected {
+        theme::accent_bright()
+    } else {
+        theme::text_secondary()
+    };
+    div()
+        .py(px(5.0))
+        .px(px(10.0))
+        .rounded(px(5.0))
+        .cursor_pointer()
+        .when(selected, |segment| segment.bg(theme::bg_row_active()))
+        .child(text(label, 11.0, 550.0, foreground))
+}
+
+/// `.strip-chip`: a status chip in the title strip, with its dot.
+pub fn status_chip(label: impl Into<SharedString>, dot: Hsla) -> Div {
     div()
         .flex()
         .flex_none()
@@ -192,8 +291,19 @@ pub fn status_chip(label: &'static str) -> Div {
         .border_color(theme::border_subtle())
         .rounded_full()
         .bg(theme::bg_elevated())
-        .child(theme::dot(theme::status_ok()))
+        .child(theme::dot(dot))
         .child(mono(label, 10.5, 600.0, theme::text_muted()))
+}
+
+/// `.st`: a status dot and its word.
+pub fn status(label: impl Into<SharedString>, dot: Hsla) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .child(theme::dot(dot))
+        .child(text(label, 11.0, 500.0, theme::text_secondary()))
 }
 
 /// `.kbd`: a key cap.
@@ -207,4 +317,53 @@ pub fn key_cap(label: &'static str) -> Div {
         .border_color(theme::border_default())
         .rounded(px(4.0))
         .child(mono(label, 10.0, 600.0, theme::text_muted()))
+}
+
+/// A wrapping run of sans text: CSS `font: <weight> <size>/<line-height>`.
+pub fn paragraph(
+    content: impl Into<SharedString>,
+    size: f32,
+    line_height: f32,
+    color: Hsla,
+) -> Div {
+    div()
+        .font_family(theme::SANS)
+        .font_weight(theme::weight(400.0))
+        .text_size(px(size))
+        .line_height(px(line_height))
+        .text_color(color)
+        .child(content.into())
+}
+
+/// `.note`: small subtle help text.
+pub fn note(content: impl Into<SharedString>) -> Div {
+    paragraph(content, 10.5, 15.75, theme::text_subtle())
+}
+
+/// The badge letters for a browser or app, as the design draws them.
+pub fn badge_for(name: &str) -> SharedString {
+    const KNOWN: &[(&str, &str)] = &[
+        ("chrome", "Ch"),
+        ("firefox", "Ff"),
+        ("arc", "Ar"),
+        ("safari", "Sf"),
+        ("zoom", "Zm"),
+        ("figma", "Fg"),
+        ("slack", "Sl"),
+        ("edge", "Ed"),
+        ("brave", "Br"),
+        ("mail", "Ml"),
+        ("ical", "Ca"),
+        ("calendar", "Ca"),
+        ("ghostty", "Gh"),
+    ];
+    let lower = name.to_lowercase();
+    if let Some((_, label)) = KNOWN.iter().find(|(key, _)| lower.contains(key)) {
+        return (*label).into();
+    }
+    let last = name.rsplit('.').next().unwrap_or(name);
+    let mut letters = last.chars().filter(|c| c.is_alphanumeric());
+    let first = letters.next().map(|c| c.to_ascii_uppercase());
+    let second = letters.next().map(|c| c.to_ascii_lowercase());
+    first.into_iter().chain(second).collect::<String>().into()
 }

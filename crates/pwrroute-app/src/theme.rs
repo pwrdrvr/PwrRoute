@@ -89,11 +89,19 @@ tokens! {
     accent = hex(0xff8a1f);
     accent_bright = hex(0xffb35c);
     accent_on = hex(0x160a00);
+    accent_soft = hex_alpha(0xff8a1f, 0.12);
+    accent_border = hex_alpha(0xff8a1f, 0.42);
+    danger_soft = hex_alpha(0xb94232, 0.24);
     danger_text = hex(0xffb0a1);
+    success_soft = hex_alpha(0x4a945c, 0.18);
+    success_text = hex(0x9ce5b3);
     info_soft = hex_alpha(0x5689c4, 0.16);
     info_text = hex(0x9fc8ff);
     status_ok = hex(0x5fa969);
+    status_error = hex(0xc45a3a);
     status_warning = hex(0xd99a3d);
+    warn_soft = hex_alpha(0xd99a3d, 0.14);
+    warn_text = hex(0xe8c890);
     transparent = hex_alpha(0x000000, 0.0);
 }
 
