@@ -1,0 +1,612 @@
+//! Test a link (design option 2a): a URL, the app it comes from, and the
+//! trace of how the rules resolve it. Nothing is opened.
+//!
+//! The window runs its own [`Engine`]: over the Finicky config when one is
+//! in charge, exactly as the router loads it, and otherwise over the rules
+//! the Rules screen shows (`fixtures/rules.json`). It is built on the first
+//! test and lives on the UI thread; QuickJS runtimes are not `Send`.
+
+use std::{
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    App, ClipboardItem, Context, Div, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, StatefulInteractiveElement as _, StrikethroughStyle,
+    Styled as _, StyledText, Window, deferred, div, px,
+};
+use pwrroute_engine::{DefaultHost, Engine, Limits, Link, RulesFile, Sources, Trace};
+
+use crate::app::PwrRoute;
+use crate::fixtures::{self, Opener};
+use crate::rules_view::{card, pane_frame, pane_heading};
+use crate::text_field::{self, Edit, Look, TextField};
+use crate::theme::{self, mono, text};
+use crate::trace_view::{Chip, StepBody, StepState, TraceStep, TraceView, UrlMark, UrlPart};
+use crate::widgets::{
+    ButtonKind, action_tag, app_tag, badge, button, caret, input_box, paragraph, tag,
+};
+
+/// The last run, kept so folding and unfolding redraw without resolving
+/// again.
+struct Run {
+    trace: Trace,
+    opener: Option<Opener>,
+    took: Duration,
+}
+
+/// The screen's state.
+pub struct TestLink {
+    pub url: TextField,
+    /// Index into [`fixtures::openers`].
+    pub opener: usize,
+    /// The opener menu is open.
+    pub picking: bool,
+    /// Show each missed handler rather than one folded step.
+    pub unfold: bool,
+    /// Copy trace was pressed since the last run.
+    pub copied: bool,
+    config: Option<PathBuf>,
+    rules: RulesFile,
+    engine: Option<Result<Engine, String>>,
+    run: Option<Run>,
+    /// The trace of the last run, or why it failed.
+    pub outcome: Option<Result<TraceView, String>>,
+}
+
+impl TestLink {
+    /// `config` is the Finicky config in charge, if any.
+    pub fn new(config: Option<PathBuf>, cx: &mut App) -> Self {
+        // The router does not read `rules.json` yet; with a config in charge
+        // it routes by the config alone, and so does this.
+        let rules = if config.is_some() {
+            RulesFile::default()
+        } else {
+            fixtures::rules_file()
+        };
+        Self {
+            url: TextField::new(fixtures::TEST_URL, cx),
+            opener: fixtures::TEST_OPENER,
+            picking: false,
+            unfold: false,
+            copied: false,
+            config,
+            rules,
+            engine: None,
+            run: None,
+            outcome: None,
+        }
+    }
+
+    pub fn opener(&self) -> Option<Opener> {
+        fixtures::openers().get(self.opener).copied().flatten()
+    }
+
+    /// Resolves the field's URL and records the trace.
+    pub fn run(&mut self) {
+        self.copied = false;
+        self.picking = false;
+        let url = match pwrroute_router::normalize_url(&self.url.text) {
+            Ok(url) => url,
+            Err(error) => {
+                self.run = None;
+                self.outcome = Some(Err(format!("Not a link the router accepts: {error}.")));
+                return;
+            }
+        };
+        let opener = self.opener();
+        let rules = &self.rules;
+        let config = &self.config;
+        let engine = self.engine.get_or_insert_with(|| {
+            Engine::from_sources(
+                &Sources {
+                    config: config.clone(),
+                    rules: rules.clone(),
+                },
+                Rc::new(DefaultHost),
+                Limits::default(),
+            )
+            .map_err(|e| format!("The rules did not load: {e:#}"))
+        });
+        let engine = match engine {
+            Ok(engine) => engine,
+            Err(error) => {
+                self.outcome = Some(Err(error.clone()));
+                return;
+            }
+        };
+        let engine_opener = opener.map(|app| pwrroute_engine::Opener {
+            name: app.name.into(),
+            bundle_id: app.bundle_id.into(),
+            ..pwrroute_engine::Opener::default()
+        });
+        let started = Instant::now();
+        match engine.trace(&Link::new(url), engine_opener.as_ref()) {
+            Ok(trace) => {
+                self.run = Some(Run {
+                    trace,
+                    opener,
+                    took: started.elapsed(),
+                });
+                self.redraw();
+            }
+            Err(error) => {
+                self.run = None;
+                self.outcome = Some(Err(format!("The rules failed: {error:#}")));
+            }
+        }
+    }
+
+    /// Rebuilds the view of the last run, as after folding or unfolding.
+    fn redraw(&mut self) {
+        if let Some(run) = &self.run {
+            self.outcome = Some(Ok(TraceView::from_engine(
+                &run.trace,
+                &self.rules,
+                run.opener.as_ref(),
+                run.took,
+                self.unfold,
+            )));
+        }
+    }
+
+    pub fn set_unfold(&mut self, unfold: bool) {
+        self.unfold = unfold;
+        self.redraw();
+    }
+
+    /// The trace was run at least once.
+    pub fn has_run(&self) -> bool {
+        self.outcome.is_some()
+    }
+}
+
+/// The step circle's colors: background, border, text.
+fn circle_colors(state: StepState) -> (Hsla, Hsla, Hsla) {
+    match state {
+        StepState::Plain | StepState::Miss => (
+            theme::bg_elevated(),
+            theme::border_default(),
+            theme::text_muted(),
+        ),
+        StepState::Hit => (
+            theme::accent_soft(),
+            theme::accent_border(),
+            theme::accent_bright(),
+        ),
+        StepState::End => (
+            theme::success_soft(),
+            theme::transparent(),
+            theme::success_text(),
+        ),
+        StepState::Error => (
+            theme::danger_soft(),
+            theme::transparent(),
+            theme::danger_text(),
+        ),
+    }
+}
+
+/// `.url`: a wrapping mono URL with this step's changes marked.
+fn url(parts: &[UrlPart], color: Hsla) -> Div {
+    let mut whole = String::new();
+    let mut highlights = Vec::new();
+    for part in parts {
+        let range = whole.len()..whole.len() + part.text.len();
+        whole.push_str(&part.text);
+        match part.mark {
+            UrlMark::Same => {}
+            UrlMark::Changed => highlights.push((
+                range,
+                HighlightStyle {
+                    color: Some(theme::accent_bright()),
+                    background_color: Some(theme::accent_soft()),
+                    ..HighlightStyle::default()
+                },
+            )),
+            UrlMark::Deleted => highlights.push((
+                range,
+                HighlightStyle {
+                    color: Some(theme::danger_text()),
+                    strikethrough: Some(StrikethroughStyle {
+                        thickness: px(1.0),
+                        color: Some(theme::danger_text()),
+                    }),
+                    fade_out: Some(0.15),
+                    ..HighlightStyle::default()
+                },
+            )),
+        }
+    }
+    div()
+        .min_w_0()
+        .font_family(theme::mono_family(500.0))
+        .font_weight(theme::weight(500.0))
+        .text_size(px(11.5))
+        .line_height(px(17.25))
+        .text_color(color)
+        .child(StyledText::new(whole).with_highlights(highlights))
+}
+
+fn chip(chip: &Chip) -> Div {
+    match chip {
+        Chip::Action(kind, value) => action_tag(kind.clone(), value.clone()),
+        Chip::App(badge, name) => app_tag(badge.clone(), name.clone()),
+        Chip::Plain(label) => tag(label.clone()),
+    }
+}
+
+/// `.ts`: number, title and detail, and what the step did.
+fn step_row(
+    index: usize,
+    count: usize,
+    step: &TraceStep,
+    cx: &mut Context<'_, PwrRoute>,
+) -> impl IntoElement + use<> {
+    let (fill, border, number_color) = circle_colors(step.state);
+    let number = step
+        .number
+        .map_or_else(|| "\u{2713}".to_owned(), |n| n.to_string());
+    let dim = |cell: Div| {
+        if step.state == StepState::Miss {
+            cell.opacity(0.55)
+        } else {
+            cell
+        }
+    };
+    let first = index == 0;
+    let last = index + 1 == count;
+    let body = step.body.iter().fold(
+        div().flex_1().min_w_0().flex().flex_col().gap(px(5.0)),
+        |column, body| match body {
+            StepBody::Chips(chips, note) => column.child(
+                chips
+                    .iter()
+                    .fold(
+                        div().flex().flex_wrap().items_center().gap(px(5.0)),
+                        |row, item| row.child(chip(item)),
+                    )
+                    .when_some(note.clone(), |row, note| {
+                        row.child(paragraph(note, 10.5, 15.75, theme::text_subtle()))
+                    }),
+            ),
+            StepBody::Url(parts) => column.child(url(parts, theme::text_primary())),
+            StepBody::Text(content) => column.child(paragraph(
+                content.clone(),
+                11.5,
+                17.25,
+                if step.state == StepState::Error {
+                    theme::danger_text()
+                } else {
+                    theme::text_muted()
+                },
+            )),
+            StepBody::Folded => column
+                .child(paragraph("No match.", 11.5, 17.25, theme::text_muted()))
+                .child(
+                    div()
+                        .id("trace-show-each")
+                        .debug_selector(|| "trace-show-each".into())
+                        .self_start()
+                        .cursor_pointer()
+                        .font_family(theme::SANS)
+                        .font_weight(theme::weight(400.0))
+                        .text_size(px(11.5))
+                        .line_height(px(17.25))
+                        .text_color(theme::accent_bright())
+                        .underline()
+                        .child("Show each")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.test.set_unfold(true);
+                            cx.notify();
+                        })),
+                ),
+        },
+    );
+    div()
+        .relative()
+        .flex()
+        .gap(px(12.0))
+        .py(px(10.0))
+        .px(px(14.0))
+        .when(!last, |row| {
+            row.border_b_1().border_color(theme::border_faint())
+        })
+        // `.ts::before`: the line that joins the circles.
+        .when(count > 1, |row| {
+            row.child(
+                div()
+                    .absolute()
+                    .left(px(24.0))
+                    .w(px(1.0))
+                    .bg(theme::border_subtle())
+                    .map(|line| {
+                        if first {
+                            line.top(px(20.0)).bottom_0()
+                        } else if last {
+                            line.top_0().h(px(20.0))
+                        } else {
+                            line.top_0().bottom_0()
+                        }
+                    }),
+            )
+        })
+        .child(
+            div().w(px(22.0)).flex_none().child(
+                div()
+                    .size(px(20.0))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(fill)
+                    .border_1()
+                    .border_color(border)
+                    // The circle hides the line behind it.
+                    .child(mono(number, 9.5, 600.0, number_color)),
+            ),
+        )
+        .child(dim(div()
+            .w(px(150.0))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(3.0))
+            .child(text(step.title.clone(), 11.5, 600.0, theme::text_secondary()).line_height(px(16.1)))
+            .child(
+                div()
+                    .font_family(theme::mono_family(500.0))
+                    .font_weight(theme::weight(500.0))
+                    .text_size(px(10.0))
+                    .line_height(px(13.0))
+                    .text_color(theme::text_subtle())
+                    .child(step.detail.clone()),
+            )))
+        .child(dim(body))
+}
+
+/// The opener picker and its menu.
+fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
+    let label = |opener: Option<Opener>| -> Div {
+        match opener {
+            Some(app) => div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(badge(app.badge))
+                .child(text(app.name, 12.5, 400.0, theme::text_primary())),
+            None => div().child(text("no app", 12.5, 400.0, theme::text_subtle())),
+        }
+    };
+    let menu = fixtures::openers().into_iter().enumerate().fold(
+        div()
+            .id("test-opener-menu")
+            .occlude()
+            .absolute()
+            .top(px(34.0))
+            .left_0()
+            .w(px(170.0))
+            .flex()
+            .flex_col()
+            .p(px(4.0))
+            .bg(theme::bg_elevated())
+            .border_1()
+            .border_color(theme::border_default())
+            .rounded(px(7.0))
+            .shadow_lg()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.test.picking = false;
+                cx.notify();
+            })),
+        |menu, (index, opener)| {
+            let selected = index == app.test.opener;
+            menu.child(
+                div()
+                    .id(("test-opener-choice", index))
+                    .debug_selector(move || format!("test-opener-choice-{index}"))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .when(selected, |row| row.bg(theme::bg_row_active()))
+                    .hover(|row| row.bg(theme::bg_hover()))
+                    .child(label(opener))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.test.opener = index;
+                        this.test.picking = false;
+                        this.test.run();
+                        cx.notify();
+                    })),
+            )
+        },
+    );
+    div()
+        .relative()
+        .w(px(170.0))
+        .flex_none()
+        .child(
+            input_box()
+                .id("test-opener")
+                .debug_selector(|| "test-opener".into())
+                .cursor_pointer()
+                .child(text("from", 10.5, 400.0, theme::text_subtle()))
+                .child(label(app.test.opener()))
+                .child(caret())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.test.picking = !this.test.picking;
+                    cx.notify();
+                })),
+        )
+        .when(app.test.picking, |picker| picker.child(deferred(menu)))
+}
+
+/// `.res`: where the link opens, and the two actions.
+fn result_card(view: &TraceView, copied: bool, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let text_copy = view.to_text();
+    card().child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(14.0))
+            .py(px(14.0))
+            .px(px(16.0))
+            .child(
+                div()
+                    .size(px(44.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(theme::border_strong())
+                    .bg(theme::bg_elevated())
+                    .child(mono(
+                        view.result.badge.clone(),
+                        13.0,
+                        700.0,
+                        theme::text_secondary(),
+                    )),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        text(
+                            view.result.title.clone(),
+                            15.0,
+                            600.0,
+                            theme::text_primary(),
+                        )
+                        .line_height(px(18.0)),
+                    )
+                    .child(url(
+                        &[UrlPart {
+                            text: view.result.url.clone(),
+                            mark: UrlMark::Same,
+                        }],
+                        theme::text_secondary(),
+                    ))
+                    .when_some(view.result.error.clone(), |column, error| {
+                        column.child(paragraph(error, 11.0, 16.5, theme::danger_text()))
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        button(
+                            if copied { "Copied" } else { "Copy trace" },
+                            ButtonKind::Default,
+                            false,
+                        )
+                        .id("test-copy")
+                        .debug_selector(|| "test-copy".into())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text_copy.clone()));
+                            this.test.copied = true;
+                            cx.notify();
+                        })),
+                    )
+                    // Dispatching from here waits for the browser launcher.
+                    .child(button("Open now", ButtonKind::Primary, false)),
+            ),
+    )
+}
+
+pub fn pane(
+    app: &PwrRoute,
+    window: &mut Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> impl IntoElement + use<> {
+    let field = text_field::field(
+        "test-url",
+        &app.test.url,
+        Look {
+            mono: true,
+            placeholder: "Paste a link",
+        },
+        None,
+        window,
+    )
+    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+        match this.test.url.key(&event.keystroke, cx) {
+            Edit::Submit => this.test.run(),
+            Edit::Changed | Edit::Handled => {}
+            Edit::Ignored => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }))
+    .on_click(cx.listener(|this, _, window, cx| {
+        window.focus(&this.test.url.focus, cx);
+        cx.notify();
+    }));
+
+    let test_row = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(8.0))
+        .child(field)
+        .child(opener_picker(app, cx))
+        .child(
+            button("Test", ButtonKind::Primary, false)
+                .id("test-run")
+                .debug_selector(|| "test-run".into())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.test.run();
+                    cx.notify();
+                })),
+        );
+
+    let outcome = match &app.test.outcome {
+        None => None,
+        Some(Err(error)) => Some(
+            card()
+                .py(px(14.0))
+                .px(px(16.0))
+                .child(paragraph(error.clone(), 11.5, 17.25, theme::danger_text()))
+                .into_any_element(),
+        ),
+        Some(Ok(view)) => {
+            let count = view.steps.len();
+            let trace = view.steps.iter().enumerate().fold(
+                card()
+                    .id("test-trace")
+                    .debug_selector(|| "test-trace".into()),
+                |trace, (index, step)| trace.child(step_row(index, count, step, cx)),
+            );
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(18.0))
+                    .child(trace)
+                    .child(result_card(view, app.test.copied, cx))
+                    .into_any_element(),
+            )
+        }
+    };
+
+    pane_frame("test-pane")
+        .child(div().flex().items_start().child(pane_heading(
+            "Dry run",
+            "Test a link",
+            Some(
+                "Resolves against the active rules in the real router. Nothing opens until \
+                 you say so.",
+            ),
+        )))
+        .child(test_row)
+        .children(outcome)
+}
