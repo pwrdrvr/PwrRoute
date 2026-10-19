@@ -158,8 +158,8 @@ fn open_in_section(handler: &Handler) -> Div {
             badge,
             name,
             profile,
-        } => (*badge, *name, *profile),
-        Destination::Rewrite { .. } => ("", "", None),
+        } => (badge.clone(), name.clone(), profile.clone()),
+        Destination::Rewrite { .. } | Destination::Function(_) => ("".into(), "".into(), None),
     };
     let field = |width: f32| input_box().w(px(width)).flex_none();
     section()
@@ -174,7 +174,7 @@ fn open_in_section(handler: &Handler) -> Div {
             "Profile",
             field(190.0)
                 .child(text(
-                    profile.unwrap_or("Default"),
+                    profile.unwrap_or_else(|| "Default".into()),
                     12.5,
                     400.0,
                     theme::text_primary(),
@@ -224,8 +224,8 @@ fn try_it_section(selected: usize, handler: &Handler) -> Div {
     // the rail says who wins from the selected handler's point of view.
     const SAMPLE_WINNER: usize = 1;
     let browser = match &handler.rule.destination {
-        Destination::Browser { name, .. } => *name,
-        Destination::Rewrite { .. } => "",
+        Destination::Browser { name, .. } => name.clone(),
+        Destination::Rewrite { .. } | Destination::Function(_) => "".into(),
     };
     let (result, status) = match selected.cmp(&SAMPLE_WINNER) {
         std::cmp::Ordering::Greater => {
@@ -285,8 +285,8 @@ fn rewrite_match_section(rewrite: &Rewrite) -> Div {
 /// What the rewrite changes: the action and its value.
 fn rewrite_section(rewrite: &Rewrite) -> Div {
     let (kind, value) = match &rewrite.rule.destination {
-        Destination::Rewrite { kind, value } => (*kind, *value),
-        Destination::Browser { .. } => ("", ""),
+        Destination::Rewrite { kind, value } => (*kind, value.clone()),
+        Destination::Browser { .. } | Destination::Function(_) => ("", "".into()),
     };
     let (action, field, help) = match kind {
         "host" => (

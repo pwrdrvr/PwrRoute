@@ -70,9 +70,9 @@ impl PwrRoute {
         home: Option<PathBuf>,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let in_charge = config.as_deref().map(|path| {
-            fixtures::config_in_charge(config_view::display_path(path, home.as_deref()))
-        });
+        let in_charge = config
+            .as_deref()
+            .map(|path| ConfigInCharge::load(path, home.as_deref()));
         Self {
             focus: cx.focus_handle(),
             screen: Screen::Rules,

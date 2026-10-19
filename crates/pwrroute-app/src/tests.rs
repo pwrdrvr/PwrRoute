@@ -8,6 +8,7 @@ use gpui_kit::{Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestCont
 
 use crate::activity::Filter;
 use crate::app::{PwrRoute, ROOT_ID, Screen, Selection};
+use crate::fixtures::{Destination, Matcher};
 use crate::trace_view::TraceView;
 
 /// The contrived home directory that holds `.finicky.ts` for option 1b.
@@ -51,6 +52,21 @@ fn trace(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> TraceView {
     view.read_with(cx, |app, _| app.test.outcome.clone())
         .expect("Test a link ran")
         .expect("the trace resolved")
+}
+
+fn matcher(matcher: &Matcher) -> String {
+    match matcher {
+        Matcher::Pattern(s) | Matcher::Regex(s) => s.to_string(),
+        Matcher::Function(source) => format!("fn {source}"),
+        other => format!("{other:?}"),
+    }
+}
+
+fn browser(destination: &Destination) -> String {
+    match destination {
+        Destination::Browser { name, .. } => name.to_string(),
+        other => format!("{other:?}"),
+    }
 }
 
 fn titles(trace: &TraceView) -> Vec<&str> {
@@ -216,10 +232,49 @@ fn activity_expands_filters_and_retests(cx: &mut TestAppContext) {
 fn a_finicky_config_in_charge_is_read_only(cx: &mut TestAppContext) {
     let config = fixture_home().join(".finicky.ts");
     let (view, cx) = open_with(cx, Some(config));
-    let path = view.read_with(cx, |app, _| {
-        app.config.as_ref().map(|c| (c.path.clone(), c.need_js()))
-    });
-    assert_eq!(path, Some(("~/.finicky.ts".to_owned(), 2)));
+    let config = view
+        .read_with(cx, |app, _| app.config.clone())
+        .expect("the config is in charge");
+    assert_eq!(config.path, "~/.finicky.ts");
+    assert_eq!(config.need_js(), 2);
+    // The rows are the engine's reading of the file, not fixtures: the
+    // functions' source, the patterns and browsers in the file's order.
+    let rows: Vec<(Vec<String>, String)> = config
+        .handlers
+        .iter()
+        .map(|rule| {
+            (
+                rule.matchers.iter().map(matcher).collect(),
+                browser(&rule.destination),
+            )
+        })
+        .collect();
+    let row = |matchers: &[&str], browser: &str| {
+        (
+            matchers.iter().map(|m| (*m).to_owned()).collect::<Vec<_>>(),
+            browser.to_owned(),
+        )
+    };
+    assert_eq!(
+        rows,
+        [
+            row(
+                &["fn (url, { opener }) => url.host.includes(\"workplace\")"],
+                "Firefox"
+            ),
+            row(
+                &["fn (url, { opener }) => opener?.name.includes(\"Slack\") || false"],
+                "Firefox"
+            ),
+            row(&["bsky.app/*"], "Firefox"),
+            row(&["google.com/*", "*.google.com*"], "Google Chrome"),
+        ]
+    );
+    assert!(config.rewrites.is_empty());
+    assert_eq!(
+        config.default_browser.as_ref().map(browser).as_deref(),
+        Some("Google Chrome")
+    );
     // No editor until the visual rules are expanded.
     assert!(cx.debug_bounds("editor-rail").is_none());
     click(cx, "visual-rules-toggle");
@@ -230,4 +285,19 @@ fn a_finicky_config_in_charge_is_read_only(cx: &mut TestAppContext) {
     let slack = trace(&view, cx);
     assert_eq!(slack.result.title, "Firefox");
     assert!(titles(&slack).contains(&"Config handler 2"));
+}
+
+#[gpui_kit::test]
+fn a_config_that_does_not_load_says_why(cx: &mut TestAppContext) {
+    let config = fixture_home().join("missing.finicky.ts");
+    let (view, cx) = open_with(cx, Some(config));
+    let config = view
+        .read_with(cx, |app, _| app.config.clone())
+        .expect("the config is in charge");
+    assert!(
+        config.status.starts_with("It did not load:"),
+        "{}",
+        config.status
+    );
+    assert!(config.handlers.is_empty() && config.default_browser.is_none());
 }

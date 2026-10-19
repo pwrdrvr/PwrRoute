@@ -1,5 +1,5 @@
 // The Finicky config of design option 1b: contrived, for the app's tests and
-// screenshots. `fixtures::config_in_charge` draws these same handlers.
+// screenshots. The Rules screen draws what the engine reads in it.
 import type { FinickyConfig } from "/Applications/Finicky.app/Contents/Resources/finicky.d.ts";
 
 export default {
