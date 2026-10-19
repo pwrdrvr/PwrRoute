@@ -26,8 +26,7 @@ placeholders until the family's panes are ported.
 - **Fidelity:** compare against headless Chrome at the design's size (each
   option's `.dv-card` is 1060px wide). Geist's `ch` is 0.663em
   (`style::ch`); an inline `font:` in the design resets line height to
-  `normal`. GPUI can only capture a window image with `test-support` on the
-  process main thread, which libtest never is, so render from a scratch
-  harness that `#[path]`-includes this module, not from a unit test.
+  `normal`. `cargo run -p pwrroute-app --example screens -- OUT_DIR`
+  renders each pane at its option's size (`settings-1a.png` …).
 - Tests (`tests.rs`) drive the real window through gpui-kit's harness: ids
   are on `Pane::nav_id`/`pane_id` and the `*_ID` constants in each pane.

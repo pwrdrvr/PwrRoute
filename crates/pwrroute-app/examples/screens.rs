@@ -43,6 +43,9 @@ mod router;
 #[path = "../src/rules_view.rs"]
 mod rules_view;
 #[cfg(target_os = "macos")]
+#[path = "../src/settings/mod.rs"]
+mod settings;
+#[cfg(target_os = "macos")]
 #[path = "../src/test_link.rs"]
 mod test_link;
 #[cfg(target_os = "macos")]
@@ -126,6 +129,53 @@ fn main() {
     shoot("app-2b", None, &|app, window, cx| {
         app.navigate(Screen::Activity, window, cx);
     });
+
+    // Settings, at each option's `.dv-card` size in headless Chrome less
+    // its 1px border (`design/PwrRoute Settings.dc.html`).
+    for (name, pane, height) in [
+        ("settings-1a", settings::Pane::LocalAgents, 1603.0),
+        ("settings-1b", settings::Pane::Configuration, 1315.0),
+        ("settings-1c", settings::Pane::Browsers, 880.0),
+    ] {
+        let mut cx = HeadlessAppContext::with_platform(
+            gpui_kit::platform::current_platform(true).text_system(),
+            Arc::new(assets::Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(|cx| {
+            assets::load_fonts(cx);
+            settings::install(cx);
+        });
+        let handle = cx
+            .open_window(size(px(1058.0), px(height)), |_, cx| {
+                cx.new(|cx| {
+                    let mut view = settings::SettingsWindow::new(
+                        settings::fixtures::model(),
+                        std::rc::Rc::new(|_, _, _| {}),
+                        cx,
+                    );
+                    view.pane = pane;
+                    view
+                })
+            })
+            .expect("open a headless window");
+        cx.allow_parking();
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .expect("draw");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let image = cx
+            .capture_screenshot(handle.into())
+            .expect("render with Metal");
+        let path = dir.join(format!("{name}.png"));
+        image.save(&path).expect("write the PNG");
+        println!("{}", path.display());
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
