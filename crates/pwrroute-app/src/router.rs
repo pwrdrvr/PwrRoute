@@ -10,7 +10,7 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -186,17 +186,24 @@ fn route_here_and_exit(args: &Args, links: Vec<Link>) {
     }
 }
 
+/// The Finicky config the router loaded, set once when it starts.
+static CONFIG_IN_CHARGE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// The Finicky config in charge of routing, if the router found one. The
+/// window shows it read-only and tests links against it.
+pub fn config_in_charge() -> Option<PathBuf> {
+    CONFIG_IN_CHARGE.get().cloned().flatten()
+}
+
 fn spawn_router(args: &Args) -> Router {
-    let factory = args
-        .config
-        .clone()
-        .or_else(find_finicky_config)
-        .map(|path| -> ResolverFactory {
-            Box::new(move || {
-                let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default())?;
-                Ok(Box::new(engine) as Box<dyn Resolver>)
-            })
-        });
+    let config = args.config.clone().or_else(find_finicky_config);
+    let _ = CONFIG_IN_CHARGE.set(config.clone());
+    let factory = config.map(|path| -> ResolverFactory {
+        Box::new(move || {
+            let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default())?;
+            Ok(Box::new(engine) as Box<dyn Resolver>)
+        })
+    });
     let launcher: Box<dyn Launcher> = if args.dry_run {
         Box::new(DryRunLauncher::new())
     } else {

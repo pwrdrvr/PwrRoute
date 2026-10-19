@@ -23,8 +23,9 @@ it cannot open a browser (run with `--dry-run` to see dispatches succeed).
 - `crates/pwrroute-os` — link receipt and default-browser registration per
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It draws the
-  design's Rules screen, the tray and the first-run window from contrived
-  fixture data and hosts the router. See its `AGENTS.md`.
+  design's Rules, Test a link and Activity screens, the tray and the
+  first-run window from contrived fixture data (`fixtures/`), and hosts the
+  router. Test a link runs the real engine. See its `AGENTS.md`.
 - `xtask` — lint, test, license notices, release checks and packaging.
 
 Port, don't invent: the design in `design/` decides the shape. Read
@@ -57,6 +58,7 @@ cargo xtask test                 # every workspace test
 cargo xtask licenses             # regenerate THIRD_PARTY_LICENSES
 cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG
 cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
+cargo run -p pwrroute-app --example screens -- DIR   # macOS: each screen as a PNG
 ```
 
 `cargo xtask lint` chains rustfmt → clippy `-D warnings` → `cargo deny check`

@@ -27,7 +27,7 @@ use gpui_kit::{
 use super::TrayCommand;
 use super::model::{HeaderChip, Recent, TrayModel};
 use crate::theme::{self, icon, mono, text, tracked};
-use crate::widgets::{badge_text, key_cap, switch};
+use crate::widgets::{badge, key_cap, switch};
 
 /// The element ids tests and the inspector find things by.
 pub const CARD_ID: &str = "tray-card";
@@ -440,7 +440,7 @@ fn recent_row(
                         .flex()
                         .items_center()
                         .gap(px(5.0))
-                        .child(badge_text(recent.browser.badge.clone().into()))
+                        .child(badge(recent.browser.badge.clone()))
                         .child(
                             text(recent.detail(), 10.0, 500.0, theme::text_muted())
                                 .line_height(px(REC_DETAIL)),

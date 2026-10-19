@@ -9,12 +9,14 @@
 // A window, not a console program, when built for Windows.
 #![windows_subsystem = "windows"]
 
+mod activity;
 mod app;
 mod app_menu;
 mod assets;
 #[cfg(target_os = "windows")]
 mod browser_registration;
 mod chrome;
+mod config_view;
 mod dock;
 mod editor;
 mod first_run;
@@ -23,9 +25,12 @@ mod fixtures;
 mod macos;
 mod router;
 mod rules_view;
+mod test_link;
 #[cfg(test)]
 mod tests;
+mod text_field;
 mod theme;
+mod trace_view;
 mod tray;
 mod updater;
 mod widgets;

@@ -22,7 +22,7 @@ use gpui_kit::{
 use crate::chrome::{BRAND_X, STRIP_HEIGHT};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::tray::model::BrowserLabel;
-use crate::widgets::{badge_text, caret, input_box};
+use crate::widgets::{badge, caret, input_box};
 
 /// The element id of the window's root, for tests and the inspector.
 pub const ROOT_ID: &str = "first-run-root";
@@ -535,7 +535,7 @@ fn fallback_picker(fallback: Option<&BrowserLabel>) -> Div {
     let input = input_box().w(px(300.0));
     match fallback {
         Some(browser) => input
-            .child(badge_text(browser.badge.clone().into()))
+            .child(badge(browser.badge.clone()))
             .child(text(browser.display(), 12.5, 400.0, theme::text_primary()))
             .child(caret()),
         None => input

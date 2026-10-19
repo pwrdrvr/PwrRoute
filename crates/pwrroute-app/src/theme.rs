@@ -89,20 +89,20 @@ tokens! {
     accent = hex(0xff8a1f);
     accent_bright = hex(0xffb35c);
     accent_on = hex(0x160a00);
+    accent_soft = hex_alpha(0xff8a1f, 0.12);
+    accent_border = hex_alpha(0xff8a1f, 0.42);
+    danger_soft = hex_alpha(0xb94232, 0.24);
     danger_text = hex(0xffb0a1);
+    success_soft = hex_alpha(0x4a945c, 0.18);
+    success_text = hex(0x9ce5b3);
     info_soft = hex_alpha(0x5689c4, 0.16);
     info_text = hex(0x9fc8ff);
     status_ok = hex(0x5fa969);
+    status_error = hex(0xc45a3a);
     status_warning = hex(0xd99a3d);
-    transparent = hex_alpha(0x000000, 0.0);
-    /// `.chip.ok`, a done step.
-    success_soft = hex_alpha(0x4a945c, 0.18);
-    success_text = hex(0x9ce5b3);
-    /// `.chip.warn`.
     warn_soft = hex_alpha(0xd99a3d, 0.14);
     warn_text = hex(0xe8c890);
-    /// The current step's border.
-    accent_border = hex_alpha(0xff8a1f, 0.42);
+    transparent = hex_alpha(0x000000, 0.0);
     /// `.strip-chip.off`'s dot: not routing.
     status_suspended = hex(0x6b6660);
     /// The menu bar dropdown's fill: `.tray`'s rgba(16,16,16,0.98), made
