@@ -9,7 +9,7 @@
 
 use std::{
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, LazyLock, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant, SystemTime},
@@ -120,6 +120,13 @@ fn spec<T: JsonSchema + 'static>(
             .with_title(title)
             .with_annotations(annotations),
     }
+}
+
+/// Built once: generating the schemas is not free.
+static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(specs);
+
+fn spec_named(name: &str) -> Option<&'static Spec> {
+    SPECS.iter().find(|s| s.name == name)
 }
 
 fn specs() -> Vec<Spec> {
@@ -241,17 +248,18 @@ impl Connection {
 
     /// The answer this connection waits on: the one asked for when it
     /// connected, unless that was an approval since forgotten in Settings,
-    /// in which case the person is asked again.
-    fn answer(&self, approvals: &Arc<Approvals>, client: &Implementation) -> Decision {
+    /// in which case the person is asked again. `None` when no prompt could
+    /// be raised.
+    fn answer(&self, approvals: &Arc<Approvals>, client: &Implementation) -> Option<Decision> {
         let mut slot = self
             .answer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match slot.as_ref() {
             Some(answer) if !matches!(*answer.borrow(), Some(ApprovalDecision::Approve { .. })) => {
-                answer.clone()
+                Some(answer.clone())
             }
-            _ => slot.insert(approvals.ask(client)).clone(),
+            _ => Some(slot.insert(approvals.ask(client)?).clone()),
         }
     }
 }
@@ -282,9 +290,6 @@ impl Handler {
     /// The agent's role now, asking the person first if its name is new.
     async fn authorize(&self, client: &Implementation) -> Result<Role, String> {
         let name = self.connection.identify(client);
-        if self.connection.denied.load(Ordering::Relaxed) {
-            return Err(denied_message(&name));
-        }
         match self.tools.agents.standing(&name) {
             Standing::Allowed(role) => return Ok(role),
             Standing::Revoked => {
@@ -294,7 +299,14 @@ impl Handler {
             }
             Standing::Unknown => {}
         }
-        let mut answer = self.connection.answer(&self.tools.approvals, client);
+        if self.connection.denied.load(Ordering::Relaxed) {
+            return Err(denied_message(&name));
+        }
+        let Some(mut answer) = self.connection.answer(&self.tools.approvals, client) else {
+            return Err(format!(
+                "approval_pending: PwrRoute cannot ask about {name} now (too many approval windows are open); call again later"
+            ));
+        };
         let decided =
             tokio::time::timeout(self.tools.approval_wait, answer.wait_for(Option::is_some))
                 .await
@@ -312,7 +324,7 @@ impl Handler {
     }
 
     async fn run(&self, name: &str, args: Value, agent: &AgentRef, role: Role) -> Answer {
-        let Some(spec) = specs().into_iter().find(|s| s.name == name) else {
+        let Some(spec) = spec_named(name) else {
             return Answer::Failed(format!("unknown_tool: PwrRoute has no tool named {name}"));
         };
         let permissions = role.permissions();
@@ -490,7 +502,7 @@ impl ServerHandler for Handler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
-            tools: specs().into_iter().map(|s| s.tool).collect(),
+            tools: SPECS.iter().map(|s| s.tool.clone()).collect(),
             ..ListToolsResult::default()
         })
     }
@@ -521,7 +533,10 @@ impl ServerHandler for Handler {
         };
         self.tools.agents.record_use(&agent.name);
         self.tools.audit.record(AuditRecord {
-            tool: request.name.to_string(),
+            // Only names PwrRoute defines: an unknown one is agent text.
+            tool: spec_named(&request.name)
+                .map_or("unknown_tool", |s| s.name)
+                .to_owned(),
             agent: agent.name.clone(),
             connection: agent.connection,
             started,
@@ -556,10 +571,7 @@ fn error_result(message: &str) -> CallToolResult {
 /// For tests: the permission each tool needs.
 #[cfg(test)]
 pub(crate) fn tool_permissions() -> Vec<(&'static str, Permission)> {
-    specs()
-        .into_iter()
-        .map(|s| (s.name, s.permission))
-        .collect()
+    SPECS.iter().map(|s| (s.name, s.permission)).collect()
 }
 
 #[cfg(test)]

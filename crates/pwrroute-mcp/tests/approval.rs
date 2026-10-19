@@ -78,6 +78,9 @@ async fn a_denial_refuses_the_connection_and_a_new_one_is_asked_again() {
     let result = call(&again, "pwrroute_resolve", json!({ "url": LINK })).await;
     assert_eq!(result.is_error, Some(false), "{}", text(&result));
     assert_eq!(h.approver.asked().len(), 2);
+    // Once the name is approved, the denied connection works too.
+    let result = call(&client, "pwrroute_resolve", json!({ "url": LINK })).await;
+    assert_eq!(result.is_error, Some(false), "{}", text(&result));
     client.cancel().await.unwrap();
     again.cancel().await.unwrap();
     h.finish().await;
@@ -129,6 +132,44 @@ async fn an_unanswered_window_reports_pending_then_works_once_answered() {
     let result = call(&client, "pwrroute_resolve", json!({ "url": LINK })).await;
     assert_eq!(result.is_error, Some(false), "{}", text(&result));
     client.cancel().await.unwrap();
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn past_the_prompt_cap_a_client_waits_rather_than_counting_as_denied() {
+    let h = Harness::start_with(FakeAnswer::Hold, Duration::from_millis(200)).await;
+    let mut clients = Vec::new();
+    for n in 0..8 {
+        clients.push(h.client(&format!("agent-{n}")).await);
+    }
+    let approver = h.approver.clone();
+    eventually(|| approver.asked().len() == 8).await;
+    let ninth = h.client("agent-8").await;
+    let result = call(&ninth, "pwrroute_resolve", json!({ "url": LINK })).await;
+    assert!(
+        text(&result).starts_with("approval_pending") && text(&result).contains("too many"),
+        "{}",
+        text(&result)
+    );
+    assert_eq!(h.approver.asked().len(), 8, "the ninth is not asked");
+
+    // A window closes; the ninth is asked on its next call.
+    let (_, reply) = h.approver.take_pending().remove(0);
+    reply.deny();
+    let mut asked = false;
+    for _ in 0..50 {
+        call(&ninth, "pwrroute_browsers", json!({})).await;
+        if h.approver.asked().len() == 9 {
+            asked = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(asked, "the ninth was never asked");
+    clients.push(ninth);
+    for client in clients {
+        client.cancel().await.unwrap();
+    }
     h.finish().await;
 }
 

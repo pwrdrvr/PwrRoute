@@ -5965,6 +5965,7 @@ version = "0.0.1-alpha.0"
 dependencies = [
  "anyhow",
  "pwrroute-engine",
+ "pwrroute-os",
  "rmcp",
  "schemars",
  "serde",

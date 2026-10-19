@@ -47,8 +47,15 @@ pub async fn proxy(endpoint: &Endpoint) -> io::Result<()> {
     };
     tokio::pin!(down);
     tokio::select! {
-        // The app hung up (it quit, or Local agents was turned off).
-        result = &mut down => ended(result),
+        // The app hung up (it quit, or Local agents was turned off), or
+        // turned this connection away before it said anything.
+        result = &mut down => match result {
+            Ok(0) => Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                format!("PwrRoute at {endpoint} closed the connection before answering (too many local agents connected?)"),
+            )),
+            result => ended(result),
+        },
         result = up => {
             ended(result)?;
             match tokio::time::timeout(DRAIN, &mut down).await {

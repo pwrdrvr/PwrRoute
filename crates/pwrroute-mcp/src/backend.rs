@@ -7,7 +7,7 @@
 //!
 //! The traits are synchronous: the server calls them on a blocking thread,
 //! so an implementation may wait on its own thread or lock without stalling
-//! the HTTP listener.
+//! the link.
 
 use std::sync::Arc;
 
@@ -69,6 +69,8 @@ impl Trace {
         for step in &mut trace.steps {
             step.url = step.url.as_deref().map(host_of);
         }
+        // A config's browser arguments often carry the URL.
+        trace.browser.args.clear();
         // A function's error message can quote the URL it was given.
         if trace.error.is_some() {
             trace.error = Some("a rule failed; details need full-URL access".to_owned());
@@ -217,5 +219,38 @@ pub struct Backends {
 impl std::fmt::Debug for Backends {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Backends").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pwrroute_engine::AppType;
+
+    use super::*;
+
+    #[test]
+    fn hosts_only_withholds_every_url() {
+        let url = "https://docs.example.org/private?token=abc";
+        let trace = Trace {
+            url: url.to_owned(),
+            steps: vec![TraceStep {
+                kind: StepKind::Rewrite,
+                index: Some(0),
+                summary: "rewrite".to_owned(),
+                url: Some(url.to_owned()),
+            }],
+            browser: Browser {
+                name: "Firefox".to_owned(),
+                app_type: AppType::AppName,
+                url: url.to_owned(),
+                profile: String::new(),
+                args: vec!["--new-window".to_owned(), url.to_owned()],
+                open_in_background: None,
+            },
+            error: Some(format!("could not open {url}")),
+        };
+        let hosts = serde_json::to_string(&trace.hosts_only()).unwrap();
+        assert!(!hosts.contains("/private"), "{hosts}");
+        assert!(hosts.contains("docs.example.org"), "{hosts}");
     }
 }

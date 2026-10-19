@@ -115,19 +115,25 @@ impl Approvals {
     }
 
     /// The answer for `client`, asking the person if no prompt for its name
-    /// is up yet.
-    pub(crate) fn ask(self: &Arc<Self>, client: &Implementation) -> Answer {
+    /// is up yet. `None` when no prompt can be raised: too many are open,
+    /// or the server is stopping. Nobody was asked then, so it is not a
+    /// denial.
+    pub(crate) fn ask(self: &Arc<Self>, client: &Implementation) -> Option<Answer> {
         let name = clean_name(&client.name);
         let (tx, rx) = {
             let mut pending = self
                 .pending
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(answer) = pending.get(&name) {
-                return answer.clone();
+            // A prompt answered a moment ago is not this connection's.
+            if let Some(answer) = pending.get(&name)
+                && answer.borrow().is_none()
+            {
+                return Some(answer.clone());
             }
+            pending.remove(&name);
             if pending.len() >= MAX_PROMPTS || self.closed.is_cancelled() {
-                return watch::channel(Some(ApprovalDecision::Deny)).1;
+                return None;
             }
             let (tx, rx) = watch::channel(None);
             pending.insert(name.clone(), rx.clone());
@@ -170,14 +176,21 @@ impl Approvals {
                     ApprovalDecision::Deny
                 }
             };
-            // Answer the waiters before the next connection could ask again.
+            // Answer the waiters, then drop the prompt unless a newer one
+            // for the name has taken its place.
             let _ = tx.send(Some(decision));
-            this.pending
+            let mut pending = this
+                .pending
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&name);
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending
+                .get(&name)
+                .is_some_and(|a| a.same_channel(&tx.subscribe()))
+            {
+                pending.remove(&name);
+            }
         });
-        rx
+        Some(rx)
     }
 
     /// Closes every open prompt, as a denial.

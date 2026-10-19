@@ -218,11 +218,12 @@ impl Agents {
     pub(crate) fn record_use(&self, name: &str) {
         let name = clean_name(name);
         let mut state = self.lock();
-        *state.calls.entry(name.clone()).or_default() += 1;
+        // Only approved agents: a name nobody approved is not kept.
         let Some(record) = state.records.iter_mut().find(|r| r.name == name) else {
             return;
         };
         record.last_used_at = Some(now_secs());
+        *state.calls.entry(name.clone()).or_default() += 1;
         let due = state
             .last_used_written
             .get(&name)

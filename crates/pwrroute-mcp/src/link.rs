@@ -44,22 +44,20 @@ impl Endpoint {
         let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
         Self::choose(
             var(ENDPOINT_ENV).map(PathBuf::from),
-            var("XDG_RUNTIME_DIR").map(PathBuf::from),
-            var("TMPDIR").map(PathBuf::from),
+            pwrroute_os::router_dir(),
             var(if cfg!(windows) { "USERNAME" } else { "USER" })
                 .map(|u| u.to_string_lossy().into_owned()),
         )
     }
 
-    /// [`Self::for_user`] over given environment values, so the choice is
-    /// testable. On Unix the runtime directory and `$TMPDIR` (per user on
-    /// macOS) are the user's own, so the name needs no user; `/tmp` is
-    /// shared, so there it carries one.
+    /// [`Self::for_user`] over given values, so the choice is testable. On
+    /// Unix the socket sits beside the router's, in a directory that is the
+    /// user's own; only without one does it go in the shared `/tmp`, named
+    /// for the user, where the peer check still turns others away.
     #[must_use]
     pub fn choose(
         explicit: Option<PathBuf>,
-        runtime_dir: Option<PathBuf>,
-        tmp_dir: Option<PathBuf>,
+        router_dir: Option<PathBuf>,
         user: Option<String>,
     ) -> Self {
         if let Some(path) = explicit {
@@ -72,8 +70,8 @@ impl Endpoint {
         if cfg!(windows) {
             return Self(PathBuf::from(format!(r"\\.\pipe\pwrroute-mcp-{user}")));
         }
-        match runtime_dir.or(tmp_dir) {
-            Some(dir) => Self(dir.join("pwrroute-mcp.sock")),
+        match router_dir {
+            Some(dir) => Self(dir.join("mcp.sock")),
             None => Self(PathBuf::from(format!("/tmp/pwrroute-mcp-{user}.sock"))),
         }
     }
@@ -222,7 +220,12 @@ mod imp {
         }
 
         pub(crate) async fn accept(&mut self) -> io::Result<Stream> {
-            self.next.connect().await?;
+            if let Err(e) = self.next.connect().await {
+                // A client that left before the connect (ERROR_NO_DATA)
+                // leaves the instance unusable until it is disconnected.
+                let _ = self.next.disconnect();
+                return Err(e);
+            }
             let following = ServerOptions::new()
                 .reject_remote_clients(true)
                 .create(&self.name)?;
@@ -252,30 +255,23 @@ mod tests {
 
     #[test]
     fn an_explicit_endpoint_wins() {
-        let e = Endpoint::choose(Some("/x/y.sock".into()), Some("/run".into()), None, None);
+        let e = Endpoint::choose(Some("/x/y.sock".into()), Some("/run".into()), None);
         assert_eq!(e.path(), Path::new("/x/y.sock"));
     }
 
     #[cfg(unix)]
     #[test]
-    fn unix_prefers_the_runtime_dir_then_tmpdir_then_a_named_tmp_socket() {
-        let e = Endpoint::choose(
-            None,
-            Some("/run/user/501".into()),
-            Some("/tmp/t".into()),
-            None,
-        );
-        assert_eq!(e.path(), Path::new("/run/user/501/pwrroute-mcp.sock"));
-        let e = Endpoint::choose(None, None, Some("/var/folders/x/T".into()), None);
-        assert_eq!(e.path(), Path::new("/var/folders/x/T/pwrroute-mcp.sock"));
-        let e = Endpoint::choose(None, None, None, Some("ann/../x".into()));
+    fn unix_sits_beside_the_router_socket_else_a_named_tmp_socket() {
+        let e = Endpoint::choose(None, Some("/run/user/501/pwrroute".into()), None);
+        assert_eq!(e.path(), Path::new("/run/user/501/pwrroute/mcp.sock"));
+        let e = Endpoint::choose(None, None, Some("ann/../x".into()));
         assert_eq!(e.path(), Path::new("/tmp/pwrroute-mcp-ann..x.sock"));
     }
 
     #[cfg(windows)]
     #[test]
     fn windows_names_a_pipe_per_user() {
-        let e = Endpoint::choose(None, None, None, Some("Ann Lee".into()));
+        let e = Endpoint::choose(None, None, Some("Ann Lee".into()));
         assert_eq!(e.path(), Path::new(r"\\.\pipe\pwrroute-mcp-AnnLee"));
     }
 }

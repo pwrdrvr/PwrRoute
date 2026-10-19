@@ -83,6 +83,9 @@ async fn a_client_on_the_link_lists_and_calls_tools() {
 
     let result = call(&client, "pwrroute_nope", json!({})).await;
     assert_eq!(result.is_error, Some(true));
+    // The audit names only PwrRoute's tools, never text an agent made up.
+    let records = h.audit.records();
+    assert_eq!(records.last().unwrap().tool, "unknown_tool");
     client.cancel().await.unwrap();
     h.finish().await;
 }

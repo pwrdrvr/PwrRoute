@@ -21,9 +21,10 @@ door; this crate supersedes that part of it.
 - **The proxy is a byte pipe.** `proxy.rs` copies stdio to and from the link
   and nothing else; the app runs the one MCP server (`server.rs`, one rmcp
   session per connection). Do not give the proxy its own protocol or tools.
-- **Only this user reaches the link.** Unix: a `0600` socket in
-  `$XDG_RUNTIME_DIR` or `$TMPDIR`, and every connection's peer uid must match
-  the socket's owner. Windows: a named pipe that refuses remote clients; the
+- **Only this user reaches the link.** Unix: a `0600` `mcp.sock` beside the
+  router's socket (`pwrroute_os::router_dir()`, the user's own directory),
+  and every connection's peer uid must match the socket's owner. Never put
+  it in a shared directory under a name without the user. Windows: a named pipe that refuses remote clients; the
   default pipe ACL gives other local users read access only, which cannot
   send a request. A second PwrRoute never takes over a live endpoint.
 - **Only the app approves.** The first time a client name connects, the
