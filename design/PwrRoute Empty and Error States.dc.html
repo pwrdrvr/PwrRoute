@@ -226,7 +226,7 @@
       <!-- ================= TURN 2 — Error states ================= -->
       <section class="dv-turn" id="t2">
         <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Error states</span></div>
-        <p class="dv-sub">Three failures, each with a different fallback. A <b>config that fails to load</b> leaves the last good version routing, so the error is news, not an outage. A <b>matcher that times out</b> hits the 1 s resolve budget (<code>Limits::resolve</code>); Finicky returns the default browser when a config throws or times out, and so does the router. A <b>browser that is not installed</b> cannot open the link, so the fallback opens it and the trace says why. Nothing is ever dropped.</p>
+        <p class="dv-sub">Three failures, each with a different fallback. A <b>config that fails to load</b> leaves the last good version routing, so the error is news, not an outage. A <b>matcher that times out</b> hits the 1 s resolve budget (<code>Limits::resolve</code>); a matcher that throws still gets the config's default browser, as in Finicky, but a deadline stops the whole resolve, so the router opens its own fallback: Safari on macOS, Edge on Windows, Firefox on Linux. A <b>browser that is not installed</b> cannot open the link, so the fallback opens it and the trace says why. Nothing is ever dropped.</p>
         <div class="dv-opts">
 
           <div class="dv-opt" id="2a" data-screen-label="2a Config fails to load">
@@ -253,19 +253,19 @@
                       <b>~/.finicky.ts did not load</b>
                       <span>Saved 09:41. The version loaded at 09:12 is still routing every link. Fix the file and save; it reloads on its own.</span>
                       <div class="frame">
-                        <div class="fh"><span>Expected `,` but found `}`</span><i>~/.finicky.ts:14:5</i></div>
+                        <div class="fh"><span>Expected `,` or `}` but found `Identifier`</span><i>~/.finicky.ts:13:5</i></div>
                         <div class="ln"><u>12</u><code>    match: ["*.atlassian.net/*", "github.com/pwrdrvr/*"]</code></div>
-                        <div class="ln"><u>13</u><code>    browser: { name: "Google Chrome", profile: "Work" }</code></div>
-                        <div class="ln hit"><u>14</u><code>  <span class="x">}</span>,</code></div>
-                        <div class="ln car"><u></u><code>  ^</code></div>
+                        <div class="ln hit"><u>13</u><code>    <span class="x">browser</span>: { name: "Google Chrome", profile: "Work" }</code></div>
+                        <div class="ln car"><u></u><code>    ^</code></div>
+                        <div class="ln"><u>14</u><code>  },</code></div>
                       </div>
                     </div>
-                    <div class="row-actions" style="flex-direction: column; align-items: stretch;"><span class="btn sm">Open at line 14</span><span class="btn sm quiet">Copy error</span></div>
+                    <div class="row-actions" style="flex-direction: column; align-items: stretch;"><span class="btn sm">Open at line 13</span><span class="btn sm quiet">Copy error</span></div>
                   </div>
                   <section class="card">
                     <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">From ~/.finicky.ts as loaded 09:12 · read-only</p><h2 class="card-title">Handlers</h2></div><span class="chip warn">still routing</span></div>
                     <div class="rules">
-                      <div class="rr ro"><span class="idx">01</span><div class="m nw"><span class="tag fn">fn</span><span class="srcline">(url, { opener }) =&gt; url.host.includes("workplace")</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
+                      <div class="rr ro"><span class="idx">01</span><div class="m nw"><span class="tag fn">fn</span><span class="srcline">(url) =&gt; { let h = url.host; while (aliases[h]) h = aliases[h]; return h.endsWith("workplace.com") }</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
                       <div class="rr ro"><span class="idx">02</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
                       <div class="rr ro"><span class="idx">03</span><div class="m"><span class="tag">bsky.app/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
                       <div class="rr ro"><span></span><div class="m"><span class="lbl" style="font-weight: 600; color: var(--text-primary);">defaultBrowser</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome</div><span class="more"></span></div>
@@ -285,7 +285,7 @@
                 <div class="tray">
                   <div class="th"><svg class="mark" viewBox="188 188 648 648" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip bad">config error</span></div>
                   <div class="sec">
-                    <div class="alert"><b>~/.finicky.ts did not load</b><span>Expected `,` but found `}` at 14:5. The version loaded at 09:12 is still routing.</span><div class="row-actions"><span class="btn sm">Show error</span><span class="btn sm quiet">Open file</span></div></div>
+                    <div class="alert"><b>~/.finicky.ts did not load</b><span>Expected `,` or `}` but found `Identifier` at 13:5. The version loaded at 09:12 is still routing.</span><div class="row-actions"><span class="btn sm">Show error</span><span class="btn sm quiet">Open file</span></div></div>
                   </div>
                   <div class="sec">
                     <div class="mi-row">Open PwrRoute<span class="sub">&#8984;O</span></div>
@@ -298,7 +298,7 @@
           </div>
 
           <div class="dv-opt" id="2c" data-screen-label="2c Matcher timed out">
-            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>Test a link on a URL that sends handler 1's function into a loop. The trace stops at that step, says what the budget is, and ends at the default browser the way Finicky does. Activity shows the same steps for a real link.</span></div>
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>Test a link on a URL whose host is in a cycle of aliases, so handler 1's function never returns. The trace stops at that step, says what the budget is, and ends at the router's fallback, not the config's default, because nothing of the config's answer survives the deadline. Activity shows the same steps for a real link.</span></div>
             <div class="dv-card win" style="width: 1040px;">
               <div class="strip">
                 <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
@@ -324,15 +324,15 @@
                     <div class="trace">
                       <div class="ts"><span class="n">0</span><div class="k">Received<small>from Mail · com.apple.mail</small></div><div class="v"><span class="url">https://workplace.example.com/groups/eng/permalink/8812</span></div></div>
                       <div class="ts skip"><span class="n">1</span><div class="k">Rewrites<small>2 in the config</small></div><div class="v">No match.</div></div>
-                      <div class="ts bad"><span class="n">!</span><div class="k">Handler 1<small>fn · ~/.finicky.ts:6</small></div><div class="v"><b>Timed out after 1,000 ms.</b><span>Each link gets 1 s for every matcher and rewrite function together. This one did not return, so no later handler ran.</span><div class="mm"><span class="tag fn">fn</span><span class="url" style="color: var(--text-muted); font-size: 10.5px;">(url, { opener }) =&gt; url.host.includes("workplace")</span></div></div></div>
+                      <div class="ts bad"><span class="n">!</span><div class="k">Handler 1<small>fn · ~/.finicky.ts:6</small></div><div class="v"><b>Timed out after 1,000 ms.</b><span>Each link gets 1 s for every matcher and rewrite function together. This one did not return, so no later handler ran.</span><div class="mm"><span class="tag fn">fn</span><span class="url" style="color: var(--text-muted); font-size: 10.5px;">(url) =&gt; { let h = url.host; while (aliases[h]) h = aliases[h]; return h.endsWith("workplace.com") }</span></div></div></div>
                       <div class="ts skip"><span class="n">2</span><div class="k">Handlers 2 to 4<small>not evaluated</small></div><div class="v">Skipped.</div></div>
-                      <div class="ts end"><span class="n">&#8618;</span><div class="k">Opens in<small>defaultBrowser, as Finicky does</small></div><div class="v"><div class="mm"><span class="tag app"><span class="bi">Ch</span>Google Chrome</span></div></div></div>
+                      <div class="ts end"><span class="n">&#8618;</span><div class="k">Opens in<small>router fallback · the config could not resolve the link</small></div><div class="v"><div class="mm"><span class="tag app"><span class="bi">Sa</span>Safari</span></div></div></div>
                     </div>
                   </section>
                   <section class="card">
                     <div class="res">
-                      <span class="big">Ch</span>
-                      <div class="rt"><b>Google Chrome</b><span class="note">Not what handler 1 meant, probably. Its function is the place to look.</span></div>
+                      <span class="big">Sa</span>
+                      <div class="rt"><b>Safari</b><span class="note">Not what any rule meant. Handler 1's function is the place to look.</span></div>
                       <div class="row-actions"><span class="btn">Open ~/.finicky.ts:6</span><span class="btn">Copy trace</span><span class="btn primary">Open now</span></div>
                     </div>
                   </section>

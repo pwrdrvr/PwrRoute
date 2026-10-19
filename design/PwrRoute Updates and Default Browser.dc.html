@@ -250,7 +250,8 @@
                   <div class="field"><div class="field-l"><span>What ran</span><span class="field-sub">Per user. Undo by choosing another browser in your desktop's settings.</span></div><div class="field-c">
                     <div class="cmd"><span><b>$</b> xdg-settings set default-web-browser pwrroute.desktop</span><span class="no">not found</span></div>
                     <div class="cmd"><span><b>$</b> xdg-mime default pwrroute.desktop x-scheme-handler/http x-scheme-handler/https</span><span class="ok">ok</span></div>
-                    <div class="cmd"><span><b>$</b> xdg-mime query default x-scheme-handler/http, https</span><span class="ok">pwrroute.desktop &times;2</span></div>
+                    <div class="cmd"><span><b>$</b> xdg-mime query default x-scheme-handler/http</span><span class="ok">pwrroute.desktop</span></div>
+                    <div class="cmd"><span><b>$</b> xdg-mime query default x-scheme-handler/https</span><span class="ok">pwrroute.desktop</span></div>
                     <span class="field-help">Some desktops keep their own setting as well. If links still open elsewhere, check Settings &rsaquo; Default Applications in GNOME, or System Settings &rsaquo; Default Applications in KDE.</span>
                   </div></div>
                 </section>
