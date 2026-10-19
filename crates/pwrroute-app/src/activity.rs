@@ -466,14 +466,14 @@ impl PwrRoute {
         cx: &mut Context<'_, Self>,
     ) {
         self.test.url.set(url);
-        if let Some(index) = fixtures::openers()
+        // An app the picker does not offer tests as no app, never as
+        // whichever app was picked before.
+        self.test.opener = fixtures::openers()
             .iter()
             .position(|o| o.is_some_and(|o| o.name == from))
-        {
-            self.test.opener = index;
-        }
-        self.navigate(Screen::TestLink, window, cx);
+            .unwrap_or(0);
+        // Run first, so opening the screen does not run its sample too.
         self.test.run();
-        cx.notify();
+        self.navigate(Screen::TestLink, window, cx);
     }
 }

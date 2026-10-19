@@ -45,13 +45,19 @@ pub struct TestLink {
     pub opener: usize,
     /// The opener menu is open.
     pub picking: bool,
+    /// The menu was open when the picker was pressed. The menu closes on
+    /// any press outside it, before the picker's click, so the click needs
+    /// to know whether it was open.
+    was_picking: bool,
     /// Show each missed handler rather than one folded step.
     pub unfold: bool,
     /// Copy trace was pressed since the last run.
     pub copied: bool,
     config: Option<PathBuf>,
     rules: RulesFile,
-    engine: Option<Result<Engine, String>>,
+    /// Built on the first test. A load error is not kept, so the next test
+    /// tries again (after the config is fixed, say).
+    engine: Option<Engine>,
     run: Option<Run>,
     /// The trace of the last run, or why it failed.
     pub outcome: Option<Result<TraceView, String>>,
@@ -71,6 +77,7 @@ impl TestLink {
             url: TextField::new(fixtures::TEST_URL, cx),
             opener: fixtures::TEST_OPENER,
             picking: false,
+            was_picking: false,
             unfold: false,
             copied: false,
             config,
@@ -98,25 +105,22 @@ impl TestLink {
             }
         };
         let opener = self.opener();
-        let rules = &self.rules;
-        let config = &self.config;
-        let engine = self.engine.get_or_insert_with(|| {
-            Engine::from_sources(
-                &Sources {
-                    config: config.clone(),
-                    rules: rules.clone(),
-                },
-                Rc::new(DefaultHost),
-                Limits::default(),
-            )
-            .map_err(|e| format!("The rules did not load: {e:#}"))
-        });
-        let engine = match engine {
-            Ok(engine) => engine,
-            Err(error) => {
-                self.outcome = Some(Err(error.clone()));
-                return;
+        if self.engine.is_none() {
+            let sources = Sources {
+                config: self.config.clone(),
+                rules: self.rules.clone(),
+            };
+            match Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default()) {
+                Ok(engine) => self.engine = Some(engine),
+                Err(error) => {
+                    self.run = None;
+                    self.outcome = Some(Err(format!("The rules did not load: {error:#}")));
+                    return;
+                }
             }
+        }
+        let Some(engine) = &self.engine else {
+            return;
         };
         let engine_opener = opener.map(|app| pwrroute_engine::Opener {
             name: app.name.into(),
@@ -435,8 +439,13 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
                 .child(text("from", 10.5, 400.0, theme::text_subtle()))
                 .child(label(app.test.opener()))
                 .child(caret())
+                // Capture runs in paint order: before the deferred menu's
+                // press-outside handler closes it.
+                .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                    this.test.was_picking = this.test.picking;
+                }))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.test.picking = !this.test.picking;
+                    this.test.picking = !this.test.was_picking;
                     cx.notify();
                 })),
         )
@@ -445,7 +454,6 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
 
 /// `.res`: where the link opens, and the two actions.
 fn result_card(view: &TraceView, copied: bool, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let text_copy = view.to_text();
     card().child(
         div()
             .flex()
@@ -511,10 +519,12 @@ fn result_card(view: &TraceView, copied: bool, cx: &mut Context<'_, PwrRoute>) -
                         )
                         .id("test-copy")
                         .debug_selector(|| "test-copy".into())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text_copy.clone()));
-                            this.test.copied = true;
-                            cx.notify();
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(Ok(view)) = &this.test.outcome {
+                                cx.write_to_clipboard(ClipboardItem::new_string(view.to_text()));
+                                this.test.copied = true;
+                                cx.notify();
+                            }
                         })),
                     )
                     // Dispatching from here waits for the browser launcher.

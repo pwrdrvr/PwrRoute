@@ -178,7 +178,13 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
             .child(theme::dot(theme::status_warning()))
             .into_any_element()
     } else {
-        count("10")
+        mono(
+            (app.rewrites.len() + app.handlers.len()).to_string(),
+            10.5,
+            600.0,
+            theme::text_subtle(),
+        )
+        .into_any_element()
     };
     let foot = if app.config.is_some() {
         div().child(

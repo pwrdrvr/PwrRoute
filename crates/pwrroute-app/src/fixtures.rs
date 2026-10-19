@@ -458,3 +458,63 @@ pub fn activity() -> Vec<ActivityRow> {
     ];
     rows
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Rules screen draws `rewrites()` and `handlers()`; Test a link
+    /// resolves `fixtures/rules.json`. They must be the same rules.
+    #[test]
+    fn rules_json_is_the_rules_screen() {
+        let file = rules_file();
+
+        let rewrites = rewrites();
+        assert_eq!(file.rewrites.len(), rewrites.len());
+        for (json, row) in file.rewrites.iter().zip(&rewrites) {
+            assert_eq!(json.patterns, row.patterns, "{}", row.title);
+            assert_eq!(json.enabled, row.rule.enabled, "{}", row.title);
+        }
+
+        let handlers = handlers();
+        assert_eq!(file.rules.len(), handlers.len());
+        for (json, row) in file.rules.iter().zip(&handlers) {
+            // rules.json has no regex matchers: a `/regex/` row stands in
+            // as a wildcard there, so only the wildcards must agree.
+            let wildcards: Vec<&str> = row
+                .patterns
+                .iter()
+                .copied()
+                .filter(|p| !p.starts_with('/'))
+                .collect();
+            assert_eq!(
+                json.patterns
+                    .iter()
+                    .take(wildcards.len())
+                    .collect::<Vec<_>>(),
+                wildcards,
+                "{}",
+                row.title
+            );
+            assert_eq!(json.enabled, row.rule.enabled, "{}", row.title);
+            let Destination::Browser { name, profile, .. } = &row.rule.destination else {
+                panic!("{} opens a browser", row.title);
+            };
+            // An app row shows its bundle id where a browser shows the
+            // profile; rules.json names that app by the bundle id.
+            if json.browser == *name {
+                assert_eq!(json.profile, profile.unwrap_or_default(), "{}", row.title);
+            } else {
+                assert_eq!(Some(json.browser.as_str()), *profile, "{}", row.title);
+            }
+            let opener: Vec<&str> = row.sent_from.iter().map(|app| app.bundle_id).collect();
+            assert_eq!(json.opener, opener, "{}", row.title);
+        }
+
+        let Destination::Browser { name, profile, .. } = everything_else().destination else {
+            panic!("everything else opens a browser");
+        };
+        assert_eq!(file.default_browser, name);
+        assert_eq!(file.default_profile, profile.unwrap_or_default());
+    }
+}

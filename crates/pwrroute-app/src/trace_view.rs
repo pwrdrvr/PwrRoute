@@ -126,6 +126,11 @@ impl TraceView {
         let mut misses: Vec<&Step> = Vec::new();
         for step in &trace.steps {
             if step.stage == Stage::Handler && !step.matched && step.error.is_none() && !unfold {
+                // A run folds within one list: the config's handlers and
+                // rules.json's are numbered separately.
+                if misses.last().is_some_and(|last| last.source != step.source) {
+                    flush_misses(&mut steps, &mut misses);
+                }
                 misses.push(step);
                 continue;
             }
@@ -553,6 +558,55 @@ mod tests {
                 ("https://xcancel.com/pwrdrvr/status/1842?", UrlMark::Same),
                 ("utm_source=slack&", UrlMark::Deleted),
                 ("s=20", UrlMark::Same),
+            ]
+        );
+    }
+
+    fn miss(source: Source, index: usize) -> Step {
+        Step {
+            stage: Stage::Handler,
+            source,
+            index,
+            matchers: vec![Matcher::Wildcard(format!("h{index}.example/*"))],
+            url: "https://a.example/".into(),
+            matched: false,
+            pattern: None,
+            rewritten_to: None,
+            won: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn missed_handlers_fold_within_their_own_list() {
+        let trace: Trace = serde_json::from_value(serde_json::json!({
+            "url": "https://a.example/",
+            "originalUrl": "https://a.example/",
+            "steps": [],
+            "resolution": {"browser": {
+                "name": "Safari", "appType": "appName", "url": "https://a.example/"
+            }},
+        }))
+        .expect("a trace");
+        let trace = Trace {
+            steps: vec![
+                miss(Source::Config, 0),
+                miss(Source::Config, 1),
+                miss(Source::Rules, 0),
+                miss(Source::Rules, 1),
+            ],
+            ..trace
+        };
+        let view =
+            TraceView::from_engine(&trace, &RulesFile::default(), None, Duration::ZERO, false);
+        let titles: Vec<&str> = view.steps.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Received",
+                "Config handlers 1 and 2",
+                "Handlers 1 and 2",
+                "Opens in"
             ]
         );
     }

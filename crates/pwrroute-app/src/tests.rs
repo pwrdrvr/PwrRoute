@@ -153,7 +153,14 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
 fn the_opener_picker_reruns_the_test(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     click(cx, "nav-test");
+    let picking = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.test.picking);
+    // The picker opens its menu and, clicked again, closes it.
     click(cx, "test-opener");
+    assert!(picking(cx));
+    click(cx, "test-opener");
+    assert!(!picking(cx));
+    click(cx, "test-opener");
+    assert!(picking(cx));
     // Not from Slack: handler 3 no longer matches and the default opens it.
     click(cx, "test-opener-choice-0");
     let none = trace(&view, cx);
@@ -195,6 +202,14 @@ fn activity_expands_filters_and_retests(cx: &mut TestAppContext) {
         trace(&view, cx).result.title,
         "Firefox \u{00b7} default-release"
     );
+
+    // A row from an app the picker does not offer re-tests as no app, not
+    // as Slack (picked by the previous re-test).
+    click(cx, "nav-activity");
+    click(cx, "activity-row-4");
+    click(cx, "activity-retest-4");
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener), 0);
+    assert_eq!(trace(&view, cx).result.title, "Google Chrome \u{00b7} Work");
 }
 
 #[gpui_kit::test]

@@ -59,8 +59,9 @@ impl TextField {
             self.text.clear();
             self.selected = false;
         }
-        // One line: a pasted newline ends the text, as in a browser's bar.
-        self.text.extend(text.chars().filter(|c| !c.is_control()));
+        // One line: pasted text stops at its first line break.
+        let line = text.lines().next().unwrap_or_default();
+        self.text.extend(line.chars().filter(|c| !c.is_control()));
     }
 
     /// Applies one keystroke.
