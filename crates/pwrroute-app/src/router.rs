@@ -38,6 +38,8 @@ pub struct Args {
     pub dry_run: bool,
     /// A Finicky config to load instead of the default locations.
     pub config: Option<PathBuf>,
+    /// Open the first-run window (`--first-run`), whatever has run before.
+    pub first_run: bool,
 }
 
 impl Args {
@@ -54,6 +56,7 @@ impl Args {
         while let Some(arg) = rest.next() {
             match arg {
                 "--dry-run" => args.dry_run = true,
+                "--first-run" => args.first_run = true,
                 "--config" => args.config = rest.next().map(PathBuf::from),
                 _ => {
                     if let Some(path) = arg.strip_prefix("--config=") {
@@ -272,7 +275,9 @@ mod tests {
 
         let args = parse(&["pwrroute", "--config=/c.js"]);
         assert_eq!(args.config.as_deref(), Some(Path::new("/c.js")));
-        assert!(args.links.is_empty() && !args.dry_run);
+        assert!(args.links.is_empty() && !args.dry_run && !args.first_run);
+
+        assert!(parse(&["pwrroute", "--first-run"]).first_run);
     }
 
     #[test]

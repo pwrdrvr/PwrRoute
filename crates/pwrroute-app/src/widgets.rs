@@ -2,7 +2,7 @@
 //! switches. Each mirrors one class in `design/pwrroute.css`.
 
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{Div, Hsla, ParentElement as _, Styled as _, div, px};
+use gpui_kit::{Div, Hsla, ParentElement as _, SharedString, Styled as _, div, px};
 
 use crate::theme::{self, icon, mono, text};
 
@@ -50,6 +50,11 @@ pub fn tag_frame() -> Div {
 
 /// `.bi`: a browser or app's two-letter badge.
 pub fn badge(label: &'static str) -> Div {
+    badge_text(label.into())
+}
+
+/// [`badge`] for a label that is not `'static`.
+pub fn badge_text(label: SharedString) -> Div {
     div()
         .flex()
         .flex_none()

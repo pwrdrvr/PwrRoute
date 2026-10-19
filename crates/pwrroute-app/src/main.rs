@@ -15,13 +15,18 @@ mod assets;
 #[cfg(target_os = "windows")]
 mod browser_registration;
 mod chrome;
+mod dock;
 mod editor;
+mod first_run;
 mod fixtures;
+#[cfg(target_os = "macos")]
+mod macos;
 mod router;
 mod rules_view;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod tray;
 mod updater;
 mod widgets;
 
@@ -92,6 +97,7 @@ fn main() {
         router::Start::Resident(resident) => resident,
     };
     let handle = resident.handle();
+    let first_run = args.first_run;
     let last_link = LastLink::default();
     if resident.launched_with_links {
         last_link.mark();
@@ -121,6 +127,8 @@ fn main() {
     app.run(move |cx| {
         assets::load_fonts(cx);
         app_menu::install(cx);
+        dock::install(cx);
+        tray::install(cx);
         updater::check_in_background(updater::Trigger::Startup);
 
         let activate = resident.activate.clone();
@@ -132,6 +140,13 @@ fn main() {
         .detach();
         cx.set_global(ResidentRouter(resident));
 
+        if first_run {
+            let model = first_run::FirstRunModel::fixture();
+            if let Err(error) = first_run::open(model, first_run::FirstRunHooks::logging(), cx) {
+                eprintln!("pwrroute: could not open the first-run window: {error}");
+            }
+            return;
+        }
         if last_link.ever() {
             return;
         }
@@ -154,7 +169,8 @@ fn main() {
 
 /// Brings the main window forward, opening it if it is closed.
 fn show_main_window(cx: &mut App) {
-    if let Some(window) = cx.windows().first() {
+    // The tray dropdown and the first-run window are windows too.
+    if let Some(window) = cx.windows().iter().find_map(|w| w.downcast::<PwrRoute>()) {
         let _ = window.update(cx, |_, window, _| window.activate_window());
         cx.activate(true);
         return;
