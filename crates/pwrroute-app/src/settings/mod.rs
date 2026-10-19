@@ -27,7 +27,7 @@ use gpui_kit::{
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 
-use self::controls::{card, separated};
+use self::controls::{Heading, Kind, button, card, separated};
 use self::model::{SettingsModel, SettingsRequest};
 use crate::theme::{self, icon, mono, text};
 
@@ -254,7 +254,7 @@ impl SettingsWindow {
         on_request: RequestHandler,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let agents = local_agents::State::new(&model.local_agents, cx);
+        let agents = local_agents::State::new(cx);
         Self {
             focus: cx.focus_handle(),
             // General is not drawn yet; Browsers is the first pane that is.
@@ -319,13 +319,14 @@ impl SettingsWindow {
     fn disclosure(
         &self,
         id: &'static str,
-        heading: Div,
+        heading: Heading,
         trailing: Option<AnyElement>,
         rows: Vec<Div>,
         cx: &mut Context<'_, Self>,
     ) -> gpui_kit::Stateful<Div> {
         let open = !self.collapsed.contains(id);
         let toggle_id = ElementId::Name(SharedString::from(format!("{id}-toggle")));
+        let name = heading.title;
         card(id)
             .child(
                 div()
@@ -344,12 +345,10 @@ impl SettingsWindow {
                             .justify_start()
                             .items_start()
                             .line_height(px(13.5))
-                            .accessibility_label(SharedString::from(format!(
-                                "{} section",
-                                if open { "Collapse" } else { "Expand" }
-                            )))
+                            .accessibility_label(name)
+                            .aria_expanded(open)
                             .on_click(cx.listener(move |this, _, _, cx| this.toggle_card(id, cx)))
-                            .child(heading),
+                            .child(heading.render()),
                     )
                     .children(trailing),
             )
@@ -363,7 +362,7 @@ impl SettingsWindow {
             "Copy"
         };
         let id = ElementId::Name(SharedString::from(format!("settings-copy-{index}")));
-        controls::button(id, label, controls::Kind::Default, true)
+        button(id, label, Kind::Default, true)
             .on_click(cx.listener(move |this, _, _, cx| this.copy(index, content.clone(), cx)))
             .into_any_element()
     }
@@ -398,6 +397,20 @@ impl SettingsWindow {
             pane => placeholder(pane),
         }
     }
+}
+
+/// A button whose only job is to send `request`.
+fn request_button(
+    id: &'static str,
+    label: &'static str,
+    kind: Kind,
+    small: bool,
+    request: SettingsRequest,
+    cx: &mut Context<'_, SettingsWindow>,
+) -> Button {
+    button(id, label, kind, small).on_click(cx.listener(move |this, _, window, cx| {
+        this.request(request.clone(), window, cx);
+    }))
 }
 
 /// `.snav .rail-item`; `.on` when `selected`.

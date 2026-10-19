@@ -6,19 +6,20 @@ use gpui_kit::{
     Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div, px,
 };
 
-use super::SettingsWindow;
 use super::controls::{
-    Kind, Tone, action_tag, add_pill, button, card_description, card_heading, checkbox, chip,
-    command_box, field, field_help, field_sub, field_sub_code, fn_tag, pane_head, radio_dot,
+    Kind, Tone, action_tag, add_pill, button_when, card_description, checkbox, chip, command_box,
+    field, field_help, field_sub, field_sub_code, fn_tag, heading, pane_head, radio_dot,
     row_actions, slot, switch, tag,
 };
 use super::model::{ImportCandidate, Piece, RulesSource, SettingsRequest};
 use super::style::para;
+use super::{SettingsWindow, request_button};
 use crate::theme::{self, mono, text};
 
 pub const VISUAL_SLOT_ID: &str = "config-source-visual";
 pub const FINICKY_SLOT_ID: &str = "config-source-finicky";
 pub const IMPORT_ID: &str = "config-import";
+pub const KEEP_CONFIG_ID: &str = "config-import-keep";
 
 impl SettingsWindow {
     fn set_source(&mut self, source: RulesSource, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -93,20 +94,6 @@ pub fn pane(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> Div 
         .when_some(import_card(this, cx), Div::child)
         .child(short_links_card(this, cx))
         .child(files_card(this, cx))
-}
-
-/// A button whose only job is to send `request`.
-fn request_button(
-    id: &'static str,
-    label: &'static str,
-    kind: Kind,
-    small: bool,
-    request: SettingsRequest,
-    cx: &mut Context<'_, SettingsWindow>,
-) -> impl IntoElement {
-    button(id, label, kind, small).on_click(cx.listener(move |this, _, window, cx| {
-        this.request(request.clone(), window, cx);
-    }))
 }
 
 /// `.slot`: one source tile.
@@ -208,7 +195,7 @@ fn source_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
     )];
     this.disclosure(
         "config-source",
-        card_heading("Where rules come from", "Source", None),
+        heading("Where rules come from", "Source"),
         Some(chip(chosen, Tone::Ok).into_any_element()),
         rows,
         cx,
@@ -229,11 +216,11 @@ fn count_word(count: usize) -> String {
 /// truncated line, with any aside below it.
 fn summary(candidate: &ImportCandidate) -> Div {
     if !candidate.importable {
-        let (source, asides): (Vec<_>, Vec<_>) = candidate
+        let (asides, source): (Vec<_>, Vec<_>) = candidate
             .summary
             .iter()
             .cloned()
-            .partition(|piece| matches!(piece, Piece::Source(_)));
+            .partition(|piece| matches!(piece, Piece::Aside(_) | Piece::Code(_)));
         let line = |pieces: Vec<Piece>| {
             pieces_row(&ImportCandidate {
                 summary: pieces,
@@ -337,56 +324,56 @@ fn import_card(
         1 => "Import 1 rule".to_owned(),
         count => format!("Import {count} rules"),
     });
+    let enabled = checked > 0;
+    // Keeping the config only means something while some rules stay JS.
     let actions = row_actions()
         .mt(px(6.0))
         .child(
-            button(IMPORT_ID, import_label, Kind::Primary, false)
-                .disabled(checked == 0)
-                .when(checked == 0, |button| button.opacity(0.6))
+            button_when(IMPORT_ID, import_label, Kind::Primary, false, enabled)
                 .on_click(cx.listener(|this, _, window, cx| this.import(false, window, cx))),
         )
-        .child(
-            button(
-                "config-import-keep",
-                "Import and keep the config for the rest",
-                Kind::Default,
-                false,
+        .when(stays > 0, |actions| {
+            actions.child(
+                button_when(
+                    KEEP_CONFIG_ID,
+                    "Import and keep the config for the rest",
+                    Kind::Default,
+                    false,
+                    enabled,
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.import(true, window, cx))),
             )
-            .disabled(checked == 0)
-            .on_click(cx.listener(|this, _, window, cx| this.import(true, window, cx))),
-        )
+        })
         .into_any_element();
     let matchers = if stays == 1 {
-        "function matcher keeps".to_owned()
+        "function matcher keeps"
     } else {
-        "function matchers keep".to_owned()
+        "function matchers keep"
     };
-    let help = field_help(format!(
-        "The second button leaves {path} selected so the {} {matchers} working, with the \
-         imported rules running after it.",
-        count_word(stays),
-    ))
-    .into_any_element();
+    let help = (stays > 0).then(|| {
+        field_help(format!(
+            "The second button leaves {path} selected so the {} {matchers} working, with the \
+             imported rules running after it.",
+            count_word(stays),
+        ))
+        .into_any_element()
+    });
     let rows = vec![field(
         "Rules found",
         Some(field_sub(
             "Checked rows become visual rules. Unchecked ones keep running from the config if it \
              stays selected.",
         )),
-        lines.chain([actions, help]),
+        lines.chain([actions]).chain(help),
     )];
     let stays_chip =
         (stays > 0).then(|| chip(format!("{stays} stay JS"), Tone::Warn).into_any_element());
     Some(this.disclosure(
         "config-import",
-        card_heading(
-            "Migration",
-            "Import from Finicky",
-            Some(card_description(format!(
-                "Reads {path} and offers what the visual rules can hold. The file itself is not \
-                 changed."
-            ))),
-        ),
+        heading("Migration", "Import from Finicky").description(card_description(format!(
+            "Reads {path} and offers what the visual rules can hold. The file itself is not \
+             changed."
+        ))),
         stays_chip,
         rows,
         cx,
@@ -434,7 +421,7 @@ fn short_links_card(
     )];
     this.disclosure(
         "config-short-links",
-        card_heading("Options", "Short links", None),
+        heading("Options", "Short links"),
         None,
         rows,
         cx,
@@ -481,11 +468,5 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
                 .into_any_element(),
         ],
     )];
-    this.disclosure(
-        "config-files",
-        card_heading("On disk", "Files", None),
-        None,
-        rows,
-        cx,
-    )
+    this.disclosure("config-files", heading("On disk", "Files"), None, rows, cx)
 }

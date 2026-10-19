@@ -15,6 +15,7 @@ use gpui_kit::{
 use super::model::Status;
 use super::style::{self, ch, para};
 use crate::theme::{self, mono, text, tracked};
+use crate::widgets::tag_frame;
 
 /// `.btn` and its modifiers.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,18 @@ pub fn button(
     label: impl Into<SharedString>,
     kind: Kind,
     small: bool,
+) -> Button {
+    button_when(id, label, kind, small, true)
+}
+
+/// [`button`], or an inert one at 60% when not `enabled`: no pointer, no
+/// hover, no activation.
+pub fn button_when(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    kind: Kind,
+    small: bool,
+    enabled: bool,
 ) -> Button {
     let foreground = match kind {
         Kind::Default => theme::text_primary(),
@@ -72,8 +85,14 @@ pub fn button(
         .border_color(border)
         .rounded(px(7.0))
         .bg(fill)
-        .cursor_pointer()
-        .hover(move |style| style.bg(hover))
+        .disabled(!enabled)
+        .map(|button| {
+            if enabled {
+                button.cursor_pointer().hover(move |style| style.bg(hover))
+            } else {
+                button.opacity(0.6)
+            }
+        })
         .child(text(label, size, 550.0, foreground))
 }
 
@@ -234,33 +253,19 @@ pub fn status(label: impl Into<SharedString>, status: Status) -> Div {
         .child(text(label, 11.0, 500.0, theme::text_secondary()))
 }
 
-fn tag_box() -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(5.0))
-        .h(px(20.0))
-        .px(px(7.0))
-        .border_1()
-        .border_color(theme::border_subtle())
-        .rounded(px(6.0))
-        .bg(theme::bg_elevated())
-}
-
 /// `.tag`.
 pub fn tag(label: impl Into<SharedString>) -> Div {
-    tag_box().child(mono(label, 10.5, 500.0, theme::text_secondary()))
+    tag_frame().child(mono(label, 10.5, 500.0, theme::text_secondary()))
 }
 
 /// `.tag` in accent text: a rewrite's action.
 pub fn action_tag(label: impl Into<SharedString>) -> Div {
-    tag_box().child(mono(label, 10.5, 500.0, theme::accent_bright()))
+    tag_frame().child(mono(label, 10.5, 500.0, theme::accent_bright()))
 }
 
 /// `.tag.fn`.
 pub fn fn_tag() -> Div {
-    tag_box()
+    tag_frame()
         .bg(style::accent_soft())
         .border_color(theme::transparent())
         .child(mono("fn", 10.5, 500.0, theme::accent_bright()))
@@ -400,8 +405,36 @@ pub fn card(id: impl Into<ElementId>) -> gpui_kit::Stateful<Div> {
         .overflow_hidden()
 }
 
+/// What a card's header says: eyebrow, title and an optional description.
+/// The title also names the card's fold toggle for assistive technology.
+pub struct Heading {
+    pub eyebrow: &'static str,
+    pub title: &'static str,
+    description: Option<Div>,
+}
+
+pub fn heading(eyebrow: &'static str, title: &'static str) -> Heading {
+    Heading {
+        eyebrow,
+        title,
+        description: None,
+    }
+}
+
+impl Heading {
+    /// A `.card-desc` under the title.
+    pub fn description(mut self, description: Div) -> Self {
+        self.description = Some(description);
+        self
+    }
+
+    pub fn render(self) -> Div {
+        card_heading(self.eyebrow, self.title, self.description)
+    }
+}
+
 /// `.card-hd-main`: eyebrow, title and the optional description.
-pub fn card_heading(eyebrow: &str, title: &'static str, description: Option<Div>) -> Div {
+fn card_heading(eyebrow: &str, title: &'static str, description: Option<Div>) -> Div {
     div()
         .flex_1()
         .min_w_0()

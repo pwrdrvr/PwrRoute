@@ -1,17 +1,16 @@
 //! 1c Browsers: OS default registration, detected browsers and other apps.
 
 use gpui_kit::{
-    AnyElement, Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
-    div, px,
+    Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div, px,
 };
 
-use super::SettingsWindow;
 use super::controls::{
-    Kind, Tone, badge, button, card_description, card_heading, chip, field, field_help, field_sub,
-    field_sub_code, note, pane_head, row_actions, status, switch, tag,
+    Kind, Tone, badge, button_when, card_description, chip, field, field_help, field_sub,
+    field_sub_code, heading, note, pane_head, row_actions, status, switch, tag,
 };
 use super::model::{BrowserApp, SettingsRequest, Status, Usage};
 use super::style::para;
+use super::{SettingsWindow, request_button};
 use crate::theme::{self, mono};
 
 /// The explicit "make PwrRoute the default browser" button.
@@ -73,21 +72,6 @@ pub fn pane(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> Div 
         .child(other_apps_card(this, cx))
 }
 
-fn request_button(
-    id: &'static str,
-    label: &'static str,
-    kind: Kind,
-    small: bool,
-    request: SettingsRequest,
-    cx: &mut Context<'_, SettingsWindow>,
-) -> AnyElement {
-    button(id, label, kind, small)
-        .on_click(cx.listener(move |this, _, window, cx| {
-            this.request(request.clone(), window, cx);
-        }))
-        .into_any_element()
-}
-
 fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
     let default = &this.model.browsers.default;
     let (state, register, help) = if default.is_default {
@@ -101,14 +85,13 @@ fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
         );
         (
             chip("PwrRoute is default", Tone::Ok),
-            button(
+            button_when(
                 REGISTER_ID,
                 "PwrRoute is the default browser",
                 Kind::Default,
                 false,
+                false,
             )
-            .disabled(true)
-            .opacity(0.6)
             .into_any_element(),
             help,
         )
@@ -122,7 +105,8 @@ fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
                 false,
                 SettingsRequest::RegisterDefaultBrowser,
                 cx,
-            ),
+            )
+            .into_any_element(),
             "Until then the OS opens links in its own default browser, without PwrRoute\u{2019}s \
              rules."
                 .to_owned(),
@@ -151,7 +135,7 @@ fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
     )];
     this.disclosure(
         "browsers-default",
-        card_heading("OS registration", "Default browser", None),
+        heading("OS registration", "Default browser"),
         Some(state.into_any_element()),
         rows,
         cx,
@@ -263,15 +247,11 @@ fn detected_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) ->
     );
     this.disclosure(
         "browsers-detected",
-        card_heading(
-            "Applications",
-            "Detected browsers",
-            Some(card_description(
-                "Scanned at launch and on demand. Profiles are read from each browser\u{2019}s \
-                 own files.",
-            )),
-        ),
-        Some(rescan),
+        heading("Applications", "Detected browsers").description(card_description(
+            "Scanned at launch and on demand. Profiles are read from each browser\u{2019}s own \
+             files.",
+        )),
+        Some(rescan.into_any_element()),
         rows,
         cx,
     )
@@ -304,12 +284,9 @@ fn other_apps_card(
     );
     this.disclosure(
         "browsers-other",
-        card_heading(
-            "By bundle id or path",
-            "Other apps",
-            Some(description.text_size(px(11.5)).line_height(px(18.4))),
-        ),
-        Some(add),
+        heading("By bundle id or path", "Other apps")
+            .description(description.text_size(px(11.5)).line_height(px(18.4))),
+        Some(add.into_any_element()),
         rows,
         cx,
     )

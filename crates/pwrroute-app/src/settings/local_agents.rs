@@ -9,12 +9,14 @@ use gpui_kit::{
     anchored, deferred, div, point, px, rgb,
 };
 
+use std::collections::HashMap;
+
 use super::SettingsWindow;
 use super::controls::{
-    Kind, Tone, button, card_description, card_heading, chip, column_head, command_box, field,
-    field_help, field_sub, field_sub_code, pane_head, status, switch,
+    Kind, Tone, button, card_description, chip, column_head, command_box, field, field_help,
+    field_sub, field_sub_code, heading, pane_head, status, switch,
 };
-use super::model::{AgentRole, AgentSession, Grant, Listener, LocalAgents, SettingsRequest};
+use super::model::{AgentRole, AgentSession, Grant, Listener, SessionId, SettingsRequest};
 use super::style::{self, para};
 use crate::theme::{self, mono, text};
 
@@ -34,23 +36,24 @@ pub const COLLAPSE_ALL_ID: &str = "agents-collapse-all";
 /// The pane's own view state: which role menu is open.
 pub struct State {
     menu: Option<Menu>,
-    /// One per session, for its role select's trigger.
-    triggers: Vec<FocusHandle>,
+    /// Each session's role select trigger, by id, so a producer can add,
+    /// drop or reorder sessions under an open window.
+    triggers: HashMap<SessionId, FocusHandle>,
     /// The open menu's, which takes the arrow keys.
     menu_focus: FocusHandle,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Menu {
-    session: usize,
+    session: SessionId,
     highlighted: usize,
 }
 
 impl State {
-    pub fn new(model: &LocalAgents, cx: &mut Context<'_, SettingsWindow>) -> Self {
+    pub fn new(cx: &mut Context<'_, SettingsWindow>) -> Self {
         Self {
             menu: None,
-            triggers: model.sessions.iter().map(|_| cx.focus_handle()).collect(),
+            triggers: HashMap::new(),
             menu_focus: cx.focus_handle(),
         }
     }
@@ -59,10 +62,27 @@ impl State {
         self.menu = None;
     }
 
+    /// Give every session a trigger handle and forget sessions that left;
+    /// close the menu if its session is gone.
+    fn sync(&mut self, sessions: &[AgentSession], cx: &mut Context<'_, SettingsWindow>) {
+        self.triggers
+            .retain(|id, _| sessions.iter().any(|session| &session.id == id));
+        for session in sessions {
+            self.triggers
+                .entry(session.id.clone())
+                .or_insert_with(|| cx.focus_handle());
+        }
+        if let Some(menu) = &self.menu
+            && !self.triggers.contains_key(&menu.session)
+        {
+            self.menu = None;
+        }
+    }
+
     /// The session whose role menu is open, for tests.
     #[cfg(test)]
-    pub fn open_menu(&self) -> Option<usize> {
-        self.menu.map(|menu| menu.session)
+    pub fn open_menu(&self) -> Option<SessionId> {
+        self.menu.as_ref().map(|menu| menu.session.clone())
     }
 }
 
@@ -79,16 +99,17 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    fn open_role_menu(&mut self, session: usize, open: bool, cx: &mut Context<'_, Self>) {
+    fn open_role_menu(&mut self, session: &SessionId, open: bool, cx: &mut Context<'_, Self>) {
         self.agents.menu = if open {
             let agents = &self.model.local_agents;
             let current = agents
                 .sessions
-                .get(session)
-                .and_then(|session| agents.roles.iter().position(|role| role.id == session.role))
+                .iter()
+                .find(|row| &row.id == session)
+                .and_then(|row| agents.roles.iter().position(|role| role.id == row.role))
                 .unwrap_or(0);
             Some(Menu {
-                session,
+                session: session.clone(),
                 highlighted: current,
             })
         } else {
@@ -108,10 +129,10 @@ impl SettingsWindow {
         }
     }
 
-    /// Give session `session` role `role` (indices), and close its menu.
+    /// Give `session` the role at index `role`, and close its menu.
     pub(crate) fn set_role(
         &mut self,
-        session: usize,
+        session: &SessionId,
         role: usize,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
@@ -121,8 +142,8 @@ impl SettingsWindow {
             window.focus(trigger, cx);
         }
         let agents = &mut self.model.local_agents;
-        let (Some(row), Some(role)) = (agents.sessions.get_mut(session), agents.roles.get(role))
-        else {
+        let row = agents.sessions.iter_mut().find(|row| &row.id == session);
+        let (Some(row), Some(role)) = (row, agents.roles.get(role)) else {
             return;
         };
         if row.role != role.id {
@@ -136,8 +157,9 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    fn revoke(&mut self, session: usize, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(row) = self.model.local_agents.sessions.get_mut(session) else {
+    fn revoke(&mut self, session: &SessionId, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let sessions = &mut self.model.local_agents.sessions;
+        let Some(row) = sessions.iter_mut().find(|row| &row.id == session) else {
             return;
         };
         // The producer reports the real date; until it does, say when.
@@ -161,6 +183,7 @@ pub fn pane(
     window: &mut Window,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Div {
+    this.agents.sync(&this.model.local_agents.sessions, cx);
     let collapse_label = if this.all_collapsed(&CARDS) {
         "Expand all"
     } else {
@@ -186,10 +209,14 @@ pub fn pane(
 
 fn server_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
     let agents = &this.model.local_agents;
-    let listener = match &agents.listener {
-        Listener::Listening => chip("Listening", Tone::Ok),
-        Listener::Stopped => chip("Stopped", Tone::Neutral),
-        Listener::Failed(why) => chip(why.clone(), Tone::Bad),
+    // The chip is one word; a failure's reason wraps under the switch.
+    let (listener, failure) = match &agents.listener {
+        Listener::Listening => (chip("Listening", Tone::Ok), None),
+        Listener::Stopped => (chip("Stopped", Tone::Neutral), None),
+        Listener::Failed(why) => (
+            chip("Not listening", Tone::Bad),
+            Some(field_help(why.clone()).into_any_element()),
+        ),
     };
     let endpoint = agents.endpoint.clone();
     let rows = vec![
@@ -207,7 +234,9 @@ fn server_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
                     });
                     move |on, _, window, cx| set(&on, window, cx)
                 })
-                .into_any_element()],
+                .into_any_element()]
+            .into_iter()
+            .chain(failure),
         ),
         field(
             "Endpoint",
@@ -230,7 +259,7 @@ fn server_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
     ];
     this.disclosure(
         "agents-server",
-        card_heading("Local agent access", "MCP server", None),
+        heading("Local agent access", "MCP server"),
         Some(listener.into_any_element()),
         rows,
         cx,
@@ -265,14 +294,10 @@ fn connect_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
     ];
     this.disclosure(
         "agents-connect",
-        card_heading(
-            "Connect an agent",
-            "Claude Code and Codex",
-            Some(card_description(
-                "Run one of these. The approval window opens in PwrRoute; the browser page only \
-                 waits.",
-            )),
-        ),
+        heading("Connect an agent", "Claude Code and Codex").description(card_description(
+            "Run one of these. The approval window opens in PwrRoute; the browser page only \
+             waits.",
+        )),
         None,
         rows,
         cx,
@@ -314,7 +339,7 @@ fn sessions_card(
     }
     this.disclosure(
         "agents-sessions",
-        card_heading("Authorization", "Sessions", None),
+        heading("Authorization", "Sessions"),
         Some(chip(format!("{active} active"), Tone::Ok).into_any_element()),
         rows,
         cx,
@@ -336,6 +361,7 @@ fn session_line(
     };
     let name = para(session.name.clone(), 12.0, 600.0, 1.3, name_color)
         .when(revoked, |name| name.line_through());
+    let id = session.id.clone();
     session_row()
         .child(
             div()
@@ -369,9 +395,8 @@ fn session_line(
         }))
         .child(div().w(px(70.0)).flex_none().when(!revoked, |cell| {
             cell.child(
-                button(("agents-revoke", index), "Revoke", Kind::Danger, true).on_click(
-                    cx.listener(move |this, _, window, cx| this.revoke(index, window, cx)),
-                ),
+                button(("agents-revoke", index), "Revoke", Kind::Danger, true)
+                    .on_click(cx.listener(move |this, _, window, cx| this.revoke(&id, window, cx))),
             )
         }))
 }
@@ -387,16 +412,21 @@ fn role_select(
 ) -> AnyElement {
     let agents = &this.model.local_agents;
     let disabled = session.revoked.is_some();
-    let menu = this.agents.menu.filter(|menu| menu.session == index);
+    let menu = this
+        .agents
+        .menu
+        .clone()
+        .filter(|menu| menu.session == session.id);
     let current = agents
         .role(&session.role)
         .map_or_else(|| session.role.0.clone(), |role| role.name.clone());
+    let id = session.id.clone();
     let open_change = cx.listener(move |this, open: &bool, _, cx| {
-        this.open_role_menu(index, *open, cx);
+        this.open_role_menu(&id, *open, cx);
     });
     let confirm = cx.listener(move |this, _: &(), window, cx| {
-        if let Some(menu) = this.agents.menu {
-            this.set_role(menu.session, menu.highlighted, window, cx);
+        if let Some(menu) = this.agents.menu.clone() {
+            this.set_role(&menu.session, menu.highlighted, window, cx);
         }
     });
     let trigger = div()
@@ -426,10 +456,11 @@ fn role_select(
                 trigger.opacity(0.5)
             } else {
                 let open = menu.is_some();
+                let id = session.id.clone();
                 trigger
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.open_role_menu(index, !open, cx);
+                        this.open_role_menu(&id, !open, cx);
                     }))
             }
         });
@@ -442,7 +473,7 @@ fn role_select(
         .on_confirm(move |window, cx| confirm(&(), window, cx))
         .w_full()
         .child(trigger);
-    if let Some(trigger) = this.agents.triggers.get(index) {
+    if let Some(trigger) = this.agents.triggers.get(&session.id) {
         select = select
             .focus_handle(trigger)
             .content_focus_handle(&this.agents.menu_focus);
@@ -453,13 +484,7 @@ fn role_select(
                 anchored()
                     .offset(point(px(0.0), px(4.0)))
                     .snap_to_window_with_margin(px(8.0))
-                    .child(role_menu(
-                        &agents.roles,
-                        index,
-                        menu,
-                        &this.agents.menu_focus,
-                        cx,
-                    )),
+                    .child(role_menu(&agents.roles, menu, &this.agents.menu_focus, cx)),
             ))
         })
         .into_any_element()
@@ -467,7 +492,6 @@ fn role_select(
 
 fn role_menu(
     roles: &[AgentRole],
-    session: usize,
     menu: Menu,
     focus: &FocusHandle,
     cx: &mut Context<'_, SettingsWindow>,
@@ -497,6 +521,7 @@ fn role_menu(
             .on_action(cx.listener(|this, _: &SelectDown, _, cx| this.move_highlight(1, cx))),
         |list, (index, role)| {
             let highlighted = index == menu.highlighted;
+            let session = menu.session.clone();
             list.child(
                 Button::new(("agents-role-option", index))
                     .role(gpui_kit::Role::ListBoxOption)
@@ -518,7 +543,7 @@ fn role_menu(
                         }
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_role(session, index, window, cx);
+                        this.set_role(&session, index, window, cx);
                     }))
                     .child(text(role.name.clone(), 11.5, 500.0, theme::text_primary()))
                     .when(!role.built_in, |option| {
@@ -545,14 +570,10 @@ fn roles_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
     );
     this.disclosure(
         "agents-roles",
-        card_heading(
-            "Permissions",
-            "Roles",
-            Some(card_description(
-                "Built-in roles cover the three things an agent can want. Permissions are \
-                 additive; a custom role starts from a copy.",
-            )),
-        ),
+        heading("Permissions", "Roles").description(card_description(
+            "Built-in roles cover the three things an agent can want. Permissions are additive; \
+             a custom role starts from a copy.",
+        )),
         Some(new_role.into_any_element()),
         vec![tiles],
         cx,
@@ -714,7 +735,7 @@ fn recent_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
         }));
     this.disclosure(
         "agents-recent",
-        card_heading("Activity", "Recent agent actions", None),
+        heading("Activity", "Recent agent actions"),
         Some(open_activity.into_any_element()),
         rows,
         cx,

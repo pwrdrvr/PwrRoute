@@ -179,7 +179,7 @@ fn a_role_is_chosen_from_the_select(cx: &mut TestAppContext) {
     click(cx, ("agents-role", 0_usize));
     assert_eq!(
         view.read_with(cx, |view, _| view.agents.open_menu()),
-        Some(0)
+        Some(SessionId("s1".into()))
     );
 
     click(cx, ("agents-role-option", 2_usize));
@@ -191,6 +191,40 @@ fn a_role_is_chosen_from_the_select(cx: &mut TestAppContext) {
             role: RoleId("editor".into()),
         }]
     );
+}
+
+#[gpui_kit::test]
+fn a_role_follows_its_session_when_the_list_changes(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::LocalAgents.nav_id());
+    click(cx, ("agents-role", 1_usize));
+
+    // The producer drops the first session while PwrAgnt's menu is open.
+    view.update(cx, |view, cx| {
+        view.model.local_agents.sessions.remove(0);
+        cx.notify();
+    });
+    draw(cx);
+    click(cx, ("agents-role-option", 0_usize));
+    assert_eq!(
+        *requests.borrow(),
+        [SettingsRequest::SetSessionRole {
+            session: SessionId("s2".into()),
+            role: RoleId("reader".into()),
+        }]
+    );
+}
+
+#[gpui_kit::test]
+fn keep_the_config_is_offered_only_while_rules_stay_js(cx: &mut TestAppContext) {
+    let (_view, cx, _) = settings(cx, |model| {
+        if let Some(plan) = model.configuration.import.as_mut() {
+            plan.candidates.retain(|candidate| candidate.importable);
+        }
+    });
+    click(cx, Pane::Configuration.nav_id());
+    assert!(visible(cx, configuration::IMPORT_ID));
+    assert!(!visible(cx, configuration::KEEP_CONFIG_ID));
 }
 
 #[gpui_kit::test]
