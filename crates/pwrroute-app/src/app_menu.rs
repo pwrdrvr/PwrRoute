@@ -5,7 +5,7 @@
 
 use gpui_kit::{App, KeyBinding, Menu, MenuItem, SystemMenuType};
 
-use crate::updater;
+use crate::{settings, updater};
 
 pub use menu_actions::*;
 
@@ -38,6 +38,8 @@ mod menu_actions {
 /// Install the menus and shortcuts.
 pub fn install(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| cx.quit());
+    // ⌘, or Ctrl+, and the Settings window's control bindings.
+    settings::install(cx);
     // Registered on every platform so other surfaces can dispatch it; only
     // the macOS menu bar shows it today.
     cx.on_action(|_: &CheckForUpdates, _| {
@@ -67,6 +69,8 @@ pub fn install(cx: &mut App) {
     cx.set_menus([
         Menu::new("PwrRoute").items([
             MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::separator(),
+            MenuItem::action("Settings…", settings::OpenSettings),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),

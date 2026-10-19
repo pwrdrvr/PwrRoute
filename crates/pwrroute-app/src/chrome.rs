@@ -13,6 +13,9 @@ use crate::fixtures;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{key_cap, status_chip};
 
+/// The rail's "Open Settings…" item.
+pub const OPEN_SETTINGS_ID: &str = "nav-settings";
+
 /// Where the brand starts, after the traffic lights. The family spec.
 pub const BRAND_X: f32 = 96.0;
 
@@ -257,12 +260,15 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
             0.09,
             theme::text_subtle(),
         )))
-        .child(rail_item(
-            "nav-settings",
-            "pwrroute/settings.svg",
-            "Open Settings\u{2026}",
-            false,
-            Some(key_cap("\u{2318},").into_any_element()),
-        ))
+        .child(
+            rail_item(
+                OPEN_SETTINGS_ID,
+                "pwrroute/settings.svg",
+                "Open Settings\u{2026}",
+                false,
+                Some(key_cap("\u{2318},").into_any_element()),
+            )
+            .on_click(|_, _, cx| crate::settings::open(cx, None)),
+        )
         .child(div().mt_auto().pt(px(10.0)).px(px(8.0)).child(foot))
 }

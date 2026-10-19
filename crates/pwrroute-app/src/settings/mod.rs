@@ -1,0 +1,544 @@
+//! The Settings window: its own window, one at a time, as in PwrSnap and
+//! PwrGit. A 208px nav on the left, and panes of cards at most 760px wide.
+//!
+//! The window draws a [`SettingsModel`] and reports what the reader asks for
+//! as [`SettingsRequest`]s to the handler in [`SettingsHost`]. Until the
+//! producers are wired up it draws [`fixtures`] and the handler only logs.
+
+mod browsers;
+mod configuration;
+mod controls;
+pub mod fixtures;
+mod local_agents;
+pub mod model;
+mod style;
+#[cfg(test)]
+mod tests;
+
+use std::collections::HashSet;
+use std::rc::Rc;
+
+use gpui_kit::base::{Button, TestSupportExt as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, FocusHandle,
+    Global, HighlightStyle, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
+    Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
+};
+
+use self::controls::{card, separated};
+use self::model::{SettingsModel, SettingsRequest};
+use crate::theme::{self, icon, mono, text};
+
+pub use settings_actions::OpenSettings;
+
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "GPUI's actions! macro writes the derives, not us"
+)]
+mod settings_actions {
+    use gpui_kit::actions;
+
+    actions!(
+        pwrroute,
+        [
+            /// Open the Settings window, or bring it forward.
+            OpenSettings,
+        ]
+    );
+}
+
+/// Cards and pane heads stop growing here.
+pub const CARD_MAX_WIDTH: f32 = 760.0;
+
+/// `.snav`.
+const NAV_WIDTH: f32 = 208.0;
+
+/// The design's 1060px canvas; tall enough for a pane's first cards.
+const WINDOW_SIZE: (f32, f32) = (1060.0, 760.0);
+
+/// PwrGit's Settings minimum.
+const MIN_SIZE: (f32, f32) = (760.0, 520.0);
+
+/// Where AppKit puts the close button: the main window's place.
+const TRAFFIC_LIGHTS: (f32, f32) = (16.0, 13.0);
+
+/// The element id of the window's root, for tests and the inspector.
+pub const ROOT_ID: &str = "settings-root";
+
+/// The pane's scroller.
+pub const SCROLL_ID: &str = "settings-scroll";
+
+/// The shortcut that opens Settings: ⌘, on macOS, Ctrl+, elsewhere.
+pub const SHORTCUT: &str = if cfg!(target_os = "macos") {
+    "cmd-,"
+} else {
+    "ctrl-,"
+};
+
+/// The nav's sections, in the design's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Pane {
+    General,
+    Browsers,
+    Configuration,
+    LocalAgents,
+    Updates,
+    Diagnostics,
+    About,
+}
+
+impl Pane {
+    pub const ALL: [Self; 7] = [
+        Self::General,
+        Self::Browsers,
+        Self::Configuration,
+        Self::LocalAgents,
+        Self::Updates,
+        Self::Diagnostics,
+        Self::About,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Browsers => "Browsers",
+            Self::Configuration => "Configuration",
+            Self::LocalAgents => "Local agents",
+            Self::Updates => "Updates",
+            Self::Diagnostics => "Diagnostics",
+            Self::About => "About",
+        }
+    }
+
+    /// The nav item's element id.
+    pub fn nav_id(self) -> &'static str {
+        match self {
+            Self::General => "settings-nav-general",
+            Self::Browsers => "settings-nav-browsers",
+            Self::Configuration => "settings-nav-configuration",
+            Self::LocalAgents => "settings-nav-local-agents",
+            Self::Updates => "settings-nav-updates",
+            Self::Diagnostics => "settings-nav-diagnostics",
+            Self::About => "settings-nav-about",
+        }
+    }
+
+    /// The pane body's element id.
+    pub fn pane_id(self) -> &'static str {
+        match self {
+            Self::General => "settings-pane-general",
+            Self::Browsers => "settings-pane-browsers",
+            Self::Configuration => "settings-pane-configuration",
+            Self::LocalAgents => "settings-pane-local-agents",
+            Self::Updates => "settings-pane-updates",
+            Self::Diagnostics => "settings-pane-diagnostics",
+            Self::About => "settings-pane-about",
+        }
+    }
+}
+
+/// Receives what the reader asks for. Runs after the window's own update,
+/// so it may update the window's entity.
+pub type RequestHandler = Rc<dyn Fn(&SettingsRequest, &mut Window, &mut App)>;
+
+/// What the Settings window is opened with: the handler for its requests.
+/// The app sets this once its producers exist; until then requests are
+/// logged and nothing else happens.
+pub struct SettingsHost {
+    pub on_request: RequestHandler,
+}
+
+impl Global for SettingsHost {}
+
+impl Default for SettingsHost {
+    fn default() -> Self {
+        Self {
+            on_request: Rc::new(|request, _, _| {
+                // Never act on the OS from here: registration in particular
+                // is the explicit action the router's owner wires up.
+                eprintln!("pwrroute: settings: {request:?} is not wired up yet");
+            }),
+        }
+    }
+}
+
+/// The open Settings window, if any.
+#[derive(Default)]
+struct OpenWindow(Option<WindowHandle<SettingsWindow>>);
+
+impl Global for OpenWindow {}
+
+/// Register the Settings action, its shortcut and gpui-kit's control
+/// bindings (the select's arrow keys, Escape).
+pub fn install(cx: &mut App) {
+    gpui_kit::base::init(cx);
+    cx.on_action(|_: &OpenSettings, cx| open(cx, None));
+    cx.bind_keys([KeyBinding::new(SHORTCUT, OpenSettings, None)]);
+}
+
+/// Open Settings, or bring the open window forward; `pane` picks a page.
+pub fn open(cx: &mut App, pane: Option<Pane>) {
+    let existing = cx.try_global::<OpenWindow>().and_then(|open| open.0);
+    if let Some(handle) = existing {
+        let shown = handle.update(cx, |view, window, cx| {
+            if let Some(pane) = pane {
+                view.show(pane, cx);
+            }
+            window.activate_window();
+        });
+        if shown.is_ok() {
+            cx.activate(true);
+            return;
+        }
+    }
+    let on_request = cx.try_global::<SettingsHost>().map_or_else(
+        || SettingsHost::default().on_request,
+        |host| host.on_request.clone(),
+    );
+    let bounds = Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("PwrRoute Settings".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
+            }),
+            app_id: Some("pwrroute".to_owned()),
+            window_min_size: Some(size(px(MIN_SIZE.0), px(MIN_SIZE.1))),
+            ..Default::default()
+        },
+        |_, cx| {
+            cx.new(|cx| {
+                let mut view = SettingsWindow::new(fixtures::model(), on_request, cx);
+                if let Some(pane) = pane {
+                    view.pane = pane;
+                }
+                view
+            })
+        },
+    );
+    match handle {
+        Ok(handle) => {
+            let _ = handle.update(cx, |view, window, cx| {
+                let focus = view.focus.clone();
+                window.focus(&focus, cx);
+            });
+            cx.set_global(OpenWindow(Some(handle)));
+            cx.activate(true);
+        }
+        Err(error) => eprintln!("pwrroute: could not open Settings: {error}"),
+    }
+}
+
+/// The Settings window's view.
+pub struct SettingsWindow {
+    pub focus: FocusHandle,
+    pub pane: Pane,
+    pub model: SettingsModel,
+    /// Cards folded shut, by id. A reading position, not a preference, so
+    /// it lives as long as the window.
+    collapsed: HashSet<&'static str>,
+    /// The command whose Copy button reads "Copied".
+    copied: Option<usize>,
+    pub(crate) agents: local_agents::State,
+    scroll: ScrollHandle,
+    on_request: RequestHandler,
+}
+
+impl SettingsWindow {
+    pub fn new(
+        model: SettingsModel,
+        on_request: RequestHandler,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let agents = local_agents::State::new(&model.local_agents, cx);
+        Self {
+            focus: cx.focus_handle(),
+            // General is not drawn yet; Browsers is the first pane that is.
+            pane: Pane::Browsers,
+            model,
+            collapsed: HashSet::new(),
+            copied: None,
+            agents,
+            scroll: ScrollHandle::new(),
+            on_request,
+        }
+    }
+
+    /// Switch panes. A new pane starts at the top.
+    pub fn show(&mut self, pane: Pane, cx: &mut Context<'_, Self>) {
+        if pane != self.pane {
+            self.pane = pane;
+            self.copied = None;
+            self.agents.close_menu();
+            self.scroll.set_offset(point(px(0.0), px(0.0)));
+            cx.notify();
+        }
+    }
+
+    /// Hand a request to the host once this update is done.
+    fn request(&self, request: SettingsRequest, window: &mut Window, cx: &mut App) {
+        let on_request = self.on_request.clone();
+        window.defer(cx, move |window, cx| on_request(&request, window, cx));
+    }
+
+    fn copy(&mut self, index: usize, content: String, cx: &mut Context<'_, Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(content));
+        self.copied = Some(index);
+        cx.notify();
+    }
+
+    fn toggle_card(&mut self, id: &'static str, cx: &mut Context<'_, Self>) {
+        if !self.collapsed.remove(id) {
+            self.collapsed.insert(id);
+        }
+        cx.notify();
+    }
+
+    /// Fold every card in `ids`, or unfold them all if all are folded.
+    fn collapse_all(&mut self, ids: &[&'static str], cx: &mut Context<'_, Self>) {
+        if ids.iter().all(|id| self.collapsed.contains(id)) {
+            for id in ids {
+                self.collapsed.remove(id);
+            }
+        } else {
+            self.collapsed.extend(ids.iter().copied());
+        }
+        cx.notify();
+    }
+
+    fn all_collapsed(&self, ids: &[&'static str]) -> bool {
+        ids.iter().all(|id| self.collapsed.contains(id))
+    }
+
+    /// A `.card` whose header folds it: `heading` toggles, `trailing` (a
+    /// chip or a button) sits on the right, and `rows` are separated.
+    fn disclosure(
+        &self,
+        id: &'static str,
+        heading: Div,
+        trailing: Option<AnyElement>,
+        rows: Vec<Div>,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui_kit::Stateful<Div> {
+        let open = !self.collapsed.contains(id);
+        let toggle_id = ElementId::Name(SharedString::from(format!("{id}-toggle")));
+        card(id)
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(12.0))
+                    .py(px(13.0))
+                    .px(px(16.0))
+                    .when(open && !rows.is_empty(), |header| {
+                        header.border_b_1().border_color(theme::border_faint())
+                    })
+                    .child(
+                        Button::new(toggle_id)
+                            .flex_1()
+                            .min_w_0()
+                            .justify_start()
+                            .items_start()
+                            .line_height(px(13.5))
+                            .accessibility_label(SharedString::from(format!(
+                                "{} section",
+                                if open { "Collapse" } else { "Expand" }
+                            )))
+                            .on_click(cx.listener(move |this, _, _, cx| this.toggle_card(id, cx)))
+                            .child(heading),
+                    )
+                    .children(trailing),
+            )
+            .when(open, |card| card.children(separated(rows)))
+    }
+
+    fn copy_button(&self, index: usize, content: String, cx: &mut Context<'_, Self>) -> AnyElement {
+        let label = if self.copied == Some(index) {
+            "Copied"
+        } else {
+            "Copy"
+        };
+        let id = ElementId::Name(SharedString::from(format!("settings-copy-{index}")));
+        controls::button(id, label, controls::Kind::Default, true)
+            .on_click(cx.listener(move |this, _, _, cx| this.copy(index, content.clone(), cx)))
+            .into_any_element()
+    }
+
+    fn nav(&self, cx: &mut Context<'_, Self>) -> Div {
+        let agents = self.model.local_agents.active_sessions();
+        Pane::ALL.into_iter().fold(
+            div()
+                .w(px(NAV_WIDTH))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .pt(px(10.0))
+                .px(px(10.0))
+                .pb(px(12.0))
+                .bg(theme::bg_sidebar())
+                .border_r_1()
+                .border_color(theme::border_subtle()),
+            |nav, pane| {
+                let count = (pane == Pane::LocalAgents && agents > 0).then(|| agents.to_string());
+                nav.child(nav_item(pane, self.pane == pane, count, cx))
+            },
+        )
+    }
+
+    fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
+        match self.pane {
+            Pane::Browsers => browsers::pane(self, cx),
+            Pane::Configuration => configuration::pane(self, cx),
+            Pane::LocalAgents => local_agents::pane(self, window, cx),
+            pane => placeholder(pane),
+        }
+    }
+}
+
+/// `.snav .rail-item`; `.on` when `selected`.
+fn nav_item(
+    pane: Pane,
+    selected: bool,
+    count: Option<String>,
+    cx: &mut Context<'_, SettingsWindow>,
+) -> Button {
+    let foreground = if selected {
+        theme::accent_bright()
+    } else {
+        theme::text_secondary()
+    };
+    Button::new(pane.nav_id())
+        .selected(selected)
+        .accessibility_label(pane.label())
+        .relative()
+        .w_full()
+        .justify_start()
+        .gap(px(9.0))
+        .px(px(10.0))
+        .py(px(8.0))
+        .rounded(px(7.0))
+        .cursor_pointer()
+        .map(|item| {
+            if selected {
+                // `.rail-item.on::before`: the 3px bar on the rail's edge.
+                item.bg(theme::bg_row_active()).child(
+                    div()
+                        .absolute()
+                        .left(px(-10.0))
+                        .top(px(7.0))
+                        .bottom(px(7.0))
+                        .w(px(3.0))
+                        .rounded_r(px(2.0))
+                        .bg(theme::accent()),
+                )
+            } else {
+                item.hover(|style| style.bg(theme::bg_hover()))
+            }
+        })
+        .on_click(cx.listener(move |this, _, _, cx| this.show(pane, cx)))
+        .child(text(pane.label(), 13.0, 500.0, foreground))
+        .when_some(count, |item, count| {
+            item.child(
+                div()
+                    .ml_auto()
+                    .child(mono(count, 10.5, 600.0, theme::text_subtle())),
+            )
+        })
+}
+
+/// A pane the design leaves to the family and that is not drawn yet.
+fn placeholder(pane: Pane) -> Div {
+    let help = match pane {
+        Pane::General => "Launch at login, the menu bar icon and appearance. Not built yet.",
+        Pane::Updates => "Release channel and automatic downloads. Not built yet.",
+        Pane::Diagnostics => {
+            "Logs, the router's memory and CPU, and a support bundle. Not built yet."
+        }
+        _ => "Version, licenses and links. Not built yet.",
+    };
+    div().child(controls::pane_head("Settings", pane.label(), help, None))
+}
+
+/// `.strip`: the family title strip, with "Settings" as its crumb.
+fn title_strip() -> Div {
+    let wordmark = StyledText::new("PwrRoute").with_highlights([(
+        3..8,
+        HighlightStyle {
+            color: Some(theme::accent()),
+            ..Default::default()
+        },
+    )]);
+    div()
+        .h(px(crate::chrome::STRIP_HEIGHT + 1.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .pl(px(crate::chrome::BRAND_X))
+        .pr(px(16.0))
+        .bg(theme::bg_titlebar())
+        .border_b_1()
+        .border_color(theme::border_subtle())
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(8.0))
+                .child(icon("pwrroute/mark.svg", 20.0, theme::accent()))
+                .child(
+                    div()
+                        .font_family(theme::SANS)
+                        .font_weight(theme::weight(700.0))
+                        .text_size(px(17.0))
+                        .line_height(px(17.0))
+                        .text_color(theme::text_primary())
+                        .whitespace_nowrap()
+                        .child(wordmark),
+                ),
+        )
+        .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
+        .child(text("Settings", 13.0, 500.0, theme::text_secondary()))
+}
+
+impl Render for SettingsWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        let pane = self.pane;
+        let body = self.pane_body(window, cx);
+        div()
+            .id(ROOT_ID)
+            .debug_selector(|| ROOT_ID.into())
+            .track_focus(&self.focus)
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme::bg_app())
+            .text_color(theme::text_primary())
+            .font_family(theme::SANS)
+            .child(title_strip())
+            .child(
+                div().flex_1().min_h_0().flex().child(self.nav(cx)).child(
+                    div()
+                        .id(SCROLL_ID)
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
+                        .child(
+                            body.id(pane.pane_id())
+                                .flex()
+                                .flex_col()
+                                .gap(px(14.0))
+                                .py(px(22.0))
+                                .px(px(24.0))
+                                .test_support(),
+                        ),
+                ),
+            )
+    }
+}
