@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* rule rows, as in App Baseline */
+          .rules { display: flex; flex-direction: column; }
+          .rr { position: relative; display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 230px) 64px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.sel { background: var(--bg-row-active); }
+          .rr.sel::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+          .rr.ro { grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 200px) 20px; }
+          .rr.stale > * { opacity: 0.6; }
+          .grip { color: var(--text-subtle); display: flex; align-items: center; justify-content: center; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr .m.nw { flex-wrap: nowrap; }
+          .rr .m .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .srcline { flex: 1; font: 400 10.5px/1.3 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .tag.act i { font-style: normal; color: var(--text-subtle); }
+          .tag.act { color: var(--accent-bright); }
+          .card-foot { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--border-faint); font: 500 10.5px/1.4 var(--font-sans); color: var(--text-subtle); }
+          .card-hd.solo { border-bottom: none; }
+          /* empty states */
+          .empty { display: flex; align-items: flex-start; gap: 14px; padding: 16px 16px 18px; }
+          .empty .et { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+          .empty .et b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .empty .et p { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); max-width: 56ch; text-wrap: pretty; }
+          .eg { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+          .blank { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 24px; }
+          .blank-in { width: 520px; display: flex; flex-direction: column; gap: 14px; }
+          .blank-in .ttl { font-size: 21px; }
+          .looked { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); }
+          .looked span { display: flex; align-items: center; gap: 8px; font: 500 10.5px/1.3 var(--font-mono); color: var(--text-muted); }
+          .looked span i { font-style: normal; margin-left: auto; color: var(--text-subtle); }
+          .choices { display: flex; flex-direction: column; gap: 8px; }
+          .choice { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); }
+          .choice.pri { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .choice .ct { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+          .choice .ct b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .choice .ct span { font: 400 11px/1.45 var(--font-sans); color: var(--text-muted); }
+          /* banners */
+          .banner { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--accent-border); border-radius: var(--radius-lg); background: var(--bg-row-active); }
+          .banner.bad { border-color: rgba(185,66,50,0.45); background: rgba(185,66,50,0.10); align-items: flex-start; }
+          .banner .bt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+          .banner .bt b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .banner .bt span { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .frame { margin-top: 6px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); overflow: hidden; font: 500 11px/1.65 var(--font-mono); }
+          .frame .fh { display: flex; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); color: var(--danger-text); }
+          .frame .fh i { font-style: normal; margin-left: auto; color: var(--text-subtle); }
+          .frame .ln { display: grid; grid-template-columns: 34px minmax(0, 1fr); padding: 0 10px; color: var(--text-secondary); white-space: pre; }
+          .frame .ln code { font: inherit; white-space: pre; }
+          .frame .ln u { text-decoration: none; color: var(--text-subtle); text-align: right; padding-right: 12px; }
+          .frame .ln.hit { background: rgba(185,66,50,0.12); color: var(--text-primary); }
+          .frame .ln.car { color: var(--danger-text); }
+          .frame .x { color: var(--danger-text); background: var(--danger-soft); border-radius: 2px; }
+          /* trace, as in App Baseline 2a */
+          .testrow { display: flex; gap: 8px; align-items: center; }
+          .testrow .inp { flex: 1; }
+          .trace { display: flex; flex-direction: column; }
+          .ts { position: relative; display: grid; grid-template-columns: 22px 150px minmax(0, 1fr); gap: 0 12px; padding: 10px 14px; border-bottom: 1px solid var(--border-faint); }
+          .ts:last-child { border-bottom: none; }
+          .ts::before { content: ""; position: absolute; left: 24px; top: 0; bottom: 0; width: 1px; background: var(--border-subtle); }
+          .ts:first-child::before { top: 20px; }
+          .ts:last-child::before { bottom: calc(100% - 20px); }
+          .ts .n { position: relative; z-index: 1; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 9.5px/1 var(--font-mono); background: var(--bg-panel-elevated); border: 1px solid var(--border-default); color: var(--text-muted); }
+          .ts.hit .n { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-bright); }
+          .ts.bad .n { background: var(--danger-soft); border-color: transparent; color: var(--danger-text); }
+          .ts.end .n { background: var(--warn-soft); border-color: transparent; color: var(--warn-text); }
+          .ts.skip .k, .ts.skip .v { opacity: 0.5; }
+          .ts .k { font: 600 11.5px/1.4 var(--font-sans); color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }
+          .ts .k small { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); }
+          .ts .v { min-width: 0; display: flex; flex-direction: column; gap: 5px; font: 400 11.5px/1.5 var(--font-sans); color: var(--text-muted); }
+          .ts .v .mm { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+          .ts.bad .v b { color: var(--danger-text); font-weight: 600; }
+          .url { font: 500 11.5px/1.5 var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+          .res { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
+          .res .big { width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-panel-elevated); display: flex; align-items: center; justify-content: center; font: 700 13px/1 var(--font-mono); color: var(--text-secondary); flex: 0 0 auto; }
+          .res .rt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+          .res .rt b { font: 600 15px/1.2 var(--font-sans); color: var(--text-primary); }
+          /* rail */
+          .rrail { flex: 0 0 372px; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); display: flex; flex-direction: column; }
+          .rs { padding: 14px 16px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 8px; }
+          .rs h5 { margin: 0 0 2px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .rhead { flex-direction: row; align-items: center; gap: 10px; }
+          .rhead > div { flex: 1; min-width: 0; }
+          .rhead .ttl { font-size: 15px; }
+          .lab { font: 600 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .lrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+          .inp.warn { border-color: rgba(217,154,61,0.55); }
+          .err-t { display: flex; align-items: flex-start; gap: 6px; font: 500 10.5px/1.45 var(--font-sans); color: var(--danger-text); }
+          .err-t i { flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 700 9px/1 var(--font-mono); font-style: normal; background: var(--danger-soft); }
+          .rail-end { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-faint); }
+          /* activity rows */
+          .ar { display: grid; grid-template-columns: 54px minmax(0, 1fr) 64px 200px; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .ar:last-child { border-bottom: none; }
+          .ar .t { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .u { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .ar .d { display: flex; flex-direction: column; gap: 4px; min-width: 0; white-space: nowrap; }
+          .ar .d .sub { display: flex; align-items: center; gap: 6px; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); }
+          /* menu bar dropdown, as in Tray and First Run 1a */
+          .desk { position: relative; width: 560px; height: 430px; background: #0b0a09; overflow: hidden; }
+          .mbar { position: absolute; left: 0; right: 0; top: 0; height: 24px; background: rgba(20,18,16,0.9); border-bottom: 1px solid var(--border-faint); display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 12px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .mbar .mi { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 18px; border-radius: 4px; }
+          .mbar .mi.on { background: rgba(247,243,235,0.14); }
+          .mbar .mi .bd { position: absolute; right: 1px; top: 1px; width: 6px; height: 6px; border-radius: 50%; background: var(--status-error); }
+          .tray { position: absolute; top: 28px; right: 70px; width: 300px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 10px; box-shadow: var(--shadow-popover); overflow: hidden; display: flex; flex-direction: column; }
+          .tray .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-faint); }
+          .tray .th .wordmark { font-size: 14px; }
+          .tray .th .chip { margin-left: auto; }
+          .tray .sec { padding: 6px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; }
+          .tray .sec:last-child { border-bottom: none; }
+          .alert { display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 10px; border-radius: 6px; background: rgba(185,66,50,0.10); }
+          .alert b { font: 600 12px/1.3 var(--font-sans); color: var(--danger-text); }
+          .alert span { font: 400 10.5px/1.45 var(--font-sans); color: var(--text-muted); }
+          .mi-row { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi-row .sub { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); margin-left: auto; }
+          .notif { position: absolute; top: 34px; left: 16px; width: 170px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: 10px; background: repeating-linear-gradient(135deg, rgba(247,243,235,0.03) 0 6px, transparent 6px 12px); font: 500 10px/1.45 var(--font-mono); color: var(--text-subtle); }
+          .crop { background: var(--bg-app); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Empty states ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Empty states</span></div>
+        <p class="dv-sub">Two different empties. <b>No rules</b>: a rules.json with a default and nothing else, so every link already has somewhere to go and the page says where. <b>No configuration</b>: no rules.json and no Finicky config, the state after Later on first run. The engine then sends everything to its fallback, <code>com.apple.Safari</code> on macOS (the Go host's choice), and the page leads with replacing that.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a No rules">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The lists keep their places and say what they are for, each with an example in the row's own vocabulary. Import shows only when discovery found a Finicky config.</span></div>
+            <div class="dv-card win" style="width: 1040px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>rules.json · no rules yet</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">0</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">31</span></div>
+                  <div class="rail-foot"><span class="st"><i></i>router · running</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head">
+                    <div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1><p class="help">Every link opens in Google Chrome · Personal until a rule says otherwise.</p></div>
+                    <div class="actions"><span class="btn">Import ~/.finicky.ts&hellip;</span></div>
+                  </div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 1 · run in order · every match applies</p><h2 class="card-title">Rewrites</h2></div></div>
+                    <div class="empty">
+                      <div class="et"><b>No rewrites</b><p>A rewrite changes a link before any handler sees it: a privacy front end, https for an internal host, tracking parameters gone.</p><div class="eg">for example <span class="tag">x.com/*</span><span class="arrow">&rarr;</span><span class="tag act"><i>host</i>xcancel.com</span></div></div>
+                      <span class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add rewrite</span>
+                    </div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div></div>
+                    <div class="empty">
+                      <div class="et"><b>No handlers</b><p>A handler sends matching links to a browser, a profile or an app. The first one that matches wins, so specific rules go above general ones.</p><div class="eg">for example <span class="tag">*.atlassian.net/*</span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span style="color: var(--text-secondary);">Google Chrome · Work</span></div></div>
+                      <span class="btn sm primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add handler</span>
+                    </div>
+                  </section>
+                  <section class="card"><div class="rules"><div class="rr"><span></span><span class="idx">&infin;</span><div class="m"><span class="lbl" style="color: var(--text-primary); font-weight: 600;">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="hits">31 today</span><span class="more">&#8943;</span></div></div></section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b No configuration">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Nothing to route by. The Rules view becomes three choices, the first being the one that ends the Safari fallback. Where discovery looked is listed, so a config in an unexpected place is easy to diagnose.</span></div>
+            <div class="dv-card win" style="width: 1040px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip warn"><span class="dot"></span>no configuration · fallback Safari</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="wdot"></span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity</div>
+                  <div class="rail-foot"><span class="st warn"><i></i>router · fallback only</span></div>
+                </nav>
+                <div class="pane" style="padding: 0;">
+                  <div class="blank">
+                    <div class="blank-in">
+                      <div><div class="eyebrow">Rules</div><h1 class="ttl">Nothing to route by yet</h1><p class="help">There is no rules.json and no Finicky config, so any link that reaches PwrRoute opens in Safari.</p></div>
+                      <div class="choices">
+                        <div class="choice pri"><div class="ct"><b>Choose where links go</b><span>Creates rules.json with a default browser. Add rules afterwards, or never.</span></div><span class="btn primary sm">Choose browser&hellip;</span></div>
+                        <div class="choice"><div class="ct"><b>Use a Finicky config</b><span>Any .js or .ts in Finicky v4 shape. It runs as written.</span></div><span class="btn sm">Choose file&hellip;</span></div>
+                        <div class="choice"><div class="ct"><b>Start with a handler</b><span>The default stays Safari until you change it.</span></div><span class="btn sm">Add handler</span></div>
+                      </div>
+                      <div class="looked">
+                        <span style="font-family: var(--font-sans); color: var(--text-secondary);">Looked for a Finicky config in</span>
+                        <span>~/.finicky.js, ~/.finicky.ts<i>not found</i></span>
+                        <span>~/.config/finicky.js, .ts<i>not found</i></span>
+                        <span>~/.config/finicky/finicky.js, .ts<i>not found</i></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================= TURN 2 — Error states ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Error states</span></div>
+        <p class="dv-sub">Three failures, each with a different fallback. A <b>config that fails to load</b> leaves the last good version routing, so the error is news, not an outage. A <b>matcher that times out</b> hits the 1 s resolve budget (<code>Limits::resolve</code>); Finicky returns the default browser when a config throws or times out, and so does the router. A <b>browser that is not installed</b> cannot open the link, so the fallback opens it and the trace says why. Nothing is ever dropped.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Config fails to load">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>A save of ~/.finicky.ts that does not parse. The banner turns danger, with oxc's message and a code frame. Below it the read-only lists are the version still routing, labelled with its load time.</span></div>
+            <div class="dv-card win" style="width: 1040px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip warn"><span class="dot"></span>~/.finicky.ts · last good 09:12</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="wdot" style="background: var(--status-error);"></span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity</div>
+                  <div class="rail-foot"><span class="st warn"><i></i>last good config active</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="banner bad">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--danger-text)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 auto; margin-top: 1px;"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+                    <div class="bt">
+                      <b>~/.finicky.ts did not load</b>
+                      <span>Saved 09:41. The version loaded at 09:12 is still routing every link. Fix the file and save; it reloads on its own.</span>
+                      <div class="frame">
+                        <div class="fh"><span>Expected `,` but found `}`</span><i>~/.finicky.ts:14:5</i></div>
+                        <div class="ln"><u>12</u><code>    match: ["*.atlassian.net/*", "github.com/pwrdrvr/*"]</code></div>
+                        <div class="ln"><u>13</u><code>    browser: { name: "Google Chrome", profile: "Work" }</code></div>
+                        <div class="ln hit"><u>14</u><code>  <span class="x">}</span>,</code></div>
+                        <div class="ln car"><u></u><code>  ^</code></div>
+                      </div>
+                    </div>
+                    <div class="row-actions" style="flex-direction: column; align-items: stretch;"><span class="btn sm">Open at line 14</span><span class="btn sm quiet">Copy error</span></div>
+                  </div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">From ~/.finicky.ts as loaded 09:12 · read-only</p><h2 class="card-title">Handlers</h2></div><span class="chip warn">still routing</span></div>
+                    <div class="rules">
+                      <div class="rr ro"><span class="idx">01</span><div class="m nw"><span class="tag fn">fn</span><span class="srcline">(url, { opener }) =&gt; url.host.includes("workplace")</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
+                      <div class="rr ro"><span class="idx">02</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+                      <div class="rr ro"><span class="idx">03</span><div class="m"><span class="tag">bsky.app/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
+                      <div class="rr ro"><span></span><div class="m"><span class="lbl" style="font-weight: 600; color: var(--text-primary);">defaultBrowser</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome</div><span class="more"></span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Load error in the menu bar">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>With the window closed. The menu bar mark gains a dot and the dropdown leads with the error. One system notification per failing save, never one per link, since nothing is being lost.</span></div>
+            <div class="dv-card" style="width: 562px;">
+              <div class="desk">
+                <div class="mbar"><span class="mi on"><svg viewBox="188 188 648 648" width="16" height="16" aria-hidden="true" style="color: var(--text-primary);"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><span class="bd"></span></span><span>Mon 09:42</span></div>
+                <div class="notif">System notification, drawn by the OS:<br />&ldquo;~/.finicky.ts did not load. The 09:12 version is still routing.&rdquo;</div>
+                <div class="tray">
+                  <div class="th"><svg class="mark" viewBox="188 188 648 648" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip bad">config error</span></div>
+                  <div class="sec">
+                    <div class="alert"><b>~/.finicky.ts did not load</b><span>Expected `,` but found `}` at 14:5. The version loaded at 09:12 is still routing.</span><div class="row-actions"><span class="btn sm">Show error</span><span class="btn sm quiet">Open file</span></div></div>
+                  </div>
+                  <div class="sec">
+                    <div class="mi-row">Open PwrRoute<span class="sub">&#8984;O</span></div>
+                    <div class="mi-row">Pause routing&hellip;</div>
+                  </div>
+                  <div class="sec"><div class="mi-row" style="color: var(--text-secondary);">Quit PwrRoute</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2c" data-screen-label="2c Matcher timed out">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>Test a link on a URL that sends handler 1's function into a loop. The trace stops at that step, says what the budget is, and ends at the default browser the way Finicky does. Activity shows the same steps for a real link.</span></div>
+            <div class="dv-card win" style="width: 1040px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Test a link</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip warn"><span class="dot"></span>~/.finicky.ts · in charge</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules</div>
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity</div>
+                  <div class="rail-foot"><span class="st"><i></i>router · running</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="testrow">
+                    <div class="inp mono focus">https://workplace.example.com/groups/eng/permalink/8812</div>
+                    <div class="inp" style="flex: 0 0 150px;"><span class="note">from</span><span class="bi">Ma</span>Mail<span class="caret">&#9662;</span></div>
+                    <span class="btn primary">Test</span>
+                  </div>
+                  <section class="card">
+                    <div class="trace">
+                      <div class="ts"><span class="n">0</span><div class="k">Received<small>from Mail · com.apple.mail</small></div><div class="v"><span class="url">https://workplace.example.com/groups/eng/permalink/8812</span></div></div>
+                      <div class="ts skip"><span class="n">1</span><div class="k">Rewrites<small>2 in the config</small></div><div class="v">No match.</div></div>
+                      <div class="ts bad"><span class="n">!</span><div class="k">Handler 1<small>fn · ~/.finicky.ts:6</small></div><div class="v"><b>Timed out after 1,000 ms.</b><span>Each link gets 1 s for every matcher and rewrite function together. This one did not return, so no later handler ran.</span><div class="mm"><span class="tag fn">fn</span><span class="url" style="color: var(--text-muted); font-size: 10.5px;">(url, { opener }) =&gt; url.host.includes("workplace")</span></div></div></div>
+                      <div class="ts skip"><span class="n">2</span><div class="k">Handlers 2 to 4<small>not evaluated</small></div><div class="v">Skipped.</div></div>
+                      <div class="ts end"><span class="n">&#8618;</span><div class="k">Opens in<small>defaultBrowser, as Finicky does</small></div><div class="v"><div class="mm"><span class="tag app"><span class="bi">Ch</span>Google Chrome</span></div></div></div>
+                    </div>
+                  </section>
+                  <section class="card">
+                    <div class="res">
+                      <span class="big">Ch</span>
+                      <div class="rt"><b>Google Chrome</b><span class="note">Not what handler 1 meant, probably. Its function is the place to look.</span></div>
+                      <div class="row-actions"><span class="btn">Open ~/.finicky.ts:6</span><span class="btn">Copy trace</span><span class="btn primary">Open now</span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2d" data-screen-label="2d Browser not installed">
+            <div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a><span>Handler 6 names zoom.us, which is gone. The row says so before any link fails; the rail offers the two real fixes; Activity records the fallback launch. Cropped to the pane, rail and two Activity rows.</span></div>
+            <div class="dv-card" style="width: 1040px; background: var(--bg-app);">
+              <div class="body">
+                <div class="pane">
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip warn">1 app missing</span></div>
+                    <div class="rules">
+                      <div class="rr" style="grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 170px) 20px;"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">localhost:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="more">&#8943;</span></div>
+                      <div class="rr sel" style="grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 170px) 20px;"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">06</span><div class="m"><span class="tag">zoom.us/j/*</span><span class="tag">*.zoom.us/j/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Zm</span><span style="color: var(--text-muted); text-decoration: line-through;">zoom.us</span><span class="st bad"><i></i>not installed</span></div><span class="more">&#8943;</span></div>
+                      <div class="rr" style="grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 170px) 20px;"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">07</span><div class="m"><span class="tag">figma.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Fg</span>Figma</div><span class="more">&#8943;</span></div>
+                    </div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Activity · this handler</p></div></div>
+                    <div class="ar"><span class="t">09:31:40</span><span class="u">https://zoom.us/j/8142201137?pwd=…</span><span>Calendar</span><div class="d"><span class="st bad"><i></i>zoom.us not found</span><span class="sub">&#8618; <span class="bi">Ch</span>opened in Chrome · Personal</span></div></div>
+                    <div class="ar"><span class="t">08:58:02</span><span class="u">https://pwrdrvr.zoom.us/j/5520918?pwd=…</span><span>Slack</span><div class="d"><span class="st bad"><i></i>zoom.us not found</span><span class="sub">&#8618; <span class="bi">Ch</span>opened in Chrome · Personal</span></div></div>
+                  </section>
+                </div>
+                <aside class="rrail">
+                  <div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">Handler · 6 of 7</div><h2 class="ttl">Zoom meetings</h2></div><span class="sw on"></span></div>
+                  <div class="rs">
+                    <h5>Open in</h5>
+                    <div class="inp warn"><span class="bi">Zm</span>zoom.us<span class="note">us.zoom.xos</span><span class="caret">&#9662;</span></div>
+                    <span class="err-t"><i>!</i><span>zoom.us is not installed. Links this handler takes open in the default, Google Chrome · Personal, until it is back.</span></span>
+                    <div class="row-actions"><span class="btn sm">Choose another app</span><span class="btn sm quiet">Turn off handler</span></div>
+                  </div>
+                  <div class="rs">
+                    <h5>Checked</h5>
+                    <span class="field-help">Looked up by bundle id at launch, on Rescan in Settings &rsaquo; Browsers, and again on every failed launch. A reinstall clears this without an edit.</span>
+                  </div>
+                  <div class="rail-end"><span class="btn quiet danger sm">Delete handler</span><span class="note">2 links fell back today</span></div>
+                </aside>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note">The not-installed fallback is new behaviour: today Activity (App Baseline 2b) records the failed launch and nothing opens. Opening the default instead keeps the promise the other two failures already keep. 2a and 2b are both wanted, not alternatives: the banner when the window is open, the dot and one notification when it is not.</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

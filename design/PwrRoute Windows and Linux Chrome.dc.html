@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* rule rows, as in App Baseline */
+          .rules { display: flex; flex-direction: column; }
+          .rr { position: relative; display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 230px) 64px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .grip { color: var(--text-subtle); display: flex; align-items: center; justify-content: center; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr .m .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .card-hd.solo { border-bottom: none; }
+          /* platform chrome */
+          .win.w11 { border-radius: 8px; }
+          .win.gnome { border-radius: 0; border: 1px solid var(--border-strong); }
+          .strip.w11 { padding-right: 150px; }
+          .menubar { display: flex; align-items: center; gap: 1px; }
+          .mitem { padding: 5px 7px; border-radius: var(--radius-md); font: 500 12px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .mitem.focus { background: var(--bg-panel-hover); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--accent); }
+          .mitem u { text-decoration: underline; text-underline-offset: 2px; }
+          .caps { position: absolute; right: 0; top: 0; height: 40px; display: flex; }
+          .caps span { width: 46px; height: 40px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); }
+          .caps span:last-child { border-top-right-radius: 7px; }
+          .wco { position: absolute; right: 0; top: 0; width: 150px; height: 40px; border: 1px dashed rgba(159,200,255,0.55); border-top-right-radius: 7px; pointer-events: none; }
+          .gctl { display: flex; align-items: center; gap: 6px; margin-left: -2px; }
+          .gctl span { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-panel-hover); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; }
+          .gctl span.hov { background: var(--danger-soft); color: var(--danger-text); }
+          .tick { position: absolute; z-index: 3; top: 0; width: 1px; height: 40px; background: rgba(159,200,255,0.7); }
+          .gut { width: 68px; height: 24px; flex: 0 0 auto; border: 1px dashed var(--border-strong); border-radius: 5px; background: repeating-linear-gradient(135deg, rgba(247,243,235,0.04) 0 5px, transparent 5px 10px); }
+          .rel { position: relative; }
+          .stack { display: flex; flex-direction: column; gap: 22px; padding: 20px; background: var(--bg-app); }
+          .stack .cap { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-subtle); margin-bottom: 6px; display: block; }
+          .stack .win { border: 1px solid var(--border-subtle); }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Main-window chrome ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Main window on Windows and Linux</span></div>
+        <p class="dv-sub">The 40px strip, the 20px mark, the 17px wordmark and the y=20 centreline stay. What moves is everything the stoplights decided. PwrGit's <code>TitleBar.tsx</code> is the reference: its 80px gutter exists only under <code>data-platform="darwin"</code>, so on Windows and Linux the brand starts at the 16px rail inset, x=16. Neither OS has a global menu bar, so the strip paints the top-level menu after the brand (PwrGit's <code>AppMenuBar</code>), and the caption buttons go on the right. Windows draws them in its Window Controls Overlay; Linux gets none in a frameless window, so PwrRoute paints GNOME's.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Windows 11">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Windows 11. Brand at x=16, menu bar after it, Alt focuses File. The tick marks x=16; the dashed box is the 150px reserved (<code>padding-right: 150px</code>) for the overlay, which Windows paints from <code>titleBarOverlay</code>: fill <code>--bg-titlebar</code>, glyphs <code>--text-secondary</code>, height 40 so the strip's divider runs under it. Corners are the OS's 8px. Settings is Ctrl+,.</span></div>
+            <div class="dv-card win w11 rel" style="width: 1100px;">
+              <span class="tick" style="left: 16px;"></span>
+              <div class="strip w11">
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <div class="menubar"><span class="mitem focus"><u>F</u>ile</span><span class="mitem"><u>E</u>dit</span><span class="mitem"><u>V</u>iew</span><span class="mitem"><u>H</u>elp</span></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span>
+                <div class="caps">
+                  <span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5.5h10"/></svg></span>
+                  <span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5"/></svg></span>
+                  <span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="m0.5 0.5 9 9M9.5 0.5l-9 9"/></svg></span>
+                </div>
+                <span class="wco"></span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">10</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                  <div class="rail-label">Settings</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">Ctrl+,</span></div>
+                  <div class="rail-foot"><span class="st"><i></i>router · running</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1></div><div class="actions"><span class="btn">Add rewrite</span><span class="btn primary">Add handler</span></div></div>
+                  <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 1 · run in order · every match applies</p><h2 class="card-title">Rewrites</h2></div><span class="chip">3 rewrites</span></div></section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">7 handlers</span></div>
+                    <div class="rules">
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag">teams.microsoft.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="hits">41 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">214 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="lbl">sent from</span><span class="tag app"><span class="bi">Sl</span>Slack</span><span class="lbl">and</span><span class="tag">*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="hits">57 today</span><span class="more">&#8943;</span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Linux, GNOME">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Linux under GNOME. Same left side. The strip paints minimize, maximize and close itself: 24px circles, 6px apart, GNOME's side and order, close hovering to the danger wash (shown). Corners are square and a 1px <code>--border-strong</code> hairline is the window's edge, dropped when maximized.</span></div>
+            <div class="dv-card win gnome rel" style="width: 1100px;">
+              <span class="tick" style="left: 16px;"></span>
+              <div class="strip">
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <div class="menubar"><span class="mitem">File</span><span class="mitem">Edit</span><span class="mitem">View</span><span class="mitem">Help</span></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span>
+                <div class="gctl">
+                  <span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 8h8"/></svg></span>
+                  <span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4" y="4" width="8" height="8" rx="1.4"/></svg></span>
+                  <span class="hov"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="m4.6 4.6 6.8 6.8M11.4 4.6l-6.8 6.8"/></svg></span>
+                </div>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">10</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                  <div class="rail-label">Settings</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">Ctrl+,</span></div>
+                  <div class="rail-foot"><span class="st"><i></i>router · running</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1></div><div class="actions"><span class="btn">Add rewrite</span><span class="btn primary">Add handler</span></div></div>
+                  <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 1 · run in order · every match applies</p><h2 class="card-title">Rewrites</h2></div><span class="chip">3 rewrites</span></div></section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">7 handlers</span></div>
+                    <div class="rules">
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">214 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">localhost:*</span><span class="tag">127.0.0.1:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">dev-edition</span></div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="lbl">sent from</span><span class="tag app"><span class="bi">Sl</span>Slack</span><span class="lbl">and</span><span class="tag">*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="hits">57 today</span><span class="more">&#8943;</span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Keep the gutter everywhere">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Not recommended. Keep the brand at x=96 on every OS for one shared layout. On Windows and Linux the gutter reserves room for stoplights that are not there: 80px of empty strip in front of the brand. Strips only, with macOS on top for reference.</span></div>
+            <div class="dv-card stack" style="width: 1100px;">
+              <div><span class="cap">macOS · reference · stoplights end at x=76, brand at x=96</span>
+                <div class="win" style="border-radius: 8px;"><div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span></div></div>
+              </div>
+              <div><span class="cap">Windows · gutter kept · brand at x=96</span>
+                <div class="win w11 rel"><div class="strip w11"><div class="gut"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="menubar"><span class="mitem">File</span><span class="mitem">Edit</span><span class="mitem">View</span><span class="mitem">Help</span></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span>
+                  <div class="caps"><span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5.5h10"/></svg></span><span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5"/></svg></span><span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="m0.5 0.5 9 9M9.5 0.5l-9 9"/></svg></span></div></div></div>
+              </div>
+              <div><span class="cap">Linux · gutter kept · brand at x=96</span>
+                <div class="win gnome"><div class="strip"><div class="gut"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="menubar"><span class="mitem">File</span><span class="mitem">Edit</span><span class="mitem">View</span><span class="mitem">Help</span></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span>
+                  <div class="gctl"><span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 8h8"/></svg></span><span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4" y="4" width="8" height="8" rx="1.4"/></svg></span><span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="m4.6 4.6 6.8 6.8M11.4 4.6l-6.8 6.8"/></svg></span></div></div></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Pick 1a and 1b.</b> They are PwrGit's shipped behaviour, so the family stays consistent per OS rather than across them. For the GPUI build: the strip's gutter becomes a platform switch, x=16 off macOS. On Windows the 150px reserve and a 40px caption height must be set when the window is made, and the overlay colours repaint on a theme change. On Linux the window is frameless, so PwrRoute draws its own edge and three buttons, and the maximize glyph follows the window's real state, not the last click. The Settings window takes the same rules, with its own crumb.</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

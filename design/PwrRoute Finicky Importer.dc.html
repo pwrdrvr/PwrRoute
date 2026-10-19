@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* rule rows, as in App Baseline */
+          .rules { display: flex; flex-direction: column; }
+          .rr { position: relative; display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 230px) 64px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.new { background: var(--accent-tint); }
+          .grip { color: var(--text-subtle); display: flex; align-items: center; justify-content: center; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr .m .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .tag.act i { font-style: normal; color: var(--text-subtle); }
+          .tag.act { color: var(--accent-bright); }
+          .card-hd.solo { border-bottom: none; }
+          .banner { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--accent-border); border-radius: var(--radius-lg); background: var(--bg-row-active); }
+          .banner.info { border-color: rgba(86,137,196,0.4); background: var(--info-soft); }
+          .banner.bad { border-color: rgba(185,66,50,0.45); background: rgba(185,66,50,0.10); align-items: flex-start; }
+          .banner .bt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+          .banner .bt b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .banner .bt span { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          /* importer window */
+          .stepper { display: flex; align-items: center; gap: 6px; margin-left: 4px; }
+          .stp { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border-subtle); font: 550 11px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .stp i { font: 600 10px/1 var(--font-mono); font-style: normal; color: var(--text-subtle); }
+          .stp.on { border-color: var(--accent-border); background: var(--bg-row-active); color: var(--accent-bright); }
+          .stp.on i { color: var(--accent); }
+          .stp.done { color: var(--success-text); }
+          .stp.done i { color: var(--success-text); }
+          .imp-body { flex: 1; min-height: 0; display: flex; }
+          .ilist { flex: 0 0 440px; border-right: 1px solid var(--border-subtle); background: var(--bg-sidebar); display: flex; flex-direction: column; }
+          .ilist-hd { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border-faint); }
+          .ilist-hd .note { margin-left: auto; }
+          .igrp { padding: 10px 14px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-subtle); }
+          .ir { position: relative; display: grid; grid-template-columns: 14px 20px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 14px; font: 400 11.5px/1.35 var(--font-sans); color: var(--text-secondary); }
+          .ir.sel { background: var(--bg-row-active); }
+          .ir.sel::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+          .ir .ln { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .ir .tx { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
+          .ir .tx .sl { font: 400 10.5px/1.3 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+          .ck2 { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; font-size: 9px; flex: 0 0 auto; }
+          .ck2.on { background: var(--accent); border-color: transparent; color: var(--accent-on); }
+          .ck2.na { opacity: 0.35; }
+          .idet { flex: 1; min-width: 0; padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
+          .idet h3 { margin: 0; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .verdict { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; border-radius: 8px; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-secondary); }
+          .verdict b { color: var(--text-primary); font-weight: 600; }
+          .verdict.ok { background: var(--success-soft); }
+          .verdict.js { background: var(--warn-soft); }
+          .verdict .pin { margin-top: 1px; }
+          .frame { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); overflow: hidden; font: 500 11px/1.7 var(--font-mono); }
+          .frame .fh { display: flex; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); color: var(--text-muted); }
+          .frame .fh i { font-style: normal; margin-left: auto; color: var(--text-subtle); }
+          .frame .fl { display: grid; grid-template-columns: 34px minmax(0, 1fr); padding: 0 10px; color: var(--text-secondary); }
+          .frame .fl u { text-decoration: none; color: var(--text-subtle); text-align: right; padding-right: 12px; }
+          .frame .fl code { font: inherit; white-space: pre; }
+          .frame .fl.hit { background: var(--accent-tint); color: var(--text-primary); }
+          .frame .fl.err { background: rgba(185,66,50,0.12); color: var(--text-primary); }
+          .frame .fl.car { color: var(--danger-text); }
+          .frame .fh.bad { color: var(--danger-text); }
+          .becomes { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); overflow: hidden; }
+          .sugg { display: flex; flex-direction: column; gap: 8px; padding: 12px 13px; border: 1px dashed var(--border-strong); border-radius: 8px; }
+          .sugg .sh { display: flex; align-items: center; gap: 8px; font: 600 12px/1.3 var(--font-sans); color: var(--text-primary); }
+          .sugg p { margin: 0; font: 400 11px/1.55 var(--font-sans); color: var(--text-muted); }
+          .ev { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font: 500 10.5px/1.4 var(--font-mono); color: var(--text-secondary); }
+          .ev span:nth-child(odd) { color: var(--text-subtle); }
+          .imp-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--bg-panel); }
+          .imp-foot .sum { flex: 1; display: flex; align-items: center; gap: 8px; font: 500 11.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          /* place + source steps */
+          .ipane { flex: 1; min-width: 0; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+          .slots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+          .slots.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .slot { display: flex; flex-direction: column; gap: 7px; padding: 12px 13px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 8px; }
+          .slot.sel { background: var(--bg-row-active); border-color: var(--accent-border); }
+          .slot .sv { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 12.5px/1.25 var(--font-sans); color: var(--text-primary); }
+          .slot.sel .sv { color: var(--accent-bright); }
+          .slot .ss { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .slot .sw2 { font: 500 10.5px/1.45 var(--font-sans); color: var(--warn-text); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          .dupe { display: flex; align-items: center; gap: 8px; font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .preview-lbl { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .crop { background: var(--bg-app); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+          .entry { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 6px 14px; font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .entry b { font-weight: 600; color: var(--text-secondary); }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Finding a config ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Importer &rsaquo; finding a config</span></div>
+        <p class="dv-sub">The importer is one window with three steps: <b>Review</b>, <b>Place</b>, <b>Choose source</b>. It reads the config the way the router does, by evaluating it in QuickJS, and inspects the handlers and rewrites the config produced, not its text. It writes only rules.json, and never the file it read. It can be opened from four places; the first time discovery finds a config while visual rules are in charge, the Rules view says so once.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Found a config">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>An info banner above the lists, cropped to the pane. Dismissing it is remembered per file path; the other entry points stay.</span></div>
+            <div class="dv-card crop" style="width: 900px;">
+              <div class="banner info">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--info-text)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 auto;"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13 4-2 16"/></svg>
+                <div class="bt"><b>Found ~/.finicky.ts</b><span>2 rewrites, 6 handlers and a default browser. Review what the visual rules can hold; nothing changes until you import.</span></div>
+                <div class="row-actions"><span class="btn sm">Review import&hellip;</span><span class="btn sm quiet">Not now</span></div>
+              </div>
+              <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 1 · run in order · every match applies</p><h2 class="card-title">Rewrites</h2></div><span class="chip">1 rewrite</span></div></section>
+              <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">2 handlers</span></div></section>
+              <div class="entry">
+                <b>Also opens from</b><span></span>
+                <span>First run, step 2</span><span>Import 5 rules goes straight to Choose source with every proven rule checked.</span>
+                <span>Settings &rsaquo; Configuration</span><span>The importer card (Settings 1b) becomes a summary with Review import&hellip;</span>
+                <span>Finicky in charge</span><span>The banner's Import to visual rules&hellip; (App Baseline 1b).</span>
+                <span>File menu</span><span>Import Finicky config&hellip; for any .js or .ts, not only the discovered one.</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================= TURN 2 — Review and place ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Importer &rsaquo; review &middot; place</span></div>
+        <p class="dv-sub">Each rule gets one verdict. <b>Imports</b>: string, wildcard and regex matchers, browser names with profiles, string rewrites and <code>defaultBrowser</code> become visual rules that run through the same Finicky API, so they behave identically by construction. <b>Stays JS</b>: function matchers and <code>url</code> functions, which no visual rule can prove equal. A function that looks like a visual rule gets a <b>suggestion</b>, tested against recent links and clearly not a proof; it is off unless ticked.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Review, an exact import">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Review, with a regex handler selected: its source lines, the verdict, and the visual row it becomes.</span></div>
+            <div class="dv-card win" style="width: 1180px; height: 640px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Import ~/.finicky.ts</span>
+                <div class="stepper"><span class="stp on"><i>1</i>Review</span><span class="stp"><i>2</i>Place</span><span class="stp"><i>3</i>Choose source</span></div>
+              </div>
+              <div class="imp-body">
+                <div class="ilist">
+                  <div class="ilist-hd"><span class="ck2 on">&#10003;</span><span class="lab" style="font: 600 11.5px var(--font-sans); color: var(--text-secondary);">9 found</span><span class="note">6 import · 2 stay JS · 1 suggestion</span></div>
+                  <div class="igrp">Rewrites</div>
+                  <div class="ir"><span class="ck2 on">&#10003;</span><span class="ln">:4</span><span class="tx"><span class="tag">x.com/*</span><span class="arrow">&rarr;</span><span class="tag act"><i>host</i>xcancel.com</span></span><span class="chip ok">Imports</span></div>
+                  <div class="ir"><span class="ck2 na"></span><span class="ln">:8</span><span class="tx"><span class="tag fn">fn</span><span class="sl">url =&gt; { url.searchParams.delete("utm_source"); &hellip;</span></span><span class="chip warn">Stays JS</span></div>
+                  <div class="igrp">Handlers</div>
+                  <div class="ir"><span class="ck2 na"></span><span class="ln">:15</span><span class="tx"><span class="tag fn">fn</span><span class="sl">(url, { opener }) =&gt; url.host.includes("workplace")</span></span><span class="chip warn">Stays JS</span></div>
+                  <div class="ir"><span class="ck2"></span><span class="ln">:19</span><span class="tx"><span class="tag fn">fn</span><span class="sl">(url, { opener }) =&gt; opener?.name.includes("Slack")</span></span><span class="chip acc">Suggestion</span></div>
+                  <div class="ir"><span class="ck2 on">&#10003;</span><span class="ln">:23</span><span class="tx"><span class="tag">bsky.app/*</span><span class="arrow">&rarr;</span>Firefox</span><span class="chip ok">Imports</span></div>
+                  <div class="ir sel"><span class="ck2 on">&#10003;</span><span class="ln">:27</span><span class="tx"><span class="tag re">/^https:\/\/news\.ycombinator\.com/</span><span class="arrow">&rarr;</span>Firefox</span><span class="chip ok">Imports</span></div>
+                  <div class="ir"><span class="ck2 on">&#10003;</span><span class="ln">:31</span><span class="tx"><span class="tag">google.com/*</span><span class="tag">*.google.com*</span><span class="arrow">&rarr;</span>Chrome</span><span class="chip ok">Imports</span></div>
+                  <div class="ir"><span class="ck2 on">&#10003;</span><span class="ln">:35</span><span class="tx"><span class="tag">*.atlassian.net/*</span><span class="arrow">&rarr;</span>Chrome · Work</span><span class="chip ok">Imports</span></div>
+                  <div class="igrp">Default</div>
+                  <div class="ir"><span class="ck2 on">&#10003;</span><span class="ln">:2</span><span class="tx">defaultBrowser<span class="arrow">&rarr;</span>Google Chrome</span><span class="chip ok">Imports</span></div>
+                </div>
+                <div class="idet">
+                  <h3>Handler · ~/.finicky.ts line 27</h3>
+                  <div class="frame">
+                    <div class="fh"><span>~/.finicky.ts</span><i>lines 26&ndash;29</i></div>
+                    <div class="fl"><u>26</u><code>    {</code></div>
+                    <div class="fl hit"><u>27</u><code>      match: /^https:\/\/news\.ycombinator\.com/,</code></div>
+                    <div class="fl hit"><u>28</u><code>      browser: "Firefox",</code></div>
+                    <div class="fl"><u>29</u><code>    },</code></div>
+                  </div>
+                  <div class="verdict ok"><span class="pin ok">&#10003;</span><span><b>Imports exactly.</b> A regex matcher and a browser name are what a visual handler stores; the router passes them to the same Finicky API, so the result cannot differ.</span></div>
+                  <h3>Becomes a visual handler · position set in Place</h3>
+                  <div class="becomes"><div class="rules"><div class="rr new"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">+</span><div class="m"><span class="tag re">/^https:\/\/news\.ycombinator\.com/</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">new</span><span class="more"></span></div></div></div>
+                </div>
+              </div>
+              <div class="imp-foot"><span class="sum"><span class="ck2 on">&#10003;</span>6 of 9 selected. Nothing is written yet.</span><span class="btn quiet">Cancel</span><span class="btn primary">Next: Place</span></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Review, a suggestion">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>The detail pane for line 19, cropped. The function cannot be proved equal to &ldquo;sent from Slack&rdquo;: <code>includes</code> also matches &ldquo;Slack Beta&rdquo;, and the function sees more than the opener. The suggestion shows its evidence and is never preselected.</span></div>
+            <div class="dv-card" style="width: 740px; background: var(--bg-app);">
+              <div class="idet">
+                <h3>Handler · ~/.finicky.ts line 19</h3>
+                <div class="frame">
+                  <div class="fh"><span>~/.finicky.ts</span><i>lines 18&ndash;21</i></div>
+                  <div class="fl"><u>18</u><code>    {</code></div>
+                  <div class="fl hit"><u>19</u><code>      match: (url, { opener }) =&gt; opener?.name.includes("Slack") || false,</code></div>
+                  <div class="fl hit"><u>20</u><code>      browser: { name: "Firefox", profile: "default-release" },</code></div>
+                  <div class="fl"><u>21</u><code>    },</code></div>
+                </div>
+                <div class="verdict js"><span class="pin q">fn</span><span><b>Stays JS.</b> A function matcher can look at anything, so no visual rule is provably the same. Keep the config in charge (step 3) and this keeps running as written.</span></div>
+                <div class="sugg">
+                  <span class="sh"><span class="ck2"></span>Use a visual rule instead: <span class="tag app"><span class="bi">Sl</span>sent from Slack</span><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox · default-release</span>
+                  <p>Tested, not proved. Opener names that contain &ldquo;Slack&rdquo; but are not Slack, such as Slack Beta, would stop matching.</p>
+                  <div class="ev"><span>last 100 links</span><span>57 from Slack · same browser for all 57</span><span>other openers</span><span>43 · neither rule matched any</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2c" data-screen-label="2c Place">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>Place, when visual rules already exist. Order is meaning, so where the imported handlers go is a choice, previewed below. A rule that is already there is skipped, not doubled.</span></div>
+            <div class="dv-card win" style="width: 1180px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Import ~/.finicky.ts</span>
+                <div class="stepper"><span class="stp done"><i>&#10003;</i>Review</span><span class="stp on"><i>2</i>Place</span><span class="stp"><i>3</i>Choose source</span></div>
+              </div>
+              <div class="ipane">
+                <div><div class="eyebrow">Place</div><h1 class="ttl" style="font-size: 17px;">You already have 2 handlers</h1><p class="help">Imported handlers keep their order among themselves. Choose where the group goes.</p></div>
+                <div class="slots">
+                  <div class="slot sel"><div class="sv">Before yours<span class="radio on"></span></div><span class="ss">The config's handlers win where both match. Closest to how the config routed until now.</span></div>
+                  <div class="slot"><div class="sv">After yours<span class="radio"></span></div><span class="ss">Your handlers win where both match.</span><span class="sw2">3 of the last 100 links would change.</span></div>
+                  <div class="slot"><div class="sv">Replace yours<span class="radio"></span></div><span class="ss">Your 2 handlers are removed. Undo import restores them.</span></div>
+                </div>
+                <div class="dupe"><span class="chip">skipped</span><span class="tag">bsky.app/*</span><span class="arrow">&rarr;</span><span>Firefox is already your handler 2. defaultBrowser is Google Chrome in both, so Everything else is unchanged.</span></div>
+                <span class="preview-lbl">Handlers after import</span>
+                <section class="card">
+                  <div class="rules">
+                    <div class="rr new"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag re">/^https:\/\/news\.ycombinator\.com/</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">imported</span><span class="more"></span></div>
+                    <div class="rr new"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">google.com/*</span><span class="tag">*.google.com*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome</div><span class="hits">imported</span><span class="more"></span></div>
+                    <div class="rr new"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="tag">*.atlassian.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">imported</span><span class="more"></span></div>
+                    <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">localhost:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">yours</span><span class="more"></span></div>
+                    <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">bsky.app/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">yours</span><span class="more"></span></div>
+                  </div>
+                </section>
+              </div>
+              <div class="imp-foot"><span class="sum">Rewrites go after yours, since every rewrite runs anyway.</span><span class="btn quiet">Back</span><span class="btn primary">Next: Choose source</span></div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================= TURN 3 — Choose source, result, failure ================= -->
+      <section class="dv-turn" id="t3">
+        <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Importer &rsaquo; choose source &middot; result</span></div>
+        <p class="dv-sub">The last step decides what the router reads afterwards, because the rules that stay JS only keep working while the config is selected. Import writes rules.json in one atomic save (<code>RulesFile::save</code> stages and renames), keeps the previous file for <b>Undo import</b>, and the router hot-reloads. If the config does not load, there is nothing to review, and the importer says why instead of showing an empty list.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="3a" data-screen-label="3a Choose source">
+            <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>Two outcomes, and the one that drops something says exactly what. With nothing left in JS the step is skipped and visual rules are selected.</span></div>
+            <div class="dv-card win" style="width: 1180px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Import ~/.finicky.ts</span>
+                <div class="stepper"><span class="stp done"><i>&#10003;</i>Review</span><span class="stp done"><i>&#10003;</i>Place</span><span class="stp on"><i>3</i>Choose source</span></div>
+              </div>
+              <div class="ipane">
+                <div><div class="eyebrow">Choose source</div><h1 class="ttl" style="font-size: 17px;">2 rules stay in JavaScript</h1><p class="help">They only run while ~/.finicky.ts is selected. Choose what the router reads after the import.</p></div>
+                <div class="slots two">
+                  <div class="slot sel"><div class="sv">Keep ~/.finicky.ts in charge<span class="radio on"></span></div><span class="ss">The config runs first, as now, with the 2 JS rules; the 5 imported rules run after it. Nothing stops working. Switch later in Settings &rsaquo; Configuration.</span></div>
+                  <div class="slot"><div class="sv">Visual rules only<span class="radio"></span></div><span class="ss">The router stops reading ~/.finicky.ts. These stop running:</span><span class="sw2">line 8 · rewrite that drops utm_source</span><span class="sw2">line 15 · workplace links to Firefox</span></div>
+                </div>
+                <span class="field-help">~/.finicky.ts is not modified either way. rules.json is saved once; the previous version is kept for Undo import.</span>
+              </div>
+              <div class="imp-foot"><span class="sum">5 rules: 1 rewrite, 3 handlers before yours, the default. 1 duplicate skipped.</span><span class="btn quiet">Back</span><span class="btn primary">Import 5 rules</span></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="3b" data-screen-label="3b After import">
+            <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a><span>Back in the Rules view, cropped to the pane. Imported rows are tinted and marked until the window closes; the banner carries Undo import and the way to look at what stayed behind.</span></div>
+            <div class="dv-card crop" style="width: 960px;">
+              <div class="banner">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 auto;"><path d="M20 6 9 17l-5-5"/></svg>
+                <div class="bt"><b>Imported 5 rules from ~/.finicky.ts</b><span>~/.finicky.ts stays in charge for its 2 JS rules and runs first. Saved 09:52; reloaded.</span></div>
+                <div class="row-actions"><span class="btn sm">Undo import</span><span class="btn sm quiet">Show what stayed JS</span></div>
+              </div>
+              <section class="card">
+                <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Run after the config · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip acc">3 imported</span></div>
+                <div class="rules">
+                  <div class="rr new"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag re">/^https:\/\/news\.ycombinator\.com/</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">imported</span><span class="more">&#8943;</span></div>
+                  <div class="rr new"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">google.com/*</span><span class="tag">*.google.com*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome</div><span class="hits">imported</span><span class="more">&#8943;</span></div>
+                  <div class="rr new"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="tag">*.atlassian.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">imported</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">localhost:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">bsky.app/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="3c" data-screen-label="3c Config does not load">
+            <div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a><span>The importer on a config that does not evaluate, cropped to the window body. The file and its imports are watched, so a save re-runs the review on its own.</span></div>
+            <div class="dv-card" style="width: 760px; background: var(--bg-app);">
+              <div class="ipane">
+                <div class="banner bad">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--danger-text)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 auto; margin-top: 1px;"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+                  <div class="bt"><b>Can't read ~/.finicky.ts</b><span>The importer reads what the config produces, so it has to run first. It stopped here:</span></div>
+                </div>
+                <div class="frame">
+                  <div class="fh bad"><span>Cannot find module "./work-hosts"</span><i>~/.finicky.ts:1:27</i></div>
+                  <div class="fl err"><u>1</u><code>import { workHosts } from "./work-hosts";</code></div>
+                  <div class="fl car"><u></u><code>                          ^</code></div>
+                  <div class="fl"><u>2</u><code></code></div>
+                  <div class="fl"><u>3</u><code>export default {</code></div>
+                </div>
+                <div class="row-actions"><span class="btn sm">Open at line 1</span><span class="btn sm quiet">Choose another file&hellip;</span><span class="note" style="margin-left: auto;">watching ~/.finicky.ts</span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note">Undo import is good until the next edit to rules.json or until the window closes, the same lifetime as rule-level undo in Rule Editing turn 4. Suggestions accepted in 2b are recorded in the banner as &ldquo;1 from a suggestion&rdquo;, so a later surprise has a place to start.</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
