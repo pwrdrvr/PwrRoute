@@ -7,15 +7,19 @@ Keep this file short; see **Docs & conventions** below.
 
 ## Status: early port
 
-A Cargo workspace with a GPUI window, a Finicky-compatible rules engine and a
-resident router that receives links from the OS. The router resolves and
-records every link, but cannot open a browser until the launcher crate lands
-(run with `--dry-run` to see dispatches succeed).
+A Cargo workspace with a GPUI window, a Finicky-compatible rules engine, a
+resident router that receives links from the OS, and a browser launcher. The
+router resolves and records every link, but does not use the launcher yet, so
+it cannot open a browser (run with `--dry-run` to see dispatches succeed).
 
 - `crates/pwrroute-engine` — loads Finicky v4 `.js`/`.ts` configs in QuickJS
   (rquickjs) with oxc for TypeScript, and resolves URLs. See its `AGENTS.md`.
 - `crates/pwrroute-router` — the dispatch pipeline, the in-memory trace of
   recent dispatches, single instance and IPC. See its `AGENTS.md`.
+- `crates/pwrroute-browsers` — the browser catalog (`data/browsers.json`,
+  from Finicky's `browsers.json` plus Windows, Linux and more browsers),
+  detection, Chromium/Firefox profiles, and launch commands with a dry run.
+  See its `AGENTS.md`.
 - `crates/pwrroute-os` — link receipt and default-browser registration per
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI window (binary `pwrroute`). It draws the
@@ -27,11 +31,11 @@ Port, don't invent: the design in `design/` decides the shape. Read
 fork of Finicky, Go + Electron) is reference only; Go and Electron are gone.
 
 Code derived from Finicky (its configuration API in
-`crates/pwrroute-engine/assets`, and anything later ported from its resolver
-or launcher) is MIT, Copyright (c) 2015-2025 John Sterling. Its notice is in
-`LICENSE`; keep it there, and keep any per-file copyright headers. Finicky's
-name and icon are not PwrRoute branding; the icon is by @uetchy and is not
-ours to reuse.
+`crates/pwrroute-engine/assets`, its `browsers.json` and launcher in
+`crates/pwrroute-browsers`, and anything later ported from its resolver) is
+MIT, Copyright (c) 2015-2025 John Sterling. Its notice is in `LICENSE`; keep
+it there, and keep any per-file copyright headers. Finicky's name and icon are
+not PwrRoute branding; the icon is by @uetchy and is not ours to reuse.
 
 ## Set up a checkout
 

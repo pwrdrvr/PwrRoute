@@ -1,0 +1,1307 @@
+{
+  "_origin": [
+    "Entries with \"finicky\": true come from Finicky's apps/finicky/src/browser/browsers.json (MIT, Copyright (c) 2015-2025 John Sterling); their macOS bundle_id, app_name, engine and profile directory are Finicky's.",
+    "Everything else (Windows, Linux, and the browsers Finicky lacks) was added for PwrRoute; each entry's sources say where its facts came from.",
+    "Path templates start with a base-directory token; see Env::expand in src/env.rs."
+  ],
+  "browsers": [
+    {
+      "id": "chrome",
+      "name": "Google Chrome",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.google.Chrome",
+        "app_name": "Google Chrome",
+        "profiles": [
+          "{app_support}/Google/Chrome"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Google/Chrome/Application/chrome.exe",
+          "{programfiles_x86}/Google/Chrome/Application/chrome.exe",
+          "{localappdata}/Google/Chrome/Application/chrome.exe"
+        ],
+        "prog_id": "ChromeHTML",
+        "profiles": [
+          "{localappdata}/Google/Chrome/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "google-chrome.desktop",
+          "com.google.Chrome.desktop"
+        ],
+        "executables": [
+          "google-chrome-stable"
+        ],
+        "profiles": [
+          "{xdg_config}/google-chrome"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
+        "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
+        "https://github.com/chromium/chromium/blob/main/chrome/installer/util/shell_util.cc",
+        "https://formulae.brew.sh/api/cask/google-chrome.json",
+        "https://dl.google.com/linux/chrome/rpm/stable/x86_64/repodata/"
+      ],
+      "notes": "Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches. /usr/bin/google-chrome is shared by every channel's package, so only google-chrome-stable is used."
+    },
+    {
+      "id": "chrome-beta",
+      "name": "Google Chrome Beta",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.google.Chrome.beta",
+        "app_name": "Google Chrome Beta",
+        "profiles": [
+          "{app_support}/Google/Chrome Beta"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Google/Chrome Beta/Application/chrome.exe",
+          "{programfiles_x86}/Google/Chrome Beta/Application/chrome.exe",
+          "{localappdata}/Google/Chrome Beta/Application/chrome.exe"
+        ],
+        "prog_id": "ChromeBHTML",
+        "profiles": [
+          "{localappdata}/Google/Chrome Beta/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "google-chrome-beta.desktop",
+          "com.google.Chrome.beta.desktop"
+        ],
+        "executables": [
+          "google-chrome-beta"
+        ],
+        "profiles": [
+          "{xdg_config}/google-chrome-beta"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
+        "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
+        "https://github.com/chromium/chromium/blob/main/chrome/installer/util/shell_util.cc",
+        "https://formulae.brew.sh/api/cask/google-chrome@beta.json",
+        "https://dl.google.com/linux/chrome/rpm/stable/x86_64/repodata/"
+      ],
+      "notes": "Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "chrome-dev",
+      "name": "Google Chrome Dev",
+      "engine": "chromium",
+      "macos": {
+        "bundle_id": "com.google.Chrome.dev",
+        "app_name": "Google Chrome Dev",
+        "profiles": [
+          "{app_support}/Google/Chrome Dev"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Google/Chrome Dev/Application/chrome.exe",
+          "{programfiles_x86}/Google/Chrome Dev/Application/chrome.exe",
+          "{localappdata}/Google/Chrome Dev/Application/chrome.exe"
+        ],
+        "prog_id": "ChromeDHTML",
+        "profiles": [
+          "{localappdata}/Google/Chrome Dev/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "google-chrome-unstable.desktop",
+          "com.google.Chrome.unstable.desktop"
+        ],
+        "executables": [
+          "google-chrome-unstable"
+        ],
+        "profiles": [
+          "{xdg_config}/google-chrome-unstable"
+        ]
+      },
+      "sources": [
+        "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
+        "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
+        "https://github.com/chromium/chromium/blob/main/chrome/installer/util/shell_util.cc",
+        "https://formulae.brew.sh/api/cask/google-chrome@dev.json",
+        "https://dl.google.com/linux/chrome/rpm/stable/x86_64/repodata/"
+      ],
+      "notes": "Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches. Linux calls the Dev channel 'unstable'."
+    },
+    {
+      "id": "chrome-canary",
+      "name": "Google Chrome Canary",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.google.Chrome.canary",
+        "app_name": "Google Chrome Canary",
+        "profiles": [
+          "{app_support}/Google/Chrome Canary"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Google/Chrome SxS/Application/chrome.exe"
+        ],
+        "prog_id": "ChromeSSHTM",
+        "profiles": [
+          "{localappdata}/Google/Chrome SxS/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "google-chrome-canary.desktop",
+          "com.google.Chrome.canary.desktop"
+        ],
+        "executables": [
+          "google-chrome-canary"
+        ],
+        "profiles": [
+          "{xdg_config}/google-chrome-canary"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
+        "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
+        "https://github.com/chromium/chromium/blob/main/chrome/installer/util/shell_util.cc",
+        "https://formulae.brew.sh/api/cask/google-chrome@canary.json",
+        "https://dl.google.com/linux/chrome/rpm/stable/x86_64/repodata/"
+      ],
+      "notes": "Windows Canary is per-user only and cannot be the default browser."
+    },
+    {
+      "id": "chromium",
+      "name": "Chromium",
+      "engine": "chromium",
+      "finicky": true,
+      "aliases": [
+        "ungoogled-chromium"
+      ],
+      "macos": {
+        "bundle_id": "org.chromium.Chromium",
+        "app_name": "Chromium",
+        "profiles": [
+          "{app_support}/Chromium"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Chromium/Application/chrome.exe",
+          "{programfiles}/Chromium/Application/chrome.exe"
+        ],
+        "prog_id": "ChromiumHTM",
+        "profiles": [
+          "{localappdata}/Chromium/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "chromium.desktop",
+          "chromium-browser.desktop",
+          "chromium_chromium.desktop",
+          "org.chromium.Chromium.desktop",
+          "io.github.ungoogled_software.ungoogled_chromium.desktop"
+        ],
+        "executables": [
+          "chromium",
+          "chromium-browser"
+        ],
+        "profiles": [
+          "{xdg_config}/chromium",
+          "{home}/snap/chromium/common/chromium",
+          "{home}/.var/app/org.chromium.Chromium/config/chromium",
+          "{home}/.var/app/io.github.ungoogled_software.ungoogled_chromium/config/chromium"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
+        "https://github.com/chromium/chromium/blob/main/chrome/install_static/chromium_install_modes.h",
+        "https://github.com/chromium/chromium/blob/main/chrome/installer/util/shell_util.cc",
+        "https://formulae.brew.sh/api/cask/chromium.json",
+        "https://formulae.brew.sh/api/cask/ungoogled-chromium.json",
+        "https://packages.debian.org/trixie/amd64/chromium/filelist",
+        "https://archlinux.org/packages/extra/x86_64/chromium/files/",
+        "https://mdapi.fedoraproject.org/rawhide/files/chromium",
+        "https://git.launchpad.net/~chromium-team/chromium-browser/+git/snap-from-source/plain/snapcraft.yaml?h=stable",
+        "https://flathub.org/apps/io.github.ungoogled_software.ungoogled_chromium"
+      ],
+      "notes": "ungoogled-chromium shares Chromium's bundle id, ProgID and directories, so it is this entry. Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "edge",
+      "name": "Microsoft Edge",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.microsoft.edgemac",
+        "app_name": "Microsoft Edge",
+        "profiles": [
+          "{app_support}/Microsoft Edge"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles_x86}/Microsoft/Edge/Application/msedge.exe",
+          "{programfiles}/Microsoft/Edge/Application/msedge.exe"
+        ],
+        "prog_id": "MSEdgeHTM",
+        "profiles": [
+          "{localappdata}/Microsoft/Edge/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "microsoft-edge.desktop",
+          "com.microsoft.Edge.desktop"
+        ],
+        "executables": [
+          "microsoft-edge-stable"
+        ],
+        "profiles": [
+          "{xdg_config}/microsoft-edge"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/microsoft-edge.json",
+        "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
+        "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
+        "https://packages.microsoft.com/yumrepos/edge"
+      ],
+      "notes": "/usr/bin/microsoft-edge is shared by every channel's package, so only microsoft-edge-stable is used. Linux profile directories follow Chromium's naming; Microsoft does not document them."
+    },
+    {
+      "id": "edge-beta",
+      "name": "Microsoft Edge Beta",
+      "engine": "chromium",
+      "macos": {
+        "bundle_id": "com.microsoft.edgemac.Beta",
+        "app_name": "Microsoft Edge Beta",
+        "profiles": [
+          "{app_support}/Microsoft Edge Beta"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles_x86}/Microsoft/Edge Beta/Application/msedge.exe",
+          "{programfiles}/Microsoft/Edge Beta/Application/msedge.exe"
+        ],
+        "prog_id": "MSEdgeBHTML",
+        "profiles": [
+          "{localappdata}/Microsoft/Edge Beta/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "microsoft-edge-beta.desktop",
+          "com.microsoft.Edge.beta.desktop"
+        ],
+        "executables": [
+          "microsoft-edge-beta"
+        ],
+        "profiles": [
+          "{xdg_config}/microsoft-edge-beta"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/microsoft-edge@beta.json",
+        "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
+        "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
+        "https://packages.microsoft.com/yumrepos/edge"
+      ],
+      "notes": "Linux profile directories follow Chromium's naming; Microsoft does not document them."
+    },
+    {
+      "id": "edge-dev",
+      "name": "Microsoft Edge Dev",
+      "engine": "chromium",
+      "macos": {
+        "bundle_id": "com.microsoft.edgemac.Dev",
+        "app_name": "Microsoft Edge Dev",
+        "profiles": [
+          "{app_support}/Microsoft Edge Dev"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles_x86}/Microsoft/Edge Dev/Application/msedge.exe",
+          "{programfiles}/Microsoft/Edge Dev/Application/msedge.exe"
+        ],
+        "prog_id": "MSEdgeDHTML",
+        "profiles": [
+          "{localappdata}/Microsoft/Edge Dev/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "microsoft-edge-dev.desktop",
+          "com.microsoft.Edge.dev.desktop"
+        ],
+        "executables": [
+          "microsoft-edge-dev"
+        ],
+        "profiles": [
+          "{xdg_config}/microsoft-edge-dev"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/microsoft-edge@dev.json",
+        "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
+        "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
+        "https://packages.microsoft.com/yumrepos/edge"
+      ],
+      "notes": "Linux profile directories follow Chromium's naming; Microsoft does not document them."
+    },
+    {
+      "id": "edge-canary",
+      "name": "Microsoft Edge Canary",
+      "engine": "chromium",
+      "macos": {
+        "bundle_id": "com.microsoft.edgemac.Canary",
+        "app_name": "Microsoft Edge Canary",
+        "profiles": [
+          "{app_support}/Microsoft Edge Canary"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Microsoft/Edge SxS/Application/msedge.exe"
+        ],
+        "profiles": [
+          "{localappdata}/Microsoft/Edge SxS/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "microsoft-edge-canary.desktop",
+          "com.microsoft.Edge.canary.desktop"
+        ],
+        "executables": [
+          "microsoft-edge-canary"
+        ],
+        "profiles": [
+          "{xdg_config}/microsoft-edge-canary"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/microsoft-edge@canary.json",
+        "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
+        "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
+        "https://packages.microsoft.com/yumrepos/edge"
+      ],
+      "notes": "Windows Canary is per-user; its ProgID is unverified. Linux profile directories follow Chromium's naming; Microsoft does not document them."
+    },
+    {
+      "id": "brave",
+      "name": "Brave Browser",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.brave.Browser",
+        "app_name": "Brave Browser",
+        "profiles": [
+          "{app_support}/BraveSoftware/Brave-Browser"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/BraveSoftware/Brave-Browser/Application/brave.exe",
+          "{localappdata}/BraveSoftware/Brave-Browser/Application/brave.exe"
+        ],
+        "prog_id": "BraveHTML",
+        "profiles": [
+          "{localappdata}/BraveSoftware/Brave-Browser/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "brave-browser.desktop",
+          "com.brave.Browser.desktop"
+        ],
+        "executables": [
+          "brave-browser-stable"
+        ],
+        "profiles": [
+          "{xdg_config}/BraveSoftware/Brave-Browser",
+          "{home}/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/install_static/chromium_install_modes.h",
+        "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/common/chrome_constants.cc",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/b/Brave/Brave",
+        "https://formulae.brew.sh/api/cask/brave-browser.json"
+      ],
+      "notes": "The Flatpak (com.brave.Browser) shares the native desktop id. /usr/bin/brave-browser is shared by every channel's package. Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "brave-beta",
+      "name": "Brave Browser Beta",
+      "engine": "chromium",
+      "macos": {
+        "bundle_id": "com.brave.Browser.beta",
+        "app_name": "Brave Browser Beta",
+        "profiles": [
+          "{app_support}/BraveSoftware/Brave-Browser-Beta"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/BraveSoftware/Brave-Browser-Beta/Application/brave.exe",
+          "{localappdata}/BraveSoftware/Brave-Browser-Beta/Application/brave.exe"
+        ],
+        "prog_id": "BraveBHTML",
+        "profiles": [
+          "{localappdata}/BraveSoftware/Brave-Browser-Beta/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "brave-browser-beta.desktop",
+          "com.brave.Browser.beta.desktop"
+        ],
+        "executables": [
+          "brave-browser-beta"
+        ],
+        "profiles": [
+          "{xdg_config}/BraveSoftware/Brave-Browser-Beta"
+        ]
+      },
+      "sources": [
+        "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/install_static/chromium_install_modes.h",
+        "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/common/chrome_constants.cc",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/b/Brave/Brave",
+        "https://formulae.brew.sh/api/cask/brave-browser@beta.json"
+      ],
+      "notes": "Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "brave-nightly",
+      "name": "Brave Browser Nightly",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.brave.Browser.nightly",
+        "app_name": "Brave Browser Nightly",
+        "profiles": [
+          "{app_support}/BraveSoftware/Brave-Browser-Nightly"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/BraveSoftware/Brave-Browser-Nightly/Application/brave.exe",
+          "{localappdata}/BraveSoftware/Brave-Browser-Nightly/Application/brave.exe"
+        ],
+        "prog_id": "BraveSSHTM",
+        "profiles": [
+          "{localappdata}/BraveSoftware/Brave-Browser-Nightly/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "brave-browser-nightly.desktop",
+          "com.brave.Browser.nightly.desktop"
+        ],
+        "executables": [
+          "brave-browser-nightly"
+        ],
+        "profiles": [
+          "{xdg_config}/BraveSoftware/Brave-Browser-Nightly"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/install_static/chromium_install_modes.h",
+        "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/common/chrome_constants.cc",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/b/Brave/Brave",
+        "https://formulae.brew.sh/api/cask/brave-browser@nightly.json"
+      ],
+      "notes": "Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "vivaldi",
+      "name": "Vivaldi",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.vivaldi.Vivaldi",
+        "app_name": "Vivaldi",
+        "profiles": [
+          "{app_support}/Vivaldi"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Vivaldi/Application/vivaldi.exe",
+          "{programfiles}/Vivaldi/Application/vivaldi.exe"
+        ],
+        "prog_id": "VivaldiHTM",
+        "profiles": [
+          "{localappdata}/Vivaldi/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "vivaldi-stable.desktop"
+        ],
+        "executables": [
+          "vivaldi-stable"
+        ],
+        "profiles": [
+          "{xdg_config}/vivaldi",
+          "{home}/snap/vivaldi/current/.config/vivaldi"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/vivaldi.json",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/v/Vivaldi/Vivaldi",
+        "https://help.vivaldi.com/desktop/install-vivaldi-for-snap/",
+        "https://github.com/J-U-B/OPSI-dfn_vivaldi",
+        "https://forum.vivaldi.net/post/189636"
+      ],
+      "notes": "The ProgID comes from a deployment script and a forum post, not Vivaldi. Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "vivaldi-snapshot",
+      "name": "Vivaldi Snapshot",
+      "engine": "chromium",
+      "macos": {
+        "bundle_id": "com.vivaldi.Vivaldi.snapshot",
+        "app_name": "Vivaldi Snapshot",
+        "profiles": [
+          "{app_support}/Vivaldi Snapshot"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "vivaldi-snapshot.desktop"
+        ],
+        "executables": [
+          "vivaldi-snapshot"
+        ],
+        "profiles": [
+          "{xdg_config}/vivaldi-snapshot"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/vivaldi@snapshot.json",
+        "https://help.vivaldi.com/desktop/install-update/standalone-version-of-vivaldi/",
+        "https://vivaldi.com/blog/snapshot-vs-stable/"
+      ],
+      "notes": "No Windows entry: Snapshot replaces stable in the same directory unless installed standalone, wherever the user chose."
+    },
+    {
+      "id": "opera",
+      "name": "Opera",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.operasoftware.Opera",
+        "app_name": "Opera",
+        "profiles": [
+          "{app_support}/com.operasoftware.Opera"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Programs/Opera/opera.exe"
+        ],
+        "profiles": [
+          "{appdata}/Opera Software/Opera Stable"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "opera.desktop"
+        ],
+        "executables": [
+          "opera"
+        ],
+        "profiles": [
+          "{xdg_config}/opera"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/opera.json",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/o/Opera/Opera",
+        "https://appcatalog.cloud/apps/opera",
+        "https://forums.opera.com/post/1646"
+      ],
+      "notes": "Finicky passes --profile-directory to it; Opera does not document the flag (its forums describe --user-data-dir per profile). Windows keeps Opera's data in Roaming; the per-user install path and the Linux profile directory are Opera's defaults, not verified against Opera documentation."
+    },
+    {
+      "id": "opera-gx",
+      "name": "Opera GX",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.operasoftware.OperaGX",
+        "app_name": "Opera GX",
+        "profiles": [
+          "{app_support}/com.operasoftware.OperaGX"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Programs/Opera GX/opera.exe"
+        ],
+        "profiles": [
+          "{appdata}/Opera Software/Opera GX Stable"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "opera-gx.desktop",
+          "com.opera.opera-gx.desktop"
+        ],
+        "executables": [
+          "opera-gx"
+        ],
+        "profiles": [
+          "{xdg_config}/opera-gx",
+          "{home}/.var/app/com.opera.opera-gx/config/opera-gx"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/opera-gx.json",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/o/Opera/OperaGX",
+        "https://rpm.opera.com/",
+        "https://flathub.org/apps/com.opera.opera-gx"
+      ],
+      "notes": "Finicky passes --profile-directory to it; Opera does not document the flag (its forums describe --user-data-dir per profile). The Windows install path and native Linux profile directory are unverified."
+    },
+    {
+      "id": "yandex",
+      "name": "Yandex",
+      "engine": "chromium",
+      "finicky": true,
+      "aliases": [
+        "Yandex Browser"
+      ],
+      "macos": {
+        "bundle_id": "ru.yandex.desktop.yandex-browser",
+        "app_name": "Yandex",
+        "profiles": [
+          "{app_support}/Yandex/YandexBrowser"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Yandex/YandexBrowser/Application/browser.exe"
+        ],
+        "profiles": [
+          "{localappdata}/Yandex/YandexBrowser/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "yandex-browser.desktop",
+          "ru.yandex.desktop.browser.desktop",
+          "ru.yandex.Browser.desktop"
+        ],
+        "executables": [
+          "yandex-browser-stable"
+        ],
+        "profiles": [
+          "{xdg_config}/yandex-browser",
+          "{home}/.var/app/ru.yandex.Browser/config/yandex-browser"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/yandex.json",
+        "https://browser.yandex.com/help/en/personalization/profile.md",
+        "https://yandex.com/support/browser/en/about/install.md",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/y/Yandex/Browser",
+        "https://flathub.org/apps/ru.yandex.Browser"
+      ],
+      "notes": "Finicky treats it as Chromium for profiles; Yandex does not document --profile-directory. The Windows executable name and the Flatpak profile directory are unverified."
+    },
+    {
+      "id": "wavebox",
+      "name": "Wavebox",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.bookry.wavebox",
+        "app_name": "Wavebox",
+        "profiles": [
+          "{app_support}/WaveboxApp"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "wavebox.desktop"
+        ],
+        "executables": [
+          "wavebox"
+        ],
+        "profiles": [
+          "{xdg_config}/wavebox"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://appcatalog.cloud/apps/wavebox",
+        "https://formulae.brew.sh/api/cask/wavebox.json",
+        "https://knowledgebase.wavebox.io/profile-backups-local"
+      ],
+      "notes": "Homebrew's quit stanza says io.wavebox.wavebox, but the app's preferences plist and Finicky say com.bookry.wavebox. No Windows entry: its install path is unverified. The Linux profile directory is inferred."
+    },
+    {
+      "id": "helium",
+      "name": "Helium",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "net.imput.helium",
+        "app_name": "Helium",
+        "profiles": [
+          "{app_support}/net.imput.helium"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/imput/Helium/Application/chrome.exe",
+          "{programfiles}/imput/Helium/Application/chrome.exe"
+        ],
+        "prog_id": "HeliumHTM",
+        "profiles": [
+          "{localappdata}/imput/Helium/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "helium.desktop"
+        ],
+        "executables": [
+          "helium",
+          "helium-browser"
+        ],
+        "profiles": [
+          "{xdg_config}/net.imput.helium"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://github.com/raycast/extensions/blob/main/extensions/browser-bookmarks/src/hooks/useAvailableBrowsers.ts",
+        "https://formulae.brew.sh/api/cask/helium-browser.json",
+        "https://appcatalog.cloud/apps/helium",
+        "https://github.com/imputnet/helium-windows/blob/main/patches/helium/windows/change-branding.patch",
+        "https://github.com/imputnet/helium-linux",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/i/ImputNet/Helium"
+      ],
+      "notes": "Helium's Windows branding keeps chrome.exe; the executable name is inferred from that patch. Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "comet",
+      "name": "Comet",
+      "engine": "chromium",
+      "finicky": true,
+      "aliases": [
+        "Perplexity Comet"
+      ],
+      "macos": {
+        "bundle_id": "ai.perplexity.comet",
+        "app_name": "Comet",
+        "profiles": [
+          "{app_support}/Comet"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://github.com/raycast/extensions/blob/main/extensions/browser-bookmarks/src/hooks/useAvailableBrowsers.ts",
+        "https://formulae.brew.sh/api/cask/comet.json",
+        "https://www.perplexity.ai/comet"
+      ],
+      "notes": "No Linux build. No Windows entry: its install path and user-data directory are unverified."
+    },
+    {
+      "id": "ecosia",
+      "name": "Ecosia Browser",
+      "engine": "chromium",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "org.ecosia.browser",
+        "app_name": "Ecosia Browser",
+        "profiles": [
+          "{app_support}/EcosiaBrowser"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "org.ecosia.Browser.desktop"
+        ],
+        "profiles": [
+          "{home}/.var/app/org.ecosia.Browser/config/EcosiaBrowser"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://flathub.org/apps/org.ecosia.Browser",
+        "https://snapcraft.io/ecosia",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/e/Ecosia/EcosiaBrowser"
+      ],
+      "notes": "The macOS facts are Finicky's alone (no Homebrew cask). Linux: the Flatpak only; the Snap's paths are unverified. No Windows entry: its paths are unverified."
+    },
+    {
+      "id": "thorium",
+      "name": "Thorium",
+      "engine": "chromium",
+      "aliases": [
+        "Thorium Browser"
+      ],
+      "macos": {
+        "bundle_id": "org.chromium.Thorium",
+        "app_name": "Thorium",
+        "profiles": [
+          "{app_support}/Thorium"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{localappdata}/Thorium/Application/thorium.exe",
+          "{programfiles}/Thorium/Application/thorium.exe"
+        ],
+        "prog_id": "ThoriumHTM",
+        "profiles": [
+          "{localappdata}/Thorium/User Data"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "thorium-browser.desktop"
+        ],
+        "executables": [
+          "thorium-browser"
+        ],
+        "profiles": [
+          "{xdg_config}/thorium"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/alex313031-thorium.json",
+        "https://github.com/Alex313031/thorium/blob/main/src/chrome/install_static/chromium_install_modes.h",
+        "https://github.com/Alex313031/thorium/blob/main/src/chrome/common/chrome_paths_linux.cc",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/Alex313031/Thorium"
+      ],
+      "notes": "Homebrew installs the bundle as 'Thorium Browser.app'; detection still finds it by bundle id. Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
+    },
+    {
+      "id": "arc",
+      "name": "Arc",
+      "engine": "chromium",
+      "profile_flag": "none",
+      "macos": {
+        "bundle_id": "company.thebrowser.Browser",
+        "app_name": "Arc"
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/arc.json",
+        "https://appcatalog.cloud/apps/arc",
+        "https://github.com/raycast/extensions/blob/main/extensions/browser-bookmarks/src/hooks/useAvailableBrowsers.ts",
+        "https://sindresorhus.com/velja",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/t/TheBrowserCompany/Arc"
+      ],
+      "notes": "Arc ignores --profile-directory (its Spaces are reachable only from AppleScript). No Windows entry: it ships as an MSIX package with no fixed executable path. No Linux build."
+    },
+    {
+      "id": "dia",
+      "name": "Dia",
+      "engine": "chromium",
+      "profile_flag": "none",
+      "macos": {
+        "bundle_id": "company.thebrowser.dia",
+        "app_name": "Dia"
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/thebrowsercompany-dia.json",
+        "https://appcatalog.cloud/apps/dia",
+        "https://github.com/raycast/extensions/blob/main/extensions/browser-bookmarks/src/hooks/useAvailableBrowsers.ts",
+        "https://sindresorhus.com/velja"
+      ],
+      "notes": "Dia ignores --profile-directory. No Windows entry (MSIX, early build). No Linux build."
+    },
+    {
+      "id": "firefox",
+      "name": "Firefox",
+      "engine": "firefox",
+      "finicky": true,
+      "aliases": [
+        "Firefox ESR"
+      ],
+      "macos": {
+        "bundle_id": "org.mozilla.firefox",
+        "app_name": "Firefox",
+        "profiles": [
+          "{app_support}/Firefox"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Mozilla Firefox/firefox.exe",
+          "{programfiles_x86}/Mozilla Firefox/firefox.exe",
+          "{localappdata}/Mozilla Firefox/firefox.exe"
+        ],
+        "prog_id": "FirefoxURL-",
+        "profiles": [
+          "{appdata}/Mozilla/Firefox"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "firefox.desktop",
+          "org.mozilla.firefox.desktop",
+          "firefox_firefox.desktop",
+          "firefox-esr.desktop"
+        ],
+        "executables": [
+          "firefox",
+          "firefox-esr"
+        ],
+        "profiles": [
+          "{home}/.mozilla/firefox",
+          "{xdg_config}/mozilla/firefox",
+          "{home}/snap/firefox/common/.mozilla/firefox",
+          "{home}/.var/app/org.mozilla.firefox/.mozilla/firefox",
+          "{home}/.var/app/org.mozilla.firefox/config/mozilla/firefox"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/firefox.json",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/installer/windows/nsis/shared.nsh",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/branding/official/configure.sh",
+        "https://github.com/mozilla-firefox/firefox/blob/main/toolkit/xre/nsXREDirProvider.cpp",
+        "https://bugzilla.mozilla.org/show_bug.cgi?id=259356",
+        "https://www.firefox.com/en-US/firefox/147.0/releasenotes/",
+        "https://github.com/canonical/firefox-snap/blob/stable/snapcraft.yaml",
+        "https://wiki.mozilla.org/Firefox/Command_Line_Options",
+        "https://support.mozilla.org/en-US/kb/understanding-depth-profile-installation"
+      ],
+      "notes": "Linux: Firefox 147+ uses $XDG_CONFIG_HOME/mozilla/firefox for new profiles but keeps ~/.mozilla/firefox when it exists, so that is checked first. The Snap keeps the legacy layout (MOZ_LEGACY_HOME). The Flatpak's XDG path is inferred. Every Firefox channel and Gecko fork on Windows may register FirefoxURL-<hash>, so only this entry claims it."
+    },
+    {
+      "id": "firefox-developer-edition",
+      "name": "Firefox Developer Edition",
+      "engine": "firefox",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "org.mozilla.firefoxdeveloperedition",
+        "app_name": "Firefox Developer Edition",
+        "profiles": [
+          "{app_support}/Firefox"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Firefox Developer Edition/firefox.exe",
+          "{programfiles_x86}/Firefox Developer Edition/firefox.exe"
+        ],
+        "profiles": [
+          "{appdata}/Mozilla/Firefox"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "firefox-devedition.desktop",
+          "firefox-developer-edition.desktop"
+        ],
+        "executables": [
+          "firefox-devedition",
+          "firefox-developer-edition"
+        ],
+        "profiles": [
+          "{home}/.mozilla/firefox",
+          "{xdg_config}/mozilla/firefox"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/firefox@developer-edition.json",
+        "https://appcatalog.cloud/apps/firefox-developer-edition",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/branding/aurora/configure.sh",
+        "https://github.com/mozilla-firefox/firefox/blob/main/toolkit/profile/nsToolkitProfileService.cpp"
+      ],
+      "notes": "Shares Firefox's profiles.ini; its own default profile is dev-edition-default. Linux: Firefox 147+ uses $XDG_CONFIG_HOME/mozilla/firefox for new profiles but keeps ~/.mozilla/firefox when it exists, so that is checked first."
+    },
+    {
+      "id": "firefox-nightly",
+      "name": "Firefox Nightly",
+      "engine": "firefox",
+      "macos": {
+        "bundle_id": "org.mozilla.nightly",
+        "app_name": "Firefox Nightly",
+        "profiles": [
+          "{app_support}/Firefox"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Firefox Nightly/firefox.exe",
+          "{programfiles_x86}/Firefox Nightly/firefox.exe"
+        ],
+        "profiles": [
+          "{appdata}/Mozilla/Firefox"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "firefox-nightly.desktop"
+        ],
+        "executables": [
+          "firefox-nightly"
+        ],
+        "profiles": [
+          "{home}/.mozilla/firefox",
+          "{xdg_config}/mozilla/firefox"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/firefox@nightly.json",
+        "https://github.com/mozilla-firefox/firefox/blob/main/browser/branding/nightly/configure.sh",
+        "https://github.com/mozilla-firefox/firefox/blob/main/toolkit/profile/nsToolkitProfileService.cpp"
+      ],
+      "notes": "Shares Firefox's profiles.ini; its own default profile is default-nightly. Linux: Firefox 147+ uses $XDG_CONFIG_HOME/mozilla/firefox for new profiles but keeps ~/.mozilla/firefox when it exists, so that is checked first."
+    },
+    {
+      "id": "zen",
+      "name": "Zen",
+      "engine": "firefox",
+      "finicky": true,
+      "aliases": [
+        "Zen Browser"
+      ],
+      "macos": {
+        "bundle_id": "app.zen-browser.zen",
+        "app_name": "Zen",
+        "profiles": [
+          "{app_support}/zen"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Zen Browser/zen.exe"
+        ],
+        "profiles": [
+          "{appdata}/zen"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "zen.desktop",
+          "app.zen_browser.zen.desktop"
+        ],
+        "executables": [
+          "zen-browser",
+          "zen"
+        ],
+        "profiles": [
+          "{home}/.zen",
+          "{xdg_config}/zen",
+          "{home}/.var/app/app.zen_browser.zen/.zen"
+        ]
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://formulae.brew.sh/api/cask/zen.json",
+        "https://appcatalog.cloud/apps/zen-browser",
+        "https://github.com/raycast/extensions/blob/main/extensions/browser-bookmarks/src/hooks/useAvailableBrowsers.ts",
+        "https://github.com/zen-browser/desktop/blob/dev/configs/common/mozconfig",
+        "https://github.com/zen-browser/desktop/issues/7110",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/z/Zen-Team/Zen-Browser",
+        "https://flathub.org/apps/app.zen_browser.zen",
+        "https://github.com/noctalia-dev/noctalia/issues/1839"
+      ],
+      "notes": "Windows: registers Firefox's FirefoxURL-<hash> ProgID, so it is matched by path. Linux: ~/.config/zen for new profiles comes from a community report. -P is Gecko's flag; the fork does not document it."
+    },
+    {
+      "id": "floorp",
+      "name": "Floorp",
+      "engine": "firefox",
+      "macos": {
+        "app_name": "Floorp",
+        "profiles": [
+          "{app_support}/Floorp"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Ablaze Floorp/floorp.exe"
+        ],
+        "profiles": [
+          "{appdata}/Floorp"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "floorp.desktop",
+          "one.ablaze.floorp.desktop"
+        ],
+        "executables": [
+          "floorp"
+        ],
+        "profiles": [
+          "{home}/.floorp",
+          "{home}/.var/app/one.ablaze.floorp/.floorp"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/floorp.json",
+        "https://github.com/Floorp-Projects/Floorp-Runtime",
+        "https://github.com/Floorp-Projects/Floorp/blob/main/static/gecko/config/moz.configure",
+        "https://github.com/microsoft/winget-pkgs/tree/master/manifests/a/Ablaze/Floorp",
+        "https://flathub.org/apps/one.ablaze.floorp"
+      ],
+      "notes": "The macOS bundle id is unverified, so Floorp is matched by app name. The Windows and native Linux profile directories are unconfirmed for releases. -P is Gecko's flag; the fork does not document it."
+    },
+    {
+      "id": "librewolf",
+      "name": "LibreWolf",
+      "engine": "firefox",
+      "aliases": [
+        "io.gitlab.librewolf-community.librewolf",
+        "net.librewolf.librewolf"
+      ],
+      "macos": {
+        "bundle_id": "org.mozilla.librewolf",
+        "app_name": "LibreWolf",
+        "profiles": [
+          "{app_support}/librewolf"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/LibreWolf/librewolf.exe"
+        ],
+        "prog_id": "LibreWolfHTM",
+        "profiles": [
+          "{appdata}/librewolf"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "librewolf.desktop",
+          "io.gitlab.librewolf-community.desktop"
+        ],
+        "executables": [
+          "librewolf"
+        ],
+        "profiles": [
+          "{home}/.librewolf",
+          "{xdg_config}/librewolf/librewolf",
+          "{home}/.var/app/io.gitlab.librewolf-community/.librewolf"
+        ]
+      },
+      "sources": [
+        "https://appcatalog.cloud/apps/librewolf",
+        "https://github.com/raycast/extensions/blob/main/extensions/browser-bookmarks/src/hooks/useAvailableBrowsers.ts",
+        "https://formulae.brew.sh/api/cask/librewolf.json",
+        "https://codeberg.org/librewolf/source/src/branch/main/themes/browser/branding/librewolf/configure.sh",
+        "https://codeberg.org/librewolf/bsys6/src/branch/master/assets/setup.nsi",
+        "https://codeberg.org/librewolf/source/src/branch/main/patches/moz-configure.patch",
+        "https://librewolf.net/docs/faq/",
+        "https://flathub.org/apps/io.gitlab.librewolf-community"
+      ],
+      "notes": "The aliases are older macOS bundle ids Homebrew still cleans up. Linux: the legacy ~/.librewolf wins when present. -P is Gecko's flag; the fork does not document it."
+    },
+    {
+      "id": "waterfox",
+      "name": "Waterfox",
+      "engine": "firefox",
+      "macos": {
+        "bundle_id": "net.waterfox.waterfox",
+        "app_name": "Waterfox",
+        "profiles": [
+          "{app_support}/Waterfox"
+        ]
+      },
+      "windows": {
+        "exe": [
+          "{programfiles}/Waterfox/waterfox.exe"
+        ],
+        "prog_id": "WaterfoxURL-",
+        "profiles": [
+          "{appdata}/Waterfox",
+          "{appdata}/Waterfox/Waterfox"
+        ]
+      },
+      "linux": {
+        "desktop_ids": [
+          "waterfox.desktop",
+          "net.waterfox.waterfox.desktop"
+        ],
+        "executables": [
+          "waterfox"
+        ],
+        "profiles": [
+          "{home}/.waterfox",
+          "{home}/.var/app/net.waterfox.waterfox/.waterfox"
+        ]
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/waterfox.json",
+        "https://appcatalog.cloud/apps/waterfox",
+        "https://github.com/BrowserWorks/waterfox/blob/current/waterfox/build/mozconfig.common",
+        "https://github.com/BrowserWorks/waterfox/blob/current/waterfox/moz.configure",
+        "https://flathub.org/apps/net.waterfox.waterfox"
+      ],
+      "notes": "Which of the two Windows directories holds profiles.ini is unresolved; the one that has it is used. -P is Gecko's flag; the fork does not document it."
+    },
+    {
+      "id": "safari",
+      "name": "Safari",
+      "engine": "webkit",
+      "finicky": true,
+      "macos": {
+        "bundle_id": "com.apple.Safari",
+        "app_name": "Safari"
+      },
+      "sources": [
+        "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
+        "https://sindresorhus.com/velja",
+        "https://www.browserfairy.com/en/docs/macos/browser-profiles"
+      ],
+      "notes": "Safari 17+ profiles cannot be chosen from the command line."
+    },
+    {
+      "id": "orion",
+      "name": "Orion",
+      "engine": "webkit",
+      "macos": {
+        "bundle_id": "com.kagi.kagimacOS",
+        "app_name": "Orion"
+      },
+      "sources": [
+        "https://formulae.brew.sh/api/cask/orion.json",
+        "https://appcatalog.cloud/apps/orion",
+        "https://help.kagi.com/orion/features/profiles.html"
+      ],
+      "notes": "Each Orion profile is a separate app with its own bundle id; a config targets one by that id or path. The Linux beta (a Kagi-hosted Flatpak) is not listed: its ids are unverified."
+    }
+  ]
+}

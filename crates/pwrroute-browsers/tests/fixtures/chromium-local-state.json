@@ -1,0 +1,12 @@
+{
+  "browser": { "enabled_labs_experiments": [] },
+  "profile": {
+    "info_cache": {
+      "Default": { "name": "Work", "is_using_default_name": false },
+      "Profile 1": { "name": "Personal", "is_using_default_name": false },
+      "Profile 3": { "name": "Side Project", "is_using_default_name": false }
+    },
+    "last_used": "Profile 1",
+    "profiles_order": ["Default", "Profile 1", "Profile 3"]
+  }
+}

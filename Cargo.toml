@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/pwrroute-app",
+    "crates/pwrroute-browsers",
     "crates/pwrroute-engine",
     "crates/pwrroute-os",
     "crates/pwrroute-router",
@@ -19,6 +20,7 @@ repository = "https://github.com/pwrdrvr/PwrRoute"
 authors = ["PwrDrvr LLC"]
 
 [workspace.dependencies]
+pwrroute-browsers = { path = "crates/pwrroute-browsers" }
 pwrroute-engine = { path = "crates/pwrroute-engine" }
 pwrroute-os = { path = "crates/pwrroute-os" }
 pwrroute-router = { path = "crates/pwrroute-router" }

@@ -681,7 +681,7 @@ Apache License 2.0 (477)
 - chrono@0.4.45 | https://github.com/chronotope/chrono
 - nonmax@0.5.5 | https://github.com/LPGhatguy/nonmax
 
-MIT License (186)
+MIT License (187)
 - rustybuzz@0.20.1 | https://github.com/harfbuzz/rustybuzz
 - uds_windows@1.2.1 | https://github.com/haraldh/rust_uds_windows
 - freetype-sys@0.20.1 | https://github.com/PistonDevelopers/freetype-sys.git
@@ -762,6 +762,7 @@ MIT License (186)
 - core_maths@0.1.1 | https://github.com/robertbastian/core_maths
 - convert_case@0.10.0 | https://github.com/rutrum/convert-case
 - pwrroute-app@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-browsers@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-engine@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-os@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-router@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
@@ -14819,6 +14820,7 @@ MIT License (MIT)
 
 Applies to:
 - pwrroute-app@0.0.1-alpha.0
+- pwrroute-browsers@0.0.1-alpha.0
 - pwrroute-engine@0.0.1-alpha.0
 - pwrroute-os@0.0.1-alpha.0
 - pwrroute-router@0.0.1-alpha.0

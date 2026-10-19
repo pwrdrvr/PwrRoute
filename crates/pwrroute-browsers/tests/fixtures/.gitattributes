@@ -1,0 +1,2 @@
+# Windows-written profiles.ini files are CRLF; keep this one byte for byte.
+firefox-profiles.ini -text
