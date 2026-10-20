@@ -275,6 +275,7 @@ fn a_finicky_config_in_charge_is_read_only(cx: &mut TestAppContext) {
         config.default_browser.as_ref().map(browser).as_deref(),
         Some("Google Chrome")
     );
+    assert!(cx.debug_bounds("config-handlers").is_some());
     // No editor until the visual rules are expanded.
     assert!(cx.debug_bounds("editor-rail").is_none());
     click(cx, "visual-rules-toggle");
@@ -294,10 +295,10 @@ fn a_config_that_does_not_load_says_why(cx: &mut TestAppContext) {
     let config = view
         .read_with(cx, |app, _| app.config.clone())
         .expect("the config is in charge");
-    assert!(
-        config.status.starts_with("It did not load:"),
-        "{}",
-        config.status
-    );
+    let problem = config.problem.as_deref().unwrap_or_default();
+    assert!(problem.starts_with("It did not load:"), "{problem}");
+    assert!(!problem.contains('\n'), "{problem}");
     assert!(config.handlers.is_empty() && config.default_browser.is_none());
+    // No Handlers card claiming the config has none.
+    assert!(cx.debug_bounds("config-handlers").is_none());
 }

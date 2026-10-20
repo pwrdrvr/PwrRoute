@@ -340,6 +340,10 @@ pub fn note(content: impl Into<SharedString>) -> Div {
     paragraph(content, 10.5, 15.75, theme::text_subtle())
 }
 
+/// How a `browser: null` destination reads: the link is not opened.
+pub const NOT_OPENED: &str = "Not opened";
+pub const NOT_OPENED_BADGE: &str = "\u{2014}";
+
 /// The badge letters for a browser or app, as the design draws them.
 pub fn badge_for(name: &str) -> SharedString {
     const KNOWN: &[(&str, &str)] = &[

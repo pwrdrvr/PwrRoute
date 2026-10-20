@@ -589,6 +589,23 @@ fn a_description_shows_typescript_functions_without_their_types() {
 }
 
 #[test]
+fn a_description_shows_null_browsers_and_functions_without_source() {
+    let d = engine(Some("describe.js"), RulesFile::default())
+        .describe()
+        .unwrap()
+        .unwrap();
+    // A bound function's toString is native code: no source, just its name.
+    let MatcherSpec::Function(bound) = &d.handlers[0].matchers[0] else {
+        panic!("a function matcher: {:?}", d.handlers[0].matchers);
+    };
+    assert_eq!(bound.source, None);
+    assert!(bound.name.contains("test"), "{}", bound.name);
+    // `browser: null` opens nothing, as createBrowserConfig spells it.
+    assert_eq!(d.handlers[1].browser, fixed("", AppType::None, ""));
+    assert_eq!(d.default_browser, fixed("", AppType::None, ""));
+}
+
+#[test]
 fn a_description_leaves_out_rules_json() {
     let rules = RulesFile {
         default_browser: "Firefox".into(),

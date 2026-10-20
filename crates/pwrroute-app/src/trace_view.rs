@@ -10,7 +10,7 @@ use std::time::Duration;
 use pwrroute_engine::{AppType, Matcher, RewriteAction, RulesFile, Source, Stage, Step, Trace};
 
 use crate::fixtures::Opener;
-use crate::widgets::badge_for;
+use crate::widgets::{NOT_OPENED, NOT_OPENED_BADGE, badge_for};
 
 /// A resolution, step by step.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,7 +142,7 @@ impl TraceView {
         let browser = &trace.resolution.browser;
         let mut chips = Vec::new();
         let (badge, title) = if browser.app_type == AppType::None {
-            ("\u{2014}".to_owned(), "Not opened".to_owned())
+            (NOT_OPENED_BADGE.to_owned(), NOT_OPENED.to_owned())
         } else {
             let name = browser.name.clone();
             chips.push(Chip::App(badge_for(&name).to_string(), name.clone()));

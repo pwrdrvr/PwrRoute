@@ -55,8 +55,9 @@ pub struct TestLink {
     pub copied: bool,
     config: Option<PathBuf>,
     rules: RulesFile,
-    /// Built on the first test. A load error is not kept, so the next test
-    /// tries again (after the config is fixed, say).
+    /// Handed in by the window, or built on the first test. A load error is
+    /// not kept, so the next test tries again (after the config is fixed,
+    /// say).
     engine: Option<Engine>,
     run: Option<Run>,
     /// The trace of the last run, or why it failed.
@@ -64,8 +65,9 @@ pub struct TestLink {
 }
 
 impl TestLink {
-    /// `config` is the Finicky config in charge, if any.
-    pub fn new(config: Option<PathBuf>, cx: &mut App) -> Self {
+    /// `config` is the Finicky config in charge, if any, and `engine` the
+    /// engine the window already loaded it in (config alone, as here).
+    pub fn new(config: Option<PathBuf>, engine: Option<Engine>, cx: &mut App) -> Self {
         // The router does not read `rules.json` yet; with a config in charge
         // it routes by the config alone, and so does this.
         let rules = if config.is_some() {
@@ -82,7 +84,7 @@ impl TestLink {
             copied: false,
             config,
             rules,
-            engine: None,
+            engine,
             run: None,
             outcome: None,
         }

@@ -3,17 +3,16 @@
 //! and the visual rules folded below, since they run after it.
 
 use std::path::Path;
-use std::rc::Rc;
 use std::time::SystemTime;
 
+use anyhow::Context as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
 };
 use pwrroute_engine::{
-    AppType, BrowserSpec, DefaultHost, Description, Engine, FunctionSpec, Limits, MatcherSpec,
-    UrlSpec,
+    AppType, BrowserSpec, Description, Engine, FunctionSpec, MatcherSpec, UrlSpec,
 };
 
 use crate::app::PwrRoute;
@@ -22,15 +21,24 @@ use crate::rules_view::{
     RowState, card, card_header_with, card_title, pane_frame, rule_row, visual_cards,
 };
 use crate::theme::{self, icon, text};
-use crate::widgets::{ButtonKind, Tone, badge_for, button, fn_tag, paragraph, toned_chip};
+use crate::widgets::{
+    ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge_for, button, fn_tag, paragraph,
+    toned_chip,
+};
+
+/// How much of a function's source or a load error a row or the banner
+/// keeps. Rows end in an ellipsis long before this; it bounds layout work.
+const MAX_TEXT: usize = 240;
 
 /// What the screen shows about the config: what the engine reads in it.
 #[derive(Clone, Debug)]
 pub struct ConfigInCharge {
     /// The config's path as the user knows it: `~/.finicky.ts`.
     pub path: String,
-    /// When the file last changed, or why the engine could not read it.
-    pub status: String,
+    /// When the file last changed, for the banner to say how long ago.
+    pub modified: Option<SystemTime>,
+    /// Why the engine could not read the config; then there are no rows.
+    pub problem: Option<String>,
     pub rewrites: Vec<Rule>,
     pub handlers: Vec<Rule>,
     /// `None` when the config did not load.
@@ -38,25 +46,40 @@ pub struct ConfigInCharge {
 }
 
 impl ConfigInCharge {
-    /// Loads the config at `path` in its own engine and describes it. `home`
-    /// shortens the path to `~/…`. A config that does not load is shown
-    /// with the error and no rows.
-    pub fn load(path: &Path, home: Option<&Path>) -> Self {
+    /// Describes the config at `path` from the engine that loaded it, or
+    /// says why it did not load. `home` shortens the path to `~/…`.
+    pub fn new(path: &Path, home: Option<&Path>, engine: Result<&Engine, &anyhow::Error>) -> Self {
         let shown = display_path(path, home);
-        let described = Engine::load(path, Rc::new(DefaultHost), Limits::default())
-            .and_then(|engine| engine.describe());
+        let described = engine
+            .map_err(|error| anyhow::anyhow!("{error:#}"))
+            .and_then(|engine| {
+                engine
+                    .describe()?
+                    .context("the engine has no JS config to describe")
+            });
         match described {
-            Ok(Some(description)) => Self::from_description(shown, edited(path), &description),
-            Ok(None) => Self::failed(shown, "It has no rules to show.".into()),
-            Err(error) => Self::failed(shown, format!("It did not load: {error:#}")),
+            Ok(description) => Self::from_description(shown, modified(path), &description),
+            Err(error) => Self {
+                path: shown,
+                modified: None,
+                problem: Some(one_line(&format!("It did not load: {error:#}"))),
+                rewrites: Vec::new(),
+                handlers: Vec::new(),
+                default_browser: None,
+            },
         }
     }
 
     /// The rows for an engine's description of the config.
-    pub fn from_description(path: String, status: String, description: &Description) -> Self {
+    pub fn from_description(
+        path: String,
+        modified: Option<SystemTime>,
+        description: &Description,
+    ) -> Self {
         Self {
             path,
-            status,
+            modified,
+            problem: None,
             rewrites: description
                 .rewrites
                 .iter()
@@ -80,14 +103,16 @@ impl ConfigInCharge {
         }
     }
 
-    fn failed(path: String, status: String) -> Self {
-        Self {
-            path,
-            status,
-            rewrites: Vec::new(),
-            handlers: Vec::new(),
-            default_browser: None,
+    /// What the banner says after its fixed text: the load error, or how
+    /// long ago the file changed, as of `now`.
+    pub fn status(&self, now: SystemTime) -> String {
+        if let Some(problem) = &self.problem {
+            return problem.clone();
         }
+        self.modified
+            .and_then(|modified| now.duration_since(modified).ok())
+            .map(edited)
+            .unwrap_or_default()
     }
 
     /// How many handlers only JS can express: a function matches, or picks
@@ -129,8 +154,8 @@ fn matcher(spec: &MatcherSpec) -> Matcher {
 fn destination(browser: &BrowserSpec) -> Destination {
     match browser {
         BrowserSpec::Browser(fixed) if fixed.app_type == AppType::None => Destination::Browser {
-            badge: "\u{2014}".into(),
-            name: "Not opened".into(),
+            badge: NOT_OPENED_BADGE.into(),
+            name: NOT_OPENED.into(),
             profile: None,
         },
         BrowserSpec::Browser(fixed) => Destination::Browser {
@@ -145,25 +170,32 @@ fn destination(browser: &BrowserSpec) -> Destination {
 /// A function's source on one line, or its name when QuickJS has no source.
 fn source(function: &FunctionSpec) -> SharedString {
     match &function.source {
-        Some(source) => source
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .into(),
+        Some(source) => one_line(source).into(),
         None if function.name.is_empty() => "function".into(),
         None => format!("function {}", function.name).into(),
     }
 }
 
-/// When the file at `path` last changed, as the banner says it.
-fn edited(path: &Path) -> String {
-    let age = std::fs::metadata(path)
+/// `text` with each run of whitespace (newlines too) as one space, cut at
+/// [`MAX_TEXT`] characters.
+fn one_line(text: &str) -> String {
+    let mut line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some((cut, _)) = line.char_indices().nth(MAX_TEXT) {
+        line.truncate(cut);
+        line.push('\u{2026}');
+    }
+    line
+}
+
+/// When the file at `path` last changed.
+fn modified(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok());
-    let Some(age) = age else {
-        return String::new();
-    };
+}
+
+/// How long ago a file changed, as the banner says it.
+fn edited(age: std::time::Duration) -> String {
     let minutes = age.as_secs() / 60;
     match minutes {
         0 => "Edited just now.".into(),
@@ -218,7 +250,7 @@ fn banner(config: &ConfigInCharge) -> Div {
                     format!(
                         "Its rewrites and handlers run first and it owns the default browser. \
                          Visual rules run after it. {}",
-                        config.status
+                        config.status(SystemTime::now())
                     ),
                     11.0,
                     16.5,
@@ -278,11 +310,13 @@ pub fn pane(
     });
     let need_js = config.need_js();
     let handlers = rows(
-        card().child(card_header_with(
-            &from,
-            "Handlers",
-            toned_chip(format!("{need_js} need JS"), Tone::Warn),
-        )),
+        card()
+            .debug_selector(|| "config-handlers".into())
+            .child(card_header_with(
+                &from,
+                "Handlers",
+                toned_chip(format!("{need_js} need JS"), Tone::Warn),
+            )),
         "config-handler",
         &config.handlers,
     );
@@ -306,25 +340,28 @@ pub fn pane(
         )
         .py(px(9.0))
     });
-    let handlers = handlers.children(default_row).child(
-        // `.card-foot`
-        div()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .py(px(9.0))
-            .px(px(12.0))
-            .border_t_1()
-            .border_color(theme::border_faint())
-            .child(fn_tag())
-            .child(paragraph(
-                "Function matchers and transformers run as written. The importer offers the \
+    // A config that did not load has no rows to show: the banner says why.
+    let handlers = config.problem.is_none().then(|| {
+        handlers.children(default_row).child(
+            // `.card-foot`
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .py(px(9.0))
+                .px(px(12.0))
+                .border_t_1()
+                .border_color(theme::border_faint())
+                .child(fn_tag())
+                .child(paragraph(
+                    "Function matchers and transformers run as written. The importer offers the \
                  visual form only where it can prove the same result.",
-                10.5,
-                14.7,
-                theme::text_subtle(),
-            )),
-    );
+                    10.5,
+                    14.7,
+                    theme::text_subtle(),
+                )),
+        )
+    });
 
     let expanded = app.visual_rules_expanded;
     let visual = card().child(
@@ -369,7 +406,7 @@ pub fn pane(
     pane_frame("config-pane")
         .child(banner(config))
         .children(rewrites)
-        .child(handlers)
+        .children(handlers)
         .child(visual)
         .when(expanded, |pane| pane.child(visual_cards(app, cx)))
 }
