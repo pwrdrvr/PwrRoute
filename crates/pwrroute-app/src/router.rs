@@ -93,6 +93,9 @@ pub struct Resident {
     _server: Option<Server>,
     /// A second launch asked for the window.
     pub activate: async_channel::Receiver<()>,
+    /// Every dispatch the router records, as it lands: what Activity and the
+    /// tray follow. Memory only, like the router's own buffer.
+    pub dispatched: async_channel::Receiver<DispatchRecord>,
     /// The command line carried links, so this launch is for routing, not
     /// for the window.
     pub launched_with_links: bool,
@@ -146,7 +149,8 @@ pub fn start(args: &Args) -> Start {
         }
     };
 
-    let router = spawn_router(args);
+    let (dispatched_tx, dispatched) = async_channel::unbounded();
+    let router = spawn_router(args, Some(dispatched_tx));
     let handle = router.handle();
     let (activate_tx, activate) = async_channel::unbounded();
     let server = primary.and_then(|primary| {
@@ -168,6 +172,7 @@ pub fn start(args: &Args) -> Start {
         router,
         _server: server,
         activate,
+        dispatched,
         launched_with_links,
     })
 }
@@ -189,7 +194,7 @@ pub fn dispatch_os_links(handle: &RouterHandle, urls: Vec<String>) {
 /// Routes the links in this process without the lock or a window, waits for
 /// each to finish, and returns.
 fn route_here_and_exit(args: &Args, links: Vec<Link>) {
-    let router = spawn_router(args);
+    let router = spawn_router(args, None);
     let handle = router.handle();
     for link in links {
         let _ = handle.dispatch_and_wait(link);
@@ -248,7 +253,12 @@ pub fn config_in_charge() -> Option<PathBuf> {
     routing_source().config
 }
 
-fn spawn_router(args: &Args) -> Router {
+/// `dispatched`, when given, receives a copy of every record the router
+/// keeps, for the window. It is wired before the router takes its first
+/// link, so the window seeds Activity from this channel alone: nothing the
+/// router routed before the window came up is missing from it, and nothing
+/// is on it twice.
+fn spawn_router(args: &Args, dispatched: Option<async_channel::Sender<DispatchRecord>>) -> Router {
     let environment = Environment::current();
     let choice = match &args.config {
         Some(path) => ConfigChoice::Path(path.clone()),
@@ -288,7 +298,14 @@ fn spawn_router(args: &Args) -> Router {
     };
     let report_all = env::var_os("PWRROUTE_DIAGNOSTICS").is_some_and(|v| v == "1");
     let options = Options {
-        on_dispatch: Some(Arc::new(move |record| report_timing(record, report_all))),
+        on_dispatch: Some(Arc::new(move |record| {
+            report_timing(record, report_all);
+            if let Some(dispatched) = &dispatched {
+                // Unbounded: never blocks the dispatch thread. Nobody
+                // listening (a router without a window) just drops it.
+                let _ = dispatched.try_send(record.clone());
+            }
+        })),
         ..Options::default()
     };
     let router =

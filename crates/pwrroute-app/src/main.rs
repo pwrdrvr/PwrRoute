@@ -143,6 +143,8 @@ fn main() {
         assets::load_fonts(cx);
         app_menu::install(cx);
         dock::install(cx);
+        // Before the tray, which follows the feed from the start.
+        activity::install(resident.handle(), resident.dispatched.clone(), cx);
         tray::install(cx);
         default_browser::install(default_browser::Os::real(), cx);
         cx.set_global(settings::SettingsHost {

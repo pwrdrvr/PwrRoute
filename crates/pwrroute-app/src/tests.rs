@@ -5,10 +5,13 @@
 use std::path::PathBuf;
 
 use gpui_kit::{Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px};
+use pwrroute_router::{
+    DispatchId, DispatchRecord, DryRunLauncher, Link, Options, Outcome, Router, Source,
+};
 
-use crate::activity::Filter;
+use crate::activity::{self, EMPTY_ID, Feed, Filter};
 use crate::app::{PwrRoute, ROOT_ID, Screen, Selection};
-use crate::fixtures::{Destination, Matcher};
+use crate::fixtures::{self, Destination, Matcher};
 use crate::trace_view::TraceView;
 
 /// The contrived home directory that holds `.finicky.ts` for option 1b.
@@ -114,7 +117,11 @@ fn the_rail_switches_screens(cx: &mut TestAppContext) {
 
     click(cx, "nav-activity");
     assert_eq!(screen(cx), Screen::Activity);
-    assert!(cx.debug_bounds("activity-row-0").is_some());
+    // No router, so nothing has been routed: the empty state.
+    assert!(cx.debug_bounds(EMPTY_ID).is_some());
+    assert!(cx.debug_bounds("activity-row-0").is_none());
+    click(cx, "activity-empty-test");
+    assert_eq!(screen(cx), Screen::TestLink);
 
     click(cx, "nav-rules");
     assert_eq!(screen(cx), Screen::Rules);
@@ -188,11 +195,20 @@ fn the_opener_picker_reruns_the_test(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn activity_expands_filters_and_retests(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
+    view.update(cx, |app, _| app.activity.load(fixtures::activity()));
     click(cx, "nav-activity");
-    assert_eq!(view.read_with(cx, |app, _| app.activity.expanded), Some(1));
+    let expanded = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.activity.expanded);
+    let id = |cx: &mut VisualTestContext, index: usize| {
+        view.read_with(cx, |app, _| app.activity.rows[index].id)
+    };
+    assert_eq!(expanded(cx), None);
 
+    click(cx, "activity-row-1");
+    assert_eq!(expanded(cx), Some(id(cx, 1)));
     click(cx, "activity-row-0");
-    assert_eq!(view.read_with(cx, |app, _| app.activity.expanded), Some(0));
+    assert_eq!(expanded(cx), Some(id(cx, 0)));
+    click(cx, "activity-row-0");
+    assert_eq!(expanded(cx), None);
 
     click(cx, "activity-filter-Failed");
     assert_eq!(
@@ -226,6 +242,114 @@ fn activity_expands_filters_and_retests(cx: &mut TestAppContext) {
     click(cx, "activity-retest-4");
     assert_eq!(view.read_with(cx, |app, _| app.test.opener), 0);
     assert_eq!(trace(&view, cx).result.title, "Google Chrome \u{00b7} Work");
+
+    // Clear empties the list.
+    click(cx, "nav-activity");
+    click(cx, "activity-clear");
+    assert!(view.read_with(cx, |app, _| app.activity.rows.is_empty()));
+    assert!(cx.debug_bounds(EMPTY_ID).is_some());
+}
+
+#[gpui_kit::test]
+fn activity_follows_the_dispatch_feed(cx: &mut TestAppContext) {
+    let records = fixtures::activity();
+    let newest = records[0].clone();
+    let feed =
+        cx.update(|cx| activity::install_feed(Feed::from_records(records[1..].to_vec()), cx));
+    let (view, cx) = open(cx);
+    click(cx, "nav-activity");
+    let rows = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            app.activity
+                .rows
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    let ids: Vec<DispatchId> = records.iter().map(|r| r.id).collect();
+    assert_eq!(rows(cx), ids[1..]);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.today.routed),
+        ids.len() as u64 - 1
+    );
+
+    // Expand the first row, then a dispatch lands: it goes on top, the
+    // expanded row stays expanded, and the counts move.
+    click(cx, "activity-row-0");
+    feed.update(cx, |feed, cx| {
+        feed.push(newest);
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(rows(cx), ids);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.expanded),
+        Some(ids[1])
+    );
+    let today = view.read_with(cx, |app, _| app.activity.today);
+    assert_eq!((today.routed, today.failed), (ids.len() as u64, 1));
+    assert!(cx.debug_bounds("activity-row-0").is_some());
+
+    // Clear goes through the feed and empties the screen.
+    click(cx, "activity-clear");
+    assert!(feed.read_with(cx, |feed, _| feed.records().is_empty()));
+    assert!(rows(cx).is_empty());
+    assert!(cx.debug_bounds(EMPTY_ID).is_some());
+}
+
+/// Links routed before `activity::install` runs (the command line's, or a
+/// second launch's forwarded over IPC while GPUI starts) are in the router's
+/// buffer and on the `dispatched` channel both. The feed takes each once.
+#[gpui_kit::test]
+fn links_routed_before_install_land_in_the_feed_once(cx: &mut TestAppContext) {
+    let (dispatched_tx, dispatched) = async_channel::unbounded();
+    let sender = dispatched_tx.clone();
+    let options = Options {
+        on_dispatch: Some(std::sync::Arc::new(move |record: &DispatchRecord| {
+            let _ = dispatched_tx.try_send(record.clone());
+        })),
+        ..Options::default()
+    };
+    let router = Router::spawn(options, None, DryRunLauncher::new()).expect("spawn the router");
+    let handle = router.handle();
+
+    // Two links finish before the window comes up: the router has recorded
+    // both, and both are waiting on the channel.
+    let early: Vec<DispatchRecord> = ["first", "second"]
+        .into_iter()
+        .map(|path| {
+            let link = Link::new(format!("https://a.example/{path}"), Source::CommandLine);
+            handle.dispatch_and_wait(link).expect("routed")
+        })
+        .collect();
+    assert_eq!(early[1].outcome, Outcome::DryRun);
+    assert_eq!(handle.recent().len(), 2);
+
+    let feed = cx.update(|cx| {
+        activity::install(handle.clone(), dispatched, cx);
+        activity::feed(cx).expect("installed")
+    });
+    let ids = |cx: &mut TestAppContext| {
+        feed.read_with(cx, |feed, _| {
+            feed.records().iter().map(|r| r.id).collect::<Vec<_>>()
+        })
+    };
+    let (first, second) = (early[0].id, early[1].id);
+    assert_eq!(ids(cx), [second, first], "seeded once each, newest first");
+    cx.run_until_parked();
+    assert_eq!(ids(cx), [second, first], "the pump does not add them again");
+
+    // A dispatch after install still arrives through the pump. It is sent
+    // from this thread: the test scheduler forbids the dispatch thread
+    // waking a task, so the router's own callback cannot be used here.
+    let mut later = early[1].clone();
+    later.id = DispatchId(second.0 + 1);
+    sender.try_send(later.clone()).expect("open");
+    cx.run_until_parked();
+    assert_eq!(ids(cx), [later.id, second, first]);
+    let today = feed.read_with(cx, |feed, _| feed.today(std::time::SystemTime::now()));
+    assert_eq!((today.routed, today.failed), (3, 0));
 }
 
 #[gpui_kit::test]

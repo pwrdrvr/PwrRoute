@@ -9,7 +9,6 @@ use gpui_kit::{
 };
 
 use crate::app::{PwrRoute, Screen};
-use crate::fixtures;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{key_cap, status_chip};
 
@@ -44,7 +43,7 @@ fn strip_chips(app: &PwrRoute) -> Vec<Div> {
         (Screen::Rules | Screen::TestLink, Some(in_charge)) => vec![config(&in_charge.path)],
         (Screen::Rules, None) => vec![rules(), crate::default_browser::chip()],
         (Screen::TestLink, None) => vec![rules()],
-        (Screen::Activity, _) => vec![status_chip(fixtures::ACTIVITY_TODAY, theme::status_ok())],
+        (Screen::Activity, _) => vec![status_chip(app.activity.today.label(), theme::status_ok())],
     }
 }
 
@@ -171,8 +170,7 @@ fn section(
 
 /// `.rail`: the sections, Settings, and the router's status at the foot.
 pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let count =
-        |label: &'static str| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
+    let count = |label: String| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
     let rules_trailing = if app.config.is_some() {
         // `.wdot`: the config in charge, not the visual rules, is routing.
         div()
@@ -251,7 +249,7 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
             app,
             cx,
             Screen::Activity,
-            Some(count(fixtures::ACTIVITY_COUNT)),
+            app.activity.today.compact().map(count),
         ))
         .child(div().mt(px(10.0)).mx(px(8.0)).mb(px(4.0)).child(tracked(
             "Settings",

@@ -23,9 +23,10 @@ it cannot open a browser (run with `--dry-run` to see dispatches succeed).
 - `crates/pwrroute-os` — link receipt and default-browser registration per
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It draws the
-  design's Rules, Test a link and Activity screens, the tray and the
-  first-run window from contrived fixture data (`fixtures/`), and hosts the
-  router. Test a link runs the real engine. See its `AGENTS.md`.
+  design's Rules and Test a link screens and the first-run window from
+  contrived fixture data (`fixtures/`), and hosts the router. Test a link
+  runs the real engine; Activity and the tray's recents show the router's
+  real dispatches. See its `AGENTS.md`.
 - `xtask` — lint, test, license notices, release checks and packaging.
 
 Port, don't invent: the design in `design/` decides the shape. Read
