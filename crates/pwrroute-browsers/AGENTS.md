@@ -29,9 +29,9 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   overrides it only with a source (Edge's `--inprivate`) or to say the
   browser has no command-line way (Arc, Dia). The launcher adds the flag
   once, after the profile flag and inside `open --args` on macOS, when the
-  engine's `Browser` asks for it (`launch::requests_private`, which reads
-  `false` until `pwrroute_engine::Browser::private` lands); a browser
-  without one gets `Note::PrivateUnsupported` and still opens.
+  engine's `Browser` asks for it (`pwrroute_engine::Browser::private`, set
+  from `rules[].private` or a known private flag in a JS config's args); a
+  browser without one gets `Note::PrivateUnsupported` and still opens.
 - **No `unsafe`.** Registry access goes through `windows-registry`'s safe
   API, confined to `src/registry.rs`. macOS detection reads XML
   `Info.plist`s rather than calling Launch Services.

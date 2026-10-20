@@ -174,13 +174,12 @@ impl Launcher {
     /// The dry run: the command [`Launcher::launch`] would run for
     /// `browser`, without running it. `Ok(None)` for `AppType::None`
     /// (`browser: null` in the config): do not open the URL at all.
+    ///
+    /// When `browser.private` is set (the engine's reading of
+    /// `rules[].private`, or of a known private flag in a JS config's
+    /// `args`), the browser's private-window flag is added once; a browser
+    /// without one gets [`Note::PrivateUnsupported`] and still opens.
     pub fn plan(&self, browser: &Browser) -> Result<Option<Plan>, LaunchError> {
-        self.plan_in(browser, requests_private(browser))
-    }
-
-    /// [`Launcher::plan`] with the private-window request spelled out, so
-    /// it can be exercised before the engine carries it.
-    fn plan_in(&self, browser: &Browser, private: bool) -> Result<Option<Plan>, LaunchError> {
         if browser.app_type == AppType::None {
             return Ok(None);
         }
@@ -192,7 +191,9 @@ impl Launcher {
         };
         let mut notes = Vec::new();
         let mut flags = self.profile_args(entry, &browser.profile, &mut notes);
-        if private && let Some(flag) = private_flag(browser, entry, &mut notes) {
+        if browser.private
+            && let Some(flag) = private_flag(browser, entry, &mut notes)
+        {
             flags.get_or_insert_default().push(flag.to_owned());
         }
         let background = browser
@@ -351,17 +352,6 @@ impl Launcher {
         };
         command.ok_or_else(|| not_installed(browser))
     }
-}
-
-/// Whether the rule that chose `browser` asked for a private window.
-///
-/// `pwrroute_engine::Browser` is gaining `pub private: bool` (set by the
-/// engine from `rules[].private`, or from a known private flag in a JS
-/// config's `args`). Until that field lands this is `false`, and only args
-/// that already carry the flag open a private window; flip the body to
-/// `browser.private` when it does.
-fn requests_private(_browser: &Browser) -> bool {
-    false
 }
 
 /// The private-window flag to add for `browser`, or `None` with a note
@@ -579,6 +569,8 @@ mod tests {
             profile: String::new(),
             args: Vec::new(),
             open_in_background: None,
+            private: false,
+            privacy: pwrroute_engine::Privacy::Full,
         }
     }
 
@@ -595,8 +587,13 @@ mod tests {
         (dir, Launcher::with_env(env, LaunchOptions::default()))
     }
 
+    /// The plan for `b` with a private window requested.
     fn private_plan(launcher: &Launcher, b: &Browser) -> Plan {
-        launcher.plan_in(b, true).unwrap().expect("a plan")
+        let b = Browser {
+            private: true,
+            ..b.clone()
+        };
+        launcher.plan(&b).unwrap().expect("a plan")
     }
 
     fn args(p: &Plan) -> Vec<&str> {
@@ -721,7 +718,7 @@ mod tests {
         // Without the request, args are passed through as they are.
         let mut b = browser("Microsoft Edge", AppType::AppName);
         b.args = ["--incognito", URL].map(String::from).to_vec();
-        let p = launcher.plan_in(&b, false).unwrap().unwrap();
+        let p = launcher.plan(&b).unwrap().unwrap();
         assert_eq!(
             args(&p),
             ["-a", "Microsoft Edge", "--args", "--incognito", URL]
@@ -799,15 +796,24 @@ mod tests {
         assert_eq!(p.notes, unsupported("epiphany"));
     }
 
-    /// Until the engine's `Browser` carries `private`, a plan never asks
-    /// for a private window on its own.
+    /// `Browser::private` is the request: a plan adds the flag only when
+    /// the engine set it, never on its own.
     #[test]
     fn plan_reads_the_request_from_the_browser() {
-        let b = browser("Google Chrome", AppType::AppName);
-        assert!(!requests_private(&b));
         let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        let b = browser("Google Chrome", AppType::AppName);
+        assert!(!b.private);
         let p = launcher.plan(&b).unwrap().unwrap();
         assert_eq!(args(&p), ["-a", "Google Chrome", URL]);
+        assert!(p.notes.is_empty());
+
+        let b = Browser { private: true, ..b };
+        let p = launcher.plan(&b).unwrap().unwrap();
+        assert_eq!(
+            args(&p),
+            ["-a", "Google Chrome", "-n", "--args", "--incognito", URL]
+        );
+        assert!(p.notes.is_empty());
     }
 
     #[test]
