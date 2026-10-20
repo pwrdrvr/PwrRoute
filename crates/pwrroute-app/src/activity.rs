@@ -1061,6 +1061,8 @@ mod tests {
             profile: profile.into(),
             args: Vec::new(),
             open_in_background: None,
+            private: false,
+            privacy: pwrroute_engine::Privacy::Full,
         }
     }
 

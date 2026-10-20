@@ -67,6 +67,8 @@ fn plan(env: Env, name: &str, url: &str, rest: &[String]) -> ExitCode {
         profile: String::new(),
         args: Vec::new(),
         open_in_background: None,
+        private: false,
+        privacy: pwrroute_engine::Privacy::Full,
     };
     let mut it = rest.iter();
     while let Some(arg) = it.next() {

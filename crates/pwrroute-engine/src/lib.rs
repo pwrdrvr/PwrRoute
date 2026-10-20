@@ -9,7 +9,10 @@
 //!
 //! - [`Engine`] loads [`Sources`] and resolves a [`Link`], or returns a
 //!   [`Trace`] of how it did, or a [`Description`] of the config's rules.
-//! - [`RulesFile`] is `rules.json`, the visual rules editor's model.
+//! - [`RulesFile`] is `rules.json`, the visual rules editor's model. Its
+//!   examples and tests run through the engine ([`Engine::test_rules`]) and
+//!   come back as a [`TestReport`]; [`suggest_rule`] and
+//!   [`Engine::collisions`] help write a rule for an unrouted link.
 //! - [`ShortLinks`] expands short links over a [`Network`] before resolving.
 //! - [`discovery`] finds the config and `rules.json` the way Finicky does.
 //! - [`Reloader`] watches them and swaps in a new [`Engine`] only once it has
@@ -29,8 +32,10 @@ mod native;
 mod reload;
 mod rules;
 mod shortlinks;
+mod suggest;
 mod trace;
 mod transform;
+mod verify;
 
 use std::{
     cell::{Cell, RefCell},
@@ -57,10 +62,13 @@ pub use http::HttpNetwork;
 pub use native::NativeHost;
 pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
 pub use rules::{
-    FALLBACK_BROWSER, Place, Problem, Rewrite, RewriteAction, Rule, RulesFile, RulesOptions,
+    Expectation, FALLBACK_BROWSER, Place, PrivacySetting, Problem, Rewrite, RewriteAction,
+    RewriteExample, RouteTest, Rule, RulesFile, RulesOptions,
 };
 pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
+pub use suggest::{Suggestion, suggest_rule};
 pub use trace::{Matcher, Source, Stage, Step, Trace};
+pub use verify::{TestFailure, TestReport, TestSource};
 
 /// Finicky's configuration API, as the Go host embeds it. See
 /// `assets/README.md` for where it comes from.
@@ -133,6 +141,62 @@ pub struct Browser {
     pub args: Vec<String>,
     #[serde(default)]
     pub open_in_background: Option<bool>,
+    /// Open the link in a private (incognito) window. Set by the `rules.json`
+    /// rule that won (`private: true`), or when a JS config's `args` already
+    /// carry a private flag (`--incognito`, `--inprivate`,
+    /// `--private-window`). The engine never adds the flag itself; the
+    /// launcher maps `private` to the right one for the browser.
+    #[serde(default)]
+    pub private: bool,
+    /// What the router may keep of this link once it is opened: the tightest
+    /// level of every `rules.json` rewrite that matched and the handler that
+    /// won. [`Privacy::Full`] when only a JS config or the default decided.
+    #[serde(default)]
+    pub privacy: Privacy,
+}
+
+/// What may be kept of a link after it is routed. The router applies it to
+/// its in-memory activity; `rules.json` sets it per rule (`privacy`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Privacy {
+    /// The full URL may be kept.
+    #[default]
+    Full,
+    /// Only the host may be kept.
+    Host,
+    /// Nothing of the URL may be kept.
+    None,
+}
+
+impl Privacy {
+    /// The tighter of two levels: [`Privacy::None`] over [`Privacy::Host`]
+    /// over [`Privacy::Full`].
+    pub fn tighter(self, other: Self) -> Self {
+        if other.rank() > self.rank() {
+            other
+        } else {
+            self
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Full => 0,
+            Self::Host => 1,
+            Self::None => 2,
+        }
+    }
+}
+
+/// Browser arguments that already open a private window, as a JS config may
+/// pass them. Compared ignoring case and the number of leading dashes, since
+/// Edge and Firefox accept one dash too.
+const PRIVATE_FLAGS: [&str; 3] = ["incognito", "inprivate", "private-window"];
+
+fn is_private_flag(arg: &str) -> bool {
+    let flag = arg.trim().trim_start_matches('-');
+    arg.trim().starts_with('-') && PRIVATE_FLAGS.iter().any(|f| flag.eq_ignore_ascii_case(f))
 }
 
 /// How [`Browser::name`] identifies the app.
@@ -165,6 +229,10 @@ pub struct Engine {
     deadline: Rc<Cell<Option<Instant>>>,
     limits: Limits,
     config: Option<PathBuf>,
+    host: Rc<dyn Host>,
+    /// The `rules.json` the engine loaded, for the privacy of what it routes
+    /// and for its examples and tests.
+    rules: RulesFile,
     imports: Rc<RefCell<Vec<PathBuf>>>,
     short_links: ShortLinks,
     /// For each `rules.json` rewrite and handler the engine loaded, its
@@ -243,6 +311,8 @@ impl Engine {
             deadline,
             limits,
             config: config.as_ref().map(|(path, _)| path.clone()),
+            host: Rc::clone(&host),
+            rules: sources.rules.clone(),
             imports,
             short_links: ShortLinks::default(),
             planned_rewrites: sources.rules.planned_rewrites(),
@@ -317,24 +387,27 @@ impl Engine {
         self.resolve_link(&self.short_links.expand(url, network), opener)
     }
 
-    /// Resolves a link whose short link (if any) was already expanded.
+    /// Resolves a link whose short link (if any) was already expanded. The
+    /// resolution is the one a [`Engine::trace`] of the same link ends with:
+    /// both come from one run of Finicky's `openUrl`, and the trace is what
+    /// says which `rules.json` entries fired, which sets the result's
+    /// [`Browser::privacy`] and [`Browser::private`].
     pub fn resolve_link(&self, link: &Link, opener: Option<&Opener>) -> Result<Resolution> {
-        self.with_deadline(self.limits.resolve, |ctx| {
-            set_link(&ctx, link, opener)?;
-            let json: String = ctx
-                .eval(
-                    "JSON.stringify(finickyConfigAPI.openUrl(url, opener, originalUrl, __pwrroute.config()))",
-                )
-                .catch(&ctx)
-                .map_err(|e| js_error("resolving the URL", &e))?;
-            Ok(serde_json::from_str(&json)?)
-        })
+        Ok(self.trace(link, opener)?.resolution)
     }
 
     /// Resolves a link and returns every step on the way: the rewrites and
     /// handlers evaluated, which matched, and which won. Nothing is opened;
     /// the resolution is the one [`Engine::resolve_link`] returns.
     pub fn trace(&self, link: &Link, opener: Option<&Opener>) -> Result<Trace> {
+        let mut trace = self.trace_steps(link, opener)?;
+        self.apply_privacy(&mut trace);
+        Ok(trace)
+    }
+
+    /// Finicky's `openUrl` over the traced config, with `rules.json` steps
+    /// numbered by their place in the file.
+    fn trace_steps(&self, link: &Link, opener: Option<&Opener>) -> Result<Trace> {
         self.with_deadline(self.limits.resolve, |ctx| {
             set_link(&ctx, link, opener)?;
             let json: String = ctx
@@ -361,6 +434,57 @@ impl Engine {
                 resolution: raw.result,
             })
         })
+    }
+
+    /// What the rules that fired allow the router to keep, and whether the
+    /// browser opens a private window. Matched `rules.json` rewrites and the
+    /// winning `rules.json` handler each tighten the level; a JS config's own
+    /// steps and the default leave it at [`Privacy::Full`]. `private` comes
+    /// from the winning rule or from a private flag the config put in `args`.
+    fn apply_privacy(&self, trace: &mut Trace) {
+        let mut privacy = Privacy::Full;
+        let mut private = false;
+        for step in &trace.steps {
+            if step.source != Source::Rules {
+                continue;
+            }
+            match step.stage {
+                Stage::Rewrite if step.matched => {
+                    if let Some(rewrite) = self.rules.rewrites.get(step.index) {
+                        privacy = privacy.tighter(rewrite.effective_privacy());
+                    }
+                }
+                Stage::Handler if step.won => {
+                    if let Some(rule) = self.rules.rules.get(step.index) {
+                        privacy = privacy.tighter(rule.effective_privacy());
+                        private = rule.private;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let browser = &mut trace.resolution.browser;
+        browser.privacy = privacy;
+        browser.private = private || browser.args.iter().any(|a| is_private_flag(a));
+    }
+
+    /// Runs the examples and tests `rules.json` carries through this engine
+    /// (the JS config, when there is one, and the rules together), or those
+    /// of `proposal` through an engine built from the same config and the
+    /// proposal instead of the saved rules. The editor and an agent check a
+    /// change this way before saving it. Nothing is opened or written.
+    pub fn test_rules(&self, proposal: Option<&RulesFile>) -> Result<TestReport> {
+        match proposal {
+            None => self.rules.run_tests(self),
+            Some(rules) => {
+                let sources = Sources {
+                    config: self.config.clone(),
+                    rules: rules.clone(),
+                };
+                let engine = Self::from_sources(&sources, Rc::clone(&self.host), self.limits)?;
+                rules.run_tests(&engine)
+            }
+        }
     }
 
     /// The JS or TS config's own rewrites, handlers and default browser, in

@@ -12,12 +12,21 @@ use std::{
 };
 
 use pwrroute_engine::{
-    AppType, Engine, Host, Limits, Link, LogLevel, ModifierKeys, Opener, RulesFile, Sources,
+    AppType, Browser, Engine, Host, Limits, Link, LogLevel, ModifierKeys, Opener, Privacy,
+    RulesFile, Sources,
 };
 use serde::Deserialize;
 
 fn configs() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs")
+}
+
+/// Finicky never had privacy levels or private windows: a config's result
+/// keeps everything, and opens a private window only when the config put
+/// the flag in `args` itself.
+fn privacy_as_finicky(b: &Browser) -> bool {
+    let flagged = b.args.iter().any(|a| a == "--incognito");
+    b.privacy == Privacy::Full && b.private == flagged
 }
 
 fn load(name: &str) -> Engine {
@@ -91,6 +100,9 @@ fn matches_the_go_host() {
             if traced.resolution != got {
                 failures.push(format!("{config} {}: the trace ends elsewhere", case.input));
             }
+            if !privacy_as_finicky(&got.browser) {
+                failures.push(format!("{config} {}: privacy differs", case.input));
+            }
             let b = &got.browser;
             let actual = (
                 b.url.as_str(),
@@ -155,6 +167,9 @@ fn suites_match_the_go_host_and_their_traces() {
             }
             if trace.winner().is_none() {
                 failures.push(format!("{label}: the trace names no winner"));
+            }
+            if suite.rules.is_none() && !privacy_as_finicky(&got.browser) {
+                failures.push(format!("{label}: privacy differs"));
             }
             if let Some(error) = &case.error {
                 if got.error.as_deref() != Some(error.as_str()) {

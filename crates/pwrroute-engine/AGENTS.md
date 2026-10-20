@@ -43,7 +43,20 @@ crate docs map the modules.
   disk, or logs one: `RulesFile::save` writes only the rules it is given, and
   a `Network` must not record what it fetches. ureq logs requests through the
   `log` crate at debug level, so a host that writes logs to disk must filter
-  `ureq` out.
+  `ureq` out. The examples and tests in `rules.json` are URLs the user chose
+  to save; they are the one exception, and `run_tests` only reads them.
+- **Privacy comes from the trace.** `resolve` is `trace` without the steps:
+  one `openUrl` run, whose `rules.json` steps say which rewrites matched and
+  which handler won, and those set `Browser::privacy` and `Browser::private`
+  (`Engine::apply_privacy`). A JS config's result is `Full` and private only
+  when its `args` carry a private flag. The engine never adds a flag; the
+  launcher maps `private` to one.
+- **Examples and tests run through the live engine.** `Engine::test_rules`
+  (and `RulesFile::run_tests`) resolve every example and test through the
+  JS config and `rules.json` together, so a change to either is caught; a
+  proposed file is tested on a temporary engine built from the same config.
+  `suggest_rule` only shapes candidate patterns; whether one matches is
+  always the API's `isMatch`, through `Engine::collisions`.
 - **Unsafe is confined.** The crate denies `unsafe_code`; only
   `src/native/macos.rs` and `src/native/windows.rs` allow it, for FFI, with a
   safety comment on each block. `src/native/mod.rs` documents what each OS

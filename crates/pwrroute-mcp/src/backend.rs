@@ -246,6 +246,8 @@ mod tests {
                 profile: String::new(),
                 args: vec!["--new-window".to_owned(), url.to_owned()],
                 open_in_background: None,
+                private: false,
+                privacy: pwrroute_engine::Privacy::Full,
             },
             error: Some(format!("could not open {url}")),
         };

@@ -263,6 +263,8 @@ impl Resolver for Tracing {
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,
+                private: false,
+                privacy: pwrroute_engine::Privacy::Full,
             },
             error: None,
             rule_steps: vec![
@@ -546,6 +548,8 @@ impl Resolver for Watching {
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,
+                private: false,
+                privacy: pwrroute_engine::Privacy::Full,
             },
             error: None,
             rule_steps: Vec::new(),

@@ -15,6 +15,11 @@
 //! | `rules[].opener` | no | Also require the link to come from one of these apps (name or bundle id). |
 //! | `rules[].enabled` | no | `false` switches a rule off but keeps its place. |
 //! | `rewrites` | no | Rewrites: every match applies, in order, before the handlers. |
+//! | `rules[].privacy`, `rewrites[].privacy` | no | What the router may keep of a link this entry routed: `full` (default) the URL, `host` its host only, `none` nothing. The tightest level of every rewrite that matched and the handler that won applies. An unknown word is kept as written, flagged by [`RulesFile::problems`], and treated as `none`. |
+//! | `rules[].private` | no | `true` opens the link in a private (incognito) window. When `privacy` is absent, it then defaults to `host`. |
+//! | `rules[].examples` | no | URLs that must resolve to this rule. Run by [`RulesFile::run_tests`]; a new rule cannot take them over unnoticed. |
+//! | `rewrites[].examples` | no | `{ "url", "becomes" }` pairs: this rewrite must match `url` and turn it into `becomes`. |
+//! | `tests` | no | `{ "url", "opener"?, "expect": { "browser", "profile"?, "url"? } }`: the whole config, JS included, must send `url` there. `opener` is an app name or bundle id (`Name:bundle.id` sets both). |
 //!
 //! With a JS config, the config's rewrites and handlers run first and it owns
 //! the default browser and options; these rules are appended after its own,
@@ -23,12 +28,18 @@
 //!
 //! Match patterns are Finicky's: wildcard strings (`*.example.com/*`), matched
 //! by Finicky's own `isMatch`. A regex or function matcher is JS-only.
+//!
+//! Examples and tests are URLs the user chose to save with the rules. They
+//! are the one place a URL goes to disk: nothing else in the engine writes
+//! one, and the router keeps the links it routes in memory only.
 
 use std::{fs, io, path::Path};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, json};
+
+use crate::Privacy;
 
 /// The default browser the Go host used for a `rules.json` that names none.
 pub const FALLBACK_BROWSER: &str = "com.apple.Safari";
@@ -50,6 +61,10 @@ pub struct RulesFile {
     /// Handlers, first match wins. The Go host calls them rules.
     #[serde(default, deserialize_with = "null_as_empty")]
     pub rules: Vec<Rule>,
+    /// PwrRoute extension: links with the browser (and profile, and URL)
+    /// the whole config must send them to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests: Vec<RouteTest>,
 }
 
 /// Finicky's `options`, as the Go host's `rules.json` carried them. Each is
@@ -92,6 +107,17 @@ pub struct Rule {
     /// PwrRoute extension: a disabled rule is skipped but keeps its place.
     #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
     pub enabled: bool,
+    /// PwrRoute extension: open the link in a private (incognito) window.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub private: bool,
+    /// PwrRoute extension: what the router may keep of a link this rule
+    /// routed. Absent means [`Privacy::Full`], or [`Privacy::Host`] for a
+    /// private rule; [`Rule::effective_privacy`] says which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<PrivacySetting>,
+    /// PwrRoute extension: URLs that must resolve to this rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
 }
 
 impl Default for Rule {
@@ -102,7 +128,56 @@ impl Default for Rule {
             profile: String::new(),
             opener: Vec::new(),
             enabled: true,
+            private: false,
+            privacy: None,
+            examples: Vec::new(),
         }
+    }
+}
+
+impl Rule {
+    /// The privacy level this rule gives a link: `privacy` as written, or
+    /// [`Privacy::Host`] for a private rule and [`Privacy::Full`] otherwise.
+    pub fn effective_privacy(&self) -> Privacy {
+        match &self.privacy {
+            Some(setting) => setting.level(),
+            None if self.private => Privacy::Host,
+            None => Privacy::Full,
+        }
+    }
+}
+
+/// A `privacy` value as the file has it: one of the three levels, or a word
+/// the engine does not know, kept as written so [`RulesFile::problems`] can
+/// name it and [`RulesFile::save`] does not drop it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PrivacySetting {
+    Level(Privacy),
+    Unknown(String),
+}
+
+impl PrivacySetting {
+    /// The level the engine applies. An unknown word asked for privacy of
+    /// some kind, so it keeps nothing.
+    pub fn level(&self) -> Privacy {
+        match self {
+            Self::Level(level) => *level,
+            Self::Unknown(_) => Privacy::None,
+        }
+    }
+
+    fn problem(&self) -> Option<&'static str> {
+        match self {
+            Self::Level(_) => None,
+            Self::Unknown(_) => Some("Privacy must be full, host or none."),
+        }
+    }
+}
+
+impl From<Privacy> for PrivacySetting {
+    fn from(level: Privacy) -> Self {
+        Self::Level(level)
     }
 }
 
@@ -121,6 +196,13 @@ pub struct Rewrite {
     pub actions: Vec<RewriteAction>,
     #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
     pub enabled: bool,
+    /// What the router may keep of a link this rewrite touched. Absent means
+    /// [`Privacy::Full`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<PrivacySetting>,
+    /// URLs this rewrite must match, and what it must turn each into.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<RewriteExample>,
 }
 
 impl Default for Rewrite {
@@ -129,8 +211,54 @@ impl Default for Rewrite {
             patterns: Vec::new(),
             actions: Vec::new(),
             enabled: true,
+            privacy: None,
+            examples: Vec::new(),
         }
     }
+}
+
+impl Rewrite {
+    /// The privacy level this rewrite gives a link it touched.
+    pub fn effective_privacy(&self) -> Privacy {
+        self.privacy
+            .as_ref()
+            .map_or(Privacy::Full, PrivacySetting::level)
+    }
+}
+
+/// One URL a [`Rewrite`] must match, and the URL it must produce from it
+/// (the URL after this rewrite alone, before any later rewrite).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewriteExample {
+    pub url: String,
+    pub becomes: String,
+}
+
+/// A link the whole config must route somewhere in particular.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteTest {
+    pub url: String,
+    /// The app the link comes from: a name or bundle id, or `Name:bundle.id`
+    /// for both. The test's opener has that name and that bundle id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener: Option<String>,
+    pub expect: Expectation,
+}
+
+/// Where a [`RouteTest`] must end. Only what is given is compared.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Expectation {
+    /// The browser's name, bundle id or path, compared ignoring case.
+    /// `Name:profile` names the profile too, as Finicky reads it.
+    pub browser: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The URL the browser must receive, after every rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// One change a [`Rewrite`] makes. These are the visual rewrites the design
@@ -158,6 +286,7 @@ pub enum Place {
     DefaultBrowser,
     Rule(usize),
     Rewrite(usize),
+    Test(usize),
 }
 
 /// Something the editor should not save, with the reason in words for the
@@ -227,6 +356,12 @@ impl RulesFile {
             if rule.opener.iter().any(|o| o.trim().is_empty()) {
                 flag(place, "App names cannot be empty.");
             }
+            if let Some(message) = rule.privacy.as_ref().and_then(PrivacySetting::problem) {
+                flag(place, message);
+            }
+            if !rule.examples.iter().all(|u| is_absolute_url(u)) {
+                flag(place, EXAMPLE_URL);
+            }
         }
         for (i, rewrite) in self.rewrites.iter().enumerate() {
             let place = Place::Rewrite(i);
@@ -238,6 +373,36 @@ impl RulesFile {
                 if let Some(message) = action.problem() {
                     flag(place, message);
                 }
+            }
+            if let Some(message) = rewrite.privacy.as_ref().and_then(PrivacySetting::problem) {
+                flag(place, message);
+            }
+            if !rewrite
+                .examples
+                .iter()
+                .all(|e| is_absolute_url(&e.url) && is_absolute_url(&e.becomes))
+            {
+                flag(place, EXAMPLE_URL);
+            }
+        }
+        for (i, test) in self.tests.iter().enumerate() {
+            let place = Place::Test(i);
+            if !is_absolute_url(&test.url) {
+                flag(place, EXAMPLE_URL);
+            }
+            if test.expect.browser.trim().is_empty() {
+                flag(place, "Name the browser the link must open in.");
+            }
+            if test
+                .expect
+                .url
+                .as_deref()
+                .is_some_and(|u| !is_absolute_url(u))
+            {
+                flag(place, "The expected URL must be a full URL.");
+            }
+            if test.opener.as_deref().is_some_and(|o| o.trim().is_empty()) {
+                flag(place, "App names cannot be empty.");
             }
         }
         problems
@@ -347,6 +512,14 @@ impl RewriteAction {
     }
 }
 
+const EXAMPLE_URL: &str = "Examples must be full URLs, such as https://example.com/path.";
+
+/// A URL with a scheme, as the engine receives links. `github.com/x` is not
+/// one; Finicky would read it as a relative path.
+fn is_absolute_url(text: &str) -> bool {
+    url::Url::parse(text.trim()).is_ok()
+}
+
 fn check_patterns(patterns: &[String], place: Place, flag: &mut impl FnMut(Place, &str)) {
     if patterns.is_empty() {
         flag(place, "Add at least one match pattern.");
@@ -377,6 +550,10 @@ fn enabled() -> bool {
 
 fn is_enabled(enabled: &bool) -> bool {
     *enabled
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn null_as_empty<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
@@ -587,6 +764,81 @@ mod tests {
         assert_eq!(
             places,
             [Place::DefaultBrowser, Place::Rule(0), Place::Rewrite(0)]
+        );
+    }
+
+    #[test]
+    fn privacy_examples_and_tests_round_trip() {
+        let text = r#"{
+          "defaultBrowser": "Firefox",
+          "rewrites": [
+            { "match": "x.com/*", "actions": [{ "setHost": "xcancel.com" }], "privacy": "none",
+              "examples": [{ "url": "https://x.com/a", "becomes": "https://xcancel.com/a" }] }
+          ],
+          "rules": [
+            { "match": "bank.example/*", "browser": "Safari", "private": true, "examples": ["https://bank.example/"] },
+            { "match": "a.example/*", "browser": "Safari", "privacy": "host" },
+            { "match": "b.example/*", "browser": "Safari", "private": true, "privacy": "full" }
+          ],
+          "tests": [
+            { "url": "https://bank.example/", "expect": { "browser": "Safari" } },
+            { "url": "https://x.com/a", "opener": "Slack", "expect": { "browser": "Firefox", "profile": "Work", "url": "https://xcancel.com/a" } }
+          ]
+        }"#;
+        let file: RulesFile = serde_json::from_str(text).unwrap();
+        assert_eq!(file.rewrites[0].effective_privacy(), Privacy::None);
+        assert_eq!(
+            file.rewrites[0].examples,
+            [RewriteExample {
+                url: "https://x.com/a".into(),
+                becomes: "https://xcancel.com/a".into()
+            }]
+        );
+        let levels: Vec<_> = file.rules.iter().map(Rule::effective_privacy).collect();
+        assert_eq!(levels, [Privacy::Host, Privacy::Host, Privacy::Full]);
+        assert_eq!(file.rules[0].examples, ["https://bank.example/"]);
+        assert_eq!(file.tests[1].opener.as_deref(), Some("Slack"));
+        assert_eq!(file.tests[1].expect.profile.as_deref(), Some("Work"));
+        let again: RulesFile =
+            serde_json::from_str(&serde_json::to_string(&file).unwrap()).unwrap();
+        assert_eq!(again, file);
+        // What was absent stays absent, and `private: true` is written as such.
+        let value = serde_json::to_value(&file).unwrap();
+        assert_eq!(
+            value["rules"][0],
+            json!({ "match": "bank.example/*", "browser": "Safari", "private": true, "examples": ["https://bank.example/"] })
+        );
+        assert_eq!(
+            value["rules"][1],
+            json!({ "match": "a.example/*", "browser": "Safari", "privacy": "host" })
+        );
+        assert_eq!(
+            value["tests"][0],
+            json!({ "url": "https://bank.example/", "expect": { "browser": "Safari" } })
+        );
+    }
+
+    #[test]
+    fn an_unknown_privacy_level_loads_and_is_a_problem() {
+        let file: RulesFile = serde_json::from_str(
+            r#"{ "defaultBrowser": "Firefox", "rules": [{ "match": "a/*", "browser": "Safari", "privacy": "hidden" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            file.rules[0].privacy,
+            Some(PrivacySetting::Unknown("hidden".into()))
+        );
+        assert_eq!(file.rules[0].effective_privacy(), Privacy::None);
+        let problems = file.problems();
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].place, Place::Rule(0));
+        assert_eq!(problems[0].message, "Privacy must be full, host or none.");
+        // A wrong type is still a load error, as for every other field.
+        assert!(
+            serde_json::from_str::<RulesFile>(
+                r#"{ "rules": [{ "match": "a/*", "browser": "Safari", "privacy": 2 }] }"#
+            )
+            .is_err()
         );
     }
 
