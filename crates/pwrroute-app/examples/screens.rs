@@ -127,6 +127,11 @@ fn main() {
         app.navigate(Screen::TestLink, window, cx);
     });
     shoot("app-2b", None, &|app, window, cx| {
+        app.activity.load(fixtures::activity());
+        app.activity.expanded = Some(app.activity.rows[1].id);
+        app.navigate(Screen::Activity, window, cx);
+    });
+    shoot("app-2b-empty", None, &|app, window, cx| {
         app.navigate(Screen::Activity, window, cx);
     });
 

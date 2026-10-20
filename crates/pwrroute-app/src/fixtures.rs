@@ -1,5 +1,6 @@
-//! Contrived data for the window to draw until it reads `rules.json` and
-//! the router's recent dispatches.
+//! Contrived data for the window to draw until it reads `rules.json`, and
+//! for tests and screenshots of the Activity screen, which draws the
+//! router's real records.
 //!
 //! These are the examples from the design review (`design/PwrRoute App
 //! Baseline.dc.html`): the rules of option 1a and the Activity rows of 2b.
@@ -9,10 +10,14 @@
 //! `fixtures/rules.json` is the same rules in the engine's format, so Test a
 //! link resolves against what the Rules screen shows.
 
+use std::time::{Duration, SystemTime};
+
 use gpui_kit::SharedString;
 use pwrroute_engine::RulesFile;
-
-use crate::activity::{ActivityRow, ActivityStep, Opened, StepMark};
+use pwrroute_router::{
+    AppType, Browser, DispatchId, DispatchRecord, Link, Matched, OpenerInfo, Outcome, Source, Step,
+    Timings,
+};
 
 /// One piece of a rule's match column.
 #[derive(Clone, Debug)]
@@ -313,121 +318,178 @@ pub const TEST_URL: &str = "https://x.com/pwrdrvr/status/1842?utm_source=slack&s
 /// The index into [`OPENERS`] Test a link starts with: Slack.
 pub const TEST_OPENER: usize = 1;
 
-/// How many links the router handled today, for the rail and strip.
-pub const ACTIVITY_TODAY: &str = "1,412 today \u{00b7} 2 failed";
-pub const ACTIVITY_COUNT: &str = "1.4k";
-
-/// The Activity rows of option 2b, newest first. The second is the design's
-/// expanded row, and the fourth a failed launch.
-pub fn activity() -> Vec<ActivityRow> {
-    let row =
-        |time: &str, url: &str, from: &str, rule: &str, opened: Opened, took: &str| ActivityRow {
-            time: time.into(),
-            url: url.into(),
-            from: from.into(),
-            rule: rule.into(),
-            opened,
-            took: took.into(),
-            rewritten: false,
-            default: rule == "default",
-            steps: Vec::new(),
-            final_url: url.into(),
-        };
-    let browser = |badge: &str, name: &str, profile: Option<&str>| Opened::Browser {
-        badge: badge.into(),
+/// Contrived dispatch records in the shape of option 2b's Activity rows,
+/// newest first, for tests and screenshots: the second ran two rewrites and
+/// handler 3, the fourth failed to launch. The window draws the router's
+/// real records; nothing here reaches it.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn activity() -> Vec<DispatchRecord> {
+    let now = SystemTime::now();
+    let link = |url: &str, from: &str| {
+        Link::new(url, Source::AppleEvent).with_opener(Some(OpenerInfo {
+            name: from.into(),
+            ..OpenerInfo::default()
+        }))
+    };
+    let browser = |name: &str, profile: &str, url: &str| Browser {
         name: name.into(),
-        profile: profile.map(Into::into),
+        app_type: AppType::AppName,
+        url: url.into(),
+        profile: profile.into(),
+        args: Vec::new(),
+        open_in_background: None,
     };
-    let step = |mark, text: &str| ActivityStep {
-        mark,
-        text: text.into(),
+    let timings = |total_ms: u64| Timings {
+        queue_us: 40,
+        resolve_us: 600,
+        launch_us: total_ms * 1_000 - 700,
+        total_us: total_ms * 1_000,
     };
-    let mut rows = vec![
-        row(
-            "09:41:08",
+    // Handler numbers are 1-based in the design; `index` is 0-based.
+    let opened = |id: u64,
+                  secs_ago: u64,
+                  url: &str,
+                  from: &str,
+                  handler: Option<usize>,
+                  browser: Browser,
+                  total_ms: u64| DispatchRecord {
+        id: DispatchId(id),
+        received_at: now - Duration::from_secs(secs_ago),
+        link: link(url, from),
+        forwarded: false,
+        final_url: Some(browser.url.clone()),
+        browser: Some(browser.clone()),
+        steps: vec![
+            Step::Received { url: url.into() },
+            Step::Matched {
+                by: handler.map_or(Matched::Default, |index| Matched::Handler { index }),
+            },
+            Step::Browser { browser },
+            Step::Launched { dry_run: false },
+        ],
+        outcome: Outcome::Opened,
+        timings: timings(total_ms),
+    };
+    let chrome_work = |url: &str| browser("Google Chrome", "Work", url);
+
+    let rewritten = {
+        let after_host = "https://xcancel.com/pwrdrvr/status/1842?utm_source=slack&s=20";
+        let final_url = "https://xcancel.com/pwrdrvr/status/1842?s=20";
+        let firefox = browser("Firefox", "default-release", final_url);
+        DispatchRecord {
+            id: DispatchId(7),
+            received_at: now - Duration::from_secs(17),
+            link: link(TEST_URL, "Slack"),
+            forwarded: false,
+            final_url: Some(final_url.into()),
+            browser: Some(firefox.clone()),
+            steps: vec![
+                Step::Received {
+                    url: TEST_URL.into(),
+                },
+                Step::Rewrite {
+                    rule: Some(0),
+                    url: after_host.into(),
+                },
+                Step::Rewrite {
+                    rule: Some(1),
+                    url: final_url.into(),
+                },
+                Step::Matched {
+                    by: Matched::Handler { index: 2 },
+                },
+                Step::Browser { browser: firefox },
+                Step::Launched { dry_run: false },
+            ],
+            outcome: Outcome::Opened,
+            timings: timings(6),
+        }
+    };
+    let failed = {
+        let url = "https://zoom.us/j/8142201137?pwd=\u{2026}";
+        let zoom = browser("zoom.us", "", url);
+        DispatchRecord {
+            id: DispatchId(5),
+            received_at: now - Duration::from_secs(9 * 60 + 28),
+            link: link(url, "Calendar"),
+            forwarded: false,
+            final_url: Some(url.into()),
+            browser: Some(zoom.clone()),
+            steps: vec![
+                Step::Received { url: url.into() },
+                Step::Matched {
+                    by: Matched::Handler { index: 5 },
+                },
+                Step::Browser { browser: zoom },
+                Step::LaunchFailed {
+                    message: "zoom.us not found".into(),
+                },
+            ],
+            outcome: Outcome::Failed,
+            timings: timings(41),
+        }
+    };
+    vec![
+        opened(
+            8,
+            0,
             "https://example.atlassian.net/browse/PG-12",
             "Slack",
-            "handler 2",
-            browser("Ch", "Google Chrome", Some("Work")),
-            "4 ms",
+            Some(1),
+            chrome_work("https://example.atlassian.net/browse/PG-12"),
+            4,
         ),
-        row(
-            "09:40:51",
-            TEST_URL,
-            "Slack",
-            "rw 1, 2 \u{00b7} h 3",
-            browser("Ff", "Firefox", Some("default-release")),
-            "6 ms",
-        ),
-        row(
-            "09:38:12",
+        rewritten,
+        opened(
+            6,
+            2 * 60 + 56,
             "http://localhost:5173/library",
             "Ghostty",
-            "handler 5",
-            browser("Ar", "Arc", None),
-            "3 ms",
+            Some(4),
+            browser("Arc", "", "http://localhost:5173/library"),
+            3,
         ),
-        row(
-            "09:31:40",
-            "https://zoom.us/j/8142201137?pwd=\u{2026}",
-            "Calendar",
-            "handler 6",
-            Opened::Failed("zoom.us not found".into()),
-            "41 ms",
-        ),
-        row(
-            "09:30:02",
+        failed,
+        opened(
+            4,
+            11 * 60 + 6,
             "https://github.com/pwrdrvr/PwrGit/pull/361",
             "PwrAgnt",
-            "handler 2",
-            browser("Ch", "Google Chrome", Some("Work")),
-            "5 ms",
+            Some(1),
+            chrome_work("https://github.com/pwrdrvr/PwrGit/pull/361"),
+            5,
         ),
-        row(
-            "09:27:55",
+        opened(
+            3,
+            13 * 60 + 13,
             "https://news.ycombinator.com/item?id=41",
             "Mail",
-            "handler 4",
-            browser("Ff", "Firefox", None),
-            "4 ms",
+            Some(3),
+            browser("Firefox", "", "https://news.ycombinator.com/item?id=41"),
+            4,
         ),
-        row(
-            "09:26:10",
+        opened(
+            2,
+            14 * 60 + 58,
             "https://www.apple.com/macos/",
             "Safari",
-            "default",
-            browser("Ch", "Google Chrome", Some("Personal")),
-            "4 ms",
+            None,
+            browser("Google Chrome", "Personal", "https://www.apple.com/macos/"),
+            4,
         ),
-        row(
-            "09:22:48",
+        opened(
+            1,
+            18 * 60 + 20,
             "https://meet.google.com/abc-defg-hij",
             "Calendar",
-            "handler 1",
-            browser("Ch", "Google Chrome", Some("Work")),
-            "7 ms",
+            Some(0),
+            chrome_work("https://meet.google.com/abc-defg-hij"),
+            7,
         ),
-    ];
-    let expanded = &mut rows[1];
-    expanded.rewritten = true;
-    expanded.final_url = "https://xcancel.com/pwrdrvr/status/1842?s=20".into();
-    expanded.steps = vec![
-        step(
-            StepMark::Hit("1"),
-            "rewrite 1 \u{00b7} host \u{2192} xcancel.com",
-        ),
-        step(StepMark::Hit("2"), "rewrite 2 \u{00b7} dropped utm_source"),
-        step(
-            StepMark::Miss("3"),
-            "rewrite 3, handlers 1\u{2013}2 \u{00b7} no match",
-        ),
-        step(StepMark::Hit("5"), "handler 3 \u{00b7} sent from Slack"),
-        step(
-            StepMark::Done,
-            "Firefox \u{00b7} default-release \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
-        ),
-    ];
-    rows
+    ]
 }
 
 #[cfg(test)]

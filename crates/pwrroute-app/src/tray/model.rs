@@ -1,13 +1,21 @@
 //! What the menu bar dropdown and the tray menu show, as plain data.
 //!
-//! The router fills this in (recent links, pause state, whether PwrRoute is
-//! the default browser); until it does, [`TrayModel::fixture`] draws the
-//! design's example. Everything here is testable without a window.
+//! The recents and the count come from the router's dispatch records
+//! ([`Recent::from_record`], [`TrayModel::sync`]). The pause state and
+//! whether PwrRoute is the default browser are not wired yet, so
+//! [`TrayModel::starting`] carries the design's values for those;
+//! [`TrayModel::fixture`] is the whole design example, for screenshots and
+//! tests. Everything here is testable without a window.
 //!
 //! Recent links keep a host, never a full URL: the dropdown is visible to
 //! whoever is looking at the screen.
 
 use std::time::{Duration, SystemTime};
+
+use pwrroute_router::{DispatchRecord, Matched, Outcome, Step};
+
+use crate::activity::{Feed, thousands};
+use crate::widgets::badge_for;
 
 /// How many recent links the dropdown lists.
 pub const RECENT_LIMIT: usize = 3;
@@ -53,9 +61,14 @@ impl BrowserLabel {
 pub enum RecentRoute {
     /// A handler matched; its 1-based number in the rules list.
     Handler(usize),
-    /// No handler matched: the fallback browser.
-    #[allow(dead_code, reason = "the router reports it; no fixture shows one")]
+    /// A handler matched that the router does not number (a `rules.json`
+    /// entry).
+    Unnumbered,
+    /// No handler matched: the default browser.
     Default,
+    /// No config, or the config pointed back at PwrRoute: the router's
+    /// fallback browser.
+    Fallback,
     /// Routing was paused. `skipped` is the handler that would have matched.
     Paused { skipped: Option<usize> },
 }
@@ -97,6 +110,45 @@ impl Recent {
         })
     }
 
+    /// A recent entry from a dispatch record. `None` when the link did not
+    /// open (rejected, `browser: null`, a failed launch) or has no host.
+    pub fn from_record(record: &DispatchRecord) -> Option<Self> {
+        if !matches!(record.outcome, Outcome::Opened | Outcome::DryRun) {
+            return None;
+        }
+        let browser = record.browser.as_ref()?;
+        let mut received = None;
+        let mut rewritten = false;
+        let mut route = RecentRoute::Unnumbered;
+        for step in &record.steps {
+            match step {
+                Step::Received { url } => received = Some(url.as_str()),
+                Step::Rewrite { .. } => rewritten = true,
+                Step::Matched { by } => {
+                    route = match by {
+                        Matched::Handler { index } => RecentRoute::Handler(index + 1),
+                        Matched::Default => RecentRoute::Default,
+                        Matched::Unreported => RecentRoute::Unnumbered,
+                    };
+                }
+                Step::Fallback { .. } | Step::RefusedLoop { .. } => route = RecentRoute::Fallback,
+                _ => {}
+            }
+        }
+        let label = BrowserLabel::new(
+            &badge_for(&browser.name),
+            &browser.name,
+            (!browser.profile.is_empty()).then_some(browser.profile.as_str()),
+        );
+        Self::from_urls(
+            &browser.url,
+            received.filter(|_| rewritten),
+            label,
+            route,
+            record.received_at,
+        )
+    }
+
     /// The second line: "Firefox · rewritten · handler 3".
     pub fn detail(&self) -> String {
         let mut parts = vec![self.browser.name.clone()];
@@ -108,7 +160,9 @@ impl Recent {
         }
         match self.route {
             RecentRoute::Handler(n) => parts.push(format!("handler {n}")),
+            RecentRoute::Unnumbered => {}
             RecentRoute::Default => parts.push("default".to_owned()),
+            RecentRoute::Fallback => parts.push("fallback".to_owned()),
             RecentRoute::Paused { skipped } => {
                 parts.push("paused".to_owned());
                 if let Some(n) = skipped {
@@ -143,6 +197,28 @@ fn age(elapsed: Duration) -> String {
         1..60 => format!("{minutes}m"),
         60..1440 => format!("{}h", minutes / 60),
         _ => format!("{}d", minutes / 1440),
+    }
+}
+
+/// What the tray takes from the dispatch feed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dispatched {
+    /// The newest [`RECENT_LIMIT`] links that opened.
+    pub recents: Vec<Recent>,
+    pub links_today: u64,
+}
+
+impl Dispatched {
+    pub fn of(feed: &Feed, now: SystemTime) -> Self {
+        Self {
+            recents: feed
+                .records()
+                .iter()
+                .filter_map(Recent::from_record)
+                .take(RECENT_LIMIT)
+                .collect(),
+            links_today: feed.today(now).routed,
+        }
     }
 }
 
@@ -218,6 +294,21 @@ impl TrayModel {
             recents: recents.into_iter().flatten().collect(),
             links_today: 1412,
         }
+    }
+
+    /// The model at launch: nothing routed yet, and the design's pause target
+    /// and default-browser state until those are wired to the OS.
+    pub fn starting(now: SystemTime) -> Self {
+        let mut model = Self::fixture(now);
+        model.recents.clear();
+        model.links_today = 0;
+        model
+    }
+
+    /// The recents and the count from the dispatch feed.
+    pub fn sync(&mut self, dispatched: Dispatched) {
+        self.recents = dispatched.recents;
+        self.links_today = dispatched.links_today;
     }
 
     /// The design's 1b: paused, with a link that skipped its handler.
@@ -298,18 +389,6 @@ impl TrayModel {
             "PwrRoute".to_owned()
         }
     }
-}
-
-fn thousands(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -446,10 +525,39 @@ mod tests {
 
     #[test]
     fn counts_get_separators() {
-        assert_eq!(thousands(0), "0");
-        assert_eq!(thousands(999), "999");
-        assert_eq!(thousands(1412), "1,412");
-        assert_eq!(thousands(1_234_567), "1,234,567");
         assert_eq!(TrayModel::fixture(now()).today_label(), "1,412 today");
+        assert_eq!(TrayModel::starting(now()).today_label(), "0 today");
+    }
+
+    #[test]
+    fn the_model_follows_the_feed() {
+        let records = crate::fixtures::activity();
+        let feed = Feed::from_records(records.clone());
+        let mut model = TrayModel::starting(now());
+        assert!(model.recents.is_empty());
+        model.sync(Dispatched::of(&feed, SystemTime::now()));
+        // The failed launch is skipped; the three newest that opened show.
+        let details: Vec<String> = model.recents.iter().map(Recent::detail).collect();
+        assert_eq!(
+            details,
+            [
+                "Google Chrome \u{00b7} Work \u{00b7} handler 2",
+                "Firefox \u{00b7} default-release \u{00b7} rewritten \u{00b7} handler 3",
+                "Arc \u{00b7} handler 5",
+            ]
+        );
+        assert_eq!(model.recents[1].host, "xcancel.com");
+        assert_eq!(model.recents[1].rewritten_from.as_deref(), Some("x.com"));
+        assert_eq!(model.links_today, records.len() as u64);
+        assert!(records.iter().all(|r| Recent::from_record(r).is_none()
+            || matches!(r.outcome, Outcome::Opened | Outcome::DryRun)));
+
+        let default = Recent::from_record(&records[6]).expect("the default opened");
+        assert_eq!(default.route, RecentRoute::Default);
+        assert_eq!(default.host, "www.apple.com");
+        assert_eq!(
+            default.detail(),
+            "Google Chrome \u{00b7} Personal \u{00b7} default"
+        );
     }
 }

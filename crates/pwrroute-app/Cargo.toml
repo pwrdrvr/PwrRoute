@@ -21,8 +21,12 @@ pwrroute-engine = { workspace = true }
 pwrroute-os = { workspace = true }
 pwrroute-router = { workspace = true }
 serde_json = { workspace = true }
-# Wakes the GPUI thread when a second launch asks for the window.
+# Wakes the GPUI thread when a second launch asks for the window, and
+# carries each dispatch to the Activity feed.
 async-channel = "2"
+# Local clock time and the local calendar day for Activity: the Time column
+# and "today". Already in the tree through GPUI.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 gpui-kit = { version = "=0.6.6", default-features = false, features = ["assets"] }
 # Rasterizes the mark for the tray icon. The same version GPUI draws SVGs with.
 resvg = { version = "0.46", default-features = false }

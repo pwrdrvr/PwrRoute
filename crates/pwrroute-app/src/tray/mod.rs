@@ -2,10 +2,10 @@
 //! Linux notification-area icon and its native menu.
 //!
 //! [`install`] puts the icon up and owns a [`TrayModel`] entity that both
-//! surfaces draw. The router keeps it current through [`model`]: recent
-//! links, the pause state, whether PwrRoute is the default browser. Until it
-//! does, the model holds the design's fixture. Pausing from either surface
-//! updates the model; whoever routes observes it.
+//! surfaces draw. Its recents and count follow the dispatch feed
+//! (`activity::feed`) when one is installed; the pause state and whether
+//! PwrRoute is the default browser wait for their wiring. Pausing from
+//! either surface updates the model; whoever routes observes it.
 
 mod dropdown;
 mod icon;
@@ -20,8 +20,9 @@ use std::time::{Duration, Instant, SystemTime};
 use gpui_kit::{App, AppContext as _, Entity, Global, WindowHandle};
 
 use self::dropdown::Dropdown;
-use self::model::TrayModel;
+use self::model::{Dispatched, TrayModel};
 use self::native::{NativeTray, TrayEvent};
+use crate::activity::{self, Feed};
 use crate::app::{PwrRoute, Screen};
 
 /// What a tray row or menu item does.
@@ -106,7 +107,12 @@ pub fn model(cx: &App) -> Option<Entity<TrayModel>> {
 /// desktop, say) is reported and the app runs without it.
 pub fn install(cx: &mut App) {
     dropdown::bind_keys(cx);
-    let model = cx.new(|_| fixture(SystemTime::now()));
+    let preset = fixture(SystemTime::now());
+    let live = preset.is_none();
+    let model = cx.new(|_| preset.unwrap_or_else(|| TrayModel::starting(SystemTime::now())));
+    if live {
+        follow_feed(&model, cx);
+    }
     let (events, received) = async_channel::unbounded();
     let native = match NativeTray::create(model.read(cx), events) {
         Ok(native) => Some(native),
@@ -161,14 +167,32 @@ fn open_at_launch(cx: &mut App) {
     .detach();
 }
 
-/// The design's fixture until the router fills the model in.
-/// `PWRROUTE_TRAY_FIXTURE=paused` starts in the paused state (1b), for
-/// screenshots and manual checks.
-fn fixture(now: SystemTime) -> TrayModel {
+/// `PWRROUTE_TRAY_FIXTURE=routing` draws the design's 1a and `paused` its
+/// 1b, for screenshots and manual checks; the model then ignores the feed.
+fn fixture(now: SystemTime) -> Option<TrayModel> {
     match std::env::var("PWRROUTE_TRAY_FIXTURE").as_deref() {
-        Ok("paused") => TrayModel::paused_fixture(now),
-        _ => TrayModel::fixture(now),
+        Ok("routing") => Some(TrayModel::fixture(now)),
+        Ok("paused") => Some(TrayModel::paused_fixture(now)),
+        _ => None,
     }
+}
+
+/// Keep the recents and the count at what the router has dispatched.
+fn follow_feed(model: &Entity<TrayModel>, cx: &mut App) {
+    let Some(feed) = activity::feed(cx) else {
+        return;
+    };
+    fn sync(model: &Entity<TrayModel>, feed: &Entity<Feed>, cx: &mut App) {
+        let dispatched = Dispatched::of(feed.read(cx), SystemTime::now());
+        model.update(cx, |model, cx| {
+            model.sync(dispatched);
+            cx.notify();
+        });
+    }
+    sync(model, &feed, cx);
+    let model = model.clone();
+    cx.observe(&feed, move |feed, cx| sync(&model, &feed, cx))
+        .detach();
 }
 
 fn handle(event: TrayEvent, cx: &mut App) {

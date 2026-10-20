@@ -134,6 +134,8 @@ fn main() {
         assets::load_fonts(cx);
         app_menu::install(cx);
         dock::install(cx);
+        // Before the tray, which follows the feed from the start.
+        activity::install(resident.handle(), resident.dispatched.clone(), cx);
         tray::install(cx);
         updater::check_in_background(updater::Trigger::Startup);
 
