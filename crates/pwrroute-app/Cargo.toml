@@ -17,9 +17,11 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+pwrroute-browsers = { workspace = true }
 pwrroute-engine = { workspace = true }
 pwrroute-os = { workspace = true }
 pwrroute-router = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 # Wakes the GPUI thread when a second launch asks for the window, and
 # carries each dispatch to the Activity feed.
@@ -68,3 +70,4 @@ gpui-kit = { version = "=0.6.6", default-features = false, features = [
     "assets",
     "test-support",
 ] }
+tempfile = "3"

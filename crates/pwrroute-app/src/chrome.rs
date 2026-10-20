@@ -41,7 +41,7 @@ fn strip_chips(app: &PwrRoute) -> Vec<Div> {
     };
     match (app.screen, &app.config) {
         (Screen::Rules | Screen::TestLink, Some(in_charge)) => vec![config(&in_charge.path)],
-        (Screen::Rules, None) => vec![rules(), status_chip("default browser", theme::status_ok())],
+        (Screen::Rules, None) => vec![rules(), crate::default_browser::chip()],
         (Screen::TestLink, None) => vec![rules()],
         (Screen::Activity, _) => vec![status_chip(app.activity.today.label(), theme::status_ok())],
     }

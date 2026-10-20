@@ -8,7 +8,7 @@ use super::controls::{
     Kind, Tone, badge, button_when, card_description, chip, field, field_help, field_sub,
     field_sub_code, heading, note, pane_head, row_actions, status, switch, tag,
 };
-use super::model::{BrowserApp, SettingsRequest, Status, Usage};
+use super::model::{BrowserApp, DefaultState, SettingsRequest, Status, Usage};
 use super::style::para;
 use super::{SettingsWindow, request_button};
 use crate::theme::{self, mono};
@@ -74,16 +74,19 @@ pub fn pane(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> Div 
 
 fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
     let default = &this.model.browsers.default;
-    let (state, register, help) = if default.is_default {
-        let help = format!(
-            "{} If another app takes the default, the strip shows a warning dot and this button \
-             comes back.",
-            default
-                .confirmed
-                .as_deref()
-                .unwrap_or("PwrRoute is the default."),
-        );
-        (
+    let register = |cx: &mut Context<'_, SettingsWindow>| {
+        request_button(
+            REGISTER_ID,
+            "Register as default browser",
+            Kind::Primary,
+            false,
+            SettingsRequest::RegisterDefaultBrowser,
+            cx,
+        )
+        .into_any_element()
+    };
+    let (state, register, help) = match &default.state {
+        DefaultState::PwrRoute => (
             chip("PwrRoute is default", Tone::Ok),
             button_when(
                 REGISTER_ID,
@@ -93,24 +96,40 @@ fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
                 false,
             )
             .into_any_element(),
-            help,
-        )
-    } else {
-        (
-            chip("Not the default", Tone::Warn),
-            request_button(
-                REGISTER_ID,
-                "Register as default browser",
-                Kind::Primary,
-                false,
-                SettingsRequest::RegisterDefaultBrowser,
-                cx,
-            )
-            .into_any_element(),
-            "Until then the OS opens links in its own default browser, without PwrRoute\u{2019}s \
-             rules."
-                .to_owned(),
-        )
+            format!(
+                "{} If another app takes the default, the strip shows a warning dot and this \
+                 button comes back.",
+                default
+                    .note
+                    .as_deref()
+                    .unwrap_or("PwrRoute is the default.")
+            ),
+        ),
+        DefaultState::Other(name) => (
+            chip(format!("{name} is default"), Tone::Warn),
+            register(cx),
+            default.note.as_deref().map_or_else(
+                || {
+                    format!(
+                        "Until then the OS opens links in {name}, without PwrRoute\u{2019}s \
+                         rules."
+                    )
+                },
+                str::to_owned,
+            ),
+        ),
+        DefaultState::Unknown => (
+            chip("Default browser unknown", Tone::Neutral),
+            register(cx),
+            default.note.as_deref().map_or_else(
+                || {
+                    "The OS did not say which app handles links. Until PwrRoute is the default, \
+                     its rules do not run."
+                        .to_owned()
+                },
+                str::to_owned,
+            ),
+        ),
     };
     let rows = vec![field(
         "Handle http and https",

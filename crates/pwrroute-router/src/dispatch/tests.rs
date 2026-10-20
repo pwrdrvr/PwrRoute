@@ -528,3 +528,76 @@ fn answer_queues_forwarded_links_and_reports_activate() {
     );
     assert!(!response.ok);
 }
+
+/// A resolver whose files come and go: `refresh` reports what is in charge
+/// and counts its calls.
+struct Watching {
+    in_charge: Arc<Mutex<std::result::Result<(), String>>>,
+    refreshed: Arc<AtomicU64>,
+}
+
+impl Resolver for Watching {
+    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+        Ok(Resolved {
+            browser: Browser {
+                name: "Watched Browser".into(),
+                app_type: AppType::AppName,
+                url: url.to_owned(),
+                profile: String::new(),
+                args: Vec::new(),
+                open_in_background: None,
+            },
+            error: None,
+            rule_steps: Vec::new(),
+        })
+    }
+
+    fn refresh(&self) -> std::result::Result<(), String> {
+        self.refreshed.fetch_add(1, Ordering::Relaxed);
+        self.in_charge.lock().unwrap().clone()
+    }
+}
+
+#[test]
+fn refresh_runs_before_each_link_and_its_reason_is_the_fallback_reason() {
+    let in_charge = Arc::new(Mutex::new(Err("no rules.json at /nowhere".to_owned())));
+    let refreshed = Arc::new(AtomicU64::new(0));
+    let factory: ResolverFactory = {
+        let (in_charge, refreshed) = (Arc::clone(&in_charge), Arc::clone(&refreshed));
+        Box::new(move || {
+            Ok(Box::new(Watching {
+                in_charge,
+                refreshed,
+            }) as Box<dyn Resolver>)
+        })
+    };
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(Options::default(), Some(factory), launcher.clone()).unwrap();
+    let handle = router.handle();
+
+    let record = handle
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    assert!(record.steps.contains(&Step::Fallback {
+        reason: "no rules.json at /nowhere".into()
+    }));
+    assert_eq!(launcher.launched()[0].name, FALLBACK_BROWSER);
+    assert_eq!(
+        handle.status().unwrap().config_error.as_deref(),
+        Some("no rules.json at /nowhere")
+    );
+
+    // The file appears: the next link sees it without a replace.
+    *in_charge.lock().unwrap() = Ok(());
+    let record = handle
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    assert_eq!(record.browser.unwrap().name, "Watched Browser");
+    assert_eq!(handle.status().unwrap().config_error, None);
+
+    // A refresh on its own asks the resolver too, and returns at once.
+    let before = refreshed.load(Ordering::Relaxed);
+    handle.refresh().unwrap();
+    handle.status().unwrap();
+    assert!(refreshed.load(Ordering::Relaxed) >= before + 2);
+}

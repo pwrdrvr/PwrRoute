@@ -9,6 +9,8 @@
 
 use gpui_kit::SharedString;
 
+pub use crate::default_browser::DefaultState;
+
 /// Everything the Settings window draws.
 #[derive(Clone, Debug)]
 pub struct SettingsModel {
@@ -261,11 +263,13 @@ pub struct Browsers {
 }
 
 /// Whether the OS hands PwrRoute its links.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DefaultBrowser {
-    pub is_default: bool,
-    /// "Confirmed 2026-10-13 09:02." once the OS has said so.
-    pub confirmed: Option<SharedString>,
+    pub state: DefaultState,
+    /// Replaces the card's help line while there is more to say: "Waiting
+    /// for macOS…" after a request, "Google Chrome is still the default."
+    /// after a refusal, "Confirmed 2026-10-13 09:02." once it is done.
+    pub note: Option<SharedString>,
 }
 
 /// One app PwrRoute can open links in.
