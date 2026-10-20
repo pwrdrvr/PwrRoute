@@ -11,6 +11,7 @@ use super::*;
 use crate::{
     launcher::DryRunLauncher,
     link::{OpenerInfo, Source},
+    trace::WITHHELD,
 };
 
 const CONFIG: &str = r#"
@@ -267,6 +268,7 @@ impl Resolver for Tracing {
                 privacy: pwrroute_engine::Privacy::Full,
             },
             error: None,
+            privacy: Privacy::Full,
             rule_steps: vec![
                 Step::Rewrite {
                     rule: Some(1),
@@ -343,7 +345,10 @@ fn a_bad_link_is_rejected_and_recorded() {
 fn the_recent_buffer_keeps_the_newest_up_to_its_capacity() {
     let router = Router::spawn(
         Options {
-            capacity: 3,
+            retention: Retention {
+                count: 3,
+                hours: 24,
+            },
             ..Options::default()
         },
         None,
@@ -552,6 +557,7 @@ impl Resolver for Watching {
                 privacy: pwrroute_engine::Privacy::Full,
             },
             error: None,
+            privacy: Privacy::Full,
             rule_steps: Vec::new(),
         })
     }
@@ -604,4 +610,342 @@ fn refresh_runs_before_each_link_and_its_reason_is_the_fallback_reason() {
     handle.refresh().unwrap();
     handle.status().unwrap();
     assert!(refreshed.load(Ordering::Relaxed) >= before + 2);
+}
+
+/// Routes every link to one browser, at the privacy level its host names:
+/// `host.example.com` is kept as host only, `none.example.com` is only
+/// counted, anything else in full.
+struct Leveled;
+impl Resolver for Leveled {
+    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+        let privacy = if url.contains("://host.") {
+            Privacy::Host
+        } else if url.contains("://none.") {
+            Privacy::None
+        } else {
+            Privacy::Full
+        };
+        Ok(Resolved {
+            browser: Browser {
+                name: "Firefox".into(),
+                app_type: AppType::AppName,
+                url: format!("{url}&rewritten=1"),
+                profile: "Work".into(),
+                args: vec![format!("--url={url}")],
+                open_in_background: None,
+            },
+            error: Some(format!("the rule warned about {url}")),
+            privacy,
+            rule_steps: Vec::new(),
+        })
+    }
+}
+
+fn leveled_factory() -> ResolverFactory {
+    Box::new(|| Ok(Box::new(Leveled) as Box<dyn Resolver>))
+}
+
+fn secret_opener() -> OpenerInfo {
+    OpenerInfo {
+        name: "Secret Opener".into(),
+        bundle_id: "com.example.secret".into(),
+        path: "/Applications/Secret.app".into(),
+        window_title: Some("Inbox".into()),
+    }
+}
+
+#[test]
+fn a_host_rule_reduces_the_record_everywhere_but_the_launcher_opens_the_full_url() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            on_dispatch: Some(Arc::new(move |r: &DispatchRecord| {
+                sink.lock().unwrap().push(r.clone());
+            })),
+            ..Options::default()
+        },
+        Some(leveled_factory()),
+        launcher.clone(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    let secret = "https://host.example.com/reset?token=hunter2";
+    let reply = handle
+        .dispatch_and_wait(link(secret).with_opener(Some(secret_opener())))
+        .unwrap();
+    // The browser got the real link.
+    assert_eq!(launcher.launched()[0].url, format!("{secret}&rewritten=1"));
+
+    // Every copy outside the dispatch thread is the reduced one.
+    let stored = handle.get(reply.id).unwrap();
+    let callback = seen.lock().unwrap()[0].clone();
+    for record in [&reply, &stored, &callback] {
+        assert_eq!(record.privacy, Privacy::Host);
+        assert_eq!(record.link.url, "https://host.example.com");
+        assert_eq!(
+            record.final_url.as_deref(),
+            Some("https://host.example.com")
+        );
+        assert_eq!(record.link.opener.as_ref().unwrap().name, "Secret Opener");
+        assert_eq!(record.outcome, Outcome::DryRun);
+        assert_eq!(record.browser.as_ref().unwrap().profile, "Work");
+        let json = serde_json::to_string(record).unwrap();
+        for private in ["hunter2", "/reset", "rewritten", "--url", "warned about"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+        assert!(record.steps.contains(&Step::ConfigError {
+            message: WITHHELD.into()
+        }));
+    }
+}
+
+#[test]
+fn a_none_rule_only_counts_the_dispatch() {
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options::default(),
+        Some(leveled_factory()),
+        launcher.clone(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(
+            link("https://none.example.com/private").with_opener(Some(secret_opener())),
+        )
+        .unwrap();
+    assert_eq!(launcher.launched().len(), 1);
+    assert_eq!(record.privacy, Privacy::None);
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert!(record.timings.total_us > 0);
+    let json = serde_json::to_string(&handle.get(record.id).unwrap()).unwrap();
+    for private in [
+        "example.com",
+        "private",
+        "Secret",
+        "Inbox",
+        "Firefox",
+        "Work",
+    ] {
+        assert!(!json.contains(private), "{private} leaked into {json}");
+    }
+
+    // A link the rules leave alone is kept in full, as are rejected ones.
+    let record = handle
+        .dispatch_and_wait(link("https://full.example.com/page"))
+        .unwrap();
+    assert_eq!(record.privacy, Privacy::Full);
+    assert_eq!(record.link.url, "https://full.example.com/page");
+    let record = handle.dispatch_and_wait(link("not a url")).unwrap();
+    assert_eq!(record.privacy, Privacy::Full);
+}
+
+#[test]
+fn test_a_link_reports_the_level_without_reducing() {
+    let router = Router::spawn(
+        Options::default(),
+        Some(leveled_factory()),
+        DryRunLauncher::new(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .test(link("https://host.example.com/reset?token=hunter2"))
+        .unwrap();
+    assert_eq!(record.privacy, Privacy::Host);
+    assert_eq!(record.outcome, Outcome::Tested);
+    assert_eq!(
+        record.link.url,
+        "https://host.example.com/reset?token=hunter2"
+    );
+    assert!(router.handle().recent().is_empty());
+}
+
+#[test]
+fn unrouted_links_stay_full() {
+    let router = Router::spawn(Options::default(), None, DryRunLauncher::new()).unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://example.com/page?q=1"))
+        .unwrap();
+    assert_eq!(record.privacy, Privacy::Full);
+    assert_eq!(record.link.url, "https://example.com/page?q=1");
+}
+
+#[test]
+fn with_the_journal_off_nothing_is_written_and_the_description_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let before: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert!(before.is_empty());
+    let router = Router::spawn(
+        Options::default(),
+        Some(leveled_factory()),
+        DryRunLauncher::new(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    handle
+        .dispatch_and_wait(link("https://full.example.com/page?token=hunter2"))
+        .unwrap();
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+    assert!(handle.journal(10).unwrap().is_empty());
+    let retention = handle.retention();
+    assert_eq!(retention.memory, Retention::default());
+    assert_eq!(retention.journal, None);
+    assert_eq!(
+        retention.description,
+        "Kept in memory only: the last 500 links or 24 hours, cleared when PwrRoute quits."
+    );
+    assert_eq!(
+        Options::default().retention_description(),
+        retention.description
+    );
+    assert_eq!(handle.status().unwrap().journal_error, None);
+}
+
+#[test]
+fn with_the_journal_on_each_dispatch_is_a_line_at_its_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = JournalConfig {
+        days: 3,
+        ..JournalConfig::new(dir.path().join("activity"), JournalMode::Full)
+    };
+    let options = Options {
+        retention: Retention {
+            count: 1,
+            hours: 24,
+        },
+        journal: Some(journal.clone()),
+        ..Options::default()
+    };
+    assert_eq!(
+        options.retention_description(),
+        format!(
+            "Kept in memory for the last 1 link or 24 hours, cleared when PwrRoute quits, \
+             and journaled with full URLs (except links whose rule keeps less) to {} for 3 days.",
+            dir.path()
+                .join("activity")
+                .join("activity-YYYY-MM-DD.jsonl")
+                .display()
+        )
+    );
+    let router = Router::spawn(options, Some(leveled_factory()), DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
+    let full = handle
+        .dispatch_and_wait(link("https://full.example.com/page?token=hunter2"))
+        .unwrap();
+    let host = handle
+        .dispatch_and_wait(link("https://host.example.com/page?token=hunter2"))
+        .unwrap();
+    let none = handle
+        .dispatch_and_wait(link("https://none.example.com/page?token=hunter2"))
+        .unwrap();
+    handle
+        .test(link("https://full.example.com/tested"))
+        .unwrap();
+    assert_eq!(handle.status().unwrap().journal_error, None);
+
+    // Memory holds one; the journal holds all three, newest first.
+    assert_eq!(handle.recent().len(), 1);
+    let journaled = handle.journal(10).unwrap();
+    assert_eq!(
+        journaled.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![none.id, host.id, full.id]
+    );
+    assert_eq!(journaled[0].privacy, Privacy::None);
+    assert_eq!(journaled[1].privacy, Privacy::Host);
+    assert_eq!(journaled[2].privacy, Privacy::Full);
+    assert_eq!(
+        journaled[2].link.url,
+        "https://full.example.com/page?token=hunter2"
+    );
+    assert_eq!(handle.journal(1).unwrap()[0].id, none.id);
+
+    let text = std::fs::read_dir(dir.path().join("activity"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert_eq!(text.lines().count(), 3);
+    assert!(!text.contains("tested"));
+    assert!(!text.contains("host.example.com/page"));
+    assert!(!text.contains("none.example.com"));
+    assert!(!text.contains("warned about"), "error text in the journal");
+
+    let retention = handle.retention();
+    assert_eq!(retention.journal, Some(journal));
+    assert_eq!(
+        retention.description,
+        Options {
+            retention: Retention {
+                count: 1,
+                hours: 24
+            },
+            journal: retention.journal.clone(),
+            ..Options::default()
+        }
+        .retention_description()
+    );
+}
+
+#[test]
+fn a_hosts_journal_keeps_no_full_url_and_a_failing_one_does_not_stop_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = Router::spawn(
+        Options {
+            journal: Some(JournalConfig::new(dir.path(), JournalMode::Hosts)),
+            ..Options::default()
+        },
+        Some(leveled_factory()),
+        DryRunLauncher::new(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://full.example.com/page?token=hunter2"))
+        .unwrap();
+    // In memory it is full; on disk it is host only.
+    assert_eq!(record.privacy, Privacy::Full);
+    let journaled = handle.journal(10).unwrap();
+    assert_eq!(journaled[0].privacy, Privacy::Host);
+    assert_eq!(journaled[0].link.url, "https://full.example.com");
+    assert_eq!(
+        handle.retention().description,
+        format!(
+            "Kept in memory for the last 500 links or 24 hours, cleared when PwrRoute quits, \
+             and journaled as scheme and host only to {} for 7 days.",
+            dir.path().join("activity-YYYY-MM-DD.jsonl").display()
+        )
+    );
+
+    // A journal that cannot be written: dispatch goes on, status says why.
+    let blocked = dir.path().join("blocked");
+    std::fs::write(&blocked, "").unwrap();
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            journal: Some(JournalConfig::new(&blocked, JournalMode::Hosts)),
+            ..Options::default()
+        },
+        Some(leveled_factory()),
+        launcher.clone(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://full.example.com/page?token=hunter2"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched().len(), 1);
+    assert_eq!(handle.recent().len(), 1);
+    let error = handle
+        .status()
+        .unwrap()
+        .journal_error
+        .expect("the write failed");
+    assert!(
+        !error.contains("example.com") && !error.contains("hunter2"),
+        "{error}"
+    );
 }

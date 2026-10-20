@@ -9,10 +9,23 @@ runs on every platform.
   Everything else talks through `RouterHandle`.
 - **`Launcher` is the seam to pwrroute-browsers.** Keep it small. Tests use
   `DryRunLauncher`; nothing in this crate opens a browser.
-- **URLs never touch disk.** `DispatchRecord` holds full URLs in memory only;
-  `DispatchRecord::timing()` is the only view meant for logs, and a test
-  checks it carries no link data. Error and step text can quote URLs, so it
-  stays in memory too.
+- **URLs never touch disk unless the journal is on, and then only at the
+  record's privacy level.** Each `DispatchRecord` is reduced to the
+  `Privacy` of the rule that routed it (`Full`, `Host`: scheme and host
+  only, `None`: counted only) on the dispatch thread, before the buffer, the
+  journal, `on_dispatch` or a reply sees it; a link no rule routed stays
+  `Full`. The buffer (`recent.rs`) is memory only, bounded by
+  `Options::retention` (count and age, swept on push and read). The journal
+  (`journal.rs`) is off unless `Options::journal` is set; on, it appends one
+  JSON line per dispatch to `<dir>/activity-YYYY-MM-DD.jsonl` (UTC days,
+  `0600`), capped at the lesser of the record's level and `JournalMode`, and
+  never with error text, which can quote a URL. `DispatchRecord::timing()`
+  is the only other view meant for logs; tests check both carry no link data
+  beyond their level. `Options::retention_description()` is the sentence the
+  UI and MCP show about all this; keep it true.
+- **`Resolved::privacy` is the seam to the engine.** `impl Resolver for
+  Engine` sets it; a test resolver sets it directly. Until the engine's
+  `Browser` carries the rule's level it is `Privacy::Full` there.
 - **The trace is the product.** Activity, Test a link and the MCP tool all
   read `DispatchRecord`. The engine names the rules that fired through
   `Engine::trace`, which becomes `Resolved::rule_steps`; report more that way

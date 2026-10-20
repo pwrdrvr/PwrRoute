@@ -4,9 +4,63 @@
 use std::time::{Duration, SystemTime};
 
 use pwrroute_engine::Browser;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::link::{Link, Source};
+
+/// How much of a link a record keeps, in memory and in the journal.
+///
+/// The rule that routed the link decides (the engine's `Browser` carries the
+/// level the winning `rules.json` rule set); a link no rule matched is kept
+/// in full. The router reduces the record to this level before anything
+/// stores it, sees it or writes it, so a `Host` record never held the full
+/// URL anywhere outside the dispatch thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Privacy {
+    /// The URL, the opener and every step, as received.
+    #[default]
+    Full,
+    /// Scheme and host only, in the link, the final URL and every step; no
+    /// error text, which can quote the URL. The opener stays, including its
+    /// `window_title`, which an app can fill with a page title or a URL;
+    /// dropping the title at this level is a follow-up.
+    Host,
+    /// No URL, no host, no opener, no steps: the dispatch is only counted,
+    /// with its outcome and timings.
+    None,
+}
+
+impl Privacy {
+    /// The lesser of two levels: what a record kept at `self` may become
+    /// under a cap such as the journal's mode.
+    #[must_use]
+    pub fn at_most(self, cap: Privacy) -> Privacy {
+        if self.rank() <= cap.rank() { self } else { cap }
+    }
+
+    /// A fixed label, for logs and descriptions. Never carries link data.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Host => "host",
+            Self::None => "none",
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Host => 1,
+            Self::Full => 2,
+        }
+    }
+}
+
+/// What replaces error text in a reduced record: a config or launcher
+/// message can quote the URL, so a `Host` record keeps the step, not the
+/// words.
+pub const WITHHELD: &str = "withheld: this link is kept as host only";
 
 /// A dispatch's number, unique within one router process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -14,12 +68,23 @@ use crate::link::{Link, Source};
 pub struct DispatchId(pub u64);
 
 /// One dispatch: the link, every step that fired, and how long each part took.
-#[derive(Debug, Clone, Serialize)]
+///
+/// It also reads back from the journal (one record per JSON line), so the
+/// Activity screen and the MCP tool show journaled dispatches the same way.
+/// `id` is unique within one router process only; journaled records from
+/// earlier runs can repeat one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DispatchRecord {
     pub id: DispatchId,
-    #[serde(serialize_with = "unix_millis")]
+    #[serde(serialize_with = "unix_millis", deserialize_with = "from_unix_millis")]
     pub received_at: SystemTime,
+    /// The level this record is kept at. A `Host` or `None` record was
+    /// reduced before it was stored, journaled or handed to `on_dispatch`.
+    /// A Test a link record stores nothing, so it is not reduced; its level
+    /// says what a dispatch of the same link would keep.
+    #[serde(default)]
+    pub privacy: Privacy,
     pub link: Link,
     /// The link came from a second launch, over the IPC socket.
     pub forwarded: bool,
@@ -38,7 +103,7 @@ pub struct DispatchRecord {
 /// rewrite runs in order, then the first matching handler wins, then the
 /// default. Rule numbers are indexes into the config's `rewrite` and
 /// `handlers` arrays, present when the resolver reports them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -96,7 +161,7 @@ pub enum Step {
 }
 
 /// The rule that chose the browser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Matched {
     /// `handlers[index]` matched first.
@@ -109,7 +174,7 @@ pub enum Matched {
 }
 
 /// How a dispatch ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Outcome {
     /// Handed to the launcher, which reported success.
@@ -126,7 +191,7 @@ pub enum Outcome {
 
 /// Durations, in microseconds, measured from the moment the OS edge handed
 /// the link to the router.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Timings {
     /// Waiting for the dispatch thread.
@@ -158,6 +223,45 @@ pub struct DispatchTiming {
 }
 
 impl DispatchRecord {
+    /// Reduces the record to `level`, in place. `Full` changes nothing;
+    /// `Host` keeps scheme and host of every URL and withholds error text;
+    /// `None` keeps the count: id, time, source, outcome and timings. A
+    /// record already below `level` stays as it is.
+    pub fn reduce(&mut self, level: Privacy) {
+        let level = self.privacy.at_most(level);
+        self.privacy = level;
+        match level {
+            Privacy::Full => {}
+            Privacy::Host => {
+                self.link.url = host_only(&self.link.url);
+                if let Some(url) = &mut self.final_url {
+                    *url = host_only(url);
+                }
+                if let Some(browser) = &mut self.browser {
+                    reduce_browser(browser);
+                }
+                for step in &mut self.steps {
+                    reduce_step(step);
+                }
+            }
+            Privacy::None => {
+                self.link.url = String::new();
+                self.link.opener = None;
+                self.final_url = None;
+                self.browser = None;
+                self.steps.clear();
+            }
+        }
+    }
+
+    /// A copy reduced to `level`; see [`reduce`](Self::reduce).
+    #[must_use]
+    pub fn reduced(&self, level: Privacy) -> Self {
+        let mut record = self.clone();
+        record.reduce(level);
+        record
+    }
+
     /// The URL-free view of this dispatch, for logs.
     pub fn timing(&self) -> DispatchTiming {
         DispatchTiming {
@@ -179,10 +283,229 @@ impl DispatchRecord {
     }
 }
 
+/// Scheme and host of a URL, the port included when one is given:
+/// `https://example.com:8443`. A URL without a host (`mailto:`) keeps the
+/// scheme alone, and one that does not parse keeps nothing.
+pub fn host_only(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return String::new();
+    };
+    let mut out = format!("{}:", parsed.scheme());
+    if let Some(host) = parsed.host_str() {
+        out.push_str("//");
+        out.push_str(host);
+        if let Some(port) = parsed.port() {
+            out.push_str(&format!(":{port}"));
+        }
+    }
+    out
+}
+
+fn reduce_browser(browser: &mut Browser) {
+    browser.url = host_only(&browser.url);
+    // Extra arguments come from the config and can carry the URL.
+    browser.args.clear();
+}
+
+fn reduce_step(step: &mut Step) {
+    match step {
+        Step::Received { url } | Step::Rewrite { url, .. } => *url = host_only(url),
+        Step::Browser { browser } => reduce_browser(browser),
+        Step::ConfigError { message } | Step::LaunchFailed { message } => {
+            *message = WITHHELD.to_owned();
+        }
+        Step::Matched { .. }
+        | Step::Fallback { .. }
+        | Step::RefusedLoop { .. }
+        | Step::NotOpened
+        | Step::Launched { .. }
+        | Step::Rejected { .. } => {}
+    }
+}
+
 fn unix_millis<S: Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
     let ms = t
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
     s.serialize_u64(ms)
+}
+
+fn from_unix_millis<'de, D: Deserializer<'de>>(d: D) -> Result<SystemTime, D::Error> {
+    let ms = u64::deserialize(d)?;
+    Ok(SystemTime::UNIX_EPOCH + Duration::from_millis(ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::SystemTime;
+
+    use pwrroute_engine::AppType;
+
+    use super::*;
+    use crate::link::OpenerInfo;
+
+    fn browser(url: &str) -> Browser {
+        Browser {
+            name: "Firefox".into(),
+            app_type: AppType::AppName,
+            url: url.into(),
+            profile: "Work".into(),
+            args: vec![format!("--open={url}")],
+            open_in_background: None,
+        }
+    }
+
+    fn record() -> DispatchRecord {
+        let url = "https://bank.example.com:8443/account?token=hunter2#x";
+        let rewritten = "https://bank.example.com/new?token=hunter2";
+        DispatchRecord {
+            id: DispatchId(3),
+            received_at: SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
+            privacy: Privacy::Full,
+            link: Link::new(url, Source::AppleEvent).with_opener(Some(OpenerInfo {
+                name: "Mail".into(),
+                bundle_id: "com.apple.mail".into(),
+                path: "/System/Applications/Mail.app".into(),
+                window_title: Some("Inbox".into()),
+            })),
+            forwarded: false,
+            final_url: Some(rewritten.into()),
+            browser: Some(browser(rewritten)),
+            steps: vec![
+                Step::Received { url: url.into() },
+                Step::Rewrite {
+                    rule: Some(0),
+                    url: rewritten.into(),
+                },
+                Step::ConfigError {
+                    message: format!("matcher threw on {url}"),
+                },
+                Step::Matched {
+                    by: Matched::Handler { index: 2 },
+                },
+                Step::Browser {
+                    browser: browser(rewritten),
+                },
+                Step::LaunchFailed {
+                    message: format!("firefox: cannot open {rewritten}"),
+                },
+            ],
+            outcome: Outcome::Failed,
+            timings: Timings {
+                queue_us: 1,
+                resolve_us: 2,
+                launch_us: 3,
+                total_us: 6,
+            },
+        }
+    }
+
+    #[test]
+    fn host_only_keeps_scheme_host_and_port() {
+        assert_eq!(
+            host_only("https://bank.example.com:8443/account?token=hunter2#x"),
+            "https://bank.example.com:8443"
+        );
+        assert_eq!(host_only("http://example.com/"), "http://example.com");
+        assert_eq!(host_only("mailto:someone@example.com"), "mailto:");
+        assert_eq!(host_only("not a url"), "");
+    }
+
+    #[test]
+    fn a_host_record_keeps_hosts_and_the_opener_and_nothing_that_quotes_the_url() {
+        let reduced = record().reduced(Privacy::Host);
+        assert_eq!(reduced.privacy, Privacy::Host);
+        assert_eq!(reduced.link.url, "https://bank.example.com:8443");
+        assert_eq!(
+            reduced.final_url.as_deref(),
+            Some("https://bank.example.com")
+        );
+        assert_eq!(reduced.link.opener.as_ref().unwrap().name, "Mail");
+        let browser = reduced.browser.as_ref().unwrap();
+        assert_eq!(browser.url, "https://bank.example.com");
+        assert_eq!(browser.name, "Firefox");
+        assert_eq!(browser.profile, "Work");
+        assert!(browser.args.is_empty());
+        assert_eq!(
+            reduced.steps,
+            vec![
+                Step::Received {
+                    url: "https://bank.example.com:8443".into()
+                },
+                Step::Rewrite {
+                    rule: Some(0),
+                    url: "https://bank.example.com".into()
+                },
+                Step::ConfigError {
+                    message: WITHHELD.into()
+                },
+                Step::Matched {
+                    by: Matched::Handler { index: 2 }
+                },
+                Step::Browser {
+                    browser: browser.clone()
+                },
+                Step::LaunchFailed {
+                    message: WITHHELD.into()
+                },
+            ]
+        );
+        let json = serde_json::to_string(&reduced).unwrap();
+        for private in ["hunter2", "/account", "/new", "--open", "#x"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+        assert_eq!(reduced.outcome, Outcome::Failed);
+        assert_eq!(reduced.timings, record().timings);
+    }
+
+    #[test]
+    fn a_none_record_is_only_counted() {
+        let reduced = record().reduced(Privacy::None);
+        assert_eq!(reduced.privacy, Privacy::None);
+        assert_eq!(reduced.id, DispatchId(3));
+        assert_eq!(reduced.link.url, "");
+        assert!(reduced.link.opener.is_none());
+        assert_eq!(reduced.link.source, Source::AppleEvent);
+        assert!(reduced.final_url.is_none());
+        assert!(reduced.browser.is_none());
+        assert!(reduced.steps.is_empty());
+        assert_eq!(reduced.outcome, Outcome::Failed);
+        assert_eq!(reduced.timings.total_us, 6);
+        let json = serde_json::to_string(&reduced).unwrap();
+        for private in ["example.com", "hunter2", "Mail", "Firefox", "Inbox"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+    }
+
+    #[test]
+    fn reducing_never_raises_the_level() {
+        let mut reduced = record().reduced(Privacy::None);
+        reduced.reduce(Privacy::Full);
+        assert_eq!(reduced.privacy, Privacy::None);
+        assert!(reduced.steps.is_empty());
+        assert_eq!(Privacy::Host.at_most(Privacy::Full), Privacy::Host);
+        assert_eq!(Privacy::Full.at_most(Privacy::Host), Privacy::Host);
+        assert_eq!(Privacy::Host.at_most(Privacy::None), Privacy::None);
+    }
+
+    #[test]
+    fn a_record_round_trips_through_json() {
+        let full = record();
+        let json = serde_json::to_string(&full).unwrap();
+        let back: DispatchRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, full.id);
+        assert_eq!(back.received_at, full.received_at);
+        assert_eq!(back.privacy, Privacy::Full);
+        assert_eq!(back.link, full.link);
+        assert_eq!(back.final_url, full.final_url);
+        assert_eq!(back.browser, full.browser);
+        assert_eq!(back.steps, full.steps);
+        assert_eq!(back.outcome, full.outcome);
+        assert_eq!(back.timings, full.timings);
+        // A line written before `privacy` existed reads as full.
+        let json = json.replace(r#""privacy":"full","#, "");
+        let back: DispatchRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.privacy, Privacy::Full);
+    }
 }
