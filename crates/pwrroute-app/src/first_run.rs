@@ -225,13 +225,16 @@ impl FirstRunModel {
     }
 }
 
+/// Who answers step 3, for the middle of a sentence ("Waiting for
+/// macOS…"): the OS by name, or the desktop on Linux, whose own name is
+/// not known here.
 fn os_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "macOS"
     } else if cfg!(target_os = "windows") {
         "Windows"
     } else {
-        "Your desktop"
+        "your desktop"
     }
 }
 
@@ -995,7 +998,9 @@ mod tests {
         // The request is out: the app says so, and the button steps aside.
         view.update(cx, |this, cx| this.set_default_state(&chrome, true, cx));
         draw(cx);
-        assert_eq!(note(cx).as_deref(), Some("Waiting for macOS\u{2026}"));
+        // The platform's own name, as the view writes it.
+        let waiting = format!("Waiting for {}\u{2026}", os_name());
+        assert_eq!(note(cx).as_deref(), Some(waiting.as_str()));
         assert!(cx.debug_bounds("first-run-default").is_none());
         assert!(cx.debug_bounds("first-run-default-note").is_some());
         // Nothing to click, and the model refuses a second request anyway.
