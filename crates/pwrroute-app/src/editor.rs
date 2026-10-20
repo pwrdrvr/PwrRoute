@@ -14,6 +14,7 @@ use gpui_kit::{
 };
 
 use crate::app::{PwrRoute, Selection};
+use crate::e2e;
 use crate::rules_model::{Destination, Handler, KINDS, Rewrite, RowBadge, Rule, kind_of};
 use crate::rules_view::{ChipTone, chip_in};
 use crate::text_field::TextField;
@@ -233,6 +234,7 @@ fn header(eyebrow: &str, title: SharedString, rule: &Rule, cx: &mut Context<'_, 
             .into_any_element()
     };
     section()
+        .on_children_prepainted(e2e::regions(&["editor.title", "editor.enabled"]))
         .flex_row()
         .items_center()
         .gap(px(10.0))

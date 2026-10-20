@@ -7,6 +7,7 @@ members = [
     "crates/pwrroute-mcp",
     "crates/pwrroute-os",
     "crates/pwrroute-router",
+    "e2e",
     "xtask",
 ]
 

@@ -1,0 +1,23 @@
+[package]
+name = "pwrroute-e2e"
+description = "Desktop E2E: launches the built PwrRoute and drives it through its test hook"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# Every test here launches the built app, and skips itself unless
+# `cargo xtask e2e` named one (PWRROUTE_E2E_APP). `cargo xtask test` compiles
+# them and they return at once.
+[dependencies]
+anyhow = { workspace = true }
+interprocess = "2.4"
+pwrroute-engine = { workspace = true }
+pwrroute-router = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"

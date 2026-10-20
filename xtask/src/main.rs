@@ -1,6 +1,7 @@
 //! Repository tasks: `cargo xtask <task>`. CI runs these same commands, so a
 //! green local run means a green CI run.
 
+mod e2e;
 mod linux;
 mod macos;
 
@@ -25,7 +26,10 @@ usage: cargo xtask <task>
   bundle [--universal] [--sign IDENTITY] [--notarize] [--app-only]
                        macOS: target/bundle/PwrRoute.app, its zip and DMG
                        (--app-only: the app alone, for vpk pack)
-  package-linux        Linux: target/package/*.tar.gz and *.deb";
+  package-linux        Linux: target/package/*.tar.gz and *.deb
+  e2e [--release] [--pending] [--screenshots] [-- TEST-ARGS]
+                       build the app and run the Desktop E2E suite against
+                       it (--pending: also the scenarios not yet met)";
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -41,6 +45,7 @@ fn main() -> Result<()> {
         "release-check" => release_check(rest),
         "bundle" => macos::bundle(rest),
         "package-linux" => linux::package(),
+        "e2e" => e2e::e2e(rest),
         "-h" | "--help" | "help" => {
             println!("{USAGE}");
             Ok(())

@@ -270,3 +270,210 @@ jobs:
       - name: Test
         run: cargo xtask test
 
+
+  # Desktop E2E: `cargo xtask e2e` builds the app and drives it through its
+  # env-gated test hook (e2e/AGENTS.md). One job per OS; the `Desktop E2E`
+  # aggregate below is the one check to require, not these.
+  e2e-linux:
+    name: Linux Desktop E2E
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
+    timeout-minutes: 40
+    env:
+      # A hosted runner is thrown away after the job (e2e/CONTRACT.md).
+      PWRROUTE_E2E_DISPOSABLE: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install GPUI system libraries
+        run: ./scripts/ci/install-linux-deps.sh
+
+      # Xvfb for the display, Mesa's lavapipe for software Vulkan (wgpu has
+      # no GPU here), xwininfo/xprop/import for the OS-side checks, and
+      # xdg-utils for the scenarios that make PwrRoute the default browser.
+      - name: Install the headless desktop
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth mesa-vulkan-drivers x11-utils imagemagick xdg-utils
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.97"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Saved even when a test fails: the build is what is slow to redo.
+          cache-on-failure: true
+
+      - name: Desktop E2E
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" cargo xtask e2e
+
+      - name: Upload Desktop E2E artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: linux-desktop-e2e-artifacts
+          path: target/e2e-artifacts/
+          retention-days: 30
+
+  e2e-macos:
+    name: macOS Desktop E2E
+    # The restricted Tart runner pool PwrGit and PwrAgnt use. PwrRoute must be
+    # in that organization runner group's selected repositories, or this job
+    # stays queued. Never run fork code on this pool. The guests persist
+    # between jobs, so they are not disposable: no PWRROUTE_E2E_DISPOSABLE.
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    needs: changes
+    if: >-
+      needs.changes.outputs.code_impacting == 'true' &&
+      (github.event_name == 'push' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.97"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Saved even when a test fails: the build is what is slow to redo.
+          cache-on-failure: true
+
+      - name: Clear PwrRoute state left by earlier jobs
+        timeout-minutes: 5
+        run: ./scripts/ci/macos-e2e-pre-run-cleanup.sh
+
+      - name: Desktop E2E
+        timeout-minutes: 30
+        run: cargo xtask e2e
+
+      - name: Upload Desktop E2E artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: macos-desktop-e2e-artifacts
+          path: target/e2e-artifacts/
+          retention-days: 30
+
+  e2e-windows:
+    name: Windows Desktop E2E
+    # The hosted image has an interactive desktop session, so the app can
+    # open its window. A cold build of the GPUI stack takes about 30 minutes
+    # (see the windows job); the cache makes later runs a few.
+    runs-on: windows-2025
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
+    timeout-minutes: 60
+    env:
+      PWRROUTE_E2E_DISPOSABLE: "1"
+    steps:
+      - run: git config --global core.autocrlf false
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.97"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Saved even when a test fails: the build is what is slow to redo.
+          cache-on-failure: true
+
+      - name: Desktop E2E
+        run: cargo xtask e2e
+
+      - name: Upload Desktop E2E artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: windows-desktop-e2e-artifacts
+          path: target/e2e-artifacts/
+          retention-days: 30
+
+  desktop-e2e-result:
+    # The check to require. `always()` so a failed platform job reaches this
+    # one: a skipped required check counts as satisfied, and without it the
+    # gate would stop gating in exactly the case it exists for.
+    name: Desktop E2E
+    runs-on: ubuntu-latest
+    needs: [changes, e2e-linux, e2e-macos, e2e-windows]
+    # Also when Classify Changes itself failed: its output is then empty, and
+    # skipping here would turn a broken classifier into a passing gate.
+    if: >-
+      always() &&
+      (needs.changes.result != 'success' ||
+       needs.changes.outputs.code_impacting == 'true')
+    timeout-minutes: 5
+    steps:
+      - name: Require Linux, eligible macOS and Windows Desktop E2E
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          LINUX_E2E_RESULT: ${{ needs.e2e-linux.result }}
+          MACOS_E2E_RESULT: ${{ needs.e2e-macos.result }}
+          WINDOWS_E2E_RESULT: ${{ needs.e2e-windows.result }}
+          # macOS is not scheduled for fork PRs (the self-hosted guests must
+          # not run untrusted code), so it reports `skipped` there. Excuse
+          # exactly that case; any other missing macOS result fails, so an
+          # event neither job anticipated fails closed.
+          MACOS_IS_FORK_PR: >-
+            ${{ github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+
+          say() {
+            echo "$1"
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Report every platform before failing, so a red gate names each
+          # one that broke.
+          status=0
+          require() {
+            if [[ "$2" == "success" ]]; then
+              say "- PASS \`$1\` ($2)"
+            else
+              say "- FAIL \`$1\` ($2)"
+              echo "::error::$1 Desktop E2E did not succeed ($2)."
+              status=1
+            fi
+          }
+
+          say "### Desktop E2E platform results"
+          require "Classify Changes" "$CHANGES_RESULT"
+          require "Linux" "$LINUX_E2E_RESULT"
+          if [[ "$MACOS_IS_FORK_PR" == "true" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
+            say "- SKIP \`macOS\` (skipped): fork PR; the self-hosted lane is not scheduled"
+            echo "::warning::macOS Desktop E2E did not run for this fork PR; macOS coverage is unverified."
+          else
+            require "macOS" "$MACOS_E2E_RESULT"
+          fi
+          require "Windows" "$WINDOWS_E2E_RESULT"
+
+          exit "$status"

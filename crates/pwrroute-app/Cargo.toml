@@ -37,6 +37,8 @@ resvg = { version = "0.46", default-features = false }
 # (`ksni`), so it needs no GTK main loop beside GPUI's.
 tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
 url = "2.5"
+# The E2E hook's control socket (`src/e2e.rs`), as the router's IPC uses it.
+interprocess = "2.4"
 # Installer and auto-updater. Pinned with `=` because the `vpk` CLI that
 # packs releases must be the same version: VPK_VERSION (and its SHA-512) in
 # scripts/release/install-vpk.sh. Upgrade them together.

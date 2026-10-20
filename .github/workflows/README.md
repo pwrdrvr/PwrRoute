@@ -6,7 +6,7 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that runs the tests. Docs/Dependabot-only PRs skip everything after Classify Changes (see below). |
+| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that runs the tests; Desktop E2E on Linux, macOS and Windows. Docs/Dependabot-only PRs skip everything after Classify Changes (see below). |
 | `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, Velopack Setup.exe and MSI, uploaded as workflow artifacts. |
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
@@ -26,11 +26,49 @@ Jobs and the names the "Protect main" ruleset requires:
 | `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
 | `macos` | macOS (test + bundle) | macos-26 | Tests, then `cargo xtask bundle` (ad hoc signed). |
 | `windows` | Windows (test) | windows-2025 | The tests, which compile every module of the app. |
+| `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | `cargo xtask e2e` under Xvfb, with Mesa's software Vulkan. |
+| `e2e-macos` | macOS Desktop E2E | self-hosted `pwrdrvr-macos` | `cargo xtask e2e` on a Tart guest; same-repository PRs and pushes only. |
+| `e2e-windows` | Windows Desktop E2E | windows-2025 | `cargo xtask e2e`. |
+| `desktop-e2e-result` | **Desktop E2E** (to require) | ubuntu-latest | Fails unless every platform's E2E job succeeded (macOS excused on fork PRs). |
 
 The required check names are pinned. Renaming the `Typecheck`, `Build` or
 `Test` job leaves that check permanently pending and blocks every PR.
 `Typecheck` kept its name from the Electron scaffold; in Rust it is the lint
 chain.
+
+### Desktop E2E
+
+`cargo xtask e2e` builds the app, wraps it in a dev `PwrRoute.app` on macOS,
+and runs `e2e/` against it; `e2e/AGENTS.md` has the design. Each platform
+uploads `target/e2e-artifacts/` (per-test app logs, state dumps on failure,
+window-only screenshots of fixture data) for 30 days.
+
+- **Linux** runs under `xvfb-run` with `mesa-vulkan-drivers` (lavapipe),
+  since wgpu finds no GPU on the runner, plus `x11-utils` and ImageMagick
+  for the OS-side window checks and screenshots, and `xdg-utils` for the
+  default-browser scenarios.
+- **macOS** runs on the self-hosted Tart pool shared with PwrGit and
+  PwrAgnt, selected by `[self-hosted, macOS, ARM64, pwrdrvr-macos]`. Add
+  `pwrdrvr/PwrRoute` to that organization runner group's selected
+  repositories, or the job stays queued. Guests need a logged-in desktop.
+  Fork PRs skip it so untrusted code never reaches the persistent guests.
+  `scripts/ci/macos-e2e-pre-run-cleanup.sh` first stops PwrRoute copies an
+  earlier job in this workspace left running and clears the app's saved
+  window state.
+- **Windows** needs nothing extra: the hosted image has a desktop session.
+
+Hosted runners set `PWRROUTE_E2E_DISPOSABLE=1`; the Tart guests persist, so
+they do not. Only a disposable machine runs the scenarios in which the app
+registers itself with the OS and a link arrives through the OS's handler for
+web links (`e2e/CONTRACT.md`, "Registration"): on Linux through `xdg-open`,
+on Windows through the registered ProgID command. Elsewhere they skip.
+
+The check to require is `Desktop E2E`, the `desktop-e2e-result` aggregate,
+not any platform job: a skipped required check counts as satisfied, so a
+fork-guarded job would gate nothing, and naming per-platform jobs binds the
+ruleset to the job list. Adding a platform is a change to the aggregate's
+`needs`. `Desktop E2E` is not in the "Protect main" ruleset yet; add it once
+it is green on `main`.
 
 ### Docs/Dependabot-only PRs
 

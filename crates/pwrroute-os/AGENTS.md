@@ -6,7 +6,9 @@ browser registration on macOS, Windows and Linux.
 - **Never change this machine's default browser.** No test, example or
   launch calls `register_browser`, `unregister_browser` or
   `set_default_browser`. Test the plans instead: `windows_registry_values`
-  and `desktop_entry` are plain functions for that reason.
+  and `desktop_entry` are plain functions for that reason. The exception is
+  the app's E2E hook, which calls them only on a throwaway runner
+  (`PWRROUTE_E2E_DISPOSABLE=1`, see `e2e/CONTRACT.md`).
 - **Two acts, kept apart.** `register_browser` / `unregister_browser` list or
   unlist PwrRoute as a browser (installer and updater hooks; keep the names).
   `set_default_browser` asks to become the default and runs only from an

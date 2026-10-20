@@ -36,6 +36,25 @@ mod default_browser;
 #[cfg(target_os = "macos")]
 #[path = "../src/editor.rs"]
 mod editor;
+/// The test hook's probes, inert: the real hook needs the app's menu and
+/// `main`, which this example does not compile.
+#[cfg(target_os = "macos")]
+mod e2e {
+    use gpui_kit::{App, Bounds, Pixels, Window};
+
+    pub const SOCKET_ENV: &str = "PWRROUTE_E2E_SOCKET";
+    pub const ROUTER_DIR_ENV: &str = "PWRROUTE_E2E_ROUTER_DIR";
+    pub const DRY_RUN_ENV: &str = "PWRROUTE_E2E_DRY_RUN";
+    pub const CONFIG_ENV: &str = "PWRROUTE_E2E_CONFIG";
+
+    pub fn regions(
+        _: &'static [&'static str],
+    ) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut App) + 'static {
+        |_, _, _| {}
+    }
+
+    pub fn frame(_: &Window) {}
+}
 #[cfg(target_os = "macos")]
 #[path = "../src/fixtures.rs"]
 mod fixtures;
