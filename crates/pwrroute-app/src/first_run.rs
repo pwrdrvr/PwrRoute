@@ -9,6 +9,8 @@
 //! opens the window decides what that does (`crate::onboarding` wires
 //! `pwrroute_os::set_default_browser` in the app; tests count the calls).
 //! The OS's answer comes back through [`FirstRun::set_default_state`].
+//! Leaving the window, by "Open PwrRoute" once every step is done or by
+//! "Later" before that, goes through [`FirstRunHooks::on_finish`].
 
 use std::rc::Rc;
 
@@ -86,8 +88,12 @@ pub struct FirstRunModel {
     pub import: Option<ImportChoice>,
     /// The browser links open in today, before PwrRoute is the default.
     pub current_default: String,
-    /// Step 3 was asked for. The OS answers on its own, in its own dialog.
+    /// Step 3 was asked for at least once. The OS answers on its own, in
+    /// its own dialog; the button then reads "Ask again".
     pub default_requested: bool,
+    /// A request is out and the OS has not answered yet: whoever opened the
+    /// window is reading the answer back, and the step says so.
+    pub waiting: bool,
     /// The OS reports PwrRoute is the default browser.
     pub is_default: bool,
 }
@@ -118,6 +124,7 @@ impl FirstRunModel {
             import: None,
             current_default: "Google Chrome".to_owned(),
             default_requested: false,
+            waiting: false,
             is_default: false,
         }
     }
@@ -146,6 +153,25 @@ impl FirstRunModel {
     /// Links route only once PwrRoute is the default browser.
     pub fn routing(&self) -> bool {
         self.is_default
+    }
+
+    /// Every step is done: the window offers to open PwrRoute.
+    pub fn complete(&self) -> bool {
+        self.steps().iter().all(|step| *step == StepState::Done)
+    }
+
+    /// Step 3's line beside its button: the OS has the question, or it
+    /// answered no (or was never answered) and the step offers to ask again.
+    pub fn default_note(&self) -> Option<String> {
+        if self.is_default {
+            None
+        } else if self.waiting {
+            Some(format!("Waiting for {}\u{2026}", os_name()))
+        } else if self.default_requested {
+            Some(format!("{} is still the default.", self.current_default))
+        } else {
+            None
+        }
     }
 
     /// Step 2's paragraph.
@@ -225,6 +251,15 @@ fn help_line() -> &'static str {
 
 type Hook<T> = Rc<dyn Fn(T, &mut App)>;
 
+/// How the window was left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Finish {
+    /// "Open PwrRoute", once every step is done.
+    Done,
+    /// "Later", before that.
+    Later,
+}
+
 /// What the window's choices do. The window itself changes nothing.
 #[derive(Clone)]
 pub struct FirstRunHooks {
@@ -233,6 +268,9 @@ pub struct FirstRunHooks {
     pub on_import: Hook<ImportChoice>,
     /// "Set as default browser". Only this asks the OS anything.
     pub on_set_default_browser: Hook<()>,
+    /// "Open PwrRoute" or "Later": first run is over, and the window closes
+    /// right after. The app marks it done and shows the main window.
+    pub on_finish: Hook<Finish>,
 }
 
 /// Open the first-run window.
@@ -296,15 +334,25 @@ impl FirstRun {
         cx.notify();
     }
 
-    /// The OS's answer on who handles links, as it changes.
-    pub fn set_default_state(&mut self, state: &DefaultState, cx: &mut Context<'_, Self>) {
+    /// The OS's answer on who handles links, as it changes, and whether a
+    /// request is still out (`waiting`).
+    pub fn set_default_state(
+        &mut self,
+        state: &DefaultState,
+        waiting: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
         let is_default = state.is_default();
         let current = state.current_name();
-        if self.model.is_default == is_default && self.model.current_default == current {
+        if self.model.is_default == is_default
+            && self.model.current_default == current
+            && self.model.waiting == waiting
+        {
             return;
         }
         self.model.is_default = is_default;
         self.model.current_default = current;
+        self.model.waiting = waiting;
         cx.notify();
     }
 
@@ -318,12 +366,18 @@ impl FirstRun {
     }
 
     fn set_default(&mut self, cx: &mut Context<'_, Self>) {
-        if self.model.steps()[2] != StepState::Current {
+        if self.model.steps()[2] != StepState::Current || self.model.waiting {
             return;
         }
         self.model.default_requested = true;
         (self.hooks.on_set_default_browser)((), cx);
         cx.notify();
+    }
+
+    /// "Open PwrRoute" or "Later": tell the app, then close.
+    fn finish(&mut self, finish: Finish, window: &mut Window, cx: &mut Context<'_, Self>) {
+        (self.hooks.on_finish)(finish, cx);
+        window.remove_window();
     }
 }
 
@@ -415,13 +469,7 @@ impl Render for FirstRun {
                                 )
                                 .line_height(px(15.75)),
                             )
-                            .child(
-                                button("first-run-later", "Later", Kind::QuietSmall).on_click(
-                                    cx.listener(|_, _: &ClickEvent, window, _| {
-                                        window.remove_window();
-                                    }),
-                                ),
-                            ),
+                            .child(finish_button(model, cx)),
                     ),
             )
     }
@@ -701,6 +749,8 @@ fn import_actions(
     }
 }
 
+/// Step 3's control: the request button while the step is current and no
+/// request is out, and the line that says what the OS said.
 fn default_actions(
     model: &FirstRunModel,
     state: StepState,
@@ -715,20 +765,33 @@ fn default_actions(
         .flex()
         .items_center()
         .gap(px(8.0))
-        .when(state != StepState::Done, |row| {
+        .when(state != StepState::Done && !model.waiting, |row| {
             row.child(
                 button("first-run-default", label, Kind::Default)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_default(cx))),
             )
         })
-        .when(model.default_requested && !model.is_default, |row| {
-            row.child(text(
-                format!("Waiting for {}\u{2026}", os_name()),
-                11.0,
-                400.0,
-                theme::text_subtle(),
-            ))
+        .when_some(model.default_note(), |row, note| {
+            row.child(
+                text(note, 11.0, 400.0, theme::text_subtle())
+                    .debug_selector(|| "first-run-default-note".into()),
+            )
         })
+}
+
+/// The footer's button: "Open PwrRoute" once every step is done, "Later"
+/// before that. The design draws only Later; the primary is what the
+/// finished window needs, since nothing else opens on its own.
+fn finish_button(model: &FirstRunModel, cx: &mut Context<'_, FirstRun>) -> impl IntoElement {
+    if model.complete() {
+        button("first-run-done", "Open PwrRoute", Kind::Primary).on_click(
+            cx.listener(|this, _: &ClickEvent, window, cx| this.finish(Finish::Done, window, cx)),
+        )
+    } else {
+        button("first-run-later", "Later", Kind::QuietSmall).on_click(
+            cx.listener(|this, _: &ClickEvent, window, cx| this.finish(Finish::Later, window, cx)),
+        )
+    }
 }
 
 /// `.btn` and its variants.
@@ -825,6 +888,7 @@ mod tests {
         fallbacks: Rc<RefCell<Vec<BrowserChoice>>>,
         imports: Rc<RefCell<Vec<ImportChoice>>>,
         defaults: Rc<Cell<usize>>,
+        finishes: Rc<RefCell<Vec<Finish>>>,
     }
 
     fn open(cx: &mut TestAppContext) -> (Entity<FirstRun>, Calls, &mut VisualTestContext) {
@@ -840,14 +904,17 @@ mod tests {
             fallbacks: Rc::default(),
             imports: Rc::default(),
             defaults: Rc::default(),
+            finishes: Rc::default(),
         };
         let fallbacks = calls.fallbacks.clone();
         let imports = calls.imports.clone();
         let defaults = calls.defaults.clone();
+        let finishes = calls.finishes.clone();
         let hooks = FirstRunHooks {
             on_fallback: Rc::new(move |choice, _| fallbacks.borrow_mut().push(choice)),
             on_import: Rc::new(move |choice, _| imports.borrow_mut().push(choice)),
             on_set_default_browser: Rc::new(move |(), _| defaults.set(defaults.get() + 1)),
+            on_finish: Rc::new(move |finish, _| finishes.borrow_mut().push(finish)),
         };
         let (view, cx) = cx.add_window_view(|_, cx| FirstRun::new(model, hooks, cx));
         draw(cx);
@@ -861,11 +928,16 @@ mod tests {
     }
 
     fn click(id: &'static str, cx: &mut VisualTestContext) {
+        press(id, cx);
+        draw(cx);
+    }
+
+    /// A click without the redraw: for a button that closes the window.
+    fn press(id: &'static str, cx: &mut VisualTestContext) {
         let bounds = cx
             .debug_bounds(id)
             .unwrap_or_else(|| panic!("{id} is drawn"));
         cx.simulate_click(bounds.center(), Modifiers::none());
-        draw(cx);
     }
 
     #[gpui_kit::test]
@@ -894,7 +966,7 @@ mod tests {
 
         // The answer arrives from whoever reads the OS.
         view.update(cx, |this, cx| {
-            this.set_default_state(&DefaultState::PwrRoute, cx);
+            this.set_default_state(&DefaultState::PwrRoute, false, cx);
         });
         draw(cx);
         assert!(view.read_with(cx, |this, _| this.model.routing()));
@@ -903,6 +975,78 @@ mod tests {
             [StepState::Done, StepState::Done, StepState::Done]
         );
         assert!(cx.debug_bounds("first-run-default").is_none());
+        assert!(cx.debug_bounds("first-run-default-note").is_none());
+    }
+
+    /// Step 3 while the OS has the question: no button, a waiting line;
+    /// once the answer settles as no, "Ask again" and who is still default.
+    #[gpui_kit::test]
+    fn step_three_waits_for_the_os_and_then_offers_to_ask_again(cx: &mut TestAppContext) {
+        let mut model = FirstRunModel::fixture();
+        model.import = Some(ImportChoice::KeepFile);
+        let (view, calls, cx) = open_with(cx, model);
+        let chrome = DefaultState::Other("Google Chrome".into());
+        let note =
+            |cx: &mut VisualTestContext| view.read_with(cx, |this, _| this.model.default_note());
+        assert_eq!(note(cx), None);
+
+        click("first-run-default", cx);
+        assert_eq!(calls.defaults.get(), 1);
+        // The request is out: the app says so, and the button steps aside.
+        view.update(cx, |this, cx| this.set_default_state(&chrome, true, cx));
+        draw(cx);
+        assert_eq!(note(cx).as_deref(), Some("Waiting for macOS\u{2026}"));
+        assert!(cx.debug_bounds("first-run-default").is_none());
+        assert!(cx.debug_bounds("first-run-default-note").is_some());
+        // Nothing to click, and the model refuses a second request anyway.
+        view.update(cx, |this, cx| this.set_default(cx));
+        assert_eq!(calls.defaults.get(), 1);
+
+        // The poll ran out, or the window came back, with the same answer.
+        view.update(cx, |this, cx| this.set_default_state(&chrome, false, cx));
+        draw(cx);
+        assert_eq!(
+            note(cx).as_deref(),
+            Some("Google Chrome is still the default.")
+        );
+        assert!(cx.debug_bounds("first-run-default").is_some());
+        assert!(!view.read_with(cx, |this, _| this.model.complete()));
+        assert!(cx.debug_bounds("first-run-later").is_some());
+        assert!(cx.debug_bounds("first-run-done").is_none());
+
+        click("first-run-default", cx);
+        assert_eq!(calls.defaults.get(), 2);
+        view.update(cx, |this, cx| this.set_default_state(&chrome, true, cx));
+        // This time the OS agreed, mid-poll.
+        view.update(cx, |this, cx| {
+            this.set_default_state(&DefaultState::PwrRoute, false, cx);
+        });
+        draw(cx);
+        assert_eq!(note(cx), None);
+        assert!(view.read_with(cx, |this, _| this.model.complete()));
+        assert!(cx.debug_bounds("first-run-default").is_none());
+        assert!(cx.debug_bounds("first-run-later").is_none());
+        assert!(cx.debug_bounds("first-run-done").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn later_tells_the_app_and_closes_the_window(cx: &mut TestAppContext) {
+        let (_view, calls, cx) = open(cx);
+        press("first-run-later", cx);
+        assert_eq!(*calls.finishes.borrow(), [Finish::Later]);
+        assert!(cx.windows().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn open_pwrroute_tells_the_app_and_closes_the_window(cx: &mut TestAppContext) {
+        let mut model = FirstRunModel::fixture();
+        model.import = Some(ImportChoice::StartEmpty);
+        model.is_default = true;
+        let (_view, calls, cx) = open_with(cx, model);
+        assert!(cx.debug_bounds("first-run-later").is_none());
+        press("first-run-done", cx);
+        assert_eq!(*calls.finishes.borrow(), [Finish::Done]);
+        assert!(cx.windows().is_empty());
     }
 
     #[gpui_kit::test]

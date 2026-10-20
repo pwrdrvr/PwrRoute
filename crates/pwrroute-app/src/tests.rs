@@ -91,6 +91,16 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
     draw(cx);
 }
 
+/// Types the design's test link, from Slack, into the open Test a link
+/// screen, which starts empty, and runs it.
+fn type_sample(cx: &mut VisualTestContext) {
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input(fixtures::TEST_URL);
+    click(cx, "test-opener");
+    click(cx, "test-opener-choice-1");
+}
+
 fn trace(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> TraceView {
     view.read_with(cx, |app, _| app.test.outcome.clone())
         .expect("Test a link ran")
@@ -158,7 +168,8 @@ fn the_rail_switches_screens(cx: &mut TestAppContext) {
 
     click(cx, "nav-test");
     assert_eq!(screen(cx), Screen::TestLink);
-    assert!(cx.debug_bounds("test-trace").is_some());
+    assert!(cx.debug_bounds("test-run").is_some());
+    assert!(cx.debug_bounds("test-trace").is_none());
     assert!(cx.debug_bounds("editor-rail").is_none());
 
     click(cx, "nav-activity");
@@ -179,7 +190,17 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     click(cx, "nav-test");
 
+    // The screen starts empty: no link, no app, nothing traced, and Test
+    // with nothing typed is not an error.
+    assert_eq!(view.read_with(cx, |app, _| app.test.url.text.clone()), "");
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener()), None);
+    assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
+    click(cx, "test-run");
+    assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
+    assert!(cx.debug_bounds("test-trace").is_none());
+
     // The design's example: two rewrites apply, handler 3 wins on Slack.
+    type_sample(cx);
     let first = trace(&view, cx);
     assert_eq!(
         titles(&first),
@@ -222,6 +243,15 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
 fn the_opener_picker_reruns_the_test(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     click(cx, "nav-test");
+    click(cx, "test-url");
+    cx.simulate_input(fixtures::TEST_URL);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    // From no app: handler 3 does not match and the default opens it.
+    let none = trace(&view, cx);
+    assert_eq!(none.result.title, "Google Chrome \u{00b7} Personal");
+    assert!(titles(&none).contains(&"Everything else"));
+
     let picking = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.test.picking);
     // The picker opens its menu and, clicked again, closes it.
     click(cx, "test-opener");
@@ -230,12 +260,58 @@ fn the_opener_picker_reruns_the_test(cx: &mut TestAppContext) {
     assert!(!picking(cx));
     click(cx, "test-opener");
     assert!(picking(cx));
-    // Not from Slack: handler 3 no longer matches and the default opens it.
-    click(cx, "test-opener-choice-0");
-    let none = trace(&view, cx);
-    assert_eq!(none.result.title, "Google Chrome \u{00b7} Personal");
-    assert!(titles(&none).contains(&"Everything else"));
-    assert!(!view.read_with(cx, |app, _| app.test.picking));
+    // The fixture rules name Slack by bundle id: the example is offered
+    // as an app in the rules, and from it handler 3 wins.
+    let slack = view.read_with(cx, |app, _| {
+        let choices = app.test.openers();
+        let slack = choices[1].clone().expect("the first example");
+        assert_eq!(slack.bundle_id.as_ref(), "com.tinyspeck.slackmacgap");
+        app.test.named_by_rules(&slack)
+    });
+    assert!(slack);
+    click(cx, "test-opener-choice-1");
+    let from_slack = trace(&view, cx);
+    assert_eq!(from_slack.result.title, "Firefox \u{00b7} default-release");
+    assert!(!picking(cx));
+}
+
+/// The picker offers an app a rule names as written, after the examples,
+/// so a "sent from" rule can be tried; it goes when the rule does.
+#[gpui_kit::test]
+fn the_opener_picker_offers_the_apps_the_rules_name(cx: &mut TestAppContext) {
+    let dir = scratch("openers");
+    let path = dir.join("rules.json");
+    let mut rules = crate::fixtures::rules_file();
+    rules.rules[1].opener = vec!["com.microsoft.teams2".to_owned()];
+    rules.save(&path).expect("write the rules");
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path)));
+    click(cx, "nav-test");
+    let choices = view.read_with(cx, |app, _| app.test.openers());
+    let teams = choices.len() - 1;
+    assert_eq!(teams, fixtures::OPENERS.len());
+    let last = choices[teams].clone().expect("the app from the rules");
+    assert_eq!(last.name.as_ref(), "com.microsoft.teams2");
+    assert_eq!(last.bundle_id.as_ref(), "com.microsoft.teams2");
+
+    click(cx, "test-url");
+    cx.simulate_input("https://github.com/pwrdrvr/PwrGit");
+    click(cx, "test-opener");
+    let id: &'static str = Box::leak(format!("test-opener-choice-{teams}").into_boxed_str());
+    click(cx, id);
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener), teams);
+    assert_eq!(trace(&view, cx).result.title, "Google Chrome \u{00b7} Work");
+
+    // The rule stops naming it: the picker falls back to no app.
+    view.update(cx, |app, _| {
+        let mut rules = crate::fixtures::rules_file();
+        rules.rules[1].opener = Vec::new();
+        app.test.set_rules(rules);
+    });
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener), 0);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.test.openers().len()),
+        fixtures::OPENERS.len()
+    );
 }
 
 #[gpui_kit::test]
@@ -415,6 +491,7 @@ fn switching_a_rule_off_changes_test_a_link(cx: &mut TestAppContext) {
     assert!(!saved(cx, &dir.join("rules.json")).rewrites[0].enabled);
     assert!(view.read_with(cx, |app, _| !app.store.needs_save()));
     click(cx, "nav-test");
+    type_sample(cx);
     let off = trace(&view, cx);
     assert_eq!(off.result.url, "https://x.com/pwrdrvr/status/1842?s=20");
     assert!(titles(&off).contains(&"Rewrite 2"));
@@ -441,6 +518,7 @@ fn test_a_link_reloads_a_changed_config(cx: &mut TestAppContext) {
     write("Firefox");
     let (view, cx) = open_with(cx, Some(config.clone()));
     click(cx, "nav-test");
+    type_sample(cx);
     assert_eq!(trace(&view, cx).result.title, "Firefox");
 
     // A later modification time, as an edit gives it.
@@ -511,6 +589,7 @@ fn a_finicky_config_in_charge_is_read_only(cx: &mut TestAppContext) {
 
     // Test a link runs the config first: its Slack function handler wins.
     click(cx, "nav-test");
+    type_sample(cx);
     let slack = trace(&view, cx);
     assert_eq!(slack.result.title, "Firefox");
     assert!(titles(&slack).contains(&"Config handler 2"));
@@ -724,6 +803,7 @@ fn a_file_with_only_a_default_shows_empty_cards(cx: &mut TestAppContext) {
     );
     // Test a link resolves this file: everything goes to Firefox.
     click(cx, "nav-test");
+    type_sample(cx);
     assert_eq!(trace(&view, cx).result.title, "Firefox");
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -18,12 +18,15 @@ mod tests;
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui_kit::{App, AppContext as _, Entity, Global, WindowHandle};
+use pwrroute_engine::{RulesFile, discovery};
 
 use self::dropdown::Dropdown;
-use self::model::{Dispatched, TrayModel};
+use self::model::{BrowserLabel, Dispatched, TrayModel};
 use self::native::{NativeTray, TrayEvent};
 use crate::activity::{self, Feed};
 use crate::app::{PwrRoute, Screen};
+use crate::default_browser;
+use crate::widgets::badge_for;
 
 /// What a tray row or menu item does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +85,9 @@ const REOPEN_GUARD: Duration = Duration::from_millis(300);
 
 struct Tray {
     model: Entity<TrayModel>,
+    /// The model follows the feed and the OS; `false` draws a fixture
+    /// (`PWRROUTE_TRAY_FIXTURE`) that ignores both.
+    live: bool,
     native: Option<NativeTray>,
     /// The open dropdown, and when it last closed itself. macOS only.
     #[cfg_attr(
@@ -109,7 +115,7 @@ pub fn install(cx: &mut App) {
     dropdown::bind_keys(cx);
     let preset = fixture(SystemTime::now());
     let live = preset.is_none();
-    let model = cx.new(|_| preset.unwrap_or_else(|| TrayModel::starting(SystemTime::now())));
+    let model = cx.new(|_| preset.unwrap_or_else(|| TrayModel::starting(pause_target())));
     if live {
         follow_feed(&model, cx);
     }
@@ -130,6 +136,7 @@ pub fn install(cx: &mut App) {
     .detach();
     cx.set_global(Tray {
         model,
+        live,
         native,
         dropdown: None,
         dropdown_closed_at: None,
@@ -167,8 +174,54 @@ fn open_at_launch(cx: &mut App) {
     .detach();
 }
 
+/// Where Pause routing would send every link: `rules.json`'s fallback, as
+/// it stands at launch. (Pausing is not wired to the router yet.)
+fn pause_target() -> BrowserLabel {
+    let rules = discovery::rules_path(&discovery::Environment::current())
+        .and_then(|path| RulesFile::load(&path).ok())
+        .filter(|rules| !rules.default_browser.is_empty());
+    match rules {
+        Some(rules) => BrowserLabel::new(
+            &badge_for(&rules.default_browser),
+            &rules.default_browser,
+            Some(rules.default_profile.as_str()).filter(|profile| !profile.is_empty()),
+        ),
+        None => BrowserLabel::new("", "the fallback browser", None),
+    }
+}
+
+/// Keep the header chip at what the OS says about the default browser.
+/// Call after `default_browser::install`.
+pub fn follow_default_browser(cx: &mut App) {
+    let Some(registrar) = default_browser::registrar(cx) else {
+        return;
+    };
+    let Some(model) = cx
+        .try_global::<Tray>()
+        .filter(|tray| tray.live)
+        .map(|tray| tray.model.clone())
+    else {
+        return;
+    };
+    fn sync(model: &Entity<TrayModel>, is_default: bool, cx: &mut App) {
+        model.update(cx, |model, cx| {
+            if model.is_default_browser != is_default {
+                model.is_default_browser = is_default;
+                cx.notify();
+            }
+        });
+    }
+    sync(&model, registrar.read(cx).state.is_default(), cx);
+    cx.observe(&registrar, move |registrar, cx| {
+        let is_default = registrar.read(cx).state.is_default();
+        sync(&model, is_default, cx);
+    })
+    .detach();
+}
+
 /// `PWRROUTE_TRAY_FIXTURE=routing` draws the design's 1a and `paused` its
-/// 1b, for screenshots and manual checks; the model then ignores the feed.
+/// 1b, for screenshots and manual checks; the model then ignores the feed
+/// and the OS.
 fn fixture(now: SystemTime) -> Option<TrayModel> {
     match std::env::var("PWRROUTE_TRAY_FIXTURE").as_deref() {
         Ok("routing") => Some(TrayModel::fixture(now)),
@@ -268,7 +321,7 @@ pub fn run(command: TrayCommand, cx: &mut App) {
 }
 
 /// Bring the main window forward, opening it if need be, on `screen`.
-fn show_screen(screen: Screen, cx: &mut App) {
+pub fn show_screen(screen: Screen, cx: &mut App) {
     crate::show_main_window(cx);
     let main = cx
         .windows()
