@@ -61,8 +61,9 @@ pub struct Resolved {
     /// [`Step::Matched`]. Left empty, the router derives what it can from the
     /// result: a rewrite step when the URL changed, and `Matched::Unreported`.
     pub rule_steps: Vec<Step>,
-    /// How much of the link the record may keep, from the rule that chose
-    /// the browser. [`Privacy::Full`] when the resolver does not say.
+    /// How much of the link the record may keep: the tightest level of the
+    /// rules that routed it, as the engine's `Browser::privacy` carries it.
+    /// [`Privacy::Full`] when the resolver does not say.
     pub privacy: Privacy,
 }
 
@@ -71,9 +72,7 @@ impl Resolver for Engine {
         let trace = self.trace(&pwrroute_engine::Link::new(url), opener)?;
         Ok(Resolved {
             rule_steps: rule_steps(&trace),
-            // The engine's `Browser` does not carry the rule's privacy level
-            // yet. When it does, read it here: `trace.resolution.browser.privacy`.
-            privacy: Privacy::Full,
+            privacy: trace.resolution.browser.privacy,
             browser: trace.resolution.browser,
             error: trace.resolution.error,
         })
@@ -698,7 +697,7 @@ impl Worker {
             args: Vec::new(),
             open_in_background: None,
             private: false,
-            privacy: pwrroute_engine::Privacy::Full,
+            privacy: Privacy::Full,
         }
     }
 }

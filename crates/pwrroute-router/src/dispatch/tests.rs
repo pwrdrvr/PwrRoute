@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use pwrroute_engine::{DefaultHost, Limits};
+use pwrroute_engine::{DefaultHost, Limits, Rewrite, RewriteAction, Rule, RulesFile, Sources};
 
 use anyhow::anyhow;
 
@@ -633,6 +633,8 @@ impl Resolver for Leveled {
                 profile: "Work".into(),
                 args: vec![format!("--url={url}")],
                 open_in_background: None,
+                private: false,
+                privacy: Privacy::Full,
             },
             error: Some(format!("the rule warned about {url}")),
             privacy,
@@ -761,6 +763,207 @@ fn test_a_link_reports_the_level_without_reducing() {
         "https://host.example.com/reset?token=hunter2"
     );
     assert!(router.handle().recent().is_empty());
+}
+
+/// A `rules.json` with no JS config, so every level comes from the engine's
+/// own reading of the rules: a `host` handler, a `none` handler, a private
+/// handler that says nothing about privacy, a handler with no level behind
+/// a `host` rewrite, and a plain handler.
+fn leveled_rules() -> RulesFile {
+    let handler = |pattern: &str| Rule {
+        patterns: vec![pattern.to_owned()],
+        browser: "Firefox".into(),
+        profile: "Work".into(),
+        ..Rule::default()
+    };
+    RulesFile {
+        default_browser: "Safari".into(),
+        rewrites: vec![Rewrite {
+            patterns: vec!["tracked.example.com/*".into()],
+            actions: vec![RewriteAction::DropQuery(vec!["utm_*".into()])],
+            privacy: Some(Privacy::Host.into()),
+            ..Rewrite::default()
+        }],
+        rules: vec![
+            Rule {
+                privacy: Some(Privacy::Host.into()),
+                ..handler("host.example.com/*")
+            },
+            Rule {
+                privacy: Some(Privacy::None.into()),
+                ..handler("none.example.com/*")
+            },
+            Rule {
+                private: true,
+                ..handler("private.example.com/*")
+            },
+            handler("tracked.example.com/*"),
+            handler("full.example.com/*"),
+        ],
+        ..RulesFile::default()
+    }
+}
+
+fn rules_factory(rules: RulesFile) -> ResolverFactory {
+    Box::new(move || {
+        let sources = Sources {
+            config: None,
+            rules,
+        };
+        let engine = Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())?;
+        Ok(Box::new(engine) as Box<dyn Resolver>)
+    })
+}
+
+fn rules_router(rules: RulesFile) -> (Router, DryRunLauncher) {
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options::default(),
+        Some(rules_factory(rules)),
+        launcher.clone(),
+    )
+    .unwrap();
+    (router, launcher)
+}
+
+#[test]
+fn a_rules_json_host_level_reaches_the_stored_record_through_the_engine() {
+    let (router, launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+    let secret = "https://host.example.com/reset?token=hunter2";
+    let reply = handle
+        .dispatch_and_wait(link(secret).with_opener(Some(secret_opener())))
+        .unwrap();
+    // The browser got the real link, routed by the rule.
+    assert_eq!(launcher.launched()[0].url, secret);
+    assert_eq!(launcher.launched()[0].profile, "Work");
+
+    let stored = handle.get(reply.id).unwrap();
+    for record in [&reply, &stored] {
+        assert_eq!(record.privacy, Privacy::Host);
+        assert_eq!(record.outcome, Outcome::DryRun);
+        assert_eq!(record.link.url, "https://host.example.com");
+        assert_eq!(
+            record.final_url.as_deref(),
+            Some("https://host.example.com")
+        );
+        assert_eq!(record.link.opener.as_ref().unwrap().name, "Secret Opener");
+        let browser = record.browser.as_ref().unwrap();
+        assert_eq!(browser.url, "https://host.example.com");
+        assert_eq!(browser.privacy, Privacy::Host);
+        assert!(!browser.private);
+        let json = serde_json::to_string(record).unwrap();
+        for private in ["hunter2", "/reset", "token"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+    }
+}
+
+#[test]
+fn a_rules_json_none_level_only_counts_the_dispatch_through_the_engine() {
+    let (router, launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+    let secret = "https://none.example.com/private?token=hunter2";
+    let reply = handle
+        .dispatch_and_wait(link(secret).with_opener(Some(secret_opener())))
+        .unwrap();
+    assert_eq!(launcher.launched()[0].url, secret);
+
+    let stored = handle.get(reply.id).unwrap();
+    for record in [&reply, &stored] {
+        assert_eq!(record.privacy, Privacy::None);
+        assert_eq!(record.outcome, Outcome::DryRun);
+        assert_eq!(record.link.url, "");
+        assert!(record.link.opener.is_none());
+        assert!(record.final_url.is_none());
+        assert!(record.browser.is_none());
+        assert!(record.steps.is_empty());
+        assert!(record.timings.total_us > 0);
+        let json = serde_json::to_string(record).unwrap();
+        for private in [
+            "example.com",
+            "hunter2",
+            "Secret",
+            "Inbox",
+            "Firefox",
+            "Work",
+        ] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+    }
+}
+
+#[test]
+fn a_private_rule_with_no_level_keeps_the_host_through_the_engine() {
+    let (router, launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+    let secret = "https://private.example.com/inbox?token=hunter2";
+    let reply = handle
+        .dispatch_and_wait(link(secret).with_opener(Some(secret_opener())))
+        .unwrap();
+    // The launcher sees the full URL and the private flag.
+    assert_eq!(launcher.launched()[0].url, secret);
+    assert!(launcher.launched()[0].private);
+
+    let stored = handle.get(reply.id).unwrap();
+    for record in [&reply, &stored] {
+        assert_eq!(record.privacy, Privacy::Host);
+        assert_eq!(record.link.url, "https://private.example.com");
+        assert_eq!(
+            record.final_url.as_deref(),
+            Some("https://private.example.com")
+        );
+        let browser = record.browser.as_ref().unwrap();
+        assert!(browser.private);
+        assert_eq!(browser.privacy, Privacy::Host);
+        let json = serde_json::to_string(record).unwrap();
+        for private in ["hunter2", "/inbox", "token"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+    }
+}
+
+#[test]
+fn the_engines_tightest_level_and_an_unmatched_link_come_through_the_router() {
+    let (router, launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+
+    // A `host` rewrite behind a handler with no level: the tightest wins,
+    // and the rewrite itself still ran for the browser.
+    let record = handle
+        .dispatch_and_wait(link(
+            "https://tracked.example.com/page?utm_source=mail&id=7",
+        ))
+        .unwrap();
+    assert_eq!(
+        launcher.launched()[0].url,
+        "https://tracked.example.com/page?id=7"
+    );
+    assert_eq!(record.privacy, Privacy::Host);
+    assert_eq!(record.link.url, "https://tracked.example.com");
+    assert_eq!(
+        record.final_url.as_deref(),
+        Some("https://tracked.example.com")
+    );
+
+    // A handler with no level, and a link no rule matched: kept in full.
+    let record = handle
+        .dispatch_and_wait(link("https://full.example.com/page?q=1"))
+        .unwrap();
+    assert_eq!(record.privacy, Privacy::Full);
+    assert_eq!(record.link.url, "https://full.example.com/page?q=1");
+    assert_eq!(record.browser.as_ref().unwrap().name, "Firefox");
+    let record = handle
+        .dispatch_and_wait(link("https://unrouted.example.com/page?q=1"))
+        .unwrap();
+    assert_eq!(record.privacy, Privacy::Full);
+    assert_eq!(record.link.url, "https://unrouted.example.com/page?q=1");
+    assert_eq!(
+        record.final_url.as_deref(),
+        Some("https://unrouted.example.com/page?q=1")
+    );
+    assert_eq!(record.browser.as_ref().unwrap().name, "Safari");
+    assert_eq!(handle.get(record.id).unwrap().privacy, Privacy::Full);
 }
 
 #[test]
