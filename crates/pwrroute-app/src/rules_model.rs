@@ -359,6 +359,7 @@ mod tests {
                 profile: "default-release".into(),
                 opener: vec!["com.tinyspeck.slackmacgap".into()],
                 enabled: false,
+                ..engine::Rule::default()
             },
             RowBadge::None,
             Vec::new(),
@@ -420,6 +421,7 @@ mod tests {
                 patterns: vec!["x.com/*".into()],
                 actions: actions[..2].to_vec(),
                 enabled: true,
+                ..engine::Rewrite::default()
             },
             RowBadge::None,
             Vec::new(),

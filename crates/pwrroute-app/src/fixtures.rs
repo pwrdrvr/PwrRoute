@@ -85,6 +85,8 @@ pub fn activity() -> Vec<DispatchRecord> {
         profile: profile.into(),
         args: Vec::new(),
         open_in_background: None,
+        private: false,
+        privacy: pwrroute_engine::Privacy::Full,
     };
     let timings = |total_ms: u64| Timings {
         queue_us: 40,

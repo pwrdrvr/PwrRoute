@@ -1,0 +1,30 @@
+{
+  "defaultBrowser": "Firefox",
+  "rewrites": [
+    {
+      "match": "old.example/*",
+      "actions": [{ "setHost": "new.example" }],
+      "examples": [{ "url": "https://old.example/a", "becomes": "https://new.example/moved" }]
+    }
+  ],
+  "rules": [
+    {
+      "match": "*.atlassian.net/*",
+      "browser": "Arc",
+      "examples": ["https://acme.atlassian.net/wiki/"]
+    },
+    {
+      "match": "acme.atlassian.net/*",
+      "browser": "Google Chrome",
+      "profile": "Work",
+      "examples": ["https://acme.atlassian.net/browse/X-1"]
+    }
+  ],
+  "tests": [
+    {
+      "url": "https://acme.atlassian.net/browse/X-1",
+      "expect": { "browser": "Google Chrome", "profile": "Work" }
+    },
+    { "url": "https://unrouted.example/", "expect": { "browser": "Firefox" } }
+  ]
+}
