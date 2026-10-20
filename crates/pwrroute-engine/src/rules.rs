@@ -251,8 +251,11 @@ pub struct RouteTest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Expectation {
-    /// The browser's name, bundle id or path, compared ignoring case.
-    /// `Name:profile` names the profile too, as Finicky reads it.
+    /// The browser as the rule or config that should win names it: its
+    /// `browser` field as written, compared ignoring case. The engine does
+    /// not know that `Safari` and `com.apple.Safari` are one app, so write
+    /// the same spelling the rule uses. `Name:profile` names the profile
+    /// too, as Finicky reads it.
     pub browser: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -514,10 +517,21 @@ impl RewriteAction {
 
 const EXAMPLE_URL: &str = "Examples must be full URLs, such as https://example.com/path.";
 
-/// A URL with a scheme, as the engine receives links. `github.com/x` is not
-/// one; Finicky would read it as a relative path.
+/// A URL as the engine receives links: `http` or `https`, a scheme Finicky
+/// matches without an authority (`mailto:`, `tel:`, `sms:`, `data:`,
+/// `file:`), or an app's own scheme with `://`. `github.com/x` is not one,
+/// and neither is `localhost:3000/x`, which parses with `localhost` as its
+/// scheme.
 fn is_absolute_url(text: &str) -> bool {
-    url::Url::parse(text.trim()).is_ok()
+    let text = text.trim();
+    let Ok(url) = url::Url::parse(text) else {
+        return false;
+    };
+    let scheme = url.scheme();
+    matches!(
+        scheme,
+        "http" | "https" | "mailto" | "tel" | "sms" | "data" | "file"
+    ) || text[scheme.len()..].starts_with("://")
 }
 
 fn check_patterns(patterns: &[String], place: Place, flag: &mut impl FnMut(Place, &str)) {
@@ -816,6 +830,32 @@ mod tests {
             value["tests"][0],
             json!({ "url": "https://bank.example/", "expect": { "browser": "Safari" } })
         );
+    }
+
+    #[test]
+    fn an_example_needs_a_scheme_the_engine_would_receive() {
+        for ok in [
+            "https://example.com/x",
+            "http://localhost:3000/x",
+            " https://example.com ",
+            "mailto:alice@example.com",
+            "tel:+15555550100",
+            "data:text/plain,hi",
+            "file:///tmp/x.html",
+            "vscode://file/x.rs",
+            "slack://channel?id=1",
+        ] {
+            assert!(is_absolute_url(ok), "{ok}");
+        }
+        for bad in [
+            "github.com/x",
+            "localhost:3000/x",
+            "example.com:443/x",
+            "",
+            "not a url",
+        ] {
+            assert!(!is_absolute_url(bad), "{bad}");
+        }
     }
 
     #[test]

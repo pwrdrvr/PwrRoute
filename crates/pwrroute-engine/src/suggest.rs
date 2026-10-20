@@ -20,8 +20,10 @@ pub struct Suggestion {
     /// itself, exactly, in place of the first. A scheme outside the ones a
     /// pattern matches implicitly (`http`, `https`, `ftp`, `mailto`,
     /// `file`, `tel`, `sms`, `data`) is written out, and so is the scheme
-    /// of a link with a port, since `host:port` would read as a scheme.
-    /// Empty for text that is not a URL.
+    /// of a link with a port, since `host:port` would read as a scheme, or
+    /// with a user name, which is written out too (`https://user@host/*`).
+    /// A password is never written: `user:*@` stands for it. Empty for text
+    /// that is not a URL.
     pub candidates: Vec<String>,
     /// A wildcard cannot say what distinguishes this link, so a precise rule
     /// needs a JS config: a regex matcher, or a `url` function with a
@@ -45,7 +47,9 @@ const WHY_SCHEME: &str = "Matches every link with this scheme.";
 const WHY_NOT_A_URL: &str = "This is not a URL PwrRoute can match.";
 const WHY_ID: &str = "The first part of the path looks like an id. A wildcard cannot limit a part to ids; a regex matcher in a JS config can.";
 const WHY_INNER_URL: &str = "A query parameter carries another URL. Unwrapping it is a rewrite with a capture group, which needs a url function in a JS config.";
-const WHY_USERINFO: &str = "The link carries a user name before the host, which a pattern that starts with the host cannot see; a JS matcher can read it.";
+const WHY_USER_SECTION: &str =
+    "Matches everything under the first part of the path, for this user name.";
+const WHY_USER_HOST: &str = "Matches everything on this host, for this user name.";
 
 /// Wildcard patterns for a rule that would route `url`, and whether a rule
 /// that fits it precisely needs JS instead.
@@ -59,39 +63,54 @@ pub fn suggest_rule(url: &str) -> Suggestion {
     };
     let mut suggestion = Suggestion::default();
     let scheme = parsed.scheme();
+    // A user name sits between `//` and the host, where the prefix a
+    // scheme-less pattern gets has no room for it, so it is written out with
+    // the scheme. A password never goes in a pattern: `user:*@` stands for
+    // it.
+    let user = parsed.username();
+    let userinfo = match (user.is_empty(), parsed.password()) {
+        (true, _) => String::new(),
+        (false, None) => format!("{}@", escape(user)),
+        (false, Some(_)) => format!("{}:*@", escape(user)),
+    };
     // A pattern that starts with `host:port` reads as one with a scheme, so
     // a port needs the scheme written out too.
-    let prefix = if IMPLICIT_SCHEMES.contains(&scheme) && parsed.port().is_none() {
-        String::new()
-    } else if parsed.host_str().is_some() {
-        format!("{scheme}://")
+    let prefix =
+        if IMPLICIT_SCHEMES.contains(&scheme) && parsed.port().is_none() && userinfo.is_empty() {
+            String::new()
+        } else if parsed.host_str().is_some() {
+            format!("{scheme}://")
+        } else {
+            format!("{scheme}:")
+        };
+    let link = link_pattern(&parsed, &prefix, &userinfo);
+    let (why_section, why_host) = if userinfo.is_empty() {
+        (WHY_SECTION, WHY_HOST)
     } else {
-        format!("{scheme}:")
+        (WHY_USER_SECTION, WHY_USER_HOST)
     };
 
     let Some(host) = parsed.host_str() else {
         // mailto:, tel:, data: and the like: the whole link, or every link
         // of its kind.
-        suggestion.candidates.push(escape(parsed.as_str()));
+        suggestion.candidates.push(link);
         suggestion.why.push(WHY_PAGE);
         suggestion.candidates.push(format!("{scheme}:*"));
         suggestion.why.push(WHY_SCHEME);
         return suggestion;
     };
-    let authority = match parsed.port() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
+    let origin = match parsed.port() {
+        Some(port) => format!("{prefix}{userinfo}{}:{port}", escape(host)),
+        None => format!("{prefix}{userinfo}{}", escape(host)),
     };
     let path = parsed.path();
     if path.is_empty() {
         // A scheme of its own (`slack://channel?id=1`) may have no path at
         // all, so `host/*` would not match it.
-        suggestion.candidates.push(escape(parsed.as_str()));
+        suggestion.candidates.push(link);
         suggestion.why.push(WHY_PAGE);
-        suggestion
-            .candidates
-            .push(format!("{prefix}{}*", escape(&authority)));
-        suggestion.why.push(WHY_HOST);
+        suggestion.candidates.push(format!("{origin}*"));
+        suggestion.why.push(why_host);
         return suggestion;
     }
     let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
@@ -99,17 +118,17 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         if path.starts_with(&format!("/{first}/")) {
             suggestion
                 .candidates
-                .push(format!("{prefix}{authority}/{}/*", escape(first)));
-            suggestion.why.push(WHY_SECTION);
+                .push(format!("{origin}/{}/*", escape(first)));
+            suggestion.why.push(why_section);
         } else {
             // `host/first/*` needs a slash after the segment, which this
             // link does not have, so the narrowest pattern is the link.
-            suggestion.candidates.push(escape(parsed.as_str()));
+            suggestion.candidates.push(link);
             suggestion.why.push(WHY_PAGE);
         }
     }
-    suggestion.candidates.push(format!("{prefix}{authority}/*"));
-    suggestion.why.push(WHY_HOST);
+    suggestion.candidates.push(format!("{origin}/*"));
+    suggestion.why.push(why_host);
 
     if looks_like_id(first) {
         suggestion.needs_js = true;
@@ -122,11 +141,31 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         suggestion.needs_js = true;
         suggestion.why.push(WHY_INNER_URL);
     }
-    if !parsed.username().is_empty() {
-        suggestion.needs_js = true;
-        suggestion.why.push(WHY_USERINFO);
-    }
     suggestion
+}
+
+/// The link itself as a pattern: exact when it has no password, else the
+/// same link with `user:*@` in place of the credentials, since a password
+/// must not be written into a rule.
+fn link_pattern(parsed: &url::Url, prefix: &str, userinfo: &str) -> String {
+    if parsed.password().is_none() {
+        return escape(parsed.as_str());
+    }
+    let mut rest = String::new();
+    if let Some(host) = parsed.host_str() {
+        rest.push_str(&escape(host));
+    }
+    if let Some(port) = parsed.port() {
+        rest.push_str(&format!(":{port}"));
+    }
+    rest.push_str(&escape(parsed.path()));
+    if let Some(query) = parsed.query() {
+        rest.push_str(&format!("?{}", escape(query)));
+    }
+    if let Some(fragment) = parsed.fragment() {
+        rest.push_str(&format!("#{}", escape(fragment)));
+    }
+    format!("{prefix}{userinfo}{rest}")
 }
 
 /// A path segment that is an identifier rather than a section name: all
@@ -239,10 +278,41 @@ mod tests {
         let s = suggest_rule("https://www.google.com/url?q=https://example.com/x");
         assert!(s.needs_js);
         assert!(s.why.contains(&WHY_INNER_URL));
-        let s = suggest_rule("https://user@host.example/a/b");
-        assert!(s.needs_js);
-        assert!(s.why.contains(&WHY_USERINFO));
         assert!(!suggest_rule("https://docs.example/guide/intro").needs_js);
+    }
+
+    #[test]
+    fn a_user_name_is_written_out_and_a_password_never_is() {
+        let s = suggest_rule("https://user@host.example/a/b");
+        assert_eq!(
+            s.candidates,
+            [
+                "https://user@host.example/a/*",
+                "https://user@host.example/*"
+            ]
+        );
+        assert_eq!(s.why, [WHY_USER_SECTION, WHY_USER_HOST]);
+        assert!(!s.needs_js);
+        assert_eq!(
+            candidates("https://user@host.example/"),
+            ["https://user@host.example/*"]
+        );
+        let s = suggest_rule("https://user:s3cret@host.example/a?q=1#f");
+        assert_eq!(
+            s.candidates,
+            [
+                "https://user:*@host.example/a?q=1#f",
+                "https://user:*@host.example/*"
+            ]
+        );
+        assert!(s.candidates.iter().all(|c| !c.contains("s3cret")));
+        assert_eq!(
+            candidates("http://user:s3cret@localhost:3000/x/y"),
+            [
+                "http://user:*@localhost:3000/x/*",
+                "http://user:*@localhost:3000/*"
+            ]
+        );
     }
 
     #[test]

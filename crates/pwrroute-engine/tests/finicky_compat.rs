@@ -1,7 +1,8 @@
 //! Finicky v4 compatibility: every config in `tests/configs` resolves every URL
 //! in `urls.txt` the way the Go host did, and so does every suite (a config,
 //! `rules.json`, or both, with openers) in `expected.json`. Every case is also
-//! traced, and the trace must end where `resolve` does.
+//! run through the API's plain `openUrl`, which must decide as the traced
+//! run `resolve` is built on does.
 
 use std::{
     cell::RefCell,
@@ -13,7 +14,7 @@ use std::{
 
 use pwrroute_engine::{
     AppType, Browser, Engine, Host, Limits, Link, LogLevel, ModifierKeys, Opener, Privacy,
-    RulesFile, Sources,
+    Resolution, RulesFile, Sources,
 };
 use serde::Deserialize;
 
@@ -27,6 +28,17 @@ fn configs() -> PathBuf {
 fn privacy_as_finicky(b: &Browser) -> bool {
     let flagged = b.args.iter().any(|a| a == "--incognito");
     b.privacy == Privacy::Full && b.private == flagged
+}
+
+/// The plain `openUrl` run leaves privacy at its defaults; the traced run
+/// sets it, so it is copied over before the two are compared.
+fn plain_agrees(engine: &Engine, input: &str, opener: Option<&Opener>, got: &Resolution) -> bool {
+    let mut plain = engine
+        .resolve_plain(&Link::new(input), opener)
+        .unwrap_or_else(|e| panic!("{input}: {e:#}"));
+    plain.browser.private = got.browser.private;
+    plain.browser.privacy = got.browser.privacy;
+    plain == *got
 }
 
 fn load(name: &str) -> Engine {
@@ -94,11 +106,20 @@ fn matches_the_go_host() {
             let got = engine
                 .resolve(&case.input, None)
                 .unwrap_or_else(|e| panic!("{config} {}: {e:#}", case.input));
+            if !plain_agrees(&engine, &case.input, None, &got) {
+                failures.push(format!(
+                    "{config} {}: the trace ends elsewhere than openUrl",
+                    case.input
+                ));
+            }
             let traced = engine
                 .trace(&Link::new(&case.input), None)
                 .unwrap_or_else(|e| panic!("{config} {} trace: {e:#}", case.input));
-            if traced.resolution != got {
-                failures.push(format!("{config} {}: the trace ends elsewhere", case.input));
+            if traced.winner().is_none() {
+                failures.push(format!(
+                    "{config} {}: the trace names no winner",
+                    case.input
+                ));
             }
             if !privacy_as_finicky(&got.browser) {
                 failures.push(format!("{config} {}: privacy differs", case.input));
@@ -156,15 +177,12 @@ fn suites_match_the_go_host_and_their_traces() {
             let got = engine
                 .resolve(&case.input, case.opener.as_ref())
                 .unwrap_or_else(|e| panic!("{label}: {e:#}"));
+            if !plain_agrees(&engine, &case.input, case.opener.as_ref(), &got) {
+                failures.push(format!("{label}: the trace ends elsewhere than openUrl"));
+            }
             let trace = engine
                 .trace(&Link::new(&case.input), case.opener.as_ref())
                 .unwrap_or_else(|e| panic!("{label} trace: {e:#}"));
-            if trace.resolution != got {
-                failures.push(format!(
-                    "{label}\n  trace ends {:?}\n  resolve   {got:?}",
-                    trace.resolution
-                ));
-            }
             if trace.winner().is_none() {
                 failures.push(format!("{label}: the trace names no winner"));
             }

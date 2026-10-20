@@ -552,6 +552,11 @@ fn every_candidate_matches_its_own_link_by_finickys_is_match() {
         "mailto:alice@example.com",
         "https://a.example/q*",
         "https://issues.example/12345/comments",
+        "https://user@host.example/a/b",
+        "https://user@host.example/",
+        "https://user:s3cret@host.example/a",
+        "https://user:s3cret@host.example/a/b?q=1#f",
+        "http://user:s3cret@localhost:3000/x",
     ] {
         let suggestion = suggest_rule(url);
         assert!(!suggestion.candidates.is_empty(), "{url}");
@@ -560,6 +565,10 @@ fn every_candidate_matches_its_own_link_by_finickys_is_match() {
                 e.collisions(candidate, &[url]).unwrap(),
                 [url],
                 "{candidate} should match {url}"
+            );
+            assert!(
+                !candidate.contains("s3cret"),
+                "{candidate} carries a password"
             );
         }
     }

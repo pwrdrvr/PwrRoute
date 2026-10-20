@@ -174,8 +174,10 @@ impl TestReport {
 }
 
 impl Expectation {
-    /// Whether `browser` is what this expectation asks for. The browser name
-    /// is compared ignoring case; a profile or URL only when given.
+    /// Whether `browser` is what this expectation asks for. The browser is
+    /// compared ignoring case with [`Browser::name`] as the winning rule or
+    /// config wrote it (so `Safari` does not satisfy a rule that says
+    /// `com.apple.Safari`); a profile or URL only when given.
     pub fn is_met_by(&self, browser: &Browser) -> bool {
         let (name, profile) = self.name_and_profile();
         name.trim().eq_ignore_ascii_case(browser.name.trim())

@@ -190,13 +190,19 @@ impl Privacy {
 }
 
 /// Browser arguments that already open a private window, as a JS config may
-/// pass them. Compared ignoring case and the number of leading dashes, since
-/// Edge and Firefox accept one dash too.
-const PRIVATE_FLAGS: [&str; 3] = ["incognito", "inprivate", "private-window"];
+/// pass them: Chromium's `--incognito`, Edge's `--inprivate`, Firefox's
+/// `--private-window` and `--private`. Compared ignoring case, the number
+/// of leading dashes (Edge and Firefox accept one) and any `=value`.
+const PRIVATE_FLAGS: [&str; 4] = ["incognito", "inprivate", "private-window", "private"];
 
 fn is_private_flag(arg: &str) -> bool {
-    let flag = arg.trim().trim_start_matches('-');
-    arg.trim().starts_with('-') && PRIVATE_FLAGS.iter().any(|f| flag.eq_ignore_ascii_case(f))
+    let arg = arg.trim();
+    if !arg.starts_with('-') {
+        return false;
+    }
+    let flag = arg.trim_start_matches('-');
+    let flag = flag.split_once('=').map_or(flag, |(name, _)| name);
+    PRIVATE_FLAGS.iter().any(|f| flag.eq_ignore_ascii_case(f))
 }
 
 /// How [`Browser::name`] identifies the app.
@@ -394,6 +400,25 @@ impl Engine {
     /// [`Browser::privacy`] and [`Browser::private`].
     pub fn resolve_link(&self, link: &Link, opener: Option<&Opener>) -> Result<Resolution> {
         Ok(self.trace(link, opener)?.resolution)
+    }
+
+    /// Finicky's `openUrl` on the config as loaded, without the trace's
+    /// wrappers and without [`Browser::privacy`] or [`Browser::private`]
+    /// (both stay at their defaults). It exists so a test can show that the
+    /// traced run decides as the plain one does; routing goes through
+    /// [`Engine::resolve_link`].
+    #[doc(hidden)]
+    pub fn resolve_plain(&self, link: &Link, opener: Option<&Opener>) -> Result<Resolution> {
+        self.with_deadline(self.limits.resolve, |ctx| {
+            set_link(&ctx, link, opener)?;
+            let json: String = ctx
+                .eval(
+                    "JSON.stringify(finickyConfigAPI.openUrl(url, opener, originalUrl, __pwrroute.config()))",
+                )
+                .catch(&ctx)
+                .map_err(|e| js_error("resolving the URL", &e))?;
+            Ok(serde_json::from_str(&json)?)
+        })
     }
 
     /// Resolves a link and returns every step on the way: the rewrites and
@@ -715,5 +740,47 @@ fn js_error(stage: &str, error: &CaughtError<'_>) -> anyhow::Error {
         anyhow!("{stage}: timed out")
     } else {
         anyhow!("{stage}: {text}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_flags_are_the_browsers_own_spellings() {
+        for flag in [
+            "--incognito",
+            "-inprivate",
+            "--InPrivate",
+            "--private-window",
+            "-private",
+            "--private",
+            "--incognito=1",
+            " --private-window=https://example.com ",
+        ] {
+            assert!(is_private_flag(flag), "{flag}");
+        }
+        for not in [
+            "incognito",
+            "--incognito-mode",
+            "--no-incognito",
+            "--new-window",
+            "https://example.com/?mode=--incognito",
+            "--private-tab",
+            "-",
+            "",
+        ] {
+            assert!(!is_private_flag(not), "{not}");
+        }
+    }
+
+    #[test]
+    fn privacy_tightens_one_way() {
+        assert_eq!(Privacy::Full.tighter(Privacy::Host), Privacy::Host);
+        assert_eq!(Privacy::Host.tighter(Privacy::Full), Privacy::Host);
+        assert_eq!(Privacy::Host.tighter(Privacy::None), Privacy::None);
+        assert_eq!(Privacy::None.tighter(Privacy::Full), Privacy::None);
+        assert_eq!(Privacy::default(), Privacy::Full);
     }
 }
