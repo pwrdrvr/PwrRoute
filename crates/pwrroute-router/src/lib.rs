@@ -8,6 +8,8 @@
 //!
 //! - [`Router`] runs the dispatch thread. The engine is single-threaded, so
 //!   the router builds its [`Resolver`] on that thread and never moves it.
+//!   A resolver that watches files catches up in [`Resolver::refresh`],
+//!   which runs before each link and when [`RouterHandle::refresh`] asks.
 //! - [`Launcher`] is the seam to the browser launcher. [`DryRunLauncher`]
 //!   records what would open and opens nothing.
 //! - [`DispatchRecord`] is one dispatch with its trace. The last

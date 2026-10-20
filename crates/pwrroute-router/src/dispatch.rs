@@ -36,6 +36,16 @@ pub const FALLBACK_BROWSER: &str = if cfg!(target_os = "macos") {
 /// `Send` (QuickJS is not).
 pub trait Resolver {
     fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved>;
+
+    /// Catches up with the files behind the resolver and says whether
+    /// anything is in charge. The router calls it before each resolve, for
+    /// its status, and when [`RouterHandle::refresh`] asks. `Err` is why no
+    /// config is in charge: the link then goes to the fallback browser with
+    /// that reason, and [`RouterStatus::config_error`] carries it. A resolver
+    /// built once from a file has nothing to do here.
+    fn refresh(&self) -> std::result::Result<(), String> {
+        Ok(())
+    }
 }
 
 /// A resolver's answer.
@@ -128,7 +138,8 @@ impl std::fmt::Debug for Options {
 /// What the router is running on, for status displays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouterStatus {
-    /// Why no config is loaded, when none is. Links then go to the fallback.
+    /// Why no config is in charge, when none is. Links then go to the
+    /// fallback.
     pub config_error: Option<String>,
     pub dry_run: bool,
 }
@@ -149,6 +160,7 @@ enum Command {
     Status {
         reply: mpsc::Sender<RouterStatus>,
     },
+    Refresh,
     Shutdown,
 }
 
@@ -297,6 +309,15 @@ impl RouterHandle {
         rx.recv().map_err(|_| RouterGone)
     }
 
+    /// Asks the resolver to catch up with its files now ([`Resolver::refresh`])
+    /// rather than at the next link, so [`status`] is current. Returns at
+    /// once; a file watcher calls it from its own thread.
+    ///
+    /// [`status`]: Self::status
+    pub fn refresh(&self) -> std::result::Result<(), RouterGone> {
+        self.send(Command::Refresh)
+    }
+
     /// Recent dispatches, newest first.
     pub fn recent(&self) -> Vec<DispatchRecord> {
         self.recent.snapshot()
@@ -406,9 +427,12 @@ impl Worker {
                 }
                 Command::Status { reply } => {
                     let _ = reply.send(RouterStatus {
-                        config_error: self.resolver.as_ref().err().cloned(),
+                        config_error: self.in_charge().err(),
                         dry_run: self.launcher.is_dry_run(),
                     });
+                }
+                Command::Refresh => {
+                    let _ = self.in_charge();
                 }
                 Command::Shutdown => break,
             }
@@ -470,14 +494,20 @@ impl Worker {
         record
     }
 
+    /// The resolver, caught up with its files; or why links go to the
+    /// fallback browser instead.
+    fn in_charge(&self) -> std::result::Result<&dyn Resolver, String> {
+        let resolver = self.resolver.as_ref().map_err(Clone::clone)?;
+        resolver.refresh()?;
+        Ok(resolver.as_ref())
+    }
+
     /// The browser for `url`, with every step that chose it.
     fn resolve(&self, url: &str, link: &Link, steps: &mut Vec<Step>) -> Browser {
-        let resolver = match &self.resolver {
+        let resolver = match self.in_charge() {
             Ok(resolver) => resolver,
             Err(reason) => {
-                steps.push(Step::Fallback {
-                    reason: reason.clone(),
-                });
+                steps.push(Step::Fallback { reason });
                 return self.fallback(url);
             }
         };
