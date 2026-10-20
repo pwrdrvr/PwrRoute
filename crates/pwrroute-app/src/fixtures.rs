@@ -289,29 +289,28 @@ pub fn rules_file() -> RulesFile {
         .expect("fixtures/rules.json is a valid rules.json")
 }
 
-/// The apps Test a link offers as the opener, the first being none.
-pub fn openers() -> Vec<Option<Opener>> {
-    let app = |badge, name, bundle_id| {
-        Some(Opener {
-            badge,
-            name,
-            bundle_id,
-        })
-    };
-    vec![
-        None,
-        app("Sl", "Slack", "com.tinyspeck.slackmacgap"),
-        app("Ml", "Mail", "com.apple.mail"),
-        app("Ca", "Calendar", "com.apple.iCal"),
-        app("Gh", "Ghostty", "com.mitchellh.ghostty"),
-    ]
+const fn app(badge: &'static str, name: &'static str, bundle_id: &'static str) -> Option<Opener> {
+    Some(Opener {
+        badge,
+        name,
+        bundle_id,
+    })
 }
+
+/// The apps Test a link offers as the opener, the first being none.
+pub const OPENERS: &[Option<Opener>] = &[
+    None,
+    app("Sl", "Slack", "com.tinyspeck.slackmacgap"),
+    app("Ml", "Mail", "com.apple.mail"),
+    app("Ca", "Calendar", "com.apple.iCal"),
+    app("Gh", "Ghostty", "com.mitchellh.ghostty"),
+];
 
 /// The link Test a link starts with, from Slack: two rewrites apply and
 /// handler 3 wins.
 pub const TEST_URL: &str = "https://x.com/pwrdrvr/status/1842?utm_source=slack&s=20";
 
-/// The index into [`openers`] Test a link starts with: Slack.
+/// The index into [`OPENERS`] Test a link starts with: Slack.
 pub const TEST_OPENER: usize = 1;
 
 /// How many links the router handled today, for the rail and strip.

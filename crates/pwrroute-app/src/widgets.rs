@@ -344,6 +344,28 @@ pub fn note(content: impl Into<SharedString>) -> Div {
 pub const NOT_OPENED: &str = "Not opened";
 pub const NOT_OPENED_BADGE: &str = "\u{2014}";
 
+/// One line of text that ends in an ellipsis when its box is too narrow.
+pub fn one_line(
+    content: impl Into<SharedString>,
+    family: &'static str,
+    css_weight: f32,
+    size: f32,
+    line_height: f32,
+    color: Hsla,
+) -> Div {
+    div()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .font_family(family)
+        .font_weight(theme::weight(css_weight))
+        .text_size(px(size))
+        .line_height(px(line_height))
+        .text_color(color)
+        .child(content.into())
+}
+
 /// The badge letters for a browser or app, as the design draws them.
 pub fn badge_for(name: &str) -> SharedString {
     const KNOWN: &[(&str, &str)] = &[
@@ -355,14 +377,27 @@ pub fn badge_for(name: &str) -> SharedString {
         ("figma", "Fg"),
         ("slack", "Sl"),
         ("edge", "Ed"),
+        ("edgemac", "Ed"),
         ("brave", "Br"),
         ("mail", "Ml"),
         ("ical", "Ca"),
         ("calendar", "Ca"),
         ("ghostty", "Gh"),
     ];
+    // Whole words (`Google Chrome`, `com.apple.Safari`), so a short key
+    // like "arc" does not match inside "Search" or "archiver". A long key
+    // also matches a word it starts (`firefoxdeveloperedition`).
     let lower = name.to_lowercase();
-    if let Some((_, label)) = KNOWN.iter().find(|(key, _)| lower.contains(key)) {
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let known = KNOWN.iter().find(|(key, _)| {
+        words
+            .iter()
+            .any(|word| word == key || (key.len() >= 5 && word.starts_with(key)))
+    });
+    if let Some((_, label)) = known {
         return (*label).into();
     }
     let last = name.rsplit('.').next().unwrap_or(name);
@@ -370,4 +405,23 @@ pub fn badge_for(name: &str) -> SharedString {
     let first = letters.next().map(|c| c.to_ascii_uppercase());
     let second = letters.next().map(|c| c.to_ascii_lowercase());
     first.into_iter().chain(second).collect::<String>().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::badge_for;
+
+    #[test]
+    fn badges_match_whole_words() {
+        assert_eq!(badge_for("Google Chrome"), "Ch");
+        assert_eq!(badge_for("com.apple.Safari"), "Sf");
+        assert_eq!(badge_for("Arc"), "Ar");
+        assert_eq!(badge_for("us.zoom.xos"), "Zm");
+        assert_eq!(badge_for("com.microsoft.edgemac"), "Ed");
+        assert_eq!(badge_for("Firefox Developer Edition"), "Ff");
+        // "arc" inside another word is not Arc.
+        assert_eq!(badge_for("Search Browser"), "Se");
+        assert_eq!(badge_for("com.example.archiver"), "Ar");
+        assert_eq!(badge_for("Searchlight"), "Se");
+    }
 }

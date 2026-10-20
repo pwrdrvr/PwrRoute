@@ -9,7 +9,7 @@
 use std::{
     path::PathBuf,
     rc::Rc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use gpui_kit::prelude::FluentBuilder as _;
@@ -20,7 +20,7 @@ use gpui_kit::{
 };
 use pwrroute_engine::{DefaultHost, Engine, Limits, Link, RulesFile, Sources, Trace};
 
-use crate::app::PwrRoute;
+use crate::app::{PwrRoute, Selection};
 use crate::fixtures::{self, Opener};
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
@@ -41,7 +41,7 @@ struct Run {
 /// The screen's state.
 pub struct TestLink {
     pub url: TextField,
-    /// Index into [`fixtures::openers`].
+    /// Index into [`fixtures::OPENERS`].
     pub opener: usize,
     /// The opener menu is open.
     pub picking: bool,
@@ -59,6 +59,9 @@ pub struct TestLink {
     /// not kept, so the next test tries again (after the config is fixed,
     /// say).
     engine: Option<Engine>,
+    /// The engine's files and when each last changed, as it was built: a
+    /// test after any of them changes builds it again.
+    loaded: Vec<(PathBuf, Option<SystemTime>)>,
     run: Option<Run>,
     /// The trace of the last run, or why it failed.
     pub outcome: Option<Result<TraceView, String>>,
@@ -84,6 +87,7 @@ impl TestLink {
             copied: false,
             config,
             rules,
+            loaded: engine.as_ref().map(stamps).unwrap_or_default(),
             engine,
             run: None,
             outcome: None,
@@ -91,13 +95,15 @@ impl TestLink {
     }
 
     pub fn opener(&self) -> Option<Opener> {
-        fixtures::openers().get(self.opener).copied().flatten()
+        fixtures::OPENERS.get(self.opener).copied().flatten()
     }
 
     /// Resolves the field's URL and records the trace.
     pub fn run(&mut self) {
         self.copied = false;
         self.picking = false;
+        // Each test starts folded, as the design draws it.
+        self.unfold = false;
         let url = match pwrroute_router::normalize_url(&self.url.text) {
             Ok(url) => url,
             Err(error) => {
@@ -107,13 +113,19 @@ impl TestLink {
             }
         };
         let opener = self.opener();
+        if self.loaded.iter().any(|(path, at)| modified(path) != *at) {
+            self.engine = None;
+        }
         if self.engine.is_none() {
             let sources = Sources {
                 config: self.config.clone(),
                 rules: self.rules.clone(),
             };
             match Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default()) {
-                Ok(engine) => self.engine = Some(engine),
+                Ok(engine) => {
+                    self.loaded = stamps(&engine);
+                    self.engine = Some(engine);
+                }
                 Err(error) => {
                     self.run = None;
                     self.outcome = Some(Err(format!("The rules did not load: {error:#}")));
@@ -159,6 +171,24 @@ impl TestLink {
         }
     }
 
+    /// A visual rule was switched on or off: test against the change.
+    /// With a config in charge the visual rules are not loaded, so nothing
+    /// changes.
+    pub fn set_enabled(&mut self, rule: Selection, enabled: bool) {
+        let slot = match rule {
+            Selection::Rewrite(i) => self.rules.rewrites.get_mut(i).map(|r| &mut r.enabled),
+            Selection::Handler(i) => self.rules.rules.get_mut(i).map(|r| &mut r.enabled),
+        };
+        if let Some(slot) = slot.filter(|slot| **slot != enabled) {
+            *slot = enabled;
+            // Rebuild on the next test, and run it again when the screen
+            // opens.
+            self.engine = None;
+            self.run = None;
+            self.outcome = None;
+        }
+    }
+
     pub fn set_unfold(&mut self, unfold: bool) {
         self.unfold = unfold;
         self.redraw();
@@ -168,6 +198,23 @@ impl TestLink {
     pub fn has_run(&self) -> bool {
         self.outcome.is_some()
     }
+}
+
+/// The engine's files and when each last changed.
+fn stamps(engine: &Engine) -> Vec<(PathBuf, Option<SystemTime>)> {
+    engine
+        .dependencies()
+        .into_iter()
+        .map(|path| {
+            let at = modified(&path);
+            (path, at)
+        })
+        .collect()
+}
+
+/// When a file last changed, if it can be read.
+fn modified(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// The step circle's colors: background, border, text.
@@ -387,7 +434,7 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
             None => div().child(text("no app", 12.5, 400.0, theme::text_subtle())),
         }
     };
-    let menu = fixtures::openers().into_iter().enumerate().fold(
+    let menu = fixtures::OPENERS.iter().copied().enumerate().fold(
         div()
             .id("test-opener-menu")
             .occlude()

@@ -48,7 +48,8 @@ pub struct Step {
     /// The JS config or `rules.json`.
     pub source: Source,
     /// The position in its source's `rewrite` or `handlers` list (or the
-    /// rules file's `rewrites` or `rules`). Always 0 for the default.
+    /// rules file's `rewrites` or `rules`, counting disabled entries). Always
+    /// 0 for the default.
     pub index: usize,
     /// The step's `match`, described. Empty for the default.
     pub matchers: Vec<Matcher>,

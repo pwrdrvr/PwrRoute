@@ -152,6 +152,8 @@ impl PwrRoute {
         };
         if let Some(rule) = rule {
             rule.enabled = !rule.enabled;
+            let enabled = rule.enabled;
+            self.test.set_enabled(self.selection, enabled);
             cx.notify();
         }
     }

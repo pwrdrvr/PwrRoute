@@ -229,6 +229,59 @@ fn activity_expands_filters_and_retests(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn switching_a_rule_off_changes_test_a_link(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    // Rewrite 1 (X to xcancel) off, from its editor.
+    cx.simulate_keystrokes("up up up up up");
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Selection::Rewrite(0)
+    );
+    click(cx, "handler-enabled");
+    click(cx, "nav-test");
+    let off = trace(&view, cx);
+    assert_eq!(off.result.url, "https://x.com/pwrdrvr/status/1842?s=20");
+    assert!(titles(&off).contains(&"Rewrite 2"));
+
+    // Show each is for one trace: the next test folds again.
+    click(cx, "trace-show-each");
+    assert!(titles(&trace(&view, cx)).contains(&"Handler 2"));
+    click(cx, "test-run");
+    assert!(titles(&trace(&view, cx)).contains(&"Handlers 1 and 2"));
+}
+
+#[gpui_kit::test]
+fn test_a_link_reloads_a_changed_config(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("pwrroute-app-reload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a temp dir");
+    let config = dir.join("finicky.js");
+    let write = |browser: &str| {
+        std::fs::write(
+            &config,
+            format!("module.exports = {{ defaultBrowser: \"{browser}\", handlers: [] }};\n"),
+        )
+        .expect("write the config");
+    };
+    write("Firefox");
+    let (view, cx) = open_with(cx, Some(config.clone()));
+    click(cx, "nav-test");
+    assert_eq!(trace(&view, cx).result.title, "Firefox");
+
+    // A later modification time, as an edit gives it.
+    write("Safari");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&config)
+        .and_then(|file| file.set_modified(later))
+        .expect("touch the config");
+    click(cx, "test-run");
+    assert_eq!(trace(&view, cx).result.title, "Safari");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
 fn a_finicky_config_in_charge_is_read_only(cx: &mut TestAppContext) {
     let config = fixture_home().join(".finicky.ts");
     let (view, cx) = open_with(cx, Some(config));

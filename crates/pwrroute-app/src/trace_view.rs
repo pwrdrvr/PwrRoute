@@ -123,6 +123,8 @@ impl TraceView {
                 mark: UrlMark::Same,
             }])],
         }];
+        // A rule that throws stops the handlers; the default follows.
+        let threw = trace.steps.iter().any(|s| s.error.is_some());
         let mut misses: Vec<&Step> = Vec::new();
         for step in &trace.steps {
             if step.stage == Stage::Handler && !step.matched && step.error.is_none() && !unfold {
@@ -135,7 +137,7 @@ impl TraceView {
                 continue;
             }
             flush_misses(&mut steps, &mut misses);
-            steps.push(engine_step(step, rules, opener, steps.len()));
+            steps.push(engine_step(step, rules, opener, threw, steps.len()));
         }
         flush_misses(&mut steps, &mut misses);
 
@@ -259,6 +261,7 @@ fn engine_step(
     step: &Step,
     rules: &RulesFile,
     opener: Option<&Opener>,
+    threw: bool,
     number: usize,
 ) -> TraceStep {
     let patterns = || {
@@ -377,8 +380,19 @@ fn engine_step(
             number: Some(number),
             state: StepState::Hit,
             title,
-            detail: "no handler matched".into(),
-            body: vec![StepBody::Text("The default browser opens it.".into())],
+            detail: if threw {
+                "a rule threw".into()
+            } else {
+                "no handler matched".into()
+            },
+            body: vec![StepBody::Text(
+                if threw {
+                    "Finicky stops at the error and the default browser opens it."
+                } else {
+                    "The default browser opens it."
+                }
+                .into(),
+            )],
         },
     }
 }
@@ -575,6 +589,38 @@ mod tests {
             won: false,
             error: None,
         }
+    }
+
+    #[test]
+    fn the_default_after_a_thrown_rule_says_so() {
+        let trace: Trace = serde_json::from_value(serde_json::json!({
+            "url": "https://a.example/",
+            "originalUrl": "https://a.example/",
+            "steps": [],
+            "resolution": {"browser": {
+                "name": "Safari", "appType": "appName", "url": "https://a.example/"
+            }},
+        }))
+        .expect("a trace");
+        let thrown = Step {
+            error: Some("TypeError: boom".into()),
+            ..miss(Source::Config, 0)
+        };
+        let default = Step {
+            stage: Stage::Default,
+            matchers: Vec::new(),
+            won: true,
+            ..miss(Source::Config, 0)
+        };
+        let trace = Trace {
+            steps: vec![thrown, default],
+            ..trace
+        };
+        let view =
+            TraceView::from_engine(&trace, &RulesFile::default(), None, Duration::ZERO, false);
+        let fallback = &view.steps[2];
+        assert_eq!(fallback.title, "Everything else");
+        assert_eq!(fallback.detail, "a rule threw");
     }
 
     #[test]

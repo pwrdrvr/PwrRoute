@@ -249,14 +249,11 @@ impl RulesFile {
     /// pattern or no browser is skipped. Disabled rules are skipped too.
     pub(crate) fn plan(&self) -> Value {
         let handlers: Vec<Value> = self
-            .rules
-            .iter()
-            .filter(|r| r.enabled)
-            .filter_map(|r| {
+            .planned_rules()
+            .into_iter()
+            .filter_map(|i| {
+                let r = &self.rules[i];
                 let matches = non_empty(&r.patterns)?;
-                if r.browser.is_empty() {
-                    return None;
-                }
                 let browser = if r.profile.is_empty() {
                     json!(r.browser)
                 } else {
@@ -270,15 +267,38 @@ impl RulesFile {
             })
             .collect();
         let rewrites: Vec<Value> = self
-            .rewrites
-            .iter()
-            .filter(|r| r.enabled && !r.actions.is_empty())
-            .filter_map(|r| {
+            .planned_rewrites()
+            .into_iter()
+            .filter_map(|i| {
+                let r = &self.rewrites[i];
                 let matches = non_empty(&r.patterns)?;
                 Some(json!({ "match": matches, "actions": r.actions }))
             })
             .collect();
         json!({ "handlers": handlers, "rewrites": rewrites })
+    }
+
+    /// Which of `rules` the plan keeps, by position in the file: enabled,
+    /// with a pattern and a browser. The engine reports a rule by its plan
+    /// position; this maps it back.
+    pub(crate) fn planned_rules(&self) -> Vec<usize> {
+        self.rules
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.enabled && !r.browser.is_empty() && non_empty(&r.patterns).is_some())
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Which of `rewrites` the plan keeps: enabled, with a pattern and an
+    /// action.
+    pub(crate) fn planned_rewrites(&self) -> Vec<usize> {
+        self.rewrites
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.enabled && !r.actions.is_empty() && non_empty(&r.patterns).is_some())
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// The config a `rules.json` makes on its own, as the Go host's
