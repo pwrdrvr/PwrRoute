@@ -16,7 +16,7 @@ use pwrroute_engine::{
 };
 
 use crate::app::PwrRoute;
-use crate::fixtures::{Destination, Matcher, Rule};
+use crate::rules_model::{Change, Destination, Matcher, Rule};
 use crate::rules_view::{
     RowState, card, card_header_with, card_title, pane_frame, rule_row, visual_cards,
 };
@@ -85,10 +85,10 @@ impl ConfigInCharge {
                 .iter()
                 .map(|rewrite| {
                     let destination = match &rewrite.url {
-                        UrlSpec::Url(url) => Destination::Rewrite {
+                        UrlSpec::Url(url) => Destination::Rewrite(vec![Change {
                             kind: "url",
                             value: url.clone().into(),
-                        },
+                        }]),
                         UrlSpec::Function(function) => Destination::Function(source(function)),
                     };
                     row(&rewrite.matchers, destination)
@@ -132,12 +132,7 @@ impl ConfigInCharge {
 }
 
 fn row(matchers: &[MatcherSpec], destination: Destination) -> Rule {
-    Rule {
-        matchers: matchers.iter().map(matcher).collect(),
-        destination,
-        hits: "",
-        enabled: true,
-    }
+    Rule::plain(matchers.iter().map(matcher).collect(), destination)
 }
 
 fn matcher(spec: &MatcherSpec) -> Matcher {
@@ -324,12 +319,7 @@ pub fn pane(
         rule_row(
             "config-default",
             "",
-            &Rule {
-                matchers: Vec::new(),
-                destination: browser.clone(),
-                hits: "",
-                enabled: true,
-            },
+            &Rule::plain(Vec::new(), browser.clone()),
             read_only(true),
             Some(div().flex_1().min_w_0().child(text(
                 "defaultBrowser",

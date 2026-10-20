@@ -2,9 +2,10 @@
 //! trace of how the rules resolve it. Nothing is opened.
 //!
 //! The window runs its own [`Engine`]: over the Finicky config when one is
-//! in charge, exactly as the router loads it, and otherwise over the rules
-//! the Rules screen shows (`fixtures/rules.json`). It is built on the first
-//! test and lives on the UI thread; QuickJS runtimes are not `Send`.
+//! in charge, exactly as the router loads it, and otherwise over the
+//! `rules.json` the Rules screen edits, as the file stands once every
+//! saveable edit is written (`RulesStore::written`). It is built on the
+//! first test and lives on the UI thread; QuickJS runtimes are not `Send`.
 
 use std::{
     path::PathBuf,
@@ -20,7 +21,7 @@ use gpui_kit::{
 };
 use pwrroute_engine::{DefaultHost, Engine, Limits, Link, RulesFile, Sources, Trace};
 
-use crate::app::{PwrRoute, Selection};
+use crate::app::PwrRoute;
 use crate::fixtures::{self, Opener};
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
@@ -70,13 +71,19 @@ pub struct TestLink {
 impl TestLink {
     /// `config` is the Finicky config in charge, if any, and `engine` the
     /// engine the window already loaded it in (config alone, as here).
-    pub fn new(config: Option<PathBuf>, engine: Option<Engine>, cx: &mut App) -> Self {
+    /// `rules` is the visual rules file as the router reads it.
+    pub fn new(
+        config: Option<PathBuf>,
+        engine: Option<Engine>,
+        rules: RulesFile,
+        cx: &mut App,
+    ) -> Self {
         // The router does not read `rules.json` yet; with a config in charge
         // it routes by the config alone, and so does this.
         let rules = if config.is_some() {
             RulesFile::default()
         } else {
-            fixtures::rules_file()
+            rules
         };
         Self {
             url: TextField::new(fixtures::TEST_URL, cx),
@@ -113,6 +120,36 @@ impl TestLink {
             }
         };
         let opener = self.opener();
+        let engine_opener = opener.map(|app| pwrroute_engine::Opener {
+            name: app.name.into(),
+            bundle_id: app.bundle_id.into(),
+            ..pwrroute_engine::Opener::default()
+        });
+        let started = Instant::now();
+        match self.trace(&url, engine_opener.as_ref()) {
+            Ok(trace) => {
+                self.run = Some(Run {
+                    trace,
+                    opener,
+                    took: started.elapsed(),
+                });
+                self.redraw();
+            }
+            Err(error) => {
+                self.run = None;
+                self.outcome = Some(Err(error));
+            }
+        }
+    }
+
+    /// Resolves a normalized URL as from `opener`, building the engine
+    /// first when it is missing or its files changed. The editor's Try it
+    /// uses this too; the screen's own run is left alone.
+    pub fn trace(
+        &mut self,
+        url: &str,
+        opener: Option<&pwrroute_engine::Opener>,
+    ) -> Result<Trace, String> {
         if self.loaded.iter().any(|(path, at)| modified(path) != *at) {
             self.engine = None;
         }
@@ -126,36 +163,15 @@ impl TestLink {
                     self.loaded = stamps(&engine);
                     self.engine = Some(engine);
                 }
-                Err(error) => {
-                    self.run = None;
-                    self.outcome = Some(Err(format!("The rules did not load: {error:#}")));
-                    return;
-                }
+                Err(error) => return Err(format!("The rules did not load: {error:#}")),
             }
         }
         let Some(engine) = &self.engine else {
-            return;
+            return Err("The rules did not load.".into());
         };
-        let engine_opener = opener.map(|app| pwrroute_engine::Opener {
-            name: app.name.into(),
-            bundle_id: app.bundle_id.into(),
-            ..pwrroute_engine::Opener::default()
-        });
-        let started = Instant::now();
-        match engine.trace(&Link::new(url), engine_opener.as_ref()) {
-            Ok(trace) => {
-                self.run = Some(Run {
-                    trace,
-                    opener,
-                    took: started.elapsed(),
-                });
-                self.redraw();
-            }
-            Err(error) => {
-                self.run = None;
-                self.outcome = Some(Err(format!("The rules failed: {error:#}")));
-            }
-        }
+        engine
+            .trace(&Link::new(url), opener)
+            .map_err(|error| format!("The rules failed: {error:#}"))
     }
 
     /// Rebuilds the view of the last run, as after folding or unfolding.
@@ -171,22 +187,23 @@ impl TestLink {
         }
     }
 
-    /// A visual rule was switched on or off: test against the change.
-    /// With a config in charge the visual rules are not loaded, so nothing
-    /// changes.
-    pub fn set_enabled(&mut self, rule: Selection, enabled: bool) {
-        let slot = match rule {
-            Selection::Rewrite(i) => self.rules.rewrites.get_mut(i).map(|r| &mut r.enabled),
-            Selection::Handler(i) => self.rules.rules.get_mut(i).map(|r| &mut r.enabled),
-        };
-        if let Some(slot) = slot.filter(|slot| **slot != enabled) {
-            *slot = enabled;
-            // Rebuild on the next test, and run it again when the screen
-            // opens.
-            self.engine = None;
-            self.run = None;
-            self.outcome = None;
+    /// The visual rules changed: test against the change. With a config in
+    /// charge the visual rules are not loaded, so nothing changes.
+    pub fn set_rules(&mut self, rules: RulesFile) {
+        if self.config.is_some() || self.rules == rules {
+            return;
         }
+        self.rules = rules;
+        // Rebuild on the next test, and run it again when the screen opens.
+        self.engine = None;
+        self.run = None;
+        self.outcome = None;
+    }
+
+    /// The rules the engine resolves with, as the router reads them.
+    #[cfg(test)]
+    pub fn rules(&self) -> &RulesFile {
+        &self.rules
     }
 
     pub fn set_unfold(&mut self, unfold: bool) {

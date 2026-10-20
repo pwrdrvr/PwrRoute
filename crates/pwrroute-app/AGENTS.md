@@ -4,11 +4,13 @@ The GPUI shell: the main window, the tray, the first-run window and the
 resident router's hand-off. `main.rs` only wires them; put new surfaces in
 their own modules.
 
-- **Fixtures only, except Activity.** The Rules screen, Settings and the
-  first-run window draw contrived data (`fixtures.rs`,
-  `FirstRunModel::fixture`). Never a real URL, Activity entry or trace, in
-  code or in a screenshot: `fixtures::activity()` and `TrayModel::fixture`
-  exist for tests and the `screens` example.
+- **Fixtures only for tests and the `screens` example.** The Rules screen
+  reads and writes the real `rules.json` through `rules_store.rs` (tests
+  write `fixtures/rules.json` to a scratch directory); Activity draws the
+  router's real records; first run is built from `onboarding.rs` facts.
+  The tray's pause state still draws contrived data (`TrayModel::fixture`).
+  Never a real URL, Activity entry or trace, in code or in a screenshot:
+  `fixtures::activity()` and `FirstRunModel::fixture` exist for tests.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.

@@ -1,17 +1,21 @@
 //! Smoke tests through gpui-kit's window harness: open the real view, draw
-//! frames, click, type and press keys. Test a link runs the real engine over
-//! the fixture rules (and the fixture Finicky config).
+//! frames, click, type and press keys. The window reads and writes a copy
+//! of the fixture `rules.json` in a scratch directory, and Test a link runs
+//! the real engine over it (and the fixture Finicky config).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px};
+use pwrroute_engine::RulesFile;
 use pwrroute_router::{
     DispatchId, DispatchRecord, DryRunLauncher, Link, Options, Outcome, Router, Source,
 };
 
 use crate::activity::{self, EMPTY_ID, Feed, Filter};
 use crate::app::{PwrRoute, ROOT_ID, Screen, Selection};
-use crate::fixtures::{self, Destination, Matcher};
+use crate::fixtures;
+use crate::rules_model::{Destination, Matcher, RowBadge};
+use crate::rules_store::RulesStore;
 use crate::trace_view::TraceView;
 
 /// The contrived home directory that holds `.finicky.ts` for option 1b.
@@ -19,21 +23,57 @@ fn fixture_home() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
 }
 
-fn open_with(
+/// A scratch directory of its own for each test's `rules.json`. Tests run
+/// in parallel, so the name alone is not enough.
+fn scratch(name: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("pwrroute-app-{name}-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a scratch dir");
+    dir
+}
+
+/// The fixture rules written to `dir`, and the store over them.
+fn fixture_store(dir: &Path) -> RulesStore {
+    let path = dir.join("rules.json");
+    crate::fixtures::rules_file()
+        .save(&path)
+        .expect("write the fixture rules");
+    RulesStore::load(Some(path))
+}
+
+fn open_store(
     cx: &mut TestAppContext,
     config: Option<PathBuf>,
+    store: RulesStore,
 ) -> (Entity<PwrRoute>, &mut VisualTestContext) {
     cx.update(|cx| crate::assets::load_fonts(cx));
     let (view, cx) =
-        cx.add_window_view(|_, cx| PwrRoute::with_config(config, Some(fixture_home()), cx));
+        cx.add_window_view(|_, cx| PwrRoute::with_store(config, Some(fixture_home()), store, cx));
     let focus = view.read_with(cx, |app, _| app.focus.clone());
     cx.update(|window, cx| window.focus(&focus, cx));
     draw(cx);
     (view, cx)
 }
 
+fn open_with(
+    cx: &mut TestAppContext,
+    config: Option<PathBuf>,
+) -> (Entity<PwrRoute>, &mut VisualTestContext) {
+    let dir = scratch("window");
+    open_store(cx, config, fixture_store(&dir))
+}
+
 fn open(cx: &mut TestAppContext) -> (Entity<PwrRoute>, &mut VisualTestContext) {
     open_with(cx, None)
+}
+
+/// The file as it stands, after any debounced save has run.
+fn saved(cx: &mut VisualTestContext, path: &Path) -> RulesFile {
+    cx.executor().advance_clock(crate::app::SAVE_DEBOUNCE);
+    cx.run_until_parked();
+    RulesFile::load(path).expect("read the rules back")
 }
 
 fn draw(cx: &mut VisualTestContext) {
@@ -88,21 +128,27 @@ fn the_window_draws_a_frame(cx: &mut TestAppContext) {
 fn arrow_keys_move_through_rewrites_and_handlers(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let selection = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.selection);
-    assert_eq!(selection(cx), Selection::Handler(2));
+    assert_eq!(selection(cx), Some(Selection::Handler(0)));
 
     cx.simulate_keystrokes("down down");
     draw(cx);
-    assert_eq!(selection(cx), Selection::Handler(4));
+    assert_eq!(selection(cx), Some(Selection::Handler(2)));
 
     // Up past the first handler into the rewrites, clamped at the top.
     cx.simulate_keystrokes("up up up up up up up up up up");
     draw(cx);
-    assert_eq!(selection(cx), Selection::Rewrite(0));
+    assert_eq!(selection(cx), Some(Selection::Rewrite(0)));
     assert!(cx.debug_bounds("editor-rail").is_some());
 
     // The rewrite editor's switch turns the rewrite off.
     click(cx, "handler-enabled");
     assert!(view.read_with(cx, |app, _| !app.rewrites[0].rule.enabled));
+
+    // Typing in a field does not move the selection.
+    click(cx, "pattern-0");
+    cx.simulate_keystrokes("down");
+    draw(cx);
+    assert_eq!(selection(cx), Some(Selection::Rewrite(0)));
 }
 
 #[gpui_kit::test]
@@ -354,15 +400,20 @@ fn links_routed_before_install_land_in_the_feed_once(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn switching_a_rule_off_changes_test_a_link(cx: &mut TestAppContext) {
-    let (view, cx) = open(cx);
+    let dir = scratch("switch-off");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
     // Rewrite 1 (X to xcancel) off, from its editor.
-    cx.simulate_keystrokes("up up up up up");
+    cx.simulate_keystrokes("up up up");
     draw(cx);
     assert_eq!(
         view.read_with(cx, |app, _| app.selection),
-        Selection::Rewrite(0)
+        Some(Selection::Rewrite(0))
     );
     click(cx, "handler-enabled");
+    // The switch is saved, after the debounce.
+    assert!(view.read_with(cx, |app, _| app.store.needs_save()));
+    assert!(!saved(cx, &dir.join("rules.json")).rewrites[0].enabled);
+    assert!(view.read_with(cx, |app, _| !app.store.needs_save()));
     click(cx, "nav-test");
     let off = trace(&view, cx);
     assert_eq!(off.result.url, "https://x.com/pwrdrvr/status/1842?s=20");
@@ -478,4 +529,201 @@ fn a_config_that_does_not_load_says_why(cx: &mut TestAppContext) {
     assert!(config.handlers.is_empty() && config.default_browser.is_none());
     // No Handlers card claiming the config has none.
     assert!(cx.debug_bounds("config-handlers").is_none());
+}
+
+#[gpui_kit::test]
+fn editing_a_handler_writes_the_file(cx: &mut TestAppContext) {
+    let dir = scratch("edit");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    // Handler 1's first pattern, retyped.
+    click(cx, "pattern-0");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("calendar.google.com/*");
+    draw(cx);
+    let handler = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.handlers[0].clone());
+    assert_eq!(
+        handler(cx).patterns,
+        ["calendar.google.com/*", "*.google.com/*"]
+    );
+    assert_eq!(handler(cx).title, "calendar.google.com/*");
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+    // The rail still has the field focused: the rows redrew around it.
+    assert!(cx.debug_bounds("pattern-0").is_some());
+    assert_eq!(
+        saved(cx, &path).rules[0].patterns,
+        ["calendar.google.com/*", "*.google.com/*"]
+    );
+    let label = view.read_with(cx, |app, _| app.store.status_label());
+    assert!(label.starts_with("saved "), "{label}");
+
+    // The profile, and the app the link must come from.
+    click(cx, "profile");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("Personal");
+    click(cx, "opener-add");
+    cx.simulate_input("com.apple.mail");
+    draw(cx);
+    let file = saved(cx, &path);
+    assert_eq!(file.rules[0].profile, "Personal");
+    assert_eq!(file.rules[0].opener, ["com.apple.mail"]);
+    // The row shows the app before the patterns.
+    assert!(matches!(handler(cx).rule.matchers[1], Matcher::App { .. }));
+
+    // Clearing the browser is a problem: the row says so, the file keeps
+    // the saved browser, and Test a link routes by the saved version.
+    click(cx, "browser");
+    cx.simulate_keystrokes("cmd-a backspace");
+    draw(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::NotSaved);
+    assert_eq!(handler(cx).problems, ["Select a browser."]);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.rail_label(Selection::Handler(0))),
+        "1 problem \u{00b7} not saved"
+    );
+    assert_eq!(saved(cx, &path).rules[0].browser, "Google Chrome");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.test.rules().rules[0].browser.clone()),
+        "Google Chrome"
+    );
+    cx.simulate_input("Firefox");
+    draw(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+    assert_eq!(saved(cx, &path).rules[0].browser, "Firefox");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
+    let dir = scratch("add");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "add-handler");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(7))
+    );
+    assert!(cx.debug_bounds("handler-7").is_some());
+    let handler = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.handlers[7].clone());
+    assert_eq!(handler(cx).rule.badge, RowBadge::Draft);
+    assert_eq!(handler(cx).rule.hits, "draft");
+    assert_eq!(handler(cx).title, "New handler");
+    // The new pattern field has the keyboard.
+    cx.simulate_input("notion.so/*");
+    draw(cx);
+    assert_eq!(handler(cx).patterns, ["notion.so/*"]);
+    assert_eq!(handler(cx).title, "notion.so/*");
+    // Not in the file yet: it has no browser.
+    assert_eq!(saved(cx, &path).rules.len(), 7);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.rail_label(Selection::Handler(7))),
+        "saves once it has a pattern and a browser"
+    );
+    // Try it says the draft would take its sample once it is complete.
+    click(cx, "browser");
+    cx.simulate_input("Firefox");
+    draw(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+    let result = view.read_with(cx, |app, _| app.rail.as_ref().unwrap().try_result.clone());
+    assert_eq!(
+        result,
+        Some(crate::try_it::TryResult::Text {
+            verdict: crate::try_it::Verdict::Takes,
+            message: "This handler opens that link in Firefox.".into(),
+            bold: None,
+        })
+    );
+    let file = saved(cx, &path);
+    assert_eq!(file.rules.len(), 8);
+    assert_eq!(file.rules[7].patterns, ["notion.so/*"]);
+    assert_eq!(file.rules[7].browser, "Firefox");
+
+    // A rewrite with a change of another kind.
+    click(cx, "add-rewrite");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Rewrite(3))
+    );
+    cx.simulate_input("http://*.corp/*");
+    click(cx, "change-add");
+    click(cx, "change-0-kind");
+    click(cx, "change-0-kind-1");
+    click(cx, "change-0");
+    cx.simulate_input("https");
+    draw(cx);
+    let file = saved(cx, &path);
+    assert_eq!(file.rewrites.len(), 4);
+    assert_eq!(
+        file.rewrites[3].actions,
+        [pwrroute_engine::RewriteAction::SetScheme("https".into())]
+    );
+
+    // Delete takes the rewrite out of the file; the row that takes its
+    // place is selected.
+    click(cx, "rail-delete");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Rewrite(2))
+    );
+    assert_eq!(saved(cx, &path).rewrites.len(), 3);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn with_nothing_to_route_by_the_pane_offers_a_first_handler(cx: &mut TestAppContext) {
+    let dir = scratch("blank");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    assert!(view.read_with(cx, |app, _| app.nothing_to_route_by()));
+    assert!(cx.debug_bounds("rules-blank").is_some());
+    assert!(cx.debug_bounds("editor-rail").is_none());
+    assert!(cx.debug_bounds("handler-0").is_none());
+
+    click(cx, "blank-add-handler");
+    assert!(cx.debug_bounds("rules-blank").is_none());
+    assert!(cx.debug_bounds("editor-rail").is_some());
+    assert!(cx.debug_bounds("handler-0").is_some());
+    // The rewrites card is empty, with its own Add.
+    assert!(cx.debug_bounds("empty-add-rewrite").is_some());
+    // A draft is nothing to save; the file is written, empty, once the
+    // debounce runs.
+    assert!(saved(cx, &path).rules.is_empty());
+    assert!(path.is_file());
+
+    // Discarding the draft leaves two empty cards, not the blank: the file
+    // exists now.
+    click(cx, "rail-delete");
+    assert!(cx.debug_bounds("rules-blank").is_none());
+    assert!(cx.debug_bounds("empty-add-handler").is_some());
+    assert_eq!(view.read_with(cx, |app, _| app.selection), None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_file_with_only_a_default_shows_empty_cards(cx: &mut TestAppContext) {
+    let dir = scratch("default-only");
+    let path = dir.join("rules.json");
+    RulesFile {
+        default_browser: "Firefox".into(),
+        ..RulesFile::default()
+    }
+    .save(&path)
+    .unwrap();
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    assert!(!view.read_with(cx, |app, _| app.nothing_to_route_by()));
+    assert!(cx.debug_bounds("empty-add-rewrite").is_some());
+    assert!(cx.debug_bounds("empty-add-handler").is_some());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.default_browser().1),
+        "Firefox"
+    );
+    click(cx, "empty-add-rewrite");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Rewrite(0))
+    );
+    // Test a link resolves this file: everything goes to Firefox.
+    click(cx, "nav-test");
+    assert_eq!(trace(&view, cx).result.title, "Firefox");
+    let _ = std::fs::remove_dir_all(dir);
 }

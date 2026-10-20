@@ -1,26 +1,128 @@
 //! The right rail: the editor for the selected rewrite or handler.
 //!
-//! Display only for now. The fields are drawn as the design shows them; the
-//! enabled switch is the one control wired to state. The design draws the
-//! handler editor (1a); the rewrite editor follows its patterns, with the
-//! action where a handler has its browser.
+//! Every field writes to the store as it is typed (`PwrRoute::rail_key`),
+//! and the store writes the file after a short debounce. The design draws
+//! the handler editor (Rule Editing 1a) and the rewrite editor (2a); a draft
+//! has a chip where a saved rule has its switch, and a rule with problems
+//! shows them under the fields they belong to (5a, 5b).
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Context, Div, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, StyledText, div, px,
+    AnyElement, App, Context, Div, ElementId, HighlightStyle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Window, deferred, div, px,
 };
 
 use crate::app::{PwrRoute, Selection};
-use crate::fixtures::{Destination, Handler, Rewrite, Rule};
+use crate::rules_model::{Destination, Handler, KINDS, Rewrite, RowBadge, Rule, kind_of};
+use crate::rules_view::{ChipTone, chip_in};
+use crate::text_field::TextField;
 use crate::theme::{self, mono, text, tracked};
 use crate::trace_view::{UrlMark, url_diff};
-use crate::widgets::{
-    ButtonKind, badge, button, caret, focus_ring, input_box, switch, tag, tag_frame,
-};
+use crate::try_it::{TryResult, Verdict, sample_url};
+use crate::widgets::{ButtonKind, badge, button, caret, focus_ring, input_box, switch};
 
 /// The rail's width.
 pub const WIDTH: f32 = 372.0;
+
+/// One of the rail's text fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    Pattern(usize),
+    /// An app the handler requires the link to come from.
+    Opener(usize),
+    Browser,
+    Profile,
+    /// The value of a rewrite's change.
+    Value(usize),
+    /// Try it's link.
+    Sample,
+}
+
+/// The editor's fields for the selected rule. Built when the selection
+/// changes; kept while typing, so the focus stays where it is.
+pub struct Rail {
+    pub patterns: Vec<TextField>,
+    pub openers: Vec<TextField>,
+    pub browser: TextField,
+    pub profile: TextField,
+    pub values: Vec<TextField>,
+    pub sample: TextField,
+    /// The sample was typed: it no longer follows the first pattern.
+    pub sample_edited: bool,
+    /// Which change's kind menu is open.
+    pub picking_kind: Option<usize>,
+    /// The menu that was open when a kind box was pressed; see
+    /// `test_link`'s opener picker.
+    was_picking: Option<usize>,
+    pub try_result: Option<TryResult>,
+}
+
+impl Rail {
+    pub fn for_handler(handler: &Handler, cx: &mut App) -> Self {
+        Self {
+            patterns: fields(&handler.patterns, cx),
+            openers: fields(&handler.openers, cx),
+            browser: TextField::new(handler.browser.clone(), cx),
+            profile: TextField::new(handler.profile.clone(), cx),
+            values: Vec::new(),
+            sample: TextField::new(sample_url(&handler.patterns), cx),
+            sample_edited: false,
+            picking_kind: None,
+            was_picking: None,
+            try_result: None,
+        }
+    }
+
+    pub fn for_rewrite(rewrite: &Rewrite, cx: &mut App) -> Self {
+        let values: Vec<String> = rewrite
+            .actions
+            .iter()
+            .map(crate::rules_model::value_of)
+            .collect();
+        Self {
+            patterns: fields(&rewrite.patterns, cx),
+            openers: Vec::new(),
+            browser: TextField::new("", cx),
+            profile: TextField::new("", cx),
+            values: fields(&values, cx),
+            sample: TextField::new(sample_url(&rewrite.patterns), cx),
+            sample_edited: false,
+            picking_kind: None,
+            was_picking: None,
+            try_result: None,
+        }
+    }
+
+    pub fn field_mut(&mut self, field: Field) -> Option<&mut TextField> {
+        match field {
+            Field::Pattern(i) => self.patterns.get_mut(i),
+            Field::Opener(i) => self.openers.get_mut(i),
+            Field::Browser => Some(&mut self.browser),
+            Field::Profile => Some(&mut self.profile),
+            Field::Value(i) => self.values.get_mut(i),
+            Field::Sample => Some(&mut self.sample),
+        }
+    }
+
+    fn field(&self, field: Field) -> Option<&TextField> {
+        match field {
+            Field::Pattern(i) => self.patterns.get(i),
+            Field::Opener(i) => self.openers.get(i),
+            Field::Browser => Some(&self.browser),
+            Field::Profile => Some(&self.profile),
+            Field::Value(i) => self.values.get(i),
+            Field::Sample => Some(&self.sample),
+        }
+    }
+}
+
+fn fields(texts: &[String], cx: &mut App) -> Vec<TextField> {
+    texts
+        .iter()
+        .map(|text| TextField::new(text.clone(), cx))
+        .collect()
+}
 
 /// `.rs`: one section of the rail.
 fn section() -> Div {
@@ -58,12 +160,78 @@ fn labeled_row(content: &'static str, control: impl IntoElement) -> Div {
 }
 
 /// A wrapping paragraph of subtle help text.
-fn paragraph(content: &'static str, size: f32, line_height: f32) -> Div {
+fn paragraph(content: impl Into<SharedString>, size: f32, line_height: f32) -> Div {
     crate::widgets::paragraph(content, size, line_height, theme::text_subtle())
 }
 
-/// The rail's head: which rule of how many, its title and its switch.
-fn header(eyebrow: &str, title: &'static str, rule: &Rule, cx: &mut Context<'_, PwrRoute>) -> Div {
+/// `.err-t`: a problem under the field it belongs to.
+fn problem(message: &str) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .gap(px(6.0))
+        .child(
+            div()
+                .flex_none()
+                .size(px(14.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::danger_soft())
+                .child(mono("!", 9.0, 700.0, theme::danger_text())),
+        )
+        .child(crate::widgets::paragraph(
+            message.to_owned(),
+            10.5,
+            15.2,
+            theme::danger_text(),
+        ))
+}
+
+/// Where a problem's message belongs in the rail, by its words.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Under {
+    Patterns,
+    Openers,
+    Browser,
+    Changes,
+}
+
+fn under(message: &str) -> Under {
+    if message.contains("pattern") {
+        Under::Patterns
+    } else if message.contains("App names") {
+        Under::Openers
+    } else if message.contains("browser") || message.contains("PwrRoute") {
+        Under::Browser
+    } else {
+        Under::Changes
+    }
+}
+
+fn problems_under(problems: &[String], place: Under) -> Vec<Div> {
+    problems
+        .iter()
+        .filter(|m| under(m) == place)
+        .map(|m| problem(m))
+        .collect()
+}
+
+/// The rail's head: which rule of how many, its title, and its switch (or
+/// its draft chip).
+fn header(eyebrow: &str, title: SharedString, rule: &Rule, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let state: AnyElement = if rule.badge == RowBadge::Draft {
+        chip_in("draft", ChipTone::Accent).into_any_element()
+    } else {
+        div()
+            .id("handler-enabled")
+            .debug_selector(|| "handler-enabled".into())
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_selected(cx)))
+            .child(switch(rule.enabled))
+            .into_any_element()
+    };
     section()
         .flex_row()
         .items_center()
@@ -76,39 +244,149 @@ fn header(eyebrow: &str, title: &'static str, rule: &Rule, cx: &mut Context<'_, 
                 .flex_col()
                 .child(tracked(eyebrow, 9.5, 600.0, 0.14, theme::text_muted()))
                 .child(
-                    text(title, 15.0, 700.0, theme::text_primary())
-                        .mt(px(6.0))
-                        .line_height(px(18.0)),
+                    crate::widgets::one_line(
+                        title,
+                        theme::SANS,
+                        700.0,
+                        15.0,
+                        18.0,
+                        theme::text_primary(),
+                    )
+                    .mt(px(6.0)),
                 ),
         )
-        .child(
-            div()
-                .id("handler-enabled")
-                .debug_selector(|| "handler-enabled".into())
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_selected(cx)))
-                .child(switch(rule.enabled)),
-        )
+        .child(state)
 }
 
-/// `.plist` and `.addp`: the URL patterns and the way to add one.
-fn pattern_list(patterns: &[&'static str]) -> [Div; 2] {
-    let list = patterns
-        .iter()
-        .fold(div().flex().flex_col().gap(px(5.0)), |list, pattern| {
-            list.child(
-                input_box()
-                    .pr(px(6.0))
-                    .child(mono(*pattern, 12.0, 500.0, theme::text_primary()))
-                    .child(div().ml_auto().child(mono(
-                        "\u{00d7}",
-                        11.0,
-                        500.0,
-                        theme::text_subtle(),
-                    ))),
-            )
-        });
-    let add = div()
+/// How a field draws its text.
+#[derive(Clone, Copy)]
+struct Look {
+    mono: bool,
+    placeholder: &'static str,
+    /// `.inp.err`: the field has a problem.
+    error: bool,
+}
+
+/// `.inp` for one of the rail's fields: its text, a caret while focused and
+/// the focus ring; typing goes to `PwrRoute::rail_key`. Trailing content (a
+/// × to remove the field) goes in `trailing`. The same shape as
+/// `text_field::field`, with an id per field.
+fn editable(
+    rail: &Rail,
+    field: Field,
+    selector: String,
+    look: Look,
+    trailing: Option<Div>,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Stateful<Div> {
+    let Some(text_field) = rail.field(field) else {
+        return div().id(ElementId::Name(selector.into()));
+    };
+    let focused = text_field.focus.is_focused(window);
+    let (family, weight, size) = if look.mono {
+        (theme::mono_family(500.0), 500.0, 12.0)
+    } else {
+        (theme::SANS, 400.0, 12.5)
+    };
+    let content = if text_field.text.is_empty() {
+        div()
+            .text_color(theme::text_subtle())
+            .child(look.placeholder)
+    } else {
+        div()
+            .text_color(theme::text_primary())
+            .when(text_field.selected, |text| text.bg(theme::accent_soft()))
+            .child(text_field.shared())
+    };
+    let content = content
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .map(|text| {
+            if focused {
+                text.text_ellipsis_start()
+            } else {
+                text.text_ellipsis()
+            }
+        })
+        .font_family(family)
+        .font_weight(theme::weight(weight))
+        .text_size(px(size))
+        .line_height(px(size));
+    let caret_bar = || div().flex_none().w(px(1.0)).h(px(14.0)).bg(theme::accent());
+    let mut inner = input_box().w_full().gap(px(8.0)).when(look.error, |input| {
+        input.border_color(theme::status_error())
+    });
+    if text_field.text.is_empty() && focused {
+        inner = inner.child(caret_bar());
+    }
+    inner = inner.child(content);
+    if !text_field.text.is_empty() && focused && !text_field.selected {
+        inner = inner.child(caret_bar().ml(px(-8.0)));
+    }
+    inner = inner.when_some(trailing, |input, trailing| {
+        input.pr(px(6.0)).child(div().ml_auto().child(trailing))
+    });
+    let boxed = if focused { focus_ring(inner) } else { inner };
+    let focus = text_field.focus.clone();
+    let id: SharedString = selector.into();
+    div()
+        .id(ElementId::Name(id.clone()))
+        .debug_selector(move || id.to_string())
+        .track_focus(&focus)
+        .w_full()
+        .min_w_0()
+        .cursor_text()
+        .child(boxed)
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            if this.rail_key(field, event, cx) {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        }))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            if let Some(focus) = this
+                .rail
+                .as_ref()
+                .and_then(|rail| rail.field(field))
+                .map(|f| f.focus.clone())
+            {
+                window.focus(&focus, cx);
+                cx.notify();
+            }
+        }))
+}
+
+/// `.inp .x`: removes the field it sits in.
+fn remove_button(
+    selector: String,
+    on_click: impl Fn(&mut PwrRoute, &mut Window, &mut Context<'_, PwrRoute>) + 'static,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let id: SharedString = selector.into();
+    div().child(
+        div()
+            .id(ElementId::Name(id.clone()))
+            .debug_selector(move || id.to_string())
+            .cursor_pointer()
+            .px(px(2.0))
+            .child(mono("\u{00d7}", 11.0, 500.0, theme::text_subtle()))
+            .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx))),
+    )
+}
+
+/// `.addp`: the dashed way to add a pattern, an app or a change.
+fn add_button(
+    id: &'static str,
+    label: &'static str,
+    hint: Option<&'static str>,
+    on_click: impl Fn(&mut PwrRoute, &mut Window, &mut Context<'_, PwrRoute>) + 'static,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(|| id.into())
         .flex()
         .flex_none()
         .self_start()
@@ -120,72 +398,181 @@ fn pattern_list(patterns: &[&'static str]) -> [Div; 2] {
         .border_dashed()
         .border_color(theme::border_default())
         .rounded(px(7.0))
-        .child(text("+ pattern", 11.0, 500.0, theme::text_muted()))
-        .child(
-            text("wildcard, or /regex/", 10.5, 400.0, theme::text_subtle())
-                .line_height(px(15.75))
-                .ml(px(4.0)),
-        );
-    [list, add]
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::bg_hover()))
+        .child(text(label, 11.0, 500.0, theme::text_muted()))
+        .when_some(hint, |add, hint| {
+            add.child(
+                text(hint, 10.5, 400.0, theme::text_subtle())
+                    .line_height(px(15.75))
+                    .ml(px(4.0)),
+            )
+        })
+        .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
 }
 
-fn match_section(handler: &Handler) -> Div {
-    let [patterns, add] = pattern_list(&handler.patterns);
-    let sent_from = match &handler.sent_from {
-        Some(app) => tag_frame()
-            .child(badge(app.badge))
-            .child(mono(app.name, 10.5, 500.0, theme::text_primary()))
-            .child(text(app.bundle_id, 10.5, 400.0, theme::text_subtle()))
-            .child(mono("\u{00d7}", 10.5, 500.0, theme::text_subtle())),
-        None => text("any app", 11.0, 500.0, theme::text_subtle()),
-    };
+/// `.plist` and `.addp`: the URL patterns and the way to add one.
+fn pattern_list(
+    rail: &Rail,
+    problems: &[String],
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Vec<AnyElement> {
+    let list =
+        (0..rail.patterns.len()).fold(div().flex().flex_col().gap(px(5.0)), |list, index| {
+            let remove = remove_button(
+                format!("pattern-remove-{index}"),
+                move |this, window, cx| this.remove_pattern(index, window, cx),
+                cx,
+            );
+            list.child(editable(
+                rail,
+                Field::Pattern(index),
+                format!("pattern-{index}"),
+                Look {
+                    mono: true,
+                    placeholder: "example.com/*",
+                    error: rail.patterns[index].text.trim().is_empty(),
+                },
+                Some(remove),
+                window,
+                cx,
+            ))
+        });
+    let mut rows = vec![
+        label("URL patterns").into_any_element(),
+        list.into_any_element(),
+    ];
+    rows.extend(
+        problems_under(problems, Under::Patterns)
+            .into_iter()
+            .map(IntoElement::into_any_element),
+    );
+    rows.push(
+        add_button(
+            "pattern-add",
+            "+ pattern",
+            Some("wildcard, or /regex/"),
+            |this, window, cx| this.add_pattern(window, cx),
+            cx,
+        )
+        .into_any_element(),
+    );
+    rows
+}
+
+fn match_section(
+    handler: &Handler,
+    rail: &Rail,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let openers =
+        (0..rail.openers.len()).fold(div().flex().flex_col().gap(px(5.0)), |list, index| {
+            let remove = remove_button(
+                format!("opener-remove-{index}"),
+                move |this, window, cx| this.remove_opener(index, window, cx),
+                cx,
+            );
+            list.child(editable(
+                rail,
+                Field::Opener(index),
+                format!("opener-{index}"),
+                Look {
+                    mono: true,
+                    placeholder: "App name or bundle id",
+                    error: rail.openers[index].text.trim().is_empty(),
+                },
+                Some(remove),
+                window,
+                cx,
+            ))
+        });
     section()
         .child(section_title("Match"))
-        .child(label("URL patterns"))
-        .child(patterns)
-        .child(add)
-        .child(labeled_row("Sent from", sent_from).mt(px(6.0)))
+        .children(pattern_list(rail, &handler.problems, window, cx))
+        .child(label("Sent from").mt(px(6.0)))
+        .when(!rail.openers.is_empty(), |section| section.child(openers))
+        .children(problems_under(&handler.problems, Under::Openers))
+        .child(add_button(
+            "opener-add",
+            "+ app",
+            None,
+            |this, window, cx| this.add_opener(window, cx),
+            cx,
+        ))
         .child(paragraph(
-            "The app that handed the link to the OS. Window title is not available on this host.",
+            "Optional. Leave empty to match a link from any app. The app that handed the link \
+             to the OS, by name or bundle id.",
             10.5,
             15.75,
         ))
 }
 
-fn open_in_section(handler: &Handler) -> Div {
-    let (browser_badge, browser, profile) = match &handler.rule.destination {
-        Destination::Browser {
-            badge,
-            name,
-            profile,
-        } => (badge.clone(), name.clone(), profile.clone()),
-        Destination::Rewrite { .. } | Destination::Function(_) => ("".into(), "".into(), None),
+fn open_in_section(
+    handler: &Handler,
+    rail: &Rail,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let browser_badge = match &handler.rule.destination {
+        Destination::Browser { badge, .. } => Some(badge.clone()),
+        _ => None,
     };
-    let field = |width: f32| input_box().w(px(width)).flex_none();
+    let browser = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .when_some(browser_badge, |row, label| row.child(badge(label)))
+        .child(editable(
+            rail,
+            Field::Browser,
+            "browser".into(),
+            Look {
+                mono: false,
+                placeholder: "Choose a browser or app",
+                error: handler.problems.iter().any(|m| under(m) == Under::Browser),
+            },
+            None,
+            window,
+            cx,
+        ));
+    let profile = div().w(px(190.0)).flex_none().child(editable(
+        rail,
+        Field::Profile,
+        "profile".into(),
+        Look {
+            mono: false,
+            placeholder: "Default",
+            error: false,
+        },
+        None,
+        window,
+        cx,
+    ));
     section()
         .child(section_title("Open in"))
+        .child(browser)
+        .children(problems_under(&handler.problems, Under::Browser))
+        .child(paragraph(
+            "A browser or app by name, bundle id or path.",
+            10.5,
+            15.75,
+        ))
+        .child(labeled_row("Profile", profile))
+        // rules.json has no field for these yet; drawn as the design shows
+        // them, not wired.
+        .child(labeled_row("Open in background", switch(false)).opacity(0.5))
         .child(
-            input_box()
-                .child(badge(browser_badge))
-                .child(text(browser, 12.5, 400.0, theme::text_primary()))
-                .child(caret()),
+            labeled_row(
+                "Extra arguments",
+                input_box()
+                    .w(px(190.0))
+                    .flex_none()
+                    .child(mono("--new-window", 12.0, 500.0, theme::text_subtle())),
+            )
+            .opacity(0.5),
         )
-        .child(labeled_row(
-            "Profile",
-            field(190.0)
-                .child(text(
-                    profile.unwrap_or_else(|| "Default".into()),
-                    12.5,
-                    400.0,
-                    theme::text_primary(),
-                ))
-                .child(caret()),
-        ))
-        .child(labeled_row("Open in background", switch(false)))
-        .child(labeled_row(
-            "Extra arguments",
-            field(190.0).child(mono("--new-window", 12.0, 500.0, theme::text_subtle())),
-        ))
 }
 
 /// `.try`: the dot and what the rule makes of the sample.
@@ -214,174 +601,340 @@ fn try_result(status: gpui_kit::Hsla, result: StyledText) -> Div {
         )
 }
 
-/// The sample link in its focused field.
-fn try_input(sample: &'static str) -> Div {
-    focus_ring(input_box().child(mono(sample, 12.0, 500.0, theme::text_primary())))
+fn bold() -> HighlightStyle {
+    HighlightStyle {
+        color: Some(theme::text_primary()),
+        font_weight: Some(theme::weight(600.0)),
+        ..Default::default()
+    }
 }
 
-fn try_it_section(selected: usize, handler: &Handler) -> Div {
-    // The sample link is a contrived Atlassian URL: handler 2 matches it, so
-    // the rail says who wins from the selected handler's point of view.
-    const SAMPLE_WINNER: usize = 1;
-    let browser = match &handler.rule.destination {
-        Destination::Browser { name, .. } => name.clone(),
-        Destination::Rewrite { .. } | Destination::Function(_) => "".into(),
-    };
-    let (result, status) = match selected.cmp(&SAMPLE_WINNER) {
-        std::cmp::Ordering::Greater => {
-            let message = "Handler 2 wins first: Google Chrome \u{00b7} Work. Move this rule \
-                           above it to change that.";
-            let bold = "Google Chrome \u{00b7} Work";
-            let start = message.find(bold).unwrap_or(0);
+/// The result as styled text and its dot's color.
+fn try_text(result: &TryResult) -> (gpui_kit::Hsla, StyledText) {
+    match result {
+        TryResult::Text {
+            verdict,
+            message,
+            bold: run,
+        } => {
+            let color = match verdict {
+                Verdict::Takes => theme::status_ok(),
+                Verdict::Beaten => theme::status_warning(),
+                Verdict::Passes => theme::text_muted(),
+                Verdict::Broken => theme::status_error(),
+            };
+            let highlights = run
+                .as_deref()
+                .and_then(|run| {
+                    message
+                        .find(run)
+                        .map(|start| (start..start + run.len(), bold()))
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
             (
-                StyledText::new(message).with_highlights([(
-                    start..start + bold.len(),
-                    HighlightStyle {
-                        color: Some(theme::text_primary()),
-                        font_weight: Some(theme::weight(600.0)),
-                        ..Default::default()
-                    },
-                )]),
-                theme::status_warning(),
+                color,
+                StyledText::new(message.clone()).with_highlights(highlights),
             )
         }
-        std::cmp::Ordering::Equal => (
-            StyledText::new(format!("This handler opens that link in {browser}.")),
-            theme::status_ok(),
-        ),
-        std::cmp::Ordering::Less => (
-            StyledText::new("No match. Handler 2 opens that link."),
-            theme::text_muted(),
-        ),
-    };
-    section()
-        .child(section_title("Try it"))
-        .child(try_input("https://example.atlassian.net/browse/PG-12"))
-        .child(try_result(status, result))
-}
-
-/// The rewrite's condition: its patterns, and the query keys a link must
-/// carry for a rewrite that drops them.
-fn rewrite_match_section(rewrite: &Rewrite) -> Div {
-    let [patterns, add] = pattern_list(&rewrite.patterns);
-    let query = if rewrite.query.is_empty() {
-        text("any query", 11.0, 500.0, theme::text_subtle())
-    } else {
-        rewrite
-            .query
-            .iter()
-            .fold(div().flex().flex_wrap().gap(px(5.0)), |keys, key| {
-                keys.child(tag(*key))
-            })
-    };
-    section()
-        .child(section_title("Match"))
-        .child(label("URL patterns"))
-        .child(patterns)
-        .child(add)
-        .child(labeled_row("With query", query).mt(px(6.0)))
-}
-
-/// What the rewrite changes: the action and its value.
-fn rewrite_section(rewrite: &Rewrite) -> Div {
-    let (kind, value) = match &rewrite.rule.destination {
-        Destination::Rewrite { kind, value } => (*kind, value.clone()),
-        Destination::Browser { .. } | Destination::Function(_) => ("", "".into()),
-    };
-    let (action, field, help) = match kind {
-        "host" => (
-            "Set host",
-            "Host",
-            "Replaces the host and keeps the path and query.",
-        ),
-        "drop" => (
-            "Drop query keys",
-            "Keys",
-            "Removes matching query parameters. * matches any run of characters.",
-        ),
-        "scheme" => ("Set scheme", "Scheme", "Replaces the scheme only."),
-        _ => ("Replace URL", "URL", "Replaces the whole URL."),
-    };
-    let value_field = input_box().w(px(190.0)).flex_none().map(|input| {
-        if kind == "drop" {
-            value
-                .split_whitespace()
-                .fold(input.gap(px(5.0)), |input, key| input.child(tag(key)))
-        } else {
-            input.child(mono(value, 12.0, 500.0, theme::text_primary()))
-        }
-    });
-    section()
-        .child(section_title("Rewrite"))
-        .child(
-            input_box()
-                .child(text(action, 12.5, 400.0, theme::text_primary()))
-                .child(caret()),
-        )
-        .child(labeled_row(field, value_field))
-        .child(paragraph(help, 10.5, 15.75))
-}
-
-fn rewrite_try_section(rewrite: &Rewrite) -> Div {
-    let (sample, result) = rewrite.sample;
-    let prefix = "Rewrites to ";
-    let mut message = prefix.to_owned();
-    let mut highlights = Vec::new();
-    for part in url_diff(sample, result) {
-        if part.mark == UrlMark::Deleted {
-            continue;
-        }
-        let start = message.len();
-        message.push_str(&part.text);
-        if part.mark == UrlMark::Changed {
-            highlights.push((
-                start..message.len(),
-                HighlightStyle {
-                    color: Some(theme::text_primary()),
-                    font_weight: Some(theme::weight(600.0)),
-                    ..Default::default()
-                },
-            ));
+        TryResult::Rewrote {
+            before,
+            after,
+            then,
+        } => {
+            let mut message = "Rewrites to ".to_owned();
+            let mut highlights = Vec::new();
+            for part in url_diff(before, after) {
+                if part.mark == UrlMark::Deleted {
+                    continue;
+                }
+                let start = message.len();
+                message.push_str(&part.text);
+                if part.mark == UrlMark::Changed {
+                    highlights.push((start..message.len(), bold()));
+                }
+            }
+            message.push_str(". ");
+            message.push_str(then);
+            (
+                theme::status_ok(),
+                StyledText::new(message).with_highlights(highlights),
+            )
         }
     }
-    let message = if rewrite.rule.enabled {
-        StyledText::new(message).with_highlights(highlights)
+}
+
+fn try_section(
+    rail: &Rail,
+    problems: &[String],
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let (status, message) = if !problems.is_empty() {
+        (
+            theme::status_error(),
+            StyledText::new("Can't test until the problems above are fixed."),
+        )
     } else {
-        StyledText::new("Switched off: the link passes through unchanged.")
-    };
-    let status = if rewrite.rule.enabled {
-        theme::status_ok()
-    } else {
-        theme::text_muted()
+        match &rail.try_result {
+            Some(result) => try_text(result),
+            None => (
+                theme::text_muted(),
+                StyledText::new("Type a link and press Return."),
+            ),
+        }
     };
     section()
         .child(section_title("Try it"))
-        .child(try_input(sample))
+        .child(editable(
+            rail,
+            Field::Sample,
+            "try-sample".into(),
+            Look {
+                mono: true,
+                placeholder: "https://example.com/",
+                error: false,
+            },
+            None,
+            window,
+            cx,
+        ))
         .child(try_result(status, message))
 }
 
-/// `.rail-end`: delete, and when the rule was saved.
-fn rail_end(what: &'static str) -> Div {
+/// The rewrite's changes, applied in order: each a kind and a value.
+fn changes_section(
+    rewrite: &Rewrite,
+    rail: &Rail,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let rows = rewrite.actions.iter().enumerate().fold(
+        div().flex().flex_col().gap(px(6.0)),
+        |rows, (index, action)| {
+            let kind = kind_of(action);
+            let value_empty = rail
+                .values
+                .get(index)
+                .is_some_and(|v| v.text.trim().is_empty());
+            let remove = remove_button(
+                format!("change-remove-{index}"),
+                move |this, window, cx| this.remove_action(index, window, cx),
+                cx,
+            );
+            rows.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .w(px(18.0))
+                            .flex_none()
+                            .flex()
+                            .justify_center()
+                            .child(mono(
+                                (index + 1).to_string(),
+                                10.0,
+                                600.0,
+                                theme::text_subtle(),
+                            )),
+                    )
+                    .child(kind_picker(index, kind.label, rail, cx))
+                    .child(div().flex_1().min_w_0().child(editable(
+                        rail,
+                        Field::Value(index),
+                        format!("change-{index}"),
+                        Look {
+                            mono: true,
+                            placeholder: kind.placeholder,
+                            error: value_empty,
+                        },
+                        Some(remove),
+                        window,
+                        cx,
+                    ))),
+            )
+        },
+    );
+    let help = rewrite
+        .actions
+        .last()
+        .map(|action| paragraph(kind_of(action).help, 10.5, 15.75));
+    section()
+        .child(section_title("Changes \u{00b7} applied in order"))
+        .child(rows)
+        .children(help)
+        .children(problems_under(&rewrite.problems, Under::Changes))
+        .child(add_button(
+            "change-add",
+            "+ change",
+            None,
+            |this, window, cx| this.add_action(window, cx),
+            cx,
+        ))
+}
+
+/// The kind box of a change and, while open, its menu of the five kinds.
+fn kind_picker(
+    index: usize,
+    label: &'static str,
+    rail: &Rail,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let menu = KINDS.iter().enumerate().fold(
+        div()
+            .id(("change-kind-menu", index))
+            .occlude()
+            .absolute()
+            .top(px(32.0))
+            .left_0()
+            .w(px(300.0))
+            .flex()
+            .flex_col()
+            .p(px(4.0))
+            .bg(theme::bg_elevated())
+            .border_1()
+            .border_color(theme::border_default())
+            .rounded(px(7.0))
+            .shadow_lg()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if let Some(rail) = &mut this.rail {
+                    rail.picking_kind = None;
+                }
+                cx.notify();
+            })),
+        |menu, (kind, item)| {
+            let selected = item.label == label;
+            menu.child(
+                div()
+                    .id(("change-kind-choice", kind))
+                    .debug_selector(move || format!("change-{index}-kind-{kind}"))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .when(selected, |row| row.bg(theme::bg_row_active()))
+                    .hover(|row| row.bg(theme::bg_hover()))
+                    .child(text(item.label, 12.0, 500.0, theme::text_primary()))
+                    .child(div().ml_auto().pl(px(16.0)).child(mono(
+                        item.example,
+                        10.5,
+                        500.0,
+                        theme::text_muted(),
+                    )))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_action_kind(index, kind, cx);
+                    })),
+            )
+        },
+    );
+    let footer = div()
+        .px(px(8.0))
+        .pt(px(6.0))
+        .pb(px(4.0))
+        .border_t_1()
+        .border_color(theme::border_subtle())
+        .mt(px(4.0))
+        .child(paragraph(
+            "Anything else is a rewrite function in a Finicky config.",
+            10.5,
+            15.2,
+        ));
+    let menu = menu.child(footer);
+    div()
+        .relative()
+        .w(px(112.0))
+        .flex_none()
+        .child(
+            input_box()
+                .id(("change-kind", index))
+                .debug_selector(move || format!("change-{index}-kind"))
+                .min_h(px(28.0))
+                .px(px(8.0))
+                .cursor_pointer()
+                .child(crate::widgets::one_line(
+                    label,
+                    theme::SANS,
+                    400.0,
+                    11.5,
+                    11.5,
+                    theme::text_primary(),
+                ))
+                .child(caret())
+                // Capture runs in paint order: before the deferred menu's
+                // press-outside handler closes it.
+                .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                    if let Some(rail) = &mut this.rail {
+                        rail.was_picking = rail.picking_kind;
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(rail) = &mut this.rail {
+                        rail.picking_kind = if rail.was_picking == Some(index) {
+                            None
+                        } else {
+                            Some(index)
+                        };
+                    }
+                    cx.notify();
+                })),
+        )
+        .when(rail.picking_kind == Some(index), |picker| {
+            picker.child(deferred(menu))
+        })
+}
+
+/// `.rail-end`: delete (or discard), and where the rule stands with the
+/// file.
+fn rail_end(what: &'static str, draft: bool, note: String, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let kind = if draft {
+        ButtonKind::Quiet
+    } else {
+        ButtonKind::Danger
+    };
     div()
         .mt_auto()
         .flex()
         .items_center()
         .justify_between()
+        .gap(px(10.0))
         .py(px(12.0))
         .px(px(16.0))
         .border_t_1()
         .border_color(theme::border_faint())
-        .child(button(what, ButtonKind::Danger, true))
-        .child(text(
-            "edited 09:41 \u{00b7} saved",
-            10.5,
-            400.0,
-            theme::text_subtle(),
-        ))
+        .child(
+            button(what, kind, true)
+                .id("rail-delete")
+                .debug_selector(|| "rail-delete".into())
+                .on_click(cx.listener(|this, _, window, cx| this.delete_selected(window, cx))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .justify_end()
+                .child(crate::widgets::one_line(
+                    note,
+                    theme::SANS,
+                    400.0,
+                    10.5,
+                    15.75,
+                    theme::text_subtle(),
+                )),
+        )
 }
 
 /// `.rrail`.
-pub fn rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
+pub fn rail(
+    app: &PwrRoute,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> impl IntoElement + use<> {
     let frame = div()
         .id("editor-rail")
         .debug_selector(|| "editor-rail".into())
@@ -393,33 +946,66 @@ pub fn rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement 
         .border_color(theme::border_subtle())
         .bg(theme::bg_panel())
         .overflow_hidden();
-    match app.selection {
+    let (Some(selection), Some(rail)) = (app.selection, &app.rail) else {
+        return frame;
+    };
+    match selection {
         Selection::Handler(index) => match app.handlers.get(index) {
-            Some(handler) => frame
-                .child(header(
-                    &format!("Handler \u{00b7} {} of {}", index + 1, app.handlers.len()),
-                    handler.title,
-                    &handler.rule,
-                    cx,
-                ))
-                .child(match_section(handler))
-                .child(open_in_section(handler))
-                .child(try_it_section(index, handler))
-                .child(rail_end("Delete handler")),
+            Some(handler) => {
+                let draft = handler.rule.badge == RowBadge::Draft;
+                let what = if draft { "New handler" } else { "Handler" };
+                frame
+                    .child(header(
+                        &format!("{what} \u{00b7} {} of {}", index + 1, app.handlers.len()),
+                        handler.title.clone(),
+                        &handler.rule,
+                        cx,
+                    ))
+                    .child(match_section(handler, rail, window, cx))
+                    .child(open_in_section(handler, rail, window, cx))
+                    .child(try_section(rail, &handler.problems, window, cx))
+                    .child(rail_end(
+                        if draft {
+                            "Discard draft"
+                        } else {
+                            "Delete handler"
+                        },
+                        draft,
+                        app.store.rail_label(selection),
+                        cx,
+                    ))
+            }
             None => frame,
         },
         Selection::Rewrite(index) => match app.rewrites.get(index) {
-            Some(rewrite) => frame
-                .child(header(
-                    &format!("Rewrite \u{00b7} {} of {}", index + 1, app.rewrites.len()),
-                    rewrite.title,
-                    &rewrite.rule,
-                    cx,
-                ))
-                .child(rewrite_match_section(rewrite))
-                .child(rewrite_section(rewrite))
-                .child(rewrite_try_section(rewrite))
-                .child(rail_end("Delete rewrite")),
+            Some(rewrite) => {
+                let draft = rewrite.rule.badge == RowBadge::Draft;
+                let what = if draft { "New rewrite" } else { "Rewrite" };
+                frame
+                    .child(header(
+                        &format!("{what} \u{00b7} {} of {}", index + 1, app.rewrites.len()),
+                        rewrite.title.clone(),
+                        &rewrite.rule,
+                        cx,
+                    ))
+                    .child(
+                        section()
+                            .child(section_title("Match"))
+                            .children(pattern_list(rail, &rewrite.problems, window, cx)),
+                    )
+                    .child(changes_section(rewrite, rail, window, cx))
+                    .child(try_section(rail, &rewrite.problems, window, cx))
+                    .child(rail_end(
+                        if draft {
+                            "Discard draft"
+                        } else {
+                            "Delete rewrite"
+                        },
+                        draft,
+                        app.store.rail_label(selection),
+                        cx,
+                    ))
+            }
             None => frame,
         },
     }
