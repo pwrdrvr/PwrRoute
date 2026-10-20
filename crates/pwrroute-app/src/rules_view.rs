@@ -32,34 +32,39 @@ mod column {
 
 fn matcher(matcher: &Matcher) -> Div {
     match matcher {
-        Matcher::Pattern(pattern) => tag(*pattern),
-        Matcher::Regex(pattern) => regex_tag(*pattern),
+        Matcher::Pattern(pattern) => tag(pattern.clone()),
+        Matcher::Regex(pattern) => regex_tag(pattern.clone()),
         Matcher::Label(label) => text(*label, 11.0, 500.0, theme::text_muted()),
         Matcher::App { badge, name } => app_tag(*badge, *name),
-        // `.tag.fn` and its `.srcline`, which takes the rest of the row.
-        Matcher::Function(source) => div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap(px(5.0))
-            .child(fn_tag())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .font_family(theme::mono_family(400.0))
-                    .font_weight(theme::weight(400.0))
-                    .text_size(px(10.5))
-                    .line_height(px(13.65))
-                    .text_color(theme::text_muted())
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(*source),
-            ),
+        Matcher::Function(source) => function(source),
         Matcher::Off => chip("off"),
     }
+}
+
+/// `.tag.fn` and its `.srcline`, which takes the rest of the cell: a JS
+/// function by its source, on one line.
+fn function(source: &SharedString) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(5.0))
+        .child(fn_tag())
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .font_family(theme::mono_family(400.0))
+                .font_weight(theme::weight(400.0))
+                .text_size(px(10.5))
+                .line_height(px(13.65))
+                .text_color(theme::text_muted())
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(source.clone()),
+        )
 }
 
 pub(crate) fn destination(destination: &Destination) -> Div {
@@ -68,7 +73,7 @@ pub(crate) fn destination(destination: &Destination) -> Div {
             .flex()
             .items_center()
             .min_w_0()
-            .child(action_tag(*kind, *value)),
+            .child(action_tag(*kind, value.clone())),
         Destination::Browser {
             badge: badge_label,
             name,
@@ -78,11 +83,16 @@ pub(crate) fn destination(destination: &Destination) -> Div {
             .items_center()
             .gap(px(7.0))
             .min_w_0()
-            .child(badge(*badge_label))
-            .child(text(*name, 12.0, 500.0, theme::text_primary()))
-            .when_some(*profile, |row, profile| {
+            .child(badge(badge_label.clone()))
+            .child(text(name.clone(), 12.0, 500.0, theme::text_primary()))
+            .when_some(profile.clone(), |row, profile| {
                 row.child(mono(profile, 10.5, 500.0, theme::text_muted()))
             }),
+        Destination::Function(source) => div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .child(function(source)),
     }
 }
 

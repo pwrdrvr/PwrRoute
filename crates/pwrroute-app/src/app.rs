@@ -2,11 +2,14 @@
 //! layout.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::{
     Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
     Render, Styled as _, Window, div,
 };
+
+use pwrroute_engine::{DefaultHost, Engine, Limits};
 
 use crate::activity::Activity;
 use crate::config_view::{self, ConfigInCharge};
@@ -70,9 +73,15 @@ impl PwrRoute {
         home: Option<PathBuf>,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let in_charge = config.as_deref().map(|path| {
-            fixtures::config_in_charge(config_view::display_path(path, home.as_deref()))
-        });
+        // One engine for the config: the Rules screen describes it and Test a
+        // link resolves with it, so the config is evaluated once here.
+        let engine = config
+            .as_deref()
+            .map(|path| Engine::load(path, Rc::new(DefaultHost), Limits::default()));
+        let in_charge = config
+            .as_deref()
+            .zip(engine.as_ref())
+            .map(|(path, engine)| ConfigInCharge::new(path, home.as_deref(), engine.as_ref()));
         Self {
             focus: cx.focus_handle(),
             screen: Screen::Rules,
@@ -81,7 +90,7 @@ impl PwrRoute {
             selection: Selection::Handler(2),
             config: in_charge,
             visual_rules_expanded: false,
-            test: TestLink::new(config, cx),
+            test: TestLink::new(config, engine.and_then(Result::ok), cx),
             activity: Activity::new(cx),
         }
     }

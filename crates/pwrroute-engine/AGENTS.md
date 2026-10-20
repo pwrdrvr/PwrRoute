@@ -17,7 +17,9 @@ crate docs map the modules.
   `rules.json` into Finicky objects, appends them after a config's own (as the
   Go resolver appended JSON handlers), and traces by wrapping matchers around
   the API's exported `isMatch`, `rewriteUrl` and browser handling while
-  `openUrl` still decides. Keep it to the API's exports; if a feature needs
+  `openUrl` still decides. It also describes a config's own rules for the
+  window (`Engine::describe`), spelling fixed browsers out with the API's
+  `createBrowserConfig`. Keep it to the API's exports; if a feature needs
   the bundle changed, stop and say so.
 - **`rules.json` is Go's schema plus optional fields.** Every extension
   (`rewrites`, `opener`, `enabled`) defaults to what the Go host did, so a Go

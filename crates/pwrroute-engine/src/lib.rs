@@ -8,7 +8,7 @@
 //! `tests/` hold the results to the Go host's.
 //!
 //! - [`Engine`] loads [`Sources`] and resolves a [`Link`], or returns a
-//!   [`Trace`] of how it did.
+//!   [`Trace`] of how it did, or a [`Description`] of the config's rules.
 //! - [`RulesFile`] is `rules.json`, the visual rules editor's model.
 //! - [`ShortLinks`] expands short links over a [`Network`] before resolving.
 //! - [`discovery`] finds the config and `rules.json` the way Finicky does.
@@ -19,6 +19,7 @@
 //! An [`Engine`] is single-threaded (QuickJS runtimes are not `Send`): create
 //! one per config on the thread that resolves links, and replace it on reload.
 
+mod describe;
 pub mod discovery;
 mod host;
 #[cfg(feature = "http")]
@@ -46,6 +47,10 @@ use rquickjs::{
 };
 use serde::{Deserialize, Serialize};
 
+pub use describe::{
+    BrowserSpec, Description, FixedBrowser, FunctionSpec, HandlerRule, MatcherSpec, RewriteRule,
+    UrlSpec,
+};
 pub use host::{DefaultHost, Host, LogLevel, ModifierKeys, PowerInfo, SystemInfo};
 #[cfg(feature = "http")]
 pub use http::HttpNetwork;
@@ -337,6 +342,23 @@ impl Engine {
                 steps: raw.steps,
                 resolution: raw.result,
             })
+        })
+    }
+
+    /// The JS or TS config's own rewrites, handlers and default browser, in
+    /// the order `openUrl` runs them. `None` when `rules.json` is the whole
+    /// config; [`RulesFile`] describes its rules. Runs under the resolve
+    /// deadline, since reading a config's objects can run its getters.
+    pub fn describe(&self) -> Result<Option<Description>> {
+        if self.config.is_none() {
+            return Ok(None);
+        }
+        self.with_deadline(self.limits.resolve, |ctx| {
+            let json: String = ctx
+                .eval("JSON.stringify(__pwrroute.describe())")
+                .catch(&ctx)
+                .map_err(|e| js_error("describing the config", &e))?;
+            Ok(serde_json::from_str(&json)?)
         })
     }
 

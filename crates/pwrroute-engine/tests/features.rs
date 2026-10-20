@@ -12,8 +12,9 @@ use std::{
 
 use anyhow::{Result, bail};
 use pwrroute_engine::{
-    DefaultHost, Engine, Limits, Link, Matcher, Method, Network, Opener, Reply, Rewrite,
-    RewriteAction, Rule, RulesFile, Source, Sources, Stage,
+    AppType, BrowserSpec, DefaultHost, Engine, FixedBrowser, Limits, Link, Matcher, MatcherSpec,
+    Method, Network, Opener, Reply, Rewrite, RewriteAction, Rule, RulesFile, Source, Sources,
+    Stage, UrlSpec,
 };
 
 fn configs() -> PathBuf {
@@ -466,4 +467,157 @@ fn a_handler_whose_browser_fails_does_not_win() {
             .unwrap()
             .contains("cannot be undefined")
     );
+}
+
+// Describing a config
+
+fn source(spec: &MatcherSpec) -> &str {
+    match spec {
+        MatcherSpec::Function(f) => f.source.as_deref().expect("QuickJS kept the source"),
+        other => panic!("not a function: {other:?}"),
+    }
+}
+
+fn fixed(name: &str, app_type: AppType, profile: &str) -> BrowserSpec {
+    BrowserSpec::Browser(FixedBrowser {
+        name: name.into(),
+        app_type,
+        profile: profile.into(),
+        args: Vec::new(),
+        open_in_background: None,
+    })
+}
+
+#[test]
+fn a_description_lists_the_configs_rules_in_order() {
+    let d = engine(Some("functions.js"), RulesFile::default())
+        .describe()
+        .unwrap()
+        .unwrap();
+    assert_eq!(d.rewrites.len(), 5);
+    assert_eq!(d.handlers.len(), 12);
+
+    // Rewrites: a wildcard to a function, and a wildcard to a fixed URL.
+    assert_eq!(
+        d.rewrites[0].matchers,
+        [MatcherSpec::Wildcard("*://chain.example/*".into())]
+    );
+    let UrlSpec::Function(chain) = &d.rewrites[0].url else {
+        panic!("a function rewrite: {:?}", d.rewrites[0].url);
+    };
+    assert!(chain.source.as_deref().unwrap().contains("\"/one\""));
+    assert!(source(&d.rewrites[3].matchers[0]).contains("rewrite matcher threw"));
+    assert_eq!(
+        d.rewrites[4].url,
+        UrlSpec::Url("https://static-target.example/landing".into())
+    );
+
+    // Handlers: what each browser opens as, from the API's createBrowserConfig.
+    assert!(source(&d.handlers[0].matchers[0]).contains("originalUrl.hostname"));
+    assert_eq!(
+        d.handlers[0].browser,
+        fixed("Firefox", AppType::AppName, "chain")
+    );
+    assert_eq!(
+        d.handlers[1].matchers,
+        [MatcherSpec::Regex(
+            "/^https:\\/\\/CASE\\.example\\//i".into()
+        )]
+    );
+    assert_eq!(
+        d.handlers[1].browser,
+        fixed("Google Chrome", AppType::AppName, "Profile 2")
+    );
+    assert_eq!(
+        d.handlers[2].browser,
+        fixed("com.google.Chrome", AppType::BundleId, "")
+    );
+    assert_eq!(
+        d.handlers[3].browser,
+        fixed("/Applications/Firefox.app", AppType::Path, "")
+    );
+    assert!(matches!(d.handlers[4].browser, BrowserSpec::Function(_)));
+    assert_eq!(
+        d.handlers[8].matchers,
+        [
+            MatcherSpec::Wildcard("https://first.example/*".into()),
+            MatcherSpec::Wildcard("https://second.example/*".into()),
+        ]
+    );
+    let BrowserSpec::Browser(safari) = &d.handlers[10].browser else {
+        panic!("a fixed browser");
+    };
+    assert_eq!(safari.open_in_background, Some(false));
+
+    // The default browser is a function here.
+    let BrowserSpec::Function(default) = &d.default_browser else {
+        panic!("a function default: {:?}", d.default_browser);
+    };
+    assert!(
+        default
+            .source
+            .as_deref()
+            .unwrap()
+            .contains("Firefox Developer Edition")
+    );
+}
+
+#[test]
+fn a_description_shows_typescript_functions_without_their_types() {
+    let d = engine(Some("finicky-example.ts"), RulesFile::default())
+        .describe()
+        .unwrap()
+        .unwrap();
+    assert!(d.rewrites.is_empty());
+    assert_eq!(d.handlers.len(), 2);
+    // A named const's arrow function, its `url: URL` annotation stripped.
+    let workplace = source(&d.handlers[0].matchers[0]);
+    assert!(
+        workplace.contains("url.host.includes(\"workplace\")"),
+        "{workplace}"
+    );
+    assert!(!workplace.contains(": URL"), "{workplace}");
+    assert!(source(&d.handlers[1].matchers[0]).contains("opener?.name.includes(\"Slack\")"));
+    assert_eq!(
+        d.handlers[1].browser,
+        fixed("Firefox", AppType::AppName, "")
+    );
+    assert_eq!(
+        d.default_browser,
+        fixed("Google Chrome", AppType::AppName, "")
+    );
+}
+
+#[test]
+fn a_description_shows_null_browsers_and_functions_without_source() {
+    let d = engine(Some("describe.js"), RulesFile::default())
+        .describe()
+        .unwrap()
+        .unwrap();
+    // A bound function's toString is native code: no source, just its name.
+    let MatcherSpec::Function(bound) = &d.handlers[0].matchers[0] else {
+        panic!("a function matcher: {:?}", d.handlers[0].matchers);
+    };
+    assert_eq!(bound.source, None);
+    assert!(bound.name.contains("test"), "{}", bound.name);
+    // `browser: null` opens nothing, as createBrowserConfig spells it.
+    assert_eq!(d.handlers[1].browser, fixed("", AppType::None, ""));
+    assert_eq!(d.default_browser, fixed("", AppType::None, ""));
+}
+
+#[test]
+fn a_description_leaves_out_rules_json() {
+    let rules = RulesFile {
+        default_browser: "Firefox".into(),
+        rules: vec![rule(&["example.com/*"], "Safari")],
+        ..RulesFile::default()
+    };
+    // rules.json alone: there is no config to describe.
+    assert_eq!(engine(None, rules.clone()).describe().unwrap(), None);
+    // With a config, only the config's own handlers.
+    let d = engine(Some("finicky-example.ts"), rules)
+        .describe()
+        .unwrap()
+        .unwrap();
+    assert_eq!(d.handlers.len(), 2);
 }

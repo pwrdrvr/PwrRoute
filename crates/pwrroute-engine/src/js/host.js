@@ -80,6 +80,67 @@ var __pwrroute = (function (api) {
     return { other: typeof match };
   }
 
+  // A function's name and, when QuickJS kept it, its source text. Read with
+  // Function.prototype.toString so a config cannot answer for its own
+  // functions; a native or bound function has no source to show.
+  function describeFunction(fn) {
+    var text = null;
+    try {
+      text = Function.prototype.toString.call(fn);
+    } catch (ex) {
+      text = null;
+    }
+    if (text !== null && /\{\s*\[native code\]\s*\}\s*$/.test(text)) text = null;
+    return { name: fn.name || "", source: text };
+  }
+
+  function describeMatcher(match) {
+    if (typeof match === "function") return { function: describeFunction(match) };
+    return describeOne(match);
+  }
+
+  // A browser as the API's createBrowserConfig spells a fixed one out
+  // ("Firefox:work" is Firefox with the work profile); a function is known
+  // only by its source until it runs.
+  function describeBrowser(spec) {
+    if (typeof spec === "function") return { function: describeFunction(spec) };
+    var b = api.createBrowserConfig(spec);
+    return {
+      browser: {
+        name: String(b.name || ""),
+        appType: b.appType,
+        profile: String(b.profile || ""),
+        args: (b.args || []).map(String),
+        openInBackground: typeof b.openInBackground === "boolean" ? b.openInBackground : null,
+      },
+    };
+  }
+
+  function describeTarget(spec) {
+    if (typeof spec === "function") return { function: describeFunction(spec) };
+    // A string, or a URL object, which carries its href.
+    return { url: spec && typeof spec.href === "string" ? spec.href : String(spec) };
+  }
+
+  // The config's own rewrites and handlers, in the order openUrl runs them,
+  // and its default browser. rules.json's are not included: RulesFile is
+  // their description.
+  function description() {
+    if (jsonOnly) return null;
+    return {
+      rewrites: (finalConfig.rewrite || []).map(function (r) {
+        return { matchers: [].concat(r.match).map(describeMatcher), url: describeTarget(r.url) };
+      }),
+      handlers: (finalConfig.handlers || []).map(function (h) {
+        return {
+          matchers: [].concat(h.match).map(describeMatcher),
+          browser: describeBrowser(h.browser),
+        };
+      }),
+      defaultBrowser: describeBrowser(finalConfig.defaultBrowser),
+    };
+  }
+
   // The config openUrl sees. With a JS config, rules.json's handlers come
   // after the config's own, exactly as the Go host's resolver appended them.
   function config() {
@@ -253,6 +314,7 @@ var __pwrroute = (function (api) {
     },
     config: config,
     trace: trace,
+    describe: description,
     shorteners: function () {
       var list = api.getOption("urlShorteners", finalConfig, []);
       return Array.isArray(list) ? list.map(String) : [];

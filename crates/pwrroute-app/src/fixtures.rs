@@ -2,24 +2,25 @@
 //! the router's recent dispatches.
 //!
 //! These are the examples from the design review (`design/PwrRoute App
-//! Baseline.dc.html`): the rules of option 1a, the Finicky config of 1b and
-//! the Activity rows of 2b. None of it comes from anyone's browsing: the
+//! Baseline.dc.html`): the rules of option 1a and the Activity rows of 2b.
+//! (Option 1b's Finicky config is `fixtures/home/.finicky.ts`, which the
+//! engine describes like any other.) None of it comes from anyone's browsing: the
 //! hosts, hit counts, times, profiles and bundle ids are made up for the mock.
 //! `fixtures/rules.json` is the same rules in the engine's format, so Test a
 //! link resolves against what the Rules screen shows.
 
+use gpui_kit::SharedString;
 use pwrroute_engine::RulesFile;
 
 use crate::activity::{ActivityRow, ActivityStep, Opened, StepMark};
-use crate::config_view::ConfigInCharge;
 
 /// One piece of a rule's match column.
 #[derive(Clone, Debug)]
 pub enum Matcher {
     /// A wildcard URL pattern, drawn as a mono chip.
-    Pattern(&'static str),
+    Pattern(SharedString),
     /// A `/regex/` pattern, drawn in the info color.
-    Regex(&'static str),
+    Regex(SharedString),
     /// Connective text: "with query", "sent from", "and".
     Label(&'static str),
     /// The app that handed the link to the OS.
@@ -28,7 +29,7 @@ pub enum Matcher {
         name: &'static str,
     },
     /// A JS function, by its source: only in a Finicky config.
-    Function(&'static str),
+    Function(SharedString),
     /// The rule is switched off.
     Off,
 }
@@ -39,14 +40,17 @@ pub enum Destination {
     /// A rewrite: `kind` is host, drop or scheme.
     Rewrite {
         kind: &'static str,
-        value: &'static str,
+        value: SharedString,
     },
     /// A browser, with its two-letter badge and an optional profile.
     Browser {
-        badge: &'static str,
-        name: &'static str,
-        profile: Option<&'static str>,
+        badge: SharedString,
+        name: SharedString,
+        profile: Option<SharedString>,
     },
+    /// A JS function that picks the browser or URL per link, by its source:
+    /// only in a Finicky config.
+    Function(SharedString),
 }
 
 /// One row of the rewrites or handlers card.
@@ -95,20 +99,19 @@ pub struct Opener {
     pub bundle_id: &'static str,
 }
 
-const fn browser(
-    badge: &'static str,
-    name: &'static str,
-    profile: Option<&'static str>,
-) -> Destination {
+fn browser(badge: &'static str, name: &'static str, profile: Option<&'static str>) -> Destination {
     Destination::Browser {
-        badge,
-        name,
-        profile,
+        badge: badge.into(),
+        name: name.into(),
+        profile: profile.map(SharedString::from),
     }
 }
 
-const fn rewrite(kind: &'static str, value: &'static str) -> Destination {
-    Destination::Rewrite { kind, value }
+fn rewrite(kind: &'static str, value: &'static str) -> Destination {
+    Destination::Rewrite {
+        kind,
+        value: value.into(),
+    }
 }
 
 pub fn rewrites() -> Vec<Rewrite> {
@@ -128,7 +131,7 @@ pub fn rewrites() -> Vec<Rewrite> {
     vec![
         rewrite(
             "X to xcancel",
-            vec![Pattern("x.com/*"), Pattern("twitter.com/*")],
+            vec![Pattern("x.com/*".into()), Pattern("twitter.com/*".into())],
             self::rewrite("host", "xcancel.com"),
             "12 today",
             vec!["x.com/*", "twitter.com/*"],
@@ -141,10 +144,10 @@ pub fn rewrites() -> Vec<Rewrite> {
         rewrite(
             "Strip tracking",
             vec![
-                Pattern("*"),
+                Pattern("*".into()),
                 Label("with query"),
-                Pattern("utm_*"),
-                Pattern("fbclid"),
+                Pattern("utm_*".into()),
+                Pattern("fbclid".into()),
             ],
             self::rewrite("drop", "utm_* fbclid"),
             "1.1k today",
@@ -157,7 +160,7 @@ pub fn rewrites() -> Vec<Rewrite> {
         ),
         rewrite(
             "Internal over HTTPS",
-            vec![Pattern("http://*.internal/*")],
+            vec![Pattern("http://*.internal/*".into())],
             self::rewrite("scheme", "https"),
             "\u{2014}",
             vec!["http://*.internal/*"],
@@ -184,7 +187,10 @@ pub fn handlers() -> Vec<Handler> {
     let mut handlers = vec![
         handler(
             "Google, at work",
-            vec![Pattern("meet.google.com/*"), Pattern("*.google.com/*")],
+            vec![
+                Pattern("meet.google.com/*".into()),
+                Pattern("*.google.com/*".into()),
+            ],
             chrome_work(),
             "38 today",
             vec!["meet.google.com/*", "*.google.com/*"],
@@ -192,8 +198,8 @@ pub fn handlers() -> Vec<Handler> {
         handler(
             "Work tools",
             vec![
-                Pattern("*.atlassian.net/*"),
-                Pattern("github.com/pwrdrvr/*"),
+                Pattern("*.atlassian.net/*".into()),
+                Pattern("github.com/pwrdrvr/*".into()),
             ],
             chrome_work(),
             "214 today",
@@ -208,7 +214,7 @@ pub fn handlers() -> Vec<Handler> {
                     name: "Slack",
                 },
                 Label("and"),
-                Pattern("*"),
+                Pattern("*".into()),
             ],
             browser("Ff", "Firefox", Some("default-release")),
             "57 today",
@@ -217,9 +223,9 @@ pub fn handlers() -> Vec<Handler> {
         handler(
             "Social",
             vec![
-                Pattern("bsky.app/*"),
-                Pattern("*.reddit.com/*"),
-                Regex("/^https:\\/\\/news\\.ycombinator/"),
+                Pattern("bsky.app/*".into()),
+                Pattern("*.reddit.com/*".into()),
+                Regex("/^https:\\/\\/news\\.ycombinator/".into()),
             ],
             browser("Ff", "Firefox", None),
             "9 today",
@@ -232,9 +238,9 @@ pub fn handlers() -> Vec<Handler> {
         handler(
             "Local dev",
             vec![
-                Pattern("localhost:*"),
-                Pattern("127.0.0.1:*"),
-                Pattern("*.localhost/*"),
+                Pattern("localhost:*".into()),
+                Pattern("127.0.0.1:*".into()),
+                Pattern("*.localhost/*".into()),
             ],
             browser("Ar", "Arc", None),
             "402 today",
@@ -242,14 +248,17 @@ pub fn handlers() -> Vec<Handler> {
         ),
         handler(
             "Zoom links",
-            vec![Pattern("zoom.us/j/*"), Pattern("*.zoom.us/j/*")],
+            vec![
+                Pattern("zoom.us/j/*".into()),
+                Pattern("*.zoom.us/j/*".into()),
+            ],
             browser("Zm", "zoom.us", Some("us.zoom.xos")),
             "6 today",
             vec!["zoom.us/j/*", "*.zoom.us/j/*"],
         ),
         handler(
             "Figma",
-            vec![Pattern("figma.com/*"), Off],
+            vec![Pattern("figma.com/*".into()), Off],
             browser("Fg", "Figma", Some("com.figma.Desktop")),
             "\u{2014}",
             vec!["figma.com/*"],
@@ -304,43 +313,6 @@ pub const TEST_URL: &str = "https://x.com/pwrdrvr/status/1842?utm_source=slack&s
 
 /// The index into [`openers`] Test a link starts with: Slack.
 pub const TEST_OPENER: usize = 1;
-
-/// The Finicky config of option 1b, `~/.finicky.ts`, whose source is
-/// `fixtures/home/.finicky.ts`.
-pub fn config_in_charge(path: String) -> ConfigInCharge {
-    use Matcher::{Function, Pattern};
-    let rule = |matchers, destination| Rule {
-        matchers,
-        destination,
-        hits: "",
-        enabled: true,
-    };
-    let firefox = || browser("Ff", "Firefox", None);
-    ConfigInCharge {
-        path,
-        edited: "Edited externally 3 min ago; reloaded.",
-        handlers: vec![
-            rule(
-                vec![Function(
-                    "(url, { opener }) => url.host.includes(\"workplace\")",
-                )],
-                firefox(),
-            ),
-            rule(
-                vec![Function(
-                    "(url, { opener }) => opener?.name.includes(\"Slack\") || false",
-                )],
-                firefox(),
-            ),
-            rule(vec![Pattern("bsky.app/*")], firefox()),
-            rule(
-                vec![Pattern("google.com/*"), Pattern("*.google.com*")],
-                browser("Ch", "Google Chrome", None),
-            ),
-        ],
-        default_browser: browser("Ch", "Google Chrome", None),
-    }
-}
 
 /// How many links the router handled today, for the rail and strip.
 pub const ACTIVITY_TODAY: &str = "1,412 today \u{00b7} 2 failed";
@@ -503,9 +475,19 @@ mod tests {
             // An app row shows its bundle id where a browser shows the
             // profile; rules.json names that app by the bundle id.
             if json.browser == *name {
-                assert_eq!(json.profile, profile.unwrap_or_default(), "{}", row.title);
+                assert_eq!(
+                    json.profile,
+                    profile.as_deref().unwrap_or_default(),
+                    "{}",
+                    row.title
+                );
             } else {
-                assert_eq!(Some(json.browser.as_str()), *profile, "{}", row.title);
+                assert_eq!(
+                    Some(json.browser.as_str()),
+                    profile.as_deref(),
+                    "{}",
+                    row.title
+                );
             }
             let opener: Vec<&str> = row.sent_from.iter().map(|app| app.bundle_id).collect();
             assert_eq!(json.opener, opener, "{}", row.title);
