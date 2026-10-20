@@ -24,10 +24,39 @@ serde_json = { workspace = true }
 # Wakes the GPUI thread when a second launch asks for the window.
 async-channel = "2"
 gpui-kit = { version = "=0.6.6", default-features = false, features = ["assets"] }
+# Rasterizes the mark for the tray icon. The same version GPUI draws SVGs with.
+resvg = { version = "0.46", default-features = false }
+# The menu bar item (macOS) and notification-area icon (Windows, Linux), with
+# their native menus. On Linux it speaks StatusNotifierItem over D-Bus
+# (`ksni`), so it needs no GTK main loop beside GPUI's.
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
+url = "2.5"
 # Installer and auto-updater. Pinned with `=` because the `vpk` CLI that
 # packs releases must be the same version: VPK_VERSION (and its SHA-512) in
 # scripts/release/install-vpk.sh. Upgrade them together.
 velopack = "=1.2.161"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The Dock icon (activation policy) and the screen under the menu bar item.
+# objc2's AppKit bindings for these are safe; see `macos.rs`.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSApplication",
+    "NSGraphics",
+    "NSResponder",
+    "NSScreen",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSGeometry",
+    "NSString",
+    "NSValue",
+] }
 
 [dev-dependencies]
 # The window harness: lets the smoke test open a real window and draw a frame.

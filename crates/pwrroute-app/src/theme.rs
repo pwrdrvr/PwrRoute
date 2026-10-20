@@ -103,6 +103,12 @@ tokens! {
     warn_soft = hex_alpha(0xd99a3d, 0.14);
     warn_text = hex(0xe8c890);
     transparent = hex_alpha(0x000000, 0.0);
+    /// `.strip-chip.off`'s dot: not routing.
+    status_suspended = hex(0x6b6660);
+    /// The menu bar dropdown's fill: `.tray`'s rgba(16,16,16,0.98), made
+    /// opaque. In the transparent popup window the 0.98 fill let the window
+    /// behind it show through visibly.
+    bg_popover = hex(0x101010);
 }
 
 /// A single-line run of sans text: CSS `font: <weight> <size>/1`.
