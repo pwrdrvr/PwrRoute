@@ -41,6 +41,10 @@ pub struct BrowserInfo {
     /// Overrides the engine's profile flag, for browsers that ignore it.
     #[serde(default)]
     profile_flag: Option<ProfileFlag>,
+    /// Overrides the engine's private-window flag: Edge spells it
+    /// `--inprivate`; Arc and Dia take none.
+    #[serde(default)]
+    private_flag: Option<PrivateFlag>,
     pub macos: Option<MacOs>,
     pub windows: Option<Windows>,
     pub linux: Option<Linux>,
@@ -68,6 +72,44 @@ pub enum ProfileFlag {
     Firefox,
     /// No command-line profile selection.
     None,
+}
+
+/// How a browser is told to open a URL in a private window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum PrivateFlag {
+    /// `--incognito`, Chromium's switch.
+    #[serde(rename = "incognito")]
+    Incognito,
+    /// `--inprivate`, Microsoft Edge's spelling.
+    #[serde(rename = "inprivate")]
+    InPrivate,
+    /// `--private-window`, Firefox's.
+    #[serde(rename = "private-window")]
+    PrivateWindow,
+    /// No command-line way (Safari, Orion, Arc).
+    #[serde(rename = "none")]
+    None,
+}
+
+impl PrivateFlag {
+    /// Every flag a config's `args` may already carry.
+    const KNOWN: [PrivateFlag; 3] = [Self::Incognito, Self::InPrivate, Self::PrivateWindow];
+
+    /// The argument that asks for a private window, if there is one.
+    pub fn arg(self) -> Option<&'static str> {
+        match self {
+            Self::Incognito => Some("--incognito"),
+            Self::InPrivate => Some("--inprivate"),
+            Self::PrivateWindow => Some("--private-window"),
+            Self::None => Option::None,
+        }
+    }
+
+    /// The flag an argument is, if it is one of the known private-window
+    /// flags (so a config whose `args` carry one is not given it twice).
+    pub fn from_arg(arg: &str) -> Option<PrivateFlag> {
+        Self::KNOWN.into_iter().find(|f| f.arg() == Some(arg))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +266,15 @@ impl BrowserInfo {
             BrowserEngine::Chromium => ProfileFlag::Chromium,
             BrowserEngine::Firefox => ProfileFlag::Firefox,
             BrowserEngine::WebKit => ProfileFlag::None,
+        })
+    }
+
+    /// How this browser opens a private window from the command line.
+    pub fn private_flag(&self) -> PrivateFlag {
+        self.private_flag.unwrap_or(match self.engine {
+            BrowserEngine::Chromium => PrivateFlag::Incognito,
+            BrowserEngine::Firefox => PrivateFlag::PrivateWindow,
+            BrowserEngine::WebKit => PrivateFlag::None,
         })
     }
 

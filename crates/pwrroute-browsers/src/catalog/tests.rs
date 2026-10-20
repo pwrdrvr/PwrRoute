@@ -227,6 +227,47 @@ fn profile_directories_match_the_profile_flag() {
     }
 }
 
+/// Every browser says how it opens a private window: the engine's flag
+/// unless the entry overrides it. The overrides are the ones the launcher
+/// is documented with, and a Chromium browser that cannot pick a profile
+/// from the command line says explicitly whether it can go private.
+#[test]
+fn private_window_flags_match_the_engine() {
+    let flag = |id: &str| catalog().find(id).unwrap().private_flag();
+    for b in catalog().browsers() {
+        let expected = match b.engine {
+            BrowserEngine::Chromium if b.id.starts_with("edge") => PrivateFlag::InPrivate,
+            BrowserEngine::Chromium if b.profile_flag() == ProfileFlag::None => {
+                assert!(
+                    b.private_flag.is_some(),
+                    "{}: say whether it can go private",
+                    b.id
+                );
+                b.private_flag.unwrap()
+            }
+            BrowserEngine::Chromium => PrivateFlag::Incognito,
+            BrowserEngine::Firefox => PrivateFlag::PrivateWindow,
+            BrowserEngine::WebKit => PrivateFlag::None,
+        };
+        assert_eq!(b.private_flag(), expected, "{}", b.id);
+        if let Some(arg) = b.private_flag().arg() {
+            assert!(arg.starts_with("--"), "{}: {arg:?}", b.id);
+            assert_eq!(PrivateFlag::from_arg(arg), Some(b.private_flag()));
+        }
+    }
+    for id in ["chrome", "chromium", "brave", "vivaldi", "opera"] {
+        assert_eq!(flag(id).arg(), Some("--incognito"), "{id}");
+    }
+    assert_eq!(flag("edge").arg(), Some("--inprivate"));
+    for id in ["firefox", "zen", "librewolf", "waterfox", "floorp"] {
+        assert_eq!(flag(id).arg(), Some("--private-window"), "{id}");
+    }
+    for id in ["safari", "orion", "arc"] {
+        assert_eq!(flag(id), PrivateFlag::None, "{id}");
+    }
+    assert_eq!(PrivateFlag::from_arg("--profile-directory=Default"), None);
+}
+
 #[derive(Deserialize)]
 struct FinickyBrowser {
     config_dir_relative: String,
