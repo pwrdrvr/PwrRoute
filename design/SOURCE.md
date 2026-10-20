@@ -22,6 +22,12 @@ the project and re-export here.
 - Updated **2026-10-13**: `pwrroute.css` re-exported after the strip gutter
   was narrowed to 68px, which puts the brand at x=96, the family spec. The
   GPUI app uses the same value.
+- Updated **2026-10-18**: five canvases added for the workflows the first pass
+  left out (rule editing, empty and error states, Windows and Linux chrome,
+  updates and default-browser registration, the Finicky importer). Each was
+  written to the project, then downloaded from its preview and compared byte
+  for byte with the file here. The four earlier canvases, `pwrroute.css` and
+  `support.js` are unchanged.
 
 ## Files
 
@@ -31,7 +37,12 @@ the project and re-export here.
 | `PwrRoute App Baseline.dc.html` | Main window: Rules (rewrites, handlers, default) with the rule editor rail; the Finicky-config-in-charge state; Test a link (trace); Activity |
 | `PwrRoute Settings.dc.html` | Settings window: Local agents (MCP, sessions, roles), Configuration (source, importer, short links, files), Browsers (OS default, detected apps, other apps) |
 | `PwrRoute Tray and First Run.dc.html` | macOS menu bar dropdown (normal and paused), Windows/Linux tray menu, first-run window |
-| `pwrroute.css` | Shared tokens and chrome for the four canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute Rule Editing.dc.html` | Add a handler (rail or sheet), the rewrite editor and a new rewrite, reorder by drag and by keyboard, delete with undo (toast or tombstone), validation problems and warnings |
+| `PwrRoute Empty and Error States.dc.html` | No rules; no configuration; a config that fails to load while the last good one routes (window and menu bar); a matcher that timed out; a browser that is not installed |
+| `PwrRoute Windows and Linux Chrome.dc.html` | Main-window strip on Windows 11 and GNOME: brand at x=16, menu bar, caption buttons, and the rejected keep-the-gutter option |
+| `PwrRoute Updates and Default Browser.dc.html` | Velopack update states and Restart to update; becoming the default browser on macOS, Windows 11 and Linux |
+| `PwrRoute Finicky Importer.dc.html` | The importer end to end: discovery and entry points, Review with verdicts and suggestions, Place, Choose source, result with Undo import, a config that does not load |
+| `pwrroute.css` | Shared tokens and chrome for all nine canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.

@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* rule rows, as in App Baseline */
+          .rules { display: flex; flex-direction: column; position: relative; }
+          .rr { position: relative; display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 230px) 64px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.sel { background: var(--bg-row-active); }
+          .rr.sel::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+          .rr.off > * { opacity: 0.5; }
+          .grip { color: var(--text-subtle); display: flex; align-items: center; justify-content: center; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr .m .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .dest .ph { color: var(--text-subtle); }
+          .rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .rr.more-on .more { color: var(--accent-bright); background: var(--bg-hover-strong); border-radius: 4px; padding: 3px 0; }
+          .tag.act i { font-style: normal; color: var(--text-subtle); }
+          .tag.act { color: var(--accent-bright); }
+          .tag.ph { border-style: dashed; background: transparent; color: var(--text-subtle); }
+          .card-foot { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--border-faint); font: 500 10.5px/1.4 var(--font-sans); color: var(--text-subtle); }
+          .card.dim { opacity: 0.38; }
+          .card-hd.solo { border-bottom: none; }
+          /* right rail editor, as in App Baseline */
+          .rrail { flex: 0 0 372px; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); display: flex; flex-direction: column; overflow: visible; position: relative; }
+          .rrail.solo { width: 372px; border: 1px solid var(--border-subtle); border-radius: 10px; }
+          .rs { padding: 14px 16px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 8px; position: relative; }
+          .rs h5 { margin: 0 0 2px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .lab { font: 600 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .lrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+          .lrow .lab { flex: 1; }
+          .plist { display: flex; flex-direction: column; gap: 5px; }
+          .plist .inp { padding-right: 6px; }
+          .inp .x { margin-left: auto; color: var(--text-subtle); font: 500 11px/1 var(--font-mono); }
+          .addp { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px dashed var(--border-default); border-radius: var(--radius-md); font: 500 11px/1 var(--font-sans); color: var(--text-muted); align-self: flex-start; }
+          .addp.on { border-style: solid; border-color: var(--accent-border); color: var(--accent-bright); background: var(--bg-row-active); }
+          .rs .try { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-app); border: 1px solid var(--border-faint); font: 500 11px/1.45 var(--font-sans); color: var(--text-secondary); }
+          .rs .try b { color: var(--text-primary); font-weight: 600; }
+          .rs .try .st { margin-top: 4px; }
+          .rail-end { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-faint); }
+          .rhead { flex-direction: row; align-items: center; gap: 10px; }
+          .rhead > div { flex: 1; min-width: 0; }
+          .rhead .ttl { font-size: 15px; }
+          .url { font: 500 11.5px/1.5 var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+          .url .chg { color: var(--accent-bright); background: var(--accent-soft); border-radius: 3px; padding: 0 2px; }
+          .url .del { color: var(--danger-text); text-decoration: line-through; opacity: 0.85; }
+          /* change rows in the rewrite editor */
+          .acts { display: flex; flex-direction: column; gap: 6px; }
+          .chg-row { display: grid; grid-template-columns: 12px 18px 112px minmax(0, 1fr) 14px; gap: 6px; align-items: center; }
+          .chg-row .n { font: 600 10px/1 var(--font-mono); color: var(--text-subtle); text-align: center; }
+          .chg-row .x { color: var(--text-subtle); font: 500 11px/1 var(--font-mono); text-align: center; }
+          .chg-row .inp { min-height: 28px; font-size: 11.5px; }
+          /* menus */
+          .menu { position: absolute; z-index: 5; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-popover); padding: 4px; display: flex; flex-direction: column; }
+          .mi { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+          .mi .k { margin-left: auto; padding-left: 16px; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .mi.dim { color: var(--text-subtle); }
+          .mi.danger { color: var(--danger-text); }
+          .mi .ex { margin-left: auto; padding-left: 16px; font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .mi .ind { width: 12px; flex: 0 0 auto; }
+          .mcap { padding: 7px 8px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .msep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+          .mfoot { padding: 6px 8px 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); white-space: normal; }
+          /* sheet */
+          .rel { position: relative; }
+          .scrim { position: absolute; left: 0; right: 0; top: 41px; bottom: 0; background: rgba(0,0,0,0.62); }
+          .sheet { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); width: 520px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-popover); display: flex; flex-direction: column; }
+          .sheet-hd { padding: 16px 18px 12px; border-bottom: 1px solid var(--border-faint); }
+          .sheet-bd { padding: 6px 0; }
+          .sheet-bd .field-l { width: 140px; }
+          .sheet-ft { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-faint); }
+          .sheet-ft .note { flex: 1; }
+          /* drag */
+          .gap { height: 42px; margin: 4px 8px; border: 1px dashed var(--accent-border); border-radius: 8px; background: var(--accent-tint); }
+          .rr.lift { position: absolute; left: 22px; right: -10px; top: 49px; z-index: 3; background: var(--bg-panel-elevated); border: 1px solid var(--accent-border); border-radius: 8px; box-shadow: var(--shadow-popover); transform: rotate(-0.6deg); }
+          .rr.lift .grip { color: var(--accent); }
+          .rr.lift .idx { color: var(--accent-bright); }
+          .dragtip { position: absolute; z-index: 4; right: 14px; top: 104px; width: 300px; padding: 10px 12px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-popover); display: flex; flex-direction: column; gap: 6px; font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .dragtip b { font: 600 12px/1.3 var(--font-sans); color: var(--text-primary); }
+          .dragtip .ln { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+          .nodrop { display: flex; align-items: center; gap: 8px; padding: 0 2px; font: 500 10.5px/1.4 var(--font-sans); color: var(--text-subtle); }
+          /* delete */
+          .toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 14px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 10px; box-shadow: var(--shadow-popover); font: 500 12px/1.3 var(--font-sans); color: var(--text-primary); white-space: nowrap; z-index: 4; }
+          .toast .tm { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr.tomb { grid-template-columns: 12px 22px minmax(0, 1fr) auto; background: var(--bg-input); }
+          .rr.tomb .gone { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font: 500 11.5px/1.3 var(--font-sans); color: var(--text-muted); min-width: 0; }
+          .rr.tomb .gone .tag { text-decoration: line-through; color: var(--text-subtle); }
+          .rr.tomb .ua { display: flex; align-items: center; gap: 8px; }
+          .rr.fresh { background: var(--accent-tint); }
+          /* validation */
+          .inp.err { border-color: var(--danger-base); }
+          .err-t { display: flex; align-items: flex-start; gap: 6px; font: 500 10.5px/1.45 var(--font-sans); color: var(--danger-text); }
+          .warn-t { display: flex; align-items: flex-start; gap: 6px; font: 500 10.5px/1.45 var(--font-sans); color: var(--warn-text); }
+          .err-t i, .warn-t i { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 700 9px/1 var(--font-mono); font-style: normal; background: var(--danger-soft); }
+          .warn-t i { background: var(--warn-soft); }
+          .rr.bad .idx { color: var(--danger-text); }
+          .rr .badge { justify-self: end; display: inline-flex; align-items: center; gap: 5px; font: 600 10px/1 var(--font-sans); color: var(--danger-text); white-space: nowrap; }
+          .rr .badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--status-error); }
+          .card-foot.bad { color: var(--danger-text); background: var(--danger-soft); border-top-color: transparent; }
+          .crop { background: var(--bg-app); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+          .crow { display: flex; gap: 16px; align-items: flex-start; }
+          .live { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-subtle); }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Add a handler ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Rules &rsaquo; Add a handler</span></div>
+        <p class="dv-sub">Add handler from the pane head. The real choice is where the new rule is edited: in the <b>rail</b> that already edits every rule, or in a <b>sheet</b> of its own. Either way a handler saves only once it has a pattern and a browser, because <code>RulesFile::problems()</code> refuses one without them (&ldquo;Add at least one match pattern.&rdquo;, &ldquo;Select a browser.&rdquo;), and a new handler lands at the end of the list, just above Everything else. Order is the meaning of a handler list, so <b>Try it</b> says when an earlier rule would win.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a New handler in the rail">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Recommended. A draft row 08 appears, selected, and the rail opens on it with the pattern field focused. The browser menu lists detected browsers with their profiles; an app that is not installed stays listed, dimmed. Nothing is written until the draft is complete.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">10</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                  <div class="rail-foot"><span class="st"><i></i>router · running</span><span>saved 09:41</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head">
+                    <div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1></div>
+                    <div class="actions"><span class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add rewrite</span><span class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add handler</span></div>
+                  </div>
+                  <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 1 · run in order · every match applies</p><h2 class="card-title">Rewrites</h2></div><span class="chip">3 rewrites</span><span class="btn sm quiet">Expand</span></div></section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">7 handlers · 1 draft</span></div>
+                    <div class="rules">
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag">meet.google.com/*</span><span class="tag">*.google.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">38 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">214 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="lbl">sent from</span><span class="tag app"><span class="bi">Sl</span>Slack</span><span class="lbl">and</span><span class="tag">*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="hits">57 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">bsky.app/*</span><span class="tag">*.reddit.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">localhost:*</span><span class="tag">127.0.0.1:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">06</span><div class="m"><span class="tag">zoom.us/j/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Zm</span>zoom.us</div><span class="hits">6 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr off"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">07</span><div class="m"><span class="tag">figma.com/*</span><span class="chip">off</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Fg</span>Figma</div><span class="hits">&mdash;</span><span class="more">&#8943;</span></div>
+                      <div class="rr sel"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx" style="color: var(--accent-bright);">08</span><div class="m"><span class="tag">notion.so/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="ph">Choose a browser</span></div><span class="hits">draft</span><span class="more">&#8943;</span></div>
+                    </div>
+                  </section>
+                  <section class="card"><div class="rules"><div class="rr"><span></span><span class="idx">&infin;</span><div class="m"><span class="lbl" style="color: var(--text-primary); font-weight: 600;">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="hits">690 today</span><span class="more">&#8943;</span></div></div></section>
+                </div>
+                <aside class="rrail">
+                  <div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">New handler · 8 of 8</div><h2 class="ttl">notion.so</h2></div><span class="chip acc">draft</span></div>
+                  <div class="rs">
+                    <h5>Match</h5>
+                    <span class="lab">URL patterns</span>
+                    <div class="plist"><div class="inp mono">notion.so/*<span class="x">&times;</span></div><div class="inp mono">*.notion.site/*<span class="x">&times;</span></div></div>
+                    <span class="addp">+ pattern &nbsp;<span class="note">wildcard, or /regex/</span></span>
+                    <div class="lrow" style="margin-top: 6px;"><span class="lab">Sent from</span><span class="addp">+ app</span></div>
+                    <span class="field-help">Optional. Leave empty to match a link from any app.</span>
+                  </div>
+                  <div class="rs">
+                    <h5>Open in</h5>
+                    <div class="inp focus"><span class="ph">Choose a browser or app</span><span class="caret">&#9662;</span></div>
+                    <div class="menu" style="left: 16px; right: 16px; top: 68px;">
+                      <div class="mcap">Browsers</div>
+                      <div class="mi"><span class="bi">Ch</span>Google Chrome<span class="ex">Personal · Work</span></div>
+                      <div class="mi hov"><span class="bi">Ff</span>Firefox<span class="ex">default-release · dev-edition</span></div>
+                      <div class="mi"><span class="bi">Ar</span>Arc</div>
+                      <div class="mi"><span class="bi">Sa</span>Safari<span class="ex">Personal · Work</span></div>
+                      <div class="mcap">Other apps</div>
+                      <div class="mi"><span class="bi">Fg</span>Figma<span class="ex">com.figma.Desktop</span></div>
+                      <div class="mi dim"><span class="bi">Zm</span>zoom.us<span class="ex">not installed</span></div>
+                      <div class="msep"></div>
+                      <div class="mi" style="color: var(--text-secondary);">Other app by bundle id or path&hellip;</div>
+                    </div>
+                    <div class="lrow" style="opacity: 0.25;"><span class="lab">Profile</span><div class="inp" style="width: 190px;">&mdash;<span class="caret">&#9662;</span></div></div>
+                    <div class="lrow" style="opacity: 0.25;"><span class="lab">Open in background</span><span class="sw"></span></div>
+                    <div class="lrow" style="opacity: 0.25;"><span class="lab">Extra arguments</span><div class="inp mono" style="width: 190px;"><span class="ph">--new-window</span></div></div>
+                  </div>
+                  <div class="rs">
+                    <h5>Try it</h5>
+                    <div class="inp mono">https://www.notion.so/pwrdrvr/Roadmap-4f1c</div>
+                    <div class="try"><span class="st"><i></i></span><span>Nothing earlier matches, so this handler would take it.</span></div>
+                  </div>
+                  <div class="rail-end"><span class="btn quiet sm">Discard draft</span><span class="note">saves once it has a pattern and a browser</span></div>
+                </aside>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b New handler in a sheet">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>A sheet over the Rules view, with an explicit position. It reads well for a first rule, but it is a second editor for the same fields, and after Add the rule is edited in the rail anyway.</span></div>
+            <div class="dv-card win rel" style="width: 1000px; height: 640px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">10</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1></div></div>
+                  <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 1</p><h2 class="card-title">Rewrites</h2></div></div></section>
+                  <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 2</p><h2 class="card-title">Handlers</h2></div></div></section>
+                </div>
+              </div>
+              <div class="scrim"></div>
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">Handler</div><h2 class="ttl" style="font-size: 16px;">Add handler</h2></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>URL patterns</span><span class="field-sub">Wildcard, or /regex/.</span></div><div class="field-c"><div class="inp mono focus" style="width: 100%;">notion.so/*</div><span class="addp">+ pattern</span></div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><span class="addp">+ app</span></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c"><div class="inp" style="width: 100%;"><span class="bi">Ff</span>Firefox<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">default-release<span class="caret">&#9662;</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Position</span><span class="field-sub">First match wins.</span></div><div class="field-c"><div class="seg"><span>Top</span><span>After handler 3</span><span class="on">Bottom</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes handler 8. Nothing earlier matches notion.so.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add handler</span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Pick 1a.</b> The rail is already the editor, and edits already save on change; a sheet would duplicate every field and still hand off to the rail. 1a takes the sheet's one good idea, an explicit position: when Try it finds an earlier handler that wins, it offers <b>Move above handler N</b> in place, as in App Baseline 1a.</p>
+      </section>
+
+      <!-- ================= TURN 2 — Rewrites ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Rules &rsaquo; Add a rewrite &middot; the rewrite editor</span></div>
+        <p class="dv-sub">A rewrite is a match plus an ordered list of <b>changes</b>, the five <code>RewriteAction</code>s rules.json can hold: set host, set scheme, replace path, drop query parameters, replace the whole URL. The rail edits one rewrite at a time. Try it shows the URL before and after, highlighting each part a change touched, the same marks Test a link uses, then names the handler that would take the result.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Rewrite editor rail">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Rewrite 1 selected. Two changes, applied top to bottom; each row is a kind and a value, and its grip reorders it. Every matching rewrite applies, so Try it also lists the other rewrites that would run.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>rules.json · 3 rewrites · 7 handlers</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">10</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                  <div class="rail-foot"><span class="st"><i></i>router · running</span><span>saved 09:44 · reloaded</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head">
+                    <div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1></div>
+                    <div class="actions"><span class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add rewrite</span><span class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add handler</span></div>
+                  </div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 1 · run in order · every match applies</p><h2 class="card-title">Rewrites</h2></div><span class="chip">3 rewrites</span></div>
+                    <div class="rules">
+                      <div class="rr sel"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag">x.com/*</span><span class="tag">twitter.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="tag act"><i>host</i>xcancel.com</span><span class="tag act"><i>drop</i>s</span></div><span class="hits">12 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">*</span><span class="lbl">with query</span><span class="tag">utm_*</span><span class="tag">fbclid</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="tag act"><i>drop</i>utm_* fbclid</span></div><span class="hits">1.1k today</span><span class="more">&#8943;</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="tag">http://*.internal/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="tag act"><i>scheme</i>https</span></div><span class="hits">&mdash;</span><span class="more">&#8943;</span></div>
+                    </div>
+                  </section>
+                  <section class="card"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">7 handlers · 1 off</span><span class="btn sm quiet">Expand</span></div></section>
+                </div>
+                <aside class="rrail">
+                  <div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">Rewrite · 1 of 3</div><h2 class="ttl">x.com to xcancel</h2></div><span class="sw on"></span></div>
+                  <div class="rs">
+                    <h5>Match</h5>
+                    <div class="plist"><div class="inp mono">x.com/*<span class="x">&times;</span></div><div class="inp mono">twitter.com/*<span class="x">&times;</span></div></div>
+                    <span class="addp">+ pattern</span>
+                  </div>
+                  <div class="rs">
+                    <h5>Changes · applied in order</h5>
+                    <div class="acts">
+                      <div class="chg-row"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="n">1</span><div class="inp">Set host<span class="caret">&#9662;</span></div><div class="inp mono">xcancel.com</div><span class="x">&times;</span></div>
+                      <div class="chg-row"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="n">2</span><div class="inp">Drop query<span class="caret">&#9662;</span></div><div class="inp mono">s</div><span class="x">&times;</span></div>
+                    </div>
+                    <span class="addp">+ change</span>
+                  </div>
+                  <div class="rs">
+                    <h5>Try it</h5>
+                    <div class="inp mono">https://x.com/pwrdrvr/status/1842?s=20</div>
+                    <span class="url">https://<span class="chg">xcancel.com</span>/pwrdrvr/status/1842<span class="del">?s=20</span></span>
+                    <div class="try"><span class="st"><i></i></span><span>Rewrite 2 also matches and changes nothing here. No handler matches xcancel.com, so <b>Everything else · Google Chrome · Personal</b> would open it.</span></div>
+                  </div>
+                  <div class="rail-end"><span class="btn quiet danger sm">Delete rewrite</span><span class="note">edited 09:44 · saved</span></div>
+                </aside>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b New rewrite, choosing a change">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>A new rewrite, cropped to the rail. Its first change starts as a menu of the five kinds, each with an example in the value's own shape. The footer says where anything else lives.</span></div>
+            <div class="dv-card" style="width: 414px; background: var(--bg-app); padding: 20px;">
+              <aside class="rrail solo" style="height: 560px;">
+                <div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">New rewrite · 4 of 4</div><h2 class="ttl">medium.com</h2></div><span class="chip acc">draft</span></div>
+                <div class="rs">
+                  <h5>Match</h5>
+                  <div class="plist"><div class="inp mono">*.medium.com/*<span class="x">&times;</span></div></div>
+                  <span class="addp">+ pattern</span>
+                </div>
+                <div class="rs" style="border-bottom: none;">
+                  <h5>Changes</h5>
+                  <span class="addp on">+ change</span>
+                  <div class="menu" style="left: 16px; right: 16px; top: 74px;">
+                    <div class="mi">Set host<span class="ex">x.com &rarr; xcancel.com</span></div>
+                    <div class="mi hov">Set scheme<span class="ex">http &rarr; https</span></div>
+                    <div class="mi">Replace path<span class="ex">/feed</span></div>
+                    <div class="mi">Drop query parameters<span class="ex">utm_*, fbclid</span></div>
+                    <div class="mi">Replace the whole URL<span class="ex">https://new.example/</span></div>
+                    <div class="msep"></div>
+                    <div class="mfoot">Anything else is a <code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">rewrite</code> function in a Finicky config.</div>
+                  </div>
+                </div>
+                <div class="rail-end"><span class="btn quiet sm">Discard draft</span><span class="note">saves once it has a change</span></div>
+              </aside>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================= TURN 3 — Reorder ================= -->
+      <section class="dv-turn" id="t3">
+        <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Rules &rsaquo; Reorder</span></div>
+        <p class="dv-sub">Reordering handlers changes where links go, so the drag says how much before the drop. The router keeps the last hundred dispatches in memory; PwrRoute re-resolves them against the proposed order and counts the links whose browser would change. Rows move only within their own list: a handler cannot become a rewrite, and the other card dims while a row is lifted. Cropped to the pane.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="3a" data-screen-label="3a Drag in progress">
+            <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>Handler 3 lifted and held between 1 and 2. Its old place closes up and the list opens a gap where it will land. Dropping saves and reloads at once, and the change is one ⌘Z away.</span></div>
+            <div class="dv-card crop" style="width: 1000px; padding-bottom: 96px;">
+              <section class="card dim"><div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Step 1 · run in order · every match applies</p><h2 class="card-title">Rewrites</h2></div><span class="chip">3 rewrites</span></div></section>
+              <span class="nodrop">Handlers stay in Handlers; rewrites stay in Rewrites.</span>
+              <section class="card" style="overflow: visible;">
+                <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip acc">moving handler 3</span></div>
+                <div class="rules">
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag">meet.google.com/*</span><span class="tag">*.google.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">38 today</span><span class="more">&#8943;</span></div>
+                  <div class="gap"></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">214 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">bsky.app/*</span><span class="tag">*.reddit.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">localhost:*</span><span class="tag">127.0.0.1:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr lift"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="lbl">sent from</span><span class="tag app"><span class="bi">Sl</span>Slack</span><span class="lbl">and</span><span class="tag">*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="hits">&rarr; 02</span><span class="more"></span></div>
+                  <div class="dragtip">
+                    <b>Drop as handler 2</b>
+                    <span>Changes 23 of the last 100 links.</span>
+                    <span class="ln"><span class="tag">*.atlassian.net</span><span>from Slack</span><span class="arrow">&rarr;</span><span class="bi">Ff</span><span style="color: var(--text-primary);">Firefox</span><span>instead of Chrome · Work</span></span>
+                    <span class="note">Esc puts it back.</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="3b" data-screen-label="3b Reorder without a mouse">
+            <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a><span>The same move without a drag: the row menu, or ⌥⌘↑ and ⌥⌘↓ on a focused row. The menu shows the impact count for the one-step moves too, and a live region announces the new position.</span></div>
+            <div class="dv-card crop" style="width: 1000px; height: 480px;">
+              <span class="live">aria-live: &ldquo;Handler 3, sent from Slack, menu open. Move up makes it handler 2 and changes 23 recent links.&rdquo;</span>
+              <section class="card" style="overflow: visible;">
+                <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">7 handlers · 1 off</span></div>
+                <div class="rules">
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag">meet.google.com/*</span><span class="tag">*.google.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">38 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">214 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr sel more-on"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="lbl">sent from</span><span class="tag app"><span class="bi">Sl</span>Slack</span><span class="lbl">and</span><span class="tag">*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="hits">57 today</span><span class="more">&#8943;</span>
+                    <div class="menu" style="right: 8px; top: 34px; width: 270px;">
+                      <div class="mi">Move to top<span class="k">23 links change</span></div>
+                      <div class="mi hov">Move up<span class="k">&#8997;&#8984;&uarr;</span></div>
+                      <div class="mi">Move down<span class="k">&#8997;&#8984;&darr;</span></div>
+                      <div class="mi">Move to bottom<span class="k">31 links change</span></div>
+                      <div class="msep"></div>
+                      <div class="mi">Duplicate<span class="k">&#8984;D</span></div>
+                      <div class="mi">Turn off</div>
+                      <div class="mi">Test a link with this rule</div>
+                      <div class="msep"></div>
+                      <div class="mi danger">Delete handler<span class="k">&#9003;</span></div>
+                    </div>
+                  </div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">bsky.app/*</span><span class="tag">*.reddit.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">localhost:*</span><span class="tag">127.0.0.1:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note">Both are needed: 3a for the pointer, 3b for the keyboard and for anyone who wants the count before committing. The impact count runs on the in-memory trace only, never on anything written to disk, and reads &ldquo;no recent links change&rdquo; when the move is safe. With fewer than 20 recent dispatches the line is left out rather than claim confidence it does not have.</p>
+      </section>
+
+      <!-- ================= TURN 4 — Delete with undo ================= -->
+      <section class="dv-turn" id="t4">
+        <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">Rules &rsaquo; Delete with undo</span></div>
+        <p class="dv-sub">Delete is immediate: no confirmation, the file is saved and the router reloads. Undo restores the rule at its old index with its hit count. The choice is where Undo lives. ⌘Z works in both and stays good until the next edit or until the window closes.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="4a" data-screen-label="4a Undo toast">
+            <div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a><span>A toast at the foot of the pane, for 10 s. The rows below have already renumbered, so it names the rule by its pattern as well as by number.</span></div>
+            <div class="dv-card crop rel" style="width: 1000px; height: 330px;">
+              <section class="card">
+                <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">6 handlers · 1 off</span></div>
+                <div class="rules">
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">bsky.app/*</span><span class="tag">*.reddit.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">localhost:*</span><span class="tag">127.0.0.1:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr off"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">06</span><div class="m"><span class="tag">figma.com/*</span><span class="chip">off</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Fg</span>Figma</div><span class="hits">&mdash;</span><span class="more">&#8943;</span></div>
+                </div>
+              </section>
+              <div class="toast"><span>Deleted handler 6 · <span class="tag">zoom.us/j/*</span> &rarr; zoom.us</span><span class="btn sm">Undo</span><span class="tm">&#8984;Z</span><span class="btn sm quiet ic">&times;</span></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="4b" data-screen-label="4b Undo in place">
+            <div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a><span>The row stays where it was as a tombstone, with no number, until the next edit. Undo is where the eye already is, and the gap shows exactly which position comes back.</span></div>
+            <div class="dv-card crop" style="width: 1000px;">
+              <section class="card">
+                <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">6 handlers · 1 off</span></div>
+                <div class="rules">
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">bsky.app/*</span><span class="tag">*.reddit.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">localhost:*</span><span class="tag">127.0.0.1:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                  <div class="rr tomb"><span></span><span class="idx">&ndash;</span><div class="gone">Deleted <span class="tag">zoom.us/j/*</span> &rarr; zoom.us</div><div class="ua"><span class="note">restores as handler 6</span><span class="btn sm">Undo</span><span class="kbd">&#8984;Z</span></div></div>
+                  <div class="rr off"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">06</span><div class="m"><span class="tag">figma.com/*</span><span class="chip">off</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Fg</span>Figma</div><span class="hits">&mdash;</span><span class="more">&#8943;</span></div>
+                </div>
+              </section>
+              <span class="note">The rail closes on delete; selection moves to the row that took its place.</span>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Pick 4b.</b> In an ordered list the thing at risk is position, and the tombstone keeps it visible; a toast at the bottom of the pane is far from the row and gone in 10 s. Deleting the selected rule from the rail lands on the same tombstone. The Activity trace keeps naming the deleted rule by its old number for links routed before the delete.</p>
+      </section>
+
+      <!-- ================= TURN 5 — Validation ================= -->
+      <section class="dv-turn" id="t5">
+        <div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">Rules &rsaquo; Validation errors</span></div>
+        <p class="dv-sub">A rule with a problem is not saved; the router keeps routing with the last saved version of that rule, and every other edit still saves. Messages are <code>RulesFile::problems()</code>'s own words, shown under the field they belong to. Problems block saving; <b>warnings</b>, such as a pattern that matched none of the recent links, never do.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="5a" data-screen-label="5a Handler with problems">
+            <div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a><span>Handler 4 being edited. A regex that does not compile and a browser that would send the link straight back. The row keeps showing the saved version with a not-saved badge. Cropped to the pane and rail.</span></div>
+            <div class="dv-card" style="width: 1000px; background: var(--bg-app);">
+              <div class="body" style="height: 560px;">
+                <div class="pane">
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 · first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip bad">1 not saved</span></div>
+                    <div class="rules">
+                      <div class="rr" style="grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 150px) 64px 20px;"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="lbl">sent from</span><span class="tag app"><span class="bi">Sl</span>Slack</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">57 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr sel bad" style="grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 150px) 64px 20px;"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="tag">bsky.app/*</span><span class="tag">*.reddit.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="badge"><i></i>not saved</span><span class="more">&#8943;</span></div>
+                      <div class="rr" style="grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 150px) 64px 20px;"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">localhost:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                    </div>
+                    <div class="card-foot bad"><span>Handler 4 is not saved. The router uses the version saved at 09:12 until it is fixed.</span></div>
+                  </section>
+                </div>
+                <aside class="rrail">
+                  <div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">Handler · 4 of 7</div><h2 class="ttl">Social</h2></div><span class="sw on"></span></div>
+                  <div class="rs">
+                    <h5>Match</h5>
+                    <div class="plist">
+                      <div class="inp mono">bsky.app/*<span class="x">&times;</span></div>
+                      <div class="inp mono">*.reddit.com/*<span class="x">&times;</span></div>
+                      <div class="inp mono err focus">/^https:\/\/(news\.ycombinator/<span class="x">&times;</span></div>
+                    </div>
+                    <span class="err-t"><i>!</i><span>This /regex/ does not compile: unterminated group at character 11.</span></span>
+                  </div>
+                  <div class="rs">
+                    <h5>Open in</h5>
+                    <div class="inp err"><span class="bi">Pr</span>PwrRoute<span class="caret">&#9662;</span></div>
+                    <span class="err-t"><i>!</i><span>Select a browser other than PwrRoute.</span></span>
+                  </div>
+                  <div class="rs">
+                    <h5>Try it</h5>
+                    <div class="inp mono">https://news.ycombinator.com/item?id=41</div>
+                    <div class="try"><span class="st bad"><i></i></span><span>Can't test until the problems above are fixed. The saved version sends this to <b>Everything else</b>.</span></div>
+                  </div>
+                  <div class="rail-end"><span class="btn quiet sm">Revert to saved</span><span class="note" style="color: var(--danger-text);">2 problems · not saved</span></div>
+                </aside>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="5b" data-screen-label="5b Rewrite problems and a warning">
+            <div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a><span>A rewrite, cropped to the rail. Two problems on the changes, and a warning on the match that does not block saving. A host that carries a path offers the fix it implies.</span></div>
+            <div class="dv-card" style="width: 414px; background: var(--bg-app); padding: 20px;">
+              <aside class="rrail solo">
+                <div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">Rewrite · 4 of 4</div><h2 class="ttl">Old wiki</h2></div><span class="sw on"></span></div>
+                <div class="rs">
+                  <h5>Match</h5>
+                  <div class="plist"><div class="inp mono">wiki.pwrdrvr.internal/*<span class="x">&times;</span></div></div>
+                  <span class="warn-t"><i>~</i><span>Matched none of the last 100 links. That can be fine for a rule you rarely need.</span></span>
+                </div>
+                <div class="rs">
+                  <h5>Changes · applied in order</h5>
+                  <div class="acts">
+                    <div class="chg-row"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="n">1</span><div class="inp">Set host<span class="caret">&#9662;</span></div><div class="inp mono err">notion.so/pwrdrvr</div><span class="x">&times;</span></div>
+                    <span class="err-t" style="padding-left: 42px;"><i>!</i><span>Enter a host such as example.com. <a href="#5b">Move /pwrdrvr to a Replace path change</a></span></span>
+                    <div class="chg-row"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="n">2</span><div class="inp">Drop query<span class="caret">&#9662;</span></div><div class="inp mono err"><span class="ph">utm_*, ref</span></div><span class="x">&times;</span></div>
+                    <span class="err-t" style="padding-left: 42px;"><i>!</i><span>Name the query parameters to drop.</span></span>
+                  </div>
+                  <span class="addp">+ change</span>
+                </div>
+                <div class="rail-end"><span class="btn quiet sm">Revert to saved</span><span class="note" style="color: var(--danger-text);">2 problems · not saved</span></div>
+              </aside>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note">Engine gap: <code>problems()</code> checks for empty patterns but not regex syntax, so the 5a message needs a compile check in the engine before it can ship. Leaving the rail with problems keeps the draft for the session and keeps the badge on the row; closing the window asks once whether to discard it.</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
