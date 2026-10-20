@@ -124,6 +124,12 @@ jobs:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-deny and cargo-about
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
@@ -154,6 +160,12 @@ jobs:
           toolchain: "1.97"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build (release)
         run: cargo build --release --locked --workspace
@@ -176,6 +188,12 @@ jobs:
           toolchain: "1.97"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test
         run: cargo xtask test
@@ -198,6 +216,12 @@ jobs:
           toolchain: "1.97"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test
         run: cargo xtask test
@@ -236,6 +260,12 @@ jobs:
           toolchain: "1.97"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only main writes the cache. The store is capped at 10 GB and each
+          # PR branch would save 2-3 GB across the three platforms, evicting
+          # main's entries; a PR then finds nothing to restore and Windows
+          # compiles cold for 35+ minutes. PRs restore main's cache instead.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test
         run: cargo xtask test
