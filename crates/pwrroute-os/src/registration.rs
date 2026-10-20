@@ -77,6 +77,12 @@ pub fn default_browser_status() -> Result<DefaultStatus> {
     imp::status()
 }
 
+/// Opens the OS's own default-apps page, where the user can pick or change
+/// the default browser by hand. Changes nothing itself.
+pub fn open_default_apps_settings() -> Result<()> {
+    imp::open_settings()
+}
+
 /// One registry value under `HKEY_CURRENT_USER`. `name` is empty for the
 /// key's default value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,7 +200,7 @@ fn exec_arg(path: &str) -> String {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    pub use crate::macos::{register, set_default, status, unregister};
+    pub use crate::macos::{open_settings, register, set_default, status, unregister};
 }
 
 #[cfg(windows)]
@@ -243,6 +249,14 @@ mod imp {
             .spawn()
             .context("opening Settings › Default apps")?;
         Ok(DefaultRequest::OpenedSettings)
+    }
+
+    pub fn open_settings() -> Result<()> {
+        Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", "ms-settings:defaultapps"])
+            .spawn()
+            .context("opening Settings › Default apps")?;
+        Ok(())
     }
 
     pub fn status() -> Result<DefaultStatus> {
@@ -328,6 +342,22 @@ mod imp {
             )?;
         }
         Ok(DefaultRequest::Set)
+    }
+
+    /// The desktop's default-applications page, by the settings apps that
+    /// have one: GNOME, KDE, Xfce.
+    pub fn open_settings() -> Result<()> {
+        let apps: [(&str, &[&str]); 3] = [
+            ("gnome-control-center", &["default-apps"]),
+            ("systemsettings", &["kcm_componentchooser"]),
+            ("xfce4-mime-settings", &[]),
+        ];
+        for (program, args) in apps {
+            if Command::new(program).args(args).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        bail!("no default-applications settings app found (GNOME, KDE or Xfce)")
     }
 
     pub fn status() -> Result<DefaultStatus> {

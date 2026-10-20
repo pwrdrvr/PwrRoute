@@ -31,6 +31,9 @@ mod chrome;
 #[path = "../src/config_view.rs"]
 mod config_view;
 #[cfg(target_os = "macos")]
+#[path = "../src/default_browser.rs"]
+mod default_browser;
+#[cfg(target_os = "macos")]
 #[path = "../src/editor.rs"]
 mod editor;
 #[cfg(target_os = "macos")]

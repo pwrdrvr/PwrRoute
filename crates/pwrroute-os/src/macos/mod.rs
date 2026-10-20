@@ -77,6 +77,15 @@ pub fn set_default() -> Result<DefaultRequest> {
     Ok(DefaultRequest::Prompted)
 }
 
+/// System Settings › Desktop & Dock, which holds "Default web browser".
+pub fn open_settings() -> Result<()> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.Desktop-Settings.extension")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
+}
+
 pub fn status() -> Result<DefaultStatus> {
     let http = launch_services::default_handler("http");
     let https = launch_services::default_handler("https");

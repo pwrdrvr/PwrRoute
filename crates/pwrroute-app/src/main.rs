@@ -4,7 +4,8 @@
 //! with every window closed; later launches hand it their links and exit.
 //! The window draws "Rules with editor" from the design review over contrived
 //! fixture rules. Nothing here makes PwrRoute the default browser: that is an
-//! explicit action (`pwrroute_os::set_default_browser`).
+//! explicit action, a click in first run or Settings that
+//! [`default_browser`] turns into `pwrroute_os::set_default_browser`.
 
 // A window, not a console program, when built for Windows.
 #![windows_subsystem = "windows"]
@@ -17,12 +18,14 @@ mod assets;
 mod browser_registration;
 mod chrome;
 mod config_view;
+mod default_browser;
 mod dock;
 mod editor;
 mod first_run;
 mod fixtures;
 #[cfg(target_os = "macos")]
 mod macos;
+mod onboarding;
 mod router;
 mod rules_view;
 mod settings;
@@ -37,6 +40,7 @@ mod updater;
 mod widgets;
 
 use std::{
+    rc::Rc,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
@@ -103,7 +107,12 @@ fn main() {
         router::Start::Resident(resident) => resident,
     };
     let handle = resident.handle();
-    let first_run = args.first_run;
+    // `--first-run` forces the window; otherwise it opens once, on the first
+    // launch that is for the window rather than a link, until it is done or
+    // closed.
+    let first_run = args.first_run
+        || pwrroute_os::data_dir().is_some_and(|dir| onboarding::State::pending(&dir));
+    let forced_first_run = args.first_run;
     let last_link = LastLink::default();
     if resident.launched_with_links {
         last_link.mark();
@@ -135,6 +144,20 @@ fn main() {
         app_menu::install(cx);
         dock::install(cx);
         tray::install(cx);
+        default_browser::install(default_browser::Os::real(), cx);
+        cx.set_global(settings::SettingsHost {
+            model: Rc::new(|window, cx| {
+                default_browser::watch(window, cx);
+                let mut model = settings::fixtures::model();
+                model.browsers.default = default_browser::card(cx);
+                model
+            }),
+            on_request: Rc::new(|request, _, cx| {
+                if !default_browser::handle_settings_request(request, cx) {
+                    eprintln!("pwrroute: settings: {request:?} is not wired up yet");
+                }
+            }),
+        });
         updater::check_in_background(updater::Trigger::Startup);
 
         let activate = resident.activate.clone();
@@ -146,16 +169,20 @@ fn main() {
         .detach();
         cx.set_global(ResidentRouter(resident));
 
-        if first_run {
-            let model = first_run::FirstRunModel::fixture();
-            if let Err(error) = first_run::open(model, first_run::FirstRunHooks::logging(), cx) {
-                eprintln!("pwrroute: could not open the first-run window: {error}");
-            }
+        if forced_first_run {
+            onboarding::open(cx);
             return;
         }
         if last_link.ever() {
             return;
         }
+        let show = move |cx: &mut App| {
+            if first_run {
+                onboarding::open(cx);
+            } else {
+                show_main_window(cx);
+            }
+        };
         if cfg!(target_os = "macos") {
             // A link that launched the app arrives as an Apple Event around
             // now; give it a moment before deciding this launch is for the
@@ -163,12 +190,12 @@ fn main() {
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(LINK_GRACE).await;
                 if !last_link.ever() {
-                    cx.update(show_main_window);
+                    cx.update(show);
                 }
             })
             .detach();
         } else {
-            show_main_window(cx);
+            show(cx);
         }
     });
 }
@@ -200,7 +227,11 @@ fn show_main_window(cx: &mut App) {
                 window_min_size: Some(size(px(1000.0), px(600.0))),
                 ..Default::default()
             },
-            |_, cx| cx.new(PwrRoute::new),
+            |window, cx| {
+                // The strip's default-browser chip follows the OS's answer.
+                default_browser::watch(window, cx);
+                cx.new(PwrRoute::new)
+            },
         )
         .expect("open the PwrRoute window");
     // The rules list owns the keyboard from the first frame.

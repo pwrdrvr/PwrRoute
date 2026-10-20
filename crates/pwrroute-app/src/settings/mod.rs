@@ -1,9 +1,10 @@
 //! The Settings window: its own window, one at a time, as in PwrSnap and
 //! PwrGit. A 208px nav on the left, and panes of cards at most 760px wide.
 //!
-//! The window draws a [`SettingsModel`] and reports what the reader asks for
-//! as [`SettingsRequest`]s to the handler in [`SettingsHost`]. Until the
-//! producers are wired up it draws [`fixtures`] and the handler only logs.
+//! The window draws a [`SettingsModel`] from [`SettingsHost`] and reports
+//! what the reader asks for as [`SettingsRequest`]s to its handler. Until
+//! the producers are wired up it draws [`fixtures`] and the handler only
+//! logs; a producer that answers later goes through [`update`].
 
 mod browsers;
 mod configuration;
@@ -143,10 +144,15 @@ impl Pane {
 /// so it may update the window's entity.
 pub type RequestHandler = Rc<dyn Fn(&SettingsRequest, &mut Window, &mut App)>;
 
-/// What the Settings window is opened with: the handler for its requests.
-/// The app sets this once its producers exist; until then requests are
-/// logged and nothing else happens.
+/// Fills the model as the window opens. The producers may also hook the
+/// window here (a refresh when it comes to the front).
+pub type ModelSource = Rc<dyn Fn(&mut Window, &mut App) -> SettingsModel>;
+
+/// What the Settings window is opened with: its model, and the handler for
+/// its requests. The app sets this once its producers exist; until then the
+/// window draws [`fixtures`], requests are logged and nothing else happens.
 pub struct SettingsHost {
+    pub model: ModelSource,
     pub on_request: RequestHandler,
 }
 
@@ -155,6 +161,7 @@ impl Global for SettingsHost {}
 impl Default for SettingsHost {
     fn default() -> Self {
         Self {
+            model: Rc::new(|_, _| fixtures::model()),
             on_request: Rc::new(|request, _, _| {
                 // Never act on the OS from here: registration in particular
                 // is the explicit action the router's owner wires up.
@@ -193,9 +200,12 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
             return;
         }
     }
-    let on_request = cx.try_global::<SettingsHost>().map_or_else(
-        || SettingsHost::default().on_request,
-        |host| host.on_request.clone(),
+    let (model, on_request) = cx.try_global::<SettingsHost>().map_or_else(
+        || {
+            let host = SettingsHost::default();
+            (host.model, host.on_request)
+        },
+        |host| (host.model.clone(), host.on_request.clone()),
     );
     let bounds = Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let handle = cx.open_window(
@@ -210,9 +220,10 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
             window_min_size: Some(size(px(MIN_SIZE.0), px(MIN_SIZE.1))),
             ..Default::default()
         },
-        |_, cx| {
+        |window, cx| {
+            let model = model(window, cx);
             cx.new(|cx| {
-                let mut view = SettingsWindow::new(fixtures::model(), on_request, cx);
+                let mut view = SettingsWindow::new(model, on_request, cx);
                 if let Some(pane) = pane {
                     view.pane = pane;
                 }
@@ -230,6 +241,19 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
             cx.activate(true);
         }
         Err(error) => eprintln!("pwrroute: could not open Settings: {error}"),
+    }
+}
+
+/// Changes the open window's model, if there is one: how a producer reports
+/// back (the OS's answer on the default browser, say). Nothing happens when
+/// Settings is closed; the next open reads the producer afresh.
+pub fn update(cx: &mut App, edit: impl FnOnce(&mut SettingsModel)) {
+    let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
+    if let Some(handle) = open {
+        let _ = handle.update(cx, |view, _, cx| {
+            edit(&mut view.model);
+            cx.notify();
+        });
     }
 }
 

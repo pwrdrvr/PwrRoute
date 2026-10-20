@@ -4,8 +4,8 @@
 
 use super::model::{
     AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, Configuration, DefaultBrowser,
-    FinickyConfig, Grant, ImportCandidate, ImportPlan, Listener, LocalAgents, Permission, Piece,
-    RoleId, RulesSource, SessionId, SettingsModel, Status, Usage,
+    DefaultState, FinickyConfig, Grant, ImportCandidate, ImportPlan, Listener, LocalAgents,
+    Permission, Piece, RoleId, RulesSource, SessionId, SettingsModel, Status, Usage,
 };
 
 pub fn model() -> SettingsModel {
@@ -268,8 +268,8 @@ fn in_rules(count: usize) -> Usage {
 pub fn browsers() -> Browsers {
     Browsers {
         default: DefaultBrowser {
-            is_default: true,
-            confirmed: Some("Confirmed 2026-10-13 09:02.".into()),
+            state: DefaultState::PwrRoute,
+            note: Some("Confirmed 2026-10-13 09:02.".into()),
         },
         detected: vec![
             app(

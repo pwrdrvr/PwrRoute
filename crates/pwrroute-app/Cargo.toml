@@ -17,9 +17,11 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+pwrroute-browsers = { workspace = true }
 pwrroute-engine = { workspace = true }
 pwrroute-os = { workspace = true }
 pwrroute-router = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 # Wakes the GPUI thread when a second launch asks for the window.
 async-channel = "2"
@@ -59,6 +61,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+tempfile = "3"
 # The window harness: lets the smoke test open a real window and draw a frame.
 gpui-kit = { version = "=0.6.6", default-features = false, features = [
     "assets",
