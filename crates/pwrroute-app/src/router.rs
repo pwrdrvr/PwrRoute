@@ -201,7 +201,9 @@ fn route_here_and_exit(args: &Args, links: Vec<Link>) {
 /// appears, changes or breaks while the app runs is reflected.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoutingSource {
-    /// The Finicky config in charge, canonicalized, when one is.
+    /// The Finicky config in charge, canonicalized, when one is. While
+    /// `error` says a config did not load and none is in charge, the config
+    /// that failed, so the window shows it with the error.
     pub config: Option<PathBuf>,
     /// `rules.json`, when it names a default browser or has rules: appended
     /// after the config's own rules, or the whole config when there is none.
@@ -268,10 +270,10 @@ fn spawn_router(args: &Args) -> Router {
         let mut resolver =
             LiveResolver::new(choice, rules_path, source.clone()).inspect_err(|e| {
                 // The router falls back with this reason; say so where the
-                // window looks.
+                // window looks, next to the config it was going to load.
                 source.set(RoutingSource {
                     fallback: Some(format!("{e:#}")),
-                    ..RoutingSource::default()
+                    ..source.get()
                 });
             })?;
         if let Ok(handle) = handle_rx.recv() {
@@ -354,6 +356,7 @@ impl LiveResolver {
         let last = self.source.get();
         self.source.set(describe_source(
             reloader.status(),
+            chosen_config(reloader.choice()),
             self.rules_path.as_deref(),
             &last,
         ));
@@ -379,11 +382,14 @@ impl Resolver for LiveResolver {
     }
 }
 
-/// The source as the reloader's status and `rules.json` describe it. `last`
-/// is the source as last published: after a failed reload the engine in
-/// charge is still the one `last` describes.
+/// The source as the reloader's status and `rules.json` describe it.
+/// `named` is the config the choice names right now: the status only knows
+/// the config an engine was built from, so a config that never loaded is
+/// taken from here. `last` is the source as last published: after a failed
+/// reload the engine in charge is still the one `last` describes.
 fn describe_source(
     status: &Status,
+    named: Option<PathBuf>,
     rules_path: Option<&Path>,
     last: &RoutingSource,
 ) -> RoutingSource {
@@ -417,8 +423,15 @@ fn describe_source(
     } else {
         None
     };
+    // A config that did not load (at start, or one that appeared broken
+    // while rules.json was in charge) is in no engine, so the status does
+    // not name it; the window still shows it, with the error.
+    let config = status
+        .config
+        .clone()
+        .or_else(|| status.error.as_ref().and(named));
     RoutingSource {
-        config: status.config.clone(),
+        config,
         rules,
         fallback,
         error: status.error.clone(),
@@ -763,6 +776,63 @@ mod tests {
         assert_eq!(source.config, Some(config.canonicalize().unwrap()));
         assert_eq!(source.rules, Some(home.rules_path()));
         assert_eq!(source.error, None);
+    }
+
+    #[test]
+    fn a_config_that_is_broken_at_start_is_named_with_its_error() {
+        let home = Home::new();
+        home.write("PwrRoute/rules.json", RULES);
+        let config = home.write(".finicky.js", "export default {\n");
+        let resolver = home.resolver();
+
+        // Nothing has loaded: links fall back with the load error, and the
+        // window is told which config it was, so it can show the error.
+        let reason = resolver.refresh().unwrap_err();
+        assert!(reason.contains(".finicky.js"), "{reason}");
+        let source = resolver.source.get();
+        assert_eq!(source.config, Some(config.canonicalize().unwrap()));
+        assert_eq!(source.fallback.as_deref(), Some(reason.as_str()));
+        assert_eq!(source.error.as_deref(), Some(reason.as_str()));
+        assert_eq!(source.rules, None);
+
+        // Fixing it takes charge on the next refresh.
+        home.write(
+            ".finicky.js",
+            "export default { defaultBrowser: \"Arc\" };\n",
+        );
+        resolver.refresh().unwrap();
+        let source = resolver.source.get();
+        assert_eq!(source.config, Some(config.canonicalize().unwrap()));
+        assert_eq!(source.rules, Some(home.rules_path()));
+        assert_eq!(source.fallback, None);
+        assert_eq!(source.error, None);
+        assert_eq!(resolve(&resolver, "https://example.com/"), "Arc");
+    }
+
+    #[test]
+    fn a_config_that_appears_broken_is_named_while_rules_json_stays_in_charge() {
+        let home = Home::new();
+        let rules = home.write("PwrRoute/rules.json", RULES);
+        let resolver = home.resolver();
+        resolver.refresh().unwrap();
+        assert_eq!(resolver.source.get().config, None);
+
+        let config = home.write(".finicky.js", "export default {\n");
+        // rules.json goes on routing; the window learns of the config and
+        // why it did not load.
+        resolver.refresh().unwrap();
+        assert_eq!(resolve(&resolver, "https://example.com/"), "Firefox");
+        let source = resolver.source.get();
+        assert_eq!(source.config, Some(config.canonicalize().unwrap()));
+        assert_eq!(source.rules, Some(rules));
+        assert_eq!(source.fallback, None);
+        assert!(
+            source
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains(".finicky.js")),
+            "{source:?}"
+        );
     }
 
     #[test]
