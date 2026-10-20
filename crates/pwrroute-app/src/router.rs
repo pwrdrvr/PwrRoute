@@ -201,7 +201,10 @@ pub fn config_in_charge() -> Option<PathBuf> {
 }
 
 /// `dispatched`, when given, receives a copy of every record the router
-/// keeps, for the window.
+/// keeps, for the window. It is wired before the router takes its first
+/// link, so the window seeds Activity from this channel alone: nothing the
+/// router routed before the window came up is missing from it, and nothing
+/// is on it twice.
 fn spawn_router(args: &Args, dispatched: Option<async_channel::Sender<DispatchRecord>>) -> Router {
     let config = args.config.clone().or_else(find_finicky_config);
     let _ = CONFIG_IN_CHARGE.set(config.clone());

@@ -1,11 +1,14 @@
 //! Activity (design option 2b): the router's recent dispatches, newest
 //! first, one expandable to its trace.
 //!
-//! [`Feed`] is the dispatch history as the window sees it: the router's
-//! in-memory buffer, mirrored into a GPUI entity that [`install`] keeps
-//! current from the channel `router::start` feeds on every dispatch. The
-//! window's [`Activity`] observes it and draws one [`ActivityRow`] per
-//! `DispatchRecord`; the tray observes it for its recents and count. Full
+//! [`Feed`] is the dispatch history as the window sees it: a GPUI entity
+//! that [`install`] fills from the channel `router::start` feeds on every
+//! dispatch, and keeps current from it. The channel is the feed's only
+//! source. The router's own buffer holds the same records, but every one of
+//! them is also on the channel (the sender exists before the router starts),
+//! so reading both would show each record dispatched before `install` twice.
+//! The window's [`Activity`] observes the feed and draws one [`ActivityRow`]
+//! per `DispatchRecord`; the tray observes it for its recents and count. Full
 //! URLs stay in memory, as the footer says: nothing here writes one anywhere.
 
 use std::time::SystemTime;
@@ -87,7 +90,8 @@ pub fn thousands(n: u64) -> String {
 
 /// The dispatch history behind Activity, the tray's recents and the counts.
 pub struct Feed {
-    /// Newest first, at most `capacity`: the router's buffer, mirrored.
+    /// Newest first, at most `capacity`: the records the channel delivered,
+    /// bounded like the router's buffer.
     records: Vec<DispatchRecord>,
     capacity: usize,
     /// The local day `counts` is for.
@@ -97,23 +101,17 @@ pub struct Feed {
 }
 
 impl Feed {
-    /// Seeded from what the router has already recorded. `None` runs
-    /// without a router, as the window harness does.
+    /// Empty. [`install`] fills it from the channel; the handle is for
+    /// [`Feed::clear`]. `None` runs without a router, as the window harness
+    /// does.
     pub fn new(handle: Option<RouterHandle>) -> Self {
-        let mut feed = Self {
+        Self {
             records: Vec::new(),
             capacity: Options::default().capacity,
             day: None,
             counts: Counts::default(),
-            handle: handle.clone(),
-        };
-        if let Some(handle) = handle {
-            // Oldest first, so the counts follow the days in order.
-            for record in handle.recent().into_iter().rev() {
-                feed.push(record);
-            }
+            handle,
         }
-        feed
     }
 
     /// A feed over `records` (newest first) and no router: tests and
@@ -184,15 +182,22 @@ pub fn feed(cx: &App) -> Option<Entity<Feed>> {
     cx.try_global::<FeedGlobal>().map(|feed| feed.0.clone())
 }
 
-/// Mirrors the router's history into the feed every surface observes, and
-/// keeps it current from `dispatched`, which `router::start` sends every
-/// recorded dispatch down.
+/// Builds the feed every surface observes from `dispatched`, which
+/// `router::start` sends every recorded dispatch down, and keeps it current
+/// from there. The router has usually routed links before GPUI gets here
+/// (the command line's, and any a second launch forwarded): those are
+/// already on the channel, oldest first, so they are taken now and the first
+/// frame shows them, each once.
 pub fn install(
     handle: RouterHandle,
     dispatched: async_channel::Receiver<DispatchRecord>,
     cx: &mut App,
 ) {
-    let feed = install_feed(Feed::new(Some(handle)), cx);
+    let mut feed = Feed::new(Some(handle));
+    while let Ok(record) = dispatched.try_recv() {
+        feed.push(record);
+    }
+    let feed = install_feed(feed, cx);
     cx.spawn(async move |cx| {
         while let Ok(record) = dispatched.recv().await {
             cx.update(|cx| {
