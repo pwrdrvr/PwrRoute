@@ -111,7 +111,8 @@ Releases feed (`crates/pwrroute-app/src/updater.rs`). The `vpk` CLI is a
 `scripts/release/install-vpk.sh` installs it only from a nupkg whose
 SHA-512 matches the one pinned in the script (NuGet's catalog hash), after
 `actions/setup-dotnet` installs .NET 8. The script's `VPK_VERSION` must
-equal the `velopack` crate's `=` pin; upgrade both, and the hash, together.
+equal the `velopack` crate's `=` pin; upgrade both, and the hash, together,
+then rerun `scripts/release/velopack-notices.sh` for the license notices.
 `scripts/release/vpk-pack-windows.ps1` holds the Windows `vpk pack` flags,
 shared by `windows-sign` and the preview.
 

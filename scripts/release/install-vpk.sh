@@ -6,7 +6,8 @@
 # installed only from the bytes pinned here, never from whatever the feed
 # serves. VPK_VERSION must equal the velopack crate pin in
 # crates/pwrroute-app/Cargo.toml; upgrade both together and take the new
-# hash from NuGet's catalog (packageHash, base64) or `shasum -a 512`.
+# hash from NuGet's catalog (packageHash, base64) or `shasum -a 512`, then
+# rerun velopack-notices.sh for the new binaries' license notices.
 #
 # Needs .NET 8 (actions/setup-dotnet), curl, and GITHUB_PATH / RUNNER_TEMP
 # from Actions. Runs under bash on macOS and on Windows (Git Bash).
