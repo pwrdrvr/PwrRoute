@@ -6,8 +6,9 @@
 //! default. This window never touches the OS itself. Its choices go to
 //! [`FirstRunHooks`]; the default-browser step calls
 //! [`FirstRunHooks::on_set_default_browser`] and nothing else, so whoever
-//! opens the window decides what that does (`pwrroute_os::set_default_browser`
-//! in the real app, a log line in development and tests).
+//! opens the window decides what that does (`crate::onboarding` wires
+//! `pwrroute_os::set_default_browser` in the app; tests count the calls).
+//! The OS's answer comes back through [`FirstRun::set_default_state`].
 
 use std::rc::Rc;
 
@@ -18,8 +19,10 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, StyledText, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::chrome::{BRAND_X, STRIP_HEIGHT};
+use crate::default_browser::DefaultState;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::tray::model::BrowserLabel;
 use crate::widgets::{badge, caret, input_box};
@@ -30,8 +33,10 @@ pub const ROOT_ID: &str = "first-run-root";
 /// `.dv-card.win { width: 680px }`, tall enough for the three steps.
 const WINDOW_SIZE: (f32, f32) = (680.0, 600.0);
 
-/// What to do with a Finicky config that was found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What to do with a Finicky config that was found. Serialized into the
+/// first-run state file by its camelCase name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ImportChoice {
     /// Import what the visual rules can hold.
     Import,
@@ -47,8 +52,18 @@ pub struct FinickyConfig {
     pub path: String,
     pub rewrites: usize,
     pub handlers: usize,
-    /// How many of those the visual rules can hold.
+    /// How many of those the visual rules can hold. Zero while there is no
+    /// importer: the step then only offers to keep the file.
     pub importable: usize,
+}
+
+/// A browser the fallback picker offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserChoice {
+    /// What `rules.json`'s `defaultBrowser` gets: the bundle id on macOS,
+    /// the name elsewhere.
+    pub value: String,
+    pub label: BrowserLabel,
 }
 
 /// A step's state, as the design draws it.
@@ -64,6 +79,8 @@ pub enum StepState {
 pub struct FirstRunModel {
     /// Step 1. `None` until one is picked.
     pub fallback: Option<BrowserLabel>,
+    /// What step 1 offers: the browsers found on this machine.
+    pub browsers: Vec<BrowserChoice>,
     /// Step 2's subject. `None`: no Finicky config was found.
     pub finicky: Option<FinickyConfig>,
     pub import: Option<ImportChoice>,
@@ -77,9 +94,21 @@ pub struct FirstRunModel {
 
 impl FirstRunModel {
     /// The design's 2a: step 1 done, a Finicky config found, step 3 waiting.
+    #[cfg(test)]
     pub fn fixture() -> Self {
+        let chrome = BrowserLabel::new("Ch", "Google Chrome", Some("Personal"));
         Self {
-            fallback: Some(BrowserLabel::new("Ch", "Google Chrome", Some("Personal"))),
+            fallback: Some(chrome.clone()),
+            browsers: vec![
+                BrowserChoice {
+                    value: "com.google.Chrome".to_owned(),
+                    label: chrome,
+                },
+                BrowserChoice {
+                    value: "org.mozilla.firefox".to_owned(),
+                    label: BrowserLabel::new("Ff", "Firefox", None),
+                },
+            ],
             finicky: Some(FinickyConfig {
                 path: "~/.finicky.ts".to_owned(),
                 rewrites: 2,
@@ -122,6 +151,11 @@ impl FirstRunModel {
     /// Step 2's paragraph.
     pub fn import_detail(&self) -> String {
         match (&self.finicky, self.import) {
+            (Some(config), None) if config.importable == 0 => format!(
+                "Found {} with {} rewrites and {} handlers. It stays in charge; importing is \
+                 not available yet. The file is never modified.",
+                config.path, config.rewrites, config.handlers
+            ),
             (Some(config), None) => format!(
                 "Found {} with {} rewrites and {} handlers. Import what the visual rules can \
                  hold, keep the file in charge as it is, or start empty. The file is never \
@@ -151,9 +185,15 @@ impl FirstRunModel {
         if self.is_default {
             return "PwrRoute is the default browser. Links route by your rules.".to_owned();
         }
+        let asks = if cfg!(target_os = "macos") {
+            "macOS will ask you to confirm."
+        } else if cfg!(target_os = "windows") {
+            "Windows opens Default apps, where you choose PwrRoute."
+        } else {
+            "Your desktop is asked directly."
+        };
         format!(
-            "{} will ask you to confirm. Until then, links keep opening in {} as they do now.",
-            os_name(),
+            "{asks} Until then, links keep opening in {} as they do now.",
             self.current_default
         )
     }
@@ -188,22 +228,11 @@ type Hook<T> = Rc<dyn Fn(T, &mut App)>;
 /// What the window's choices do. The window itself changes nothing.
 #[derive(Clone)]
 pub struct FirstRunHooks {
+    /// Step 1 picked a browser.
+    pub on_fallback: Hook<BrowserChoice>,
     pub on_import: Hook<ImportChoice>,
     /// "Set as default browser". Only this asks the OS anything.
     pub on_set_default_browser: Hook<()>,
-}
-
-impl FirstRunHooks {
-    /// Report each choice on stderr and do nothing: development, and until
-    /// the importer and registration are wired to this window.
-    pub fn logging() -> Self {
-        Self {
-            on_import: Rc::new(|choice, _| eprintln!("pwrroute: first run: {choice:?}")),
-            on_set_default_browser: Rc::new(|(), _| {
-                eprintln!("pwrroute: first run: would ask the OS to make PwrRoute the default");
-            }),
-        }
-    }
 }
 
 /// Open the first-run window.
@@ -239,6 +268,8 @@ pub struct FirstRun {
     pub model: FirstRunModel,
     hooks: FirstRunHooks,
     pub focus: FocusHandle,
+    /// Step 1's list of browsers is open.
+    pub picker_open: bool,
 }
 
 impl FirstRun {
@@ -247,7 +278,34 @@ impl FirstRun {
             model,
             hooks,
             focus: cx.focus_handle(),
+            picker_open: false,
         }
+    }
+
+    fn toggle_picker(&mut self, cx: &mut Context<'_, Self>) {
+        self.picker_open = !self.picker_open;
+        cx.notify();
+    }
+
+    fn choose_fallback(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        self.picker_open = false;
+        if let Some(choice) = self.model.browsers.get(index).cloned() {
+            self.model.fallback = Some(choice.label.clone());
+            (self.hooks.on_fallback)(choice, cx);
+        }
+        cx.notify();
+    }
+
+    /// The OS's answer on who handles links, as it changes.
+    pub fn set_default_state(&mut self, state: &DefaultState, cx: &mut Context<'_, Self>) {
+        let is_default = state.is_default();
+        let current = state.current_name();
+        if self.model.is_default == is_default && self.model.current_default == current {
+            return;
+        }
+        self.model.is_default = is_default;
+        self.model.current_default = current;
+        cx.notify();
     }
 
     fn choose(&mut self, choice: ImportChoice, cx: &mut Context<'_, Self>) {
@@ -324,7 +382,7 @@ impl Render for FirstRun {
                                     "Where links go when no rule matches. Also what Pause \
                                      routing uses.",
                                 ),
-                                fallback_picker(model.fallback.as_ref()),
+                                fallback_picker(model, self.picker_open, cx),
                             ))
                             .child(step(
                                 2,
@@ -530,18 +588,67 @@ fn import_paragraph(model: &FirstRunModel) -> Div {
     paragraph_box().child(styled)
 }
 
-/// Step 1's `.inp` select.
-fn fallback_picker(fallback: Option<&BrowserLabel>) -> Div {
-    let input = input_box().w(px(300.0));
-    match fallback {
-        Some(browser) => input
+/// The element id of step 1's select.
+pub const FALLBACK_ID: &str = "first-run-fallback";
+
+/// Step 1's `.inp` select, and the list it opens: the browsers found on
+/// this machine, one row each.
+fn fallback_picker(model: &FirstRunModel, open: bool, cx: &mut Context<'_, FirstRun>) -> Div {
+    let input = input_box()
+        .id(FALLBACK_ID)
+        .debug_selector(|| FALLBACK_ID.into())
+        .w(px(300.0))
+        .cursor_pointer()
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_picker(cx)));
+    let input = match (&model.fallback, model.browsers.is_empty()) {
+        (Some(browser), _) => input
             .child(badge(browser.badge.clone()))
             .child(text(browser.display(), 12.5, 400.0, theme::text_primary()))
             .child(caret()),
-        None => input
+        (None, false) => input
             .child(text("Choose a browser", 12.5, 400.0, theme::text_subtle()))
             .child(caret()),
+        (None, true) => input.child(text("No browsers found", 12.5, 400.0, theme::text_subtle())),
+    };
+    let column = div().flex().flex_col().gap(px(6.0)).child(input);
+    if !open || model.browsers.is_empty() {
+        return column;
     }
+    let rows = model.browsers.iter().enumerate().map(|(index, choice)| {
+        div()
+            .id(("first-run-browser", index))
+            .debug_selector(move || format!("first-run-browser-{index}"))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .py(px(6.0))
+            .px(px(10.0))
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .hover(|row| row.bg(theme::bg_hover()))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.choose_fallback(index, cx);
+            }))
+            .child(badge(choice.label.badge.clone()))
+            .child(text(
+                choice.label.display(),
+                12.5,
+                400.0,
+                theme::text_primary(),
+            ))
+    });
+    column.child(
+        div()
+            .w(px(300.0))
+            .flex()
+            .flex_col()
+            .p(px(4.0))
+            .bg(theme::bg_popover())
+            .border_1()
+            .border_color(theme::border_default())
+            .rounded(px(7.0))
+            .children(rows),
+    )
 }
 
 fn import_actions(
@@ -557,6 +664,15 @@ fn import_actions(
         return row;
     }
     match &model.finicky {
+        // No importer yet: the file stays in charge, and the step says so.
+        Some(config) if config.importable == 0 => row.child(
+            button(
+                "first-run-keep",
+                format!("Keep using {}", config.path),
+                Kind::Primary,
+            )
+            .on_click(pick(ImportChoice::KeepFile)),
+        ),
         Some(config) => row
             .child(
                 button(
@@ -706,24 +822,34 @@ mod tests {
     }
 
     struct Calls {
+        fallbacks: Rc<RefCell<Vec<BrowserChoice>>>,
         imports: Rc<RefCell<Vec<ImportChoice>>>,
         defaults: Rc<Cell<usize>>,
     }
 
     fn open(cx: &mut TestAppContext) -> (Entity<FirstRun>, Calls, &mut VisualTestContext) {
+        open_with(cx, FirstRunModel::fixture())
+    }
+
+    fn open_with(
+        cx: &mut TestAppContext,
+        model: FirstRunModel,
+    ) -> (Entity<FirstRun>, Calls, &mut VisualTestContext) {
         cx.update(|cx| crate::assets::load_fonts(cx));
         let calls = Calls {
+            fallbacks: Rc::default(),
             imports: Rc::default(),
             defaults: Rc::default(),
         };
+        let fallbacks = calls.fallbacks.clone();
         let imports = calls.imports.clone();
         let defaults = calls.defaults.clone();
         let hooks = FirstRunHooks {
+            on_fallback: Rc::new(move |choice, _| fallbacks.borrow_mut().push(choice)),
             on_import: Rc::new(move |choice, _| imports.borrow_mut().push(choice)),
             on_set_default_browser: Rc::new(move |(), _| defaults.set(defaults.get() + 1)),
         };
-        let (view, cx) =
-            cx.add_window_view(|_, cx| FirstRun::new(FirstRunModel::fixture(), hooks, cx));
+        let (view, cx) = cx.add_window_view(|_, cx| FirstRun::new(model, hooks, cx));
         draw(cx);
         (view, calls, cx)
     }
@@ -765,5 +891,59 @@ mod tests {
         assert!(view.read_with(cx, |this, _| this.model.default_requested));
         // Asking does not make it so: the OS answers in its own dialog.
         assert!(!view.read_with(cx, |this, _| this.model.routing()));
+
+        // The answer arrives from whoever reads the OS.
+        view.update(cx, |this, cx| {
+            this.set_default_state(&DefaultState::PwrRoute, cx);
+        });
+        draw(cx);
+        assert!(view.read_with(cx, |this, _| this.model.routing()));
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.steps()),
+            [StepState::Done, StepState::Done, StepState::Done]
+        );
+        assert!(cx.debug_bounds("first-run-default").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn the_fallback_is_picked_from_the_browsers_found(cx: &mut TestAppContext) {
+        let mut model = FirstRunModel::fixture();
+        model.fallback = None;
+        let (view, calls, cx) = open_with(cx, model);
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.steps()),
+            [StepState::Current, StepState::Todo, StepState::Todo]
+        );
+        assert!(cx.debug_bounds("first-run-browser-1").is_none());
+
+        click(FALLBACK_ID, cx);
+        assert!(cx.debug_bounds("first-run-browser-1").is_some());
+        click("first-run-browser-1", cx);
+        assert_eq!(calls.fallbacks.borrow().len(), 1);
+        assert_eq!(calls.fallbacks.borrow()[0].value, "org.mozilla.firefox");
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback.clone()),
+            Some(BrowserLabel::new("Ff", "Firefox", None))
+        );
+        assert!(cx.debug_bounds("first-run-browser-1").is_none());
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.steps()),
+            [StepState::Done, StepState::Current, StepState::Todo]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn without_an_importer_the_config_can_only_be_kept(cx: &mut TestAppContext) {
+        let mut model = FirstRunModel::fixture();
+        model.finicky.as_mut().unwrap().importable = 0;
+        let (view, calls, cx) = open_with(cx, model);
+        assert!(cx.debug_bounds("first-run-import").is_none());
+        assert!(cx.debug_bounds("first-run-empty").is_none());
+        click("first-run-keep", cx);
+        assert_eq!(*calls.imports.borrow(), [ImportChoice::KeepFile]);
+        assert!(
+            view.read_with(cx, |this, _| this.model.import_detail())
+                .starts_with("~/.finicky.ts stays in charge.")
+        );
     }
 }

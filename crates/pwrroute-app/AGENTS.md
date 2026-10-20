@@ -4,9 +4,10 @@ The GPUI shell: the main window, the tray, the first-run window and the
 resident router's hand-off. `main.rs` only wires them; put new surfaces in
 their own modules.
 
-- **Fixtures only.** Every window and the tray draw contrived data
-  (`fixtures.rs`, `TrayModel::fixture`, `FirstRunModel::fixture`). Never a
-  real URL, Activity entry or trace, in code or in a screenshot.
+- **Fixtures only.** The main window and the tray draw contrived data
+  (`fixtures.rs`, `TrayModel::fixture`); `FirstRunModel::fixture` is for
+  tests. Never a real URL, Activity entry or trace, in code or in a
+  screenshot.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
   `PopUp` window (design 1a/1b); recents there are hosts only
@@ -22,9 +23,13 @@ their own modules.
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays
   `unsafe`-free.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
-  buttons do; development and tests use `FirstRunHooks::logging` or
-  counters. Never wire `pwrroute_os::set_default_browser` into a test or a
-  launch path that runs without a click.
+  buttons do; `onboarding.rs` builds the real ones and the model from
+  `Facts` (tests write their own facts and count hook calls). `state.json`
+  in the data directory says whether first run already ran.
+  `default_browser.rs` is the only caller of
+  `pwrroute_os::set_default_browser`, from a click; its `Os` struct takes
+  fakes, so tests never reach the OS. Never wire registration into a test
+  or a launch path that runs without a click.
 - **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
   sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=paused`

@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 
 use super::local_agents::{ACCESS_SWITCH_ID, COLLAPSE_ALL_ID};
-use super::model::{RoleId, SessionId, SettingsRequest};
+use super::model::{DefaultState, RoleId, SessionId, SettingsRequest};
 use super::{Pane, SettingsHost, SettingsWindow, browsers, configuration, fixtures};
 use crate::app::PwrRoute;
 use crate::chrome::OPEN_SETTINGS_ID;
@@ -25,6 +25,7 @@ fn install(cx: &mut TestAppContext) -> Requests {
         crate::assets::load_fonts(cx);
         super::install(cx);
         cx.set_global(SettingsHost {
+            model: Rc::new(|_, _| fixtures::model()),
             on_request: Rc::new(move |request, _, _| recorded.borrow_mut().push(request.clone())),
         });
     });
@@ -152,8 +153,8 @@ fn opening_settings_at_a_pane_switches_the_open_window(cx: &mut TestAppContext) 
 #[gpui_kit::test]
 fn register_calls_the_callback_and_nothing_else(cx: &mut TestAppContext) {
     let (view, cx, requests) = settings(cx, |model| {
-        model.browsers.default.is_default = false;
-        model.browsers.default.confirmed = None;
+        model.browsers.default.state = DefaultState::Other("Google Chrome".into());
+        model.browsers.default.note = None;
     });
     click(cx, browsers::REGISTER_ID);
     assert_eq!(
@@ -161,7 +162,37 @@ fn register_calls_the_callback_and_nothing_else(cx: &mut TestAppContext) {
         [SettingsRequest::RegisterDefaultBrowser]
     );
     // The window waits for the OS to say so; it does not claim success.
-    assert!(!view.read_with(cx, |view, _| view.model.browsers.default.is_default));
+    assert!(!view.read_with(cx, |view, _| view.model.browsers.default.state.is_default()));
+}
+
+#[gpui_kit::test]
+fn a_producer_reports_the_os_answer_into_the_open_window(cx: &mut TestAppContext) {
+    let requests = install(cx);
+    cx.update(|cx| super::open(cx, Some(Pane::Browsers)));
+    let handle = settings_windows(cx).remove(0);
+    let card = |cx: &mut TestAppContext| {
+        handle
+            .read_with(cx, |view, _| view.model.browsers.default.clone())
+            .unwrap()
+    };
+    assert_eq!(card(cx).state, DefaultState::PwrRoute);
+
+    let answer = super::model::DefaultBrowser {
+        state: DefaultState::Other("Firefox".into()),
+        note: Some("Firefox is still the default.".into()),
+    };
+    let reported = answer.clone();
+    cx.update(|cx| super::update(cx, move |model| model.browsers.default = reported));
+    assert_eq!(card(cx), answer);
+    // The card says so, and the button is back and live.
+    let cx = &mut VisualTestContext::from_window(handle.into(), cx);
+    draw(cx);
+    assert!(visible(cx, browsers::REGISTER_ID));
+    click(cx, browsers::REGISTER_ID);
+    assert_eq!(
+        *requests.borrow(),
+        [SettingsRequest::RegisterDefaultBrowser]
+    );
 }
 
 #[gpui_kit::test]
