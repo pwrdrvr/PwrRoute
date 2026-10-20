@@ -61,7 +61,6 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
 # The window harness: lets the smoke test open a real window and draw a frame.
 gpui-kit = { version = "=0.6.6", default-features = false, features = [
     "assets",
