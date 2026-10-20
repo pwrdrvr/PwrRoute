@@ -27,6 +27,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # One pin for every job and for the cache key prefix below.
+  RUST_TOOLCHAIN: "1.97"
   # No debug info in CI builds: nobody reads it here, and writing it (PDBs
   # on Windows above all) is a large share of compile and link time.
   CARGO_PROFILE_DEV_DEBUG: "0"
@@ -120,11 +122,21 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
+
+      # Before rust-cache: its key hashes every installed toolchain, and the
+      # runner image's preinstalled stable changes with each image rollout.
+      - name: Keep only the pinned Rust toolchain
+        shell: bash
+        run: ./scripts/ci/prune-rust-toolchains.sh
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
+          # starts a fresh cache; the prune step above keeps the runner's
+          # preinstalled stable out of the key (see the script).
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -157,10 +169,20 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      # Before rust-cache: its key hashes every installed toolchain, and the
+      # runner image's preinstalled stable changes with each image rollout.
+      - name: Keep only the pinned Rust toolchain
+        shell: bash
+        run: ./scripts/ci/prune-rust-toolchains.sh
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
+          # starts a fresh cache; the prune step above keeps the runner's
+          # preinstalled stable out of the key (see the script).
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -185,10 +207,20 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      # Before rust-cache: its key hashes every installed toolchain, and the
+      # runner image's preinstalled stable changes with each image rollout.
+      - name: Keep only the pinned Rust toolchain
+        shell: bash
+        run: ./scripts/ci/prune-rust-toolchains.sh
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
+          # starts a fresh cache; the prune step above keeps the runner's
+          # preinstalled stable out of the key (see the script).
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -213,10 +245,20 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      # Before rust-cache: its key hashes every installed toolchain, and the
+      # runner image's preinstalled stable changes with each image rollout.
+      - name: Keep only the pinned Rust toolchain
+        shell: bash
+        run: ./scripts/ci/prune-rust-toolchains.sh
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
+          # starts a fresh cache; the prune step above keeps the runner's
+          # preinstalled stable out of the key (see the script).
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -257,10 +299,20 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      # Before rust-cache: its key hashes every installed toolchain, and the
+      # runner image's preinstalled stable changes with each image rollout.
+      - name: Keep only the pinned Rust toolchain
+        shell: bash
+        run: ./scripts/ci/prune-rust-toolchains.sh
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
+          # starts a fresh cache; the prune step above keeps the runner's
+          # preinstalled stable out of the key (see the script).
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
