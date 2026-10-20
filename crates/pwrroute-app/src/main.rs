@@ -27,6 +27,8 @@ mod fixtures;
 mod macos;
 mod onboarding;
 mod router;
+mod rules_model;
+mod rules_store;
 mod rules_view;
 mod settings;
 mod test_link;
@@ -36,6 +38,7 @@ mod text_field;
 mod theme;
 mod trace_view;
 mod tray;
+mod try_it;
 mod updater;
 mod widgets;
 

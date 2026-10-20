@@ -228,7 +228,7 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                     .text_size(px(10.5))
                     .line_height(px(14.7))
                     .text_color(theme::text_subtle())
-                    .child("saved 09:41 \u{00b7} reloaded 2s ago"),
+                    .child(app.store.status_label()),
             )
     };
     div()

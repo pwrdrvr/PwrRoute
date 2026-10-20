@@ -43,6 +43,12 @@ mod fixtures;
 #[path = "../src/router.rs"]
 mod router;
 #[cfg(target_os = "macos")]
+#[path = "../src/rules_model.rs"]
+mod rules_model;
+#[cfg(target_os = "macos")]
+#[path = "../src/rules_store.rs"]
+mod rules_store;
+#[cfg(target_os = "macos")]
 #[path = "../src/rules_view.rs"]
 mod rules_view;
 #[cfg(target_os = "macos")]
@@ -60,6 +66,9 @@ mod theme;
 #[cfg(target_os = "macos")]
 #[path = "../src/trace_view.rs"]
 mod trace_view;
+#[cfg(target_os = "macos")]
+#[path = "../src/try_it.rs"]
+mod try_it;
 #[cfg(target_os = "macos")]
 #[path = "../src/widgets.rs"]
 mod widgets;
@@ -92,9 +101,16 @@ fn main() {
         );
         cx.update(|cx| assets::load_fonts(cx));
         let home = home.clone();
+        // The design's rules, as if read from the real file.
+        let store = rules_store::RulesStore::from_file(
+            Some(home.join("Library/Application Support/PwrRoute/rules.json")),
+            fixtures::rules_file(),
+            true,
+            Some(std::time::SystemTime::now()),
+        );
         let handle = cx
             .open_window(size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), |_, cx| {
-                cx.new(|cx| PwrRoute::with_config(config, Some(home), cx))
+                cx.new(|cx| PwrRoute::with_store(config, Some(home), store, cx))
             })
             .expect("open a headless window");
         cx.update_window(handle.into(), |view, window, cx| {
