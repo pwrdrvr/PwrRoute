@@ -21,6 +21,7 @@ mod editor;
 mod fixtures;
 mod router;
 mod rules_view;
+mod settings;
 mod test_link;
 #[cfg(test)]
 mod tests;
@@ -159,7 +160,12 @@ fn main() {
 
 /// Brings the main window forward, opening it if it is closed.
 fn show_main_window(cx: &mut App) {
-    if let Some(window) = cx.windows().first() {
+    // Not `first()`: the Settings window may be the only one open.
+    let main = cx
+        .windows()
+        .into_iter()
+        .find(|window| window.downcast::<PwrRoute>().is_some());
+    if let Some(window) = main {
         let _ = window.update(cx, |_, window, _| window.activate_window());
         cx.activate(true);
         return;
