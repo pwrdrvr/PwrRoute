@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* settings panes, as in Settings */
+          .snav { flex: 0 0 208px; }
+          .snav .rail-item { font-size: 13px; }
+          .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+          .spane > .card { flex: 0 0 auto; max-width: 760px; width: 100%; }
+          .spane > .pane-head { max-width: 760px; }
+          .cmd { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font: 500 11px/1.5 var(--font-mono); color: var(--text-secondary); }
+          .cmd span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+          .cmd.dim { opacity: 0.45; }
+          .num { width: 72px; justify-content: flex-end; font: 500 12.5px/1 var(--font-mono); }
+          .unit { font: 500 11.5px/1 var(--font-sans); color: var(--text-muted); }
+          .hrow { display: flex; align-items: center; gap: 8px; }
+          /* the disclosure sentence: rendered verbatim by the app, one per journal level */
+          .disc { width: 100%; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-faint); background: var(--bg-app); font: 400 11.5px/1.6 var(--font-sans); color: var(--text-secondary); text-wrap: pretty; }
+          .disc b { color: var(--text-primary); font-weight: 600; }
+          .disc.warn { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .disc .lead { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .tbl.keep { grid-template-columns: 110px minmax(0, 1.3fr) minmax(0, 1fr) 150px; border: none; border-radius: 0; }
+          .tbl.keep .tr > span { font-size: 11px; line-height: 1.5; }
+          .tbl.keep code { color: var(--text-secondary); }
+          .btn.dim { opacity: 0.4; }
+          /* sheet, as in Rule Editing */
+          .rel { position: relative; }
+          .scrim { position: absolute; left: 0; right: 0; top: 41px; bottom: 0; background: rgba(0,0,0,0.62); }
+          .sheet { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); width: 560px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-popover); display: flex; flex-direction: column; }
+          .sheet.narrow { width: 460px; top: 120px; }
+          .sheet-hd { padding: 16px 18px 12px; border-bottom: 1px solid var(--border-faint); }
+          .sheet-hd .help { margin-top: 4px; }
+          .sheet-bd { padding: 4px 0; }
+          .sheet-bd .field { padding: 11px 18px; }
+          .sheet-bd .field-l { width: 136px; }
+          .sheet-ft { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-faint); }
+          .sheet-ft .note { flex: 1; }
+          /* activity rows, as in App Baseline, plus a row-menu column */
+          .ar { display: grid; grid-template-columns: 54px minmax(0, 1fr) 76px 110px 176px 48px 18px; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1 var(--font-sans); color: var(--text-secondary); position: relative; }
+          .ar:last-child { border-bottom: none; }
+          .ar.head { padding: 7px 14px; background: var(--bg-panel-elevated); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .ar .t { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .u { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: flex; align-items: center; gap: 7px; }
+          .ar .u .chip { font-size: 9px; padding: 3px 6px; }
+          .ar .ms { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .d { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+          .ar .d .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .ar .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .ar.more-on .more { color: var(--accent-bright); background: var(--bg-hover-strong); border-radius: 4px; padding: 3px 0; }
+          .ar.bad .u { color: var(--danger-text); }
+          .ar.unr .tag { color: var(--warn-text); background: var(--warn-soft); border-color: transparent; }
+          .ar.sel { background: var(--bg-row-active); }
+          .ar.sum { grid-template-columns: 54px minmax(0, 1fr); color: var(--text-subtle); font-size: 11px; background: var(--bg-input); }
+          .ar.sum .t { visibility: hidden; }
+          .lock { width: 11px; height: 11px; color: var(--text-muted); flex: 0 0 auto; }
+          .toolbar { display: flex; align-items: center; gap: 8px; }
+          .toolbar .inp { width: 240px; }
+          .seg span i { font-style: normal; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); margin-left: 5px; }
+          .seg span.on i { color: var(--accent-bright); opacity: 0.8; }
+          .cnts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 14px 16px; }
+          .cnt-card { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+          .cnt-card .big { font: 700 22px/1 var(--font-mono); color: var(--text-primary); }
+          .cnt-card .big small { font: 500 11px/1 var(--font-sans); color: var(--text-muted); margin-left: 6px; }
+          .cnt-card .wh { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font: 500 11px/1.4 var(--font-sans); color: var(--text-secondary); }
+          .cnt-card p { margin: 0; font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); }
+          /* menus, as in Rule Editing */
+          .menu { position: absolute; z-index: 5; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-popover); padding: 4px; display: flex; flex-direction: column; }
+          .mi { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+          .mi .k { margin-left: auto; padding-left: 16px; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .mi.dim { color: var(--text-subtle); }
+          .mi.danger { color: var(--danger-text); }
+          .mi .ex { margin-left: auto; padding-left: 16px; font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .msep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+          .mfoot { padding: 6px 8px 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); white-space: normal; max-width: 300px; }
+          .crop { background: var(--bg-app); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+          .crow { display: flex; gap: 16px; align-items: flex-start; }
+          .crow > * { flex: 1; min-width: 0; }
+          /* pattern suggestions and the collision list in the Add a rule sheet */
+          .pats { display: flex; flex-direction: column; gap: 5px; width: 100%; }
+          .pat { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); }
+          .pat.on { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .pat .radio { width: 13px; height: 13px; }
+          .pat code { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); }
+          .pat .why { margin-left: auto; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .pat.on .why { color: var(--accent-bright); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          .coll { width: 100%; display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+          .coll .cr { display: grid; grid-template-columns: 50px minmax(0, 1fr) 150px; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); font: 400 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cr:last-child { border-bottom: none; }
+          .coll .cr .t { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .coll .cr .u { font: 500 10.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .coll .cr .d { display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; font-size: 10.5px; }
+          .coll .cr .d .bi { width: 11px; height: 11px; font-size: 6px; }
+          .coll .cap { padding: 6px 10px; background: var(--bg-panel-elevated); font: 600 10.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cap i { font-style: normal; color: var(--text-subtle); font-weight: 500; }
+          .needjs { width: 100%; display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--accent-border); border-radius: var(--radius-md); background: var(--bg-row-active); font: 400 11.5px/1.55 var(--font-sans); color: var(--text-secondary); }
+          .needjs b { color: var(--text-primary); font-weight: 600; }
+          .needjs .ic { flex: 0 0 auto; margin-top: 2px; }
+          .code { width: 100%; padding: 9px 11px; border-radius: var(--radius-md); background: var(--bg-input); border: 1px solid var(--border-subtle); font: 500 10.5px/1.55 var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; }
+          .code b { font-weight: 500; color: var(--accent-bright); }
+          .code i { font-style: normal; color: var(--text-subtle); }
+          .code .bad { color: var(--danger-text); }
+          .code .ok { color: var(--success-text); }
+          /* rule rows, as in App Baseline, plus example chips */
+          .rules { display: flex; flex-direction: column; }
+          .rr { position: relative; display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 230px) 64px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.sel { background: var(--bg-row-active); }
+          .rr.sel::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+          .rr.fresh { background: var(--accent-tint); }
+          .rr.off > * { opacity: 0.5; }
+          .rr.hasx { border-bottom: none; }
+          .grip { color: var(--text-subtle); display: flex; align-items: center; justify-content: center; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr .m .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .tag.act i { font-style: normal; color: var(--text-subtle); }
+          .tag.act { color: var(--accent-bright); }
+          .exrow { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 0 12px 8px 54px; border-bottom: 1px solid var(--border-faint); }
+          .exrow:last-child { border-bottom: none; }
+          .exrow .lbl { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); margin-right: 3px; }
+          .ex { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px 0 5px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-panel-elevated); font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+          .ex i { font-style: normal; width: 12px; height: 12px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); background: var(--success-soft); color: var(--success-text); flex: 0 0 auto; }
+          .ex.fail { border-color: var(--danger-base); color: var(--danger-text); }
+          .ex.fail i { background: var(--danger-soft); color: var(--danger-text); }
+          .ex.new { border-style: dashed; color: var(--text-subtle); }
+          .ex.new i { background: transparent; color: var(--text-subtle); }
+          .ex .to { font: 500 10px/1 var(--font-sans); color: var(--text-muted); }
+          .ex.fail .to { color: var(--danger-text); opacity: 0.85; }
+          /* the Run tests strip */
+          .tstrip { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-panel); overflow: hidden; }
+          .tstrip.bad { border-color: rgba(185,66,50,0.5); }
+          .tstrip .trow { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
+          .tstrip .trow .sum { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; font: 500 12px/1.3 var(--font-sans); color: var(--text-primary); }
+          .tstrip .trow .sum .note { font-weight: 400; }
+          .tstrip.bad .trow .sum b { color: var(--danger-text); font-weight: 600; }
+          .fail-row { display: grid; grid-template-columns: 22px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; padding: 10px 14px 12px; border-top: 1px solid var(--border-faint); background: var(--danger-soft); }
+          .fail-row .fh { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 5px; }
+          .fail-row .fv { display: flex; flex-direction: column; gap: 4px; font: 500 11.5px/1.4 var(--font-sans); color: var(--text-primary); min-width: 0; }
+          .fail-row .fv small { font: 400 10.5px/1.3 var(--font-sans); color: var(--text-muted); }
+          .fail-row .fv .url { font-size: 11px; }
+          .fail-row .x { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 700 9px/1 var(--font-mono); background: var(--danger-base); color: #fff; margin-top: 16px; }
+          .fail-row .fa { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+          .url { font: 500 11.5px/1.5 var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+          .url .chg { color: var(--accent-bright); background: var(--accent-soft); border-radius: 3px; padding: 0 2px; }
+          .pane-foot { display: flex; align-items: center; gap: 10px; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          /* the editor rail, as in App Baseline */
+          .rrail { flex: 0 0 372px; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); display: flex; flex-direction: column; overflow: hidden; }
+          .rrail.solo { width: 372px; border: 1px solid var(--border-subtle); border-radius: 10px; }
+          .rs { padding: 14px 16px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 8px; }
+          .rs h5 { margin: 0 0 2px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .lab { font: 600 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .lrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+          .lrow .lab { flex: 1; }
+          .plist { display: flex; flex-direction: column; gap: 5px; }
+          .plist .inp { padding-right: 6px; }
+          .inp .x { margin-left: auto; color: var(--text-subtle); font: 500 11px/1 var(--font-mono); }
+          .addp { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px dashed var(--border-default); border-radius: var(--radius-md); font: 500 11px/1 var(--font-sans); color: var(--text-muted); align-self: flex-start; }
+          .rs .try { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-app); border: 1px solid var(--border-faint); font: 500 11px/1.45 var(--font-sans); color: var(--text-secondary); }
+          .rs .try b { color: var(--text-primary); font-weight: 600; }
+          .rs .try .st { margin-top: 4px; }
+          .rail-end { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-faint); }
+          .rhead { flex-direction: row; align-items: center; gap: 10px; }
+          .rhead > div { flex: 1; min-width: 0; }
+          .rhead .ttl { font-size: 15px; }
+          .exl { display: flex; flex-direction: column; gap: 5px; }
+          .exl .inp { padding-right: 6px; gap: 7px; }
+          .exl .inp i { font-style: normal; width: 12px; height: 12px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); background: var(--success-soft); color: var(--success-text); flex: 0 0 auto; }
+          .exl .inp.fail { border-color: var(--danger-base); }
+          .exl .inp.fail i { background: var(--danger-soft); color: var(--danger-text); }
+          .exl .inp .to { font: 500 10px/1 var(--font-sans); color: var(--danger-text); margin-left: 6px; white-space: nowrap; }
+          /* test a link result, as in App Baseline */
+          .res { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
+          .res .big { width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-panel-elevated); display: flex; align-items: center; justify-content: center; font: 700 13px/1 var(--font-mono); color: var(--text-secondary); flex: 0 0 auto; }
+          .res .rt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+          .res .rt b { font: 600 15px/1.2 var(--font-sans); color: var(--text-primary); }
+          .res .rt .mm { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+          .saved { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border-faint); background: var(--bg-row-active); font: 400 11.5px/1.5 var(--font-sans); color: var(--text-secondary); }
+          .saved b { color: var(--text-primary); font-weight: 600; }
+          .saved .url { font-size: 11px; color: var(--text-secondary); }
+          .testrow { display: flex; gap: 8px; align-items: center; }
+          .testrow .inp { flex: 1; }
+          /* the MCP storyboard */
+          .story { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
+          .panel { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-right: 1px solid var(--border-faint); position: relative; }
+          .panel:last-child { border-right: none; }
+          .panel .ph2 { display: flex; align-items: center; gap: 9px; }
+          .panel .ph2 .n { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 700 10px/1 var(--font-mono); background: var(--accent-soft); color: var(--accent-bright); flex: 0 0 auto; }
+          .panel .ph2 .n.bad { background: var(--danger-soft); color: var(--danger-text); }
+          .panel .ph2 code { font: 600 12px/1 var(--font-mono); color: var(--text-primary); }
+          .panel .ph2 .chip { margin-left: auto; }
+          .panel p { margin: 0; font: 400 11px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .panel p b { color: var(--text-secondary); font-weight: 600; }
+          .panel .code { font-size: 10px; line-height: 1.5; }
+          .panel .cl { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-subtle); margin: 2px 0 -4px; }
+          .panel::after { content: "\2192"; position: absolute; right: -9px; top: 19px; z-index: 2; width: 18px; height: 18px; border-radius: 50%; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--font-mono); color: var(--text-muted); }
+          .panel:last-child::after { content: none; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Settings › Privacy ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Settings &rsaquo; Privacy</span></div>
+        <p class="dv-sub">A link is private data, and the router sees every one. This pane says in plain words what is kept, where, and for how long, and it is the only place a URL can be allowed onto disk. Today the router keeps the last 200 dispatches in memory (<code>Options.capacity</code>) and nothing on disk; the pane makes the count editable, adds an age limit, and adds the <b>journal</b>, which is off by default. The disclosure sentence under the journal switch is rendered verbatim by the app, one sentence per level, so the Activity footer, the pane and the docs say the same thing. A new <b>Privacy</b> item joins the Settings nav after Configuration; Diagnostics keeps logs and the data folder.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Privacy, journal off">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The default. Retention is a count and an age; the journal is off, so the file row is dimmed and Reveal and Clear now with it. Export is always available: it writes what Activity shows, at each record's level, to a file you choose. The last card explains the three per-rule levels with the <code>rules.json</code> field for each.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Links and what is kept</div><h1 class="ttl">Privacy</h1><p class="help">What PwrRoute remembers about the links it routes, where, and for how long. The defaults keep everything in memory and nothing on disk.</p></div></div>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">In memory</p><h2 class="card-title">Recent links</h2></div><span class="chip">200 &middot; 24 h &middot; in memory</span></div>
+                    <div class="field"><div class="field-l"><span>Keep the last</span><span class="field-sub">The router&rsquo;s buffer. Activity, the tray&rsquo;s recents and agents read from it.</span></div><div class="field-c"><div class="hrow"><div class="inp num">200</div><span class="unit">links</span></div><span class="field-help">Oldest first out. 10 to 2,000.</span></div></div>
+                    <div class="field"><div class="field-l"><span>For at most</span><span class="field-sub">A record older than this is dropped at the next link, even when there is room.</span></div><div class="field-c"><div class="hrow"><div class="inp num">24</div><span class="unit">hours</span></div><span class="field-help">Everything in the buffer goes when the router quits.</span></div></div>
+                    <div class="field"><div class="field-l"><span>Forget now</span><span class="field-sub">Empties the buffer here, in Activity and in the tray.</span></div><div class="field-c"><div class="row-actions"><span class="btn sm">Clear now</span><span class="field-help">Today&rsquo;s counts stay.</span></div></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">On disk</p><h2 class="card-title">Journal</h2><p class="card-desc">Off, PwrRoute never writes a URL to disk. On, it appends one line per link to a file you can read, reveal and clear.</p></div><span class="chip">Off</span></div>
+                    <div class="field"><div class="field-l"><span>Write links to disk</span><span class="field-sub">Takes effect on the next link. Turning it off does not delete the file.</span></div><div class="field-c">
+                      <div class="seg"><span class="on">Off</span><span>Hosts only</span><span>Full URLs</span></div>
+                      <div class="disc"><div class="lead"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>What is kept</div>Nothing about a link is written to disk. The last 200 links stay in memory for at most 24 hours and are forgotten when the router quits. Logs carry rule numbers and timings, never URL contents.</div>
+                    </div></div>
+                    <div class="field"><div class="field-l"><span>File</span><span class="field-sub">One JSON object per line, newest last.</span></div><div class="field-c"><div class="cmd dim"><span>~/Library/Application Support/PwrRoute/journal.jsonl</span><span class="note" style="flex: none;">not created while off</span></div><div class="row-actions"><span class="btn sm dim">Reveal</span><span class="btn sm dim">Clear now</span><span class="btn sm">Export&hellip;</span></div><span class="field-help">Export writes the links in memory to a file you choose, each at the level its rule allows. It never holds more than Activity shows.</span></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Per rule</p><h2 class="card-title">What each rule keeps</h2><p class="card-desc">A rule decides how much of the links it takes is remembered, in memory and in the journal. Set it in the rule editor under Keep.</p></div></div>
+                    <div class="tbl keep">
+                      <div class="tr head"><span>Keep</span><span>In Activity and the tray</span><span>In the journal, when on</span><span>rules.json</span></div>
+                      <div class="tr"><span>Full</span><span>The link as received and as opened, the app that sent it, every step that fired.</span><span>The same, at the journal&rsquo;s level.</span><span><code>"privacy": "full"</code><br /><span class="note">the default</span></span></div>
+                      <div class="tr"><span>Host only</span><span>Scheme and host, as in <code>https://mybank.example</code>. Path, query and fragment are dropped before the record exists; so are the opened URL and each step&rsquo;s URL.</span><span>Scheme and host only, even when the journal keeps full URLs.</span><span><code>"privacy": "host"</code></span></div>
+                      <div class="tr"><span>Nothing</span><span>A count. No URL, no host, no sending app. The row is not listed.</span><span>Not written. The day&rsquo;s count stays in memory.</span><span><code>"privacy": "none"</code></span></div>
+                    </div>
+                    <div class="field" style="border-top: 1px solid var(--border-faint);"><div class="field-l"><span>Private windows</span><span class="field-sub"><code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">"private": true</code> on a rule.</span></div><div class="field-c"><span class="field-help" style="max-width: 60ch;">A rule that opens a private window keeps host only unless its privacy says otherwise. A link no rule matched keeps the full URL, so you can see what to add a rule for. A Finicky config&rsquo;s handlers keep full URLs, and are private only when their arguments say so (<code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">--incognito</code>, <code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">--inprivate</code>, <code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">--private-window</code>).</span></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Journal, hosts only">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Hosts only. The sentence changes with the level, the file row wakes up with its size and age, and Reveal and Clear now become real. The journal chip in the card header mirrors the Activity footer.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Links and what is kept</div><h1 class="ttl">Privacy</h1><p class="help">What PwrRoute remembers about the links it routes, where, and for how long.</p></div></div>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">In memory</p><h2 class="card-title">Recent links</h2></div><span class="chip">500 &middot; 72 h &middot; in memory</span></div>
+                    <div class="field"><div class="field-l"><span>Keep the last</span><span class="field-sub">The router&rsquo;s buffer. Activity, the tray&rsquo;s recents and agents read from it.</span></div><div class="field-c"><div class="hrow"><div class="inp num">500</div><span class="unit">links</span></div></div></div>
+                    <div class="field"><div class="field-l"><span>For at most</span><span class="field-sub">A record older than this is dropped at the next link, even when there is room.</span></div><div class="field-c"><div class="hrow"><div class="inp num">72</div><span class="unit">hours</span></div><span class="field-help">Everything in the buffer goes when the router quits.</span></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">On disk</p><h2 class="card-title">Journal</h2></div><span class="chip warn">Hosts only &middot; since 2026-10-14</span></div>
+                    <div class="field"><div class="field-l"><span>Write links to disk</span><span class="field-sub">Takes effect on the next link. Turning it off does not delete the file.</span></div><div class="field-c">
+                      <div class="seg"><span>Off</span><span class="on">Hosts only</span><span>Full URLs</span></div>
+                      <div class="disc"><div class="lead"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>What is kept</div>Each link&rsquo;s scheme and host are appended to journal.jsonl, with the app that sent it, the rule that fired and where it opened. Paths, queries and fragments are never written. Links from rules that keep nothing are not written.</div>
+                    </div></div>
+                    <div class="field"><div class="field-l"><span>File</span><span class="field-sub">One JSON object per line, newest last.</span></div><div class="field-c"><div class="cmd"><span>~/Library/Application Support/PwrRoute/journal.jsonl</span><span class="note" style="flex: none;">1.2 MB &middot; 8,114 lines &middot; 6 days</span></div><div class="row-actions"><span class="btn sm">Reveal</span><span class="btn sm">Clear now</span><span class="btn sm">Export&hellip;</span></div><span class="field-help">Clear now truncates the file. Export writes the links in memory to a file you choose, each at the level its rule allows.</span></div></div>
+                    <div class="field"><div class="field-l"><span>Example line</span><span class="field-sub">What hosts only writes.</span></div><div class="field-c"><div class="code">{"t":"2026-10-20T09:41:08Z","host":"https://pwrdrvr.atlassian.net","from":"com.tinyspeck.slackmacgap","rule":"handler 2","opened":"com.google.Chrome","profile":"Work","ms":4}</div></div></div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Per rule</p><h2 class="card-title">What each rule keeps</h2><p class="card-desc">Full, host only or nothing, set per rule under Keep. Rules that keep less than the journal hold back what they say.</p></div><span class="btn sm quiet">Expand</span></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Full URLs, confirmed first">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Full URLs is a step the user confirms. The sheet repeats the sentence the pane will show, names who else can read the file, and says what per-rule privacy still holds back. Escape or Cancel leaves the switch where it was.</span></div>
+            <div class="dv-card win rel" style="width: 1060px; height: 560px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Links and what is kept</div><h1 class="ttl">Privacy</h1></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">On disk</p><h2 class="card-title">Journal</h2></div><span class="chip warn">Hosts only</span></div>
+                    <div class="field"><div class="field-l"><span>Write links to disk</span></div><div class="field-c"><div class="seg"><span>Off</span><span>Hosts only</span><span class="on">Full URLs</span></div></div></div>
+                  </section>
+                </div>
+              </div>
+              <div class="scrim"></div>
+              <div class="sheet narrow">
+                <div class="sheet-hd"><div class="eyebrow">Journal</div><h2 class="ttl" style="font-size: 16px;">Write full URLs to disk?</h2></div>
+                <div class="sheet-bd" style="padding: 14px 18px; display: flex; flex-direction: column; gap: 10px;">
+                  <div class="disc warn"><div class="lead"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>What is kept</div>Every link is appended to journal.jsonl as received and as opened, with the app that sent it, the rule that fired and where it opened. Rules that keep host only or nothing hold back what they say. Anyone who can read your files can read this journal.</div>
+                  <span class="note">That includes every process running as you, backups, and sync tools that watch the data folder. Handler 9 keeps host only and handler 10 keeps nothing; this does not change that.</span>
+                </div>
+                <div class="sheet-ft"><span class="note">Until you turn it off or clear it.</span><span class="btn quiet">Cancel</span><span class="btn primary">Write full URLs</span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Where a link lives, in one breath.</b> In memory: the router&rsquo;s buffer, the last <i>N</i> links for at most <i>H</i> hours, gone when the router quits, trimmed to each rule&rsquo;s privacy before the record exists. On disk: nothing, unless the journal is on, and then one line per link at the journal&rsquo;s level or the rule&rsquo;s, whichever keeps less. Logs: rule numbers and timings only, as today. Export: the buffer, at the rule&rsquo;s level, to a file the user picks. The sentence under the switch is the contract; the app renders the same string in the Activity footer.</p>
+        <p class="dv-next">Try next: "show the Diagnostics pane with the journal&rsquo;s size in it" &middot; "what does Export name the file" &middot; "a sync-folder warning when the data folder is inside iCloud Drive"</p>
+      </section>
+
+      <!-- ================= TURN 2 — Activity ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Activity &rsaquo; find the unrouted ones, add a narrow rule</span></div>
+        <p class="dv-sub">The reason Activity exists: a link opened in the wrong browser and the person never saw its URL, because the browser redirected at once. The filters change to the questions people have: <b>Unrouted</b> is the list of links that fell through to the default, <b>Private</b> is counts only because the rows were trimmed before they existed. Every row has a menu whose first item is <b>Add a rule for this link</b>, which opens a sheet pre-filled with the narrowest pattern that still matches and the recent links it would also catch. Rows that were routed can be saved as the rule&rsquo;s example, so a later rule cannot take them silently.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Activity with the new filters">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>All. Counts on every filter; the unrouted rows carry an amber <span class="tag" style="color: var(--warn-text); background: var(--warn-soft); border-color: transparent;">default</span> chip. Handler 8 keeps host only, so its row shows the host and a lock. Handler 9 keeps nothing, so its 9 links are one summary line at the end, never rows. The footer carries the same sentence as Settings.</span></div>
+            <div class="dv-card win" style="width: 1100px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Activity</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>1,412 today &middot; 2 failed &middot; 14 private</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">12</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                  <div class="rail-foot"><span class="st"><i></i>router &middot; running</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Recent</div><h1 class="ttl">Activity</h1></div><div class="actions"><span class="btn sm quiet">Export&hellip;</span><span class="btn sm quiet">Clear</span></div></div>
+                  <div class="toolbar">
+                    <div class="inp"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="color: var(--text-subtle);"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><span class="ph">Search URL, app, browser</span></div>
+                    <div class="seg"><span class="on">All<i>200</i></span><span>Unrouted<i>61</i></span><span>Failed<i>2</i></span><span>Rewritten<i>138</i></span><span>Private<i>14</i></span></div>
+                    <span class="note" style="margin-left: auto;">last 200 &middot; 24 h &middot; in memory</span>
+                  </div>
+                  <section class="card">
+                    <div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span><span></span></div>
+                    <div class="ar"><span class="t">09:41:08</span><span class="u">https://pwrdrvr.atlassian.net/browse/PG-12</span><span>Slack</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar unr"><span class="t">09:40:51</span><span class="u">https://app.metrics.example/dashboard/abc-123?from_ts=1760950800&amp;to_ts=1760954400</span><span>Slack</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar"><span class="t">09:38:12</span><span class="u">https://mybank.example<span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>host only</span></span><span>Mail</span><span><span class="tag">handler 8</span></span><div class="d"><span class="bi">Sa</span>Safari<span class="pf">private window</span></div><span class="ms">5 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar"><span class="t">09:36:40</span><span class="u">https://x.com/pwrdrvr/status/1842?utm_source=slack&amp;s=20</span><span>Slack</span><span><span class="tag">rw 1, 2 &middot; h 3</span></span><div class="d"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="ms">6 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar unr"><span class="t">09:33:05</span><span class="u">https://app.metrics.example/dashboard/9f2e/latency</span><span>PwrAgnt</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="ms">3 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar bad"><span class="t">09:31:40</span><span class="u">https://zoom.us/j/8142201137?pwd=&hellip;</span><span>Calendar</span><span><span class="tag">handler 6</span></span><div class="d"><span class="st bad"><i></i>zoom.us not found</span></div><span class="ms">41 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar"><span class="t">09:30:02</span><span class="u">https://github.com/pwrdrvr/PwrGit/pull/361</span><span>PwrAgnt</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="ms">5 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar unr"><span class="t">09:27:55</span><span class="u">https://www.apple.com/macos/</span><span>Safari</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar"><span class="t">09:22:48</span><span class="u">https://meet.google.com/abc-defg-hij</span><span>Calendar</span><span><span class="tag">handler 1</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="ms">7 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar sum"><span class="t"></span><span><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 5px;"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>9 links today from handler 9 kept nothing. Counted, not listed.</span></div>
+                  </section>
+                  <span class="note">Nothing about a link is written to disk. The last 200 links stay in memory for at most 24 hours and are forgotten when the router quits. Logs carry rule numbers and timings, never URL contents.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Private filter and the row menu">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>Left: the <b>Private</b> filter is three count cards, one per rule that keeps less than full, with the host-only rows below them and nothing for the rule that keeps nothing. Right: the row menu on an unrouted row (top) and on a routed row (bottom). On an unrouted row the second item saves a test that expects the default; on a routed row it becomes an example of the rule that took it.</span></div>
+            <div class="dv-card crop" style="width: 1180px; height: 640px;">
+              <div class="crow">
+                <div style="flex: 1.6;">
+                  <div class="toolbar" style="margin-bottom: 12px;"><div class="seg"><span>All<i>200</i></span><span>Unrouted<i>61</i></span><span>Failed<i>2</i></span><span>Rewritten<i>138</i></span><span class="on">Private<i>14</i></span></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Today &middot; counts only</p><h2 class="card-title">14 private links</h2><p class="card-desc">Rules that keep host only or nothing. What they dropped was never recorded, so there is nothing more to show.</p></div></div>
+                    <div class="cnts" style="grid-template-columns: 1fr 1fr;">
+                      <div class="cnt-card"><span class="big">5<small>today</small></span><div class="wh"><span class="tag">handler 8</span><span class="tag">*.mybank.example/*</span></div><p>Safari, private window. Keeps host only.</p></div>
+                      <div class="cnt-card"><span class="big">9<small>today</small></span><div class="wh"><span class="tag">handler 9</span><span class="tag">*.clinic.example/*</span></div><p>Firefox, private window. Keeps nothing.</p></div>
+                    </div>
+                    <div class="ar head" style="grid-template-columns: 54px minmax(0, 1fr) 56px 96px 170px 44px 18px;"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span><span></span></div>
+                    <div class="ar" style="grid-template-columns: 54px minmax(0, 1fr) 56px 96px 170px 44px 18px;"><span class="t">09:38:12</span><span class="u">https://mybank.example<span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>host only</span></span><span>Mail</span><span><span class="tag">handler 8</span></span><div class="d"><span class="bi">Sa</span>Safari<span class="pf">private window</span></div><span class="ms">5 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar" style="grid-template-columns: 54px minmax(0, 1fr) 56px 96px 170px 44px 18px;"><span class="t">08:12:30</span><span class="u">https://online.mybank.example<span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>host only</span></span><span>Mail</span><span><span class="tag">handler 8</span></span><div class="d"><span class="bi">Sa</span>Safari<span class="pf">private window</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div>
+                    <div class="ar sum"><span class="t"></span><span>3 more from handler 8 before 08:00 &middot; 9 from handler 9 kept nothing.</span></div>
+                  </section>
+                </div>
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 14px;">
+                  <section class="card" style="overflow: visible;">
+                    <div class="ar unr sel more-on" style="grid-template-columns: 54px minmax(0, 1fr) 18px;"><span class="t">09:40:51</span><span class="u">https://app.metrics.example/dashboard/abc-123?from_ts=&hellip;</span><span class="more">&#8943;</span>
+                      <div class="menu" style="right: 8px; top: 30px; width: 320px;">
+                        <div class="mi hov">Add a rule for this link&hellip;<span class="k">&#8984;N</span></div>
+                        <div class="mi">Save as test<span class="ex">expects Chrome &middot; Personal</span></div>
+                        <div class="msep"></div>
+                        <div class="mi">Open again</div>
+                        <div class="mi">Re-test</div>
+                        <div class="mi">Copy link</div>
+                        <div class="msep"></div>
+                        <div class="mi">Forget this link</div>
+                        <div class="mfoot">No rule matched; it went to the default. Add a rule, or save it as a test so a future rule cannot take it unnoticed.</div>
+                      </div>
+                    </div>
+                  </section>
+                  <section class="card" style="overflow: visible; margin-top: 250px;">
+                    <div class="ar sel more-on" style="grid-template-columns: 54px minmax(0, 1fr) 18px;"><span class="t">09:30:02</span><span class="u">https://github.com/pwrdrvr/PwrGit/pull/361</span><span class="more">&#8943;</span>
+                      <div class="menu" style="right: 8px; top: 30px; width: 320px;">
+                        <div class="mi">Add a rule for this link&hellip;<span class="k">&#8984;N</span></div>
+                        <div class="mi hov">Save as example for handler 2<span class="ex">github.com/pwrdrvr/*</span></div>
+                        <div class="msep"></div>
+                        <div class="mi">Open again</div>
+                        <div class="mi">Re-test</div>
+                        <div class="mi">Copy link</div>
+                        <div class="msep"></div>
+                        <div class="mi">Forget this link</div>
+                        <div class="mfoot">Saved to rules.json under handler 2. Run tests fails if another rule ever takes it.</div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2c" data-screen-label="2c Add a rule for this link">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>The sheet. Three patterns are offered, narrowest first and selected; the query and fragment never enter a pattern. The collision list re-resolves the links in memory: three recent links would also match, all unrouted, so nothing changes hands. Open in a private window and Keep are the rule&rsquo;s privacy. The footer says the link itself becomes the rule&rsquo;s example.</span></div>
+            <div class="dv-card win rel" style="width: 1100px; height: 960px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Activity</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>1,412 today &middot; 2 failed &middot; 14 private</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">12</span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Recent</div><h1 class="ttl">Activity</h1></div></div>
+                  <section class="card">
+                    <div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span><span></span></div>
+                    <div class="ar unr sel"><span class="t">09:40:51</span><span class="u">https://app.metrics.example/dashboard/abc-123?from_ts=1760950800&amp;to_ts=1760954400</span><span>Slack</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div>
+                  </section>
+                </div>
+              </div>
+              <div class="scrim"></div>
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 09:40:51 &middot; sent from Slack</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="help" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); max-width: none; overflow-wrap: anywhere;">https://app.metrics.example/dashboard/abc-123?from_ts=1760950800&amp;to_ts=1760954400</p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c">
+                    <div class="pats">
+                      <div class="pat on"><span class="radio on"></span><code>app.metrics.example/dashboard/*</code><span class="why">this link and 3 more</span></div>
+                      <div class="pat"><span class="radio"></span><code>app.metrics.example/*</code><span class="why">+ 2 more</span></div>
+                      <div class="pat"><span class="radio"></span><code>*.metrics.example/*</code><span class="why">+ 2 more</span></div>
+                    </div>
+                    <div class="inp mono" style="width: 100%;">app.metrics.example/dashboard/*<span class="caret" style="font-size: 10px;">edit</span></div>
+                  </div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this pattern matches.</span></div><div class="field-c">
+                    <div class="coll">
+                      <div class="cap">Would also catch these 3 recent links <i>&middot; all unrouted, nothing changes hands</i></div>
+                      <div class="cr"><span class="t">09:33</span><span class="u">https://app.metrics.example/dashboard/9f2e/latency</span><div class="d"><span class="tag">default</span><span class="bi">Ch</span>Personal</div></div>
+                      <div class="cr"><span class="t">Mon</span><span class="u">https://app.metrics.example/dashboard/abc-123?from_ts=1760864400</span><div class="d"><span class="tag">default</span><span class="bi">Ch</span>Personal</div></div>
+                      <div class="cr"><span class="t">Mon</span><span class="u">https://app.metrics.example/dashboard/list</span><div class="d"><span class="tag">default</span><span class="bi">Ch</span>Personal</div></div>
+                    </div>
+                  </div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><div class="row-actions"><span class="addp">+ app</span><span class="field-help">Slack sent this one. Leave empty to match from any app.</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c"><div class="row-actions" style="width: 100%;"><div class="inp" style="flex: 1;"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp" style="width: 150px;">Work<span class="caret">&#9662;</span></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in a private window</span><span class="field-sub"><code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">--incognito</code> for Chrome.</span></div><div class="field-c"><div class="row-actions"><span class="sw"></span><span class="field-help">On, the rule keeps host only unless Keep says otherwise.</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Keep</span><span class="field-sub">What Activity and the journal remember.</span></div><div class="field-c"><div class="seg"><span class="on">Full</span><span>Host only</span><span>Nothing</span></div><span class="field-help">Full: the link as received and as opened. Host only: scheme and host. Nothing: a count.</span></div></div>
+                  <div class="field"><div class="field-l"><span>Position</span><span class="field-sub">First match wins.</span></div><div class="field-c"><div class="seg"><span>Top</span><span>After handler 2</span><span class="on">Bottom</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes handler 10, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2d" data-screen-label="2d This needs a JS handler">
+            <div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a><span>The sheet when a visual rule cannot win. Here <code>~/.finicky.ts</code> is in charge and its function handler already takes the link; visual rules run after the config, so the sheet says so, offers the handler as code to paste, and lets the user add the rule anyway for when the config is switched off. The other reason the sheet can give is a match on the window title, which rules.json cannot express.</span></div>
+            <div class="dv-card win rel" style="width: 1100px; height: 600px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Activity</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip warn"><span class="dot"></span>~/.finicky.ts &middot; in charge</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="wdot"></span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity</div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Recent</div><h1 class="ttl">Activity</h1></div></div>
+                  <section class="card">
+                    <div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span><span></span></div>
+                    <div class="ar sel"><span class="t">09:44:17</span><span class="u">https://workplace.example/feed/post/8812</span><span>Mail</span><span><span class="tag fn">fn</span> <span class="tag">config h 1</span></span><div class="d"><span class="bi">Ff</span>Firefox</div><span class="ms">9 ms</span><span class="more">&#8943;</span></div>
+                  </section>
+                </div>
+              </div>
+              <div class="scrim"></div>
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 09:44:17 &middot; sent from Mail</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="help" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); max-width: none;">https://workplace.example/feed/post/8812</p></div>
+                <div class="sheet-bd">
+                  <div class="field" style="padding-bottom: 6px;"><div class="field-l"><span>Match</span></div><div class="field-c"><div class="pats"><div class="pat on"><span class="radio on"></span><code>workplace.example/feed/*</code><span class="why">this link and 6 more</span></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c"><div class="row-actions" style="width: 100%;"><div class="inp" style="flex: 1;"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp" style="width: 150px;">Work<span class="caret">&#9662;</span></div></div></div></div>
+                  <div class="field" style="flex-direction: column; gap: 10px;">
+                    <div class="needjs"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13 4-2 16"/></svg><div><b>This needs a JS handler because ~/.finicky.ts is in charge.</b> Its handler 1, <code style="font: 500 10.5px var(--font-mono); color: var(--accent-bright);">(url) =&gt; url.host.includes("workplace")</code>, already takes this link, and visual rules run after the config. A rule here can only win once the config is switched off.</div></div>
+                    <div class="code"><i>// paste above handler 1 in ~/.finicky.ts</i>
+{
+  match: <b>"workplace.example/feed/*"</b>,
+  browser: { name: <b>"Google Chrome"</b>, profile: <b>"Work"</b> },
+},</div>
+                    <div class="row-actions"><span class="btn sm">Copy JS handler</span><span class="btn sm">Open ~/.finicky.ts in editor</span><span class="btn sm quiet">Stop using the config</span></div>
+                  </div>
+                </div>
+                <div class="sheet-ft"><span class="note">Add anyway saves handler 10 to rules.json; it takes effect when the config is not in charge.</span><span class="btn quiet">Cancel</span><span class="btn">Add anyway</span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "the sheet when the collision list includes a link that is routed today" &middot; "Unrouted grouped by host with a count" &middot; "the tray&rsquo;s recents with a host-only link"</p>
+      </section>
+
+      <!-- ================= TURN 3 — Rules: examples and tests ================= -->
+      <section class="dv-turn" id="t3">
+        <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Rules &rsaquo; examples, Run tests, Save as test</span></div>
+        <p class="dv-sub">Every rule can carry <b>examples</b>: URLs that must resolve to it, stored in <code>rules.json</code> next to the rule (<code>rules[].examples</code>, <code>rewrites[].examples</code> with the URL each becomes). Top-level <b>tests</b> pin a whole resolution: a URL, an optional opener, and the browser, profile and URL expected. <b>Run tests</b> resolves all of them against the rules as saved and reports each failure as input, expected, actual and which rule won instead. A failure here is the rule that was just added or moved taking a link that was someone else&rsquo;s; the strip says so before the person moves on.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="3a" data-screen-label="3a Run tests with one failure">
+            <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>Handler 2, <code>github.com/*</code> &rarr; Firefox, was added a minute ago and pushed the old handler 2 to 3. Run tests ran on save: 12 passed, 1 failed. The failure row names the input, what handler 3&rsquo;s example expected, what happens now, and the winner. The chips under each rule are its examples; the failed one says where it went.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+                <div class="strip-fill"></div>
+                <span class="strip-chip"><span class="dot"></span>rules.json &middot; 3 rewrites &middot; 10 handlers</span>
+                <span class="strip-chip warn"><span class="dot"></span>tests &middot; 1 failed</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="wdot"></span></div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+                  <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+                  <div class="rail-foot"><span class="st"><i></i>router &middot; running</span><span>saved 09:52 &middot; reloaded 1s ago</span></div>
+                </nav>
+                <div class="pane">
+                  <div class="pane-head">
+                    <div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1><p class="help">Rewrites run in order and every match applies. Then the first matching handler opens the link. Anything left goes to the default.</p></div>
+                    <div class="actions"><span class="btn">Add rewrite</span><span class="btn primary">Add handler</span></div>
+                  </div>
+
+                  <div class="tstrip bad">
+                    <div class="trow"><span class="st bad"><i></i></span><div class="sum"><b>1 failed</b><span>12 passed</span><span class="note">9 examples &middot; 4 saved tests &middot; ran on save, 09:52</span></div><span class="btn sm">Run tests</span></div>
+                    <div class="fail-row">
+                      <span class="x">&times;</span>
+                      <div><div class="fh">Input</div><div class="fv"><span class="url">https://github.com/pwrdrvr/PwrGit/pull/361</span><small>example of handler 3 &middot; from any app</small></div></div>
+                      <div><div class="fh">Expected</div><div class="fv"><span><span class="bi">Ch</span> Google Chrome &middot; Work</span><small>handler 3 &middot; github.com/pwrdrvr/*</small></div></div>
+                      <div><div class="fh">Actual</div><div class="fv"><span style="color: var(--danger-text);"><span class="bi">Ff</span> Firefox &middot; default-release</span><small>resolved 0.4 ms</small></div></div>
+                      <div><div class="fh">Winner</div><div class="fv"><span><span class="tag">handler 2</span> github.com/*</span><small>added 09:52, above handler 3</small></div></div>
+                      <div class="fa"><span class="btn sm">Move handler 2 below 3</span><span class="btn sm">Edit handler 2</span><span class="btn sm quiet">Expect Firefox instead</span><span class="note">Nothing is undone for you; the rules are saved as they are.</span></div>
+                    </div>
+                  </div>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 &middot; first match wins</p><h2 class="card-title">Handlers</h2></div><span class="chip">10 handlers &middot; 1 off</span></div>
+                    <div class="rules">
+                      <div class="rr hasx"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">01</span><div class="m"><span class="tag">meet.google.com/*</span><span class="tag">*.google.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">38 today</span><span class="more">&#8943;</span></div>
+                      <div class="exrow"><span class="lbl">Examples</span><span class="ex"><i>&#10003;</i>https://meet.google.com/abc-defg-hij</span><span class="ex"><i>&#10003;</i>https://docs.google.com/document/d/1AbC/edit</span></div>
+                      <div class="rr fresh hasx"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">02</span><div class="m"><span class="tag">github.com/*</span><span class="chip acc">new</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="hits">&mdash;</span><span class="more">&#8943;</span></div>
+                      <div class="exrow" style="background: var(--accent-tint);"><span class="lbl">Examples</span><span class="ex"><i>&#10003;</i>https://github.com/rust-lang/rust/pull/1</span><span class="ex new"><i>+</i>Add example</span></div>
+                      <div class="rr hasx"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">03</span><div class="m"><span class="tag">*.atlassian.net/*</span><span class="tag">github.com/pwrdrvr/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">214 today</span><span class="more">&#8943;</span></div>
+                      <div class="exrow"><span class="lbl">Examples</span><span class="ex"><i>&#10003;</i>https://pwrdrvr.atlassian.net/browse/PG-12</span><span class="ex fail"><i>&times;</i>https://github.com/pwrdrvr/PwrGit/pull/361<span class="to">&rarr; handler 2</span></span></div>
+                      <div class="rr hasx"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">04</span><div class="m"><span class="lbl">sent from</span><span class="tag app"><span class="bi">Sl</span>Slack</span><span class="lbl">and</span><span class="tag">*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="hits">57 today</span><span class="more">&#8943;</span></div>
+                      <div class="exrow"><span class="lbl">Examples</span><span class="ex"><i>&#10003;</i>https://x.com/pwrdrvr/status/1842?utm_source=slack <span class="to">from Slack</span></span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">05</span><div class="m"><span class="tag">bsky.app/*</span><span class="tag">*.reddit.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr hasx"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">06</span><div class="m"><span class="tag">localhost:*</span><span class="tag">127.0.0.1:*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ar</span>Arc</div><span class="hits">402 today</span><span class="more">&#8943;</span></div>
+                      <div class="exrow"><span class="lbl">Examples</span><span class="ex"><i>&#10003;</i>http://localhost:5173/library</span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">07</span><div class="m"><span class="tag">zoom.us/j/*</span><span class="tag">*.zoom.us/j/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Zm</span>zoom.us<span class="pf">us.zoom.xos</span></div><span class="hits">6 today</span><span class="more">&#8943;</span></div>
+                      <div class="rr off"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">08</span><div class="m"><span class="tag">figma.com/*</span><span class="chip">off</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Fg</span>Figma<span class="pf">com.figma.Desktop</span></div><span class="hits">&mdash;</span><span class="more">&#8943;</span></div>
+                      <div class="rr hasx"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">09</span><div class="m"><span class="tag">*.mybank.example/*</span><span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>private &middot; host only</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Sa</span>Safari<span class="pf">private window</span></div><span class="hits">5 today</span><span class="more">&#8943;</span></div>
+                      <div class="exrow"><span class="lbl">Examples</span><span class="ex"><i>&#10003;</i>https://mybank.example/<span class="to">host only</span></span></div>
+                      <div class="rr"><span class="grip"><svg width="7" height="12" viewBox="0 0 9 14" fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="7" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="7" cy="12" r="1.3"/></svg></span><span class="idx">10</span><div class="m"><span class="tag">*.clinic.example/*</span><span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>private &middot; nothing</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">private window</span></div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                    </div>
+                  </section>
+
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Whole resolutions &middot; rules.json &rsaquo; tests</p><h2 class="card-title">Saved tests</h2><p class="card-desc">A link, where it came from, and what must come out: browser, profile and the URL after rewrites. Saved from Test a link or from an Activity row.</p></div><span class="chip ok">4 passed</span></div>
+                    <div class="rules">
+                      <div class="rr" style="grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 300px) 20px;"><span class="ex" style="border: none; background: transparent; padding: 0;"><i>&#10003;</i></span><div class="m"><span class="url" style="font-size: 11px;">https://x.com/pwrdrvr/status/1842?utm_source=slack&amp;s=20</span><span class="lbl">from Slack</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox<span class="pf">default-release &middot; xcancel.com/&hellip;?s=20</span></div><span class="more">&#8943;</span></div>
+                      <div class="rr" style="grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 300px) 20px;"><span class="ex" style="border: none; background: transparent; padding: 0;"><i>&#10003;</i></span><div class="m"><span class="url" style="font-size: 11px;">https://www.apple.com/macos/</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal &middot; default</span></div><span class="more">&#8943;</span></div>
+                      <div class="rr" style="grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 300px) 20px;"><span class="ex" style="border: none; background: transparent; padding: 0;"><i>&#10003;</i></span><div class="m"><span class="url" style="font-size: 11px;">https://zoom.us/j/8142201137</span><span class="lbl">from Calendar</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Zm</span>zoom.us</div><span class="more">&#8943;</span></div>
+                      <div class="rr" style="grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 300px) 20px;"><span class="ex" style="border: none; background: transparent; padding: 0;"><i>&#10003;</i></span><div class="m"><span class="url" style="font-size: 11px;">http://wiki.internal/ops/runbook</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work &middot; https://wiki.internal/&hellip;</span></div><span class="more">&#8943;</span></div>
+                    </div>
+                  </section>
+
+                  <div class="pane-foot"><span class="st warn"><i></i></span><span>rules.json &middot; saved on change &middot; tests run on every save and when a rule moves</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="3b" data-screen-label="3b Editor: Keep, private window, Add example">
+            <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a><span>The rail for handler 3. Open in gains <b>Open in a private window</b> and <b>Keep</b>, which write <code>private</code> and <code>privacy</code> on the rule. Examples lists each with its result; the failed one links to the winner. Add example says plainly where it goes. Try it keeps working on whatever is typed, without saving.</span></div>
+            <div class="dv-card crop" style="width: 820px;">
+              <div class="crow">
+                <aside class="rrail solo">
+                  <div class="rs rhead">
+                    <div><div class="eyebrow" style="color: var(--text-muted);">Handler &middot; 3 of 10</div><h2 class="ttl">Atlassian and pwrdrvr on GitHub</h2></div>
+                    <span class="sw on"></span>
+                  </div>
+                  <div class="rs">
+                    <h5>Match</h5>
+                    <span class="lab">URL patterns</span>
+                    <div class="plist"><div class="inp mono">*.atlassian.net/*<span class="x">&times;</span></div><div class="inp mono">github.com/pwrdrvr/*<span class="x">&times;</span></div></div>
+                    <span class="addp">+ pattern &nbsp;<span class="note">wildcard, or /regex/</span></span>
+                  </div>
+                  <div class="rs">
+                    <h5>Open in</h5>
+                    <div class="inp"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div>
+                    <div class="lrow"><span class="lab">Profile</span><div class="inp" style="width: 190px;">Work<span class="caret">&#9662;</span></div></div>
+                    <div class="lrow"><span class="lab">Open in a private window</span><span class="sw"></span></div>
+                    <div class="lrow"><span class="lab">Keep</span><div class="seg"><span class="on">Full</span><span>Host only</span><span>Nothing</span></div></div>
+                    <span class="field-help">What Activity and the journal remember about links this handler takes. A private window keeps host only unless set here.</span>
+                  </div>
+                  <div class="rs">
+                    <h5>Examples &middot; must resolve here</h5>
+                    <div class="exl">
+                      <div class="inp mono"><i>&#10003;</i>https://pwrdrvr.atlassian.net/browse/PG-12<span class="x">&times;</span></div>
+                      <div class="inp mono fail"><i>&times;</i>https://github.com/pwrdrvr/PwrGit/pull/361<span class="to">&rarr; handler 2</span><span class="x">&times;</span></div>
+                      <div class="inp mono focus"><span class="ph">https://</span></div>
+                    </div>
+                    <span class="field-help">Saved to rules.json as this handler&rsquo;s example. Run tests checks it still resolves here; a rule that takes it later fails the run.</span>
+                  </div>
+                  <div class="rs">
+                    <h5>Try it</h5>
+                    <div class="inp mono">https://github.com/pwrdrvr/PwrRoute/pull/29</div>
+                    <div class="try"><span class="st bad"><i></i></span><span>Handler 2 wins first: <b>Firefox &middot; default-release</b>. Move this rule above it, or narrow handler 2.</span></div>
+                  </div>
+                  <div class="rail-end"><span class="btn quiet danger sm">Delete handler</span><span class="note">edited 09:53 &middot; saved</span></div>
+                </aside>
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                  <div class="code" style="font-size: 10.5px;"><i>// rules.json, the rule as saved</i>
+{
+  "match": ["*.atlassian.net/*", "github.com/pwrdrvr/*"],
+  "browser": "Google Chrome",
+  "profile": "Work",
+  <b>"examples"</b>: [
+    "https://pwrdrvr.atlassian.net/browse/PG-12",
+    "https://github.com/pwrdrvr/PwrGit/pull/361"
+  ]
+}
+
+<i>// handler 9, as saved</i>
+{
+  "match": "*.mybank.example/*",
+  "browser": "Safari",
+  <b>"private"</b>: true,
+  <b>"privacy"</b>: "host"
+}
+
+<i>// a rewrite's example says what the URL becomes</i>
+{
+  "match": "x.com/*",
+  "host": "xcancel.com",
+  <b>"examples"</b>: [{
+    "url": "https://x.com/pwrdrvr/status/1842",
+    "becomes": "https://xcancel.com/pwrdrvr/status/1842"
+  }]
+}</div>
+                  <span class="note">A Go-host rules.json has none of these keys and loads unchanged. <code>privacy</code> defaults to full; with <code>private: true</code> and no <code>privacy</code>, host only.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="3c" data-screen-label="3c Test a link: Save as test">
+            <div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a><span>The result card gains <b>Save as test</b>. It saves the input, the opener and the whole expected outcome, including the URL after rewrites, so a change to a rewrite fails it too. Below: the same card after saving, with the test&rsquo;s number and where it went.</span></div>
+            <div class="dv-card crop" style="width: 900px;">
+              <div class="testrow">
+                <div class="inp mono">https://x.com/pwrdrvr/status/1842?utm_source=slack&amp;s=20</div>
+                <div class="inp" style="width: 170px;"><span class="note">from</span><span class="bi">Sl</span>Slack<span class="caret">&#9662;</span></div>
+                <span class="btn primary">Test</span>
+              </div>
+              <section class="card">
+                <div class="res">
+                  <span class="big">Ff</span>
+                  <div class="rt"><b>Firefox &middot; default-release</b><div class="mm"><span class="url" style="color: var(--text-secondary);">https://xcancel.com/pwrdrvr/status/1842?s=20</span><span class="tag">rw 1, 2 &middot; h 4</span></div></div>
+                  <div class="row-actions"><span class="btn">Copy trace</span><span class="btn">Save as test</span><span class="btn primary">Open now</span></div>
+                </div>
+              </section>
+              <section class="card">
+                <div class="res">
+                  <span class="big">Ff</span>
+                  <div class="rt"><b>Firefox &middot; default-release</b><div class="mm"><span class="url" style="color: var(--text-secondary);">https://xcancel.com/pwrdrvr/status/1842?s=20</span><span class="tag">rw 1, 2 &middot; h 4</span></div></div>
+                  <div class="row-actions"><span class="btn">Copy trace</span><span class="btn" style="opacity: 0.6;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>Saved as test 5</span><span class="btn primary">Open now</span></div>
+                </div>
+                <div class="saved"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span><b>Saved to rules.json &rsaquo; tests.</b> This link from Slack expects <b>Firefox &middot; default-release</b> and <span class="url">https://xcancel.com/pwrdrvr/status/1842?s=20</span>. Run tests checks it on every save.</span><span class="btn sm quiet" style="margin-left: auto;">Show in Rules</span></div>
+              </section>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>What a test holds, and what it does not.</b> Examples and tests are URLs the user chose to keep in <code>rules.json</code>; they are the one place a URL is written to disk by design, and only by an explicit Save. Run tests never reads Activity: it resolves the saved inputs against the saved rules, so it gives the same answer on another machine and for an agent. The collision list in Add a rule is the other way round: it reads the in-memory records and is gone with them.</p>
+        <p class="dv-next">Try next: "the rewrite editor&rsquo;s example with url and becomes" &middot; "Run tests while ~/.finicky.ts is in charge" &middot; "a test whose opener app is not installed"</p>
+      </section>
+
+      <!-- ================= TURN 4 — The MCP agent flow ================= -->
+      <section class="dv-turn" id="t4">
+        <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">An agent does the same, over MCP</span></div>
+        <p class="dv-sub">The same three steps as turn 2 and 3, for a local agent with the Editor role: read Activity for the unrouted links, test a proposed patch, apply it. <code>pwrroute_rules_test</code> is new: it runs the saved examples and tests against a patch without writing it. <code>pwrroute_rules_apply</code> runs the same tests itself and refuses a patch that fails any, so an agent that skips step 2 still cannot change old routing; the refusal carries the regressions in the same shape. Records come back at their privacy level: a host-only record has <code>host</code> and no <code>url</code>, and records that keep nothing are a count.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="4a" data-screen-label="4a Storyboard: activity, rules_test, rules_apply refused">
+            <div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a><span>Three calls. The agent asks for unrouted links, proposes <code>github.com/*</code> at the top, tests it, sees the regression, and the apply it tries anyway is refused with the same failure. The fix is to place the handler below handler 3, or to pass the examples it means to change in <code>update_examples</code>; either way the user&rsquo;s saved routing cannot be changed silently.</span></div>
+            <div class="dv-card" style="width: 1180px;">
+              <div class="story">
+                <div class="panel">
+                  <div class="ph2"><span class="n">1</span><code>pwrroute_activity</code><span class="chip">Editor &middot; full URLs</span></div>
+                  <p>Reader sessions get <b>host</b> only on every record. Editor and Opener get the record at its rule&rsquo;s level: nothing on disk, nothing beyond what Activity shows.</p>
+                  <div class="cl">Request</div>
+                  <div class="code">{ "filter": <b>"unrouted"</b>, "limit": 3 }</div>
+                  <div class="cl">Response</div>
+                  <div class="code">{
+  "records": [
+    { "id": 1412, "at": "2026-10-20T09:40:51Z",
+      "url": "https://app.metrics.example/dashboard/abc-123?from_ts=…",
+      "opener": "com.tinyspeck.slackmacgap",
+      "matched": "default", "privacy": "full",
+      "opened": { "browser": "Google Chrome",
+                  "profile": "Personal" } },
+    { "id": 1409,
+      "url": "https://app.metrics.example/dashboard/9f2e/latency",
+      "opener": "com.pwrdrvr.pwragnt",
+      "matched": "default", … },
+    { "id": 1402, "url": "https://www.apple.com/macos/", … }
+  ],
+  "unrouted": 61, "total": 200,
+  <i>"omitted": { "nothing": 9, "hostOnly": 5 }</i>,
+  "retention": { "count": 200, "hours": 24, "journal": "off" }
+}</div>
+                </div>
+                <div class="panel">
+                  <div class="ph2"><span class="n">2</span><code>pwrroute_rules_test</code><span class="chip ok">dry run</span></div>
+                  <p>The patch is applied to a copy of the rules in memory and every saved example and test is resolved against it. Nothing is written. The agent asked for <code>github.com/*</code> at the top, which is too wide.</p>
+                  <div class="cl">Request</div>
+                  <div class="code">{ "revision": "r41",
+  "patch": { "rules": { "insert": { "at": 1,
+    "rule": { "match": "github.com/*",
+              "browser": "Firefox",
+              "examples": [
+                "https://github.com/rust-lang/rust/pull/1" ] } } } } }</div>
+                  <div class="cl">Response</div>
+                  <div class="code">{ "passed": 12, <span class="bad">"failed": 1</span>,
+  "failures": [ {
+    "input": "https://github.com/pwrdrvr/PwrGit/pull/361",
+    "opener": null,
+    "kind": "example",
+    "of": { "rule": 3, "match": "github.com/pwrdrvr/*" },
+    "expected": { "browser": "Google Chrome",
+                  "profile": "Work" },
+    "actual":   { "browser": "Firefox",
+                  "profile": "default-release" },
+    "winner":   { "rule": 2, "match": "github.com/*" }
+  } ],
+  "hint": "Place the new handler after handler 3,
+           or narrow its match." }</div>
+                </div>
+                <div class="panel">
+                  <div class="ph2"><span class="n bad">3</span><code>pwrroute_rules_apply</code><span class="chip bad">refused</span></div>
+                  <p>Apply runs the same tests before writing. A failure is a refusal, not a warning: <b>nothing was written</b>, the revision is unchanged, and the body is the test result so the agent can fix the patch without a second call.</p>
+                  <div class="cl">Request</div>
+                  <div class="code">{ "revision": "r41", "patch": { …same patch… } }</div>
+                  <div class="cl">Response &middot; error</div>
+                  <div class="code">{ "error": <span class="bad">"regressions"</span>,
+  "message": "1 saved example would change routing.
+              Nothing was written.",
+  "passed": 12, "failed": 1,
+  "failures": [ {
+    "input": "https://github.com/pwrdrvr/PwrGit/pull/361",
+    "expected": { "browser": "Google Chrome",
+                  "profile": "Work" },
+    "actual": { "browser": "Firefox", … },
+    "winner": { "rule": 2, "match": "github.com/*" } } ],
+  "revision": "r41",
+  "toChange": "Pass update_examples with that URL
+               to move the example on purpose." }</div>
+                  <div class="cl">Then</div>
+                  <div class="code"><span class="ok">// at: 4 passes 13 of 13 and writes r42</span>
+{ "revision": "r41",
+  "patch": { "rules": { "insert": { "at": 4, … } } } }
+&rarr; { "revision": "r42", "passed": 13, "failed": 0,
+    "reloaded": true }</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Why apply refuses instead of warning.</b> An agent will take a warning as a note and move on; the user finds out when a link opens in the wrong browser, and the URL that would tell them why has already been redirected away. Refusing with the failure list costs the agent one more call and keeps every saved example true. Changing an example on purpose is a named parameter, so the intent is in the request and in Activity&rsquo;s agent log (&ldquo;pwrroute_rules_apply &middot; moved 1 example to handler 2&rdquo;).</p>
+        <p class="dv-next">Try next: "what pwrroute_activity returns to a Reader" &middot; "the agent approval window listing rules_test" &middot; "Settings &rsaquo; Local agents&rsquo; recent actions with a refused apply"</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

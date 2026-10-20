@@ -28,6 +28,13 @@ the project and re-export here.
   written to the project, then downloaded from its preview and compared byte
   for byte with the file here. The four earlier canvases, `pwrroute.css` and
   `support.js` are unchanged.
+- Updated **2026-10-20**: one canvas added for link privacy and route tests
+  (Settings › Privacy with retention and the journal, Activity's Unrouted and
+  Private filters with Add a rule for this link, per-rule examples and Run
+  tests on Rules, Save as test, and the MCP agent flow). Written to the
+  project, then downloaded from its preview and compared byte for byte with
+  the file here. The nine earlier canvases, `pwrroute.css` and `support.js`
+  are unchanged.
 
 ## Files
 
@@ -42,7 +49,8 @@ the project and re-export here.
 | `PwrRoute Windows and Linux Chrome.dc.html` | Main-window strip on Windows 11 and GNOME: brand at x=16, menu bar, caption buttons, and the rejected keep-the-gutter option |
 | `PwrRoute Updates and Default Browser.dc.html` | Velopack update states and Restart to update; becoming the default browser on macOS, Windows 11 and Linux |
 | `PwrRoute Finicky Importer.dc.html` | The importer end to end: discovery and entry points, Review with verdicts and suggestions, Place, Choose source, result with Undo import, a config that does not load |
-| `pwrroute.css` | Shared tokens and chrome for all nine canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute Activity Privacy and Route Tests.dc.html` | Settings › Privacy (retention count and hours, the journal switch Off / Hosts only / Full URLs with its disclosure sentence, file, Reveal, Clear now, Export, the per-rule Keep explainer); Activity with Unrouted and Private filters, the row menu, the Add a rule sheet with pattern suggestions and collisions, and the needs-a-JS-handler state; per-rule example chips, the Run tests strip with a failure row, Add example, Save as test; the MCP storyboard (activity, rules_test, rules_apply refused) |
+| `pwrroute.css` | Shared tokens and chrome for all ten canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.
