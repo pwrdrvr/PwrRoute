@@ -6068,6 +6068,7 @@ version = "0.0.1-alpha.0"
 dependencies = [
  "anyhow",
  "interprocess",
+ "libc",
  "pwrroute-engine",
  "serde",
  "serde_json",

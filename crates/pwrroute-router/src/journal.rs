@@ -130,8 +130,11 @@ fn journal_files(dir: &Path) -> io::Result<Vec<(Day, PathBuf)>> {
 pub(crate) struct Journal {
     config: JournalConfig,
     open: Option<(Day, fs::File)>,
-    /// The last failure, reported once; cleared by the next success.
+    /// The last write failure, reported once; cleared by the next success.
     error: Option<String>,
+    /// The last pruning failure, reported once. Pruning is best effort:
+    /// it never costs a line.
+    prune_error: Option<String>,
 }
 
 impl Journal {
@@ -140,12 +143,13 @@ impl Journal {
             config,
             open: None,
             error: None,
+            prune_error: None,
         }
     }
 
-    /// Why the last write failed, if it did.
+    /// Why the last write, or the last pruning, failed, if it did.
     pub(crate) fn error(&self) -> Option<&str> {
-        self.error.as_deref()
+        self.error.as_deref().or(self.prune_error.as_deref())
     }
 
     /// Appends `record`, reduced to what the journal may keep, to the file
@@ -181,7 +185,18 @@ impl Journal {
             create_private_dir(&self.config.dir)?;
             let file = open_private(&self.config.dir.join(day.file_name()))?;
             self.open = Some((day, file));
-            self.prune(day)?;
+            if let Err(e) = self.prune(day) {
+                let message = format!(
+                    "old files in the activity journal in {} cannot be deleted: {e}",
+                    self.config.dir.display()
+                );
+                if self.prune_error.is_none() {
+                    eprintln!("pwrroute: {message}");
+                }
+                self.prune_error = Some(message);
+            } else {
+                self.prune_error = None;
+            }
         }
         Ok(&mut self.open.as_mut().expect("just opened").1)
     }
@@ -225,15 +240,82 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
     builder.create(dir)
 }
 
+/// Opens the day's file for appending: created fresh as `0600`, or, when
+/// it already exists, reopened only if it is a plain file nobody else can
+/// read. A symlink in its place is never followed, and a file with a wider
+/// mode is refused rather than re-moded: someone set it that way, and the
+/// status should say so instead of hiding it.
 fn open_private(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.create(true).append(true);
+    let mut create = fs::OpenOptions::new();
+    create.create_new(true).append(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        create.mode(0o600);
     }
-    options.open(path)
+    match create.open(path) {
+        Ok(file) => return Ok(file),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    open_existing(path)
+}
+
+#[cfg(unix)]
+fn open_existing(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let refuse = |why: &str| {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("the day's file {why}; move it aside"),
+        ))
+    };
+    let file = match fs::OpenOptions::new()
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return refuse("is a symbolic link"),
+        Err(e) => return Err(e),
+    };
+    // Checked on the open descriptor, so nothing can be swapped in between.
+    let meta = file.metadata()?;
+    if !meta.file_type().is_file() {
+        return refuse("is not a regular file");
+    }
+    // Owner-only: a file we could open for writing and that only its owner
+    // can read is ours (short of running as root), with no `getuid` call,
+    // which the workspace's `unsafe` ban keeps out.
+    if meta.mode() & 0o077 != 0 {
+        return refuse("is readable by other users");
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn open_existing(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    // A symlink or junction in the file's place is refused before the open,
+    // which would follow it; the opened handle is checked again after.
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the day's file is not a regular file; move it aside",
+        ));
+    }
+    let file = fs::OpenOptions::new().append(true).open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the day's file is not a regular file; move it aside",
+        ));
+    }
+    Ok(file)
 }
 
 /// A UTC calendar day.
@@ -522,6 +604,55 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_day_file_is_refused_and_nothing_follows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere.txt");
+        fs::write(&target, "theirs\n").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("activity-2026-10-20.jsonl")).unwrap();
+        let mut journal = Journal::new(JournalConfig::new(dir.path(), JournalMode::Full));
+        journal.append(&record(1, at(NOON), Privacy::Full));
+        let error = journal.error().expect("the symlink is refused");
+        assert!(error.contains("is a symbolic link"), "{error}");
+        assert!(!error.contains("example.com") && !error.contains("hunter2"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "theirs\n");
+        // The next day, a fresh file, is fine.
+        journal.append(&record(2, at(NOON + 86_400), Privacy::Full));
+        assert_eq!(journal.error(), None);
+        assert_eq!(
+            lines_of(&dir.path().join("activity-2026-10-21.jsonl")).len(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_day_file_readable_by_others_is_refused_not_remoded() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("activity-2026-10-20.jsonl");
+        fs::write(&path, "").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let mut journal = Journal::new(JournalConfig::new(dir.path(), JournalMode::Full));
+        journal.append(&record(1, at(NOON), Privacy::Full));
+        let error = journal.error().expect("a wider mode is refused");
+        assert!(error.contains("readable by other users"), "{error}");
+        assert!(!error.contains("example.com") && !error.contains("hunter2"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+
+        // Made private again, the same file takes the next line.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        journal.append(&record(2, at(NOON), Privacy::Full));
+        assert_eq!(journal.error(), None);
+        assert_eq!(lines_of(&path).len(), 1);
     }
 
     #[test]

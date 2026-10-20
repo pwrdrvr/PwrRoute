@@ -20,5 +20,9 @@ serde_json = { workspace = true }
 interprocess = "2.4"
 url = "2.5"
 
+[target.'cfg(unix)'.dependencies]
+# O_NOFOLLOW, so the journal never appends through a symlink.
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"

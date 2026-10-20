@@ -30,8 +30,13 @@ impl Default for Retention {
 
 impl Retention {
     /// The oldest `received_at` still kept at `now`, when age is limited.
+    /// A span too long to represent is no limit at all.
     fn cutoff(self, now: SystemTime) -> Option<SystemTime> {
-        (self.hours > 0).then(|| now - Duration::from_secs(self.hours * 60 * 60))
+        if self.hours == 0 {
+            return None;
+        }
+        let span = Duration::from_secs(self.hours.checked_mul(60 * 60)?);
+        now.checked_sub(span)
     }
 }
 

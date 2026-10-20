@@ -22,7 +22,9 @@ pub enum Privacy {
     #[default]
     Full,
     /// Scheme and host only, in the link, the final URL and every step; no
-    /// error text, which can quote the URL. The opener stays.
+    /// error text, which can quote the URL. The opener stays, including its
+    /// `window_title`, which an app can fill with a page title or a URL;
+    /// dropping the title at this level is a follow-up.
     Host,
     /// No URL, no host, no opener, no steps: the dispatch is only counted,
     /// with its outcome and timings.

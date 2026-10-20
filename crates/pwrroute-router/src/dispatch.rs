@@ -158,34 +158,35 @@ impl std::fmt::Debug for Options {
 fn describe_retention(retention: Retention, journal: Option<&JournalConfig>) -> String {
     let links = |n: usize| if n == 1 { "link" } else { "links" };
     let hours = |n: u64| if n == 1 { "hour" } else { "hours" };
-    let memory = match (retention.count, retention.hours) {
-        (0, _) => "Nothing is kept in memory".to_owned(),
-        (count, 0) => format!("Kept in memory for the last {count} {}", links(count)),
-        (count, h) => format!(
-            "Kept in memory for the last {count} {} or {h} {}",
-            links(count),
-            hours(h)
+    // "the last 500 links or 24 hours", or "" when nothing is kept.
+    let span = match (retention.count, retention.hours) {
+        (0, _) => String::new(),
+        (count, 0) => format!("the last {count} {}", links(count)),
+        (count, h) => format!("the last {count} {} or {h} {}", links(count), hours(h)),
+    };
+    let what = |journal: &JournalConfig| {
+        let days = journal.days.max(1);
+        format!(
+            "journaled {} to {} for {days} {}",
+            match journal.mode {
+                JournalMode::Hosts => "as scheme and host only",
+                JournalMode::Full => "with full URLs (except links whose rule keeps less)",
+            },
+            journal.file_pattern().display(),
+            if days == 1 { "day" } else { "days" }
+        )
+    };
+    match (span.is_empty(), journal) {
+        (true, None) => "Nothing is kept: not in memory, and nothing is written to disk.".into(),
+        (true, Some(journal)) => {
+            format!("Nothing is kept in memory; each link is {}.", what(journal))
+        }
+        (false, None) => format!("Kept in memory only: {span}, cleared when PwrRoute quits."),
+        (false, Some(journal)) => format!(
+            "Kept in memory for {span}, cleared when PwrRoute quits, and {}.",
+            what(journal)
         ),
-    };
-    let Some(journal) = journal else {
-        return match retention.count {
-            0 => format!("{memory}, and nothing is written to disk."),
-            _ => format!(
-                "{}, cleared when PwrRoute quits.",
-                memory.replacen("Kept in memory for", "Kept in memory only:", 1)
-            ),
-        };
-    };
-    let what = match journal.mode {
-        JournalMode::Hosts => "as scheme and host only",
-        JournalMode::Full => "with full URLs (except links whose rule keeps less)",
-    };
-    let days = journal.days.max(1);
-    format!(
-        "{memory}, cleared when PwrRoute quits, and journaled {what} to {} for {days} {}.",
-        journal.file_pattern().display(),
-        if days == 1 { "day" } else { "days" }
-    )
+    }
 }
 
 /// Where dispatches are kept, as [`RouterHandle::retention`] reports it.
