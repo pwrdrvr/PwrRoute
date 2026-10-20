@@ -11,7 +11,12 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
 Every job pins Rust 1.97, the same version `rust-toolchain.toml` pins. A newer
-clippy's new lints are a change to make on purpose. Linux jobs install GPUI's
+clippy's new lints are a change to make on purpose. Right after installing
+it, every job runs `scripts/ci/prune-rust-toolchains.sh` to uninstall the
+runner image's preinstalled toolchains: `Swatinem/rust-cache` hashes every
+installed toolchain into its key, and the image's stable moves with each
+rollout, so without the prune a PR can land on an image main has not cached
+yet and compile cold. Only main saves the cache (`save-if`). Linux jobs install GPUI's
 system libraries with `scripts/ci/install-linux-deps.sh`.
 
 ## ci.yml
