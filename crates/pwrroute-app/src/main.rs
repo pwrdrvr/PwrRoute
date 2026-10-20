@@ -25,6 +25,7 @@ mod fixtures;
 mod macos;
 mod router;
 mod rules_view;
+mod settings;
 mod test_link;
 #[cfg(test)]
 mod tests;
@@ -174,8 +175,13 @@ fn main() {
 
 /// Brings the main window forward, opening it if it is closed.
 fn show_main_window(cx: &mut App) {
-    // The tray dropdown and the first-run window are windows too.
-    if let Some(window) = cx.windows().iter().find_map(|w| w.downcast::<PwrRoute>()) {
+    // Not `first()`: the Settings window, the tray dropdown or the first-run
+    // window may be the only one open.
+    let main = cx
+        .windows()
+        .into_iter()
+        .find(|window| window.downcast::<PwrRoute>().is_some());
+    if let Some(window) = main {
         let _ = window.update(cx, |_, window, _| window.activate_window());
         cx.activate(true);
         return;
