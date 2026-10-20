@@ -27,6 +27,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # One pin for every job and for the cache key prefix below.
+  RUST_TOOLCHAIN: "1.97"
   # No debug info in CI builds: nobody reads it here, and writing it (PDBs
   # on Windows above all) is a large share of compile and link time.
   CARGO_PROFILE_DEV_DEBUG: "0"
@@ -120,11 +122,20 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # The key is prefix + job + OS + lockfile hash, and nothing else.
+          # rust-cache's default "environment hash" folds in every toolchain
+          # installed on the runner, including the image's preinstalled
+          # stable; when that image updated for Rust 1.99.1 every key on
+          # every platform changed and all runs went cold. Our own toolchain
+          # version is in the prefix, so bumping RUST_TOOLCHAIN still starts
+          # a fresh cache.
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
+          add-rust-environment-hash-key: false
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -157,10 +168,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # The key is prefix + job + OS + lockfile hash, and nothing else.
+          # rust-cache's default "environment hash" folds in every toolchain
+          # installed on the runner, including the image's preinstalled
+          # stable; when that image updated for Rust 1.99.1 every key on
+          # every platform changed and all runs went cold. Our own toolchain
+          # version is in the prefix, so bumping RUST_TOOLCHAIN still starts
+          # a fresh cache.
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
+          add-rust-environment-hash-key: false
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -185,10 +205,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # The key is prefix + job + OS + lockfile hash, and nothing else.
+          # rust-cache's default "environment hash" folds in every toolchain
+          # installed on the runner, including the image's preinstalled
+          # stable; when that image updated for Rust 1.99.1 every key on
+          # every platform changed and all runs went cold. Our own toolchain
+          # version is in the prefix, so bumping RUST_TOOLCHAIN still starts
+          # a fresh cache.
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
+          add-rust-environment-hash-key: false
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -213,10 +242,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # The key is prefix + job + OS + lockfile hash, and nothing else.
+          # rust-cache's default "environment hash" folds in every toolchain
+          # installed on the runner, including the image's preinstalled
+          # stable; when that image updated for Rust 1.99.1 every key on
+          # every platform changed and all runs went cold. Our own toolchain
+          # version is in the prefix, so bumping RUST_TOOLCHAIN still starts
+          # a fresh cache.
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
+          add-rust-environment-hash-key: false
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
@@ -257,10 +295,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # The key is prefix + job + OS + lockfile hash, and nothing else.
+          # rust-cache's default "environment hash" folds in every toolchain
+          # installed on the runner, including the image's preinstalled
+          # stable; when that image updated for Rust 1.99.1 every key on
+          # every platform changed and all runs went cold. Our own toolchain
+          # version is in the prefix, so bumping RUST_TOOLCHAIN still starts
+          # a fresh cache.
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
+          add-rust-environment-hash-key: false
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
           # main's entries; a PR then finds nothing to restore and Windows
