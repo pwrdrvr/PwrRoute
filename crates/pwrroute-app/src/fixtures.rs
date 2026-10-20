@@ -15,8 +15,8 @@ use std::time::{Duration, SystemTime};
 
 use pwrroute_engine::RulesFile;
 use pwrroute_router::{
-    AppType, Browser, DispatchId, DispatchRecord, Link, Matched, OpenerInfo, Outcome, Source, Step,
-    Timings,
+    AppType, Browser, DispatchId, DispatchRecord, Link, Matched, OpenerInfo, Outcome, Privacy,
+    Source, Step, Timings,
 };
 
 /// An app a test link can come from.
@@ -102,6 +102,7 @@ pub fn activity() -> Vec<DispatchRecord> {
                   total_ms: u64| DispatchRecord {
         id: DispatchId(id),
         received_at: now - Duration::from_secs(secs_ago),
+        privacy: Privacy::Full,
         link: link(url, from),
         forwarded: false,
         final_url: Some(browser.url.clone()),
@@ -126,6 +127,7 @@ pub fn activity() -> Vec<DispatchRecord> {
         DispatchRecord {
             id: DispatchId(7),
             received_at: now - Duration::from_secs(17),
+            privacy: Privacy::Full,
             link: link(TEST_URL, "Slack"),
             forwarded: false,
             final_url: Some(final_url.into()),
@@ -158,6 +160,7 @@ pub fn activity() -> Vec<DispatchRecord> {
         DispatchRecord {
             id: DispatchId(5),
             received_at: now - Duration::from_secs(9 * 60 + 28),
+            privacy: Privacy::Full,
             link: link(url, "Calendar"),
             forwarded: false,
             final_url: Some(url.into()),

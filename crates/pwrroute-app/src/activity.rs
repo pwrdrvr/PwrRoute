@@ -107,7 +107,7 @@ impl Feed {
     pub fn new(handle: Option<RouterHandle>) -> Self {
         Self {
             records: Vec::new(),
-            capacity: Options::default().capacity,
+            capacity: Options::default().retention.count,
             day: None,
             counts: Counts::default(),
             handle,
@@ -603,7 +603,7 @@ impl Activity {
             filter: Filter::All,
             search: TextField::new("", cx),
             today: Counts::default(),
-            capacity: Options::default().capacity,
+            capacity: Options::default().retention.count,
             _feed: None,
         };
         if let Some(feed) = feed(cx) {
@@ -1047,8 +1047,8 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use pwrroute_router::{
-        AppType, Browser, DispatchId, DispatchRecord, Link, Matched, OpenerInfo, Outcome, Source,
-        Step, Timings,
+        AppType, Browser, DispatchId, DispatchRecord, Link, Matched, OpenerInfo, Outcome, Privacy,
+        Source, Step, Timings,
     };
 
     use super::*;
@@ -1084,6 +1084,7 @@ mod tests {
         DispatchRecord {
             id: DispatchId(id),
             received_at: SystemTime::now(),
+            privacy: Privacy::Full,
             link: Link::new(url, Source::AppleEvent).with_opener(from.map(|name| OpenerInfo {
                 name: name.into(),
                 ..OpenerInfo::default()
