@@ -225,15 +225,12 @@ fn dropdown_closed(cx: &mut App) {
     }
 }
 
-/// Do what a row or menu item says.
-///
-/// Settings and About open the main window for now: the Settings window
-/// lands separately and gets its own line here when it does.
+/// Do what a row or menu item says. About opens the main window: there is
+/// no About panel yet.
 pub fn run(command: TrayCommand, cx: &mut App) {
     match command {
-        TrayCommand::OpenMain | TrayCommand::Settings | TrayCommand::About => {
-            crate::show_main_window(cx);
-        }
+        TrayCommand::OpenMain | TrayCommand::About => crate::show_main_window(cx),
+        TrayCommand::Settings => crate::settings::open(cx, None),
         TrayCommand::Rules => show_screen(Screen::Rules, cx),
         TrayCommand::TestLink => show_screen(Screen::TestLink, cx),
         TrayCommand::Activity => show_screen(Screen::Activity, cx),

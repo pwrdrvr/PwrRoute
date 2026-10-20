@@ -17,8 +17,8 @@ their own modules.
   `window_height` (the tallest the card can be) with a transparent
   background. Keep the metric constants in `dropdown.rs` matched to the
   layout; `tray/tests.rs` holds `card_height` to the laid-out card.
-- **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main or
-  first-run window is open (`Regular`) and goes when the last closes
+- **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
+  Settings or first-run window is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays
   `unsafe`-free.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
