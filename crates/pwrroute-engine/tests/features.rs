@@ -286,6 +286,42 @@ fn a_trace_says_which_pattern_and_source_matched() {
 }
 
 #[test]
+fn a_trace_numbers_rules_json_entries_by_their_place_in_the_file() {
+    // A switched-off rewrite and handler are not loaded, but the ones after
+    // them keep their file positions in the trace.
+    let rules = RulesFile {
+        rewrites: vec![
+            Rewrite {
+                enabled: false,
+                ..rewrite(&["*"], vec![RewriteAction::SetHost("off.example".into())])
+            },
+            rewrite(&["*"], vec![RewriteAction::DropQuery(vec!["utm_*".into()])]),
+        ],
+        rules: vec![
+            Rule {
+                enabled: false,
+                ..rule(&["*"], "Safari")
+            },
+            rule(&["a.example/*"], "Firefox"),
+        ],
+        ..RulesFile::default()
+    };
+    let trace = engine(None, rules)
+        .trace(&Link::new("https://a.example/x?utm_source=m"), None)
+        .unwrap();
+    let steps: Vec<_> = trace
+        .steps
+        .iter()
+        .map(|s| (s.stage, s.index, s.matched))
+        .collect();
+    assert_eq!(
+        steps,
+        [(Stage::Rewrite, 1, true), (Stage::Handler, 1, true)]
+    );
+    assert_eq!(trace.resolution.browser.url, "https://a.example/x");
+}
+
+#[test]
 fn a_trace_ends_at_the_default_when_nothing_matches() {
     let rules = RulesFile::load(&configs().join("rules/go-schema.json")).unwrap();
     let trace = engine(None, rules)

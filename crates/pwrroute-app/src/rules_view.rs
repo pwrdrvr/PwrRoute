@@ -12,7 +12,8 @@ use crate::app::{PwrRoute, Selection};
 use crate::fixtures::{self, Destination, Matcher, Rule};
 use crate::theme::{self, mono, text, tracked};
 use crate::widgets::{
-    Tone, action_tag, add_button, app_tag, badge, chip, fn_tag, regex_tag, tag, toned_chip,
+    Tone, action_tag, add_button, app_tag, badge, chip, fn_tag, one_line, regex_tag, tag,
+    toned_chip,
 };
 
 /// Widths of a row's fixed columns. The design lays rows out as the grid
@@ -52,18 +53,15 @@ fn function(source: &SharedString) -> Div {
         .gap(px(5.0))
         .child(fn_tag())
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .font_family(theme::mono_family(400.0))
-                .font_weight(theme::weight(400.0))
-                .text_size(px(10.5))
-                .line_height(px(13.65))
-                .text_color(theme::text_muted())
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .child(source.clone()),
+            one_line(
+                source.clone(),
+                theme::mono_family(400.0),
+                400.0,
+                10.5,
+                13.65,
+                theme::text_muted(),
+            )
+            .flex_1(),
         )
 }
 

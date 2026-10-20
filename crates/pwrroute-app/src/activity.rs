@@ -16,7 +16,7 @@ use crate::fixtures;
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, icon, mono, text, tracked};
-use crate::widgets::{ButtonKind, badge, button, note, segment, segmented, status, tag};
+use crate::widgets::{ButtonKind, badge, button, note, one_line, segment, segmented, status, tag};
 
 /// One dispatch.
 #[derive(Clone, Debug)]
@@ -212,17 +212,7 @@ fn clipped(content: SharedString, mono_font: bool, size: f32, color: gpui_kit::H
     } else {
         (theme::SANS, 400.0)
     };
-    div()
-        .min_w_0()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_ellipsis()
-        .font_family(family)
-        .font_weight(theme::weight(weight))
-        .text_size(px(size))
-        .line_height(px(size))
-        .text_color(color)
-        .child(content)
+    one_line(content, family, weight, size, size, color)
 }
 
 fn opened_cell(opened: &Opened) -> Div {
@@ -468,7 +458,7 @@ impl PwrRoute {
         self.test.url.set(url);
         // An app the picker does not offer tests as no app, never as
         // whichever app was picked before.
-        self.test.opener = fixtures::openers()
+        self.test.opener = fixtures::OPENERS
             .iter()
             .position(|o| o.is_some_and(|o| o.name == from))
             .unwrap_or(0);

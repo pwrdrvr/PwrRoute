@@ -167,6 +167,10 @@ pub struct Engine {
     config: Option<PathBuf>,
     imports: Rc<RefCell<Vec<PathBuf>>>,
     short_links: ShortLinks,
+    /// For each `rules.json` rewrite and handler the engine loaded, its
+    /// position in the file (disabled and empty rules are not loaded).
+    planned_rewrites: Vec<usize>,
+    planned_rules: Vec<usize>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -241,6 +245,8 @@ impl Engine {
             config: config.as_ref().map(|(path, _)| path.clone()),
             imports,
             short_links: ShortLinks::default(),
+            planned_rewrites: sources.rules.planned_rewrites(),
+            planned_rules: sources.rules.planned_rules(),
         };
         let shorteners = engine.with_deadline(limits.load, |ctx| {
             install_globals(&ctx, &host)?;
@@ -335,7 +341,19 @@ impl Engine {
                 .eval("JSON.stringify(__pwrroute.trace(url, opener, originalUrl))")
                 .catch(&ctx)
                 .map_err(|e| js_error("resolving the URL", &e))?;
-            let raw: trace::Raw = serde_json::from_str(&json)?;
+            let mut raw: trace::Raw = serde_json::from_str(&json)?;
+            // The glue numbers `rules.json` entries among those it loaded;
+            // report them by their place in the file.
+            for step in &mut raw.steps {
+                let planned = match (step.source, step.stage) {
+                    (Source::Rules, Stage::Rewrite) => &self.planned_rewrites,
+                    (Source::Rules, Stage::Handler) => &self.planned_rules,
+                    _ => continue,
+                };
+                if let Some(&position) = planned.get(step.index) {
+                    step.index = position;
+                }
+            }
             Ok(Trace {
                 url: link.url.clone(),
                 original_url: link.original_url.clone(),
