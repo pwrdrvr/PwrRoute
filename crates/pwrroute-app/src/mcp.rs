@@ -104,17 +104,48 @@ impl Preferences {
 }
 
 /// An audit that keeps the last records in memory and tells the pane when
-/// one lands. Tool, client, time and outcome: never arguments.
-struct AppAudit {
+/// one lands. Tool, client, time and outcome: never arguments. A
+/// `pwrroute_rules_apply` that went through also tells the main window,
+/// so the Rules screen reads the file the agent just wrote.
+pub(crate) struct AppAudit {
     inner: MemoryAudit,
     changed: async_channel::Sender<()>,
+    rules_written: async_channel::Sender<()>,
+}
+
+impl AppAudit {
+    pub(crate) fn new(
+        changed: async_channel::Sender<()>,
+        rules_written: async_channel::Sender<()>,
+    ) -> Self {
+        Self {
+            inner: MemoryAudit::default(),
+            changed,
+            rules_written,
+        }
+    }
 }
 
 impl AuditSink for AppAudit {
     fn record(&self, record: AuditRecord) {
+        let wrote_rules = record.tool == "pwrroute_rules_apply" && record.outcome == Outcome::Ok;
         self.inner.record(record);
         let _ = self.changed.try_send(());
+        if wrote_rules {
+            let _ = self.rules_written.try_send(());
+        }
     }
+}
+
+/// Reloads the Rules screen after each in-process `pwrroute_rules_apply`
+/// the audit reports as written, on the GPUI thread.
+pub(crate) fn follow_rules_writes(rules_written: async_channel::Receiver<()>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        while rules_written.recv().await.is_ok() {
+            cx.update(crate::app::sync_rules_windows);
+        }
+    })
+    .detach();
 }
 
 /// Spawns the rules engine on first use, so a launch does not wait for a
@@ -260,6 +291,7 @@ pub fn install(wiring: Wiring, cx: &mut App) {
     let data_dir = pwrroute_os::data_dir();
     let preferences = Preferences::load(data_dir.as_deref());
     let (audit_tx, audit_rx) = async_channel::unbounded::<()>();
+    let (rules_tx, rules_rx) = async_channel::unbounded::<()>();
     let (prompt_tx, prompt_rx) = async_channel::unbounded::<Prompt>();
     let agents = match Agents::open(data_dir.as_deref()) {
         Ok(agents) => agents,
@@ -271,10 +303,7 @@ pub fn install(wiring: Wiring, cx: &mut App) {
             let door = Door {
                 data_dir: data_dir.clone(),
                 agents: agents.clone(),
-                audit: Arc::new(AppAudit {
-                    inner: MemoryAudit::default(),
-                    changed: audit_tx,
-                }),
+                audit: Arc::new(AppAudit::new(audit_tx, rules_tx)),
                 backends: backends(&wiring),
                 approver: Arc::new(GpuiApprover { prompts: prompt_tx }),
                 endpoint: Endpoint::for_user(),
@@ -289,10 +318,7 @@ pub fn install(wiring: Wiring, cx: &mut App) {
     let mut door = Door {
         data_dir,
         agents: agents.clone(),
-        audit: Arc::new(AppAudit {
-            inner: MemoryAudit::default(),
-            changed: audit_tx,
-        }),
+        audit: Arc::new(AppAudit::new(audit_tx, rules_tx)),
         backends: backends(&wiring),
         approver: Arc::new(GpuiApprover { prompts: prompt_tx }),
         endpoint: Endpoint::for_user(),
@@ -332,6 +358,8 @@ pub fn install(wiring: Wiring, cx: &mut App) {
         }
     })
     .detach();
+    // The Rules screen reloads after an agent writes rules.json.
+    follow_rules_writes(rules_rx, cx);
 }
 
 /// The backends over the real thing: the router's handle, this machine's

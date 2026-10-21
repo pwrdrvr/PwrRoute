@@ -14,9 +14,17 @@
 //! Writes go through [`RulesFile::save`]: a sibling file renamed into place,
 //! so the router's watcher never reads half a file. Nothing here logs or
 //! writes anything but the rules.
+//!
+//! The file has other writers: an agent's `pwrroute_rules_apply`, an editor,
+//! a sync from another machine. The store keeps a [`Stamp`] of the bytes it
+//! last read or wrote, and [`RulesStore::check_disk`] compares the file to
+//! it: a changed file is read again while nothing is unsaved, and is never
+//! written over while something is. Then the status says so, and the person
+//! chooses [`RulesStore::reload`] or [`RulesStore::overwrite`].
 
 use std::{
     collections::HashMap,
+    hash::{DefaultHasher, Hash as _, Hasher as _},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -40,6 +48,50 @@ pub enum Status {
     Saving,
     /// The last write failed, or the file could not be read.
     Failed(String),
+    /// The file changed on disk with nothing unsaved here, and was read
+    /// again at `at`.
+    Reloaded { at: SystemTime },
+    /// The file changed on disk under unsaved edits. Nothing is written
+    /// until [`RulesStore::reload`] drops the edits or
+    /// [`RulesStore::overwrite`] writes them anyway.
+    Changed,
+}
+
+/// What [`RulesStore::check_disk`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disk {
+    /// The file is as the store last read or wrote it.
+    Unchanged,
+    /// The file had changed and nothing was unsaved: the store now holds
+    /// what it says.
+    Reloaded,
+    /// The file had changed under unsaved edits: the store is as it was,
+    /// and [`Status::Changed`] until reload or overwrite.
+    Changed,
+}
+
+/// The message a refused write carries, and the status after it.
+pub const CHANGED_ON_DISK: &str = "rules.json changed on disk; reload or overwrite";
+
+/// The file as last read or written: its length and a hash of its bytes.
+/// A hash rather than a modification time, since some editors and sync
+/// tools keep the time. `None` is no file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    hash: u64,
+}
+
+impl Stamp {
+    fn of(path: &Path) -> Option<Self> {
+        let bytes = std::fs::read(path).ok()?;
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Some(Self {
+            len: bytes.len() as u64,
+            hash: hasher.finish(),
+        })
+    }
 }
 
 /// A rewrite or handler for the session: its position is its place in the
@@ -71,9 +123,12 @@ pub struct RulesStore {
     status: Status,
     /// An edit has not reached the file.
     dirty: bool,
-    /// The file could not be read: nothing is written over it until the
-    /// window is opened again.
+    /// The file could not be read: nothing is written over it until it
+    /// changes on disk and reads, or the window is opened again.
     unreadable: bool,
+    /// The file as last read or written here; what [`Self::check_disk`]
+    /// compares the file to.
+    stamp: Option<Stamp>,
 }
 
 impl RulesStore {
@@ -84,8 +139,11 @@ impl RulesStore {
         let Some(file_path) = path.as_deref() else {
             return Self::from_file(None, RulesFile::default(), false, None);
         };
+        // Stamped before it is read: a write that lands between the two is
+        // then a change the next check sees, never one it misses.
+        let stamp = Stamp::of(file_path);
         let exists = file_path.is_file();
-        match RulesFile::load(file_path) {
+        let mut store = match RulesFile::load(file_path) {
             Ok(file) => {
                 let modified = std::fs::metadata(file_path)
                     .and_then(|meta| meta.modified())
@@ -98,16 +156,21 @@ impl RulesStore {
                 store.unreadable = true;
                 store
             }
-        }
+        };
+        store.stamp = stamp;
+        store
     }
 
-    /// A store over `file`, as if read from `path` (modified at `at`).
+    /// A store over `file`, as if read from `path` (modified at `at`). The
+    /// file at `path`, when there is one, is what [`Self::check_disk`]
+    /// will call unchanged.
     pub fn from_file(
         path: Option<PathBuf>,
         file: RulesFile,
         exists: bool,
         at: Option<SystemTime>,
     ) -> Self {
+        let stamp = path.as_deref().and_then(Stamp::of);
         let mut store = Self {
             path,
             base: RulesFile {
@@ -124,6 +187,7 @@ impl RulesStore {
             status: Status::Saved { at },
             dirty: false,
             unreadable: false,
+            stamp,
         };
         for rewrite in file.rewrites {
             let id = store.next();
@@ -178,6 +242,12 @@ impl RulesStore {
     /// An edit is waiting to be written.
     pub fn needs_save(&self) -> bool {
         self.dirty
+    }
+
+    /// The file changed on disk under unsaved edits: the rail foot offers
+    /// Reload and Overwrite.
+    pub fn changed_on_disk(&self) -> bool {
+        self.status == Status::Changed
     }
 
     /// Every rule as edited, problems and drafts included: what the editor
@@ -287,7 +357,7 @@ impl RulesStore {
 
     fn touch(&mut self) {
         self.dirty = true;
-        if !matches!(self.status, Status::Failed(_)) {
+        if !matches!(self.status, Status::Failed(_) | Status::Changed) {
             self.status = Status::Unsaved;
         }
     }
@@ -586,30 +656,84 @@ impl RulesStore {
 
     // --- the file --------------------------------------------------------
 
+    /// Compares the file to what was last read or written here. A changed
+    /// file is read again when nothing is unsaved; under unsaved edits the
+    /// store keeps them and the status turns [`Status::Changed`], which
+    /// also stops the next save. Cheap enough for every refresh: one read
+    /// of a small file.
+    pub fn check_disk(&mut self) -> Disk {
+        let Some(path) = self.path.clone() else {
+            return Disk::Unchanged;
+        };
+        if Stamp::of(&path) == self.stamp {
+            // The file is back as it was read: an editor undid its change.
+            if self.status == Status::Changed {
+                self.status = Status::Unsaved;
+            }
+            return Disk::Unchanged;
+        }
+        if self.dirty {
+            self.status = Status::Changed;
+            return Disk::Changed;
+        }
+        self.reload();
+        Disk::Reloaded
+    }
+
+    /// Reads the file again, dropping every unsaved edit. The entries get
+    /// new ids; the status says when.
+    pub fn reload(&mut self) {
+        let path = self.path.take();
+        *self = Self::load(path);
+        if !self.unreadable {
+            self.status = Status::Reloaded {
+                at: SystemTime::now(),
+            };
+        }
+    }
+
     /// Writes every saveable edit to the file, now. The status says how it
-    /// went; the error is also returned.
+    /// went; the error is also returned. A file that changed on disk since
+    /// it was read is not written: see [`Self::overwrite`].
     pub fn save(&mut self) -> Result<(), String> {
-        let result = self.write();
+        self.save_with(false)
+    }
+
+    /// Writes every saveable edit over a file that changed on disk: the
+    /// person's choice from the rail foot.
+    pub fn overwrite(&mut self) -> Result<(), String> {
+        self.save_with(true)
+    }
+
+    fn save_with(&mut self, force: bool) -> Result<(), String> {
+        let result = self.write(force);
         self.status = match &result {
             Ok(()) => Status::Saved {
                 at: Some(SystemTime::now()),
             },
+            Err(error) if error == CHANGED_ON_DISK => Status::Changed,
             Err(error) => Status::Failed(error.clone()),
         };
         result
     }
 
-    fn write(&mut self) -> Result<(), String> {
+    fn write(&mut self, force: bool) -> Result<(), String> {
         if self.unreadable {
             return Err("rules.json did not load, so it is not overwritten.".into());
         }
         let Some(path) = self.path.clone() else {
             return Err("No configuration directory: edits last for this session.".into());
         };
+        if !force && Stamp::of(&path) != self.stamp {
+            return Err(CHANGED_ON_DISK.into());
+        }
         self.status = Status::Saving;
         let file = self.written();
         file.save(&path)
             .map_err(|error| format!("Could not save rules.json: {error:#}"))?;
+        // The file as written is the file as read: the store's own save is
+        // not a change on disk.
+        self.stamp = Stamp::of(&path);
         // What was written is what each entry's saved version now is.
         let problems = self.problems();
         for (i, entry) in self.rewrites.iter().enumerate() {
@@ -628,7 +752,7 @@ impl RulesStore {
     }
 
     /// The status for the rail's foot: "saved 09:41", "unsaved", "saving",
-    /// or what went wrong.
+    /// "reloaded 09:41", or what went wrong.
     pub fn status_label(&self) -> String {
         match &self.status {
             Status::Saved { at: Some(at) } => format!("saved {}", clock(*at)),
@@ -637,6 +761,8 @@ impl RulesStore {
             Status::Unsaved => "unsaved".into(),
             Status::Saving => "saving\u{2026}".into(),
             Status::Failed(error) => format!("not saved \u{00b7} {error}"),
+            Status::Reloaded { at } => format!("reloaded {}", clock(*at)),
+            Status::Changed => format!("not saved \u{00b7} {CHANGED_ON_DISK}"),
         }
     }
 
@@ -1101,5 +1227,170 @@ mod tests {
         );
         assert!(named.is_empty() && named.exists());
         assert_eq!(named.default_browser().1.as_ref(), "Google Chrome");
+    }
+
+    /// Another writer's `rules.json`: `n` complete handlers, saved the way
+    /// `pwrroute_rules_apply` and the editor save it.
+    fn written_by_someone_else(path: &Path, n: usize) {
+        RulesFile {
+            default_browser: "Safari".into(),
+            rules: (0..n)
+                .map(|i| engine::Rule {
+                    patterns: vec![format!("h{i}.example/*")],
+                    browser: "Firefox".into(),
+                    ..engine::Rule::default()
+                })
+                .collect(),
+            ..RulesFile::default()
+        }
+        .save(path)
+        .unwrap();
+    }
+
+    #[test]
+    fn an_external_write_is_reloaded_while_nothing_is_unsaved() {
+        let dir = scratch("external-reload");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 1);
+        let mut store = RulesStore::load(Some(path.clone()));
+        assert_eq!(store.handler_count(), 1);
+        assert_eq!(store.check_disk(), Disk::Unchanged);
+
+        // An agent writes two handlers: the next check reads them.
+        written_by_someone_else(&path, 2);
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        assert_eq!(store.handler_count(), 2);
+        assert_eq!(store.handlers()[1].patterns, ["h1.example/*"]);
+        assert!(!store.needs_save());
+        assert!(matches!(store.status(), Status::Reloaded { .. }));
+        assert!(
+            store.status_label().starts_with("reloaded "),
+            "{}",
+            store.status_label()
+        );
+        assert_eq!(store.check_disk(), Disk::Unchanged, "read once");
+
+        // The same bytes written again (an editor's save of an unchanged
+        // buffer) are not a change.
+        written_by_someone_else(&path, 2);
+        assert_eq!(store.check_disk(), Disk::Unchanged);
+
+        // A file taken away is a change too: the store follows it.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        assert!(store.is_empty() && !store.exists());
+
+        // A file that did not parse is read again once it is fixed.
+        std::fs::write(&path, "{ not json").unwrap();
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        assert!(matches!(store.status(), Status::Failed(_)));
+        store.add_handler();
+        assert!(store.save().is_err(), "never written over");
+        written_by_someone_else(&path, 3);
+        assert_eq!(store.check_disk(), Disk::Changed, "an edit is unsaved");
+        store.reload();
+        assert_eq!(store.handler_count(), 3);
+        assert!(matches!(store.status(), Status::Reloaded { .. }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_stores_own_save_is_not_a_change_on_disk() {
+        let dir = scratch("own-save");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 1);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.set_profile(0, "Work");
+        store.save().unwrap();
+        assert_eq!(store.check_disk(), Disk::Unchanged);
+        assert!(matches!(store.status(), Status::Saved { at: Some(_) }));
+        assert_eq!(store.handlers()[0].profile, "Work");
+
+        // A file created by the first save, too.
+        let fresh = dir.join("fresh").join("rules.json");
+        let mut store = RulesStore::load(Some(fresh.clone()));
+        let h = store.add_handler();
+        let p = store.add_pattern(Selection::Handler(h)).unwrap();
+        store.set_pattern(Selection::Handler(h), p, "a.example/*");
+        store.set_browser(h, "Firefox");
+        store.save().unwrap();
+        assert_eq!(store.check_disk(), Disk::Unchanged);
+        assert_eq!(store.handler_count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unsaved_edits_are_not_written_over_a_changed_file() {
+        let dir = scratch("changed-under-edits");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 1);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.set_profile(0, "Work");
+        assert_eq!(store.status(), &Status::Unsaved);
+
+        // The agent's two handlers land while the profile is unsaved.
+        written_by_someone_else(&path, 2);
+        assert_eq!(store.check_disk(), Disk::Changed);
+        assert_eq!(store.status(), &Status::Changed);
+        assert_eq!(store.handler_count(), 1, "the edits stay on screen");
+        assert_eq!(store.handlers()[0].profile, "Work");
+        assert_eq!(
+            store.status_label(),
+            format!("not saved \u{00b7} {CHANGED_ON_DISK}")
+        );
+        assert_eq!(store.save(), Err(CHANGED_ON_DISK.to_owned()));
+        assert_eq!(store.status(), &Status::Changed);
+        assert!(store.needs_save());
+        let on_disk = RulesFile::load(&path).unwrap();
+        assert_eq!(on_disk.rules.len(), 2, "the agent's rules are intact");
+        // Another edit keeps the status.
+        store.set_browser(0, "Arc");
+        assert_eq!(store.status(), &Status::Changed);
+
+        // A save that never looked at the disk is refused the same way.
+        let mut other = RulesStore::load(Some(path.clone()));
+        other.set_profile(1, "Home");
+        written_by_someone_else(&path, 3);
+        assert_eq!(other.save(), Err(CHANGED_ON_DISK.to_owned()));
+        assert_eq!(RulesFile::load(&path).unwrap().rules.len(), 3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reload_drops_the_edits_and_overwrite_writes_them() {
+        let dir = scratch("reload-overwrite");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 1);
+
+        // Reload: the file wins.
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.set_profile(0, "Work");
+        written_by_someone_else(&path, 2);
+        assert_eq!(store.check_disk(), Disk::Changed);
+        store.reload();
+        assert_eq!(store.handler_count(), 2);
+        assert_eq!(store.handlers()[0].profile, "");
+        assert!(!store.needs_save());
+        assert!(matches!(store.status(), Status::Reloaded { .. }));
+        assert_eq!(store.check_disk(), Disk::Unchanged);
+        // Editing after a reload is an ordinary unsaved edit.
+        store.set_profile(1, "Home");
+        assert_eq!(store.status(), &Status::Unsaved);
+        store.save().unwrap();
+        assert_eq!(RulesFile::load(&path).unwrap().rules[1].profile, "Home");
+
+        // Overwrite: the edits win.
+        store.set_profile(0, "Work");
+        written_by_someone_else(&path, 3);
+        assert_eq!(store.check_disk(), Disk::Changed);
+        assert!(store.save().is_err());
+        store.overwrite().unwrap();
+        assert!(matches!(store.status(), Status::Saved { at: Some(_) }));
+        assert!(!store.needs_save());
+        let on_disk = RulesFile::load(&path).unwrap();
+        assert_eq!(on_disk.rules.len(), 2);
+        assert_eq!(on_disk.rules[0].profile, "Work");
+        assert_eq!(store.check_disk(), Disk::Unchanged, "its own write");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

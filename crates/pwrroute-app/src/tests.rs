@@ -1625,3 +1625,192 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
     assert_eq!(file.rules[0].examples, ["https://meet.google.com/xyz"]);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Another writer's `rules.json`: `n` complete handlers, saved the way
+/// `pwrroute_rules_apply` and an editor save it.
+fn written_by_someone_else(path: &Path, n: usize) {
+    RulesFile {
+        default_browser: "Safari".into(),
+        rules: (0..n)
+            .map(|i| pwrroute_engine::Rule {
+                patterns: vec![format!("h{i}.example/*")],
+                browser: "Firefox".into(),
+                ..pwrroute_engine::Rule::default()
+            })
+            .collect(),
+        ..RulesFile::default()
+    }
+    .save(path)
+    .expect("write rules.json");
+}
+
+#[gpui_kit::test]
+fn a_changed_rules_json_reloads_or_offers_reload_and_overwrite(cx: &mut TestAppContext) {
+    let dir = scratch("changed-on-disk");
+    let path = dir.join("rules.json");
+    let records = fixtures::activity();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let counts = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            (
+                app.handlers.len(),
+                app.store.handler_count(),
+                app.store.status_label(),
+                app.store.needs_save(),
+            )
+        })
+    };
+    assert_eq!(counts(cx).0, 7);
+
+    // Nothing unsaved: the window comes to the front and reads the file.
+    written_by_someone_else(&path, 2);
+    view.update(cx, |app, cx| {
+        assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
+    });
+    draw(cx);
+    let (rows, stored, label, dirty) = counts(cx);
+    assert_eq!((rows, stored, dirty), (2, 2, false));
+    assert!(label.starts_with("reloaded "), "{label}");
+    assert!(cx.debug_bounds(crate::chrome::RELOAD_ID).is_none());
+    // Handler 1 is still selected; the rail shows the file's pattern.
+    assert_eq!(
+        view.read_with(cx, |app, _| (
+            app.selection,
+            app.rail.as_ref().map(|rail| rail.patterns[0].text.clone())
+        )),
+        (Some(Selection::Handler(0)), Some("h0.example/*".to_owned()))
+    );
+
+    // An edit over a file that changed meanwhile is kept on screen, not
+    // written, and the rail foot offers the two ways out.
+    written_by_someone_else(&path, 3);
+    view.update(cx, |app, cx| {
+        app.store.set_profile(0, "Work");
+        app.refresh(cx);
+    });
+    draw(cx);
+    let (rows, _, label, dirty) = counts(cx);
+    assert_eq!((rows, dirty), (2, true), "the edit, not the file");
+    assert!(label.contains("changed on disk"), "{label}");
+    assert!(cx.debug_bounds(crate::chrome::RELOAD_ID).is_some());
+    assert!(cx.debug_bounds(crate::chrome::OVERWRITE_ID).is_some());
+    // The debounced save runs and is refused.
+    let on_disk = saved(cx, &path);
+    assert_eq!(on_disk.rules.len(), 3);
+    assert_eq!(on_disk.rules[0].profile, "");
+    assert!(counts(cx).3, "still unsaved");
+
+    // Overwrite writes the edit over the file.
+    click(cx, crate::chrome::OVERWRITE_ID);
+    let on_disk = saved(cx, &path);
+    assert_eq!(on_disk.rules.len(), 2);
+    assert_eq!(on_disk.rules[0].profile, "Work");
+    let (_, _, label, dirty) = counts(cx);
+    assert!(label.starts_with("saved "), "{label}");
+    assert!(!dirty);
+    assert!(cx.debug_bounds(crate::chrome::OVERWRITE_ID).is_none());
+
+    // Reload drops the edit and reads the file; the selection past the
+    // end is cleared.
+    view.update(cx, |app, cx| {
+        app.select(Selection::Handler(1), cx);
+        app.store.set_profile(1, "Home");
+        app.refresh(cx);
+    });
+    written_by_someone_else(&path, 1);
+    view.update(cx, |app, cx| {
+        app.store.set_browser(1, "Arc");
+        app.refresh(cx);
+    });
+    draw(cx);
+    assert!(cx.debug_bounds(crate::chrome::RELOAD_ID).is_some());
+    click(cx, crate::chrome::RELOAD_ID);
+    let (rows, stored, label, dirty) = counts(cx);
+    assert_eq!((rows, stored, dirty), (1, 1, false));
+    assert!(label.starts_with("reloaded "), "{label}");
+    assert_eq!(
+        view.read_with(cx, |app, _| (app.selection, app.rail.is_some())),
+        (None, false)
+    );
+    assert_eq!(saved(cx, &path).rules[0].profile, "", "nothing written");
+
+    // Opening the Add a rule sheet reads the file first: "Becomes handler
+    // N" counts the agent's handlers.
+    written_by_someone_else(&path, 4);
+    click(cx, "nav-activity");
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    assert!(cx.debug_bounds("add-rule-sheet").is_some());
+    assert_eq!(counts(cx).1, 4);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn an_in_process_rules_apply_reloads_the_rules_screen(cx: &mut TestAppContext) {
+    use pwrroute_mcp::{AuditRecord, AuditSink as _, Outcome, RulesStore as _, live::LiveRules};
+
+    let dir = scratch("mcp-apply");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    assert!(view.read_with(cx, |app, _| app.store.is_empty()));
+    let (changed_tx, _changed_rx) = async_channel::unbounded::<()>();
+    let (rules_tx, rules_rx) = async_channel::unbounded::<()>();
+    cx.update(|_, cx| crate::mcp::follow_rules_writes(rules_rx, cx));
+    let audit = crate::mcp::AppAudit::new(changed_tx, rules_tx);
+    let record = |tool: &str, outcome: Outcome| AuditRecord {
+        tool: tool.to_owned(),
+        agent: "pwragnt".to_owned(),
+        connection: 1,
+        started: std::time::SystemTime::now(),
+        duration: std::time::Duration::from_millis(3),
+        outcome,
+        note: None,
+    };
+
+    // The tool writes through the MCP crate's live store, as the host
+    // serves it, then the audit hears of it.
+    let live = LiveRules::new(path.clone(), || None);
+    let revision = live.read().expect("read").revision;
+    let rules = serde_json::json!({
+        "defaultBrowser": "Safari",
+        "rules": [
+            { "match": "a.example/*", "browser": "Firefox" },
+            { "match": "b.example/*", "browser": "Arc" }
+        ]
+    });
+    live.write(&revision, rules, false).expect("write");
+    audit.record(record("pwrroute_rules_apply", Outcome::Ok));
+    cx.run_until_parked();
+    draw(cx);
+    let (rows, stored, label) = view.read_with(cx, |app, _| {
+        (
+            app.handlers.len(),
+            app.store.handler_count(),
+            app.store.status_label(),
+        )
+    });
+    assert_eq!((rows, stored), (2, 2));
+    assert!(label.starts_with("reloaded "), "{label}");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[1].browser.clone()),
+        "Arc"
+    );
+    // The strip's rule count is the rows'; Test a link resolves by the file.
+    click(cx, "nav-test");
+    click(cx, "test-url");
+    cx.simulate_input("https://b.example/x");
+    click(cx, "test-run");
+    assert_eq!(trace(&view, cx).result.title, "Arc");
+
+    // A refused or dry call changes nothing on disk, so nothing reloads.
+    let before = view.read_with(cx, |app, _| app.store.status_label());
+    audit.record(record("pwrroute_rules_apply", Outcome::Failed));
+    audit.record(record("pwrroute_rules_list", Outcome::Ok));
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.status_label()),
+        before
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
