@@ -43,6 +43,7 @@ use pwrroute_router::{
 };
 
 use crate::app::{PwrRoute, Screen};
+use crate::default_browser::browser_name;
 use crate::fixtures;
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
@@ -709,13 +710,17 @@ fn opened(record: &DispatchRecord) -> Opened {
             Step::Fallback { reason } if launch_failed.is_some() => why = Some(reason),
             Step::Launched { .. } if launch_failed.is_some() => {
                 return match &record.browser {
-                    Some(browser) => Opened::Fallback {
-                        why: why.or(launch_failed).unwrap_or_default().to_owned().into(),
-                        badge: badge_for(&browser.name),
-                        name: browser.name.clone().into(),
-                        profile: (!browser.profile.is_empty())
-                            .then(|| browser.profile.clone().into()),
-                    },
+                    Some(browser) => {
+                        // First run saves a bundle id: show the app's name.
+                        let name = browser_name(&browser.name);
+                        Opened::Fallback {
+                            why: why.or(launch_failed).unwrap_or_default().to_owned().into(),
+                            badge: badge_for(&name),
+                            name: name.into(),
+                            profile: (!browser.profile.is_empty())
+                                .then(|| browser.profile.clone().into()),
+                        }
+                    }
                     None => Opened::Failed("not routed".into()),
                 };
             }
@@ -1230,7 +1235,6 @@ fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
                     )
                     .when(dry_run, |sub| sub.child(tag("dry run"))),
             ),
-
         Opened::Failed(why) => div().child(status(why.clone(), theme::status_error())),
     }
 }
@@ -2249,6 +2253,16 @@ mod tests {
         assert_eq!(
             private_detail(&row).as_ref(),
             "Google Chrome \u{00b7} Personal. Keeps the full URL."
+        );
+
+        // First run saves a bundle id; the row names the app.
+        record.browser = Some(browser("com.google.Chrome", "", url));
+        let row = ActivityRow::from_record(&record);
+        assert!(
+            matches!(&row.opened, Opened::Fallback { badge, name, profile: None, .. }
+                if badge == "Ch" && name == "Google Chrome"),
+            "{:?}",
+            row.opened
         );
 
         // Both failed: the row is a failure with the first reason.

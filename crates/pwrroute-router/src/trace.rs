@@ -135,7 +135,6 @@ pub enum Step {
     Fallback {
         reason: String,
     },
-
     /// The config sent the link back to PwrRoute, which would loop. The
     /// fallback browser opens it instead.
     RefusedLoop {

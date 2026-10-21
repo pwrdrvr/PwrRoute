@@ -42,8 +42,8 @@ mod recent;
 mod trace;
 
 pub use dispatch::{
-    DispatchCallback, FALLBACK_BROWSER, Options, PauseTarget, Resolved, Resolver, ResolverFactory,
-    RetentionInfo, Router, RouterGone, RouterHandle, RouterStatus,
+    DispatchCallback, FALLBACK_BROWSER, FallbackSource, Options, PauseTarget, Resolved, Resolver,
+    ResolverFactory, RetentionInfo, Router, RouterGone, RouterHandle, RouterStatus,
 };
 pub use journal::{JournalConfig, JournalMode, JournalStamp, read_recent as read_journal};
 pub use launcher::{DryRunLauncher, Launcher};

@@ -182,7 +182,7 @@ fn browser_null_opens_nothing() {
 #[test]
 fn a_route_back_to_pwrroute_goes_to_the_fallback() {
     let (_dir, router, launcher) = engine_router(Options {
-        fallback_browser: "Fallback Browser".into(),
+        fallback: FallbackSource::fixed("Fallback Browser", ""),
         ..Options::default()
     });
     let record = router
@@ -501,7 +501,7 @@ fn a_browser_that_cannot_open_hands_the_link_to_the_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let router = Router::spawn(
         Options {
-            fallback_browser: "Safari".into(),
+            fallback: FallbackSource::fixed("Safari", ""),
             ..Options::default()
         },
         Some(engine_factory(&dir)),
@@ -536,7 +536,6 @@ fn a_browser_that_cannot_open_hands_the_link_to_the_fallback() {
     assert!(matches!(&record.steps[2], Step::Browser { browser } if browser.name == "Firefox"));
     let attempts = launcher.attempts();
     let attempts: Vec<&str> = attempts.iter().map(|b| b.name.as_str()).collect();
-
     assert_eq!(attempts, ["Firefox", "Safari"]);
 }
 
@@ -546,7 +545,7 @@ fn when_the_fallback_fails_too_the_dispatch_fails_without_a_loop() {
     let dir = tempfile::tempdir().unwrap();
     let router = Router::spawn(
         Options {
-            fallback_browser: "Safari".into(),
+            fallback: FallbackSource::fixed("Safari", ""),
             ..Options::default()
         },
         Some(engine_factory(&dir)),
@@ -581,7 +580,7 @@ fn the_fallback_itself_failing_is_not_retried() {
     let launcher = Broken::new(&["Safari"]);
     let router = Router::spawn(
         Options {
-            fallback_browser: "Safari".into(),
+            fallback: FallbackSource::fixed("Safari", ""),
             ..Options::default()
         },
         None,
@@ -613,12 +612,113 @@ fn the_fallback_itself_failing_is_not_retried() {
 }
 
 #[test]
+fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
+    // The app saves a new choice (first run, an edit of rules.json) while
+    // the router runs: the next link that falls back follows it.
+    let choice: Arc<Mutex<Option<(String, String)>>> = Arc::default();
+    let launcher = Broken::new(&["Firefox"]);
+    let dir = tempfile::tempdir().unwrap();
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::new({
+                let choice = Arc::clone(&choice);
+                move || choice.lock().unwrap().clone()
+            }),
+            ..Options::default()
+        },
+        Some(engine_factory(&dir)),
+        launcher.clone(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    let opened = |handle: &RouterHandle| {
+        let record = handle
+            .dispatch_and_wait(link("https://team.slack.com/x"))
+            .unwrap();
+        assert_eq!(record.outcome, Outcome::Opened, "{:?}", record.steps);
+        let browser = record.browser.unwrap();
+        (browser.name, browser.app_type, browser.profile)
+    };
+    assert_eq!(
+        opened(&handle),
+        (FALLBACK_BROWSER.to_owned(), AppType::AppName, String::new())
+    );
+    *choice.lock().unwrap() = Some(("com.google.Chrome".into(), "Work".into()));
+    assert_eq!(
+        opened(&handle),
+        (
+            "com.google.Chrome".to_owned(),
+            AppType::BundleId,
+            "Work".to_owned()
+        )
+    );
+    // Cleared again, or naming PwrRoute: the OS's own browser.
+    *choice.lock().unwrap() = Some(("com.pwrdrvr.pwrroute".into(), "Work".into()));
+    assert_eq!(
+        opened(&handle),
+        (FALLBACK_BROWSER.to_owned(), AppType::AppName, String::new())
+    );
+    *choice.lock().unwrap() = Some(("  ".into(), String::new()));
+    assert_eq!(opened(&handle).0, FALLBACK_BROWSER);
+}
+
+/// Routes every link to a private Firefox window.
+struct PrivateFirefox;
+impl Resolver for PrivateFirefox {
+    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+        Ok(Resolved {
+            browser: Browser {
+                name: "Firefox".into(),
+                app_type: AppType::AppName,
+                url: url.into(),
+                profile: String::new(),
+                args: Vec::new(),
+                open_in_background: None,
+                private: true,
+                privacy: Privacy::Full,
+            },
+            error: None,
+            privacy: Privacy::Full,
+            rule_steps: Vec::new(),
+        })
+    }
+}
+
+#[test]
+fn a_private_link_stays_private_in_the_fallback() {
+    let launcher = Broken::new(&["Firefox"]);
+    let factory: ResolverFactory = Box::new(|| Ok(Box::new(PrivateFirefox) as Box<dyn Resolver>));
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("Safari", ""),
+            ..Options::default()
+        },
+        Some(factory),
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::Opened);
+    let attempts = launcher.attempts();
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|b| (b.name.as_str(), b.private))
+            .collect::<Vec<_>>(),
+        [("Firefox", true), ("Safari", true)]
+    );
+    assert!(record.browser.unwrap().private);
+}
+
+#[test]
 fn the_fallback_browser_and_profile_come_from_the_options() {
     let launcher = DryRunLauncher::new();
     let router = Router::spawn(
         Options {
-            fallback_browser: "com.google.Chrome".into(),
-            fallback_profile: "Work".into(),
+            fallback: FallbackSource::fixed("com.google.Chrome", "Work"),
             ..Options::default()
         },
         None,
@@ -633,7 +733,6 @@ fn the_fallback_browser_and_profile_come_from_the_options() {
     assert_eq!(launched.name, "com.google.Chrome");
     assert_eq!(launched.app_type, AppType::BundleId);
     assert_eq!(launched.profile, "Work");
-
     assert_eq!(app_type_of("Google Chrome"), AppType::AppName);
     assert_eq!(app_type_of("org.mozilla.firefox"), AppType::BundleId);
     assert_eq!(app_type_of("/Applications/Arc.app"), AppType::Path);

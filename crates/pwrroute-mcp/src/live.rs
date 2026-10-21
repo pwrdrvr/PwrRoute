@@ -152,6 +152,9 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
 pub fn trace_of(record: &DispatchRecord) -> Trace {
     let mut steps = Vec::new();
     let mut error = None;
+    // A fallback after a launch failure is the chosen browser missing, not
+    // a config out of charge.
+    let mut launch_failed = false;
     for step in &record.steps {
         match step {
             Step::Rewrite { rule, url } => steps.push(TraceStep {
@@ -186,8 +189,11 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
             Step::Fallback { reason } => steps.push(TraceStep {
                 kind: StepKind::Default,
                 index: None,
-                summary: format!("the fallback browser: {reason}"),
-
+                summary: if launch_failed {
+                    format!("the fallback browser: {reason}")
+                } else {
+                    format!("no config in charge: the fallback browser ({reason})")
+                },
                 url: None,
             }),
             Step::RefusedLoop { browser } => steps.push(TraceStep {
@@ -209,9 +215,11 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
                 },
                 url: None,
             }),
-            Step::ConfigError { message }
-            | Step::LaunchFailed { message }
-            | Step::Rejected { reason: message } => {
+            Step::LaunchFailed { message } => {
+                launch_failed = true;
+                error.get_or_insert_with(|| message.clone());
+            }
+            Step::ConfigError { message } | Step::Rejected { reason: message } => {
                 error.get_or_insert_with(|| message.clone());
             }
             Step::Received { .. }
@@ -451,6 +459,60 @@ mod tests {
             DryRunLauncher::new(),
         )
         .unwrap()
+    }
+
+    /// Fails Firefox, as the launcher does for an app that is not installed.
+    struct NoFirefox;
+
+    impl pwrroute_router::Launcher for NoFirefox {
+        fn launch(&mut self, browser: &Browser) -> Result<()> {
+            if browser.name == "Firefox" {
+                anyhow::bail!("browser \"Firefox\" is not installed");
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_trace_tells_a_missing_browser_from_a_config_out_of_charge() {
+        let summaries = |record: &DispatchRecord| -> Vec<String> {
+            trace_of(record)
+                .steps
+                .into_iter()
+                .map(|step| step.summary)
+                .collect()
+        };
+        let link = || Link::new(PUBLIC, Source::CommandLine);
+
+        let router = RealRouter::spawn(
+            Options::default(),
+            Some(Box::new(|| Ok(Box::new(Levels)))),
+            NoFirefox,
+        )
+        .unwrap();
+        let record = router.handle().dispatch_and_wait(link()).unwrap();
+        assert_eq!(record.outcome, Outcome::Opened);
+        let trace = trace_of(&record);
+        assert_eq!(
+            trace.error.as_deref(),
+            Some("browser \"Firefox\" is not installed")
+        );
+        assert_eq!(
+            summaries(&record).last().map(String::as_str),
+            Some("the fallback browser: Firefox could not be opened")
+        );
+
+        let router = RealRouter::spawn(
+            Options::default(),
+            Some(Box::new(|| Err(anyhow!("the config did not load")))),
+            DryRunLauncher::new(),
+        )
+        .unwrap();
+        let record = router.handle().dispatch_and_wait(link()).unwrap();
+        assert_eq!(
+            summaries(&record),
+            ["no config in charge: the fallback browser (the config did not load)"]
+        );
     }
 
     #[test]
