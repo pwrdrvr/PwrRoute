@@ -243,6 +243,8 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
         steps,
         browser,
         error,
+        // The router keeps a record, not the engine's trace: no console.
+        console: Vec::new(),
     }
 }
 

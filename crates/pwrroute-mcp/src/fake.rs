@@ -81,6 +81,7 @@ impl Resolver for FakeResolver {
                 privacy,
             },
             error: None,
+            console: Vec::new(),
         })
     }
 }
