@@ -6,7 +6,7 @@
 //! cargo run -p pwrroute-browsers --example browsers -- detect
 //! cargo run -p pwrroute-browsers --example browsers -- profiles "Google Chrome"
 //! cargo run -p pwrroute-browsers --example browsers -- plan "Google Chrome" URL \
-//!     [--profile NAME] [--bundle-id | --path] [--background] [-- ARGS...]
+//!     [--profile NAME] [--bundle-id | --path] [--background] [--private] [-- ARGS...]
 //! ```
 
 use std::process::ExitCode;
@@ -77,6 +77,7 @@ fn plan(env: Env, name: &str, url: &str, rest: &[String]) -> ExitCode {
             "--bundle-id" => browser.app_type = AppType::BundleId,
             "--path" => browser.app_type = AppType::Path,
             "--background" => browser.open_in_background = Some(true),
+            "--private" => browser.private = true,
             "--" => browser.args = it.by_ref().cloned().collect(),
             other => {
                 eprintln!("unknown option {other}");

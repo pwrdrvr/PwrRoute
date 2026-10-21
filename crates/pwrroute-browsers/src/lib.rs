@@ -10,7 +10,8 @@
 //!   or Firefox's `profiles.ini`.
 //! - [`Launcher`]: turns the engine's [`pwrroute_engine::Browser`] into a
 //!   command ([`Launcher::plan`], the dry run) and runs it
-//!   ([`Launcher::launch`]).
+//!   ([`Launcher::launch`]), adding the browser's private-window flag when
+//!   the rule asked for one.
 //!
 //! Everything that reads the machine takes an [`Env`], so tests run against
 //! fixture trees for any platform on any host. Nothing here writes to disk,
@@ -25,7 +26,9 @@ mod plist;
 mod profiles;
 mod registry;
 
-pub use catalog::{BrowserEngine, BrowserInfo, Catalog, Linux, MacOs, ProfileFlag, Windows};
+pub use catalog::{
+    BrowserEngine, BrowserInfo, Catalog, Linux, MacOs, PrivateFlag, ProfileFlag, Windows,
+};
 pub use detect::{InstalledBrowser, detect_installed};
 pub use env::{Env, Platform};
 pub use launch::{LaunchError, LaunchOptions, Launcher, Note, Plan};

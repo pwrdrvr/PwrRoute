@@ -20,7 +20,7 @@ use std::{
 use pwrroute_engine::{AppType, Browser};
 
 use crate::{
-    catalog::{BrowserInfo, Catalog},
+    catalog::{BrowserInfo, Catalog, PrivateFlag},
     desktop_entry, detect,
     env::{Env, Platform},
     profiles::{self, ProfileMatch},
@@ -72,6 +72,10 @@ pub enum Note {
     /// `openInBackground` was requested on a platform with no way to open a
     /// URL without focusing the browser (Windows, Linux).
     BackgroundUnsupported,
+    /// A private window was requested, but the browser is not in the
+    /// catalog or has no command-line way to open one (Safari, Orion, Arc),
+    /// so the URL opens in a normal window.
+    PrivateUnsupported { browser: String },
 }
 
 #[derive(Debug)]
@@ -170,6 +174,11 @@ impl Launcher {
     /// The dry run: the command [`Launcher::launch`] would run for
     /// `browser`, without running it. `Ok(None)` for `AppType::None`
     /// (`browser: null` in the config): do not open the URL at all.
+    ///
+    /// When `browser.private` is set (the engine's reading of
+    /// `rules[].private`, or of a known private flag in a JS config's
+    /// `args`), the browser's private-window flag is added once; a browser
+    /// without one gets [`Note::PrivateUnsupported`] and still opens.
     pub fn plan(&self, browser: &Browser) -> Result<Option<Plan>, LaunchError> {
         if browser.app_type == AppType::None {
             return Ok(None);
@@ -181,17 +190,22 @@ impl Launcher {
             _ => catalog.find(&browser.name),
         };
         let mut notes = Vec::new();
-        let profile_args = self.profile_args(entry, &browser.profile, &mut notes);
+        let mut flags = self.profile_args(entry, &browser.profile, &mut notes);
+        if browser.private
+            && let Some(flag) = private_flag(browser, entry, &mut notes)
+        {
+            flags.get_or_insert_default().push(flag.to_owned());
+        }
         let background = browser
             .open_in_background
             .unwrap_or(self.options.background_by_default);
         let plan = match platform {
-            Platform::MacOs => macos_plan(browser, background, profile_args),
+            Platform::MacOs => macos_plan(browser, background, flags),
             _ => {
                 if background {
                     notes.push(Note::BackgroundUnsupported);
                 }
-                let mut extra = profile_args.unwrap_or_default();
+                let mut extra = flags.unwrap_or_default();
                 extra.extend(browser_args(browser));
                 match platform {
                     Platform::Windows => self.windows_plan(browser, entry, extra)?,
@@ -340,6 +354,37 @@ impl Launcher {
     }
 }
 
+/// The private-window flag to add for `browser`, or `None` with a note
+/// when it has none, or nothing when the config's `args` already carry it
+/// (or, outside the catalog, any known private flag).
+fn private_flag(
+    browser: &Browser,
+    entry: Option<&BrowserInfo>,
+    notes: &mut Vec<Note>,
+) -> Option<&'static str> {
+    let own = entry
+        .map(BrowserInfo::private_flag)
+        .and_then(PrivateFlag::arg);
+    let carries = |flag: &str| browser.args.iter().any(|a| a == flag);
+    let carries_any = || {
+        browser
+            .args
+            .iter()
+            .any(|a| PrivateFlag::from_arg(a).is_some())
+    };
+    match own {
+        Some(flag) if carries(flag) => None,
+        Some(flag) => Some(flag),
+        None if carries_any() => None,
+        None => {
+            notes.push(Note::PrivateUnsupported {
+                browser: browser.name.clone(),
+            });
+            None
+        }
+    }
+}
+
 /// The arguments after the profile flag: the config's `args` when it has
 /// any, else the URL. As in Finicky, `args` replace the URL rather than
 /// adding to it, so a config that sets `args` passes the URL itself.
@@ -351,10 +396,13 @@ fn browser_args(browser: &Browser) -> Vec<String> {
     }
 }
 
+/// `flags` are the profile and private-window flags, which must follow
+/// `--args` (and need `-n`: `open` drops arguments for a running app
+/// unless it starts a new instance).
 fn macos_plan(
     browser: &Browser,
     background: bool,
-    profile_args: Option<Vec<String>>,
+    flags: Option<Vec<String>>,
 ) -> (PathBuf, Vec<String>) {
     let mut args = vec![
         if browser.app_type == AppType::BundleId {
@@ -368,24 +416,24 @@ fn macos_plan(
     if background {
         args.push("-g".into());
     }
-    if profile_args.is_some() {
+    if flags.is_some() {
         args.push("-n".into());
     }
-    match (profile_args, browser.args.is_empty()) {
+    match (flags, browser.args.is_empty()) {
         (None, true) => args.push(browser.url.clone()),
-        (profile, _) => {
-            let profile = profile.unwrap_or_default();
+        (flags, _) => {
+            let flags = flags.unwrap_or_default();
             // Arguments before a config's own `--args` are `open`'s options
-            // (Finicky passed them through); the profile flag belongs after it.
+            // (Finicky passed them through); the flags belong after it.
             match browser.args.iter().position(|a| a == "--args") {
                 Some(i) => {
                     args.extend_from_slice(&browser.args[..=i]);
-                    args.extend(profile);
+                    args.extend(flags);
                     args.extend_from_slice(&browser.args[i + 1..]);
                 }
                 None => {
                     args.push("--args".into());
-                    args.extend(profile);
+                    args.extend(flags);
                     args.extend(browser_args(browser));
                 }
             }
@@ -509,6 +557,263 @@ mod tests {
             plan.command_line(),
             r#""C:\Program Files\Google\Chrome\Application\chrome.exe" "--profile-directory=Profile 1" "say \"hi\"" ü"#
         );
+    }
+
+    const URL: &str = "https://example.com/path?q=a%20b";
+
+    fn browser(name: &str, app_type: AppType) -> Browser {
+        Browser {
+            name: name.into(),
+            app_type,
+            url: URL.into(),
+            profile: String::new(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy: pwrroute_engine::Privacy::Full,
+        }
+    }
+
+    /// A fixture machine, kept alive with its temp dir.
+    fn fixture(platform: Platform, files: &[&str]) -> (tempfile::TempDir, Launcher) {
+        let dir = tempfile::tempdir().unwrap();
+        for rel in files {
+            let mut path = dir.path().to_path_buf();
+            path.extend(rel.split('/'));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+        }
+        let env = Env::fixture(platform, dir.path());
+        (dir, Launcher::with_env(env, LaunchOptions::default()))
+    }
+
+    /// The plan for `b` with a private window requested.
+    fn private_plan(launcher: &Launcher, b: &Browser) -> Plan {
+        let b = Browser {
+            private: true,
+            ..b.clone()
+        };
+        launcher.plan(&b).unwrap().expect("a plan")
+    }
+
+    fn args(p: &Plan) -> Vec<&str> {
+        p.args.iter().map(String::as_str).collect()
+    }
+
+    fn unsupported(name: &str) -> Vec<Note> {
+        vec![Note::PrivateUnsupported {
+            browser: name.into(),
+        }]
+    }
+
+    #[test]
+    fn macos_private_window_goes_through_open_args() {
+        let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        for (name, flag) in [
+            ("Google Chrome", "--incognito"),
+            ("Microsoft Edge", "--inprivate"),
+            ("Firefox", "--private-window"),
+        ] {
+            let p = private_plan(&launcher, &browser(name, AppType::AppName));
+            assert_eq!(p.program, PathBuf::from("/usr/bin/open"));
+            assert_eq!(args(&p), ["-a", name, "-n", "--args", flag, URL], "{name}");
+            assert!(p.notes.is_empty(), "{name}");
+        }
+        // By bundle id too, in the background, and with a profile: the
+        // private flag follows the profile flag.
+        let mut b = browser("com.google.Chrome", AppType::BundleId);
+        b.open_in_background = Some(true);
+        let p = private_plan(&launcher, &b);
+        assert_eq!(
+            args(&p),
+            [
+                "-b",
+                "com.google.Chrome",
+                "-g",
+                "-n",
+                "--args",
+                "--incognito",
+                URL
+            ]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let local_state = dir
+            .path()
+            .join("home/Library/Application Support/Google/Chrome/Local State");
+        std::fs::create_dir_all(local_state.parent().unwrap()).unwrap();
+        std::fs::write(
+            &local_state,
+            include_str!("../tests/fixtures/chromium-local-state.json"),
+        )
+        .unwrap();
+        let launcher = Launcher::with_env(
+            Env::fixture(Platform::MacOs, dir.path()),
+            LaunchOptions::default(),
+        );
+        let mut b = browser("Google Chrome", AppType::AppName);
+        b.profile = "Personal".into();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(
+            args(&p),
+            [
+                "-a",
+                "Google Chrome",
+                "-n",
+                "--args",
+                "--profile-directory=Profile 1",
+                "--incognito",
+                URL
+            ]
+        );
+        assert!(p.notes.is_empty());
+    }
+
+    #[test]
+    fn private_flag_is_not_added_twice() {
+        let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        let mut b = browser("Google Chrome", AppType::AppName);
+        b.args = ["--incognito", URL].map(String::from).to_vec();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(
+            args(&p),
+            ["-a", "Google Chrome", "--args", "--incognito", URL]
+        );
+        assert!(p.notes.is_empty());
+
+        // A config's own `--args`, with the flag after it.
+        b.args = ["-F", "--args", "--incognito", URL]
+            .map(String::from)
+            .to_vec();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(
+            args(&p),
+            ["-a", "Google Chrome", "-F", "--args", "--incognito", URL]
+        );
+
+        // Edge's flag is --inprivate: --incognito in the args is not it.
+        let mut b = browser("Microsoft Edge", AppType::AppName);
+        b.args = ["--incognito", URL].map(String::from).to_vec();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(
+            args(&p),
+            [
+                "-a",
+                "Microsoft Edge",
+                "-n",
+                "--args",
+                "--inprivate",
+                "--incognito",
+                URL
+            ]
+        );
+        let mut b = browser("Microsoft Edge", AppType::AppName);
+        b.args = ["--inprivate", URL].map(String::from).to_vec();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(
+            args(&p),
+            ["-a", "Microsoft Edge", "--args", "--inprivate", URL]
+        );
+
+        // Without the request, args are passed through as they are.
+        let mut b = browser("Microsoft Edge", AppType::AppName);
+        b.args = ["--incognito", URL].map(String::from).to_vec();
+        let p = launcher.plan(&b).unwrap().unwrap();
+        assert_eq!(
+            args(&p),
+            ["-a", "Microsoft Edge", "--args", "--incognito", URL]
+        );
+    }
+
+    #[test]
+    fn browsers_without_a_private_window_still_open() {
+        let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        for name in ["Safari", "Orion", "Arc", "Some Unknown Browser"] {
+            let p = private_plan(&launcher, &browser(name, AppType::AppName));
+            assert_eq!(args(&p), ["-a", name, URL], "{name}");
+            assert_eq!(p.notes, unsupported(name), "{name}");
+        }
+        let mut b = browser("com.apple.Safari", AppType::BundleId);
+        b.profile = "Work".into();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(args(&p), ["-b", "com.apple.Safari", URL]);
+        assert_eq!(
+            p.notes,
+            [
+                Note::ProfileUnsupported {
+                    profile: "Work".into()
+                },
+                Note::PrivateUnsupported {
+                    browser: "com.apple.Safari".into()
+                }
+            ]
+        );
+
+        // Outside the catalog, args that carry a known flag are trusted.
+        let mut b = browser("Some Unknown Browser", AppType::AppName);
+        b.args = ["--private-window", URL].map(String::from).to_vec();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(
+            args(&p),
+            [
+                "-a",
+                "Some Unknown Browser",
+                "--args",
+                "--private-window",
+                URL
+            ]
+        );
+        assert!(p.notes.is_empty());
+    }
+
+    #[test]
+    fn windows_and_linux_pass_the_flag_directly() {
+        let (dir, launcher) = fixture(
+            Platform::Windows,
+            &["Program Files/Microsoft/Edge/Application/msedge.exe"],
+        );
+        let p = private_plan(&launcher, &browser("Microsoft Edge", AppType::AppName));
+        assert!(p.program.starts_with(dir.path()));
+        assert!(p.program.ends_with("msedge.exe"));
+        assert_eq!(args(&p), ["--inprivate", URL]);
+        assert!(p.notes.is_empty());
+
+        let (_dir, launcher) = fixture(Platform::Linux, &["bin/firefox", "bin/epiphany"]);
+        let p = private_plan(&launcher, &browser("Firefox", AppType::AppName));
+        assert!(p.program.ends_with("firefox"));
+        assert_eq!(args(&p), ["--private-window", URL]);
+        assert!(p.notes.is_empty());
+
+        let mut b = browser("Firefox", AppType::AppName);
+        b.args = ["--private-window", "-new-window", URL]
+            .map(String::from)
+            .to_vec();
+        let p = private_plan(&launcher, &b);
+        assert_eq!(args(&p), ["--private-window", "-new-window", URL]);
+
+        let p = private_plan(&launcher, &browser("epiphany", AppType::AppName));
+        assert_eq!(args(&p), [URL]);
+        assert_eq!(p.notes, unsupported("epiphany"));
+    }
+
+    /// `Browser::private` is the request: a plan adds the flag only when
+    /// the engine set it, never on its own.
+    #[test]
+    fn plan_reads_the_request_from_the_browser() {
+        let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        let b = browser("Google Chrome", AppType::AppName);
+        assert!(!b.private);
+        let p = launcher.plan(&b).unwrap().unwrap();
+        assert_eq!(args(&p), ["-a", "Google Chrome", URL]);
+        assert!(p.notes.is_empty());
+
+        let b = Browser { private: true, ..b };
+        let p = launcher.plan(&b).unwrap().unwrap();
+        assert_eq!(
+            args(&p),
+            ["-a", "Google Chrome", "-n", "--args", "--incognito", URL]
+        );
+        assert!(p.notes.is_empty());
     }
 
     #[test]
