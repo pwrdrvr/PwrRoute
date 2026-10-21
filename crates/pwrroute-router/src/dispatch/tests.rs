@@ -182,7 +182,7 @@ fn browser_null_opens_nothing() {
 #[test]
 fn a_route_back_to_pwrroute_goes_to_the_fallback() {
     let (_dir, router, launcher) = engine_router(Options {
-        fallback_browser: "Fallback Browser".into(),
+        fallback: FallbackSource::fixed("Fallback Browser", ""),
         ..Options::default()
     });
     let record = router
@@ -463,16 +463,130 @@ fn rule_steps_from_the_resolver_replace_the_derived_ones() {
     );
 }
 
-struct Broken;
+/// Fails every browser whose name is in `missing`, as `open` does for an app
+/// that is not installed, and records every attempt.
+#[derive(Clone)]
+struct Broken {
+    missing: Vec<&'static str>,
+    attempts: Arc<Mutex<Vec<Browser>>>,
+}
+
+impl Broken {
+    fn new(missing: &[&'static str]) -> Self {
+        Self {
+            missing: missing.to_vec(),
+            attempts: Arc::default(),
+        }
+    }
+
+    fn attempts(&self) -> Vec<Browser> {
+        self.attempts.lock().unwrap().clone()
+    }
+}
+
 impl Launcher for Broken {
-    fn launch(&mut self, _: &Browser) -> Result<()> {
-        Err(anyhow!("Firefox is not installed"))
+    fn launch(&mut self, browser: &Browser) -> Result<()> {
+        self.attempts.lock().unwrap().push(browser.clone());
+        if self.missing.contains(&browser.name.as_str()) {
+            Err(anyhow!("browser {:?} is not installed", browser.name))
+        } else {
+            Ok(())
+        }
     }
 }
 
 #[test]
-fn a_launch_failure_is_recorded() {
-    let router = Router::spawn(Options::default(), None, Broken).unwrap();
+fn a_browser_that_cannot_open_hands_the_link_to_the_fallback() {
+    let launcher = Broken::new(&["Firefox"]);
+    let dir = tempfile::tempdir().unwrap();
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("Safari", ""),
+            ..Options::default()
+        },
+        Some(engine_factory(&dir)),
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://team.slack.com/x"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::Opened);
+    // The handler chose Firefox; the record names what opened the link.
+    let opened = record.browser.clone().unwrap();
+    assert_eq!(
+        (opened.name.as_str(), opened.app_type),
+        ("Safari", AppType::AppName)
+    );
+    assert_eq!(opened.url, "https://team.slack.com/x");
+    assert_eq!(
+        record.steps[3..],
+        [
+            Step::LaunchFailed {
+                message: "browser \"Firefox\" is not installed".into()
+            },
+            Step::Fallback {
+                reason: "Firefox could not be opened".into()
+            },
+            Step::Launched { dry_run: false },
+        ]
+    );
+    // The handler's choice stays in the trace.
+    assert!(matches!(&record.steps[2], Step::Browser { browser } if browser.name == "Firefox"));
+    let attempts = launcher.attempts();
+    let attempts: Vec<&str> = attempts.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(attempts, ["Firefox", "Safari"]);
+}
+
+#[test]
+fn when_the_fallback_fails_too_the_dispatch_fails_without_a_loop() {
+    let launcher = Broken::new(&["Firefox", "Safari"]);
+    let dir = tempfile::tempdir().unwrap();
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("Safari", ""),
+            ..Options::default()
+        },
+        Some(engine_factory(&dir)),
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://team.slack.com/x"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::Failed);
+    assert_eq!(record.browser.unwrap().name, "Firefox");
+    assert_eq!(
+        record.steps[3..],
+        [
+            Step::LaunchFailed {
+                message: "browser \"Firefox\" is not installed".into()
+            },
+            Step::Fallback {
+                reason: "Firefox could not be opened".into()
+            },
+            Step::LaunchFailed {
+                message: "browser \"Safari\" is not installed".into()
+            },
+        ]
+    );
+    assert_eq!(launcher.attempts().len(), 2);
+}
+
+#[test]
+fn the_fallback_itself_failing_is_not_retried() {
+    let launcher = Broken::new(&["Safari"]);
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("Safari", ""),
+            ..Options::default()
+        },
+        None,
+        launcher.clone(),
+    )
+    .unwrap();
     let record = router
         .handle()
         .dispatch_and_wait(link("https://example.com/"))
@@ -481,9 +595,175 @@ fn a_launch_failure_is_recorded() {
     assert_eq!(
         record.steps.last(),
         Some(&Step::LaunchFailed {
-            message: "Firefox is not installed".into()
+            message: "browser \"Safari\" is not installed".into()
         })
     );
+    assert_eq!(
+        record
+            .steps
+            .iter()
+            .filter(|s| matches!(s, Step::Fallback { .. }))
+            .count(),
+        1,
+        "only the no-config fallback, not a launch fallback: {:?}",
+        record.steps
+    );
+    assert_eq!(launcher.attempts().len(), 1);
+}
+
+#[test]
+fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
+    // The app saves a new choice (first run, an edit of rules.json) while
+    // the router runs: the next link that falls back follows it.
+    // Every link resolves to Brave, which is never the OS's own browser
+    // (on Linux that is Firefox, which the config would pick).
+    let choice: Arc<Mutex<Option<(String, String)>>> = Arc::default();
+    let launcher = Broken::new(&["Brave"]);
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::new({
+                let choice = Arc::clone(&choice);
+                move || choice.lock().unwrap().clone()
+            }),
+            ..Options::default()
+        },
+        Some(Box::new(|| Ok(Box::new(ToBrave) as Box<dyn Resolver>))),
+        launcher.clone(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    let opened = |handle: &RouterHandle| {
+        let record = handle
+            .dispatch_and_wait(link("https://team.slack.com/x"))
+            .unwrap();
+        assert_eq!(record.outcome, Outcome::Opened, "{:?}", record.steps);
+        let browser = record.browser.unwrap();
+        (browser.name, browser.app_type, browser.profile)
+    };
+    assert_eq!(
+        opened(&handle),
+        (FALLBACK_BROWSER.to_owned(), AppType::AppName, String::new())
+    );
+    *choice.lock().unwrap() = Some(("com.google.Chrome".into(), "Work".into()));
+    assert_eq!(
+        opened(&handle),
+        (
+            "com.google.Chrome".to_owned(),
+            AppType::BundleId,
+            "Work".to_owned()
+        )
+    );
+    // Cleared again, or naming PwrRoute: the OS's own browser.
+    *choice.lock().unwrap() = Some(("com.pwrdrvr.pwrroute".into(), "Work".into()));
+    assert_eq!(
+        opened(&handle),
+        (FALLBACK_BROWSER.to_owned(), AppType::AppName, String::new())
+    );
+    *choice.lock().unwrap() = Some(("  ".into(), String::new()));
+    assert_eq!(opened(&handle).0, FALLBACK_BROWSER);
+}
+
+/// Routes every link to Brave, a browser no OS has as its own.
+struct ToBrave;
+impl Resolver for ToBrave {
+    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+        Ok(Resolved {
+            browser: Browser {
+                name: "Brave".into(),
+                app_type: AppType::AppName,
+                url: url.into(),
+                profile: String::new(),
+                args: Vec::new(),
+                open_in_background: None,
+                private: false,
+                privacy: Privacy::Full,
+            },
+            error: None,
+            privacy: Privacy::Full,
+            rule_steps: Vec::new(),
+        })
+    }
+}
+
+/// Routes every link to a private Firefox window.
+struct PrivateFirefox;
+impl Resolver for PrivateFirefox {
+    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+        Ok(Resolved {
+            browser: Browser {
+                name: "Firefox".into(),
+                app_type: AppType::AppName,
+                url: url.into(),
+                profile: String::new(),
+                args: Vec::new(),
+                open_in_background: None,
+                private: true,
+                privacy: Privacy::Full,
+            },
+            error: None,
+            privacy: Privacy::Full,
+            rule_steps: Vec::new(),
+        })
+    }
+}
+
+#[test]
+fn a_private_link_stays_private_in_the_fallback() {
+    let launcher = Broken::new(&["Firefox"]);
+    let factory: ResolverFactory = Box::new(|| Ok(Box::new(PrivateFirefox) as Box<dyn Resolver>));
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("Safari", ""),
+            ..Options::default()
+        },
+        Some(factory),
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::Opened);
+    let attempts = launcher.attempts();
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|b| (b.name.as_str(), b.private))
+            .collect::<Vec<_>>(),
+        [("Firefox", true), ("Safari", true)]
+    );
+    assert!(record.browser.unwrap().private);
+}
+
+#[test]
+fn the_fallback_browser_and_profile_come_from_the_options() {
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("com.google.Chrome", "Work"),
+            ..Options::default()
+        },
+        None,
+        launcher.clone(),
+    )
+    .unwrap();
+    router
+        .handle()
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    let launched = &launcher.launched()[0];
+    assert_eq!(launched.name, "com.google.Chrome");
+    assert_eq!(launched.app_type, AppType::BundleId);
+    assert_eq!(launched.profile, "Work");
+    assert_eq!(app_type_of("Google Chrome"), AppType::AppName);
+    assert_eq!(app_type_of("org.mozilla.firefox"), AppType::BundleId);
+    assert_eq!(app_type_of("/Applications/Arc.app"), AppType::Path);
+    assert_eq!(app_type_of("~/Applications/Arc.app"), AppType::Path);
+    assert_eq!(app_type_of(""), AppType::AppName);
+    // Neither a bundle id nor an .app path: Finicky calls it an app name.
+    assert_eq!(app_type_of("Brave Browser (Beta)"), AppType::AppName);
+    assert_eq!(app_type_of("Chrome_Canary"), AppType::AppName);
 }
 
 #[test]

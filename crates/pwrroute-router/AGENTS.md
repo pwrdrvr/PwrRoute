@@ -9,6 +9,18 @@ runs on every platform.
   Everything else talks through `RouterHandle`.
 - **`Launcher` is the seam to pwrroute-browsers.** Keep it small. Tests use
   `DryRunLauncher`; nothing in this crate opens a browser.
+- **A link is never dropped for want of a browser.** `Worker::launch` tries
+  the fallback browser once when the chosen browser fails to open, traced
+  as `LaunchFailed`, `Fallback`, `Launched`, keeping the chosen browser's
+  `private`; the record's `browser` is the one that opened the link.
+  `Outcome::Failed` means both failed, or the chosen browser was the
+  fallback already.
+- **The fallback is asked for, not stored.** `Options::fallback` is a
+  `FallbackSource` the router calls each time a link falls back (the app
+  reads `rules.json`'s `defaultBrowser` and `defaultProfile`), so a choice
+  saved while the router runs applies to the next link. `FallbackSource::get`
+  turns an empty answer, or one naming PwrRoute, into `FALLBACK_BROWSER`;
+  callers do not repeat that check.
 - **URLs never touch disk unless the journal is on, and then only at the
   record's privacy level.** Each `DispatchRecord` is reduced to the
   `Privacy` of the rule that routed it (`Full`, `Host`: scheme and host

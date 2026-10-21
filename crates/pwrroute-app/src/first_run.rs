@@ -174,6 +174,23 @@ impl FirstRunModel {
         }
     }
 
+    /// Step 1's paragraph. With a Finicky config, its `defaultBrowser`
+    /// decides where unmatched links go while it is in charge; this choice
+    /// is for when it is not.
+    pub fn fallback_detail(&self) -> String {
+        match &self.finicky {
+            Some(config) => format!(
+                "{} decides where unmatched links go while it is in charge. This choice takes \
+                 over when the config does not load or a browser cannot be opened, and while \
+                 routing is paused.",
+                config.path
+            ),
+            None => "Where links go when no rule matches or a browser cannot be opened. Also \
+                     what Pause routing uses."
+                .to_owned(),
+        }
+    }
+
     /// Step 2's paragraph.
     pub fn import_detail(&self) -> String {
         match (&self.finicky, self.import) {
@@ -435,10 +452,7 @@ impl Render for FirstRun {
                                 1,
                                 fallback,
                                 "Fallback browser",
-                                paragraph(
-                                    "Where links go when no rule matches. Also what Pause \
-                                     routing uses.",
-                                ),
+                                paragraph(model.fallback_detail()),
                                 fallback_picker(model, self.picker_open, cx),
                             ))
                             .child(step(
@@ -863,6 +877,23 @@ mod tests {
         let mut fresh = FirstRunModel::fixture();
         fresh.fallback = None;
         assert_eq!(fresh.steps(), [Current, Todo, Todo]);
+    }
+
+    #[test]
+    fn step_one_says_who_owns_the_default_while_a_config_is_in_charge() {
+        let mut model = FirstRunModel::fixture();
+        assert_eq!(
+            model.fallback_detail(),
+            "~/.finicky.ts decides where unmatched links go while it is in charge. This choice \
+             takes over when the config does not load or a browser cannot be opened, and while \
+             routing is paused."
+        );
+        model.finicky = None;
+        assert!(
+            model
+                .fallback_detail()
+                .starts_with("Where links go when no rule matches")
+        );
     }
 
     #[test]
