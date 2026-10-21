@@ -118,6 +118,13 @@ their own modules.
   window activation; first run's step 3 shows the wait and "Ask again".
   Never wire registration into a test or a launch path that runs without
   a click.
+- **Updates (`updater.rs`).** Velopack's auto-apply at startup is off
+  (`STARTUP`): a launch is usually for a link, and applying first would
+  drop it. A downloaded package installs from Quit (`app_menu::quit`,
+  which the tray's Quit also calls: `apply_pending_on_quit` hands it to
+  Velopack's updater, no restart) or from Settings' Restart to update.
+  `updater::install` checks again every `CHECK_EVERY` on a Velopack
+  install only. Route every new Quit through `app_menu::quit`.
 - **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
   sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`

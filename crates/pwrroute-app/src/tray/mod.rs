@@ -316,7 +316,7 @@ pub fn run(command: TrayCommand, cx: &mut App) {
                 toggle_pause(&model, cx);
             }
         }
-        TrayCommand::Quit => cx.quit(),
+        TrayCommand::Quit => crate::app_menu::quit(cx),
     }
 }
 
