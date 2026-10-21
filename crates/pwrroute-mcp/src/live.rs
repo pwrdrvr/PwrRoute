@@ -10,7 +10,7 @@
 use std::{
     hash::{DefaultHasher, Hash as _, Hasher as _},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -283,6 +283,10 @@ pub struct LiveRules {
     path: PathBuf,
     /// The Finicky config in charge right now, when one is.
     config: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
+    /// Held from the revision check to the write, and across a read, so
+    /// two agents writing at once cannot both pass the check and the
+    /// second clobber the first.
+    lock: Mutex<()>,
 }
 
 impl std::fmt::Debug for LiveRules {
@@ -301,9 +305,17 @@ impl LiveRules {
         Self {
             path: path.into(),
             config: Arc::new(config),
+            lock: Mutex::new(()),
         }
     }
 
+    fn locked(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The file and its revision, read under the lock so they match.
     fn snapshot(&self) -> Result<RulesSnapshot> {
         let file = RulesFile::load(&self.path)?;
         Ok(RulesSnapshot {
@@ -329,6 +341,7 @@ fn revision_of(path: &Path) -> String {
 
 impl RulesStore for LiveRules {
     fn read(&self) -> Result<RulesSnapshot> {
+        let _held = self.locked();
         self.snapshot()
     }
 
@@ -338,6 +351,7 @@ impl RulesStore for LiveRules {
         rules: Value,
         dry_run: bool,
     ) -> std::result::Result<RulesSnapshot, RulesError> {
+        let _held = self.locked();
         let current = revision_of(&self.path);
         if current != base_revision {
             return Err(RulesError::Conflict {
@@ -546,6 +560,56 @@ mod tests {
             .unwrap();
         assert_eq!(dry.rules["defaultBrowser"], "Arc");
         assert_eq!(rules.read().unwrap().revision, now.revision);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Two agents (Claude Code and Codex, say) each read the revision and
+    /// write. Without the lock both can pass the check and one write is
+    /// lost; with it the loser sees a conflict, reads again and keeps the
+    /// winner's rule.
+    #[test]
+    fn concurrent_writes_are_serialized_so_none_is_lost() {
+        const WRITERS: usize = 4;
+        const WRITES: usize = 5;
+        let dir = std::env::temp_dir().join(format!(
+            "pwrroute-mcp-live-rules-concurrent-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rules.json");
+        let rules = Arc::new(LiveRules::new(path.clone(), || None));
+        let start = Arc::new(std::sync::Barrier::new(WRITERS));
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|writer| {
+                let rules = Arc::clone(&rules);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    for n in 0..WRITES {
+                        let pattern = format!("w{writer}-{n}.example/*");
+                        loop {
+                            let snapshot = rules.read().unwrap();
+                            let mut doc = snapshot.rules;
+                            doc["defaultBrowser"] = json!("Safari");
+                            let list = doc["rules"].as_array_mut().unwrap();
+                            list.push(json!({ "match": pattern, "browser": "Firefox" }));
+                            match rules.write(&snapshot.revision, doc, false) {
+                                Ok(_) => break,
+                                Err(RulesError::Conflict { .. }) => continue,
+                                Err(e) => panic!("{e:?}"),
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let file = RulesFile::load(&path).unwrap();
+        assert_eq!(file.rules.len(), WRITERS * WRITES, "every write landed");
+        assert_eq!(rules.read().unwrap().revision, revision_of(&path));
         fs::remove_dir_all(dir).unwrap();
     }
 

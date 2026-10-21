@@ -469,7 +469,15 @@ pub enum SettingsRequest {
         session: SessionId,
         role: RoleId,
     },
+    /// Arrives only after the row's Revoke was confirmed.
     RevokeSession(SessionId),
+    /// Allow a revoked session again, with `role` (the row's last one).
+    AllowSession {
+        session: SessionId,
+        role: RoleId,
+    },
+    /// Drop a revoked session; its next connection is asked about again.
+    ForgetSession(SessionId),
     NewCustomRole,
     OpenActivity,
     SetRulesSource(RulesSource),

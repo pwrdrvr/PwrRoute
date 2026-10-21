@@ -1,4 +1,6 @@
-//! 1a Local agents: the MCP door, its sessions and their roles.
+//! 1a Local agents: the MCP door, its sessions and their roles. Revoke asks
+//! once more before it acts; a revoked row offers Allow again (with its
+//! last role) and Forget (its next connection is asked about again).
 
 use gpui_kit::base::actions::{SelectDown, SelectUp};
 use gpui_kit::base::{Button, Select, box_shadow};
@@ -47,9 +49,12 @@ fn empty_row(id: &'static str, words: &'static str) -> Div {
         )
 }
 
-/// The pane's own view state: which role menu is open.
+/// The pane's own view state: which role menu is open, and which row's
+/// Revoke waits to be confirmed.
 pub struct State {
     menu: Option<Menu>,
+    /// The session whose Revoke was clicked once; the second click acts.
+    confirming: Option<SessionId>,
     /// Each session's role select trigger, by id, so a producer can add,
     /// drop or reorder sessions under an open window.
     triggers: HashMap<SessionId, FocusHandle>,
@@ -67,13 +72,16 @@ impl State {
     pub fn new(cx: &mut Context<'_, SettingsWindow>) -> Self {
         Self {
             menu: None,
+            confirming: None,
             triggers: HashMap::new(),
             menu_focus: cx.focus_handle(),
         }
     }
 
+    /// Closes the role menu and drops an unconfirmed Revoke.
     pub fn close_menu(&mut self) {
         self.menu = None;
+        self.confirming = None;
     }
 
     /// Give every session a trigger handle and forget sessions that left;
@@ -91,12 +99,23 @@ impl State {
         {
             self.menu = None;
         }
+        if let Some(session) = &self.confirming
+            && !self.triggers.contains_key(session)
+        {
+            self.confirming = None;
+        }
     }
 
     /// The session whose role menu is open, for tests.
     #[cfg(test)]
     pub fn open_menu(&self) -> Option<SessionId> {
         self.menu.as_ref().map(|menu| menu.session.clone())
+    }
+
+    /// The session whose Revoke waits to be confirmed, for tests.
+    #[cfg(test)]
+    pub fn confirming(&self) -> Option<SessionId> {
+        self.confirming.clone()
     }
 }
 
@@ -171,7 +190,21 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    /// The first click on Revoke: the row asks once more, and nothing
+    /// changes until it is confirmed.
+    fn ask_revoke(&mut self, session: &SessionId, cx: &mut Context<'_, Self>) {
+        self.agents.menu = None;
+        self.agents.confirming = Some(session.clone());
+        cx.notify();
+    }
+
+    fn cancel_revoke(&mut self, cx: &mut Context<'_, Self>) {
+        self.agents.confirming = None;
+        cx.notify();
+    }
+
     fn revoke(&mut self, session: &SessionId, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.agents.confirming = None;
         let sessions = &mut self.model.local_agents.sessions;
         let Some(row) = sessions.iter_mut().find(|row| &row.id == session) else {
             return;
@@ -182,6 +215,41 @@ impl SettingsWindow {
         let id = row.id.clone();
         self.agents.menu = None;
         self.request(SettingsRequest::RevokeSession(id), window, cx);
+        cx.notify();
+    }
+
+    /// Allow a revoked session again, with the role it last had.
+    fn allow_again(
+        &mut self,
+        session: &SessionId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let sessions = &mut self.model.local_agents.sessions;
+        let Some(row) = sessions.iter_mut().find(|row| &row.id == session) else {
+            return;
+        };
+        // The producer reports the real date; until it does, say when.
+        row.revoked = None;
+        row.detail = "approved just now".into();
+        row.last_used = "never".into();
+        let request = SettingsRequest::AllowSession {
+            session: row.id.clone(),
+            role: row.role.clone(),
+        };
+        self.request(request, window, cx);
+        cx.notify();
+    }
+
+    /// Drop a revoked session; its next connection is asked about again.
+    fn forget(&mut self, session: &SessionId, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let sessions = &mut self.model.local_agents.sessions;
+        let before = sessions.len();
+        sessions.retain(|row| &row.id != session);
+        if sessions.len() == before {
+            return;
+        }
+        self.request(SettingsRequest::ForgetSession(session.clone()), window, cx);
         cx.notify();
     }
 
@@ -350,7 +418,7 @@ fn sessions_card(
                 .flex_none()
                 .child(column_head("Last used")),
         )
-        .child(div().w(px(70.0)).flex_none());
+        .child(div().w(px(ACTIONS_WIDTH)).flex_none());
     let mut rows = vec![head];
     for (index, session) in agents.sessions.iter().enumerate() {
         rows.push(session_line(this, index, session, window, cx));
@@ -371,6 +439,10 @@ fn sessions_card(
     )
 }
 
+/// The last column: Revoke, then Confirm and Cancel; or Allow again and
+/// Forget on a revoked row.
+const ACTIONS_WIDTH: f32 = 150.0;
+
 fn session_line(
     this: &SettingsWindow,
     index: usize,
@@ -379,6 +451,7 @@ fn session_line(
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Div {
     let revoked = session.revoked.is_some();
+    let confirming = this.agents.confirming.as_ref() == Some(&session.id);
     let name_color = if revoked {
         theme::text_muted()
     } else {
@@ -418,12 +491,60 @@ fn session_line(
             )
             .into_any_element()
         }))
-        .child(div().w(px(70.0)).flex_none().when(!revoked, |cell| {
-            cell.child(
-                button(("agents-revoke", index), "Revoke", Kind::Danger, true)
-                    .on_click(cx.listener(move |this, _, window, cx| this.revoke(&id, window, cx))),
-            )
-        }))
+        .child(
+            div()
+                .w(px(ACTIONS_WIDTH))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(4.0))
+                .map(|cell| {
+                    if revoked {
+                        let allow = id.clone();
+                        let forget = id.clone();
+                        cell.child(
+                            button(("agents-allow", index), "Allow again", Kind::Default, true)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.allow_again(&allow, window, cx);
+                                })),
+                        )
+                        .child(
+                            button(("agents-forget", index), "Forget", Kind::Quiet, true).on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.forget(&forget, window, cx);
+                                }),
+                            ),
+                        )
+                    } else if confirming {
+                        let confirm = id.clone();
+                        cell.child(
+                            button(
+                                ("agents-revoke-confirm", index),
+                                "Revoke",
+                                Kind::Danger,
+                                true,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.revoke(&confirm, window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            button(("agents-revoke-cancel", index), "Keep", Kind::Quiet, true)
+                                .on_click(cx.listener(|this, _, _, cx| this.cancel_revoke(cx))),
+                        )
+                    } else {
+                        cell.child(
+                            button(("agents-revoke", index), "Revoke", Kind::Danger, true)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.ask_revoke(&id, cx);
+                                })),
+                        )
+                    }
+                }),
+        )
 }
 
 /// The role column: gpui-kit's `Select` with an `.inp` trigger and a menu

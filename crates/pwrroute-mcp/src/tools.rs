@@ -5,7 +5,8 @@
 //! naming the missing permission. The role is read at call time, so a
 //! change or revocation in Settings applies to the next call. A client
 //! name not yet approved raises the approval window, and its first call
-//! waits for the answer.
+//! waits for the answer. A denial lasts for the connection; a window that
+//! closed unanswered does not, and the next call raises it again.
 
 use std::{
     sync::{
@@ -31,7 +32,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     agents::{Agents, Standing, clean_name},
-    approval::{Answer as Decision, ApprovalDecision, Approvals},
+    approval::{Answer as Decision, ApprovalDecision, Approvals, Verdict},
     audit::{AuditRecord, AuditSink, Outcome},
     backend::{
         ActivityEntry, ActivityOutcome, ActivitySource, AgentRef, Backends, RulesError, host_of,
@@ -55,7 +56,9 @@ Read the rules with pwrroute_rules_list; pwrroute_suggest_rule proposes narrow p
 pwrroute_rules_test runs the saved examples and tests against a proposal without writing; \
 pwrroute_rules_apply writes a JSON Merge Patch, naming the revision you read, and refuses a change that fails a saved example or test unless force is true. \
 Links that pass through these tools stay in memory; only the examples and tests you write into rules.json are saved. \
-The first call from a new client waits while the user approves it in PwrRoute's window. \
+The first call from a new client waits while the user approves it in PwrRoute's window; \
+if that window closes unanswered (approval_expired), calling again reopens it. \
+A denial (access_denied) lasts for this connection: reconnect the MCP server to be asked again. \
 Which tools work depends on the role the user chose; a refused call names the permission it needs.";
 
 /// The words `pwrroute_activity` and the audit use. Fixed, never link data.
@@ -337,19 +340,24 @@ impl Connection {
     }
 
     /// The answer this connection waits on: the one asked for when it
-    /// connected, unless that was an approval since forgotten in Settings,
-    /// in which case the person is asked again. `None` when no prompt could
+    /// connected, while it is still open or was a denial. An approval since
+    /// forgotten in Settings, or a window that closed unanswered, is an
+    /// empty slot: the person is asked again. `None` when no prompt could
     /// be raised.
     fn answer(&self, approvals: &Arc<Approvals>, client: &Implementation) -> Option<Decision> {
         let mut slot = self
             .answer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match slot.as_ref() {
-            Some(answer) if !matches!(*answer.borrow(), Some(ApprovalDecision::Approve { .. })) => {
-                Some(answer.clone())
-            }
-            _ => Some(slot.insert(approvals.ask(client)?).clone()),
+        let kept = slot.as_ref().filter(|answer| {
+            matches!(
+                *answer.borrow(),
+                None | Some(Verdict::Answered(ApprovalDecision::Deny))
+            )
+        });
+        match kept {
+            Some(answer) => Some(answer.clone()),
+            None => Some(slot.insert(approvals.ask(client)?).clone()),
         }
     }
 }
@@ -402,7 +410,12 @@ impl Handler {
                 .await
                 .map(|seen| seen.ok().and_then(|d| *d));
         match decided {
-            Ok(Some(ApprovalDecision::Approve { role })) => Ok(role),
+            Ok(Some(Verdict::Answered(ApprovalDecision::Approve { role }))) => Ok(role),
+            // Nobody was asked to decide: not a denial, so the next call
+            // on this connection asks again.
+            Ok(Some(Verdict::Expired)) => Err(format!(
+                "approval_expired: PwrRoute's approval window for {name} closed unanswered; call again to reopen it"
+            )),
             Ok(_) => {
                 self.connection.denied.store(true, Ordering::Relaxed);
                 Err(denied_message(&name))
@@ -789,7 +802,9 @@ async fn blocking(
 }
 
 fn denied_message(name: &str) -> String {
-    format!("access_denied: the user did not approve {name} in PwrRoute")
+    format!(
+        "access_denied: the user did not approve {name} in PwrRoute; reconnect the MCP server to be asked again"
+    )
 }
 
 impl ServerHandler for Handler {
