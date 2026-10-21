@@ -116,7 +116,11 @@ one.
 
 `cargo xtask bundle [--universal] [--sign IDENTITY] [--notarize]` builds the
 macOS app, zip and DMG, ad hoc signed unless an identity is given.
-`cargo xtask package-linux` builds the tar.gz and .deb. Windows and macOS
+`cargo xtask package-linux` builds the tar.gz and .deb. The app icon is
+`packaging/icon/PwrRoute.svg`, the design mark on the Pwr family's tile;
+`scripts/release/make-icns.sh` renders it into the committed
+`packaging/macos/PwrRoute.icns` and `packaging/windows/PwrRoute.ico`, so
+rerun it and commit both after editing the SVG. Windows and macOS
 releases install and update through Velopack: release.yml packs them with
 `vpk`, installed by `scripts/release/install-vpk.sh` from a pinned version
 and SHA-512; that version must equal the `velopack` crate's `=` pin, and

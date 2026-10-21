@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The PwrRoute app icon: the design's route mark (crates/pwrroute-app/assets/icons/mark.svg,
+     the glyph beside the wordmark in the title strip) on the Pwr family's icon tile.
+
+     Edge to edge on a 1024 canvas with a rounded-square ground: macOS 26 masks a
+     legacy .icns into its squircle and shrinks it itself, and a padded one gets a
+     light plate on some point releases (see PwrSnap's 2026-09-05 note). The ground
+     is PwrAgent's and PwrSnap's warm near-black gradient; the mark is their icon
+     orange #e8743a, deliberately deeper than the UI accent #ff8a1f. The mark's
+     lower branch is drawn at 55% in the app; here that is baked into #884726
+     (55% of #e8743a over the ground at that height) so every renderer agrees.
+
+     scripts/release/make-icns.sh renders this into packaging/macos/PwrRoute.icns and
+     packaging/windows/PwrRoute.ico. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e1a14"/>
+      <stop offset="1" stop-color="#0a0908"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230" ry="230" fill="url(#ground)"/>
+  <g fill="none" stroke-width="56" stroke-linecap="round"
+     transform="translate(512 512) scale(1.1) translate(-512 -512)">
+    <g stroke="#884726">
+      <path d="M384 512C512 512 512 724 640 724"/>
+      <circle cx="724" cy="724" r="84"/>
+    </g>
+    <g stroke="#e8743a">
+      <path d="M384 512C512 512 512 300 640 300"/>
+      <circle cx="300" cy="512" r="84"/>
+      <circle cx="724" cy="300" r="84"/>
+    </g>
+  </g>
+</svg>
