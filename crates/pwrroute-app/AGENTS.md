@@ -11,8 +11,8 @@ their own modules.
   Test a link starts empty, and its app picker offers the apps the rules
   name plus `fixtures::OPENERS` under an "Examples" heading (their order
   is fixed: Activity's re-test picks by position). The tray follows the
-  feed and the OS; its pause target is `rules.json`'s fallback, read once
-  at launch. Settings is live: `settings_live.rs` builds every pane from
+  feed, the OS and the router's pause (`tray/`, below). Settings is live:
+  `settings_live.rs` builds every pane from
   its producer (`settings/*_host.rs`, `mcp.rs` for Local agents) and
   `settings::fixtures::model()` draws only the `screens` example and the
   window's tests (see `settings/AGENTS.md`). Never a real URL, Activity
@@ -94,8 +94,15 @@ their own modules.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
   `PopUp` window (design 1a/1b); recents there are hosts only
-  (`model::host_of`), from the feed. Pausing updates `tray::model(cx)` and
-  whoever routes observes it.
+  (`model::host_of`), from the feed. Pause routing is
+  `RouterHandle::set_paused` from `tray::toggle_pause`, with the target
+  `tray::pause_target` names: `rules.json`'s `defaultBrowser` and
+  `defaultProfile`, else the config's own `defaultBrowser` when it is not
+  a function (evaluated once per change of the file, `ConfigDefault`),
+  else `FALLBACK_BROWSER`. The dropdown re-reads it on each open; a pause
+  keeps the target it began with until resumed. A paused record's
+  `Step::Paused` is `RecentRoute::Paused` in the recents and "paused ·
+  skipped h N" in Activity's Rule column.
 - **The dropdown cannot move or grow from the top.** GPUI has no window
   move and macOS resizes from the bottom edge, so the window opens at
   `window_height` (the tallest the card can be) with a transparent

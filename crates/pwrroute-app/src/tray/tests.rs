@@ -1,13 +1,15 @@
 //! The dropdown through gpui-kit's window harness: its card is as tall as
 //! `card_height` says (the window is sized from that), it fits the window
-//! in every state, and the pause row pauses.
+//! in every state, and the pause row pauses the router.
 
 use std::time::SystemTime;
 
 use gpui_kit::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext, px};
+use pwrroute_router::{DryRunLauncher, Options, PauseTarget, Router};
 
 use super::dropdown::{CARD_ID, Dropdown, MAKE_DEFAULT_ID, PAUSE_ID, card_height, window_height};
 use super::model::TrayModel;
+use super::{ConfigDefault, Tray};
 
 fn open(model: TrayModel, cx: &mut TestAppContext) -> (Entity<TrayModel>, &mut VisualTestContext) {
     cx.update(|cx| crate::assets::load_fonts(cx));
@@ -90,13 +92,37 @@ fn losing_the_default_shows_the_make_default_row(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_pause_row_pauses_and_the_card_still_fits(cx: &mut TestAppContext) {
+fn the_pause_row_pauses_the_router_and_the_card_still_fits(cx: &mut TestAppContext) {
+    // A real router with no config, as `install` would hold it; the
+    // fixture model, so the target is the design's and not this machine's.
+    let router = Router::spawn(Options::default(), None, DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
     let (model, cx) = open(TrayModel::fixture(SystemTime::now()), cx);
+    cx.update(|_, cx| {
+        cx.set_global(Tray {
+            model: model.clone(),
+            live: false,
+            router: Some(handle.clone()),
+            config_default: ConfigDefault::default(),
+            native: None,
+            dropdown: None,
+            dropdown_closed_at: None,
+        });
+    });
+    assert_eq!(handle.paused(), None);
     let pause = cx.debug_bounds(PAUSE_ID).expect("the pause row");
 
     cx.simulate_click(pause.center(), Modifiers::none());
     draw(cx);
     assert!(model.read_with(cx, |model, _| model.is_paused()));
+    // The router is paused, to the browser the row names.
+    assert_eq!(
+        handle.paused(),
+        Some(PauseTarget {
+            browser: "Google Chrome".into(),
+            profile: "Personal".into(),
+        })
+    );
     // Paused drops the activity row: the card shrinks inside the same window.
     assert_card_fits(&model, cx);
 
@@ -104,4 +130,5 @@ fn the_pause_row_pauses_and_the_card_still_fits(cx: &mut TestAppContext) {
     cx.simulate_click(pause.center(), Modifiers::none());
     draw(cx);
     assert!(!model.read_with(cx, |model, _| model.is_paused()));
+    assert_eq!(handle.paused(), None);
 }
