@@ -128,9 +128,20 @@ throwaway CI runners (`e2e/AGENTS.md`).
 macOS app, zip and DMG, ad hoc signed unless an identity is given.
 `cargo xtask package-linux` builds the tar.gz and .deb. The app icon is
 `packaging/icon/PwrRoute.svg`, the design mark on the Pwr family's tile;
-`scripts/release/make-icns.sh` renders it into the committed
-`packaging/macos/PwrRoute.icns` and `packaging/windows/PwrRoute.ico`, so
-rerun it and commit both after editing the SVG. Windows and macOS
+`scripts/release/make-icns.sh` renders it into the committed Icon Composer
+package `packaging/icon/PwrRoute.icon`, `packaging/macos/PwrRoute.icns` and
+`packaging/windows/PwrRoute.ico`, so rerun it and commit all three after
+editing the SVG. On macOS 26 the package is the icon: `bundle` compiles it
+with Xcode 26's `actool` into `Assets.car` plus a derived `Icon.icns`
+(`CFBundleIconName` and `CFBundleIconFile`), because macOS 26 redraws a bare
+`.icns` its own way, differently across point releases (PwrSnap's
+`docs/solutions/2026-09-05-macos-26-legacy-icon-light-plate.md`). Without
+actool 26 `bundle` falls back to `PwrRoute.icns` with a warning; CI and
+release builds pass `--require-icon-catalog`, so they fail instead. The DMG
+window's background, `packaging/dmg/background.png`, is painted by
+`scripts/release/generate-dmg-background.swift` in the vendored Geist Bold
+(`packaging/dmg/fonts`) and committed the same way; `macos-dmg.sh` holds the
+window layout, and xtask's tests keep the two in step. Windows and macOS
 releases install and update through Velopack: release.yml packs them with
 `vpk`, installed by `scripts/release/install-vpk.sh` from a pinned version
 and SHA-512; that version must equal the `velopack` crate's `=` pin, and

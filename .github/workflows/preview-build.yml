@@ -56,7 +56,7 @@ jobs:
       - name: Build preview package (ad hoc signed)
         env:
           PWRROUTE_VERSION: ${{ steps.version.outputs.version }}
-        run: cargo xtask bundle --universal
+        run: cargo xtask bundle --universal --require-icon-catalog
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v7

@@ -26,8 +26,11 @@ usage: cargo xtask <task>
                        the tag, Cargo.toml version and CHANGELOG.md agree;
                        optionally write that version's notes
   bundle [--universal] [--sign IDENTITY] [--notarize] [--app-only]
+         [--require-icon-catalog]
                        macOS: <target>/bundle/PwrRoute.app, its zip and DMG
-                       (--app-only: the app alone, for vpk pack)
+                       (--app-only: the app alone, for vpk pack;
+                       --require-icon-catalog: fail, not fall back to the
+                       legacy .icns, without Xcode 26's actool)
   package-linux        Linux: <target>/package/*.tar.gz and *.deb
   e2e [--release] [--pending] [--screenshots] [-- TEST-ARGS]
                        build the app and run the Desktop E2E suite against

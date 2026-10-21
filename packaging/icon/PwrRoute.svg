@@ -11,7 +11,11 @@
      (55% of #e8743a over the ground at that height) so every renderer agrees.
 
      scripts/release/make-icns.sh renders this into packaging/macos/PwrRoute.icns and
-     packaging/windows/PwrRoute.ico. -->
+     packaging/windows/PwrRoute.ico, and into the Icon Composer package
+     packaging/icon/PwrRoute.icon: the ground's two stops become its fill, and the
+     mark without the ground, its lower branch back to #e8743a at 55%, its one
+     layer. That script finds the ground rect and the #884726 branch by those
+     attributes; keep them, or update it with them. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">

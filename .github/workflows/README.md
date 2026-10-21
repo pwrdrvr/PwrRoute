@@ -142,7 +142,7 @@ runs cargo or installs project dependencies.
 |---|---|---|
 | `distribution-audit` | — | Stub (see below). |
 | `prepare` | — | `cargo xtask release-check`, `lint`, `test` on Linux. |
-| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
+| `macos-prepare` | — | `cargo xtask bundle --universal --app-only --require-icon-catalog`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, the DMG's `background.png`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
 | `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
 | `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1`, `PwrRoute.ico` and the release notes. |
 | `windows-sign` | windows-signing | `vpk pack` with Setup.exe and MSI; verifies. |
@@ -182,7 +182,11 @@ shared by `windows-sign` and the preview.
   update hooks call `register_browser()`, uninstall `unregister_browser()`;
   registering never changes the default browser.
 - **macOS.** `vpk` adds `UpdateMac` and `sq.version` to the app, so only the
-  packed app can update; the DMG is cut from it. It signs with
+  packed app can update; the DMG is cut from it. `macos-dmg.sh` lays the DMG
+  window out like PwrSnap's (background, icon positions, volume icon, volume
+  `PwrRoute <v>-universal`) by driving Finder through `osascript`, so the
+  job needs the runner's GUI session; it retries Finder five times and fails
+  with a message rather than shipping an unstyled DMG. vpk signs with
   `packaging/macos/PwrRoute.entitlements` (none): vpk's default allows JIT,
   unsigned executable memory and `DYLD_*` variables and turns off library
   validation. No `.pkg` installer (`--noInst`): it needs a Developer ID
@@ -240,10 +244,6 @@ the release. The sign jobs read the previous release with `github.token`.
   instead.
 - **Windows arm64.** disktree builds it on `windows-11-arm`; add it when there
   is a user for it. vpk would pack it as its own channel.
-- **An Icon Composer `.icon`.** macOS 26 normalizes the legacy `.icns` the
-  bundle ships into its squircle itself; PwrSnap ships a `.icon` package
-  compiled by `actool` into `Assets.car` beside it, so macOS 26 draws the
-  glass variants and never guesses. Port that when the DMG icon is revisited.
 - **Icons for pwrroute.exe and the Linux .deb.** `vpk pack --icon` covers
   Setup.exe, the MSI and the shortcut; the executable has no icon resource,
   and the desktop entry no `Icon=`.
