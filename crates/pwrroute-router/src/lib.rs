@@ -43,7 +43,7 @@ pub use dispatch::{
     DispatchCallback, FALLBACK_BROWSER, Options, Resolved, Resolver, ResolverFactory,
     RetentionInfo, Router, RouterGone, RouterHandle, RouterStatus,
 };
-pub use journal::{JournalConfig, JournalMode, read_recent as read_journal};
+pub use journal::{JournalConfig, JournalMode, JournalStamp, read_recent as read_journal};
 pub use launcher::{DryRunLauncher, Launcher};
 pub use link::{Link, LinkError, MAX_URL_LEN, OpenerInfo, Source, normalize_url};
 pub use recent::{RecentDispatches, Retention};

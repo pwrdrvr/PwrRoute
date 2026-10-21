@@ -29,8 +29,9 @@ their own modules.
   Private, each with its count. The retention sentence under the list and
   the toolbar's note come from `RouterHandle::retention()`, never from a
   literal here. With the journal on, journaled records no longer in memory
-  are listed below a "From the journal" divider (`Feed::journal`, read from
-  disk on each sync, at most `JOURNAL_ROWS`). Export… goes through
+  are listed below a "From the journal" divider (`Feed::journal`, at most
+  `JOURNAL_ROWS`, read from disk only when the files' `JournalStamp`
+  changed since the last read: `JournalCache`). Export… goes through
   `settings::privacy_host::export`, the OS save dialog and nothing else.
   Full URLs stay in that entity and the router's buffer; nothing in the app
   writes one to disk or a log. The row's "⋯" opens `activity::row_menu`
