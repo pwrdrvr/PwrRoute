@@ -21,6 +21,10 @@ door; this crate supersedes that part of it.
 - **The proxy is a byte pipe.** `proxy.rs` copies stdio to and from the link
   and nothing else; the app runs the one MCP server (`server.rs`, one rmcp
   session per connection). Do not give the proxy its own protocol or tools.
+  Before the first byte it waits for the app to listen (`DEFAULT_CONNECT_WAIT`,
+  20 s at 250 ms; `PWRROUTE_MCP_CONNECT_WAIT` in seconds overrides it, and
+  the tests set `0`), so an MCP client launched before PwrRoute still gets
+  its tools.
 - **Only this user reaches the link.** Unix: a `0600` `mcp.sock` beside the
   router's socket (`pwrroute_os::router_dir()`, the user's own directory),
   and every connection's peer uid must match the socket's owner. Never put
@@ -33,6 +37,14 @@ door; this crate supersedes that part of it.
   self-reported, so a role is a guardrail against an agent overreaching,
   not a wall against a hostile local process: say so wherever roles are
   described.
+- **Only a person denies.** A window that closes unanswered (its
+  `Config::prompt_ttl`, 5 minutes, or the server stopping) is
+  `Verdict::Expired`, not a denial: the waiting call gets
+  `approval_expired`, and the next call on that connection raises the
+  window again. Deny, or the app dropping the reply, is `access_denied`
+  for the rest of the connection; reconnecting asks again. Settings ›
+  Local agents offers Allow again and Forget on a revoked row, so the
+  `revoked` message can send an agent there.
 - **Check the role at call time.** `tools.rs` reads the agent's standing on
   every call, so a role change, revocation or forget in Settings applies to
   the next call. Every tool stays listed; a refusal is an `isError` result
@@ -41,11 +53,19 @@ door; this crate supersedes that part of it.
 - **URLs stay in memory.** Arguments and results are never logged or
   written. `AuditRecord` has no field for them; do not add one. The only
   file is `mcp-agents.json` (names, roles, timestamps);
-  `tests/protocol.rs` checks it holds no routed URL.
+  `tests/protocol.rs` checks it holds no routed URL. A config's `console`
+  lines (`Trace::console`, `rules_test`'s `console`) are results like any
+  other: returned to the agent, cleared by `hosts_only`, never kept.
+- **The engine thread resolves with a `NativeHost`** (`engine.rs`), so a
+  config's `finicky.getModifierKeys()` and `isAppRunning()` answer from
+  the OS as they do in the router; a config's load-time console output
+  has no result to ride in and is dropped.
 - **Backends are traits.** The router, launcher, rules store and activity
   log are other crates' work; `backend.rs` holds only the calls the tools
   need, `fake.rs` the in-memory stand-ins. Narrow a trait rather than widen
-  it. Backend calls run on blocking threads.
+  it. Backend calls run on blocking threads. `LiveRules` holds one lock
+  from the revision check to the write (and across a read), so two agents
+  writing at once cannot both pass the check; the loser gets a conflict.
 - **Tests run a real server.** `tests/` start one on a private socket (a
   pipe on Windows) with the fakes, and drive it with rmcp clients over the
   link and through the `pwrroute-mcp-proxy` binary. CI runs them on macOS,
@@ -56,7 +76,8 @@ door; this crate supersedes that part of it.
 The approval is in-app only and per person, roles are named permission
 sets, every tool is listed and a refusal is an `isError` result, approvals
 persist owner-only and fail closed on a damaged file, a prompt expires after
-5 minutes, at most 8 prompts are open, and the audit holds no content.
+5 minutes (here without counting as a denial), at most 8 prompts are open,
+and the audit holds no content.
 
 ## Different, on purpose
 
@@ -65,7 +86,7 @@ persist owner-only and fail closed on a damaged file, a prompt expires after
 | Transport | loopback HTTP + OAuth 2.1 | stdio proxy + per-user socket/pipe | Claude Code refuses OAuth over `http://`; disktree's door. |
 | What is approved | an OAuth session, one token each | a client name, remembered | No token on a same-user link; the name is what the client sends. |
 | When it asks | `/authorize` | as the client connects; its first tool call waits up to 2 minutes | MCP clients connect at start-up, before any tool call. |
-| Denial | per authorization | per connection; the next connection asks again | Not remembered, so a mis-click is not permanent. |
+| Denial | per authorization | per connection; the next connection asks again; an expired window is not one | Not remembered, so a mis-click is not permanent. |
 | Revocation | per session | per name; refused without asking until Settings allows it again; *forget* asks again | Revoking must stick even though the name is self-reported. |
 | Audit | PwrSnap: sensitive actions with subject ids | every call: tool, agent, connection, start, duration, outcome | No subject: here the subject is a URL. |
 | Connections | per-request HTTP | 16 open at once | One cap. |

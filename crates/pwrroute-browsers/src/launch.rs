@@ -2,14 +2,16 @@
 //!
 //! The macOS command line is Finicky's (MIT, Copyright (c) 2015-2025 John
 //! Sterling): `open -a NAME` or `open -b BUNDLE_ID`, `-g` to stay in the
-//! background, and `-n --args` with the profile flag, because `open` drops
-//! arguments when the app is already running unless it starts a new
-//! instance (which then hands the URL to the running one).
+//! background, and `-n --args` with the profile flag or the config's own
+//! `args`, because `open` drops arguments when the app is already running
+//! unless it starts a new instance (which then hands the URL to the running
+//! one). A path that starts with `~/` is expanded with the [`Env`]'s home.
 //!
 //! Windows and Linux run the browser's executable directly, never "the
 //! default browser": that is PwrRoute, and the link would loop back.
 
 use std::{
+    borrow::Cow,
     fmt,
     io::Read as _,
     path::{Path, PathBuf},
@@ -183,6 +185,8 @@ impl Launcher {
         if browser.app_type == AppType::None {
             return Ok(None);
         }
+        let expanded = expand_home(browser, &self.env);
+        let browser = expanded.as_ref();
         let catalog = Catalog::builtin();
         let platform = self.env.platform();
         let entry = match browser.app_type {
@@ -396,9 +400,26 @@ fn browser_args(browser: &Browser) -> Vec<String> {
     }
 }
 
+/// A `Path` browser whose name starts with `~/`, with the home directory
+/// of `env` in its place; any other browser as it is. `open -a` and the
+/// catalog's path lookup never expand `~` themselves.
+fn expand_home<'a>(browser: &'a Browser, env: &Env) -> Cow<'a, Browser> {
+    if browser.app_type == AppType::Path
+        && let Some(rest) = browser.name.strip_prefix("~/")
+    {
+        let mut path = env.home().to_path_buf();
+        path.extend(rest.split('/'));
+        let mut expanded = browser.clone();
+        expanded.name = path.to_string_lossy().into_owned();
+        return Cow::Owned(expanded);
+    }
+    Cow::Borrowed(browser)
+}
+
 /// `flags` are the profile and private-window flags, which must follow
-/// `--args` (and need `-n`: `open` drops arguments for a running app
-/// unless it starts a new instance).
+/// `--args`. Whenever `--args` is used, for `flags` or for the config's own
+/// `args`, `-n` goes with it: `open` drops arguments for a running app
+/// unless it starts a new instance.
 fn macos_plan(
     browser: &Browser,
     background: bool,
@@ -416,11 +437,12 @@ fn macos_plan(
     if background {
         args.push("-g".into());
     }
-    if flags.is_some() {
+    let uses_args = flags.is_some() || !browser.args.is_empty();
+    if uses_args {
         args.push("-n".into());
     }
-    match (flags, browser.args.is_empty()) {
-        (None, true) => args.push(browser.url.clone()),
+    match (flags, uses_args) {
+        (None, false) => args.push(browser.url.clone()),
         (flags, _) => {
             let flags = flags.unwrap_or_default();
             // Arguments before a config's own `--args` are `open`'s options
@@ -677,7 +699,7 @@ mod tests {
         let p = private_plan(&launcher, &b);
         assert_eq!(
             args(&p),
-            ["-a", "Google Chrome", "--args", "--incognito", URL]
+            ["-a", "Google Chrome", "-n", "--args", "--incognito", URL]
         );
         assert!(p.notes.is_empty());
 
@@ -688,7 +710,15 @@ mod tests {
         let p = private_plan(&launcher, &b);
         assert_eq!(
             args(&p),
-            ["-a", "Google Chrome", "-F", "--args", "--incognito", URL]
+            [
+                "-a",
+                "Google Chrome",
+                "-n",
+                "-F",
+                "--args",
+                "--incognito",
+                URL
+            ]
         );
 
         // Edge's flag is --inprivate: --incognito in the args is not it.
@@ -712,7 +742,7 @@ mod tests {
         let p = private_plan(&launcher, &b);
         assert_eq!(
             args(&p),
-            ["-a", "Microsoft Edge", "--args", "--inprivate", URL]
+            ["-a", "Microsoft Edge", "-n", "--args", "--inprivate", URL]
         );
 
         // Without the request, args are passed through as they are.
@@ -721,7 +751,7 @@ mod tests {
         let p = launcher.plan(&b).unwrap().unwrap();
         assert_eq!(
             args(&p),
-            ["-a", "Microsoft Edge", "--args", "--incognito", URL]
+            ["-a", "Microsoft Edge", "-n", "--args", "--incognito", URL]
         );
     }
 
@@ -758,6 +788,7 @@ mod tests {
             [
                 "-a",
                 "Some Unknown Browser",
+                "-n",
                 "--args",
                 "--private-window",
                 URL

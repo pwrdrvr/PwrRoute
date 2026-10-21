@@ -10,7 +10,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::{Browser, Engine, Expectation, Link, Opener, RulesFile, Source, Stage, Step, Trace};
+use crate::{
+    Browser, ConsoleLine, ConsoleLog, Engine, Expectation, Link, Opener, RulesFile, Source, Stage,
+    Step, Trace,
+};
 
 /// What running a file's examples and tests found.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +24,11 @@ pub struct TestReport {
     pub total: usize,
     pub passed: usize,
     pub failures: Vec<TestFailure>,
+    /// What the config printed with `console` while the examples and tests
+    /// ran, in order, the last [`ConsoleLog::CAPACITY`] lines. In memory
+    /// only: a line often quotes the example it was printed for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub console: Vec<ConsoleLine>,
 }
 
 impl TestReport {
@@ -75,6 +83,7 @@ impl RulesFile {
             }
             for (j, url) in rule.examples.iter().enumerate() {
                 let trace = engine.trace(&Link::new(url), None)?;
+                report.print(&trace);
                 let source = TestSource::RuleExample {
                     rule: i,
                     example: j,
@@ -106,6 +115,7 @@ impl RulesFile {
             }
             for (j, example) in rewrite.examples.iter().enumerate() {
                 let trace = engine.trace(&Link::new(&example.url), None)?;
+                report.print(&trace);
                 let step = trace.steps.iter().find(|s| {
                     s.source == Source::Rules && s.stage == Stage::Rewrite && s.index == i
                 });
@@ -142,6 +152,7 @@ impl RulesFile {
         for (i, test) in self.tests.iter().enumerate() {
             let opener = test.opener.as_deref().map(opener_named);
             let trace = engine.trace(&Link::new(&test.url), opener.as_ref())?;
+            report.print(&trace);
             let outcome = if test.expect.is_met_by(&trace.resolution.browser) {
                 None
             } else {
@@ -169,6 +180,16 @@ impl TestReport {
         match failure {
             None => self.passed += 1,
             Some(failure) => self.failures.push(failure),
+        }
+    }
+
+    /// Keeps the run's `console` lines, the newest
+    /// [`ConsoleLog::CAPACITY`] of them.
+    fn print(&mut self, trace: &Trace) {
+        self.console.extend(trace.console.iter().cloned());
+        let over = self.console.len().saturating_sub(ConsoleLog::CAPACITY);
+        if over > 0 {
+            self.console.drain(..over);
         }
     }
 }

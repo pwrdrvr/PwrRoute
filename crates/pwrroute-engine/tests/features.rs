@@ -12,9 +12,9 @@ use std::{
 
 use anyhow::{Result, bail};
 use pwrroute_engine::{
-    AppType, BrowserSpec, DefaultHost, Engine, FixedBrowser, Limits, Link, Matcher, MatcherSpec,
-    Method, Network, Opener, Reply, Rewrite, RewriteAction, Rule, RulesFile, Source, Sources,
-    Stage, UrlSpec,
+    AppType, BrowserSpec, ConsoleLine, ConsoleLog, DefaultHost, Engine, Expectation, FixedBrowser,
+    Limits, Link, LogLevel, Matcher, MatcherSpec, Method, NativeHost, Network, Opener, Reply,
+    Rewrite, RewriteAction, RouteTest, Rule, RulesFile, Source, Sources, Stage, UrlSpec,
 };
 
 fn configs() -> PathBuf {
@@ -173,6 +173,71 @@ fn visual_rewrites_follow_the_configs_own() {
         .unwrap();
     assert_eq!(r.browser.url, "https://example.com/after-config");
     assert_eq!(r.browser.name, "Vivaldi");
+}
+
+#[test]
+fn a_rules_json_browser_keeps_its_bundle_id_or_path_with_a_profile() {
+    // The API's object form defaults `appType` to `appName`; the plan sets
+    // it as Finicky's `autodetectAppStringType` would for the string form,
+    // so a bundle id stays `open -b` and a path stays a path.
+    let with_profile = |patterns: &[&str], browser: &str, profile: &str| {
+        let mut r = rule(patterns, browser);
+        r.profile = profile.into();
+        r
+    };
+    let rules = RulesFile {
+        default_browser: "org.mozilla.firefox".into(),
+        default_profile: "Personal".into(),
+        rules: vec![
+            with_profile(&["work.example/*"], "com.google.Chrome", "Work"),
+            with_profile(
+                &["beta.example/*"],
+                "/Applications/Google Chrome Beta.app",
+                "Beta",
+            ),
+            with_profile(&["home.example/*"], "~/Applications/Firefox.app", "Home"),
+            with_profile(&["name.example/*"], "Google Chrome", "Named"),
+            rule(&["plain.example/*"], "com.google.Chrome"),
+        ],
+        ..RulesFile::default()
+    };
+    let e = engine(None, rules);
+    let identity = |url: &str| {
+        let b = e.resolve(url, None).unwrap().browser;
+        (b.name, b.app_type, b.profile)
+    };
+    let expected = |name: &str, app_type: AppType, profile: &str| {
+        (name.to_owned(), app_type, profile.to_owned())
+    };
+    assert_eq!(
+        identity("https://work.example/x"),
+        expected("com.google.Chrome", AppType::BundleId, "Work")
+    );
+    assert_eq!(
+        identity("https://beta.example/x"),
+        expected(
+            "/Applications/Google Chrome Beta.app",
+            AppType::Path,
+            "Beta"
+        )
+    );
+    assert_eq!(
+        identity("https://home.example/x"),
+        expected("~/Applications/Firefox.app", AppType::Path, "Home")
+    );
+    assert_eq!(
+        identity("https://name.example/x"),
+        expected("Google Chrome", AppType::AppName, "Named")
+    );
+    assert_eq!(
+        identity("https://plain.example/x"),
+        expected("com.google.Chrome", AppType::BundleId, "")
+    );
+    // `defaultBrowser` and `defaultProfile` go the same way.
+    assert_eq!(
+        identity("https://unmatched.example/x"),
+        expected("org.mozilla.firefox", AppType::BundleId, "Personal")
+    );
 }
 
 #[test]
@@ -368,6 +433,132 @@ fn a_trace_sees_the_opener() {
     assert_eq!(trace.resolution.browser.profile, "Work");
 }
 
+// Console output
+
+/// A config that prints while loading and on every link it sees.
+fn chatty_config(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "pwrroute-features-console-{name}-{}.js",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        r#"console.log("loaded");
+export default {
+  defaultBrowser: "Safari",
+  handlers: [{
+    match: (url) => { console.warn("saw", url.href); return false; },
+    browser: "Firefox",
+  }],
+};"#,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn console_output_reaches_the_native_hosts_log() {
+    let lines: Rc<RefCell<Vec<(LogLevel, String)>>> = Rc::default();
+    let sink = Rc::clone(&lines);
+    let host = NativeHost::with_log(move |level, message| {
+        sink.borrow_mut().push((level, message.to_owned()));
+    });
+    let path = chatty_config("with-log");
+    let e = Engine::load(&path, Rc::new(host), Limits::default()).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        *lines.borrow(),
+        [(LogLevel::Info, "loaded".to_owned())],
+        "load-time output arrives as the config loads"
+    );
+    e.resolve("https://a.example/x", None).unwrap();
+    assert_eq!(
+        lines.borrow()[1],
+        (LogLevel::Warn, "saw https://a.example/x".to_owned())
+    );
+}
+
+#[test]
+fn a_trace_carries_the_runs_console_lines_and_a_log_keeps_the_loads() {
+    let log = ConsoleLog::new();
+    let path = chatty_config("trace");
+    let e = Engine::load(&path, Rc::new(log.native_host()), Limits::default()).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        log.take().len(),
+        1,
+        "the load's line went to the host's log"
+    );
+
+    let trace = e.trace(&Link::new("https://a.example/one"), None).unwrap();
+    assert_eq!(
+        trace.console,
+        [ConsoleLine {
+            level: LogLevel::Warn,
+            message: "saw https://a.example/one".into(),
+        }],
+        "the run's lines, and not the load's"
+    );
+    let trace = e.trace(&Link::new("https://a.example/two"), None).unwrap();
+    assert_eq!(trace.console.len(), 1, "each run starts afresh: {trace:?}");
+    assert_eq!(trace.console[0].message, "saw https://a.example/two");
+    assert_eq!(log.take().len(), 2, "the host's log saw both runs");
+
+    // A trace without output serializes as before.
+    let quiet = engine(None, RulesFile::default())
+        .trace(&Link::new("https://a.example/"), None)
+        .unwrap();
+    let json = serde_json::to_value(&quiet).unwrap();
+    assert!(json.get("console").is_none(), "{json}");
+    assert_eq!(
+        serde_json::from_value::<pwrroute_engine::Trace>(json).unwrap(),
+        quiet
+    );
+}
+
+#[test]
+fn a_test_report_carries_the_console_lines_of_every_run() {
+    let path = chatty_config("report");
+    let rules = RulesFile {
+        tests: vec![
+            RouteTest {
+                url: "https://a.example/one".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "Safari".into(),
+                    ..Expectation::default()
+                },
+            },
+            RouteTest {
+                url: "https://a.example/two".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "Safari".into(),
+                    ..Expectation::default()
+                },
+            },
+        ],
+        ..RulesFile::default()
+    };
+    let e = Engine::from_sources(
+        &Sources {
+            config: Some(path.clone()),
+            rules,
+        },
+        Rc::new(DefaultHost),
+        Limits::default(),
+    )
+    .unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let report = e.test_rules(None).unwrap();
+    assert_eq!((report.total, report.passed), (2, 2), "{report:?}");
+    let messages: Vec<&str> = report.console.iter().map(|l| l.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["saw https://a.example/one", "saw https://a.example/two"]
+    );
+}
+
 // Short links
 
 /// Redirects every bit.ly link to one place and records what was asked.
@@ -397,16 +588,29 @@ impl Network for FakeShortener {
     }
 }
 
+/// `rules.json` alone, so the built-in shortener list applies: nothing in
+/// the file can set `urlShorteners`.
+fn github_to_firefox() -> Engine {
+    engine(
+        None,
+        RulesFile {
+            default_browser: "Safari".into(),
+            rules: vec![rule(&["github.com/*"], "Firefox")],
+            ..RulesFile::default()
+        },
+    )
+}
+
 #[test]
 fn a_short_link_resolves_where_it_lands() {
-    let e = engine(Some("stress.ts"), RulesFile::default());
+    let e = github_to_firefox();
     let net = FakeShortener::default();
     let r = e
         .expand_and_resolve("https://bit.ly/gh", None, &net)
         .unwrap();
     assert_eq!(
         r.browser.name, "Firefox",
-        "stress.ts sends github.com to Firefox"
+        "the rule matched the landing URL"
     );
     assert_eq!(r.browser.url, "https://github.com/pwrdrvr/PwrRoute");
     assert_eq!(
@@ -434,43 +638,94 @@ fn a_config_sees_the_short_link_as_original_url() {
     assert_eq!(trace.url, "https://elsewhere.example/");
 }
 
-#[test]
-fn a_config_adds_shorteners_and_the_example_keeps_the_defaults() {
+fn config_with(options: &str) -> Engine {
     let path = std::env::temp_dir().join(format!(
-        "pwrroute-features-shorteners-{}.js",
-        std::process::id()
+        "pwrroute-features-shorteners-{}-{}.js",
+        std::process::id(),
+        options.len()
     ));
     std::fs::write(
         &path,
-        r#"export default {
+        format!(
+            r#"export default {{
   defaultBrowser: "Safari",
-  options: { urlShorteners: ["go.corp.example"] },
-  handlers: [{ match: "corp.example.com/*", browser: "Google Chrome" }],
-};"#,
+  {options}
+  handlers: [
+    {{ match: "corp.example.com/*", browser: "Google Chrome" }},
+    {{ match: "github.com/*", browser: "Firefox" }},
+  ],
+}};"#
+        ),
     )
     .unwrap();
     let e = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).unwrap();
     std::fs::remove_file(&path).unwrap();
-    assert!(e.short_links().is_short("https://go.corp.example/wiki"));
+    e
+}
+
+#[test]
+fn a_config_without_url_shorteners_expands_the_built_in_list() {
+    let e = config_with("");
     assert!(e.short_links().is_short("https://bit.ly/gh"));
+    assert!(e.short_links().is_short("https://t.co/x"));
+    assert!(!e.short_links().is_short("https://go.corp.example/wiki"));
     let r = e
-        .expand_and_resolve(
-            "https://go.corp.example/wiki",
-            None,
-            &FakeShortener::default(),
-        )
+        .expand_and_resolve("https://bit.ly/gh", None, &FakeShortener::default())
+        .unwrap();
+    assert_eq!(r.browser.name, "Firefox");
+}
+
+#[test]
+fn a_configs_url_shorteners_replace_the_built_in_list() {
+    let e = config_with(r#"options: { urlShorteners: ["go.corp.example"] },"#);
+    assert!(e.short_links().is_short("https://go.corp.example/wiki"));
+    assert!(
+        !e.short_links().is_short("https://bit.ly/gh"),
+        "the config's list is the whole list"
+    );
+    let net = FakeShortener::default();
+    let r = e
+        .expand_and_resolve("https://go.corp.example/wiki", None, &net)
         .unwrap();
     assert_eq!(r.browser.name, "Google Chrome");
+    let r = e
+        .expand_and_resolve("https://bit.ly/gh", None, &net)
+        .unwrap();
+    assert_eq!(r.browser.name, "Safari", "bit.ly was not expanded");
+    assert_eq!(r.browser.url, "https://bit.ly/gh");
+    assert!(
+        !net.asked.borrow().iter().any(|q| q.contains("bit.ly")),
+        "{:?}",
+        net.asked.borrow()
+    );
+}
 
-    // Finicky's example sets `urlShorteners: []`; the Go host expanded the
-    // built-in list anyway, and so does the engine.
-    let example = engine(Some("finicky-example.js"), RulesFile::default());
-    assert!(example.short_links().is_short("https://t.co/x"));
+#[test]
+fn an_empty_url_shorteners_turns_expansion_off() {
+    let e = config_with("options: { urlShorteners: [] },");
+    assert!(e.short_links().is_off());
+    assert!(!e.short_links().is_short("https://bit.ly/gh"));
+    let net = FakeShortener::default();
+    let r = e
+        .expand_and_resolve("https://bit.ly/gh", None, &net)
+        .unwrap();
+    assert_eq!(r.browser.url, "https://bit.ly/gh");
+    assert_eq!(r.browser.name, "Safari");
+    assert!(net.asked.borrow().is_empty(), "nothing left the machine");
+
+    // Finicky's own example and stress.ts set `urlShorteners: []`: under
+    // the Go host that still expanded the built-in list, here it is the
+    // opt-out.
+    for config in ["finicky-example.js", "stress.ts"] {
+        let e = engine(Some(config), RulesFile::default());
+        assert!(e.short_links().is_off(), "{config}");
+        assert!(!e.short_links().is_short("https://t.co/x"), "{config}");
+    }
 }
 
 #[test]
 fn an_unreachable_shortener_routes_the_short_link() {
-    let e = engine(Some("stress.ts"), RulesFile::default());
+    let e = github_to_firefox();
     let r = e
         .expand_and_resolve("https://bit.ly/unknown", None, &FakeShortener::default())
         .unwrap();

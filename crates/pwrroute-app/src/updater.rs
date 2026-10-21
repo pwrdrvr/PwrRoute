@@ -2,10 +2,16 @@
 //!
 //! [`run_startup_hooks`] is Velopack's startup logic, which every Velopack
 //! app runs before anything else. [`check_in_background`] asks GitHub
-//! Releases for a newer version, at startup and from "Check for Updates…",
-//! and downloads it into Velopack's package cache. The next launch applies
-//! it: `VelopackApp::run` finds the downloaded package, swaps it in and
-//! restarts. Until the update design lands, a log line is the whole UI.
+//! Releases for a newer version, at startup, every [`CHECK_EVERY`] and from
+//! "Check for Updates…", and downloads it into Velopack's package cache.
+//!
+//! A downloaded package is never applied at launch. PwrRoute is resident
+//! and is launched by a click on a link: Velopack's default swaps the
+//! package and restarts the process before AppKit delivers that link, so
+//! the click opens nothing and the relaunch pops the window. Instead the
+//! package is applied when the user quits ([`apply_pending_on_quit`], from
+//! the app menu and the tray) or asks for it (Settings' Restart to update,
+//! [`restart_to_update`]).
 //!
 //! Only a copy Velopack installed can update. `cargo run`, the .deb and the
 //! tar.gz have no Velopack manifest, so their check logs that and stops.
@@ -21,13 +27,13 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use gpui_kit::App;
 
 use velopack::{
-    UpdateCheck, UpdateManager, VelopackApp,
+    UpdateCheck, UpdateManager, VelopackApp, VelopackAsset,
     locator::{self, LocationContext},
     sources::GithubSource,
 };
@@ -36,40 +42,124 @@ use velopack::{
 /// (`releases.<channel>.json` and the `.nupkg` packages) to each release.
 const RELEASES: &str = "https://github.com/pwrdrvr/PwrRoute";
 
+/// How often a resident router checks again after the startup check: the
+/// design's "At startup and every 6 hours while running". A Velopack
+/// install only; a dev build has nothing to check.
+pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+
 /// One check at a time: a second "Check for Updates…" while the startup
 /// check is still downloading would only contend for Velopack's lock.
 static CHECKING: AtomicBool = AtomicBool::new(false);
 
+/// What [`run_startup_hooks`] tells Velopack, apart from the hooks. Kept
+/// as data so a test can hold the policy without a Velopack install.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StartupPolicy {
+    /// Apply a downloaded package at launch, swapping it in and restarting
+    /// the process. Velopack's default is `true`; PwrRoute's is `false`,
+    /// since a launch is usually for a link (see the module docs).
+    pub auto_apply: bool,
+}
+
+/// The policy PwrRoute runs with.
+pub const STARTUP: StartupPolicy = StartupPolicy { auto_apply: false };
+
 /// Velopack's startup logic. Call it first in `main`, before the window.
 ///
 /// Setup, updates and the uninstaller start `pwrroute.exe` with a hook
-/// argument; this runs that hook and exits the process. When an update was
-/// downloaded on a previous run, this applies it and restarts into the new
-/// version. Otherwise it returns at once, also for builds Velopack did not
-/// install.
+/// argument; this runs that hook and exits the process. Otherwise it
+/// returns at once, also for builds Velopack did not install, and also
+/// when an update was downloaded on a previous run: that waits for Quit or
+/// Restart to update ([`STARTUP`]).
 pub fn run_startup_hooks() {
-    let mut app = VelopackApp::build();
+    startup_hooks(STARTUP).run();
+}
+
+/// The builder behind [`run_startup_hooks`]: `policy` and the hooks.
+fn startup_hooks(policy: StartupPolicy) -> VelopackApp<'static> {
+    let app = VelopackApp::build().set_auto_apply_on_startup(policy.auto_apply);
     // Windows only: Velopack has no install or uninstall step on macOS or
     // Linux. Each hook runs in a process of its own, which Velopack kills
     // after 30 s (install, uninstall) or 15 s (update): no UI, no network.
     // Registering makes PwrRoute one of the browsers the user can pick; it
     // never makes PwrRoute the default.
     #[cfg(target_os = "windows")]
-    {
+    let app = {
         use crate::browser_registration::{register_browser, unregister_browser};
-        app = app
-            .on_after_install_fast_callback(|_| register_browser())
+        app.on_after_install_fast_callback(|_| register_browser())
             // An update may change what is registered, so it re-registers.
             .on_after_update_fast_callback(|_| register_browser())
-            .on_before_uninstall_fast_callback(|_| unregister_browser());
+            .on_before_uninstall_fast_callback(|_| unregister_browser())
+    };
+    app
+}
+
+/// What quitting did about a downloaded update.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QuitApply {
+    /// Nothing downloaded, or not a Velopack install: a plain quit.
+    Nothing,
+    /// Velopack's updater is waiting for this process to exit, and then
+    /// swaps `version` in without starting PwrRoute again.
+    Applying(String),
+    /// A package was downloaded but the updater could not be started; it
+    /// stays downloaded for the next quit or Restart to update.
+    Failed(String),
+}
+
+/// Applies a downloaded update once this process has exited. Call right
+/// before `cx.quit()` from every Quit: the app menu and the tray. The
+/// updater waits for the exit on its own, so this returns at once and the
+/// quit goes on; PwrRoute is not started again, and the next link opens
+/// the new version.
+pub fn apply_pending_on_quit() {
+    match apply_pending() {
+        QuitApply::Nothing => {}
+        QuitApply::Applying(version) => {
+            eprintln!("pwrroute: updates: installing {version} after this quit");
+        }
+        QuitApply::Failed(why) => {
+            eprintln!("pwrroute: updates: could not install the downloaded update: {why}");
+        }
     }
-    app.run();
+}
+
+fn apply_pending() -> QuitApply {
+    // The manager locates the manifest itself and refuses a copy Velopack
+    // did not install; the feed is never read here.
+    let source = GithubSource::new(RELEASES, None, false);
+    let manager = match UpdateManager::new(source, None, None) {
+        Ok(manager) => manager,
+        Err(_) => return QuitApply::Nothing,
+    };
+    on_quit(manager.get_update_pending_restart(), |pending| {
+        manager
+            // Silent: no progress window over a quit, and no restart.
+            .wait_exit_then_apply_updates(pending, true, false, Vec::<String>::new())
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// The quit path's branch: `apply` runs only for a downloaded package.
+fn on_quit(
+    pending: Option<VelopackAsset>,
+    apply: impl FnOnce(&VelopackAsset) -> Result<(), String>,
+) -> QuitApply {
+    let Some(pending) = pending else {
+        return QuitApply::Nothing;
+    };
+    match apply(&pending) {
+        Ok(()) => QuitApply::Applying(pending.Version),
+        Err(why) => QuitApply::Failed(why),
+    }
 }
 
 /// What asked for the check, for the log line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {
     Startup,
+    /// Every [`CHECK_EVERY`] while running.
+    Timer,
     Menu,
     Settings,
 }
@@ -103,8 +193,9 @@ fn set_state(edit: impl FnOnce(&mut State)) {
     }
 }
 
-/// Redraws Settings › Updates whenever a check starts or finishes. Call
-/// once, after `settings` is installed.
+/// Redraws Settings › Updates whenever a check starts or finishes, and
+/// checks again every [`CHECK_EVERY`] on a Velopack install. Call once,
+/// after `settings` is installed.
 pub fn install(cx: &mut App) {
     let (tx, rx) = async_channel::unbounded::<()>();
     if CHANGED.set(tx).is_err() {
@@ -119,6 +210,24 @@ pub fn install(cx: &mut App) {
         }
     })
     .detach();
+    if let Some(every) = check_every(&installation()) {
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor().timer(every).await;
+                check_in_background(Trigger::Timer);
+            }
+        })
+        .detach();
+    }
+}
+
+/// How often `installation` checks again on its own: [`CHECK_EVERY`] for
+/// a Velopack install, never for a copy that cannot update itself.
+pub fn check_every(installation: &Installation) -> Option<Duration> {
+    match installation {
+        Installation::Velopack { .. } => Some(CHECK_EVERY),
+        Installation::NotInstalled { .. } => None,
+    }
 }
 
 /// Where this copy came from, as far as Velopack can tell without the
@@ -257,13 +366,13 @@ impl fmt::Display for Outcome {
             Self::Downloaded(version) => {
                 write!(
                     f,
-                    "downloaded {version}; it installs when PwrRoute restarts"
+                    "downloaded {version}; it installs when PwrRoute quits or restarts"
                 )
             }
             Self::Pending(version) => {
                 write!(
                     f,
-                    "{version} is downloaded and installs when PwrRoute restarts"
+                    "{version} is downloaded and installs when PwrRoute quits or restarts"
                 )
             }
             Self::Failed(why) => write!(f, "check failed: {why}"),
@@ -274,6 +383,7 @@ impl fmt::Display for Outcome {
 fn log(trigger: Trigger, outcome: &Outcome) {
     let trigger = match trigger {
         Trigger::Startup => "startup",
+        Trigger::Timer => "timer",
         Trigger::Menu => "menu",
         Trigger::Settings => "settings",
     };
@@ -300,6 +410,68 @@ mod tests {
     }
 
     #[test]
+    fn startup_never_applies_a_downloaded_update() {
+        // A launch is usually for a link: the package waits for Quit or
+        // Restart to update. The builder takes the policy as given; a
+        // Velopack install is needed to see it act, so the policy is what
+        // the test can hold.
+        assert_eq!(STARTUP, StartupPolicy { auto_apply: false });
+        // The builder is made, hooks and all, without a Velopack install.
+        let _off = startup_hooks(STARTUP);
+        let _on = startup_hooks(StartupPolicy { auto_apply: true });
+    }
+
+    #[test]
+    fn quitting_with_nothing_downloaded_applies_nothing() {
+        let mut applied = 0;
+        let outcome = on_quit(None, |_| {
+            applied += 1;
+            Ok(())
+        });
+        assert_eq!(outcome, QuitApply::Nothing);
+        assert_eq!(applied, 0);
+        // A test binary is not a Velopack install: the real path says the
+        // same, without starting an updater.
+        assert_eq!(apply_pending(), QuitApply::Nothing);
+    }
+
+    #[test]
+    fn quitting_with_a_download_hands_it_to_the_updater() {
+        let asset = || VelopackAsset {
+            Version: "0.2.1".to_owned(),
+            ..VelopackAsset::default()
+        };
+        assert_eq!(
+            on_quit(Some(asset()), |pending| {
+                assert_eq!(pending.Version, "0.2.1");
+                Ok(())
+            }),
+            QuitApply::Applying("0.2.1".to_owned())
+        );
+        assert_eq!(
+            on_quit(Some(asset()), |_| Err("no updater".to_owned())),
+            QuitApply::Failed("no updater".to_owned())
+        );
+    }
+
+    #[test]
+    fn only_a_velopack_install_checks_on_a_timer() {
+        assert_eq!(
+            check_every(&Installation::Velopack {
+                version: "0.2.0".to_owned()
+            }),
+            Some(CHECK_EVERY)
+        );
+        assert_eq!(
+            check_every(&Installation::NotInstalled {
+                why: "no manifest".to_owned()
+            }),
+            None
+        );
+        assert_eq!(CHECK_EVERY, Duration::from_secs(6 * 60 * 60));
+    }
+
+    #[test]
     fn a_dev_build_reports_it_is_not_installed() {
         // The test binary is not in a Velopack layout, so the manager cannot
         // load and nothing reaches the network.
@@ -314,7 +486,7 @@ mod tests {
         );
         assert_eq!(
             Outcome::Downloaded("0.0.2".to_owned()).to_string(),
-            "downloaded 0.0.2; it installs when PwrRoute restarts"
+            "downloaded 0.0.2; it installs when PwrRoute quits or restarts"
         );
     }
 }

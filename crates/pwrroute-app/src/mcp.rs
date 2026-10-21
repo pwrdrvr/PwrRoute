@@ -635,6 +635,25 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
             }
             refresh_settings(cx);
         }
+        SettingsRequest::AllowSession { session, role } => {
+            let agents = door.borrow().agents.clone();
+            match role_of(role) {
+                Some(role) => {
+                    if let Err(e) = agents.allow(&session.0, role) {
+                        eprintln!("pwrroute: local agents: {e:#}");
+                    }
+                }
+                None => eprintln!("pwrroute: local agents: no role named {}", role.0),
+            }
+            refresh_settings(cx);
+        }
+        SettingsRequest::ForgetSession(session) => {
+            let agents = door.borrow().agents.clone();
+            if let Err(e) = agents.forget(&session.0) {
+                eprintln!("pwrroute: local agents: {e:#}");
+            }
+            refresh_settings(cx);
+        }
         SettingsRequest::OpenActivity => {
             crate::show_main_window(cx);
             let main = cx
@@ -692,8 +711,9 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     }
 }
 
-/// The prompt expired or the server stopped: close its window. Dropping
-/// the view drops its reply, which the server already counts as a denial.
+/// The prompt expired or the server stopped: close its window. The server
+/// has already filed the prompt as expired, which is not a denial, so the
+/// reply dropped with the view changes nothing.
 fn close_prompt(id: &str, cx: &mut App) {
     let window = cx.update_global::<Prompts, _>(|prompts, _| prompts.0.remove(id));
     if let Some(window) = window {
@@ -1042,6 +1062,12 @@ mod tests {
                         SettingsRequest::RevokeSession(session) => {
                             agents.revoke(&session.0).unwrap();
                         }
+                        SettingsRequest::AllowSession { session, role } => {
+                            agents.allow(&session.0, role_of(role).unwrap()).unwrap();
+                        }
+                        SettingsRequest::ForgetSession(session) => {
+                            agents.forget(&session.0).unwrap();
+                        }
                         SettingsRequest::SetSessionRole { session, role } => {
                             agents.set_role(&session.0, role_of(role).unwrap()).unwrap();
                         }
@@ -1057,6 +1083,26 @@ mod tests {
         (view, cx, requests)
     }
 
+    /// The row drawn for the agent named `name`: its index and its model.
+    /// Rows sort by `approved_at`, which has one-second resolution, so a
+    /// test never assumes the producer's order.
+    fn row(
+        view: &Entity<SettingsWindow>,
+        cx: &mut VisualTestContext,
+        name: &str,
+    ) -> (usize, crate::settings::model::AgentSession) {
+        view.read_with(cx, |view, _| {
+            view.model
+                .local_agents
+                .sessions
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s.name.as_ref() == name)
+                .map(|(i, s)| (i, s.clone()))
+                .unwrap_or_else(|| panic!("no row named {name}"))
+        })
+    }
+
     #[gpui_kit::test]
     fn the_pane_draws_the_producer_and_revokes_through_the_store(cx: &mut TestAppContext) {
         let dir = temp_dir("pane");
@@ -1064,14 +1110,33 @@ mod tests {
         let endpoint = Endpoint::new(dir.join("mcp.sock"));
         let (view, cx, requests) = settings(cx, agents.clone(), audit, endpoint);
         click(cx, Pane::LocalAgents.nav_id());
-        // Two live sessions have a Revoke button; the revoked one does not.
-        assert!(visible(cx, ("agents-revoke", 0_usize)));
-        assert!(visible(cx, ("agents-revoke", 1_usize)));
-        assert!(!visible(cx, ("agents-revoke", 2_usize)));
-        let first = view.read_with(cx, |view, _| view.model.local_agents.sessions[0].clone());
+        // The live sessions have a Revoke button; the revoked one offers
+        // Allow again and Forget instead.
+        let (first_at, first) = row(&view, cx, "claude-code");
+        let (second_at, _) = row(&view, cx, "pwragnt");
+        let (revoked_at, _) = row(&view, cx, "codex-mcp-client");
+        assert!(visible(cx, ("agents-revoke", first_at)));
+        assert!(visible(cx, ("agents-revoke", second_at)));
+        assert!(!visible(cx, ("agents-revoke", revoked_at)));
+        assert!(visible(cx, ("agents-allow", revoked_at)));
+        assert!(visible(cx, ("agents-forget", revoked_at)));
         assert!(first.revoked.is_none());
 
-        click(cx, ("agents-revoke", 0_usize));
+        // Revoke asks once more; Keep leaves the row alone.
+        click(cx, ("agents-revoke", first_at));
+        assert_eq!(
+            view.read_with(cx, |view, _| view.agents.confirming()),
+            Some(first.id.clone())
+        );
+        assert!(requests.borrow().is_empty(), "nothing until confirmed");
+        assert!(visible(cx, ("agents-revoke-confirm", first_at)));
+        click(cx, ("agents-revoke-cancel", first_at));
+        assert_eq!(view.read_with(cx, |view, _| view.agents.confirming()), None);
+        assert!(requests.borrow().is_empty());
+        assert!(visible(cx, ("agents-revoke", first_at)));
+
+        click(cx, ("agents-revoke", first_at));
+        click(cx, ("agents-revoke-confirm", first_at));
         assert_eq!(
             *requests.borrow(),
             [SettingsRequest::RevokeSession(first.id.clone())]
@@ -1097,6 +1162,87 @@ mod tests {
         assert_eq!(
             view.read_with(cx, |view, _| view.model.local_agents.active_sessions()),
             1
+        );
+        let (first_at, _) = row(&view, cx, "claude-code");
+        assert!(visible(cx, ("agents-allow", first_at)));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn the_pane_allows_a_revoked_agent_again_with_its_last_role(cx: &mut TestAppContext) {
+        let dir = temp_dir("allow");
+        let (agents, audit) = producer(&dir);
+        let endpoint = Endpoint::new(dir.join("mcp.sock"));
+        let (view, cx, requests) = settings(cx, agents.clone(), audit, endpoint);
+        click(cx, Pane::LocalAgents.nav_id());
+        let (at, revoked) = row(&view, cx, "codex-mcp-client");
+        assert!(revoked.revoked.is_some());
+        assert_eq!(revoked.role, RoleId("reader".into()));
+
+        click(cx, ("agents-allow", at));
+        assert_eq!(
+            *requests.borrow(),
+            [SettingsRequest::AllowSession {
+                session: revoked.id.clone(),
+                role: RoleId("reader".into()),
+            }]
+        );
+        // The store took it: the agent is allowed again, as a Reader.
+        let stored = agents
+            .agents()
+            .into_iter()
+            .find(|a| a.name == "codex-mcp-client")
+            .unwrap();
+        assert!(stored.revoked_at.is_none());
+        assert_eq!(stored.role, Role::Reader);
+        draw(cx);
+        let (at, shown) = row(&view, cx, "codex-mcp-client");
+        assert!(
+            shown.revoked.is_none(),
+            "the row was rebuilt from the store"
+        );
+        assert!(shown.detail.starts_with("approved "), "{}", shown.detail);
+        assert!(visible(cx, ("agents-revoke", at)));
+        assert!(!visible(cx, ("agents-allow", at)));
+        assert_eq!(
+            view.read_with(cx, |view, _| view.model.local_agents.active_sessions()),
+            3
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn the_pane_forgets_a_revoked_agent_through_the_store(cx: &mut TestAppContext) {
+        let dir = temp_dir("forget");
+        let (agents, audit) = producer(&dir);
+        let endpoint = Endpoint::new(dir.join("mcp.sock"));
+        let (view, cx, requests) = settings(cx, agents.clone(), audit, endpoint);
+        click(cx, Pane::LocalAgents.nav_id());
+        let (at, revoked) = row(&view, cx, "codex-mcp-client");
+
+        click(cx, ("agents-forget", at));
+        assert_eq!(
+            *requests.borrow(),
+            [SettingsRequest::ForgetSession(revoked.id.clone())]
+        );
+        assert!(
+            agents.agents().iter().all(|a| a.name != "codex-mcp-client"),
+            "the store dropped it"
+        );
+        draw(cx);
+        let names: Vec<String> = view.read_with(cx, |view, _| {
+            view.model
+                .local_agents
+                .sessions
+                .iter()
+                .map(|s| s.name.to_string())
+                .collect()
+        });
+        assert_eq!(names.len(), 2);
+        assert!(!names.iter().any(|n| n == "codex-mcp-client"));
+        assert_eq!(
+            view.read_with(cx, |view, _| view.model.local_agents.active_sessions()),
+            2
         );
         fs::remove_dir_all(dir).unwrap();
     }

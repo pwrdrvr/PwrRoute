@@ -18,6 +18,7 @@ use pwrroute_mcp::{
     Agents, Config, Endpoint, McpServer, MemoryAudit,
     fake::{self, FakeAnswer, FakeApprover, FakeRouter, FakeRules},
     link::{self, ENDPOINT_ENV},
+    proxy::CONNECT_WAIT_ENV,
 };
 use rmcp::{
     RoleClient, ServiceExt as _,
@@ -71,30 +72,38 @@ impl Harness {
     }
 
     pub async fn start_with(answer: FakeAnswer, approval_wait: Duration) -> Self {
-        let state_dir = std::env::temp_dir().join(unique("pwrroute-mcp-state"));
         Self::start_in(
-            state_dir,
-            private_endpoint(),
+            std::env::temp_dir().join(unique("pwrroute-mcp-state")),
             Arc::new(FakeApprover::new(answer)),
-            approval_wait,
+            config(private_endpoint(), approval_wait),
         )
         .await
     }
 
-    pub async fn start_in(
-        state_dir: PathBuf,
-        endpoint: Endpoint,
-        approver: Arc<FakeApprover>,
+    /// A server whose approval window closes after `prompt_ttl`.
+    pub async fn start_with_ttl(
+        answer: FakeAnswer,
         approval_wait: Duration,
+        prompt_ttl: Duration,
     ) -> Self {
+        Self::start_in(
+            std::env::temp_dir().join(unique("pwrroute-mcp-state")),
+            Arc::new(FakeApprover::new(answer)),
+            Config {
+                prompt_ttl,
+                ..config(private_endpoint(), approval_wait)
+            },
+        )
+        .await
+    }
+
+    pub async fn start_in(state_dir: PathBuf, approver: Arc<FakeApprover>, config: Config) -> Self {
+        let endpoint = config.endpoint.clone();
         let agents = Agents::open(Some(&state_dir)).expect("open the state dir");
         let (backends, router, rules) = fake::backends();
         let audit = Arc::new(MemoryAudit::default());
         let server = McpServer::start(
-            Config {
-                endpoint: endpoint.clone(),
-                approval_wait,
-            },
+            config,
             agents.clone(),
             backends,
             approver.clone(),
@@ -151,6 +160,15 @@ impl Harness {
     }
 }
 
+/// A server config on `endpoint` with the default prompt TTL.
+pub fn config(endpoint: Endpoint, approval_wait: Duration) -> Config {
+    Config {
+        endpoint,
+        approval_wait,
+        ..Config::default()
+    }
+}
+
 pub fn client_config(name: &str) -> ClientConfig {
     ClientConfig::new(
         ClientCapabilities::default(),
@@ -158,10 +176,13 @@ pub fn client_config(name: &str) -> ClientConfig {
     )
 }
 
+/// The proxy binary on `endpoint`, trying to connect once: a test that
+/// wants it to wait for the app sets [`CONNECT_WAIT_ENV`] itself.
 pub fn proxy_command(endpoint: &Endpoint) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_pwrroute-mcp-proxy"));
     command
         .env(ENDPOINT_ENV, endpoint.path())
+        .env(CONNECT_WAIT_ENV, "0")
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     command

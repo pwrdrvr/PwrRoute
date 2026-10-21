@@ -10,7 +10,7 @@
 use std::{
     hash::{DefaultHasher, Hash as _, Hasher as _},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -110,6 +110,7 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
             Step::Matched {
                 by: Matched::Default
             } | Step::Fallback { .. }
+                | Step::Paused { .. }
         )
     });
     let rewritten = record
@@ -151,8 +152,15 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
 pub fn trace_of(record: &DispatchRecord) -> Trace {
     let mut steps = Vec::new();
     let mut error = None;
+    // A fallback after a launch failure is the chosen browser missing, not
+    // a config out of charge.
+    let mut launch_failed = false;
+    let mut received = None;
+    let mut expanded = None;
     for step in &record.steps {
         match step {
+            Step::Received { url } => received = Some(url.clone()),
+            Step::Expanded { url } => expanded = Some(url.clone()),
             Step::Rewrite { rule, url } => steps.push(TraceStep {
                 kind: StepKind::Rewrite,
                 index: *rule,
@@ -185,7 +193,11 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
             Step::Fallback { reason } => steps.push(TraceStep {
                 kind: StepKind::Default,
                 index: None,
-                summary: format!("no config in charge: the fallback browser ({reason})"),
+                summary: if launch_failed {
+                    format!("the fallback browser: {reason}")
+                } else {
+                    format!("no config in charge: the fallback browser ({reason})")
+                },
                 url: None,
             }),
             Step::RefusedLoop { browser } => steps.push(TraceStep {
@@ -194,15 +206,27 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
                 summary: format!("{browser} would send the link back: the fallback browser"),
                 url: None,
             }),
-            Step::ConfigError { message }
-            | Step::LaunchFailed { message }
-            | Step::Rejected { reason: message } => {
+            Step::Paused { skipped } => steps.push(TraceStep {
+                kind: StepKind::Default,
+                index: *skipped,
+                summary: match skipped {
+                    Some(n) => format!(
+                        "routing is paused: config handler {} skipped, the pause target instead",
+                        n + 1
+                    ),
+                    None => "routing is paused: every handler skipped, the pause target instead"
+                        .to_owned(),
+                },
+                url: None,
+            }),
+            Step::LaunchFailed { message } => {
+                launch_failed = true;
                 error.get_or_insert_with(|| message.clone());
             }
-            Step::Received { .. }
-            | Step::Browser { .. }
-            | Step::NotOpened
-            | Step::Launched { .. } => {}
+            Step::ConfigError { message } | Step::Rejected { reason: message } => {
+                error.get_or_insert_with(|| message.clone());
+            }
+            Step::Browser { .. } | Step::NotOpened | Step::Launched { .. } => {}
         }
     }
     let browser = record.browser.clone().unwrap_or_else(|| Browser {
@@ -215,11 +239,23 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
         private: false,
         privacy: record.privacy,
     });
+    // A short link was followed: the rules matched where it landed, and
+    // the trace says what arrived.
+    let (url, original_url) = match expanded {
+        Some(landed) => (
+            landed,
+            Some(received.unwrap_or_else(|| record.link.url.clone())),
+        ),
+        None => (record.link.url.clone(), None),
+    };
     Trace {
-        url: record.link.url.clone(),
+        url,
+        original_url,
         steps,
         browser,
         error,
+        // The router keeps a record, not the engine's trace: no console.
+        console: Vec::new(),
     }
 }
 
@@ -283,6 +319,10 @@ pub struct LiveRules {
     path: PathBuf,
     /// The Finicky config in charge right now, when one is.
     config: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
+    /// Held from the revision check to the write, and across a read, so
+    /// two agents writing at once cannot both pass the check and the
+    /// second clobber the first.
+    lock: Mutex<()>,
 }
 
 impl std::fmt::Debug for LiveRules {
@@ -301,9 +341,17 @@ impl LiveRules {
         Self {
             path: path.into(),
             config: Arc::new(config),
+            lock: Mutex::new(()),
         }
     }
 
+    fn locked(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The file and its revision, read under the lock so they match.
     fn snapshot(&self) -> Result<RulesSnapshot> {
         let file = RulesFile::load(&self.path)?;
         Ok(RulesSnapshot {
@@ -329,6 +377,7 @@ fn revision_of(path: &Path) -> String {
 
 impl RulesStore for LiveRules {
     fn read(&self) -> Result<RulesSnapshot> {
+        let _held = self.locked();
         self.snapshot()
     }
 
@@ -338,6 +387,7 @@ impl RulesStore for LiveRules {
         rules: Value,
         dry_run: bool,
     ) -> std::result::Result<RulesSnapshot, RulesError> {
+        let _held = self.locked();
         let current = revision_of(&self.path);
         if current != base_revision {
             return Err(RulesError::Conflict {
@@ -385,7 +435,12 @@ mod tests {
     struct Levels;
 
     impl pwrroute_router::Resolver for Levels {
-        fn resolve(&self, url: &str, _opener: Option<&Opener>) -> Result<Resolved> {
+        fn resolve(
+            &self,
+            link: &pwrroute_engine::Link,
+            _opener: Option<&Opener>,
+        ) -> Result<Resolved> {
+            let url = link.url.as_str();
             let host = url::Url::parse(url)?
                 .host_str()
                 .unwrap_or_default()
@@ -422,6 +477,65 @@ mod tests {
             DryRunLauncher::new(),
         )
         .unwrap()
+    }
+
+    /// Fails Firefox, as the launcher does for an app that is not installed.
+    struct NoFirefox;
+
+    impl pwrroute_router::Launcher for NoFirefox {
+        fn launch(&mut self, browser: &Browser) -> Result<()> {
+            if browser.name == "Firefox" {
+                anyhow::bail!("browser \"Firefox\" is not installed");
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_trace_tells_a_missing_browser_from_a_config_out_of_charge() {
+        let summaries = |record: &DispatchRecord| -> Vec<String> {
+            trace_of(record)
+                .steps
+                .into_iter()
+                .map(|step| step.summary)
+                .collect()
+        };
+        let link = || Link::new(PUBLIC, Source::CommandLine);
+
+        // A fixed fallback: on Linux the OS's own browser is Firefox, the
+        // very app this test makes missing.
+        let router = RealRouter::spawn(
+            Options {
+                fallback: pwrroute_router::FallbackSource::fixed("Brave", ""),
+                ..Options::default()
+            },
+            Some(Box::new(|| Ok(Box::new(Levels)))),
+            NoFirefox,
+        )
+        .unwrap();
+        let record = router.handle().dispatch_and_wait(link()).unwrap();
+        assert_eq!(record.outcome, Outcome::Opened);
+        let trace = trace_of(&record);
+        assert_eq!(
+            trace.error.as_deref(),
+            Some("browser \"Firefox\" is not installed")
+        );
+        assert_eq!(
+            summaries(&record).last().map(String::as_str),
+            Some("the fallback browser: Firefox could not be opened")
+        );
+
+        let router = RealRouter::spawn(
+            Options::default(),
+            Some(Box::new(|| Err(anyhow!("the config did not load")))),
+            DryRunLauncher::new(),
+        )
+        .unwrap();
+        let record = router.handle().dispatch_and_wait(link()).unwrap();
+        assert_eq!(
+            summaries(&record),
+            ["no config in charge: the fallback browser (the config did not load)"]
+        );
     }
 
     #[test]
@@ -478,6 +592,78 @@ mod tests {
 
         assert!(live.journal(10).unwrap().is_empty(), "the journal is off");
         assert!(live.retention().starts_with("Kept in memory only"));
+    }
+
+    /// Sends `bit.ly/gh` to GitHub; anything else is offline.
+    struct GitHubShortener;
+
+    impl pwrroute_engine::Network for GitHubShortener {
+        fn request(
+            &self,
+            _method: pwrroute_engine::Method,
+            url: &str,
+            _timeout: std::time::Duration,
+        ) -> Result<pwrroute_engine::Reply> {
+            match url {
+                "https://bit.ly/gh" => Ok(pwrroute_engine::Reply {
+                    status: 301,
+                    location: Some("https://github.com/pwrdrvr/x".into()),
+                }),
+                "https://github.com/pwrdrvr/x" => Ok(pwrroute_engine::Reply {
+                    status: 200,
+                    location: None,
+                }),
+                _ => Err(anyhow::anyhow!("offline")),
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_link_resolve_reports_where_it_landed_and_what_arrived() {
+        let rules = RulesFile {
+            default_browser: "Safari".into(),
+            rules: vec![Rule {
+                patterns: vec!["github.com/*".into()],
+                browser: "Firefox".into(),
+                ..Rule::default()
+            }],
+            ..RulesFile::default()
+        };
+        let router = RealRouter::spawn(
+            Options {
+                network: Some(std::sync::Arc::new(GitHubShortener)),
+                ..Options::default()
+            },
+            Some(Box::new(move || {
+                let engine = pwrroute_engine::Engine::from_sources(
+                    &pwrroute_engine::Sources {
+                        config: None,
+                        rules,
+                    },
+                    std::rc::Rc::new(pwrroute_engine::DefaultHost),
+                    pwrroute_engine::Limits::default(),
+                )?;
+                Ok(Box::new(engine))
+            })),
+            DryRunLauncher::new(),
+        )
+        .unwrap();
+        let live = LiveRouter::new(router.handle());
+        let trace = live.resolve("https://bit.ly/gh", None).unwrap();
+        assert_eq!(trace.url, "https://github.com/pwrdrvr/x");
+        assert_eq!(trace.original_url.as_deref(), Some("https://bit.ly/gh"));
+        assert_eq!(trace.browser.name, "Firefox");
+        assert_eq!(trace.browser.url, "https://github.com/pwrdrvr/x");
+        assert_eq!(
+            trace.steps.len(),
+            1,
+            "the expansion is not a step: {trace:?}"
+        );
+        assert_eq!(trace.steps[0].kind, StepKind::Handler);
+
+        let plain = live.resolve("https://github.com/direct", None).unwrap();
+        assert_eq!(plain.url, "https://github.com/direct");
+        assert_eq!(plain.original_url, None);
     }
 
     #[test]
@@ -546,6 +732,56 @@ mod tests {
             .unwrap();
         assert_eq!(dry.rules["defaultBrowser"], "Arc");
         assert_eq!(rules.read().unwrap().revision, now.revision);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Two agents (Claude Code and Codex, say) each read the revision and
+    /// write. Without the lock both can pass the check and one write is
+    /// lost; with it the loser sees a conflict, reads again and keeps the
+    /// winner's rule.
+    #[test]
+    fn concurrent_writes_are_serialized_so_none_is_lost() {
+        const WRITERS: usize = 4;
+        const WRITES: usize = 5;
+        let dir = std::env::temp_dir().join(format!(
+            "pwrroute-mcp-live-rules-concurrent-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rules.json");
+        let rules = Arc::new(LiveRules::new(path.clone(), || None));
+        let start = Arc::new(std::sync::Barrier::new(WRITERS));
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|writer| {
+                let rules = Arc::clone(&rules);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    for n in 0..WRITES {
+                        let pattern = format!("w{writer}-{n}.example/*");
+                        loop {
+                            let snapshot = rules.read().unwrap();
+                            let mut doc = snapshot.rules;
+                            doc["defaultBrowser"] = json!("Safari");
+                            let list = doc["rules"].as_array_mut().unwrap();
+                            list.push(json!({ "match": pattern, "browser": "Firefox" }));
+                            match rules.write(&snapshot.revision, doc, false) {
+                                Ok(_) => break,
+                                Err(RulesError::Conflict { .. }) => continue,
+                                Err(e) => panic!("{e:?}"),
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let file = RulesFile::load(&path).unwrap();
+        assert_eq!(file.rules.len(), WRITERS * WRITES, "every write landed");
+        assert_eq!(rules.read().unwrap().revision, revision_of(&path));
         fs::remove_dir_all(dir).unwrap();
     }
 

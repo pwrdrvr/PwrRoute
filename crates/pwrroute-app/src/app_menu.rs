@@ -35,9 +35,16 @@ mod menu_actions {
     );
 }
 
+/// Quit, from the menu (⌘Q) or the tray: a downloaded update is handed to
+/// Velopack first, which installs it once this process has exited.
+pub fn quit(cx: &mut App) {
+    updater::apply_pending_on_quit();
+    cx.quit();
+}
+
 /// Install the menus and shortcuts.
 pub fn install(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| quit(cx));
     // ⌘, or Ctrl+, and the Settings window's control bindings.
     settings::install(cx);
     // Registered on every platform so other surfaces can dispatch it; only

@@ -49,6 +49,12 @@ the family's panes in the same controls. General is a placeholder.
   Export writes the router's buffer, each record at its level, to the path
   the OS save dialog returns, owner-readable, and nowhere else. Nothing in
   the pane or its producer writes a URL anywhere but that export.
+- **Local agents (`local_agents.rs`).** Revoke is two clicks: the first
+  turns the cell into Revoke / Keep (`agents.confirming`, dropped on a
+  pane switch or when the row goes), the second sends `RevokeSession`. A
+  revoked row offers Allow again (`AllowSession` with the row's last role)
+  and Forget (`ForgetSession`); `crate::mcp` answers them through
+  `Agents::allow` and `Agents::forget` and rebuilds the pane.
 - **Everything the reader asks for leaves as a `SettingsRequest`** through
   the `SettingsHost` handler, deferred until the window's update is done.
   The window flips its own model where the answer is obvious (a switch);

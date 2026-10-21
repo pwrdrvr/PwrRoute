@@ -2,7 +2,7 @@
 
 use std::{
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
@@ -11,7 +11,10 @@ use std::{
 };
 
 use anyhow::Result;
-use pwrroute_engine::{AppType, Browser, Engine, Opener, Source, Stage, Step as TraceStep, Trace};
+use pwrroute_engine::{
+    AppType, Browser, Engine, HttpNetwork, Link as EngineLink, Network, Opener, ShortLinks, Source,
+    Stage, Step as TraceStep, Trace,
+};
 
 use crate::{
     ipc::{Request, Response},
@@ -22,8 +25,10 @@ use crate::{
     trace::{DispatchId, DispatchRecord, Matched, Outcome, Privacy, Step, Timings},
 };
 
-/// Where links go when no config is loaded, or the config sends a link back
-/// to PwrRoute: the browser every install of the OS has.
+/// Where links go when no config is loaded, the config sends a link back
+/// to PwrRoute, or the chosen browser cannot be opened: the browser every
+/// install of the OS has. [`Options::fallback`] replaces it with the
+/// user's choice.
 pub const FALLBACK_BROWSER: &str = if cfg!(target_os = "macos") {
     "Safari"
 } else if cfg!(windows) {
@@ -36,7 +41,19 @@ pub const FALLBACK_BROWSER: &str = if cfg!(target_os = "macos") {
 /// answers. Built and used on the dispatch thread only, so it need not be
 /// `Send` (QuickJS is not).
 pub trait Resolver {
-    fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved>;
+    /// Resolves a link whose short link, if any, the router already
+    /// expanded: `link.url` is what the rules see, `link.original_url` what
+    /// arrived.
+    fn resolve(&self, link: &EngineLink, opener: Option<&Opener>) -> Result<Resolved>;
+
+    /// Which links the router expands before [`resolve`](Self::resolve), as
+    /// the config in charge says; `None` expands nothing. Called on the
+    /// dispatch thread before each resolve, and done with before the
+    /// expansion runs, so a resolver that borrows an engine to answer
+    /// releases it first.
+    fn short_links(&self) -> Option<ShortLinks> {
+        None
+    }
 
     /// Catches up with the files behind the resolver and says whether
     /// anything is in charge. The router calls it before each resolve, for
@@ -68,14 +85,18 @@ pub struct Resolved {
 }
 
 impl Resolver for Engine {
-    fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved> {
-        let trace = self.trace(&pwrroute_engine::Link::new(url), opener)?;
+    fn resolve(&self, link: &EngineLink, opener: Option<&Opener>) -> Result<Resolved> {
+        let trace = self.trace(link, opener)?;
         Ok(Resolved {
             rule_steps: rule_steps(&trace),
             privacy: trace.resolution.browser.privacy,
             browser: trace.resolution.browser,
             error: trace.resolution.error,
         })
+    }
+
+    fn short_links(&self) -> Option<ShortLinks> {
+        Some(Engine::short_links(self).clone())
     }
 }
 
@@ -111,28 +132,69 @@ pub type ResolverFactory = Box<dyn FnOnce() -> Result<Box<dyn Resolver>> + Send>
 /// a link). Keep it quick: the next link waits for it.
 pub type DispatchCallback = Arc<dyn Fn(&DispatchRecord) + Send + Sync>;
 
-/// How the router behaves.
+/// Where the fallback browser comes from: asked each time a link needs it,
+/// so a choice saved while the router runs (first run, an edit of
+/// `rules.json`) applies from the next link, without a restart. Keep the
+/// call cheap; it runs on the dispatch thread, though only when a link
+/// falls back.
 #[derive(Clone)]
+pub struct FallbackSource(Arc<dyn Fn() -> Option<(String, String)> + Send + Sync>);
+
+impl FallbackSource {
+    /// Asks `choice` for the browser (an app name, bundle id or `.app`
+    /// path) and profile (empty for none). `None`, an empty name, or a name
+    /// that is PwrRoute itself means [`FALLBACK_BROWSER`].
+    pub fn new(choice: impl Fn() -> Option<(String, String)> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(choice))
+    }
+
+    /// Always `browser`, in `profile`.
+    pub fn fixed(browser: impl Into<String>, profile: impl Into<String>) -> Self {
+        let choice = (browser.into(), profile.into());
+        Self::new(move || Some(choice.clone()))
+    }
+
+    /// The browser and profile now: never empty, never PwrRoute.
+    pub fn get(&self) -> (String, String) {
+        (self.0)()
+            .map(|(browser, profile)| (browser.trim().to_owned(), profile.trim().to_owned()))
+            .filter(|(browser, _)| !browser.is_empty() && !is_self_name(browser))
+            .unwrap_or_else(|| (FALLBACK_BROWSER.to_owned(), String::new()))
+    }
+}
+
+impl Default for FallbackSource {
+    /// [`FALLBACK_BROWSER`], with no profile.
+    fn default() -> Self {
+        Self::new(|| None)
+    }
+}
+
+impl std::fmt::Debug for FallbackSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Not `get()`: asking may read a file.
+        f.debug_tuple("FallbackSource").finish_non_exhaustive()
+    }
+}
+
+/// How the router behaves.
+#[derive(Clone, Default)]
 pub struct Options {
     /// How many dispatches Activity keeps in memory, and for how long.
     pub retention: Retention,
     /// The on-disk journal of dispatches. `None`, the default, writes
     /// nothing: links live in memory only.
     pub journal: Option<JournalConfig>,
-    /// An app name, used when no config is loaded or the config would loop.
-    pub fallback_browser: String,
+    /// The browser and profile used when no config is loaded, the config
+    /// would loop, or the browser a rule chose cannot be opened.
+    /// [`FALLBACK_BROWSER`] by default.
+    pub fallback: FallbackSource,
     pub on_dispatch: Option<DispatchCallback>,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            retention: Retention::default(),
-            journal: None,
-            fallback_browser: FALLBACK_BROWSER.to_owned(),
-            on_dispatch: None,
-        }
-    }
+    /// What expands short links: the one request a dispatch makes off the
+    /// machine, to the shortener's host, as Finicky made it. `None`, the
+    /// default, is the real network ([`HttpNetwork`]), built on the dispatch
+    /// thread the first time a short link arrives; tests pass a fake.
+    pub network: Option<Arc<dyn Network + Send + Sync>>,
 }
 
 impl Options {
@@ -148,8 +210,9 @@ impl std::fmt::Debug for Options {
         f.debug_struct("Options")
             .field("retention", &self.retention)
             .field("journal", &self.journal)
-            .field("fallback_browser", &self.fallback_browser)
+            .field("fallback", &self.fallback)
             .field("on_dispatch", &self.on_dispatch.is_some())
+            .field("network", &self.network.is_some())
             .finish()
     }
 }
@@ -209,6 +272,39 @@ pub struct RouterStatus {
     /// quotes a link.
     pub journal_error: Option<String>,
 }
+
+/// Where every link goes while routing is paused: the browser the user
+/// chose as the fallback, with its profile. Rewrites still run; every
+/// handler is passed over, `browser: null` and `private` ones included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauseTarget {
+    /// An app name, bundle id or path, as `rules.json`'s `defaultBrowser`
+    /// or a config's `defaultBrowser` names it.
+    pub browser: String,
+    /// Empty for the browser's own profile.
+    pub profile: String,
+}
+
+impl PauseTarget {
+    /// The target as the launcher opens it, for `url` (the URL after every
+    /// rewrite) at the level the rules gave the link. Nothing else a
+    /// handler said carries over: no extra arguments, no private window.
+    fn browser_for(&self, url: &str, privacy: Privacy) -> Browser {
+        Browser {
+            name: self.browser.clone(),
+            app_type: AppType::AppName,
+            url: url.to_owned(),
+            profile: self.profile.clone(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy,
+        }
+    }
+}
+
+/// The pause state the handle writes and the dispatch thread reads.
+type Paused = Arc<Mutex<Option<PauseTarget>>>;
 
 enum Command {
     Dispatch {
@@ -272,15 +368,23 @@ impl Router {
         let worker_recent = Arc::clone(&recent);
         let journal = Arc::new(Mutex::new(options.journal.clone()));
         let worker_journal = Arc::clone(&journal);
+        let paused: Paused = Arc::default();
+        let worker_paused = Arc::clone(&paused);
         let thread = thread::Builder::new()
             .name("pwrroute-dispatch".into())
             .spawn(move || {
+                let network = OnceLock::new();
+                if let Some(fake) = options.network.clone() {
+                    let _ = network.set(fake);
+                }
                 Worker {
                     resolver: build(resolver),
                     launcher: Box::new(launcher),
                     recent: worker_recent,
                     journal: options.journal.clone().map(Journal::new),
                     journal_config: worker_journal,
+                    paused: worker_paused,
+                    network,
                     options,
                 }
                 .run(&rx);
@@ -290,6 +394,7 @@ impl Router {
                 tx,
                 recent,
                 journal,
+                paused,
                 next_id: Arc::new(AtomicU64::new(1)),
             },
             thread: Some(thread),
@@ -331,6 +436,11 @@ pub struct RouterHandle {
     /// [`journal`](Self::journal) describe. The dispatch thread writes it
     /// when [`set_journal`](Self::set_journal) takes effect.
     journal: Arc<Mutex<Option<JournalConfig>>>,
+    /// Where links go while routing is paused, when it is. Read by the
+    /// dispatch thread for each link; written by [`set_paused`].
+    ///
+    /// [`set_paused`]: Self::set_paused
+    paused: Paused,
     next_id: Arc<AtomicU64>,
 }
 
@@ -366,7 +476,8 @@ impl RouterHandle {
     }
 
     /// Test a link: resolves it and returns the trace without opening it or
-    /// recording it in Activity.
+    /// recording it in Activity. The rules answer, paused or not: a pause
+    /// only changes where dispatches go.
     pub fn test(&self, link: Link) -> std::result::Result<DispatchRecord, RouterGone> {
         let (reply, rx) = mpsc::channel();
         let request = self.request(link, false);
@@ -464,6 +575,23 @@ impl RouterHandle {
         rx.recv().map_err(|_| RouterGone)
     }
 
+    /// Pauses routing: from the next dispatch on, every link goes to
+    /// `target` after its rewrites, with [`Step::Paused`] in its trace
+    /// naming the handler it skipped. `None` resumes. The record keeps the
+    /// privacy level the rules gave it, since the rewrites still ran and a
+    /// rule that keeps less of a link keeps less of it paused too.
+    pub fn set_paused(&self, target: Option<PauseTarget>) {
+        *self.paused.lock().unwrap_or_else(PoisonError::into_inner) = target;
+    }
+
+    /// Where links go while paused, or `None` while routing.
+    pub fn paused(&self) -> Option<PauseTarget> {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn journal_config(&self) -> Option<JournalConfig> {
         self.journal
             .lock()
@@ -533,6 +661,10 @@ struct Worker {
     /// `journal` so a reader never sees a journal that is not the one being
     /// written.
     journal_config: Arc<Mutex<Option<JournalConfig>>>,
+    /// The handle's pause state, read once per dispatch.
+    paused: Paused,
+    /// `Options::network`, or the real one once a short link needed it.
+    network: OnceLock<Arc<dyn Network + Send + Sync>>,
     options: Options,
 }
 
@@ -641,7 +773,18 @@ impl Worker {
         };
         record.steps.push(Step::Received { url: url.clone() });
 
-        let (browser, privacy) = self.resolve(&url, &record.link, &mut record.steps);
+        let (mut browser, privacy) = self.resolve(&url, &record.link, &mut record.steps);
+        // Paused: the rules ran (so the rewrites and the privacy level
+        // stand), and the pause target takes the link from whatever they
+        // chose. A test still reports what the rules say.
+        if mode == Mode::Dispatch
+            && let Some(target) = self.pause_target()
+        {
+            record.steps.push(Step::Paused {
+                skipped: skipped_handler(&record.steps),
+            });
+            browser = target.browser_for(&browser.url, privacy);
+        }
         record.timings.resolve_us = Timings::micros(dequeued.elapsed());
         record.final_url = Some(browser.url.clone());
         // Noted here; the record is reduced when it is dispatched, not
@@ -655,16 +798,20 @@ impl Worker {
             record.steps.push(Step::Browser {
                 browser: browser.clone(),
             });
+            let mut opened = None;
             record.outcome = match mode {
                 Mode::Test => Outcome::Tested,
                 Mode::Dispatch => {
                     let launch = Instant::now();
-                    let outcome = self.launch(&browser, &mut record.steps);
+                    let launched = self.launch(&browser, &mut record.steps);
                     record.timings.launch_us = Timings::micros(launch.elapsed());
-                    outcome
+                    opened = launched.opened;
+                    launched.outcome
                 }
             };
-            record.browser = Some(browser);
+            // The browser that took the link: the fallback when the chosen
+            // one could not be opened, so Activity and the tray name it.
+            record.browser = Some(opened.unwrap_or(browser));
         }
         record.timings.total_us = Timings::micros(request.received.elapsed());
         record
@@ -680,7 +827,8 @@ impl Worker {
 
     /// The browser for `url`, with every step that chose it, and how much
     /// of the link its rule lets the record keep. A link no rule routed is
-    /// kept in full.
+    /// kept in full. A short link is expanded first, so the rules match
+    /// where it lands.
     fn resolve(&self, url: &str, link: &Link, steps: &mut Vec<Step>) -> (Browser, Privacy) {
         let resolver = match self.in_charge() {
             Ok(resolver) => resolver,
@@ -690,8 +838,10 @@ impl Worker {
             }
         };
         let opener = link.opener.as_ref().map(Opener::from);
+        let expanded = self.expand(resolver, url, steps);
+        let url = expanded.url.as_str();
         let mut privacy = Privacy::Full;
-        let mut browser = match resolver.resolve(url, opener.as_ref()) {
+        let mut browser = match resolver.resolve(&expanded, opener.as_ref()) {
             Ok(resolved) => {
                 privacy = resolved.privacy;
                 if resolved.rule_steps.is_empty() {
@@ -731,43 +881,173 @@ impl Worker {
         (browser, privacy)
     }
 
-    fn launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Outcome {
+    /// Expands `url` when the resolver's shortener list says it is a short
+    /// link: the one request a dispatch makes off the machine, made here on
+    /// the dispatch thread, after the resolver's list is read and before
+    /// its resolve. The link goes on unchanged when it is not short, the
+    /// list is empty, or the shortener does not answer; nothing is logged.
+    fn expand(&self, resolver: &dyn Resolver, url: &str, steps: &mut Vec<Step>) -> EngineLink {
+        let Some(short_links) = resolver.short_links() else {
+            return EngineLink::new(url);
+        };
+        if !short_links.is_short(url) {
+            return EngineLink::new(url);
+        }
+        let network = self
+            .network
+            .get_or_init(|| Arc::new(HttpNetwork::new()) as Arc<dyn Network + Send + Sync>);
+        let link = short_links.expand(url, network.as_ref());
+        if link.was_expanded() {
+            steps.push(Step::Expanded {
+                url: link.url.clone(),
+            });
+        }
+        link
+    }
+
+    /// Opens the link in `browser`, or, when that fails and `browser` is not
+    /// the fallback already, in the fallback browser: a rule that names a
+    /// browser this machine does not have must not lose the link. The
+    /// fallback is tried once; `Failed` means both failed.
+    fn launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Launched {
         if is_self(browser) {
             steps.push(Step::LaunchFailed {
                 message: "the fallback browser is PwrRoute itself".into(),
             });
-            return Outcome::Failed;
+            return Launched::failed();
         }
+        if let Ok(outcome) = self.try_launch(browser, steps) {
+            return Launched {
+                outcome,
+                opened: None,
+            };
+        }
+        let mut fallback = self.fallback(&browser.url);
+        if same_app(browser, &fallback) || is_self(&fallback) {
+            return Launched::failed();
+        }
+        // A private window was asked for: the fallback opens one too, so a
+        // missing browser never puts a private link in a normal window.
+        fallback.private = browser.private;
+        // The browser's name only: the launcher's message is withheld in a
+        // host-only record, this reason is kept.
+        steps.push(Step::Fallback {
+            reason: format!("{} could not be opened", browser.name),
+        });
+        match self.try_launch(&fallback, steps) {
+            Ok(outcome) => Launched {
+                outcome,
+                opened: Some(fallback),
+            },
+            Err(()) => Launched::failed(),
+        }
+    }
+
+    /// One launch, traced: `Launched` on success, `LaunchFailed` with the
+    /// launcher's message otherwise.
+    fn try_launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Result<Outcome, ()> {
         let dry_run = self.launcher.is_dry_run();
         match self.launcher.launch(browser) {
             Ok(()) => {
                 steps.push(Step::Launched { dry_run });
-                if dry_run {
+                Ok(if dry_run {
                     Outcome::DryRun
                 } else {
                     Outcome::Opened
-                }
+                })
             }
             Err(e) => {
                 steps.push(Step::LaunchFailed {
                     message: format!("{e:#}"),
                 });
-                Outcome::Failed
+                Err(())
             }
         }
     }
 
+    fn pause_target(&self) -> Option<PauseTarget> {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The fallback browser with `url`: [`Options::fallback`] as it is now,
+    /// typed as Finicky types a browser string.
     fn fallback(&self, url: &str) -> Browser {
+        let (name, profile) = self.options.fallback.get();
         Browser {
-            name: self.options.fallback_browser.clone(),
-            app_type: AppType::AppName,
+            app_type: app_type_of(&name),
+            name,
             url: url.to_owned(),
-            profile: String::new(),
+            profile,
             args: Vec::new(),
             open_in_background: None,
             private: false,
             privacy: Privacy::Full,
         }
+    }
+}
+
+/// The numbered handler the trace says chose the browser, for
+/// [`Step::Paused`]: `None` when the default did, when nothing was in
+/// charge, or when a `rules.json` handler did (the router does not number
+/// those).
+fn skipped_handler(steps: &[Step]) -> Option<usize> {
+    steps.iter().find_map(|step| match step {
+        Step::Matched {
+            by: Matched::Handler { index },
+        } => Some(*index),
+        _ => None,
+    })
+}
+
+/// What [`Worker::launch`] did.
+struct Launched {
+    outcome: Outcome,
+    /// The fallback browser, when it opened the link instead of the one
+    /// chosen.
+    opened: Option<Browser>,
+}
+
+impl Launched {
+    fn failed() -> Self {
+        Self {
+            outcome: Outcome::Failed,
+            opened: None,
+        }
+    }
+}
+
+/// Whether two browsers name the same app the same way (type and name,
+/// whatever the profile): a launch that failed in one would fail in the
+/// other. The same app named two ways (`Google Chrome`, `com.google.Chrome`)
+/// is not caught, and costs one more attempt.
+fn same_app(a: &Browser, b: &Browser) -> bool {
+    a.app_type == b.app_type && a.name.eq_ignore_ascii_case(&b.name)
+}
+
+/// How Finicky types a browser string (`autodetectAppStringType`): letters,
+/// digits and spaces are an app name, letters, digits, dots and dashes a
+/// bundle id, an absolute or `~/` path ending in `.app` a path, and
+/// anything else an app name.
+fn app_type_of(name: &str) -> AppType {
+    let name = name.trim();
+    let is_app_path = (name.starts_with('/') || name.starts_with("~/"))
+        && std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"));
+    if name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ') {
+        AppType::AppName
+    } else if name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+    {
+        AppType::BundleId
+    } else if is_app_path {
+        AppType::Path
+    } else {
+        AppType::AppName
     }
 }
 
@@ -781,7 +1061,12 @@ fn same_url(a: &str, b: &str) -> bool {
 /// Whether a browser is PwrRoute, by name, bundle id or path. Routing a link
 /// there would bounce it straight back.
 fn is_self(browser: &Browser) -> bool {
-    browser.name.to_ascii_lowercase().contains("pwrroute")
+    is_self_name(&browser.name)
+}
+
+/// Whether a browser name (an app name, bundle id or path) is PwrRoute.
+fn is_self_name(name: &str) -> bool {
+    name.to_ascii_lowercase().contains("pwrroute")
 }
 
 #[cfg(test)]

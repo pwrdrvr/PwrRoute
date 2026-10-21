@@ -1,7 +1,8 @@
 //! The in-app approval step. The first time a client name connects, the app
 //! shows PwrRoute's approval window and the person picks a role or denies.
 //! The answer is remembered per name in [`Agents`]; nothing an agent sends
-//! can approve.
+//! can approve. A window that closes unanswered ([`Verdict::Expired`]) is
+//! not a denial: the next call asks again.
 
 use std::{
     collections::HashMap,
@@ -22,8 +23,11 @@ use crate::{
     roles::Role,
 };
 
-/// How long a prompt may stay open before it counts as a denial.
-pub(crate) const PROMPT_TTL: Duration = Duration::from_secs(5 * 60);
+/// How long a prompt stays open, unless [`Config::prompt_ttl`] says
+/// otherwise. An expired prompt is not a denial: the next call asks again.
+///
+/// [`Config::prompt_ttl`]: crate::Config::prompt_ttl
+pub const DEFAULT_PROMPT_TTL: Duration = Duration::from_secs(5 * 60);
 /// Approval windows open at once, one per client name. More are denied.
 const MAX_PROMPTS: usize = 8;
 
@@ -109,8 +113,19 @@ impl ApprovalAnswer {
     }
 }
 
+/// How a prompt ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// The person answered, or the app dropped the reply (its window
+    /// closed): a denial.
+    Answered(ApprovalDecision),
+    /// Nobody answered before the prompt's TTL ran out, or the server
+    /// stopped. Not a denial: a connection that sees this asks again.
+    Expired,
+}
+
 /// The current answer for a client name: `None` while the window is up.
-pub(crate) type Answer = watch::Receiver<Option<ApprovalDecision>>;
+pub(crate) type Answer = watch::Receiver<Option<Verdict>>;
 
 /// Raises at most one prompt per client name and shares its answer with
 /// every connection waiting on it.
@@ -120,16 +135,19 @@ pub(crate) struct Approvals {
     pending: Mutex<HashMap<String, Answer>>,
     next_id: AtomicU64,
     closed: CancellationToken,
+    /// How long a prompt stays open before it expires.
+    ttl: Duration,
 }
 
 impl Approvals {
-    pub(crate) fn new(approver: Arc<dyn Approver>, agents: Agents) -> Self {
+    pub(crate) fn new(approver: Arc<dyn Approver>, agents: Agents, ttl: Duration) -> Self {
         Self {
             approver,
             agents,
             pending: Mutex::default(),
             next_id: AtomicU64::new(1),
             closed: CancellationToken::new(),
+            ttl,
         }
     }
 
@@ -173,9 +191,10 @@ impl Approvals {
         );
 
         let this = Arc::clone(self);
+        let ttl = self.ttl;
         tokio::spawn(async move {
             let decision = tokio::select! {
-                answer = tokio::time::timeout(PROMPT_TTL, answer) => match answer {
+                answer = tokio::time::timeout(ttl, answer) => match answer {
                     Ok(Ok(decision)) => Some(decision),
                     // The app dropped the reply: a denial.
                     Ok(Err(_)) => Some(ApprovalDecision::Deny),
@@ -183,21 +202,23 @@ impl Approvals {
                 },
                 () = this.closed.cancelled() => None,
             };
-            let decision = match decision {
+            let verdict = match decision {
                 Some(ApprovalDecision::Approve { role }) => match this.agents.allow(&name, role) {
-                    Ok(()) => ApprovalDecision::Approve { role },
+                    Ok(()) => Verdict::Answered(ApprovalDecision::Approve { role }),
                     // Not recorded means not approved.
-                    Err(_) => ApprovalDecision::Deny,
+                    Err(_) => Verdict::Answered(ApprovalDecision::Deny),
                 },
-                Some(ApprovalDecision::Deny) => ApprovalDecision::Deny,
+                Some(ApprovalDecision::Deny) => Verdict::Answered(ApprovalDecision::Deny),
+                // Nobody answered: close the window, and let the next call
+                // ask again.
                 None => {
                     this.approver.cancel(&id);
-                    ApprovalDecision::Deny
+                    Verdict::Expired
                 }
             };
             // Answer the waiters, then drop the prompt unless a newer one
             // for the name has taken its place.
-            let _ = tx.send(Some(decision));
+            let _ = tx.send(Some(verdict));
             let mut pending = this
                 .pending
                 .lock()
@@ -212,7 +233,7 @@ impl Approvals {
         Some(rx)
     }
 
-    /// Closes every open prompt, as a denial.
+    /// Closes every open prompt. The waiters see it expire, not a denial.
     pub(crate) fn close(&self) {
         self.closed.cancel();
     }

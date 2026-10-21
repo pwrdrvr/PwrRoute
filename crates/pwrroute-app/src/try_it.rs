@@ -14,7 +14,7 @@
 use std::{path::PathBuf, rc::Rc, time::SystemTime};
 
 use pwrroute_engine::{
-    DefaultHost, Engine, Limits, Link, Opener, RulesFile, Source, Stage, Step, TestFailure,
+    Engine, Limits, Link, NativeHost, Opener, RulesFile, Source, Stage, Step, TestFailure,
     TestReport, TestSource, Trace,
 };
 
@@ -150,7 +150,9 @@ fn load(config: Option<&std::path::Path>, rules: &RulesFile) -> Result<Engine, S
         config: config.map(std::path::Path::to_path_buf),
         rules: rules.clone(),
     };
-    Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())
+    // The OS answers the config's finicky.* calls, as it does for the
+    // router, so an example that depends on them is tested as it routes.
+    Engine::from_sources(&sources, Rc::new(NativeHost::new()), Limits::default())
         .map_err(|error| format!("The rules did not load: {error:#}"))
 }
 

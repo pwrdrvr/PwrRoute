@@ -11,11 +11,15 @@
 #   then Setup.exe and the MSI, through Azure Artifact Signing; the dlib reads
 #   the service principal from AZURE_TENANT_ID / AZURE_CLIENT_ID /
 #   AZURE_CLIENT_SECRET.
+# - --icon: packaging/windows/PwrRoute.ico (from scripts/release/make-icns.sh),
+#   for Setup.exe, the MSI and the Start menu shortcut; pwrroute.exe itself
+#   carries no icon resource yet.
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string]$Version,
   [Parameter(Mandatory = $true)] [string]$PackDir,
   [Parameter(Mandatory = $true)] [string]$OutputDir,
+  [Parameter(Mandatory = $true)] [string]$Icon,
   [string]$ReleaseNotes,
   [string]$AzureSignFile
 )
@@ -32,6 +36,7 @@ $vpkArgs = @(
   "--packTitle", "PwrRoute",
   "--packAuthors", "PwrDrvr LLC",
   "--shortcuts", "StartMenuRoot",
+  "--icon", $Icon,
   "--msi", "--instLocation", "PerUser",
   "--outputDir", $OutputDir
 )

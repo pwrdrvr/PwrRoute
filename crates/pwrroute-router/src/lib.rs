@@ -15,6 +15,8 @@
 //! - [`DispatchRecord`] is one dispatch with its trace. The last
 //!   [`Options::retention`] of them stay in memory for Activity; Test a link
 //!   gets the same record without opening anything or recording it.
+//! - [`RouterHandle::set_paused`] sends every dispatch to a [`PauseTarget`]
+//!   after its rewrites, with [`Step::Paused`] in the trace, until resumed.
 //! - [`instance`] keeps one router per user: a second launch forwards its
 //!   links over a local socket ([`ipc`]) and exits.
 //!
@@ -40,8 +42,8 @@ mod recent;
 mod trace;
 
 pub use dispatch::{
-    DispatchCallback, FALLBACK_BROWSER, Options, Resolved, Resolver, ResolverFactory,
-    RetentionInfo, Router, RouterGone, RouterHandle, RouterStatus,
+    DispatchCallback, FALLBACK_BROWSER, FallbackSource, Options, PauseTarget, Resolved, Resolver,
+    ResolverFactory, RetentionInfo, Router, RouterGone, RouterHandle, RouterStatus,
 };
 pub use journal::{JournalConfig, JournalMode, JournalStamp, read_recent as read_journal};
 pub use launcher::{DryRunLauncher, Launcher};

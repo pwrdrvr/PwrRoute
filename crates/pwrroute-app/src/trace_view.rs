@@ -55,6 +55,8 @@ pub enum StepBody {
     Url(Vec<UrlPart>),
     /// Plain text: "No match."
     Text(String),
+    /// Mono lines, one under the other: what the config printed.
+    Lines(Vec<String>),
     /// "No match." for a run of handlers folded into one step, with a link
     /// that unfolds them.
     Folded,
@@ -140,6 +142,28 @@ impl TraceView {
             steps.push(engine_step(step, rules, opener, threw, steps.len()));
         }
         flush_misses(&mut steps, &mut misses);
+        if !trace.console.is_empty() {
+            // What the config printed while these steps ran. The lines are
+            // the config's own words, URL and all; they stay on screen.
+            let count = trace.console.len();
+            steps.push(TraceStep {
+                number: Some(steps.len()),
+                state: StepState::Plain,
+                title: "Config output".into(),
+                detail: if count == 1 {
+                    "1 console line".into()
+                } else {
+                    format!("{count} console lines")
+                },
+                body: vec![StepBody::Lines(
+                    trace
+                        .console
+                        .iter()
+                        .map(|line| format!("console.{}: {}", line.level.name(), line.message))
+                        .collect(),
+                )],
+            });
+        }
 
         let browser = &trace.resolution.browser;
         let mut chips = Vec::new();
@@ -211,6 +235,7 @@ impl TraceView {
                         .map(|p| p.text.as_str())
                         .collect(),
                     StepBody::Text(text) => text.clone(),
+                    StepBody::Lines(lines) => lines.join("\n   "),
                     StepBody::Folded => "No match.".into(),
                 };
                 if !line.is_empty() {
@@ -655,6 +680,54 @@ mod tests {
                 "Opens in"
             ]
         );
+    }
+
+    #[test]
+    fn the_configs_console_output_is_a_row_before_the_result() {
+        let trace: Trace = serde_json::from_value(serde_json::json!({
+            "url": "https://a.example/",
+            "originalUrl": "https://a.example/",
+            "steps": [],
+            "resolution": {"browser": {
+                "name": "Safari", "appType": "appName", "url": "https://a.example/"
+            }},
+            "console": [
+                {"level": "info", "message": "keys {\"option\":true}"},
+                {"level": "warn", "message": "saw https://a.example/"},
+            ],
+        }))
+        .expect("a trace");
+        let view =
+            TraceView::from_engine(&trace, &RulesFile::default(), None, Duration::ZERO, false);
+        let titles: Vec<&str> = view.steps.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["Received", "Config output", "Opens in"]);
+        let output = &view.steps[1];
+        assert_eq!(output.number, Some(1));
+        assert_eq!(output.state, StepState::Plain);
+        assert_eq!(output.detail, "2 console lines");
+        assert_eq!(
+            output.body,
+            [StepBody::Lines(vec![
+                "console.log: keys {\"option\":true}".into(),
+                "console.warn: saw https://a.example/".into(),
+            ])]
+        );
+        let text = view.to_text();
+        assert!(
+            text.contains(
+                "1. Config output (2 console lines)\n   console.log: keys {\"option\":true}\n   console.warn: saw https://a.example/\n"
+            ),
+            "{text}"
+        );
+
+        // A quiet run has no such row.
+        let quiet = Trace {
+            console: Vec::new(),
+            ..trace
+        };
+        let view =
+            TraceView::from_engine(&quiet, &RulesFile::default(), None, Duration::ZERO, false);
+        assert_eq!(view.steps.len(), 2);
     }
 
     #[test]

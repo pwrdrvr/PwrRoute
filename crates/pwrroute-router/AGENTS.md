@@ -9,6 +9,18 @@ runs on every platform.
   Everything else talks through `RouterHandle`.
 - **`Launcher` is the seam to pwrroute-browsers.** Keep it small. Tests use
   `DryRunLauncher`; nothing in this crate opens a browser.
+- **A link is never dropped for want of a browser.** `Worker::launch` tries
+  the fallback browser once when the chosen browser fails to open, traced
+  as `LaunchFailed`, `Fallback`, `Launched`, keeping the chosen browser's
+  `private`; the record's `browser` is the one that opened the link.
+  `Outcome::Failed` means both failed, or the chosen browser was the
+  fallback already.
+- **The fallback is asked for, not stored.** `Options::fallback` is a
+  `FallbackSource` the router calls each time a link falls back (the app
+  reads `rules.json`'s `defaultBrowser` and `defaultProfile`), so a choice
+  saved while the router runs applies to the next link. `FallbackSource::get`
+  turns an empty answer, or one naming PwrRoute, into `FALLBACK_BROWSER`;
+  callers do not repeat that check.
 - **URLs never touch disk unless the journal is on, and then only at the
   record's privacy level.** Each `DispatchRecord` is reduced to the
   `Privacy` of the rule that routed it (`Full`, `Host`: scheme and host
@@ -35,6 +47,25 @@ runs on every platform.
   rule with no level is `Host`); a test resolver sets it directly.
   `dispatch/tests.rs` proves the path with a `rules.json`-only engine and
   the `DryRunLauncher`; keep those tests when the seam changes.
+- **Pause is a dispatch-time swap, not a resolver.**
+  `RouterHandle::set_paused(Some(PauseTarget))` is read once per link in
+  `Worker::process`, after `resolve`: the rules have run, so the rewrites,
+  the rule steps and the record's privacy level stand; `Step::Paused {
+  skipped }` names the numbered handler that matched, and the target
+  replaces the browser, a `browser: null` or `private` handler included.
+  Test a link ignores the pause. Keep it out of `launch` and `fallback()`.
+- **Short links expand on the dispatch thread, before the resolver.**
+  `Worker::expand` reads `Resolver::short_links()` (the engine's list, as
+  the config in charge set it), then follows a short link through
+  `ShortLinks::expand` with `Options::network` (`HttpNetwork` built on the
+  thread the first time it is needed; tests pass a fake). That request to
+  the shortener's host is the only place a link leaves the machine before
+  a rule sees it, as under Finicky. The resolver then gets the expanded
+  `pwrroute_engine::Link`, so a config still sees `originalUrl`, and the
+  record carries `Step::Expanded` with where it landed, reduced like every
+  other URL in it. A resolver that borrows an engine answers
+  `short_links()` with a clone and releases the borrow first; never expand
+  inside it.
 - **The trace is the product.** Activity, Test a link and the MCP tool all
   read `DispatchRecord`. The engine names the rules that fired through
   `Engine::trace`, which becomes `Resolved::rule_steps`; report more that way

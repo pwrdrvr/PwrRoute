@@ -6,7 +6,9 @@ mod linux;
 mod macos;
 
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -24,12 +26,14 @@ usage: cargo xtask <task>
                        the tag, Cargo.toml version and CHANGELOG.md agree;
                        optionally write that version's notes
   bundle [--universal] [--sign IDENTITY] [--notarize] [--app-only]
-                       macOS: target/bundle/PwrRoute.app, its zip and DMG
+                       macOS: <target>/bundle/PwrRoute.app, its zip and DMG
                        (--app-only: the app alone, for vpk pack)
-  package-linux        Linux: target/package/*.tar.gz and *.deb
+  package-linux        Linux: <target>/package/*.tar.gz and *.deb
   e2e [--release] [--pending] [--screenshots] [-- TEST-ARGS]
                        build the app and run the Desktop E2E suite against
-                       it (--pending: also the scenarios not yet met)";
+                       it (--pending: also the scenarios not yet met)
+
+<target> is $CARGO_TARGET_DIR when set, else target/ in the workspace.";
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -79,10 +83,11 @@ fn lint() -> Result<()> {
 /// every shipped crate from cargo-about.
 fn licenses(check: bool) -> Result<()> {
     let root = root();
+    let target = target_dir();
     // Written to a file, not read from stdout: under PowerShell, cargo-about
     // refuses to write to a pipe (to dodge PowerShell's re-encoding).
-    let generated = root.join("target/cargo-about.txt");
-    fs::create_dir_all(root.join("target"))?;
+    let generated = target.join("cargo-about.txt");
+    fs::create_dir_all(&target)?;
     let out = Command::new("cargo")
         .args([
             "about",
@@ -130,8 +135,7 @@ fn licenses(check: bool) -> Result<()> {
         // Normalized the same way, in case a checkout has CRLF.
         let current = normalize(&read(&path)?);
         if current != notice {
-            let fresh = root.join("target/THIRD_PARTY_LICENSES.generated");
-            fs::create_dir_all(root.join("target"))?;
+            let fresh = target.join("THIRD_PARTY_LICENSES.generated");
             fs::write(&fresh, &notice)?;
             eprintln!("generated copy for comparison: {}", fresh.display());
         }
@@ -228,6 +232,22 @@ pub(crate) fn root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Cargo's target directory: `CARGO_TARGET_DIR` when set, else `target/` in
+/// the workspace. Where `cargo build` puts the binaries `bundle` and
+/// `package-linux` copy, and where they and `licenses` write their output.
+pub(crate) fn target_dir() -> PathBuf {
+    target_dir_from(&root(), env::var_os("CARGO_TARGET_DIR"))
+}
+
+/// A relative `CARGO_TARGET_DIR` is taken from the workspace root, which is
+/// where xtask runs cargo, so it names the directory cargo builds into.
+fn target_dir_from(root: &Path, var: Option<OsString>) -> PathBuf {
+    match var {
+        Some(dir) if !dir.is_empty() => root.join(dir),
+        _ => root.join("target"),
+    }
+}
+
 pub(crate) fn read(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| path.display().to_string())
 }
@@ -275,6 +295,26 @@ mod tests {
     #[test]
     fn a_prefix_is_not_a_match() {
         assert_eq!(changelog_section(CHANGELOG, "0.1"), None);
+    }
+
+    #[test]
+    fn the_target_dir_follows_cargo_target_dir() {
+        let root = Path::new("/work/PwrRoute");
+        assert_eq!(target_dir_from(root, None), root.join("target"));
+        assert_eq!(
+            target_dir_from(root, Some(OsString::new())),
+            root.join("target"),
+            "an empty value is unset, as cargo treats it"
+        );
+        let elsewhere = env::temp_dir().join("pwrroute-target");
+        assert_eq!(
+            target_dir_from(root, Some(elsewhere.clone().into_os_string())),
+            elsewhere
+        );
+        assert_eq!(
+            target_dir_from(root, Some("build/out".into())),
+            root.join("build/out")
+        );
     }
 
     #[test]

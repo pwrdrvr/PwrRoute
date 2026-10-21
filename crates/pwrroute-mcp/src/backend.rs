@@ -22,8 +22,14 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Trace {
-    /// The URL as it arrived, before any rewrite.
+    /// The URL the rules matched, before any rewrite: the link as it
+    /// arrived, or, for a short link, where it landed (`original_url` then
+    /// holds the short link).
     pub url: String,
+    /// The short link as it arrived, when `url` is where it landed. Absent
+    /// when the link was not expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_url: Option<String>,
     pub steps: Vec<TraceStep>,
     /// The browser and how to open it. `browser.url` is the URL after every
     /// rewrite.
@@ -33,6 +39,30 @@ pub struct Trace {
     /// then the default, as in Finicky.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What the config printed with `console` during this run, in order,
+    /// when the backend resolves with the engine itself (the router's
+    /// records carry none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub console: Vec<ConsoleLine>,
+}
+
+/// One `console` line a config printed: `level` is the method called,
+/// `debug`, `log`, `warn` or `error`. The message is the config's own
+/// words, which often quote the URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleLine {
+    pub level: String,
+    pub message: String,
+}
+
+impl From<&pwrroute_engine::ConsoleLine> for ConsoleLine {
+    fn from(line: &pwrroute_engine::ConsoleLine) -> Self {
+        Self {
+            level: line.level.name().to_owned(),
+            message: line.message.clone(),
+        }
+    }
 }
 
 /// One step of a [`Trace`].
@@ -65,6 +95,7 @@ impl Trace {
     pub fn hosts_only(&self) -> Self {
         let mut trace = self.clone();
         trace.url = host_of(&trace.url);
+        trace.original_url = trace.original_url.as_deref().map(host_of);
         trace.browser.url = host_of(&trace.browser.url);
         for step in &mut trace.steps {
             step.url = step.url.as_deref().map(host_of);
@@ -75,6 +106,8 @@ impl Trace {
         if trace.error.is_some() {
             trace.error = Some("a rule failed; details need full-URL access".to_owned());
         }
+        // And a config prints whatever it likes, the URL most of all.
+        trace.console.clear();
         trace
     }
 }
@@ -319,6 +352,7 @@ mod tests {
         let url = "https://docs.example.org/private?token=abc";
         let trace = Trace {
             url: url.to_owned(),
+            original_url: Some("https://go.example/s3cr3t".to_owned()),
             steps: vec![TraceStep {
                 kind: StepKind::Rewrite,
                 index: Some(0),
@@ -336,9 +370,15 @@ mod tests {
                 privacy: pwrroute_engine::Privacy::Full,
             },
             error: Some(format!("could not open {url}")),
+            console: vec![ConsoleLine {
+                level: "log".to_owned(),
+                message: format!("saw {url}"),
+            }],
         };
         let hosts = serde_json::to_string(&trace.hosts_only()).unwrap();
         assert!(!hosts.contains("/private"), "{hosts}");
         assert!(hosts.contains("docs.example.org"), "{hosts}");
+        assert!(!hosts.contains("s3cr3t"), "{hosts}");
+        assert!(hosts.contains(r#""originalUrl":"go.example""#), "{hosts}");
     }
 }

@@ -22,7 +22,8 @@ pub fn build(installation: &Installation, state: &State, now: DateTime<Local>) -
     let (version, install, not_updatable) = match installation {
         Installation::Velopack { version } => (
             version.clone(),
-            "Installed by Velopack; a downloaded release installs when PwrRoute restarts."
+            "Installed by Velopack; a downloaded release installs when you quit, or from \
+             Restart to update."
                 .to_owned(),
             None,
         ),

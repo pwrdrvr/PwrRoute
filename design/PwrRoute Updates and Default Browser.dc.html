@@ -111,7 +111,7 @@
                     <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Ready to install</p><h2 class="card-title">PwrRoute 0.2.1</h2></div><span class="chip acc">downloaded</span></div>
                     <div class="field"><div class="field-l"><span>Version</span><span class="field-sub">stable channel · 6.1 MB · downloaded 08:14</span></div><div class="field-c"><div class="ver"><span>0.2.0</span><span class="arrow">&rarr;</span><span class="new">0.2.1</span></div></div></div>
                     <div class="field"><div class="field-l"><span>What changed</span><span class="field-sub">From the release notes.</span></div><div class="field-c"><ul class="notes"><li>A handler whose app is not installed opens the default instead of failing.</li><li>Rewrite editor: replace path.</li><li>Fixed: Test a link ignored the opener when pasted from the clipboard.</li></ul><a href="#1a" style="font-size: 11px;">Full release notes</a></div></div>
-                    <div class="field"><div class="field-l"><span>Install</span><span class="field-sub">Routing pauses for the restart, about two seconds.</span></div><div class="field-c"><div class="row-actions"><span class="btn primary">Restart to update</span><span class="btn quiet">Later</span></div><span class="field-help">Later keeps it downloaded; it installs the next time PwrRoute starts for any reason.</span></div></div>
+                    <div class="field"><div class="field-l"><span>Install</span><span class="field-sub">Routing pauses for the restart, about two seconds.</span></div><div class="field-c"><div class="row-actions"><span class="btn primary">Restart to update</span><span class="btn quiet">Later</span></div><span class="field-help">Later keeps it downloaded; it installs when you quit, or from Restart to update. A launch never applies it: a launch is usually for a link, which must open first.</span></div></div>
                   </section>
                   <section class="card">
                     <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Checking</p><h2 class="card-title">Automatic updates</h2></div></div>
@@ -173,7 +173,7 @@
           </div>
 
         </div>
-        <p class="dv-note">Windows and Linux put the dropdown row in the native tray menu (Tray and First Run 1c) as &ldquo;Restart to update to 0.2.1&rdquo;. Quitting from the menu with an update downloaded also applies it, since Velopack swaps the package on the next start either way. The every-6-hours check is new; today the check runs only at startup and from the menu.</p>
+        <p class="dv-note">Windows and Linux put the dropdown row in the native tray menu (Tray and First Run 1c) as &ldquo;Restart to update to 0.2.1&rdquo;. Quitting from the menu or the tray with an update downloaded applies it: Velopack swaps the package once PwrRoute has exited, without starting it again, and the next link opens the new version. A launch never applies one (<code>updater.rs</code> turns Velopack’s auto-apply off), since a launch is usually for a link. The check runs at startup and every 6 hours while running.</p>
       </section>
 
       <!-- ================= TURN 2 — Default-browser registration ================= -->

@@ -10,7 +10,7 @@ use pwrroute_mcp::{
     fake::{FakeAnswer, FakeApprover},
 };
 use serde_json::json;
-use support::{Harness, call, eventually, private_endpoint, text};
+use support::{Harness, call, config, eventually, private_endpoint, text};
 
 const LINK: &str = "https://docs.example.org/page";
 
@@ -59,6 +59,11 @@ async fn a_denial_refuses_the_connection_and_a_new_one_is_asked_again() {
     assert_eq!(result.is_error, Some(true));
     assert!(
         text(&result).starts_with("access_denied"),
+        "{}",
+        text(&result)
+    );
+    assert!(
+        text(&result).contains("reconnect the MCP server"),
         "{}",
         text(&result)
     );
@@ -131,6 +136,54 @@ async fn an_unanswered_window_reports_pending_then_works_once_answered() {
     eventually(|| !agents.agents().is_empty()).await;
     let result = call(&client, "pwrroute_resolve", json!({ "url": LINK })).await;
     assert_eq!(result.is_error, Some(false), "{}", text(&result));
+    client.cancel().await.unwrap();
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn an_expired_window_is_asked_again_on_the_next_call() {
+    let h = Harness::start_with_ttl(
+        FakeAnswer::Hold,
+        Duration::from_secs(10),
+        Duration::from_millis(200),
+    )
+    .await;
+    let client = h.client("claude-code").await;
+    // The window goes up as the client connects and closes unanswered
+    // while the call waits: the call is told so, and nothing is remembered.
+    let result = call(&client, "pwrroute_resolve", json!({ "url": LINK })).await;
+    assert_eq!(result.is_error, Some(true));
+    assert!(
+        text(&result).starts_with("approval_expired") && text(&result).contains("call again"),
+        "{}",
+        text(&result)
+    );
+    let asked = h.approver.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(h.approver.cancelled(), [asked[0].id.clone()]);
+    assert!(h.agents.agents().is_empty(), "an expiry is not remembered");
+    let held = h.approver.take_pending();
+    assert_eq!(held.len(), 1);
+
+    // The next call on the same connection asks again, and the answer
+    // holds: an expiry was never a denial.
+    h.approver.set(FakeAnswer::Approve(Role::Reader));
+    let result = call(&client, "pwrroute_resolve", json!({ "url": LINK })).await;
+    assert_eq!(result.is_error, Some(false), "{}", text(&result));
+    assert_eq!(h.approver.asked().len(), 2);
+    assert_eq!(h.agents.agents()[0].role, Role::Reader);
+    // The late reply to the expired window changes nothing.
+    for (_, reply) in held {
+        reply.approve(Role::Editor);
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.agents.agents()[0].role, Role::Reader);
+    assert!(
+        h.audit
+            .records()
+            .iter()
+            .any(|r| r.outcome == Outcome::Denied)
+    );
     client.cancel().await.unwrap();
     h.finish().await;
 }
@@ -230,9 +283,8 @@ async fn approvals_survive_a_restart() {
 
     let h = Harness::start_in(
         dir,
-        private_endpoint(),
         Arc::new(FakeApprover::new(FakeAnswer::Deny)),
-        Duration::from_secs(10),
+        config(private_endpoint(), Duration::from_secs(10)),
     )
     .await;
     let client = h.client("claude-code").await;

@@ -43,6 +43,7 @@ use pwrroute_router::{
 };
 
 use crate::app::{PwrRoute, Screen};
+use crate::default_browser::browser_name;
 use crate::fixtures;
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
@@ -432,12 +433,15 @@ pub struct ActivityRow {
     pub took: SharedString,
     /// A rewrite ran.
     pub rewritten: bool,
-    /// No handler matched.
+    /// No rule routed it: the default, the fallback or a pause took it.
     pub default: bool,
     /// Resolved and recorded, nothing opened (`--dry-run`).
     pub dry_run: bool,
     /// The trace, for the expanded row.
     pub steps: Vec<ActivityStep>,
+    /// The URL the rules saw (`matched_url`): where a short link landed,
+    /// else `url`. Re-test tries this one.
+    pub matched_url: SharedString,
     /// The URL the browser was asked to open.
     pub final_url: SharedString,
     /// How much of the link the record keeps: `Host` draws the "host only"
@@ -459,6 +463,15 @@ pub enum Opened {
     },
     /// The config chose `browser: null`.
     Nowhere,
+    /// The chosen browser could not be opened and the fallback browser took
+    /// the link: the design's "zoom.us not found ↪ opened in Chrome".
+    Fallback {
+        /// Why, as the router traced it: "Arc could not be opened".
+        why: SharedString,
+        badge: SharedString,
+        name: SharedString,
+        profile: Option<SharedString>,
+    },
     /// Rejected, or the launch failed, with why.
     Failed(SharedString),
 }
@@ -507,8 +520,9 @@ impl Filter {
     ];
 }
 
-/// No handler matched: `defaultBrowser` applied, or nothing was in charge
-/// and the fallback browser took it.
+/// No rule routed it: `defaultBrowser` applied, nothing was in charge and
+/// the fallback browser took it, or routing was paused and the pause target
+/// did.
 fn is_unrouted(record: &DispatchRecord) -> bool {
     record.steps.iter().any(|step| {
         matches!(
@@ -516,6 +530,7 @@ fn is_unrouted(record: &DispatchRecord) -> bool {
             Step::Matched {
                 by: Matched::Default
             } | Step::Fallback { .. }
+                | Step::Paused { .. }
         )
     })
 }
@@ -565,6 +580,7 @@ impl ActivityRow {
                 .iter()
                 .any(|step| matches!(step, Step::Launched { dry_run: true })),
             steps: trace_lines(record),
+            matched_url: matched_url(record).into(),
             final_url: record.final_url.as_deref().unwrap_or(received).into(),
             privacy: record.privacy,
             journaled,
@@ -602,6 +618,9 @@ impl ActivityRow {
                 if *private { " private window" } else { "" }
             ),
             Opened::Nowhere => NOT_OPENED.to_owned(),
+            Opened::Fallback {
+                why, name, profile, ..
+            } => format!("{why} {name} {}", profile.as_deref().unwrap_or_default()),
             Opened::Failed(why) => why.to_string(),
         };
         [self.url.as_ref(), self.from.as_ref(), opened.as_str()]
@@ -623,7 +642,23 @@ fn received_url(record: &DispatchRecord) -> &str {
         .unwrap_or(&record.link.url)
 }
 
-/// The Rule column: "rw 1, 2 · h 3", "handler 2", "default", "fallback".
+/// The URL the rules saw: where a short link landed when the router
+/// expanded it, else the URL as received. Whatever re-resolves a record
+/// (Re-test, Save as test or example, Add a rule) starts from this one,
+/// since Test a link and the saved tests do not expand short links.
+pub(crate) fn matched_url(record: &DispatchRecord) -> &str {
+    record
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            Step::Expanded { url } => Some(url.as_str()),
+            _ => None,
+        })
+        .unwrap_or_else(|| received_url(record))
+}
+
+/// The Rule column: "rw 1, 2 · h 3", "handler 2", "default", "fallback",
+/// and while paused "paused · skipped h 3" (what would have routed it).
 fn rule_label(steps: &[Step]) -> String {
     let mut numbered = Vec::new();
     let mut unnumbered = false;
@@ -642,23 +677,33 @@ fn rule_label(steps: &[Step]) -> String {
     } else if unnumbered {
         parts.push("rw".into());
     }
+    let paused = steps.iter().any(|step| matches!(step, Step::Paused { .. }));
+    if paused {
+        parts.push("paused".into());
+    }
     for step in steps {
         match step {
             Step::Matched {
                 by: Matched::Handler { index },
-            } => parts.push(if parts.is_empty() {
+            } => parts.push(if paused {
+                format!("skipped h {}", index + 1)
+            } else if parts.is_empty() {
                 format!("handler {}", index + 1)
             } else {
                 format!("h {}", index + 1)
             }),
-            Step::Matched {
-                by: Matched::Default,
-            } => parts.push("default".into()),
             // A rules.json handler: the router does not number those.
             Step::Matched {
                 by: Matched::Unreported,
-            } => parts.push("handler".into()),
-            Step::Fallback { .. } | Step::RefusedLoop { .. } => parts.push("fallback".into()),
+            } => parts.push(if paused { "skipped h" } else { "handler" }.into()),
+            // Paused, the pause target took what these would have sent to
+            // the default or the fallback: "paused" says it all.
+            Step::Matched {
+                by: Matched::Default,
+            } if !paused => parts.push("default".into()),
+            Step::Fallback { .. } | Step::RefusedLoop { .. } if !paused => {
+                parts.push("fallback".into());
+            }
             Step::Rejected { .. } => parts.push("rejected".into()),
             _ => {}
         }
@@ -671,13 +716,39 @@ fn rule_label(steps: &[Step]) -> String {
 }
 
 fn opened(record: &DispatchRecord) -> Opened {
+    // The first launch failure, and the router's reason for falling back
+    // after it. A launch that follows them is the fallback browser's.
+    let mut launch_failed: Option<&str> = None;
+    let mut why: Option<&str> = None;
     for step in &record.steps {
         match step {
             Step::Rejected { reason } => return Opened::Failed(reason.clone().into()),
-            Step::LaunchFailed { message } => return Opened::Failed(message.clone().into()),
+            Step::LaunchFailed { message } => {
+                launch_failed.get_or_insert(message);
+            }
+            Step::Fallback { reason } if launch_failed.is_some() => why = Some(reason),
+            Step::Launched { .. } if launch_failed.is_some() => {
+                return match &record.browser {
+                    Some(browser) => {
+                        // First run saves a bundle id: show the app's name.
+                        let name = browser_name(&browser.name);
+                        Opened::Fallback {
+                            why: why.or(launch_failed).unwrap_or_default().to_owned().into(),
+                            badge: badge_for(&name),
+                            name: name.into(),
+                            profile: (!browser.profile.is_empty())
+                                .then(|| browser.profile.clone().into()),
+                        }
+                    }
+                    None => Opened::Failed("not routed".into()),
+                };
+            }
             Step::NotOpened => return Opened::Nowhere,
             _ => {}
         }
+    }
+    if let Some(message) = launch_failed {
+        return Opened::Failed(message.to_owned().into());
     }
     match &record.browser {
         Some(browser) => Opened::Browser {
@@ -722,6 +793,14 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
         let (mark, line) = match step {
             // The row itself shows the link and where it went.
             Step::Received { .. } | Step::Browser { .. } => continue,
+            Step::Expanded { url: after } => {
+                let line = format!(
+                    "short link \u{00b7} expanded \u{00b7} {}",
+                    describe_rewrite(url, after)
+                );
+                url = after;
+                (StepMark::Hit(number), line)
+            }
             Step::Rewrite { rule, url: after } => {
                 let name = match rule {
                     Some(rule) => format!("rewrite {}", rule + 1),
@@ -749,6 +828,13 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
             Step::RefusedLoop { browser } => (
                 StepMark::Miss(number),
                 format!("{browser} is PwrRoute \u{00b7} fallback instead"),
+            ),
+            Step::Paused { skipped } => (
+                StepMark::Miss(number),
+                match skipped {
+                    Some(index) => format!("paused \u{00b7} skipped handler {}", index + 1),
+                    None => "paused \u{00b7} every handler skipped".to_owned(),
+                },
             ),
             Step::NotOpened => (
                 StepMark::Miss(number),
@@ -1035,6 +1121,10 @@ fn private_detail(row: &ActivityRow) -> SharedString {
             went
         }
         Opened::Nowhere => NOT_OPENED.to_owned(),
+        Opened::Fallback { name, profile, .. } => match profile {
+            Some(profile) => format!("{name} \u{00b7} {profile}"),
+            None => name.to_string(),
+        },
         Opened::Failed(_) => "Failed".to_owned(),
     };
     let keeps = match row.privacy {
@@ -1136,6 +1226,42 @@ fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
             .gap(px(6.0))
             .child(badge(NOT_OPENED_BADGE))
             .child(text(NOT_OPENED, 11.5, 400.0, theme::text_muted())),
+        // `.ar .d`: the failure, then `.sub` with where the link went.
+        Opened::Fallback {
+            why,
+            badge: badge_label,
+            name,
+            profile,
+        } => div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .min_w_0()
+            .child(status(why.clone(), theme::status_error()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .min_w_0()
+                    .child(text("\u{21aa}", 10.5, 500.0, theme::text_muted()))
+                    .child(badge(badge_label.clone()))
+                    .child(
+                        one_line(
+                            match profile {
+                                Some(profile) => format!("opened in {name} \u{00b7} {profile}"),
+                                None => format!("opened in {name}"),
+                            },
+                            theme::SANS,
+                            500.0,
+                            10.5,
+                            10.5,
+                            theme::text_muted(),
+                        )
+                        .min_w_0(),
+                    )
+                    .when(dry_run, |sub| sub.child(tag("dry run"))),
+            ),
         Opened::Failed(why) => div().child(status(why.clone(), theme::status_error())),
     }
 }
@@ -1240,7 +1366,7 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
             )
             .child(text(content, 11.0, 400.0, theme::text_muted()).line_height(px(16.5)))
     };
-    let url = row.url.to_string();
+    let url = row.matched_url.to_string();
     let from = row.from.to_string();
     let key = row.key;
     // A host-only record has no full URL to re-test or add a rule for.
@@ -1841,6 +1967,45 @@ mod tests {
     }
 
     #[test]
+    fn a_short_link_row_shows_the_link_and_where_it_landed() {
+        let received = "https://bit.ly/gh";
+        let landed = "https://github.com/pwrdrvr/x";
+        let record = record(
+            9,
+            received,
+            Some("Mail"),
+            vec![
+                Step::Received {
+                    url: received.into(),
+                },
+                Step::Expanded { url: landed.into() },
+                Step::Matched {
+                    by: Matched::Unreported,
+                },
+                Step::Browser {
+                    browser: browser("Firefox", "", landed),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let row = ActivityRow::from_record(&record);
+        assert_eq!(row.url, received, "the row is the link as clicked");
+        assert_eq!(row.matched_url, landed, "Re-test tries what the rules saw");
+        assert_eq!(row.final_url, landed);
+        assert_eq!(row.rule, "handler");
+        assert!(!row.rewritten, "an expansion is not a rewrite");
+        assert_eq!(
+            texts(&row)[..2],
+            [
+                "short link \u{00b7} expanded \u{00b7} host \u{2192} github.com \u{00b7} path \u{2192} /pwrdrvr/x",
+                "a handler matched",
+            ]
+        );
+        assert_eq!(row.steps[0].mark, StepMark::Hit(1));
+        assert!(texts(&row)[2].starts_with("Firefox \u{00b7} resolved"));
+    }
+
+    #[test]
     fn a_rewritten_handler_dispatch_fills_every_column() {
         let received = "https://x.com/pwrdrvr/status/1842?utm_source=slack&s=20";
         let after_host = "https://xcancel.com/pwrdrvr/status/1842?utm_source=slack&s=20";
@@ -1946,6 +2111,70 @@ mod tests {
     }
 
     #[test]
+    fn a_paused_dispatch_names_the_handler_it_skipped() {
+        let url = "https://bsky.app/profile/example";
+        let paused = record(
+            4,
+            url,
+            None,
+            vec![
+                Step::Received { url: url.into() },
+                Step::Matched {
+                    by: Matched::Handler { index: 3 },
+                },
+                Step::Paused { skipped: Some(3) },
+                Step::Browser {
+                    browser: browser("Google Chrome", "Personal", url),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let row = ActivityRow::from_record(&paused);
+        assert_eq!(row.rule, "paused \u{00b7} skipped h 4");
+        assert!(row.default, "a paused link is unrouted");
+        assert!(row.passes(Filter::Unrouted, ""));
+        assert_eq!(
+            texts(&row),
+            [
+                "handler 4",
+                "paused \u{00b7} skipped handler 4",
+                "Google Chrome \u{00b7} Personal \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
+            ]
+        );
+        assert_eq!(row.steps[1].mark, StepMark::Miss(2));
+
+        // Rewritten first, then nothing to skip: the default would have had
+        // it, and the pause target did.
+        let rewritten = "https://xcancel.com/example/status/1";
+        let unskipped = record(
+            5,
+            "https://x.com/example/status/1",
+            None,
+            vec![
+                Step::Received {
+                    url: "https://x.com/example/status/1".into(),
+                },
+                Step::Rewrite {
+                    rule: Some(0),
+                    url: rewritten.into(),
+                },
+                Step::Matched {
+                    by: Matched::Default,
+                },
+                Step::Paused { skipped: None },
+                Step::Browser {
+                    browser: browser("Google Chrome", "Personal", rewritten),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let row = ActivityRow::from_record(&unskipped);
+        assert_eq!(row.rule, "rw 1 \u{00b7} paused");
+        assert!(row.rewritten && row.default);
+        assert_eq!(texts(&row)[2], "paused \u{00b7} every handler skipped");
+    }
+
+    #[test]
     fn failures_name_their_reason() {
         let url = "https://zoom.us/j/8142201137";
         let failed = record(
@@ -2024,6 +2253,95 @@ mod tests {
         assert!(matches!(row.opened, Opened::Nowhere));
         assert_eq!(row.rule, "handler");
         assert!(!row.failed());
+    }
+
+    #[test]
+    fn a_browser_that_could_not_open_shows_the_fallback_that_did() {
+        let url = "https://zoom.us/j/8142201137";
+        let mut record = record(
+            6,
+            url,
+            Some("Calendar"),
+            vec![
+                Step::Received { url: url.into() },
+                Step::Matched {
+                    by: Matched::Handler { index: 5 },
+                },
+                Step::Browser {
+                    browser: browser("zoom.us", "", url),
+                },
+                Step::LaunchFailed {
+                    message: "browser \"zoom.us\" is not installed".into(),
+                },
+                Step::Fallback {
+                    reason: "zoom.us could not be opened".into(),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        // The router names the browser that opened the link.
+        record.browser = Some(browser("Google Chrome", "Personal", url));
+        assert_eq!(record.outcome, Outcome::Opened);
+        let row = ActivityRow::from_record(&record);
+        assert!(!row.failed(), "{:?}", row.opened);
+        let Opened::Fallback {
+            why,
+            badge,
+            name,
+            profile,
+        } = &row.opened
+        else {
+            panic!("opened in the fallback: {:?}", row.opened);
+        };
+        assert_eq!(why.as_ref(), "zoom.us could not be opened");
+        assert_eq!((badge.as_ref(), name.as_ref()), ("Ch", "Google Chrome"));
+        assert_eq!(profile.as_deref(), Some("Personal"));
+        assert_eq!(row.rule, "handler 6 \u{00b7} fallback");
+        assert!(
+            row.default,
+            "the fallback took it: a link to add a rule for"
+        );
+        assert_eq!(
+            texts(&row),
+            [
+                "handler 6",
+                "launch failed \u{00b7} browser \"zoom.us\" is not installed",
+                "fallback \u{00b7} zoom.us could not be opened",
+                "Google Chrome \u{00b7} Personal \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
+            ]
+        );
+        assert_eq!(row.steps[1].mark, StepMark::Fail);
+        assert_eq!(row.steps[2].mark, StepMark::Miss(3));
+        assert_eq!(row.steps[3].mark, StepMark::Done);
+        assert!(row.passes(Filter::Unrouted, "chrome"));
+        assert!(row.passes(Filter::All, "could not be opened"));
+        assert!(!row.passes(Filter::Failed, ""));
+        assert_eq!(
+            private_detail(&row).as_ref(),
+            "Google Chrome \u{00b7} Personal. Keeps the full URL."
+        );
+
+        // First run saves a bundle id; the row names the app.
+        record.browser = Some(browser("com.google.Chrome", "", url));
+        let row = ActivityRow::from_record(&record);
+        assert!(
+            matches!(&row.opened, Opened::Fallback { badge, name, profile: None, .. }
+                if badge == "Ch" && name == "Google Chrome"),
+            "{:?}",
+            row.opened
+        );
+
+        // Both failed: the row is a failure with the first reason.
+        record.steps.pop();
+        record.steps.push(Step::LaunchFailed {
+            message: "browser \"Google Chrome\" is not installed".into(),
+        });
+        record.outcome = Outcome::Failed;
+        let row = ActivityRow::from_record(&record);
+        assert!(row.failed());
+        assert!(
+            matches!(&row.opened, Opened::Failed(why) if why == "browser \"zoom.us\" is not installed")
+        );
     }
 
     #[test]

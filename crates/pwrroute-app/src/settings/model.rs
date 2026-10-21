@@ -193,8 +193,10 @@ pub struct Configuration {
     pub finicky: Option<FinickyConfig>,
     /// What the importer offers from that config.
     pub import: Option<ImportPlan>,
-    /// The hosts whose links are followed one redirect before matching:
-    /// the engine's built-in list, plus a config's own.
+    /// The hosts whose links are followed to where they land before the
+    /// rules run: the engine's built-in list, or the config's own
+    /// `urlShorteners` when it sets one. Empty when the config turned
+    /// expansion off.
     pub shorteners: Vec<SharedString>,
     /// Where `rules.json` lives, as the reader would type it.
     pub rules_path: SharedString,
@@ -364,7 +366,7 @@ pub enum Usage {
 /// Settings › Updates: this copy, and what the updater last said.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
-    /// "0.0.1-alpha.0".
+    /// "0.1.0-rc.1".
     pub version: SharedString,
     /// "stable" or "prerelease": which releases this copy follows.
     pub channel: SharedString,
@@ -398,7 +400,7 @@ pub enum UpdateState {
 /// and states, never a link.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostics {
-    /// "0.0.1-alpha.0 · release · arm64".
+    /// "0.1.0-rc.1 · release · arm64".
     pub version: SharedString,
     /// "macOS 15.6 (arm64)".
     pub os: SharedString,
@@ -469,7 +471,15 @@ pub enum SettingsRequest {
         session: SessionId,
         role: RoleId,
     },
+    /// Arrives only after the row's Revoke was confirmed.
     RevokeSession(SessionId),
+    /// Allow a revoked session again, with `role` (the row's last one).
+    AllowSession {
+        session: SessionId,
+        role: RoleId,
+    },
+    /// Drop a revoked session; its next connection is asked about again.
+    ForgetSession(SessionId),
     NewCustomRole,
     OpenActivity,
     SetRulesSource(RulesSource),

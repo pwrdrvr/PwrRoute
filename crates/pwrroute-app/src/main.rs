@@ -170,7 +170,7 @@ fn main() -> ExitCode {
         // Before the tray, which follows the feed from the start.
         activity::install(resident.handle(), resident.dispatched.clone(), cx);
         settings_store::install(resident.settings.clone(), Some(resident.handle()), cx);
-        tray::install(cx);
+        tray::install(Some(resident.handle()), cx);
         default_browser::install(default_browser::Os::real(), cx);
         tray::follow_default_browser(cx);
         // Local agents: MCP on <data dir>/mcp.sock, beside the router's.
@@ -298,12 +298,14 @@ fn rules_command(args: Vec<String>) -> Option<ExitCode> {
     )))
 }
 
-/// Runs the file's examples and tests and prints the result: one line per
+/// Runs the file's examples and tests and prints the result: whatever the
+/// config printed with `console` while loading and running, one line per
 /// failure with the input, what was expected, what happened and which rule
-/// won. The inputs are the user's own saved examples, so printing them is
-/// what the command is for. The result is the command's exit code.
+/// won, then the count. The inputs are the user's own saved examples, so
+/// printing them is what the command is for. The result is the command's
+/// exit code.
 fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Write) -> u8 {
-    use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, Sources, TestSource};
+    use pwrroute_engine::{ConsoleLog, Engine, Limits, RulesFile, Sources, TestSource};
 
     let rules_file = match rules {
         Some(path) => match RulesFile::load(path) {
@@ -319,9 +321,15 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
         config: config.map(Path::to_path_buf),
         rules: rules_file,
     };
-    let engine = match Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default()) {
+    // The OS answers the config's finicky.* calls, as it does for the
+    // router. Its console output is collected (the last ConsoleLog::CAPACITY
+    // lines) and printed here: `out` is where the user asked for it.
+    let console = ConsoleLog::new();
+    let host = Rc::new(console.native_host());
+    let engine = match Engine::from_sources(&sources, host, Limits::default()) {
         Ok(engine) => engine,
         Err(error) => {
+            print_console(&console, out);
             let _ = writeln!(out, "the rules did not load: {error:#}");
             return 2;
         }
@@ -329,10 +337,12 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
     let report = match engine.test_rules(None) {
         Ok(report) => report,
         Err(error) => {
+            print_console(&console, out);
             let _ = writeln!(out, "the tests did not run: {error:#}");
             return 2;
         }
     };
+    print_console(&console, out);
     for failure in &report.failures {
         let source = match failure.source {
             TestSource::RuleExample { rule, example } => {
@@ -379,6 +389,13 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
         report.total
     );
     u8::from(!report.is_ok())
+}
+
+/// The config's `console` lines so far, as `console.<level>: message`.
+fn print_console(console: &pwrroute_engine::ConsoleLog, out: &mut dyn Write) {
+    for line in console.take() {
+        let _ = writeln!(out, "console.{}: {}", line.level.name(), line.message);
+    }
 }
 
 /// Brings the main window forward, opening it if it is closed.
@@ -491,6 +508,34 @@ mod cli_tests {
             String::from_utf8(out)
                 .unwrap()
                 .contains("winner:   config handler 1")
+        );
+    }
+
+    #[test]
+    fn rules_test_prints_the_configs_console_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules = write(
+            dir.path(),
+            "rules.json",
+            r#"{ "defaultBrowser": "Firefox",
+                 "tests": [{ "url": "https://example.com/a", "expect": { "browser": "Firefox" } }] }"#,
+        );
+        let config = write(
+            dir.path(),
+            "finicky.js",
+            r#"console.log("config loaded");
+               export default { defaultBrowser: "Firefox",
+                 handlers: [{ match: (url) => { console.warn("testing", url.href); return false; },
+                              browser: "Safari" }] };"#,
+        );
+        let mut out = Vec::new();
+        assert_eq!(run_rules_tests(Some(&rules), Some(&config), &mut out), 0);
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(
+            text,
+            "console.log: config loaded\n\
+             console.warn: testing https://example.com/a\n\
+             1 passed, 0 failed, 1 total\n"
         );
     }
 

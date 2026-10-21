@@ -20,7 +20,8 @@ use crate::link::{Link, Source};
 ///
 /// - `Full`: the URL, the opener and every step, as received.
 /// - `Host`: scheme and host only, in the link, the final URL and every
-///   step; no error text, which can quote the URL. The opener's name,
+///   step (where a short link landed included); no error text, which can
+///   quote the URL. The opener's name,
 ///   bundle id and path stay; its `window_title` goes, since an app can
 ///   fill it with the page's title or the URL itself.
 /// - `None`: no URL, no host, no opener, no steps: the dispatch is only
@@ -111,6 +112,13 @@ pub enum Step {
     Received {
         url: String,
     },
+    /// The link was on a shortener's domain and was followed to where it
+    /// lands; `url` is that destination, which the rules then saw. Absent
+    /// when the link was not short, expansion is off, or the shortener did
+    /// not answer (the short link then goes to the rules as it is).
+    Expanded {
+        url: String,
+    },
     /// A rewrite rule matched and ran; `url` is the URL after it, which can
     /// equal the URL before. `rule` is `None` when the resolver only reports
     /// the final URL (the step then means the URL changed, and `url` is the
@@ -129,7 +137,9 @@ pub enum Step {
     ConfigError {
         message: String,
     },
-    /// No config is loaded, so the fallback browser applies.
+    /// The fallback browser applies: no config is loaded, the config could
+    /// not resolve the link, or (after a [`LaunchFailed`](Self::LaunchFailed))
+    /// the chosen browser could not be opened, so the fallback opens it.
     Fallback {
         reason: String,
     },
@@ -137,6 +147,12 @@ pub enum Step {
     /// fallback browser opens it instead.
     RefusedLoop {
         browser: String,
+    },
+    /// Routing was paused: every handler is ignored and the link goes to the
+    /// pause target instead, after the rewrites. `skipped` is the handler
+    /// that matched and was passed over, when the resolver numbers it.
+    Paused {
+        skipped: Option<usize>,
     },
     /// The chosen browser.
     Browser {
@@ -311,7 +327,9 @@ fn reduce_browser(browser: &mut Browser) {
 
 fn reduce_step(step: &mut Step) {
     match step {
-        Step::Received { url } | Step::Rewrite { url, .. } => *url = host_only(url),
+        Step::Received { url } | Step::Expanded { url } | Step::Rewrite { url, .. } => {
+            *url = host_only(url);
+        }
         Step::Browser { browser } => reduce_browser(browser),
         Step::ConfigError { message } | Step::LaunchFailed { message } => {
             *message = WITHHELD.to_owned();
@@ -319,6 +337,7 @@ fn reduce_step(step: &mut Step) {
         Step::Matched { .. }
         | Step::Fallback { .. }
         | Step::RefusedLoop { .. }
+        | Step::Paused { .. }
         | Step::NotOpened
         | Step::Launched { .. }
         | Step::Rejected { .. } => {}
@@ -388,6 +407,7 @@ mod tests {
                 Step::Matched {
                     by: Matched::Handler { index: 2 },
                 },
+                Step::Paused { skipped: Some(2) },
                 Step::Browser {
                     browser: browser(rewritten),
                 },
@@ -451,6 +471,7 @@ mod tests {
                 Step::Matched {
                     by: Matched::Handler { index: 2 }
                 },
+                Step::Paused { skipped: Some(2) },
                 Step::Browser {
                     browser: browser.clone()
                 },
@@ -465,6 +486,31 @@ mod tests {
         }
         assert_eq!(reduced.outcome, Outcome::Failed);
         assert_eq!(reduced.timings, record().timings);
+    }
+
+    #[test]
+    fn a_host_record_keeps_only_the_host_of_where_a_short_link_landed() {
+        let mut full = record();
+        full.link.url = "https://go.example/s3cr3t".into();
+        full.steps.insert(
+            1,
+            Step::Expanded {
+                url: "https://bank.example.com:8443/account?token=hunter2#x".into(),
+            },
+        );
+        let reduced = full.reduced(Privacy::Host);
+        assert_eq!(reduced.link.url, "https://go.example");
+        assert_eq!(
+            reduced.steps[1],
+            Step::Expanded {
+                url: "https://bank.example.com:8443".into()
+            }
+        );
+        let json = serde_json::to_string(&reduced).unwrap();
+        for private in ["s3cr3t", "hunter2", "/account"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+        assert!(full.reduced(Privacy::None).steps.is_empty());
     }
 
     #[test]

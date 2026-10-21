@@ -65,6 +65,48 @@ fn macos_by_name_bundle_id_and_path() {
 }
 
 #[test]
+fn a_home_path_is_expanded() {
+    // macOS: `open -a` does not expand `~`, and the catalog still knows the
+    // app by its file name, so the profile flag is found.
+    let fx = mac_with_chrome_profiles();
+    let mut b = browser("~/Applications/Google Chrome.app", AppType::Path);
+    b.profile = "Work".into();
+    let expanded = fx.path("home/Applications/Google Chrome.app");
+    let p = plan(&fx, &b);
+    assert_eq!(
+        open_args(&p),
+        [
+            "-a",
+            expanded.to_str().unwrap(),
+            "-n",
+            "--args",
+            "--profile-directory=Default",
+            URL
+        ]
+    );
+    assert!(p.notes.is_empty());
+
+    // Linux: the file must exist at the expanded path.
+    let fx = Fixture::new(Platform::Linux);
+    let surf = fx.write("home/bin/surf", "");
+    let p = plan(&fx, &browser("~/bin/surf", AppType::Path));
+    assert_eq!(p.program, surf);
+    assert_eq!(p.args, strings(&[URL]));
+
+    // Windows too; a `~` anywhere else is part of the name.
+    let fx = Fixture::new(Platform::Windows);
+    let other = fx.write("home/Tools/other.exe", "");
+    let p = plan(&fx, &browser("~/Tools/other.exe", AppType::Path));
+    assert_eq!(p.program, other);
+    let launcher = Launcher::with_env(fx.env.clone(), LaunchOptions::default());
+    assert!(
+        launcher
+            .plan(&browser("~Tools/other.exe", AppType::Path))
+            .is_err()
+    );
+}
+
+#[test]
 fn macos_background() {
     let fx = Fixture::new(Platform::MacOs);
     let mut b = browser("Safari", AppType::AppName);
@@ -177,16 +219,33 @@ fn missing_and_unsupported_profiles_open_without_one() {
 
 #[test]
 fn macos_args_replace_the_url() {
+    // `-n` goes with every `--args`: without a new instance `open` hands a
+    // running browser the URL and drops the arguments, so a config's `args`
+    // (which carry the URL) would open nothing.
     let fx = mac_with_chrome_profiles();
     let mut b = browser("Google Chrome", AppType::AppName);
     b.args = strings(&["--incognito", URL]);
     assert_eq!(
         open_args(&plan(&fx, &b)),
-        ["-a", "Google Chrome", "--args", "--incognito", URL]
+        ["-a", "Google Chrome", "-n", "--args", "--incognito", URL]
+    );
+    let mut b = browser("com.google.Chrome", AppType::BundleId);
+    b.args = strings(&["--new-window", URL]);
+    assert_eq!(
+        open_args(&plan(&fx, &b)),
+        [
+            "-b",
+            "com.google.Chrome",
+            "-n",
+            "--args",
+            "--new-window",
+            URL
+        ]
     );
 
     // A config's own `--args`: what precedes it is for `open`, and the
     // profile flag goes after it.
+    let mut b = browser("Google Chrome", AppType::AppName);
     b.profile = "Work".into();
     b.args = strings(&["-F", "--args", "--incognito", URL]);
     assert_eq!(
@@ -230,7 +289,7 @@ fn private_window_adds_the_catalog_flag() {
     let p = plan(&fx, &b);
     assert_eq!(
         open_args(&p),
-        ["-a", "Google Chrome", "--args", "--incognito", URL]
+        ["-a", "Google Chrome", "-n", "--args", "--incognito", URL]
     );
     assert!(p.notes.is_empty());
 

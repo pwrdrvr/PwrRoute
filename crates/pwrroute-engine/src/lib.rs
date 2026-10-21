@@ -18,6 +18,9 @@
 //! - [`Reloader`] watches them and swaps in a new [`Engine`] only once it has
 //!   loaded and validated.
 //! - [`NativeHost`] answers the `finicky.*` native functions from the OS.
+//!   A config's `console` output reaches the [`Host`] as it prints, and
+//!   each run's lines come back in its [`Trace`] (and a [`TestReport`]), in
+//!   memory only: they often carry the URL.
 //!
 //! An [`Engine`] is single-threaded (QuickJS runtimes are not `Send`): create
 //! one per config on the thread that resolves links, and replace it on reload.
@@ -56,7 +59,9 @@ pub use describe::{
     BrowserSpec, Description, FixedBrowser, FunctionSpec, HandlerRule, MatcherSpec, RewriteRule,
     UrlSpec,
 };
-pub use host::{DefaultHost, Host, LogLevel, ModifierKeys, PowerInfo, SystemInfo};
+pub use host::{
+    ConsoleLine, ConsoleLog, DefaultHost, Host, LogLevel, ModifierKeys, PowerInfo, SystemInfo,
+};
 #[cfg(feature = "http")]
 pub use http::HttpNetwork;
 pub use native::NativeHost;
@@ -236,6 +241,9 @@ pub struct Engine {
     limits: Limits,
     config: Option<PathBuf>,
     host: Rc<dyn Host>,
+    /// The config's `console` output since the current run started; each
+    /// trace takes its lines.
+    console: ConsoleLog,
     /// The `rules.json` the engine loaded, for the privacy of what it routes
     /// and for its examples and tests.
     rules: RulesFile,
@@ -318,14 +326,16 @@ impl Engine {
             limits,
             config: config.as_ref().map(|(path, _)| path.clone()),
             host: Rc::clone(&host),
+            console: ConsoleLog::new(),
             rules: sources.rules.clone(),
             imports,
             short_links: ShortLinks::default(),
             planned_rewrites: sources.rules.planned_rewrites(),
             planned_rules: sources.rules.planned_rules(),
         };
+        let console = engine.console.clone();
         let shorteners = engine.with_deadline(limits.load, |ctx| {
-            install_globals(&ctx, &host)?;
+            install_globals(&ctx, &host, &console)?;
             let base = match &config {
                 Some(_) => serde_json::Value::Null,
                 None => sources.rules.base_config(),
@@ -342,13 +352,13 @@ impl Engine {
                 load_config(&ctx, path, source)?;
             }
             adopt_config(&ctx, config.is_some())?;
-            let list: Vec<String> = ctx
-                .eval::<Vec<String>, _>("__pwrroute.shorteners()")
+            let list: Option<Vec<String>> = ctx
+                .eval::<Option<Vec<String>>, _>("__pwrroute.shorteners()")
                 .catch(&ctx)
                 .map_err(|e| js_error("reading options.urlShorteners", &e))?;
             Ok(list)
         })?;
-        engine.short_links = ShortLinks::with_domains(shorteners);
+        engine.short_links = ShortLinks::from_option(shorteners);
         Ok(engine)
     }
 
@@ -370,8 +380,9 @@ impl Engine {
     }
 
     /// Which links this config expands before resolving: the built-in
-    /// shorteners plus the config's `options.urlShorteners`. Cloneable and
-    /// `Send`, so expansion can run off the engine's thread.
+    /// shorteners, or the config's own `options.urlShorteners` when it sets
+    /// the option (an empty list expands nothing). Cloneable and `Send`, so
+    /// expansion can run off the engine's thread, as the router does it.
     pub fn short_links(&self) -> &ShortLinks {
         &self.short_links
     }
@@ -409,6 +420,7 @@ impl Engine {
     /// [`Engine::resolve_link`].
     #[doc(hidden)]
     pub fn resolve_plain(&self, link: &Link, opener: Option<&Opener>) -> Result<Resolution> {
+        self.console.clear();
         self.with_deadline(self.limits.resolve, |ctx| {
             set_link(&ctx, link, opener)?;
             let json: String = ctx
@@ -431,8 +443,10 @@ impl Engine {
     }
 
     /// Finicky's `openUrl` over the traced config, with `rules.json` steps
-    /// numbered by their place in the file.
+    /// numbered by their place in the file, and the `console` output of
+    /// this run and nothing earlier.
     fn trace_steps(&self, link: &Link, opener: Option<&Opener>) -> Result<Trace> {
+        self.console.clear();
         self.with_deadline(self.limits.resolve, |ctx| {
             set_link(&ctx, link, opener)?;
             let json: String = ctx
@@ -457,6 +471,7 @@ impl Engine {
                 original_url: link.original_url.clone(),
                 steps: raw.steps,
                 resolution: raw.result,
+                console: self.console.take(),
             })
         })
     }
@@ -555,10 +570,10 @@ fn set_link(ctx: &Ctx<'_>, link: &Link, opener: Option<&Opener>) -> Result<()> {
 }
 
 /// `self`, `console` and the `finicky` global, then the config API itself.
-fn install_globals(ctx: &Ctx<'_>, host: &Rc<dyn Host>) -> Result<()> {
+fn install_globals(ctx: &Ctx<'_>, host: &Rc<dyn Host>, console: &ConsoleLog) -> Result<()> {
     let globals = ctx.globals();
     globals.set("self", globals.clone())?;
-    install_console(ctx, host)?;
+    install_console(ctx, host, console)?;
 
     ctx.eval::<(), _>(CONFIG_API)
         .catch(ctx)
@@ -624,7 +639,9 @@ fn install_host_functions<'js>(
     Ok(())
 }
 
-fn install_console<'js>(ctx: &Ctx<'js>, host: &Rc<dyn Host>) -> Result<()> {
+/// `console.debug/log/info/warn/error`: each call reaches the host as it
+/// happens and is kept in `log` for the run's trace.
+fn install_console<'js>(ctx: &Ctx<'js>, host: &Rc<dyn Host>, log: &ConsoleLog) -> Result<()> {
     let console = Object::new(ctx.clone())?;
     for (name, level) in [
         ("debug", LogLevel::Debug),
@@ -634,6 +651,7 @@ fn install_console<'js>(ctx: &Ctx<'js>, host: &Rc<dyn Host>) -> Result<()> {
         ("error", LogLevel::Error),
     ] {
         let h = Rc::clone(host);
+        let log = log.clone();
         console.set(
             name,
             Function::new(ctx.clone(), move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
@@ -643,6 +661,7 @@ fn install_console<'js>(ctx: &Ctx<'js>, host: &Rc<dyn Host>) -> Result<()> {
                     .map(|v| display(&ctx, v))
                     .collect::<Vec<_>>()
                     .join(" ");
+                log.push(level, &message);
                 h.log(level, &message);
             })?,
         )?;

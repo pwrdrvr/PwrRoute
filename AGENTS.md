@@ -9,8 +9,9 @@ Keep this file short; see **Docs & conventions** below.
 
 A Cargo workspace with a GPUI window, a Finicky-compatible rules engine, a
 resident router that receives links from the OS, and a browser launcher. The
-router resolves and records every link, but does not use the launcher yet, so
-it cannot open a browser (run with `--dry-run` to see dispatches succeed).
+router resolves every link, opens it through `pwrroute-browsers`' launcher
+(or the fallback browser, when that fails) and records it;
+`--dry-run` swaps in a launcher that opens nothing.
 
 - `crates/pwrroute-engine` — loads Finicky v4 `.js`/`.ts` configs in QuickJS
   (rquickjs) with oxc for TypeScript, and resolves URLs. See its `AGENTS.md`.
@@ -22,11 +23,15 @@ it cannot open a browser (run with `--dry-run` to see dispatches succeed).
   See its `AGENTS.md`.
 - `crates/pwrroute-os` — link receipt and default-browser registration per
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
-- `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It draws the
-  design's Rules and Test a link screens and the first-run window from
-  contrived fixture data (`fixtures/`), and hosts the router. Test a link
-  runs the real engine; Activity and the tray's recents show the router's
-  real dispatches. See its `AGENTS.md`.
+- `crates/pwrroute-mcp` — the MCP server for local agents, served by the
+  running app and reached through `pwrroute mcp`. See its `AGENTS.md`.
+- `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It hosts the
+  router and the MCP server and draws the design's screens over live data:
+  Rules edits the real `rules.json`, Test a link runs the real engine,
+  Activity and the tray show the router's dispatches, Settings and the
+  first-run window read and change the running app. Contrived fixture data
+  (`fixtures/`) is for tests and the `screens` example only. See its
+  `AGENTS.md`.
 - `e2e` — Desktop E2E: launches the built app and drives it through an
   env-gated control socket (`crates/pwrroute-app/src/e2e.rs`). See its
   `AGENTS.md` and `CONTRACT.md`.
@@ -61,7 +66,7 @@ cargo xtask lint                 # everything CI's Typecheck job runs
 cargo xtask test                 # every workspace test
 cargo xtask licenses             # regenerate THIRD_PARTY_LICENSES
 cargo xtask e2e                  # build the app, run Desktop E2E against it
-cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG
+cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG ($CARGO_TARGET_DIR if set)
 cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
 cargo run -p pwrroute-app --example screens -- DIR   # macOS: each screen as a PNG
 ```
@@ -121,7 +126,11 @@ throwaway CI runners (`e2e/AGENTS.md`).
 
 `cargo xtask bundle [--universal] [--sign IDENTITY] [--notarize]` builds the
 macOS app, zip and DMG, ad hoc signed unless an identity is given.
-`cargo xtask package-linux` builds the tar.gz and .deb. Windows and macOS
+`cargo xtask package-linux` builds the tar.gz and .deb. The app icon is
+`packaging/icon/PwrRoute.svg`, the design mark on the Pwr family's tile;
+`scripts/release/make-icns.sh` renders it into the committed
+`packaging/macos/PwrRoute.icns` and `packaging/windows/PwrRoute.ico`, so
+rerun it and commit both after editing the SVG. Windows and macOS
 releases install and update through Velopack: release.yml packs them with
 `vpk`, installed by `scripts/release/install-vpk.sh` from a pinned version
 and SHA-512; that version must equal the `velopack` crate's `=` pin, and

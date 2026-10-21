@@ -14,7 +14,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::{macos, package_version, read, root, run};
+use crate::{macos, package_version, read, root, run, target_dir};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Options {
@@ -53,7 +53,7 @@ pub(crate) fn e2e(args: &[String]) -> Result<()> {
     }
     run(build.current_dir(&root))?;
 
-    let target = target_dir(&root);
+    let target = target_dir();
     let binary = target
         .join(profile)
         .join(format!("pwrroute{}", env::consts::EXE_SUFFIX));
@@ -92,14 +92,6 @@ pub(crate) fn e2e(args: &[String]) -> Result<()> {
     let result = run(&mut test);
     println!("E2E artifacts: {}", artifacts.display());
     result
-}
-
-/// Where the build above put the binary: `CARGO_TARGET_DIR` when a developer
-/// keeps several checkouts' builds apart, else the workspace's `target/`.
-fn target_dir(root: &Path) -> PathBuf {
-    env::var_os("CARGO_TARGET_DIR")
-        .map(|dir| root.join(dir))
-        .unwrap_or_else(|| root.join("target"))
 }
 
 /// `target/e2e/PwrRoute.app` around `binary`: the release bundle's

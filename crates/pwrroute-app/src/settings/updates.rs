@@ -133,8 +133,8 @@ fn checking_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) ->
         field(
             "Checks",
             Some(field_sub(
-                "At startup and from Check for Updates\u{2026} in the app menu. A download \
-                 installs on the next launch.",
+                "At startup, every 6 hours and from Check for Updates\u{2026} in the app menu. \
+                 A download installs when you quit, or from Restart to update.",
             )),
             [field_help(
                 "Nothing is downloaded without a newer release on this copy\u{2019}s channel.",
