@@ -6,7 +6,8 @@
      PwrRoute as a default browser; the router receives them as kAEGetURL
      Apple Events. Becoming the default is still an explicit action in the
      app, answered by the OS consent prompt.
-     No icon yet; the design draws placeholder tiles only. -->
+     CFBundleIconFile names Contents/Resources/PwrRoute.icns, which the bundle
+     task copies from packaging/macos (made by scripts/release/make-icns.sh). -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
@@ -17,6 +18,8 @@
 	<string>PwrRoute</string>
 	<key>CFBundleExecutable</key>
 	<string>pwrroute</string>
+	<key>CFBundleIconFile</key>
+	<string>PwrRoute</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

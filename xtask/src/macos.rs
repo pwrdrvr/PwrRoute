@@ -94,12 +94,14 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
     for file in ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"] {
         fs::copy(root.join(file), contents.join("Resources").join(file))?;
     }
+    fs::copy(root.join(ICNS), contents.join("Resources/PwrRoute.icns"))?;
     let plist = read(&root.join("packaging/macos/Info.plist.in"))?
         .replace("@SHORT_VERSION@", short_version(&version));
     fs::write(contents.join("Info.plist"), plist)?;
     run(Command::new("plutil")
         .arg("-lint")
         .arg(contents.join("Info.plist")))?;
+    check_icon(&contents)?;
 
     sign(&app, options.identity.as_deref())?;
     if options.app_only {
@@ -145,6 +147,36 @@ fn build(root: &Path, target: Option<&str>) -> Result<()> {
 /// `0.0.1-alpha.0` becomes `0.0.1`: macOS wants three numbers.
 fn short_version(version: &str) -> &str {
     version.split(['-', '+']).next().unwrap_or(version)
+}
+
+/// The icon set `scripts/release/make-icns.sh` renders from
+/// packaging/icon/PwrRoute.svg; committed, because CI does not rasterize.
+const ICNS: &str = "packaging/macos/PwrRoute.icns";
+
+/// The bundle shows an icon only when Info.plist's CFBundleIconFile names
+/// an .icns that is in Contents/Resources; a slip in either leaves the
+/// generic app icon in the Dock and the default-browser chooser.
+fn check_icon(contents: &Path) -> Result<()> {
+    let plist = read(&contents.join("Info.plist"))?;
+    let name = icon_file(&plist).context("Info.plist has no CFBundleIconFile")?;
+    let icns = contents
+        .join("Resources")
+        .join(format!("{}.icns", name.trim_end_matches(".icns")));
+    let header = fs::read(&icns).with_context(|| icns.display().to_string())?;
+    ensure!(
+        header.starts_with(b"icns"),
+        "{} is not an icns file",
+        icns.display()
+    );
+    Ok(())
+}
+
+/// The `<string>` after `<key>CFBundleIconFile</key>`.
+fn icon_file(plist: &str) -> Option<&str> {
+    let (_, after_key) = plist.split_once("<key>CFBundleIconFile</key>")?;
+    let (_, after_tag) = after_key.split_once("<string>")?;
+    let (value, _) = after_tag.split_once("</string>")?;
+    Some(value.trim()).filter(|v| !v.is_empty())
 }
 
 fn sign(app: &Path, identity: Option<&str>) -> Result<()> {
@@ -235,5 +267,49 @@ mod tests {
     fn short_version_drops_the_prerelease() {
         assert_eq!(short_version("0.0.1-alpha.0"), "0.0.1");
         assert_eq!(short_version("1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn reads_the_icon_file_from_a_plist() {
+        let plist = "<dict>\n\t<key>CFBundleIconFile</key>\n\t<string>PwrRoute</string>\n</dict>";
+        assert_eq!(icon_file(plist), Some("PwrRoute"));
+        assert_eq!(icon_file("<dict></dict>"), None);
+        assert_eq!(
+            icon_file("<key>CFBundleIconFile</key><string></string>"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_plist_template_names_the_committed_icon_set() {
+        let plist = read(&root().join("packaging/macos/Info.plist.in")).unwrap();
+        assert_eq!(icon_file(&plist), Some("PwrRoute"));
+        let icns = fs::read(root().join(ICNS)).unwrap();
+        assert!(icns.starts_with(b"icns"), "{ICNS} is not an icns file");
+        let ico = fs::read(root().join("packaging/windows/PwrRoute.ico")).unwrap();
+        assert!(
+            ico.starts_with(&[0, 0, 1, 0]),
+            "the .ico has no icon header"
+        );
+    }
+
+    /// What `bundle` runs after writing Contents: a bundle laid out like
+    /// ours passes, one missing the .icns or the plist key does not.
+    #[test]
+    fn the_bundle_check_wants_the_icns_the_plist_names() {
+        let dir = env::temp_dir().join(format!("pwrroute-icon-check-{}", std::process::id()));
+        let contents = dir.join("Contents");
+        fs::create_dir_all(contents.join("Resources")).unwrap();
+        fs::write(
+            contents.join("Info.plist"),
+            "<key>CFBundleIconFile</key><string>PwrRoute</string>",
+        )
+        .unwrap();
+        assert!(check_icon(&contents).is_err(), "no .icns yet");
+        fs::copy(root().join(ICNS), contents.join("Resources/PwrRoute.icns")).unwrap();
+        check_icon(&contents).unwrap();
+        fs::write(contents.join("Info.plist"), "<dict></dict>").unwrap();
+        assert!(check_icon(&contents).is_err(), "the key is gone");
+        fs::remove_dir_all(dir).unwrap();
     }
 }
