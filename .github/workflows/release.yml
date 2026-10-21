@@ -105,7 +105,7 @@ jobs:
 
       # Ad hoc signed; vpk re-signs it in the sign job.
       - name: Build PwrRoute.app (universal)
-        run: cargo xtask bundle --universal --app-only
+        run: cargo xtask bundle --universal --app-only --require-icon-catalog
 
       # Everything the sign job needs, and nothing else: it has no checkout.
       - name: Stage signing input
@@ -260,6 +260,9 @@ jobs:
       # vpk changed but did not sign fails `codesign --verify`. No .pkg
       # installer (--noInst): it needs a Developer ID Installer certificate,
       # which apple-signing does not hold; the DMG is the installer.
+      # --icon is read only when vpk builds the .app itself from a folder; a
+      # prebuilt .app keeps its Info.plist, Assets.car and Icon.icns as
+      # bundle wrote them (checked with vpk 1.2.161).
       - name: Pack with vpk
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
