@@ -46,6 +46,8 @@ async fn a_client_on_the_link_lists_and_calls_tools() {
             "pwrroute_resolve",
             "pwrroute_rules_apply",
             "pwrroute_rules_list",
+            "pwrroute_rules_test",
+            "pwrroute_suggest_rule",
         ]
     );
 
@@ -94,7 +96,7 @@ async fn a_client_on_the_link_lists_and_calls_tools() {
 async fn the_proxy_carries_a_client_end_to_end() {
     let h = Harness::start(FakeAnswer::Approve(Role::Opener)).await;
     let (client, mut child) = h.client_via_proxy("claude-code").await;
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 6);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 8);
     let result = call(
         &client,
         "pwrroute_open",
@@ -168,7 +170,7 @@ async fn a_second_server_does_not_take_over_the_endpoint() {
     );
     // The first still answers.
     let client = h.client("test-agent").await;
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 6);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 8);
     client.cancel().await.unwrap();
     h.finish().await;
 }
@@ -257,7 +259,8 @@ async fn urls_stay_off_disk_and_out_of_the_audit_log() {
             "outcome",
             "started",
             "tool"
-        ]
+        ],
+        "no note on an ordinary call, and never the arguments"
     );
 
     client.cancel().await.unwrap();

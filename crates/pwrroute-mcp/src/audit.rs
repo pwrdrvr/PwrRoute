@@ -34,6 +34,11 @@ pub struct AuditRecord {
     #[serde(with = "millis")]
     pub duration: Duration,
     pub outcome: Outcome,
+    /// A fixed word about the outcome, when there is more to say than the
+    /// outcome itself: `pwrroute_rules_apply` refused for failing saved
+    /// tests, or wrote past them with `force`. Never agent text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'static str>,
 }
 
 /// Where audit records go. The app may write them to disk: they hold no

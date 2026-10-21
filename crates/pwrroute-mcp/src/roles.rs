@@ -15,7 +15,8 @@ pub enum Permission {
     /// `pwrroute_browsers`.
     #[serde(rename = "browsers.read")]
     Browsers,
-    /// `pwrroute_rules_list`.
+    /// `pwrroute_rules_list`, `pwrroute_rules_test` and
+    /// `pwrroute_suggest_rule`.
     #[serde(rename = "rules.read")]
     RulesRead,
     /// `pwrroute_activity`, with every URL cut to its host.
@@ -24,6 +25,10 @@ pub enum Permission {
     /// `pwrroute_activity` with full URLs.
     #[serde(rename = "activity.urls")]
     ActivityUrls,
+    /// `pwrroute_activity` over the on-disk journal (`source: "journal"`),
+    /// when the user turned it on.
+    #[serde(rename = "activity.journal")]
+    ActivityJournal,
     /// `pwrroute_open`.
     #[serde(rename = "links.open")]
     Open,
@@ -33,7 +38,7 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Resolve,
         Self::Browsers,
         Self::RulesRead,
@@ -41,6 +46,7 @@ impl Permission {
         Self::ActivityUrls,
         Self::Open,
         Self::RulesWrite,
+        Self::ActivityJournal,
     ];
 
     #[must_use]
@@ -51,6 +57,7 @@ impl Permission {
             Self::RulesRead => "rules.read",
             Self::ActivityHosts => "activity.hosts",
             Self::ActivityUrls => "activity.urls",
+            Self::ActivityJournal => "activity.journal",
             Self::Open => "links.open",
             Self::RulesWrite => "rules.write",
         }
@@ -65,6 +72,7 @@ impl Permission {
             Self::RulesRead => "Read the rules",
             Self::ActivityHosts => "See recent activity, hosts only",
             Self::ActivityUrls => "See recent activity with full URLs",
+            Self::ActivityJournal => "Read the activity journal on disk, when it is on",
             Self::Open => "Open links through PwrRoute",
             Self::RulesWrite => "Change rules.json",
         }
@@ -88,7 +96,7 @@ pub enum Role {
     Reader,
     /// Reader, plus opening links through the router.
     Opener,
-    /// Opener, plus writing `rules.json`.
+    /// Opener, plus writing `rules.json` and reading the activity journal.
     Editor,
 }
 
@@ -103,7 +111,7 @@ impl Role {
             set.extend([P::ActivityUrls, P::Open]);
         }
         if self >= Self::Editor {
-            set.insert(P::RulesWrite);
+            set.extend([P::RulesWrite, P::ActivityJournal]);
         }
         set
     }
@@ -162,6 +170,7 @@ mod tests {
             (P::ActivityUrls, [false, true, true]),
             (P::Open, [false, true, true]),
             (P::RulesWrite, [false, false, true]),
+            (P::ActivityJournal, [false, false, true]),
         ];
         for (permission, expected) in rows {
             for (role, allowed) in Role::ALL.into_iter().zip(expected) {

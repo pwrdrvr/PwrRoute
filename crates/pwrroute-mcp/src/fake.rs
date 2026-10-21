@@ -1,28 +1,30 @@
-//! In-memory stand-ins for the backends still being built, and an approver
-//! that answers without a window. Tests use them; so can the app until the
-//! real router, launcher and rules store land.
+//! In-memory stand-ins for the backends, and an approver that answers
+//! without a window. Tests use them; the app runs [`crate::live`].
 
 use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use pwrroute_engine::{AppType, Browser, Opener};
-use serde_json::{Value, json};
+use pwrroute_engine::{
+    AppType, Browser, Expectation, Limits, Opener, Privacy, RouteTest, Rule, RulesFile,
+};
+use serde_json::Value;
 
 use crate::{
     approval::{ApprovalDecision, ApprovalReply, ApprovalRequest, Approver},
     backend::{
-        ActivityEntry, ActivityLog, AgentRef, Backends, BrowserCatalog, BrowserList,
-        DetectedBrowser, Resolver, Router, RulesError, RulesSnapshot, RulesSource, RulesStore,
-        StepKind, Trace, TraceStep,
+        ActivityEntry, ActivityLog, ActivityOutcome, ActivitySource, AgentRef, Backends,
+        BrowserCatalog, BrowserList, DetectedBrowser, Resolver, Router, RulesError, RulesSnapshot,
+        RulesSource, RulesStore, StepKind, Trace, TraceStep,
     },
+    engine::EngineTester,
     roles::Role,
 };
 
 /// Sends every `*.example.org` link to Firefox and the rest to Safari, and
 /// rewrites `x.com` to `xcancel.com` first. Contrived, like the app's
-/// fixture data.
+/// fixture data, and the same routing [`FakeRules::default`] writes down.
 #[derive(Debug, Default)]
 pub struct FakeResolver;
 
@@ -57,6 +59,14 @@ impl Resolver for FakeResolver {
             });
             "Safari"
         };
+        // A link to the bank keeps its host only, as a rule's `privacy`
+        // would have it; the router reduces such a record before anyone
+        // sees it, and so does this fake.
+        let privacy = match host {
+            "bank.example.org" => Privacy::Host,
+            "secret.example.org" => Privacy::None,
+            _ => Privacy::Full,
+        };
         Ok(Trace {
             url: url.to_owned(),
             steps,
@@ -67,8 +77,8 @@ impl Resolver for FakeResolver {
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,
-                private: false,
-                privacy: pwrroute_engine::Privacy::Full,
+                private: host == "bank.example.org",
+                privacy,
             },
             error: None,
         })
@@ -87,22 +97,63 @@ impl FakeRouter {
     pub fn opened(&self) -> Vec<(AgentRef, ActivityEntry)> {
         lock(&self.opened).clone()
     }
+
+    /// Records a dispatch that did not come through MCP: a click in another
+    /// app, as the router would have reduced it.
+    pub fn record(&self, url: &str, via: &str) -> anyhow::Result<()> {
+        let trace = FakeResolver.resolve(url, None)?;
+        let entry = entry_of(self.next_id(), Some(via.to_owned()), trace);
+        lock(&self.opened).push((
+            AgentRef {
+                name: String::new(),
+                connection: 0,
+            },
+            entry,
+        ));
+        Ok(())
+    }
+
+    fn next_id(&self) -> u64 {
+        lock(&self.opened).len() as u64 + 1
+    }
 }
 
 impl Router for FakeRouter {
     fn open(&self, url: &str, opener: Option<&Opener>, agent: &AgentRef) -> anyhow::Result<Trace> {
         let trace = FakeResolver.resolve(url, opener)?;
-        let entry = ActivityEntry {
-            at_ms: now_ms(),
-            via: Some(agent.name.clone()),
-            trace: trace.clone(),
-        };
+        let entry = entry_of(self.next_id(), Some(agent.name.clone()), trace.clone());
         lock(&self.opened).push((agent.clone(), entry));
         Ok(trace)
     }
 }
 
-/// Activity read back from a [`FakeRouter`].
+/// An entry reduced to its trace's privacy, as the router reduces a record
+/// before the buffer sees it.
+fn entry_of(id: u64, via: Option<String>, trace: Trace) -> ActivityEntry {
+    let privacy = trace.browser.privacy;
+    let unrouted = trace.steps.iter().any(|s| s.kind == StepKind::Default);
+    let rewritten = trace.steps.iter().any(|s| s.kind == StepKind::Rewrite);
+    let private = trace.browser.private;
+    let trace = match privacy {
+        Privacy::Full => Some(trace),
+        Privacy::Host => Some(trace.hosts_only()),
+        Privacy::None => None,
+    };
+    ActivityEntry {
+        id,
+        at_ms: now_ms(),
+        via: via.filter(|_| privacy != Privacy::None),
+        privacy,
+        source: ActivitySource::Memory,
+        outcome: ActivityOutcome::DryRun,
+        unrouted,
+        rewritten,
+        private,
+        trace,
+    }
+}
+
+/// Activity read back from a [`FakeRouter`]: memory only, no journal.
 #[derive(Debug)]
 pub struct FakeActivity(pub Arc<FakeRouter>);
 
@@ -116,6 +167,14 @@ impl ActivityLog for FakeActivity {
             .take(limit)
             .map(|(_, entry)| entry)
             .collect())
+    }
+
+    fn journal(&self, _limit: usize) -> anyhow::Result<Vec<ActivityEntry>> {
+        Ok(Vec::new())
+    }
+
+    fn retention(&self) -> String {
+        "Kept in memory only: the last 500 links or 24 hours, cleared when PwrRoute quits.".into()
     }
 }
 
@@ -142,35 +201,77 @@ impl BrowserCatalog for FakeBrowsers {
     }
 }
 
-/// `rules.json` in memory. Revisions count writes. Valid rules are an object
-/// with `rewrite` and `handlers` arrays; anything else is refused, which is
-/// enough to exercise the tool's validation path.
+/// `rules.json` in memory, in the file's own schema. Revisions count
+/// writes. A write must parse as a [`RulesFile`] with no problems.
 #[derive(Debug)]
 pub struct FakeRules {
     state: Mutex<RulesSnapshot>,
 }
 
 impl FakeRules {
+    /// The routing [`FakeResolver`] does, written as rules with an example
+    /// and a test, so the saved tests pass against it.
     pub fn new(source: RulesSource) -> Self {
+        Self::with(source, Self::file())
+    }
+
+    pub fn with(source: RulesSource, file: RulesFile) -> Self {
         Self {
             state: Mutex::new(RulesSnapshot {
                 revision: "1".to_owned(),
                 source,
-                rules: json!({
-                    "rewrite": [{ "match": "x.com/*", "host": "xcancel.com" }],
-                    "handlers": [
-                        { "match": "*.example.org/*", "browser": "Firefox" },
-                        { "fn": "(url, { opener }) => …", "opaque": true }
-                    ],
-                    "defaultBrowser": "Safari"
-                }),
+                config: None,
+                rules: serde_json::to_value(file).unwrap_or(Value::Null),
             }),
+        }
+    }
+
+    /// The default rules: `x.com` rewritten to `xcancel.com`, `*.example.org`
+    /// to Firefox, Safari otherwise; one example and one test.
+    pub fn file() -> RulesFile {
+        RulesFile {
+            default_browser: "Safari".into(),
+            rewrites: vec![pwrroute_engine::Rewrite {
+                patterns: vec!["x.com/*".into()],
+                actions: vec![pwrroute_engine::RewriteAction::SetHost(
+                    "xcancel.com".into(),
+                )],
+                examples: vec![pwrroute_engine::RewriteExample {
+                    url: "https://x.com/someone".into(),
+                    becomes: "https://xcancel.com/someone".into(),
+                }],
+                ..pwrroute_engine::Rewrite::default()
+            }],
+            rules: vec![Rule {
+                patterns: vec!["*.example.org/*".into()],
+                browser: "Firefox".into(),
+                examples: vec!["https://docs.example.org/page".into()],
+                ..Rule::default()
+            }],
+            tests: vec![RouteTest {
+                url: "https://example.net/".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "Safari".into(),
+                    ..Expectation::default()
+                },
+            }],
+            ..RulesFile::default()
         }
     }
 
     /// The stored revision, for assertions.
     pub fn read_revision(&self) -> String {
         lock(&self.state).revision.clone()
+    }
+
+    /// The stored revision and rules, for the tester's engine.
+    pub fn current(&self) -> (String, RulesFile) {
+        let state = lock(&self.state);
+        (
+            state.revision.clone(),
+            serde_json::from_value(state.rules.clone()).unwrap_or_default(),
+        )
     }
 
     /// Switches the source, as Settings › Configuration would.
@@ -206,11 +307,7 @@ impl RulesStore for FakeRules {
                 current: state.revision.clone(),
             });
         }
-        for list in ["rewrite", "handlers"] {
-            if !rules.get(list).is_some_and(Value::is_array) {
-                return Err(RulesError::Invalid(format!("`{list}` must be a list")));
-            }
-        }
+        let rules = validate(rules)?;
         if dry_run {
             return Ok(RulesSnapshot {
                 rules,
@@ -224,16 +321,38 @@ impl RulesStore for FakeRules {
     }
 }
 
+/// A rules document as a [`RulesFile`] with no problems, re-serialized so
+/// the store holds exactly what the file would.
+pub(crate) fn validate(rules: Value) -> Result<Value, RulesError> {
+    let file: RulesFile =
+        serde_json::from_value(rules).map_err(|e| RulesError::Invalid(e.to_string()))?;
+    let problems = file.problems();
+    if let Some(problem) = problems.first() {
+        return Err(RulesError::Invalid(format!(
+            "{:?}: {}",
+            problem.place, problem.message
+        )));
+    }
+    serde_json::to_value(file).map_err(|e| RulesError::Invalid(e.to_string()))
+}
+
 /// Every backend as a fake, sharing one router so opens show up in
-/// activity.
+/// activity, and a real engine over the fake rules so `pwrroute_rules_test`
+/// and `pwrroute_rules_apply` test what the fake store holds.
 pub fn backends() -> (Backends, Arc<FakeRouter>, Arc<FakeRules>) {
     let router = Arc::new(FakeRouter::default());
     let rules = Arc::new(FakeRules::default());
+    let tester = {
+        let rules = Arc::clone(&rules);
+        EngineTester::over(move || rules.current(), Limits::default())
+            .expect("an engine over the fake rules")
+    };
     let backends = Backends {
         resolver: Arc::new(FakeResolver),
         router: router.clone(),
         browsers: Arc::new(FakeBrowsers),
         rules: rules.clone(),
+        tester: Arc::new(tester),
         activity: Arc::new(FakeActivity(router.clone())),
     };
     (backends, router, rules)
