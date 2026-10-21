@@ -615,9 +615,10 @@ fn the_fallback_itself_failing_is_not_retried() {
 fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
     // The app saves a new choice (first run, an edit of rules.json) while
     // the router runs: the next link that falls back follows it.
+    // Every link resolves to Brave, which is never the OS's own browser
+    // (on Linux that is Firefox, which the config would pick).
     let choice: Arc<Mutex<Option<(String, String)>>> = Arc::default();
-    let launcher = Broken::new(&["Firefox"]);
-    let dir = tempfile::tempdir().unwrap();
+    let launcher = Broken::new(&["Brave"]);
     let router = Router::spawn(
         Options {
             fallback: FallbackSource::new({
@@ -626,7 +627,7 @@ fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
             }),
             ..Options::default()
         },
-        Some(engine_factory(&dir)),
+        Some(Box::new(|| Ok(Box::new(ToBrave) as Box<dyn Resolver>))),
         launcher.clone(),
     )
     .unwrap();
@@ -660,6 +661,28 @@ fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
     );
     *choice.lock().unwrap() = Some(("  ".into(), String::new()));
     assert_eq!(opened(&handle).0, FALLBACK_BROWSER);
+}
+
+/// Routes every link to Brave, a browser no OS has as its own.
+struct ToBrave;
+impl Resolver for ToBrave {
+    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+        Ok(Resolved {
+            browser: Browser {
+                name: "Brave".into(),
+                app_type: AppType::AppName,
+                url: url.into(),
+                profile: String::new(),
+                args: Vec::new(),
+                open_in_background: None,
+                private: false,
+                privacy: Privacy::Full,
+            },
+            error: None,
+            privacy: Privacy::Full,
+            rule_steps: Vec::new(),
+        })
+    }
 }
 
 /// Routes every link to a private Firefox window.
