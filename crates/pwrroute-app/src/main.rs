@@ -117,7 +117,7 @@ fn main() -> ExitCode {
     updater::run_startup_hooks();
     // `pwrroute rules test` runs without the router or a window.
     if let Some(code) = rules_command(std::env::args().skip(1).collect()) {
-        std::process::exit(code);
+        return code;
     }
     let args = router::Args::from_env();
     let resident = match router::start(&args) {
@@ -238,10 +238,12 @@ fn main() -> ExitCode {
 
 /// `pwrroute rules test [--rules PATH] [--config PATH]`: runs the examples
 /// and tests `rules.json` carries through the engine, with the Finicky
-/// config in charge (discovered as the router does, or `--config`), and
-/// exits 0 when every one passes, 1 on a failure, 2 when they could not
-/// run. `None` when the command line is not this command.
-fn rules_command(args: Vec<String>) -> Option<i32> {
+/// config in charge (discovered as the router does, or `--config`). The
+/// exit code is 0 when every one passes, 1 on a failure, 2 when they could
+/// not run; `main` returns it rather than calling `process::exit`, so the
+/// process ends the normal way, destructors included. `None` when the
+/// command line is not this command.
+fn rules_command(args: Vec<String>) -> Option<ExitCode> {
     let mut rest = args.iter().map(String::as_str);
     if rest.next() != Some("rules") {
         return None;
@@ -262,13 +264,13 @@ fn rules_command(args: Vec<String>) -> Option<i32> {
             other if verb.is_none() => verb = Some(other.to_owned()),
             other => {
                 eprintln!("pwrroute rules: unexpected argument {other}");
-                return Some(2);
+                return Some(ExitCode::from(2));
             }
         }
     }
     if verb.as_deref() != Some("test") {
         eprintln!("usage: pwrroute rules test [--rules PATH] [--config PATH]");
-        return Some(2);
+        return Some(ExitCode::from(2));
     }
     // No flags: the rules.json and config the router routes by. An explicit
     // `--rules` runs that file on its own unless `--config` names one too, so
@@ -287,21 +289,21 @@ fn rules_command(args: Vec<String>) -> Option<i32> {
     };
     if let Some(path) = rules.as_deref().filter(|p| !p.is_file()) {
         eprintln!("pwrroute rules test: no rules file at {}", path.display());
-        return Some(2);
+        return Some(ExitCode::from(2));
     }
     let mut out = std::io::stdout().lock();
-    Some(run_rules_tests(
+    Some(ExitCode::from(run_rules_tests(
         rules.as_deref(),
         config.as_deref(),
         &mut out,
-    ))
+    )))
 }
 
 /// Runs the file's examples and tests and prints the result: one line per
 /// failure with the input, what was expected, what happened and which rule
 /// won. The inputs are the user's own saved examples, so printing them is
-/// what the command is for.
-fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Write) -> i32 {
+/// what the command is for. The result is the command's exit code.
+fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Write) -> u8 {
     use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, Sources, TestSource};
 
     let rules_file = match rules {
@@ -377,7 +379,7 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
         report.failures.len(),
         report.total
     );
-    i32::from(!report.is_ok())
+    u8::from(!report.is_ok())
 }
 
 /// Brings the main window forward, opening it if it is closed.
@@ -494,10 +496,10 @@ mod cli_tests {
     fn only_the_rules_command_is_taken() {
         assert_eq!(rules_command(vec![]), None);
         assert_eq!(rules_command(vec!["https://example.com/".into()]), None);
-        assert_eq!(rules_command(vec!["rules".into()]), Some(2));
+        assert_eq!(rules_command(vec!["rules".into()]), Some(ExitCode::from(2)));
         assert_eq!(
             rules_command(vec!["rules".into(), "test".into(), "--bogus".into()]),
-            Some(2)
+            Some(ExitCode::from(2))
         );
         let dir = tempfile::tempdir().unwrap();
         let rules = write(
@@ -513,7 +515,7 @@ mod cli_tests {
                 "--config".into(),
                 dir.path().join("none.js").display().to_string(),
             ]),
-            Some(2),
+            Some(ExitCode::from(2)),
             "a config that does not exist cannot load"
         );
         assert_eq!(
@@ -523,7 +525,7 @@ mod cli_tests {
                 "--rules".into(),
                 rules.display().to_string(),
             ]),
-            Some(0)
+            Some(ExitCode::SUCCESS)
         );
     }
 }
