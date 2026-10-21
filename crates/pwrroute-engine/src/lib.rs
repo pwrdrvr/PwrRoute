@@ -13,6 +13,9 @@
 //!   examples and tests run through the engine ([`Engine::test_rules`]) and
 //!   come back as a [`TestReport`]; [`suggest_rule`] and
 //!   [`Engine::collisions`] help write a rule for an unrouted link.
+//! - [`Engine::review_import`] is the Finicky importer's [`Review`] of a
+//!   config: which of its rules a visual rule holds exactly, which stay
+//!   JS, and a probed [`Suggested`] rule for a function that looks like one.
 //! - [`ShortLinks`] expands short links over a [`Network`] before resolving.
 //! - [`discovery`] finds the config and `rules.json` the way Finicky does.
 //! - [`Reloader`] watches them and swaps in a new [`Engine`] only once it has
@@ -30,6 +33,7 @@ pub mod discovery;
 mod host;
 #[cfg(feature = "http")]
 mod http;
+mod import;
 mod loader;
 mod native;
 mod reload;
@@ -64,6 +68,7 @@ pub use host::{
 };
 #[cfg(feature = "http")]
 pub use http::HttpNetwork;
+pub use import::{Review, Reviewed, SourceLines, Suggested, Verdict, Visual};
 pub use native::NativeHost;
 pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
 pub use rules::{

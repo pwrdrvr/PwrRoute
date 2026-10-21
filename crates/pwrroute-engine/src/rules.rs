@@ -525,7 +525,7 @@ fn browser_spec(browser: &str, profile: &str) -> Value {
 /// digits, `.` and `-` a bundle id; `/x/y.app`, optionally after `~`, a
 /// path; anything else an app name. The words are the API's `appType`
 /// values and [`crate::AppType`]'s serialized names.
-fn app_type(app: &str) -> &'static str {
+pub(crate) fn app_type(app: &str) -> &'static str {
     let all = |ok: fn(char) -> bool| !app.is_empty() && app.chars().all(ok);
     if all(|c| c.is_ascii_alphanumeric() || c == ' ') {
         "appName"
