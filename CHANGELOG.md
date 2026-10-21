@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- DMG - The macOS DMG opens to a window laid out like PwrSnap's, PwrAgnt's and PwrGit's: the PwrRoute wordmark, the app and an arrow to Applications on a branded background, the app icon as the volume icon, and a volume named `PwrRoute <version>-universal`.
+
 ## v0.1.0-rc.1 - 2026-10-21
 
 - Rules - A `rules.json` rule or `defaultBrowser` that names a browser by bundle id or `.app` path now launches it when a profile is set (the handler carries Finicky's `appType`), macOS `open` starts a new instance whenever a config's `args` are passed so a running browser receives them, and a `~/` path expands to the home directory.
