@@ -2,16 +2,38 @@
 
 The Settings window: its own window, one at a time (`open`), as in PwrSnap
 and PwrGit. Drawn from `design/PwrRoute Settings.dc.html` (1a Local agents,
-1b Configuration, 1c Browsers) and `design/PwrRoute Activity Privacy and
-Route Tests.dc.html` turn 1 (Privacy); General, Updates, Diagnostics and
-About are placeholders until the family's panes are ported.
+1b Configuration, 1c Browsers), `design/PwrRoute Activity Privacy and
+Route Tests.dc.html` turn 1 (Privacy) and `design/PwrRoute Updates and
+Default Browser.dc.html` 1a/1b (Updates); Diagnostics and About follow
+the family's panes in the same controls. General is a placeholder.
 
 - **The window draws a `SettingsModel` and nothing else.** `model.rs` is the
   contract for the MCP server, config discovery and the browser catalog:
   they fill it in their own words, with display-ready strings, and the
-  window never depends on their crates. `fixtures.rs` is contrived data
-  transcribed from the design; keep it that way. Privacy is real:
-  `main.rs` replaces the fixture's `privacy` with `privacy_host::model`.
+  window never depends on their crates (`crate::mcp` fills Local agents).
+  `fixtures.rs` is contrived data transcribed from the design; keep it that
+  way: it draws the `screens` example and `tests.rs`, never the shipped
+  window, which `settings_live.rs` fills from the producers below.
+- **Producers (`*_host.rs`).** Each builds its pane from the real thing and
+  answers its requests; each has a pure `build` over plain facts, which the
+  tests feed from tempdirs, never from the user's files. `browsers_host`:
+  the one scan (`crate::browser_scan`), `rules.json`'s handlers for "in N
+  rules" (a handler names an app by bundle id, name or path, ignoring
+  case) and the apps the rules name that the scan did not find under
+  Other apps; a switch saves `browsers.hidden` and refreshes the main
+  window's pickers. `configuration_host`: `router::routing_source` says
+  which file is in charge; the tiles only show it (`can_switch` is off,
+  the router follows the files on disk), the importer offers no plan yet,
+  Short links lists the engine's built-in hosts, and Reveal, Open data
+  folder and Reload now act. `updates_host`: `updater::installation` and
+  `updater::state`; a dev build reads "not updatable", no check reads
+  "never checked", and Check now is the menu's check (`updater::install`
+  redraws the pane when it finishes). `system_host`: Diagnostics (version,
+  OS from its files, data folder, the router's socket and `listening()`,
+  what routes links, the MCP door from the Local agents model) and About
+  (version, license, the notices beside the executable, addresses as
+  text). A producer that reports back asks `settings::is_open` first, so
+  a closed window reads no file.
 - **Privacy (`privacy.rs`, `privacy_host.rs`).** The view keeps the two
   number fields (applied on Return, clamped to `COUNT_RANGE` /
   `HOURS_RANGE`) and the open sheet; Full URLs and the journal's Clear now

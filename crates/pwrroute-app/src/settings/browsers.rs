@@ -288,24 +288,17 @@ fn other_apps_card(
         .enumerate()
         .map(|(index, app)| app_row(List::Other, index, app, cx))
         .collect();
-    let add = request_button(
-        "browsers-add-app",
-        "Add app\u{2026}",
-        Kind::Default,
-        true,
-        SettingsRequest::AddApp,
-        cx,
-    );
     let description = field_sub_code(
-        "Anything that accepts a URL. Finicky\u{2019}s ",
+        "Apps the rules name that the scan did not find: anything that accepts a URL, by name, \
+         bundle id or path (Finicky\u{2019}s ",
         "appType: bundleId | path",
-        ".",
+        "). Name one in a rule and it appears here.",
     );
     this.disclosure(
         "browsers-other",
         heading("By bundle id or path", "Other apps")
             .description(description.text_size(px(11.5)).line_height(px(18.4))),
-        Some(add.into_any_element()),
+        None,
         rows,
         cx,
     )

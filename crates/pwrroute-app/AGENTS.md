@@ -12,10 +12,20 @@ their own modules.
   name plus `fixtures::OPENERS` under an "Examples" heading (their order
   is fixed: Activity's re-test picks by position). The tray follows the
   feed and the OS; its pause target is `rules.json`'s fallback, read once
-  at launch. Settings still draws `settings::fixtures::model()` for every
-  pane but the default-browser card and Privacy (see `settings/AGENTS.md`).
-  Never a real URL, Activity entry or trace, in code or in a screenshot:
-  `fixtures::activity()` and `FirstRunModel::fixture` exist for tests.
+  at launch. Settings is live: `settings_live.rs` builds every pane from
+  its producer (`settings/*_host.rs`, `mcp.rs` for Local agents) and
+  `settings::fixtures::model()` draws only the `screens` example and the
+  window's tests (see `settings/AGENTS.md`). Never a real URL, Activity
+  entry or trace, in code or in a screenshot: `fixtures::activity()` and
+  `FirstRunModel::fixture` exist for tests.
+- **One browser scan (`browser_scan.rs`).** The machine's browsers and
+  their profiles are read once, the first time a picker or Settings asks,
+  and again only on Settings › Browsers' Rescan; `PwrRoute::browsers`
+  (Activity's Add a rule sheet) and the Browsers pane read the same scan.
+  `settings.json`'s `browsers.hidden` (bundle ids, or names where there is
+  none) keeps apps out of the pickers; rules that name a hidden app still
+  resolve. `browser_scan::install_fixture` gives a test a scan; first run
+  (`onboarding.rs`) still scans for itself, since it runs before the window.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.
@@ -27,8 +37,9 @@ their own modules.
   Private, each with its count. The retention sentence under the list and
   the toolbar's note come from `RouterHandle::retention()`, never from a
   literal here. With the journal on, journaled records no longer in memory
-  are listed below a "From the journal" divider (`Feed::journal`, read from
-  disk on each sync, at most `JOURNAL_ROWS`). Export… goes through
+  are listed below a "From the journal" divider (`Feed::journal`, at most
+  `JOURNAL_ROWS`, read from disk only when the files' `JournalStamp`
+  changed since the last read: `JournalCache`). Export… goes through
   `settings::privacy_host::export`, the OS save dialog and nothing else.
   Full URLs stay in that entity and the router's buffer; nothing in the app
   writes one to disk or a log. The row's "⋯" opens `activity::row_menu`
@@ -37,14 +48,29 @@ their own modules.
   a journaled row's record back from the journal.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
-  (`activity.keep`, `activity.journal`, `activity.journalDays`); an absent
-  file is the defaults, and a bad one is reported and ignored. `router.rs`
+  (`activity.keep`, `activity.journal`, `activity.journalDays`) and the
+  hidden browsers (`browsers.hidden`); an absent file is the defaults, and
+  a bad one is reported and ignored. `router.rs`
   reads it before the router spawns, so `Options::retention` and
   `Options::journal` (`<data dir>/journal`) are in force from the first
   link; `settings_store::install` then makes the same store and the
   router's handle the globals Settings › Privacy edits, saving first and
   applying through `set_retention` / `set_journal`. The file carries
   numbers and a level, never a link.
+- **The Rules screen follows `rules.json`'s other writers.** The store
+  (`rules_store.rs`) stamps the bytes it last read or wrote, and
+  `RulesStore::check_disk` compares the file to them: changed with nothing
+  unsaved, it reads the file again (`Status::Reloaded`, "reloaded 09:41");
+  changed under unsaved edits, it keeps them, refuses the next save
+  (`Status::Changed`) and the rail foot offers Reload (drop the edits) and
+  Overwrite (write them anyway). Its own saves restamp, so they are never
+  a change. `PwrRoute::sync_with_disk` runs the check when the window
+  comes to the front (`watch_activation`), on every dispatch, before the
+  Add a rule sheet and Test a link read the store, at the top of `refresh`,
+  and from `mcp::follow_rules_writes` right after an in-process
+  `pwrroute_rules_apply` the audit reports as written. Never write the
+  file around the store from the app; agents and editors go through the
+  check instead.
 - **Examples and tests are the only URLs that reach disk, and only by
   hand.** `rules_store.rs` writes a rule's `examples`, a rewrite's
   `url`/`becomes` pairs, `rules[].private` / `rules[].privacy` and the
@@ -57,6 +83,14 @@ their own modules.
   save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
   Activity records report a `rules.json` handler as `Matched::Unreported`,
   so Save as example resolves the link again through `Probe` at click time.
+- **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
+  `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
+  handle and an engine that follows the same files; `pwrroute mcp` in
+  `main.rs` is the stdio proxy and runs before anything else. Prompts
+  become `ApprovalWindow`s on the GPUI thread; closing one denies. The
+  pane's "Recent agent actions" is the audit: tool, agent, time, outcome,
+  never an argument. The switch is `mcp.json`; approvals are
+  `mcp-agents.json`.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
   `PopUp` window (design 1a/1b); recents there are hosts only

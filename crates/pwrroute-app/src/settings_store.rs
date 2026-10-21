@@ -1,6 +1,7 @@
 //! `settings.json` in the data directory: what Settings keeps between
 //! launches, as plain data. Today that is the Activity retention and the
-//! journal (Settings › Privacy); other panes join as their producers land.
+//! journal (Settings › Privacy) and the browsers hidden from the pickers
+//! (Settings › Browsers); other panes join as their producers land.
 //!
 //! [`Settings::load`] reads the file (absent means the defaults) and
 //! [`Settings::save`] writes it through a sibling file and a rename, like
@@ -34,6 +35,45 @@ pub const JOURNAL_DIR: &str = "journal";
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub activity: ActivitySettings,
+    /// Left out of the file while nothing is hidden, so a file written
+    /// before this field existed reads and writes back unchanged.
+    #[serde(skip_serializing_if = "BrowserSettings::is_default")]
+    pub browsers: BrowserSettings,
+}
+
+/// Settings › Browsers: which apps the reader switched off.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BrowserSettings {
+    /// Apps hidden from the browser pickers (Activity's Add a rule sheet),
+    /// by the id Settings › Browsers shows: the bundle id on macOS, the
+    /// app's name where there is none, or the value a rule names for an
+    /// app that was not detected. Rules that name a hidden app still
+    /// resolve; hiding is about the pickers, not routing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
+}
+
+impl BrowserSettings {
+    fn is_default(&self) -> bool {
+        self.hidden.is_empty()
+    }
+
+    /// Whether `id` is hidden, ignoring case: bundle ids are compared that
+    /// way everywhere else.
+    pub fn is_hidden(&self, id: &str) -> bool {
+        self.hidden
+            .iter()
+            .any(|hidden| hidden.eq_ignore_ascii_case(id))
+    }
+
+    /// Hides or shows `id`, keeping the list free of duplicates.
+    pub fn set_hidden(&mut self, id: &str, hidden: bool) {
+        self.hidden.retain(|h| !h.eq_ignore_ascii_case(id));
+        if hidden {
+            self.hidden.push(id.to_owned());
+        }
+    }
 }
 
 /// Settings › Privacy: what the router keeps of each link, where, and for
@@ -281,6 +321,60 @@ mod tests {
             SettingsStore::load(Some(dir.path().to_path_buf())).journal(),
             None
         );
+    }
+
+    #[test]
+    fn hidden_browsers_round_trip_and_leave_an_untouched_file_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = SettingsStore::load(Some(dir.path().to_path_buf()));
+        // Nothing hidden: the file does not mention browsers at all.
+        store
+            .update(|settings| settings.activity.journal_days = 3)
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(!text.contains("browsers"), "{text}");
+
+        store
+            .update(|settings| {
+                settings
+                    .browsers
+                    .set_hidden("com.brave.Browser.nightly", true);
+                settings.browsers.set_hidden("org.mozilla.firefox", true);
+                // Twice is once, whatever the case.
+                settings
+                    .browsers
+                    .set_hidden("COM.brave.browser.NIGHTLY", true);
+            })
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(
+            text.ends_with(
+                "  \"browsers\": {\n    \"hidden\": [\n      \"org.mozilla.firefox\",\n      \"COM.brave.browser.NIGHTLY\"\n    ]\n  }\n}\n"
+            ),
+            "{text}"
+        );
+        let again = SettingsStore::load(Some(dir.path().to_path_buf()));
+        assert!(
+            again
+                .settings()
+                .browsers
+                .is_hidden("com.brave.browser.nightly")
+        );
+        assert!(again.settings().browsers.is_hidden("org.mozilla.firefox"));
+        assert!(!again.settings().browsers.is_hidden("com.apple.Safari"));
+
+        // Shown again: gone from the list, and the file drops the section.
+        store
+            .update(|settings| {
+                settings.browsers.set_hidden("org.mozilla.firefox", false);
+                settings
+                    .browsers
+                    .set_hidden("com.brave.Browser.nightly", false);
+            })
+            .unwrap();
+        assert_eq!(store.settings().browsers, BrowserSettings::default());
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(!text.contains("browsers"), "{text}");
     }
 
     #[test]

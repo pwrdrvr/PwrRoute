@@ -17,6 +17,7 @@ mod app_menu;
 mod assets;
 #[cfg(target_os = "windows")]
 mod browser_registration;
+mod browser_scan;
 mod chrome;
 mod config_view;
 mod default_browser;
@@ -27,12 +28,14 @@ mod first_run;
 mod fixtures;
 #[cfg(target_os = "macos")]
 mod macos;
+mod mcp;
 mod onboarding;
 mod router;
 mod rules_model;
 mod rules_store;
 mod rules_view;
 mod settings;
+mod settings_live;
 mod settings_store;
 mod test_link;
 #[cfg(test)]
@@ -48,6 +51,7 @@ mod widgets;
 use std::{
     io::Write,
     path::{Path, PathBuf},
+    process::ExitCode,
     rc::Rc,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
@@ -105,17 +109,22 @@ struct ResidentRouter(#[allow(dead_code, reason = "held for its Drop")] Resident
 
 impl Global for ResidentRouter {}
 
-fn main() {
+fn main() -> ExitCode {
+    // `pwrroute mcp`: the stdio end an MCP client launches. A byte pipe to
+    // the running app's socket, with no window, no router and no lock.
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
+        return pwrroute_mcp::proxy::main();
+    }
     // First: Velopack's install, update and uninstall hooks run here and
     // exit, before this process could take the router lock.
     updater::run_startup_hooks();
     // `pwrroute rules test` runs without the router or a window.
     if let Some(code) = rules_command(std::env::args().skip(1).collect()) {
-        std::process::exit(code);
+        return code;
     }
     let args = router::Args::from_env();
     let resident = match router::start(&args) {
-        router::Start::Exit => return,
+        router::Start::Exit => return ExitCode::SUCCESS,
         router::Start::Resident(resident) => *resident,
     };
     let handle = resident.handle();
@@ -164,22 +173,21 @@ fn main() {
         tray::install(cx);
         default_browser::install(default_browser::Os::real(), cx);
         tray::follow_default_browser(cx);
+        // Local agents: MCP on <data dir>/mcp.sock, beside the router's.
+        mcp::install(
+            mcp::Wiring {
+                handle: resident.handle(),
+                config: args.config.clone(),
+            },
+            cx,
+        );
+        // The one browser scan, read when a picker or Settings first asks.
+        browser_scan::install(pwrroute_browsers::Env::system(), cx);
         cx.set_global(settings::SettingsHost {
-            model: Rc::new(|window, cx| {
-                default_browser::watch(window, cx);
-                let mut model = settings::fixtures::model();
-                model.browsers.default = default_browser::card(cx);
-                model.privacy = settings::privacy_host::model(cx);
-                model
-            }),
-            on_request: Rc::new(|request, _, cx| {
-                if !default_browser::handle_settings_request(request, cx)
-                    && !settings::privacy_host::handle_request(request, cx)
-                {
-                    eprintln!("pwrroute: settings: {request:?} is not wired up yet");
-                }
-            }),
+            model: Rc::new(settings_live::model),
+            on_request: Rc::new(|request, _, cx| settings_live::handle_request(request, cx)),
         });
+        updater::install(cx);
         if let Some(hook) = e2e_hook {
             e2e::attach(hook, cx);
         } else {
@@ -224,14 +232,17 @@ fn main() {
             show(cx);
         }
     });
+    ExitCode::SUCCESS
 }
 
 /// `pwrroute rules test [--rules PATH] [--config PATH]`: runs the examples
 /// and tests `rules.json` carries through the engine, with the Finicky
-/// config in charge (discovered as the router does, or `--config`), and
-/// exits 0 when every one passes, 1 on a failure, 2 when they could not
-/// run. `None` when the command line is not this command.
-fn rules_command(args: Vec<String>) -> Option<i32> {
+/// config in charge (discovered as the router does, or `--config`). The
+/// exit code is 0 when every one passes, 1 on a failure, 2 when they could
+/// not run; `main` returns it rather than calling `process::exit`, so the
+/// process ends the normal way, destructors included. `None` when the
+/// command line is not this command.
+fn rules_command(args: Vec<String>) -> Option<ExitCode> {
     let mut rest = args.iter().map(String::as_str);
     if rest.next() != Some("rules") {
         return None;
@@ -252,13 +263,13 @@ fn rules_command(args: Vec<String>) -> Option<i32> {
             other if verb.is_none() => verb = Some(other.to_owned()),
             other => {
                 eprintln!("pwrroute rules: unexpected argument {other}");
-                return Some(2);
+                return Some(ExitCode::from(2));
             }
         }
     }
     if verb.as_deref() != Some("test") {
         eprintln!("usage: pwrroute rules test [--rules PATH] [--config PATH]");
-        return Some(2);
+        return Some(ExitCode::from(2));
     }
     // No flags: the rules.json and config the router routes by. An explicit
     // `--rules` runs that file on its own unless `--config` names one too, so
@@ -277,21 +288,21 @@ fn rules_command(args: Vec<String>) -> Option<i32> {
     };
     if let Some(path) = rules.as_deref().filter(|p| !p.is_file()) {
         eprintln!("pwrroute rules test: no rules file at {}", path.display());
-        return Some(2);
+        return Some(ExitCode::from(2));
     }
     let mut out = std::io::stdout().lock();
-    Some(run_rules_tests(
+    Some(ExitCode::from(run_rules_tests(
         rules.as_deref(),
         config.as_deref(),
         &mut out,
-    ))
+    )))
 }
 
 /// Runs the file's examples and tests and prints the result: one line per
 /// failure with the input, what was expected, what happened and which rule
 /// won. The inputs are the user's own saved examples, so printing them is
-/// what the command is for.
-fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Write) -> i32 {
+/// what the command is for. The result is the command's exit code.
+fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Write) -> u8 {
     use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, Sources, TestSource};
 
     let rules_file = match rules {
@@ -367,7 +378,7 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
         report.failures.len(),
         report.total
     );
-    i32::from(!report.is_ok())
+    u8::from(!report.is_ok())
 }
 
 /// Brings the main window forward, opening it if it is closed.
@@ -400,7 +411,10 @@ pub(crate) fn show_main_window(cx: &mut App) {
             |window, cx| {
                 // The strip's default-browser chip follows the OS's answer.
                 default_browser::watch(window, cx);
-                cx.new(PwrRoute::new)
+                let view = cx.new(PwrRoute::new);
+                // And the Rules screen follows rules.json.
+                view.update(cx, |this, cx| this.watch_activation(window, cx));
+                view
             },
         )
         .expect("open the PwrRoute window");
@@ -484,10 +498,10 @@ mod cli_tests {
     fn only_the_rules_command_is_taken() {
         assert_eq!(rules_command(vec![]), None);
         assert_eq!(rules_command(vec!["https://example.com/".into()]), None);
-        assert_eq!(rules_command(vec!["rules".into()]), Some(2));
+        assert_eq!(rules_command(vec!["rules".into()]), Some(ExitCode::from(2)));
         assert_eq!(
             rules_command(vec!["rules".into(), "test".into(), "--bogus".into()]),
-            Some(2)
+            Some(ExitCode::from(2))
         );
         let dir = tempfile::tempdir().unwrap();
         let rules = write(
@@ -503,7 +517,7 @@ mod cli_tests {
                 "--config".into(),
                 dir.path().join("none.js").display().to_string(),
             ]),
-            Some(2),
+            Some(ExitCode::from(2)),
             "a config that does not exist cannot load"
         );
         assert_eq!(
@@ -513,7 +527,7 @@ mod cli_tests {
                 "--rules".into(),
                 rules.display().to_string(),
             ]),
-            Some(0)
+            Some(ExitCode::SUCCESS)
         );
     }
 }

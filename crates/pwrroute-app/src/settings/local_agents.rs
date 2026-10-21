@@ -32,6 +32,20 @@ const CARDS: [&str; 5] = [
 /// Element ids the tests reach for.
 pub const ACCESS_SWITCH_ID: &str = "agents-access";
 pub const COLLAPSE_ALL_ID: &str = "agents-collapse-all";
+pub const EMPTY_SESSIONS_ID: &str = "agents-no-sessions";
+pub const EMPTY_RECENT_ID: &str = "agents-no-recent";
+
+/// A card's one row when it has nothing to list.
+fn empty_row(id: &'static str, words: &'static str) -> Div {
+    div()
+        .py(px(14.0))
+        .px(px(16.0))
+        .child(
+            div()
+                .id(id)
+                .child(para(words, 11.5, 400.0, 1.5, theme::text_muted())),
+        )
+}
 
 /// The pane's own view state: which role menu is open.
 pub struct State {
@@ -223,8 +237,8 @@ fn server_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
         field(
             "Enable local-agent access",
             Some(field_sub(
-                "Serves MCP on loopback only. Off stops the listener and keeps sessions for next \
-                 time.",
+                "Serves MCP on a socket only this user can reach. Off stops the listener and \
+                 keeps sessions for next time.",
             )),
             [switch(ACCESS_SWITCH_ID, agents.enabled)
                 .accessibility_label("Enable local-agent access")
@@ -241,7 +255,8 @@ fn server_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
         field(
             "Endpoint",
             Some(field_sub(
-                "Fixed port. OAuth metadata is published at the usual well-known paths.",
+                "A per-user socket beside the router\u{2019}s. `pwrroute mcp` pipes an agent\u{2019}s \
+                 stdio to it.",
             )),
             [
                 command_box(
@@ -250,8 +265,9 @@ fn server_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
                 )
                 .into_any_element(),
                 field_help(
-                    "An unauthenticated request gets a 401 that points at the authorization \
-                     server, which is how a client finds the approval flow on its own.",
+                    "The first connection under a new client name opens the approval window; \
+                     the name is what the client sends, so a role is a guardrail, not proof of \
+                     who is calling. Links that pass through these tools stay in memory.",
                 )
                 .into_any_element(),
             ],
@@ -288,15 +304,17 @@ fn connect_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
         ),
         field(
             codex.client.clone(),
-            Some(field_sub("Starts the OAuth flow during add.")),
+            Some(field_sub(
+                "No OAuth: the approval happens in PwrRoute\u{2019}s window.",
+            )),
             [command(2, &codex.lines, cx)],
         ),
     ];
     this.disclosure(
         "agents-connect",
         heading("Connect an agent", "Claude Code and Codex").description(card_description(
-            "Run one of these. The approval window opens in PwrRoute; the browser page only \
-             waits.",
+            "Run one of these. The approval window opens in PwrRoute the first time the agent \
+             connects; its first call waits for the answer.",
         )),
         None,
         rows,
@@ -336,6 +354,13 @@ fn sessions_card(
     let mut rows = vec![head];
     for (index, session) in agents.sessions.iter().enumerate() {
         rows.push(session_line(this, index, session, window, cx));
+    }
+    if agents.sessions.is_empty() {
+        rows.push(empty_row(
+            EMPTY_SESSIONS_ID,
+            "No agent has connected yet. Run one of the commands above; the approval window \
+             opens when it does.",
+        ));
     }
     this.disclosure(
         "agents-sessions",
@@ -681,7 +706,7 @@ fn role_tile(
 }
 
 fn recent_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
-    let rows = this
+    let mut rows: Vec<Div> = this
         .model
         .local_agents
         .recent
@@ -729,6 +754,13 @@ fn recent_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
                 )
         })
         .collect();
+    if rows.is_empty() {
+        rows.push(empty_row(
+            EMPTY_RECENT_ID,
+            "No tool calls since PwrRoute started. Calls are listed here by tool, agent and \
+             outcome; the links they carried are not kept.",
+        ));
+    }
     let open_activity = button("agents-open-activity", "Open Activity", Kind::Quiet, true)
         .on_click(cx.listener(|this, _, window, cx| {
             this.request(SettingsRequest::OpenActivity, window, cx);

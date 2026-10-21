@@ -8,11 +8,15 @@
 //! - [`Approver`] is the app's approval window. The first time a client
 //!   name connects, the person picks a role or denies; [`Agents`] remembers
 //!   the answer, and Settings changes, revokes or forgets it there.
-//! - [`Backends`] are what the tools act on. [`EngineResolver`] adapts
-//!   today's engine; [`fake`] has in-memory stand-ins for the rest.
+//! - [`Backends`] are what the tools act on. [`live`] implements them over
+//!   the router's handle, the browser catalog and `rules.json`;
+//!   [`EngineTester`] runs the saved examples and tests on an engine of its
+//!   own; [`fake`] has in-memory stand-ins for tests.
 //!
-//! URLs that pass through MCP stay in memory. The only file written is the
-//! approval store, and [`AuditRecord`]s carry the tool, agent and timing.
+//! URLs that pass through MCP stay in memory. The only files written are
+//! the approval store and, through `pwrroute_rules_apply`, `rules.json`
+//! itself, with the examples and tests an agent writes into it;
+//! [`AuditRecord`]s carry the tool, agent and timing.
 
 mod agents;
 mod approval;
@@ -21,20 +25,21 @@ mod backend;
 mod engine;
 pub mod fake;
 pub mod link;
+pub mod live;
 pub mod proxy;
 mod roles;
 mod server;
 mod tools;
 
 pub use agents::{AgentInfo, Agents, MAX_AGENTS, MAX_NAME};
-pub use approval::{ApprovalDecision, ApprovalReply, ApprovalRequest, Approver};
+pub use approval::{ApprovalAnswer, ApprovalDecision, ApprovalReply, ApprovalRequest, Approver};
 pub use audit::{AuditRecord, AuditSink, MemoryAudit, NoAudit, Outcome};
 pub use backend::{
-    ActivityEntry, ActivityLog, AgentRef, Backends, BrowserCatalog, BrowserList, DetectedBrowser,
-    Resolver, Router, RulesError, RulesSnapshot, RulesSource, RulesStore, StepKind, Trace,
-    TraceStep,
+    ActivityEntry, ActivityLog, ActivityOutcome, ActivitySource, AgentRef, Backends,
+    BrowserCatalog, BrowserList, DetectedBrowser, Resolver, Router, RulesError, RulesSnapshot,
+    RulesSource, RulesStore, RulesTester, StepKind, Trace, TraceStep,
 };
-pub use engine::EngineResolver;
+pub use engine::{EngineResolver, EngineTester, EngineThread, Loader};
 pub use link::Endpoint;
 pub use roles::{Permission, Permissions, Role};
-pub use server::{Config, McpServer};
+pub use server::{Config, McpHost, McpServer};

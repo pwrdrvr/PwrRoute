@@ -20,9 +20,9 @@ use crate::link::{Link, Source};
 ///
 /// - `Full`: the URL, the opener and every step, as received.
 /// - `Host`: scheme and host only, in the link, the final URL and every
-///   step; no error text, which can quote the URL. The opener stays,
-///   including its `window_title`, which an app can fill with a page title
-///   or a URL; dropping the title at this level is a follow-up.
+///   step; no error text, which can quote the URL. The opener's name,
+///   bundle id and path stay; its `window_title` goes, since an app can
+///   fill it with the page's title or the URL itself.
 /// - `None`: no URL, no host, no opener, no steps: the dispatch is only
 ///   counted, with its outcome and timings.
 pub use pwrroute_engine::Privacy;
@@ -221,9 +221,10 @@ pub struct DispatchTiming {
 
 impl DispatchRecord {
     /// Reduces the record to `level`, in place. `Full` changes nothing;
-    /// `Host` keeps scheme and host of every URL and withholds error text;
-    /// `None` keeps the count: id, time, source, outcome and timings. A
-    /// record already below `level` stays as it is.
+    /// `Host` keeps scheme and host of every URL, withholds error text and
+    /// drops the opener's window title; `None` keeps the count: id, time,
+    /// source, outcome and timings. A record already below `level` stays
+    /// as it is.
     pub fn reduce(&mut self, level: Privacy) {
         let level = self.privacy.at_most(level);
         self.privacy = level;
@@ -231,6 +232,10 @@ impl DispatchRecord {
             Privacy::Full => {}
             Privacy::Host => {
                 self.link.url = host_only(&self.link.url);
+                if let Some(opener) = &mut self.link.opener {
+                    // Free text from the opener: a page title, or the URL.
+                    opener.window_title = None;
+                }
                 if let Some(url) = &mut self.final_url {
                     *url = host_only(url);
                 }
@@ -420,7 +425,11 @@ mod tests {
             reduced.final_url.as_deref(),
             Some("https://bank.example.com")
         );
-        assert_eq!(reduced.link.opener.as_ref().unwrap().name, "Mail");
+        let opener = reduced.link.opener.as_ref().unwrap();
+        assert_eq!(opener.name, "Mail");
+        assert_eq!(opener.bundle_id, "com.apple.mail");
+        assert_eq!(opener.path, "/System/Applications/Mail.app");
+        assert_eq!(opener.window_title, None);
         let browser = reduced.browser.as_ref().unwrap();
         assert_eq!(browser.url, "https://bank.example.com");
         assert_eq!(browser.name, "Firefox");
@@ -451,11 +460,39 @@ mod tests {
             ]
         );
         let json = serde_json::to_string(&reduced).unwrap();
-        for private in ["hunter2", "/account", "/new", "--open", "#x"] {
+        for private in ["hunter2", "/account", "/new", "--open", "#x", "Inbox"] {
             assert!(!json.contains(private), "{private} leaked into {json}");
         }
         assert_eq!(reduced.outcome, Outcome::Failed);
         assert_eq!(reduced.timings, record().timings);
+    }
+
+    #[test]
+    fn a_host_record_drops_the_openers_window_title() {
+        // A window title is the opener's free text: Mail puts the message's
+        // subject there, a browser the page's title, and a title can be the
+        // URL itself. At `Host` it goes the way the path and query go.
+        let mut full = record();
+        full.link.opener.as_mut().unwrap().window_title =
+            Some("Reset your password - https://bank.example.com/account?token=hunter2".into());
+        let reduced = full.reduced(Privacy::Host);
+        let opener = reduced.link.opener.as_ref().unwrap();
+        assert_eq!(opener.window_title, None);
+        assert_eq!(opener.name, "Mail");
+        let json = serde_json::to_string(&reduced).unwrap();
+        assert!(!json.contains("windowTitle"), "{json}");
+        assert!(!json.contains("Reset your password"), "{json}");
+        // `Full` keeps it, and a record without an opener reduces as before.
+        assert!(
+            full.reduced(Privacy::Full)
+                .link
+                .opener
+                .unwrap()
+                .window_title
+                .is_some()
+        );
+        full.link.opener = None;
+        assert!(full.reduced(Privacy::Host).link.opener.is_none());
     }
 
     #[test]

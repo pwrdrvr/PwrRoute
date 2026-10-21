@@ -28,23 +28,29 @@ use crate::settings_store::{self, SettingsStore};
 /// The file name Export suggests.
 pub const EXPORT_NAME: &str = "pwrroute-activity.json";
 
-/// The pane's model as things stand.
+/// The pane's model as things stand: the store, the router and the
+/// `rules.json` the router routes by.
 pub fn model(cx: &App) -> Privacy {
     let store = settings_store::store(cx).map(|store| store.read(cx).clone());
     let router = settings_store::router(cx);
+    let rules = discovery::rules_path(&discovery::Environment::current());
     build(
         store.as_ref(),
         router.as_ref(),
         std::env::home_dir().as_deref(),
+        rules.as_deref(),
     )
 }
 
 /// The model from its parts. `store` is `None` only before `install` ran
-/// (the window harness); then the defaults are described.
+/// (the window harness); then the defaults are described. `rules` is the
+/// `rules.json` whose levels the confirm sheet names; `None`, or a file
+/// that is not there, names no rule.
 pub fn build(
     store: Option<&SettingsStore>,
     router: Option<&RouterHandle>,
     home: Option<&Path>,
+    rules: Option<&Path>,
 ) -> Privacy {
     let default_store = SettingsStore::load(None);
     let store = store.unwrap_or(&default_store);
@@ -94,7 +100,7 @@ pub fn build(
         journal_path: journal_path.into(),
         journal_files: journal_dir.as_deref().and_then(journal_files),
         journal_error,
-        rules_keep_less: rules_keep_less(),
+        rules_keep_less: rules_keep_less(rules),
         can_save: store.dir().is_some(),
     }
 }
@@ -182,11 +188,11 @@ fn size_label(bytes: u64) -> String {
     }
 }
 
-/// "Handler 9 keeps host only and handler 10 keeps nothing": the
-/// `rules.json` rules that keep less than full, for the confirm sheet.
-fn rules_keep_less() -> Option<SharedString> {
-    let path = discovery::rules_path(&discovery::Environment::current())?;
-    let file = RulesFile::load(&path).ok()?;
+/// "Handler 9 keeps host only and handler 10 keeps nothing": the rules
+/// in the `rules.json` at `path` that keep less than full, for the confirm
+/// sheet.
+fn rules_keep_less(path: Option<&Path>) -> Option<SharedString> {
+    let file = RulesFile::load(path?).ok()?;
     let keeps = |level: Level| match level {
         Level::Full => None,
         Level::Host => Some("host only"),
@@ -431,7 +437,7 @@ mod tests {
 
     #[test]
     fn the_model_describes_the_defaults_without_a_router() {
-        let privacy = build(None, None, None);
+        let privacy = build(None, None, None, None);
         assert_eq!(privacy.keep_count, 500);
         assert_eq!(privacy.keep_hours, 24);
         assert_eq!(privacy.journal, JournalLevel::Off);
@@ -442,6 +448,39 @@ mod tests {
         assert_eq!(privacy.journal_files, None);
         assert!(!privacy.can_save);
         assert_eq!(privacy.journal_path.as_ref(), "no data folder");
+        assert_eq!(privacy.rules_keep_less, None);
+    }
+
+    #[test]
+    fn the_sheet_names_the_rules_that_keep_less() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules = dir.path().join("rules.json");
+        // No file, then a file whose rules all keep full: nothing to name.
+        assert_eq!(build(None, None, None, Some(&rules)).rules_keep_less, None);
+        fs::write(
+            &rules,
+            r#"{ "defaultBrowser": "Firefox",
+                 "rules": [{ "match": "docs.example.com/*", "browser": "Safari" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(build(None, None, None, Some(&rules)).rules_keep_less, None);
+        fs::write(
+            &rules,
+            r#"{ "defaultBrowser": "Firefox",
+                 "rewrites": [{ "match": "*.example.com/*", "privacy": "host" }],
+                 "rules": [{ "match": "docs.example.com/*", "browser": "Safari" },
+                           { "match": "bank.example.com/*", "browser": "Safari", "private": true },
+                           { "match": "secret.example.com/*", "browser": "Safari", "privacy": "none" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            build(None, None, None, Some(&rules))
+                .rules_keep_less
+                .as_deref(),
+            Some(
+                "Rewrite 1 keeps host only and handler 2 keeps host only and handler 3 keeps nothing"
+            )
+        );
     }
 
     #[test]
@@ -468,7 +507,7 @@ mod tests {
         )
         .unwrap();
         let handle = router.handle();
-        let before = build(Some(&store), Some(&handle), Some(dir.path()));
+        let before = build(Some(&store), Some(&handle), Some(dir.path()), None);
         assert_eq!(before.journal_files, None);
         assert!(before.can_save);
         assert_eq!(
@@ -485,7 +524,7 @@ mod tests {
                 Source::CommandLine,
             ))
             .unwrap();
-        let after = build(Some(&store), Some(&handle), Some(dir.path()));
+        let after = build(Some(&store), Some(&handle), Some(dir.path()), None);
         let files = after.journal_files.expect("one file now");
         assert!(
             files.summary.ends_with(" \u{00b7} 1 line \u{00b7} 1 day"),

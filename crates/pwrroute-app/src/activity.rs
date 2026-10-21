@@ -15,14 +15,19 @@
 //! When the journal is on, journaled records that are no longer in memory
 //! are listed below the in-memory ones, under a divider. Nothing here
 //! writes a URL anywhere: Export… hands over to Settings' producer, which
-//! writes only to the file the reader picks.
+//! writes only to the file the reader picks. The journal is read from disk
+//! only when its files changed since the last read ([`JournalCache`]): a
+//! sync happens on every dispatch and every Settings change, and most of
+//! them find the files as they were.
 //!
 //! The row's "⋯" opens [`row_menu`] (`activity_actions.rs`): Add a rule
 //! for this link, Save as example or Save as test, over the record the
 //! [`RowKey`] names; the expanded row's "Add a rule…" is
 //! [`PwrRoute::add_rule`], the same sheet.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::io;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Local, NaiveDate};
@@ -33,8 +38,8 @@ use gpui_kit::{
     Styled as _, Subscription, Window, div, px,
 };
 use pwrroute_router::{
-    DispatchId, DispatchRecord, Matched, Options, Outcome, Privacy, RetentionInfo, RouterHandle,
-    Step,
+    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, Options, Outcome, Privacy,
+    RetentionInfo, RouterHandle, Step,
 };
 
 use crate::app::{PwrRoute, Screen};
@@ -155,6 +160,51 @@ pub struct Feed {
     day: Option<NaiveDate>,
     counts: Counts,
     handle: Option<RouterHandle>,
+    /// The journal as last read, so a sync that finds its files unchanged
+    /// lists the same records without reading them again.
+    journal_cache: RefCell<JournalCache>,
+}
+
+/// The journal's records as last read, and the [`JournalStamp`] its files
+/// had then. A read takes the stamp first and reads the files only when it
+/// differs from the last one (or the journal, or the limit, is not what
+/// was read), so a week of journal is read once, not on every sync.
+#[derive(Default)]
+struct JournalCache {
+    /// The journal read, how many records were asked for, and its files'
+    /// stamp before the read.
+    read_as: Option<(JournalConfig, usize, JournalStamp)>,
+    /// Newest first, at most the limit in `read_as`.
+    records: Vec<DispatchRecord>,
+}
+
+impl JournalCache {
+    /// Brings `records` up to date with `config`, reading its files only
+    /// when their stamp changed since the last read. `true` when they were
+    /// read. The stamp is taken before the read, so a line appended during
+    /// the read is caught by the next stamp.
+    fn refresh(&mut self, config: &JournalConfig, limit: usize) -> io::Result<bool> {
+        let stamp = config.stamp()?;
+        if self
+            .read_as
+            .as_ref()
+            .is_some_and(|(read, n, was)| read == config && *n == limit && *was == stamp)
+        {
+            return Ok(false);
+        }
+        self.records = config.read(limit)?;
+        self.read_as = Some((config.clone(), limit, stamp));
+        Ok(true)
+    }
+
+    fn records(&self) -> &[DispatchRecord] {
+        &self.records
+    }
+
+    /// Forgets the last read: the next refresh reads.
+    fn forget(&mut self) {
+        *self = Self::default();
+    }
 }
 
 impl Feed {
@@ -168,6 +218,7 @@ impl Feed {
             day: None,
             counts: Counts::default(),
             handle,
+            journal_cache: RefCell::new(JournalCache::default()),
         }
     }
 
@@ -238,29 +289,43 @@ impl Feed {
     }
 
     /// Journaled dispatches, newest first, at most `limit`: empty while
-    /// the journal is off. Read from disk each time, so a screen asks only
-    /// when it is about to draw them.
+    /// the journal is off. Read from disk when the journal's files changed
+    /// since the last read, else answered from that read.
     pub fn journal(&self, limit: usize) -> Vec<DispatchRecord> {
-        let Some(handle) = &self.handle else {
-            return Vec::new();
-        };
-        if handle.retention().journal.is_none() {
-            return Vec::new();
-        }
-        handle.journal(limit).unwrap_or_else(|error| {
-            eprintln!("pwrroute: cannot read the activity journal: {error}");
-            Vec::new()
-        })
+        self.with_journal(limit, <[DispatchRecord]>::to_vec)
     }
 
-    /// The record behind a row: from memory, or read back from the journal
-    /// for a journaled row (the journal is read on each call, like
+    /// `f` over the journal's records, newest first, at most `limit`, read
+    /// again only when the files changed (see [`JournalCache`]). An empty
+    /// list while the journal is off, or when it cannot be read (reported
+    /// on stderr, without link data).
+    fn with_journal<T>(&self, limit: usize, f: impl FnOnce(&[DispatchRecord]) -> T) -> T {
+        let Some(handle) = &self.handle else {
+            return f(&[]);
+        };
+        let mut cache = self.journal_cache.borrow_mut();
+        let Some(config) = handle.retention().journal else {
+            cache.forget();
+            return f(&[]);
+        };
+        match cache.refresh(&config, limit) {
+            Ok(_) => f(cache.records()),
+            Err(error) => {
+                eprintln!("pwrroute: cannot read the activity journal: {error}");
+                cache.forget();
+                f(&[])
+            }
+        }
+    }
+
+    /// The record behind a row: from memory, or from the journal for a
+    /// journaled row (read again only when its files changed, like
     /// [`journal`](Self::journal)).
     pub fn record(&self, key: RowKey) -> Option<DispatchRecord> {
         if key.journaled {
-            self.journal(JOURNAL_ROWS)
-                .into_iter()
-                .find(|record| record.id == key.id)
+            self.with_journal(JOURNAL_ROWS, |records| {
+                records.iter().find(|record| record.id == key.id).cloned()
+            })
         } else {
             self.records
                 .iter()
@@ -807,6 +872,9 @@ impl Activity {
             activity.sync(feed.read(cx));
             activity._feed = Some(cx.observe(&feed, |this, feed, cx| {
                 this.activity.sync(feed.read(cx));
+                // A dispatch is a moment the file may have changed: an
+                // agent wrote a rule the router just used.
+                this.sync_with_disk(cx);
                 cx.notify();
             }));
         }
@@ -1624,11 +1692,97 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use pwrroute_router::{
-        AppType, Browser, DispatchId, DispatchRecord, JournalConfig, JournalMode, Link, Matched,
-        OpenerInfo, Outcome, Privacy, Retention, Source, Step, Timings,
+        AppType, Browser, DispatchId, DispatchRecord, DryRunLauncher, JournalConfig, JournalMode,
+        Link, Matched, OpenerInfo, Outcome, Privacy, Retention, Router, Source, Step, Timings,
     };
 
     use super::*;
+
+    #[test]
+    fn the_journal_is_read_again_only_when_its_files_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = JournalConfig::new(dir.path().join("journal"), JournalMode::Hosts);
+        let router = Router::spawn(
+            Options {
+                journal: Some(config.clone()),
+                ..Options::default()
+            },
+            None,
+            DryRunLauncher::new(),
+        )
+        .unwrap();
+        let handle = router.handle();
+        let dispatch = |path: &str| {
+            handle
+                .dispatch_and_wait(Link::new(
+                    format!("https://a.example/{path}?q=1"),
+                    Source::CommandLine,
+                ))
+                .unwrap();
+        };
+
+        // Nothing journaled yet: one read of an empty journal, then none.
+        let mut cache = JournalCache::default();
+        assert!(cache.refresh(&config, 10).unwrap());
+        assert!(cache.records().is_empty());
+        assert!(!cache.refresh(&config, 10).unwrap());
+
+        // A dispatch appends a line: read once, at the journal's level.
+        dispatch("one");
+        assert!(cache.refresh(&config, 10).unwrap());
+        assert_eq!(cache.records().len(), 1);
+        assert_eq!(cache.records()[0].link.url, "https://a.example");
+        assert!(!cache.refresh(&config, 10).unwrap());
+        assert!(!cache.refresh(&config, 10).unwrap());
+        assert_eq!(cache.records().len(), 1);
+
+        // Another limit, or another journal, is another read.
+        assert!(cache.refresh(&config, 5).unwrap());
+        assert!(!cache.refresh(&config, 5).unwrap());
+        let elsewhere = JournalConfig::new(dir.path().join("elsewhere"), JournalMode::Hosts);
+        assert!(cache.refresh(&elsewhere, 5).unwrap());
+        assert!(cache.records().is_empty());
+        assert!(cache.refresh(&config, 5).unwrap());
+        assert_eq!(cache.records().len(), 1);
+
+        dispatch("two");
+        assert!(cache.refresh(&config, 5).unwrap());
+        assert_eq!(cache.records().len(), 2);
+        assert_eq!(cache.records()[0].id, handle.recent()[0].id);
+        cache.forget();
+        assert!(cache.refresh(&config, 5).unwrap());
+
+        // The feed answers from the same cache, and a journaled row's
+        // record comes back from it.
+        let feed = Feed::new(Some(handle.clone()));
+        let records = feed.journal(10);
+        assert_eq!(records.len(), 2);
+        assert_eq!(feed.journal(10).len(), 2);
+        assert!(
+            !feed
+                .journal_cache
+                .borrow_mut()
+                .refresh(&config, 10)
+                .unwrap()
+        );
+        let key = RowKey {
+            id: records[1].id,
+            journaled: true,
+        };
+        assert_eq!(feed.record(key).unwrap().id, records[1].id);
+        assert_eq!(feed.journal(10).len(), 2);
+        assert!(
+            !feed
+                .journal_cache
+                .borrow_mut()
+                .refresh(&config, 10)
+                .unwrap()
+        );
+        // The journal turned off: nothing is listed, and nothing is kept.
+        handle.set_journal(None).unwrap();
+        assert!(feed.journal(10).is_empty());
+        assert!(feed.journal_cache.borrow().read_as.is_none());
+    }
 
     fn browser(name: &str, profile: &str, url: &str) -> Browser {
         Browser {

@@ -141,3 +141,100 @@ impl McpServer {
         let _ = self.task.await;
     }
 }
+
+/// A [`McpServer`] on a thread of its own, with its own Tokio runtime, for
+/// a host that has no runtime (the app, whose main thread is GPUI's).
+/// [`Self::stop`] stops the server and joins the thread.
+pub struct McpHost {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    endpoint: Endpoint,
+}
+
+impl std::fmt::Debug for McpHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpHost")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl McpHost {
+    /// Starts the server on a new thread and returns once it listens, or
+    /// with the error that stopped it.
+    pub fn start(
+        config: Config,
+        agents: Agents,
+        backends: Backends,
+        approver: Arc<dyn Approver>,
+        audit: Arc<dyn AuditSink>,
+    ) -> Result<Self> {
+        let endpoint = config.endpoint.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("pwrroute-mcp".into())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e.into()));
+                        return;
+                    }
+                };
+                runtime.block_on(async move {
+                    let server =
+                        match McpServer::start(config, agents, backends, approver, audit).await {
+                            Ok(server) => server,
+                            Err(e) => {
+                                let _ = ready_tx.send(Err(e));
+                                return;
+                            }
+                        };
+                    let _ = ready_tx.send(Ok(()));
+                    // Blocks this thread's only task until told to stop,
+                    // without holding the runtime: the server runs on it.
+                    let stopped = tokio::task::spawn_blocking(move || stop_rx.recv());
+                    let _ = stopped.await;
+                    server.stop().await;
+                });
+            })
+            .context("starting the local-agent thread")?;
+        ready_rx
+            .recv()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the local-agent thread exited")))?;
+        Ok(Self {
+            stop: Some(stop_tx),
+            thread: Some(thread),
+            endpoint,
+        })
+    }
+
+    #[must_use]
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    /// Stops the server and waits for the thread.
+    pub fn stop(mut self) {
+        self.shut_down();
+    }
+
+    fn shut_down(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for McpHost {
+    fn drop(&mut self) {
+        self.shut_down();
+    }
+}

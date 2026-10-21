@@ -83,7 +83,33 @@ impl JournalConfig {
     pub fn read(&self, limit: usize) -> io::Result<Vec<DispatchRecord>> {
         read_recent(&self.dir, limit)
     }
+
+    /// What the journal's files look like from outside, without reading
+    /// them: equal to the last stamp while nothing was written, pruned or
+    /// cleared, so a reader can skip [`read`](Self::read). An absent
+    /// directory stamps as an empty journal.
+    pub fn stamp(&self) -> io::Result<JournalStamp> {
+        let mut files = Vec::new();
+        for (_, path) in journal_files(&self.dir)? {
+            let meta = match fs::metadata(&path) {
+                Ok(meta) => meta,
+                // Pruned between the listing and here: not a file any more.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            files.push((path, meta.len(), meta.modified().ok()));
+        }
+        files.sort_unstable();
+        Ok(JournalStamp(files))
+    }
 }
+
+/// The journal's files as [`JournalConfig::stamp`] saw them: each file's
+/// path, size and modification time, in path order. Two stamps are equal
+/// while no line was appended and no file came or went. Paths, sizes and
+/// times only: never a line's contents.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JournalStamp(Vec<(PathBuf, u64, Option<SystemTime>)>);
 
 /// Everything journaled under `dir`, newest first, at most `limit` records.
 /// See [`JournalConfig::read`].
@@ -487,6 +513,45 @@ mod tests {
         for days in [-1_000_000, -1, 0, 1, 59, 60, 20_746, 1_000_000] {
             assert_eq!(Day::from_days(days).to_days(), days, "{days}");
         }
+    }
+
+    #[test]
+    fn the_stamp_changes_with_the_files_and_not_otherwise() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("activity");
+        let config = JournalConfig::new(&dir, JournalMode::Hosts);
+        // Nothing written yet: no directory, and an empty stamp.
+        assert_eq!(config.stamp().unwrap(), JournalStamp::default());
+
+        let mut journal = Journal::new(config.clone());
+        journal.append(&record(1, at(NOON), Privacy::Full));
+        let one = config.stamp().unwrap();
+        assert_ne!(one, JournalStamp::default());
+        // Nothing happened in between: the same stamp.
+        assert_eq!(config.stamp().unwrap(), one);
+
+        // A line appended to the day's file, then a second day's file.
+        journal.append(&record(2, at(NOON), Privacy::Full));
+        let two = config.stamp().unwrap();
+        assert_ne!(two, one);
+        journal.append(&record(3, at(NOON + 86_400), Privacy::Full));
+        let three = config.stamp().unwrap();
+        assert_ne!(three, two);
+        assert_eq!(three.0.len(), 2);
+
+        // A file that is not the journal's is not in the stamp.
+        fs::write(dir.join("notes.txt"), "not a journal file").unwrap();
+        assert_eq!(config.stamp().unwrap(), three);
+
+        // A file deleted (Settings' Clear now) changes it.
+        fs::remove_file(dir.join(Day::from(at(NOON)).file_name())).unwrap();
+        let cleared = config.stamp().unwrap();
+        assert_ne!(cleared, three);
+        assert_eq!(cleared.0.len(), 1);
+
+        // The stamp names files, not links.
+        let debug = format!("{three:?}");
+        assert!(!debug.contains("bank.example.com"), "{debug}");
     }
 
     #[test]

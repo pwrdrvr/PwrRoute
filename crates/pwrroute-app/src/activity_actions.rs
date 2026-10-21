@@ -45,27 +45,6 @@ pub struct BrowserChoice {
     pub profiles: Vec<String>,
 }
 
-/// The browsers installed on this machine, with their profiles, read once
-/// at launch. Never called from a test: a test sets `PwrRoute::browsers`.
-pub fn detected_browsers() -> Vec<BrowserChoice> {
-    let env = pwrroute_browsers::Env::system();
-    pwrroute_browsers::detect_installed(&env)
-        .into_iter()
-        .map(|installed| BrowserChoice {
-            profiles: installed
-                .browser
-                .map(|info| {
-                    pwrroute_browsers::list_profiles(info, &env)
-                        .into_iter()
-                        .map(|profile| profile.name)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            name: installed.name,
-        })
-        .collect()
-}
-
 /// What the row actions are doing: the row whose "⋯" menu is open, the
 /// sheet, and the note the last action left, for the row it was on (the
 /// menu's footer shows it).
@@ -474,6 +453,8 @@ impl PwrRoute {
         let Some(record) = record(key, cx) else {
             return;
         };
+        // "Becomes handler N" counts the file as it is.
+        self.sync_with_disk(cx);
         let mut sheet = if record.privacy == Privacy::Full {
             AddRule::new(&record, &self.browsers, cx)
         } else {

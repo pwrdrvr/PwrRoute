@@ -6,8 +6,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::{
-    Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Render, Styled as _, Window, div,
+    App, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
+    ParentElement as _, Render, Styled as _, Window, div,
 };
 
 use pwrroute_engine::{DefaultHost, Engine, Limits, discovery};
@@ -17,7 +17,7 @@ use crate::activity_actions::{self, Actions, BrowserChoice};
 use crate::config_view::{self, ConfigInCharge};
 use crate::editor::{Field, Rail};
 use crate::rules_model::{self, Handler, Rewrite};
-use crate::rules_store::RulesStore;
+use crate::rules_store::{Disk, RulesStore};
 use crate::test_link::TestLink;
 use crate::text_field::{Edit, TextField};
 use crate::try_it::{Probe, TestRuns};
@@ -85,8 +85,9 @@ pub struct PwrRoute {
     /// Activity's row actions: the Add a rule sheet and what the last
     /// action did.
     pub actions: Actions,
-    /// The browsers the sheet offers, with their profiles: detected at
-    /// launch; a test or screenshot sets its own.
+    /// The browsers the sheet offers, with their profiles: the app's one
+    /// scan (`browser_scan`), less the apps hidden in Settings › Browsers;
+    /// a test or screenshot sets its own.
     pub browsers: Vec<BrowserChoice>,
     /// A debounced save is on its way.
     save_scheduled: bool,
@@ -99,7 +100,8 @@ impl PwrRoute {
         let store = RulesStore::load(discovery::rules_path(&discovery::Environment::current()));
         let mut this =
             Self::with_store(router::config_in_charge(), std::env::home_dir(), store, cx);
-        this.browsers = activity_actions::detected_browsers();
+        // The one scan the app makes, less the apps hidden in Settings.
+        this.browsers = crate::browser_scan::choices(cx);
         this
     }
 
@@ -160,6 +162,8 @@ impl PwrRoute {
         self.screen = screen;
         match screen {
             Screen::TestLink => {
+                // Test a link tests the file as it is.
+                self.sync_with_disk(cx);
                 if !self.test.has_run() {
                     self.test.run();
                 }
@@ -217,8 +221,11 @@ impl PwrRoute {
 
     /// The store changed: redraw the rows, hand Test a link, Try it and the
     /// test runs the new rules, and write the file after the debounce. The
-    /// rail's fields are kept, so typing keeps its focus.
+    /// rail's fields are kept, so typing keeps its focus. The file is
+    /// checked first: an edit over a file another writer changed is kept
+    /// on screen and not saved, and the status says so.
     pub(crate) fn refresh(&mut self, cx: &mut Context<'_, Self>) {
+        let disk = self.store.check_disk();
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
         let order = self.order();
@@ -229,11 +236,77 @@ impl PwrRoute {
         self.test.set_rules(self.store.written());
         self.probe.set_rules(self.store.edited());
         self.tests.set_rules(self.store.edited());
+        if disk == Disk::Reloaded {
+            // The rail's fields held a rule that is gone: nothing was
+            // unsaved, so they are rebuilt from the file.
+            self.rebuild_rail(cx);
+        }
         self.try_it();
         if self.store.needs_save() {
             self.schedule_save(cx);
         }
         cx.notify();
+    }
+
+    // --- the file's other writers ------------------------------------------
+
+    /// Follows `rules.json` when something else wrote it: an agent's
+    /// `pwrroute_rules_apply`, an editor, a sync. Called when the window
+    /// comes to the front, on every dispatch, after an in-process agent
+    /// write, and before the Add a rule sheet and Test a link read the
+    /// store. A changed file is read again while nothing is unsaved; under
+    /// unsaved edits the rail foot shows Reload and Overwrite instead.
+    pub fn sync_with_disk(&mut self, cx: &mut Context<'_, Self>) -> Disk {
+        let disk = self.store.check_disk();
+        match disk {
+            Disk::Unchanged => {}
+            Disk::Reloaded => self.reloaded(cx),
+            Disk::Changed => cx.notify(),
+        }
+        disk
+    }
+
+    /// Reload: drops every unsaved edit and reads the file again.
+    pub fn reload_rules(&mut self, cx: &mut Context<'_, Self>) {
+        self.store.reload();
+        self.reloaded(cx);
+    }
+
+    /// Overwrite: writes the edits over the file as it now is.
+    pub fn overwrite_rules(&mut self, cx: &mut Context<'_, Self>) {
+        // The status carries the error; nothing else reports it.
+        let _ = self.store.overwrite();
+        self.rewrites = self.store.rewrites();
+        self.handlers = self.store.handlers();
+        self.run_tests(cx);
+    }
+
+    /// The store holds the file again: the rows, the selection (cleared
+    /// when its row is gone), the rail, and every engine over the rules.
+    fn reloaded(&mut self, cx: &mut Context<'_, Self>) {
+        self.rewrites = self.store.rewrites();
+        self.handlers = self.store.handlers();
+        let order = self.order();
+        self.selection = self.selection.filter(|s| order.contains(s));
+        self.rebuild_rail(cx);
+        self.test.set_rules(self.store.written());
+        self.probe.set_rules(self.store.edited());
+        self.tests.set_rules(self.store.edited());
+        if self.tests.counts() != (0, 0) {
+            self.tests.run();
+        }
+        cx.notify();
+    }
+
+    /// Checks the file each time the window comes to the front: an editor
+    /// or a sync changed it while something else had the screen.
+    pub fn watch_activation(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.sync_with_disk(cx);
+            }
+        })
+        .detach();
     }
 
     /// The selected rule's editor, fresh from the store, and its Try it.
@@ -535,6 +608,19 @@ impl PwrRoute {
             "up" => self.step(-1, cx),
             "down" => self.step(1, cx),
             _ => {}
+        }
+    }
+}
+
+/// Every main window checks the file now: an in-process agent write
+/// landed, so the Rules screen reloads at once rather than on the next
+/// activation or dispatch.
+pub fn sync_rules_windows(cx: &mut App) {
+    for window in cx.windows() {
+        if let Some(window) = window.downcast::<PwrRoute>() {
+            let _ = window.update(cx, |this, _, cx| {
+                this.sync_with_disk(cx);
+            });
         }
     }
 }

@@ -70,7 +70,21 @@ persist owner-only and fail closed on a damaged file, a prompt expires after
 | Audit | PwrSnap: sensitive actions with subject ids | every call: tool, agent, connection, start, duration, outcome | No subject: here the subject is a URL. |
 | Connections | per-request HTTP | 16 open at once | One cap. |
 
-Not here yet: the app's `pwrroute mcp` subcommand (it calls
-`proxy::main`), the approval window and Settings pane, custom roles, the
-`status://router` resource, and the real router, launcher, rules store and
-activity log behind the traits.
+- **Backends over the real thing live in `live.rs`.** `LiveRouter` is the
+  router's handle (resolve is its Test a link, open is a dispatch, activity
+  is its buffer and journal), `LiveBrowsers` the catalog over an `Env`,
+  `LiveRules` `rules.json` on disk with a content-hash revision.
+  `EngineTester` runs the saved examples and tests on an engine of its own
+  that follows the same config choice and `rules.json` as the router's
+  resolver. The app wires them in `crates/pwrroute-app/src/mcp.rs`.
+- **Apply refuses, it does not warn.** `pwrroute_rules_apply` runs the
+  saved examples and tests before and after the patch; a case that passed
+  and now fails is a regression, and the write is refused with the list
+  unless `force` is true. The audit's `note` says `refused` or `forced` in
+  fixed words. Keep that: an agent treats a warning as a note.
+- **Activity is already reduced.** Entries come from the router at their
+  rule's level (`privacy`); a `none` entry has no trace and no `via`. The
+  tool adds only the role's cut (`hosts_only`) and the filters. The journal
+  is a separate `source` behind `activity.journal`, Editor only.
+
+Not here yet: custom roles and the `status://router` resource.

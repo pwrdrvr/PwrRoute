@@ -905,6 +905,7 @@ pub fn pane(
                 .id("test-run")
                 .debug_selector(|| "test-run".into())
                 .on_click(cx.listener(|this, _, _, cx| {
+                    this.sync_with_disk(cx);
                     this.test.run();
                     cx.notify();
                 })),
