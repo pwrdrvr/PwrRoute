@@ -71,30 +71,38 @@ impl Harness {
     }
 
     pub async fn start_with(answer: FakeAnswer, approval_wait: Duration) -> Self {
-        let state_dir = std::env::temp_dir().join(unique("pwrroute-mcp-state"));
         Self::start_in(
-            state_dir,
-            private_endpoint(),
+            std::env::temp_dir().join(unique("pwrroute-mcp-state")),
             Arc::new(FakeApprover::new(answer)),
-            approval_wait,
+            config(private_endpoint(), approval_wait),
         )
         .await
     }
 
-    pub async fn start_in(
-        state_dir: PathBuf,
-        endpoint: Endpoint,
-        approver: Arc<FakeApprover>,
+    /// A server whose approval window closes after `prompt_ttl`.
+    pub async fn start_with_ttl(
+        answer: FakeAnswer,
         approval_wait: Duration,
+        prompt_ttl: Duration,
     ) -> Self {
+        Self::start_in(
+            std::env::temp_dir().join(unique("pwrroute-mcp-state")),
+            Arc::new(FakeApprover::new(answer)),
+            Config {
+                prompt_ttl,
+                ..config(private_endpoint(), approval_wait)
+            },
+        )
+        .await
+    }
+
+    pub async fn start_in(state_dir: PathBuf, approver: Arc<FakeApprover>, config: Config) -> Self {
+        let endpoint = config.endpoint.clone();
         let agents = Agents::open(Some(&state_dir)).expect("open the state dir");
         let (backends, router, rules) = fake::backends();
         let audit = Arc::new(MemoryAudit::default());
         let server = McpServer::start(
-            Config {
-                endpoint: endpoint.clone(),
-                approval_wait,
-            },
+            config,
             agents.clone(),
             backends,
             approver.clone(),
@@ -148,6 +156,15 @@ impl Harness {
     pub async fn finish(self) {
         let dir = self.stop().await;
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A server config on `endpoint` with the default prompt TTL.
+pub fn config(endpoint: Endpoint, approval_wait: Duration) -> Config {
+    Config {
+        endpoint,
+        approval_wait,
+        ..Config::default()
     }
 }
 

@@ -692,8 +692,9 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     }
 }
 
-/// The prompt expired or the server stopped: close its window. Dropping
-/// the view drops its reply, which the server already counts as a denial.
+/// The prompt expired or the server stopped: close its window. The server
+/// has already filed the prompt as expired, which is not a denial, so the
+/// reply dropped with the view changes nothing.
 fn close_prompt(id: &str, cx: &mut App) {
     let window = cx.update_global::<Prompts, _>(|prompts, _| prompts.0.remove(id));
     if let Some(window) = window {

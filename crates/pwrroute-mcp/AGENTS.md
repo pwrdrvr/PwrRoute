@@ -33,6 +33,14 @@ door; this crate supersedes that part of it.
   self-reported, so a role is a guardrail against an agent overreaching,
   not a wall against a hostile local process: say so wherever roles are
   described.
+- **Only a person denies.** A window that closes unanswered (its
+  `Config::prompt_ttl`, 5 minutes, or the server stopping) is
+  `Verdict::Expired`, not a denial: the waiting call gets
+  `approval_expired`, and the next call on that connection raises the
+  window again. Deny, or the app dropping the reply, is `access_denied`
+  for the rest of the connection; reconnecting asks again. Settings ›
+  Local agents offers Allow again and Forget on a revoked row, so the
+  `revoked` message can send an agent there.
 - **Check the role at call time.** `tools.rs` reads the agent's standing on
   every call, so a role change, revocation or forget in Settings applies to
   the next call. Every tool stays listed; a refusal is an `isError` result
@@ -56,7 +64,8 @@ door; this crate supersedes that part of it.
 The approval is in-app only and per person, roles are named permission
 sets, every tool is listed and a refusal is an `isError` result, approvals
 persist owner-only and fail closed on a damaged file, a prompt expires after
-5 minutes, at most 8 prompts are open, and the audit holds no content.
+5 minutes (here without counting as a denial), at most 8 prompts are open,
+and the audit holds no content.
 
 ## Different, on purpose
 
@@ -65,7 +74,7 @@ persist owner-only and fail closed on a damaged file, a prompt expires after
 | Transport | loopback HTTP + OAuth 2.1 | stdio proxy + per-user socket/pipe | Claude Code refuses OAuth over `http://`; disktree's door. |
 | What is approved | an OAuth session, one token each | a client name, remembered | No token on a same-user link; the name is what the client sends. |
 | When it asks | `/authorize` | as the client connects; its first tool call waits up to 2 minutes | MCP clients connect at start-up, before any tool call. |
-| Denial | per authorization | per connection; the next connection asks again | Not remembered, so a mis-click is not permanent. |
+| Denial | per authorization | per connection; the next connection asks again; an expired window is not one | Not remembered, so a mis-click is not permanent. |
 | Revocation | per session | per name; refused without asking until Settings allows it again; *forget* asks again | Revoking must stick even though the name is self-reported. |
 | Audit | PwrSnap: sensitive actions with subject ids | every call: tool, agent, connection, start, duration, outcome | No subject: here the subject is a URL. |
 | Connections | per-request HTTP | 16 open at once | One cap. |

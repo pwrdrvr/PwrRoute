@@ -6,10 +6,10 @@ mod support;
 
 use std::{fs, time::Duration};
 
-use pwrroute_mcp::{Config, McpServer, MemoryAudit, Outcome, Role, fake};
+use pwrroute_mcp::{McpServer, MemoryAudit, Outcome, Role, fake};
 use rmcp::ServiceExt as _;
 use serde_json::json;
-use support::{Harness, call, eventually, private_endpoint, proxy_command, text};
+use support::{Harness, call, config, eventually, private_endpoint, proxy_command, text};
 
 use pwrroute_mcp::fake::FakeAnswer;
 
@@ -154,10 +154,7 @@ async fn a_second_server_does_not_take_over_the_endpoint() {
     let h = Harness::start(FakeAnswer::Approve(Role::Reader)).await;
     let (backends, _, _) = fake::backends();
     let second = McpServer::start(
-        Config {
-            endpoint: h.endpoint.clone(),
-            approval_wait: Duration::from_secs(1),
-        },
+        config(h.endpoint.clone(), Duration::from_secs(1)),
         h.agents.clone(),
         backends,
         h.approver.clone(),
@@ -192,9 +189,8 @@ async fn the_socket_is_owner_only_replaces_a_stale_one_and_is_removed_on_stop() 
 
     let h = Harness::start_in(
         std::env::temp_dir().join(format!("pwrroute-mcp-stale-{}", std::process::id())),
-        endpoint.clone(),
         std::sync::Arc::new(fake::FakeApprover::new(FakeAnswer::Approve(Role::Reader))),
-        Duration::from_secs(10),
+        config(endpoint.clone(), Duration::from_secs(10)),
     )
     .await;
     let mode = fs::metadata(endpoint.path()).unwrap().permissions().mode() & 0o777;
@@ -336,10 +332,7 @@ async fn a_host_thread_serves_until_stopped() {
         let endpoint = endpoint.clone();
         move || {
             pwrroute_mcp::McpHost::start(
-                Config {
-                    endpoint,
-                    approval_wait: Duration::from_secs(1),
-                },
+                config(endpoint, Duration::from_secs(1)),
                 agents,
                 backends,
                 std::sync::Arc::new(fake::FakeApprover::approving(Role::Reader)),
