@@ -99,7 +99,7 @@ runs cargo or installs project dependencies.
 |---|---|---|
 | `distribution-audit` | — | Stub (see below). |
 | `prepare` | — | `cargo xtask release-check`, `lint`, `test` on Linux. |
-| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
+| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, the DMG's `background.png`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
 | `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
 | `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1`, `PwrRoute.ico` and the release notes. |
 | `windows-sign` | windows-signing | `vpk pack` with Setup.exe and MSI; verifies. |
@@ -139,7 +139,11 @@ shared by `windows-sign` and the preview.
   update hooks call `register_browser()`, uninstall `unregister_browser()`;
   registering never changes the default browser.
 - **macOS.** `vpk` adds `UpdateMac` and `sq.version` to the app, so only the
-  packed app can update; the DMG is cut from it. It signs with
+  packed app can update; the DMG is cut from it. `macos-dmg.sh` lays the DMG
+  window out like PwrSnap's (background, icon positions, volume icon, volume
+  `PwrRoute <v>-universal`) by driving Finder through `osascript`, so the
+  job needs the runner's GUI session; it retries Finder five times and fails
+  with a message rather than shipping an unstyled DMG. vpk signs with
   `packaging/macos/PwrRoute.entitlements` (none): vpk's default allows JIT,
   unsigned executable memory and `DYLD_*` variables and turns off library
   validation. No `.pkg` installer (`--noInst`): it needs a Developer ID

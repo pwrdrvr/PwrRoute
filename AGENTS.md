@@ -125,7 +125,11 @@ macOS app, zip and DMG, ad hoc signed unless an identity is given.
 `packaging/icon/PwrRoute.svg`, the design mark on the Pwr family's tile;
 `scripts/release/make-icns.sh` renders it into the committed
 `packaging/macos/PwrRoute.icns` and `packaging/windows/PwrRoute.ico`, so
-rerun it and commit both after editing the SVG. Windows and macOS
+rerun it and commit both after editing the SVG. The DMG window's
+background, `packaging/dmg/background.png`, is painted by
+`scripts/release/generate-dmg-background.swift` in the vendored Geist Bold
+(`packaging/dmg/fonts`) and committed the same way; `macos-dmg.sh` holds the
+window layout, and xtask's tests keep the two in step. Windows and macOS
 releases install and update through Velopack: release.yml packs them with
 `vpk`, installed by `scripts/release/install-vpk.sh` from a pinned version
 and SHA-512; that version must equal the `velopack` crate's `=` pin, and
