@@ -9,13 +9,15 @@
 //!   fallback already in `rules.json`. [`Facts::probe`] reads the machine;
 //!   tests write their own and build the model with [`model`].
 //! - [`hooks`] makes the window's choices real: the fallback goes to
-//!   `rules.json`'s `defaultBrowser`, the Finicky choice is recorded (there
+//!   `rules.json`'s `defaultBrowser` and `defaultProfile` (empty for the
+//!   browser's own default profile), the Finicky choice is recorded (there
 //!   is no importer yet, so the config stays in charge either way), "Set as
 //!   default browser" asks the OS through [`crate::default_browser`], and
 //!   "Open PwrRoute" or "Later" marks first run done and opens the main
-//!   window on Rules, so leaving the window never leaves the app without
-//!   one. Closing the window instead only marks first run done: the menu
-//!   bar item stays, as the window's own help line says.
+//!   window on Rules, on the display the first-run window was on, so
+//!   leaving the window never leaves the app without one. Closing the
+//!   window instead only marks first run done: the menu bar item stays, as
+//!   the window's own help line says.
 
 use std::{
     fs, io,
@@ -24,8 +26,8 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use gpui_kit::{App, Subscription, WindowHandle};
-use pwrroute_browsers::{Env, detect_installed};
+use gpui_kit::{App, DisplayId, Subscription, WindowHandle};
+use pwrroute_browsers::Env;
 use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, discovery};
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +52,10 @@ pub struct State {
     /// Step 1's choice, as written to `rules.json`'s `defaultBrowser`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback: Option<String>,
+    /// Step 1's profile, as written to `rules.json`'s `defaultProfile`;
+    /// `None` for the browser's own default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_profile: Option<String>,
     /// Step 2's choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub import: Option<ImportChoice>,
@@ -133,11 +139,14 @@ pub struct FinickyFound {
 pub struct Facts {
     /// Who handles links today.
     pub handler: DefaultState,
-    /// The browsers on this machine, for the fallback picker.
+    /// The browsers on this machine and their profiles, for the fallback
+    /// pickers.
     pub browsers: Vec<BrowserChoice>,
     pub finicky: Option<FinickyFound>,
     /// `rules.json`'s `defaultBrowser`, empty when it names none.
     pub rules_default: String,
+    /// `rules.json`'s `defaultProfile`, empty when it names none.
+    pub rules_profile: String,
     pub state: State,
 }
 
@@ -147,26 +156,23 @@ impl Facts {
     /// router chose, `rules.json` and `state.json`.
     pub fn probe(cx: &App) -> Self {
         let env = discovery::Environment::current();
-        let rules_default = discovery::rules_path(&env)
+        let (rules_default, rules_profile) = discovery::rules_path(&env)
             .and_then(|path| RulesFile::load(&path).ok())
-            .map(|rules| rules.default_browser)
+            .map(|rules| (rules.default_browser, rules.default_profile))
             .unwrap_or_default();
         let state = pwrroute_os::data_dir()
             .and_then(|dir| State::load(&dir).ok())
             .unwrap_or_default();
         Self {
             handler: default_browser::state(cx),
-            browsers: detect_installed(&Env::system())
+            // The same read as Settings › Browsers: names, ids and profile
+            // names.
+            browsers: crate::browser_scan::scan(&Env::system())
                 .into_iter()
-                .map(|browser| {
-                    let value = browser
-                        .bundle_id
-                        .clone()
-                        .unwrap_or_else(|| browser.name.clone());
-                    BrowserChoice {
-                        label: BrowserLabel::new(&badge_for(&browser.name), &browser.name, None),
-                        value,
-                    }
+                .map(|app| BrowserChoice {
+                    label: BrowserLabel::new(&badge_for(&app.name), &app.name, None),
+                    value: app.id().to_owned(),
+                    profiles: app.profiles,
                 })
                 .collect(),
             finicky: crate::router::config_in_charge().map(|path| {
@@ -186,6 +192,7 @@ impl Facts {
                 }
             }),
             rules_default,
+            rules_profile,
             state,
         }
     }
@@ -194,14 +201,20 @@ impl Facts {
 /// The window's model for these facts. `home` shortens the config's path
 /// to `~/…`.
 pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
-    let chosen = facts
-        .state
-        .fallback
-        .clone()
-        .filter(|value| !value.is_empty())
-        .or_else(|| Some(facts.rules_default.clone()).filter(|value| !value.is_empty()));
-    let fallback = chosen.map(|value| {
-        facts
+    // state.json's choice when first run made one, else rules.json's; the
+    // profile comes from the same place as the browser.
+    let non_empty = |value: &str| Some(value.to_owned()).filter(|value| !value.is_empty());
+    let chosen = match facts.state.fallback.as_deref().and_then(non_empty) {
+        Some(value) => Some((
+            value,
+            facts.state.fallback_profile.as_deref().and_then(non_empty),
+        )),
+        None => {
+            non_empty(&facts.rules_default).map(|value| (value, non_empty(&facts.rules_profile)))
+        }
+    };
+    let fallback = chosen.map(|(value, profile)| {
+        let mut label = facts
             .browsers
             .iter()
             .find(|choice| {
@@ -212,7 +225,9 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
                 // Named in rules.json but not found here: shown as written.
                 || BrowserLabel::new(&badge_for(&value), &value, None),
                 |choice| choice.label.clone(),
-            )
+            );
+        label.profile = profile;
+        label
     });
     FirstRunModel {
         fallback,
@@ -252,25 +267,55 @@ pub fn hooks() -> FirstRunHooks {
     hooks_with(
         pwrroute_os::data_dir(),
         discovery::rules_path(&discovery::Environment::current()),
-        Rc::new(|cx| crate::tray::show_screen(Screen::Rules, cx)),
+        Rc::new(|first_run, cx| {
+            let connected: Vec<DisplayId> =
+                cx.displays().iter().map(|display| display.id()).collect();
+            #[cfg(target_os = "macos")]
+            let under_mouse = crate::macos::display_under_mouse();
+            #[cfg(not(target_os = "macos"))]
+            let under_mouse = None;
+            let display = main_window_display(first_run, under_mouse, &connected);
+            crate::tray::show_screen_on(Screen::Rules, display, cx);
+        }),
     )
 }
 
+/// Where the main window opens when first run hands over to it: the
+/// display the first-run window was on, else the one under the mouse,
+/// else (`None`) the primary display, as a cold launch opens it. A display
+/// that is no longer connected is skipped.
+pub fn main_window_display(
+    first_run: Option<DisplayId>,
+    under_mouse: Option<DisplayId>,
+    connected: &[DisplayId],
+) -> Option<DisplayId> {
+    [first_run, under_mouse]
+        .into_iter()
+        .flatten()
+        .find(|display| connected.contains(display))
+}
+
+/// What follows the first-run window: the main window, given the display
+/// the first-run window was on.
+pub type OpenMain = Rc<dyn Fn(Option<DisplayId>, &mut App)>;
+
 /// [`hooks`] over these files, with `open_main` as what follows the
-/// window: tests give it a scratch directory and count the calls.
+/// window, given the display the first-run window was on: tests give it a
+/// scratch directory and count the calls.
 pub fn hooks_with(
     data_dir: Option<PathBuf>,
     rules_path: Option<PathBuf>,
-    open_main: Rc<dyn Fn(&mut App)>,
+    open_main: OpenMain,
 ) -> FirstRunHooks {
     let fallback_dir = data_dir.clone();
     let import_dir = data_dir.clone();
     let finish_dir = data_dir;
     FirstRunHooks {
-        on_fallback: Rc::new(move |choice, _| {
+        on_fallback: Rc::new(move |choice: first_run::Fallback, _| {
             if let Some(path) = &rules_path {
                 let saved = RulesFile::load(path).and_then(|mut rules| {
-                    rules.default_browser = choice.value.clone();
+                    rules.default_browser.clone_from(&choice.browser.value);
+                    rules.default_profile = choice.profile.clone().unwrap_or_default();
                     rules.save(path)
                 });
                 if let Err(error) = saved {
@@ -278,7 +323,8 @@ pub fn hooks_with(
                 }
             }
             edit_state(fallback_dir.as_deref(), |state| {
-                state.fallback = Some(choice.value.clone());
+                state.fallback = Some(choice.browser.value.clone());
+                state.fallback_profile.clone_from(&choice.profile);
             });
         }),
         on_import: Rc::new(move |choice, _| {
@@ -296,9 +342,9 @@ pub fn hooks_with(
         }),
         // Done or Later alike: the window closes itself next, and the main
         // window is what the reader is left with.
-        on_finish: Rc::new(move |_, cx| {
+        on_finish: Rc::new(move |finished: first_run::Finished, cx| {
             mark_completed(finish_dir.as_deref());
-            open_main(cx);
+            open_main(finished.display, cx);
         }),
     }
 }
@@ -312,9 +358,9 @@ struct Open {
 impl gpui_kit::Global for Open {}
 
 /// Opens first run over the machine's facts. Step 3 follows the OS's
-/// answer (read back on a timer after the request, and whenever the window
-/// comes to the front), and closing the window, however, marks first run
-/// done.
+/// answer (read every second while the window is open and PwrRoute is not
+/// the default, and whenever the window comes to the front), and closing
+/// the window, however, marks first run done.
 pub fn open(cx: &mut App) {
     let facts = Facts::probe(cx);
     let model = model(&facts, std::env::home_dir().as_deref());
@@ -352,6 +398,14 @@ pub fn open(cx: &mut App) {
         window,
         _answers: answers.unwrap_or_else(|| Subscription::new(|| {})),
     });
+    let id = window.window_id();
+    default_browser::follow_while(
+        move |cx| {
+            cx.try_global::<Open>()
+                .is_some_and(|open| open.window.window_id() == id)
+        },
+        cx,
+    );
 }
 
 #[cfg(test)]
@@ -365,6 +419,15 @@ mod tests {
         BrowserChoice {
             value: "com.google.Chrome".to_owned(),
             label: BrowserLabel::new("Ch", "Google Chrome", None),
+            profiles: vec!["Personal".to_owned(), "Work".to_owned()],
+        }
+    }
+
+    fn safari() -> BrowserChoice {
+        BrowserChoice {
+            value: "com.apple.Safari".to_owned(),
+            label: BrowserLabel::new("Sa", "Safari", None),
+            profiles: Vec::new(),
         }
     }
 
@@ -376,7 +439,9 @@ mod tests {
                 BrowserChoice {
                     value: "org.mozilla.firefox".to_owned(),
                     label: BrowserLabel::new("Ff", "Firefox", None),
+                    profiles: vec!["default-release".to_owned()],
                 },
+                safari(),
             ],
             finicky: Some(FinickyFound {
                 path: PathBuf::from("/Users/u/.finicky.ts"),
@@ -384,6 +449,7 @@ mod tests {
                 handlers: 6,
             }),
             rules_default: String::new(),
+            rules_profile: String::new(),
             state: State::default(),
         }
     }
@@ -398,6 +464,7 @@ mod tests {
         let state = State {
             first_run_completed: true,
             fallback: Some("com.google.Chrome".to_owned()),
+            fallback_profile: Some("Work".to_owned()),
             import: Some(ImportChoice::KeepFile),
         };
         state.save(&dir).unwrap();
@@ -406,6 +473,7 @@ mod tests {
         let text = fs::read_to_string(State::path(&dir)).unwrap();
         assert!(text.contains("\"firstRunCompleted\": true"));
         assert!(text.contains("\"import\": \"keepFile\""));
+        assert!(text.contains("\"fallbackProfile\": \"Work\""));
 
         // A bad file does not nag.
         fs::write(State::path(&dir), "{").unwrap();
@@ -418,7 +486,7 @@ mod tests {
         let facts = facts();
         let built = model(&facts, Some(Path::new("/Users/u")));
         assert_eq!(built.fallback, None);
-        assert_eq!(built.browsers.len(), 2);
+        assert_eq!(built.browsers.len(), 3);
         assert_eq!(built.current_default, "Google Chrome");
         assert!(!built.is_default);
         let finicky = built.finicky.as_ref().unwrap();
@@ -429,10 +497,11 @@ mod tests {
             built.steps(),
             [StepState::Current, StepState::Todo, StepState::Todo]
         );
-        assert!(
-            built
-                .import_detail()
-                .contains("importing is not available yet")
+        assert_eq!(
+            built.import_detail(),
+            "Found ~/.finicky.ts with 2 rewrites and 6 handlers. It stays in charge and runs \
+             as it did under Finicky; the file is never modified. Importing it into editable \
+             rules is coming."
         );
     }
 
@@ -476,18 +545,19 @@ mod tests {
         let hooks = hooks_with(
             Some(data_dir.clone()),
             None,
-            Rc::new(move |_| count.set(count.get() + 1)),
+            Rc::new(move |_, _| count.set(count.get() + 1)),
         );
         assert!(State::pending(&data_dir));
 
-        cx.update(|cx| (hooks.on_finish)(Finish::Later, cx));
+        let finished = |how| first_run::Finished { how, display: None };
+        cx.update(|cx| (hooks.on_finish)(finished(Finish::Later), cx));
         assert_eq!(opened.get(), 1);
         assert!(!State::pending(&data_dir));
         let state = State::load(&data_dir).unwrap();
         assert!(state.first_run_completed);
         assert_eq!(state.fallback.as_deref(), Some("com.google.Chrome"));
 
-        cx.update(|cx| (hooks.on_finish)(Finish::Done, cx));
+        cx.update(|cx| (hooks.on_finish)(finished(Finish::Done), cx));
         assert_eq!(opened.get(), 2);
         assert!(!State::pending(&data_dir));
     }
@@ -507,5 +577,102 @@ mod tests {
         assert!(built.is_default);
         assert_eq!(built.finicky, None);
         assert_eq!(tilde(Path::new("/x/y"), Some(Path::new("/z"))), "/x/y");
+    }
+
+    /// Step 1's browser and profile go to rules.json's `defaultBrowser`
+    /// and `defaultProfile` (the router's fallback) and to state.json, and
+    /// the next first run reads them back from either.
+    #[gpui_kit::test]
+    fn step_one_saves_the_browser_and_profile(cx: &mut TestAppContext) {
+        use crate::first_run::Fallback;
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("PwrRoute");
+        let rules_path = data_dir.join("rules.json");
+        let hooks = hooks_with(
+            Some(data_dir.clone()),
+            Some(rules_path.clone()),
+            Rc::new(|_, _| {}),
+        );
+        let saved = || {
+            let rules = RulesFile::load(&rules_path).unwrap();
+            let state = State::load(&data_dir).unwrap();
+            (rules, state)
+        };
+
+        cx.update(|cx| {
+            (hooks.on_fallback)(
+                Fallback {
+                    browser: chrome(),
+                    profile: Some("Work".to_owned()),
+                },
+                cx,
+            );
+        });
+        let (rules, state) = saved();
+        assert_eq!(rules.default_browser, "com.google.Chrome");
+        assert_eq!(rules.default_profile, "Work");
+        assert_eq!(state.fallback.as_deref(), Some("com.google.Chrome"));
+        assert_eq!(state.fallback_profile.as_deref(), Some("Work"));
+
+        // Read back: from state.json, and from rules.json alone.
+        let mut read_back = facts();
+        read_back.state = state;
+        let expected = Some(BrowserLabel::new("Ch", "Google Chrome", Some("Work")));
+        assert_eq!(model(&read_back, None).fallback, expected);
+        assert_eq!(
+            model(&read_back, None).fallback_profiles(),
+            ["Personal", "Work"]
+        );
+        read_back.state = State::default();
+        read_back.rules_default = rules.default_browser;
+        read_back.rules_profile = rules.default_profile;
+        assert_eq!(model(&read_back, None).fallback, expected);
+
+        // A browser without profiles clears the profile in both files.
+        cx.update(|cx| {
+            (hooks.on_fallback)(
+                Fallback {
+                    browser: safari(),
+                    profile: None,
+                },
+                cx,
+            );
+        });
+        let (rules, state) = saved();
+        assert_eq!(rules.default_browser, "com.apple.Safari");
+        assert_eq!(rules.default_profile, "");
+        assert_eq!(state.fallback_profile, None);
+        let mut after = facts();
+        after.state = state;
+        let built = model(&after, None);
+        assert_eq!(
+            built.fallback,
+            Some(BrowserLabel::new("Sa", "Safari", None))
+        );
+        assert!(built.fallback_profiles().is_empty());
+    }
+
+    /// After first run the main window opens where the first-run window
+    /// was; with no first-run display, under the mouse; a display since
+    /// unplugged is skipped; with nothing known, the primary (`None`), as a
+    /// cold launch.
+    #[test]
+    fn the_main_window_opens_on_the_first_run_display() {
+        let (laptop, studio, gone) = (DisplayId::new(1), DisplayId::new(2), DisplayId::new(3));
+        let connected = [laptop, studio];
+        assert_eq!(
+            main_window_display(Some(studio), Some(laptop), &connected),
+            Some(studio)
+        );
+        assert_eq!(
+            main_window_display(None, Some(studio), &connected),
+            Some(studio)
+        );
+        assert_eq!(
+            main_window_display(Some(gone), Some(laptop), &connected),
+            Some(laptop)
+        );
+        assert_eq!(main_window_display(Some(gone), None, &connected), None);
+        assert_eq!(main_window_display(None, None, &connected), None);
     }
 }

@@ -27,8 +27,8 @@ pub use args::links_from_args;
 pub use paths::{data_dir, router_dir};
 pub use registration::{
     BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, PROG_ID, REGISTERED_NAME,
-    default_browser_status, open_default_apps_settings, register_browser, set_default_browser,
-    unregister_browser,
+    app_display_name, default_browser_status, open_default_apps_settings, register_browser,
+    set_default_browser, unregister_browser,
 };
 // Plans the platform code applies, public so they can be checked anywhere.
 pub use registration::{RegistryValue, desktop_entry, windows_registry_values};

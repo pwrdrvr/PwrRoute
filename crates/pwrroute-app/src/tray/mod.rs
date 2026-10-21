@@ -445,7 +445,13 @@ pub fn run(command: TrayCommand, cx: &mut App) {
 
 /// Bring the main window forward, opening it if need be, on `screen`.
 pub fn show_screen(screen: Screen, cx: &mut App) {
-    crate::show_main_window(cx);
+    show_screen_on(screen, None, cx);
+}
+
+/// [`show_screen`], opening the window on `display` when it is closed:
+/// first run hands over on the display its own window was on.
+pub fn show_screen_on(screen: Screen, display: Option<gpui_kit::DisplayId>, cx: &mut App) {
+    crate::show_main_window_on(display, cx);
     let main = cx
         .windows()
         .iter()

@@ -8,9 +8,16 @@
 //! OS has the last word (a consent prompt on macOS, Settings › Default apps
 //! on Windows), so the answer is read back rather than assumed: on every
 //! window activation ([`watch`]), when the tray dropdown opens, for a while
-//! after a request on a fast timer, and always on a slow one
+//! after a request on a fast timer, every second while first run's step 3
+//! is open and not done ([`follow_while`]), and always on a slow timer
 //! ([`RECHECK_EVERY`]), so a router running with no window still notices
 //! when another browser takes the default.
+//!
+//! LaunchServices answers late: right after the reader approves macOS's
+//! dialog, and so right when the window comes back to the front, it can
+//! still name the old browser for a second or more. An activation therefore
+//! does not settle a request on the spot; the poll keeps reading for
+//! [`ACTIVATION_GRACE`] first.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -30,6 +37,12 @@ use crate::widgets::status_chip;
 /// step 3 close behind the click, and a minute bounds a refused prompt.
 pub const POLL_EVERY: Duration = Duration::from_secs(1);
 pub const POLL_FOR: Duration = Duration::from_secs(60);
+
+/// How long after the window comes back to the front an unchanged answer
+/// still counts as "not yet" rather than "no". LaunchServices can report
+/// the old handler for a moment after the dialog is answered; the lab VM
+/// reports the change within 3 s.
+pub const ACTIVATION_GRACE: Duration = Duration::from_secs(5);
 
 /// How often the status is re-read for the life of the app, window or no
 /// window. Another browser's "make me the default" prompt is answered
@@ -51,8 +64,9 @@ pub enum DefaultState {
 }
 
 impl DefaultState {
-    /// From the OS's answer. `None` is a failed query.
-    pub fn from_status(status: Option<&DefaultStatus>) -> Self {
+    /// From the OS's answer. `None` is a failed query. `app_name` names an
+    /// installed app the catalog does not list (see [`handler_name`]).
+    pub fn from_status(status: Option<&DefaultStatus>, app_name: &AppName) -> Self {
         let Some(status) = status else {
             return Self::Unknown;
         };
@@ -71,7 +85,7 @@ impl DefaultState {
             .flatten()
             .find(|id| !ours(id))
         {
-            Some(id) => Self::Other(browser_name(id).into()),
+            Some(id) => Self::Other(handler_name(id, app_name).into()),
             None => Self::Unknown,
         }
     }
@@ -99,6 +113,20 @@ pub fn browser_name(id: &str) -> String {
         .map_or_else(|| id.to_owned(), |browser| browser.name.clone())
 }
 
+/// The name of the installed app with a handler id, when the OS knows one:
+/// `pwrroute_os::app_display_name`.
+pub type AppName = dyn Fn(&str) -> Option<String>;
+
+/// The default handler as the reader knows it: the catalog's name, else
+/// the installed app's own name ("PwrFinicky" for a Finicky fork the
+/// catalog does not list), else the id itself when no app has it.
+pub fn handler_name(id: &str, app_name: &AppName) -> String {
+    match Catalog::builtin().find(id) {
+        Some(browser) => browser.name.clone(),
+        None => app_name(id).unwrap_or_else(|| id.to_owned()),
+    }
+}
+
 /// The OS calls this module makes, as functions so tests supply fakes.
 #[derive(Clone)]
 pub struct Os {
@@ -108,6 +136,8 @@ pub struct Os {
     pub set_default: Rc<dyn Fn() -> anyhow::Result<DefaultRequest>>,
     /// `pwrroute_os::open_default_apps_settings`.
     pub open_settings: Rc<dyn Fn() -> anyhow::Result<()>>,
+    /// `pwrroute_os::app_display_name`.
+    pub app_name: Rc<AppName>,
 }
 
 impl Os {
@@ -117,6 +147,7 @@ impl Os {
             status: Rc::new(|| pwrroute_os::default_browser_status().ok()),
             set_default: Rc::new(pwrroute_os::set_default_browser),
             open_settings: Rc::new(pwrroute_os::open_default_apps_settings),
+            app_name: Rc::new(pwrroute_os::app_display_name),
         }
     }
 
@@ -135,7 +166,13 @@ impl Os {
                 Ok(DefaultRequest::Prompted)
             }),
             open_settings: Rc::new(|| Ok(())),
+            app_name: Rc::new(|_| None),
         }
+    }
+
+    /// The OS's answer, read back and named.
+    fn read(&self) -> DefaultState {
+        DefaultState::from_status((self.status)().as_ref(), &*self.app_name)
     }
 }
 
@@ -152,17 +189,22 @@ pub struct Registrar {
     /// Counts requests. A poll stops when a newer request has started its
     /// own, so "Ask again" never leaves two running.
     generation: u64,
+    /// The window came back to the front while a request was out: how many
+    /// more poll reads may still find the old answer before it counts as
+    /// no ([`ACTIVATION_GRACE`]).
+    grace: Option<u64>,
 }
 
 impl Registrar {
     fn new(os: Os) -> Self {
-        let state = DefaultState::from_status((os.status)().as_ref());
+        let state = os.read();
         Self {
             os,
             state,
             pending: None,
             kept: false,
             generation: 0,
+            grace: None,
         }
     }
 
@@ -172,20 +214,45 @@ impl Registrar {
     }
 
     /// Re-reads the OS. `settled` says the OS had its chance to answer (the
-    /// window came back to the front, or the poll ran out): an unchanged
-    /// answer then means the request was refused, and the window stops
-    /// waiting.
+    /// poll ran out, or ran [`ACTIVATION_GRACE`] past the window's return):
+    /// an unchanged answer then means the request was refused, and the
+    /// window stops waiting.
     fn refresh(&mut self, settled: bool, cx: &mut Context<'_, Self>) {
-        let state = DefaultState::from_status((self.os.status)().as_ref());
+        let state = self.os.read();
         if state != self.state {
             self.state = state;
             self.pending = None;
+            self.grace = None;
             self.kept = false;
             cx.notify();
         } else if settled && self.pending.take().is_some() {
+            self.grace = None;
             self.kept = !self.state.is_default();
             cx.notify();
         }
+    }
+
+    /// The window came to the front: read the OS now, and if a request is
+    /// still out, give LaunchServices [`ACTIVATION_GRACE`] of poll reads to
+    /// catch up before an unchanged answer counts as no.
+    fn activated(&mut self, cx: &mut Context<'_, Self>) {
+        self.refresh(false, cx);
+        if self.waiting() && self.grace.is_none() {
+            self.grace = Some(reads_in(ACTIVATION_GRACE));
+        }
+    }
+
+    /// One read of the request's poll. `last`: the poll has run its
+    /// [`POLL_FOR`].
+    fn poll(&mut self, last: bool, cx: &mut Context<'_, Self>) {
+        let grace_over = match &mut self.grace {
+            Some(left) => {
+                *left = left.saturating_sub(1);
+                *left == 0
+            }
+            None => false,
+        };
+        self.refresh(last || grace_over, cx);
     }
 
     /// The Settings › Browsers card for this state.
@@ -202,6 +269,11 @@ impl Registrar {
             note,
         }
     }
+}
+
+/// How many [`POLL_EVERY`] reads fit in `span`.
+fn reads_in(span: Duration) -> u64 {
+    (span.as_millis() / POLL_EVERY.as_millis()).max(1) as u64
 }
 
 /// What the card says while the OS has the question.
@@ -292,13 +364,14 @@ pub fn refresh(settled: bool, cx: &mut App) {
 }
 
 /// Re-reads the OS whenever `window` comes to the front: that is when the
-/// OS's own dialog or Settings page has been dealt with.
+/// OS's own dialog or Settings page has been dealt with (see
+/// [`Registrar::activated`]).
 pub fn watch(window: &mut Window, cx: &mut App) {
     if let Some(registrar) = registrar(cx) {
         registrar.update(cx, |_, cx| {
             cx.observe_window_activation(window, |registrar, window, cx| {
                 if window.is_window_active() {
-                    registrar.refresh(true, cx);
+                    registrar.activated(cx);
                 }
             })
             .detach();
@@ -306,12 +379,47 @@ pub fn watch(window: &mut Window, cx: &mut App) {
     }
 }
 
+/// The window was activated: [`Registrar::activated`], for tests, which
+/// have no window to activate.
+#[cfg(test)]
+pub fn activated(cx: &mut App) {
+    if let Some(registrar) = registrar(cx) {
+        registrar.update(cx, |registrar, cx| registrar.activated(cx));
+    }
+}
+
+/// Re-reads the OS every [`POLL_EVERY`] for as long as `keep` says, while
+/// PwrRoute is not the default: first run's step 3, which must flip as soon
+/// as the OS reports PwrRoute, however long the reader took over macOS's
+/// dialog and however late LaunchServices caught up. The read is two
+/// LaunchServices lookups. Stops for good once `keep` says no.
+pub fn follow_while(keep: impl Fn(&mut App) -> bool + 'static, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(POLL_EVERY).await;
+            let go = cx.update(|cx| {
+                if !keep(cx) {
+                    return false;
+                }
+                if !state(cx).is_default() {
+                    refresh(false, cx);
+                }
+                true
+            });
+            if !go {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
 /// Asks the OS to make PwrRoute the default browser. The explicit action,
 /// and the only caller of `set_default_browser` in the app: wire it to a
 /// click and nothing else. Then reads the answer back every [`POLL_EVERY`]
 /// for [`POLL_FOR`]: until PwrRoute is the default, the answer settles the
-/// other way (the window came to the front, or a newer request took over),
-/// or the time is up, which settles it too.
+/// other way ([`ACTIVATION_GRACE`] after the window came to the front, or a
+/// newer request took over), or the time is up, which settles it too.
 pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
     let Some(registrar) = registrar(cx) else {
         anyhow::bail!("default-browser registration is not installed");
@@ -321,6 +429,7 @@ pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
     let generation = registrar.update(cx, |registrar, cx| {
         registrar.pending = Some(request);
         registrar.kept = false;
+        registrar.grace = None;
         registrar.generation += 1;
         cx.notify();
         registrar.generation
@@ -334,7 +443,7 @@ pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
                 if current.generation != generation || !current.waiting() {
                     return true;
                 }
-                refresh(tick == ticks, cx);
+                registrar.update(cx, |registrar, cx| registrar.poll(tick == ticks, cx));
                 let registrar = registrar.read(cx);
                 registrar.state.is_default() || !registrar.waiting()
             });
@@ -412,40 +521,79 @@ mod tests {
 
     #[test]
     fn the_state_names_the_browser_the_os_reports() {
-        assert_eq!(DefaultState::from_status(None), DefaultState::Unknown);
+        let none: &AppName = &|_| None;
+        assert_eq!(DefaultState::from_status(None, none), DefaultState::Unknown);
         assert_eq!(
-            DefaultState::from_status(Some(&status(None, None))),
+            DefaultState::from_status(Some(&status(None, None)), none),
             DefaultState::Unknown
         );
         assert_eq!(
-            DefaultState::from_status(Some(&status(
-                Some("com.google.Chrome"),
-                Some("com.google.Chrome")
-            ))),
+            DefaultState::from_status(
+                Some(&status(
+                    Some("com.google.Chrome"),
+                    Some("com.google.Chrome")
+                )),
+                none
+            ),
             DefaultState::Other("Google Chrome".into())
         );
         assert_eq!(
-            DefaultState::from_status(Some(&status(
-                Some(pwrroute_os::BUNDLE_ID),
-                Some(pwrroute_os::BUNDLE_ID)
-            ))),
+            DefaultState::from_status(
+                Some(&status(
+                    Some(pwrroute_os::BUNDLE_ID),
+                    Some(pwrroute_os::BUNDLE_ID)
+                )),
+                none
+            ),
             DefaultState::PwrRoute
         );
         // Half done: the scheme that is not ours yet names the state.
         assert_eq!(
-            DefaultState::from_status(Some(&status(
-                Some(pwrroute_os::BUNDLE_ID),
-                Some("org.mozilla.firefox")
-            ))),
+            DefaultState::from_status(
+                Some(&status(
+                    Some(pwrroute_os::BUNDLE_ID),
+                    Some("org.mozilla.firefox")
+                )),
+                none
+            ),
             DefaultState::Other("Firefox".into())
         );
         // An app the catalog does not know keeps its id.
         assert_eq!(
-            DefaultState::from_status(Some(&status(
-                Some("com.example.Browser"),
-                Some("com.example.Browser")
-            ))),
+            DefaultState::from_status(
+                Some(&status(
+                    Some("com.example.Browser"),
+                    Some("com.example.Browser")
+                )),
+                none
+            ),
             DefaultState::Other("com.example.Browser".into())
+        );
+        // An app the catalog does not know, but the OS does, goes by the
+        // name its bundle gives: the Finicky fork, not its bundle id.
+        let installed: &AppName =
+            &|id| (id == "com.pwrdrvr.pwrfinicky").then(|| "PwrFinicky".to_owned());
+        assert_eq!(
+            DefaultState::from_status(
+                Some(&status(
+                    Some("com.pwrdrvr.pwrfinicky"),
+                    Some("com.pwrdrvr.pwrfinicky")
+                )),
+                installed
+            ),
+            DefaultState::Other("PwrFinicky".into())
+        );
+        // The catalog's name still wins for a browser it lists.
+        let wrong: &AppName = &|_| Some("Chrome (renamed)".to_owned());
+        assert_eq!(
+            DefaultState::from_status(
+                Some(&status(
+                    Some("com.google.Chrome"),
+                    Some("com.google.Chrome")
+                )),
+                wrong
+            ),
+            DefaultState::Other("Google Chrome".into())
         );
     }
 
@@ -611,5 +759,132 @@ mod tests {
         }
         tick(cx);
         assert!(!waiting(cx));
+    }
+
+    /// An OS that names Chrome for its first `stale` reads and PwrRoute
+    /// from then on, counting reads in `reads`: LaunchServices catching up
+    /// some time after the reader approved macOS's dialog. `stale` can be
+    /// moved while a test runs.
+    fn flips_after(stale: Rc<Cell<usize>>, reads: Rc<Cell<usize>>) -> Os {
+        let mut os = Os::fake(Rc::new(RefCell::new(None)), Rc::new(Cell::new(0)));
+        os.status = Rc::new(move || {
+            reads.set(reads.get() + 1);
+            Some(if reads.get() <= stale.get() {
+                status(Some("com.google.Chrome"), Some("com.google.Chrome"))
+            } else {
+                status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID))
+            })
+        });
+        os
+    }
+
+    fn tick(cx: &mut TestAppContext) {
+        cx.executor().advance_clock(POLL_EVERY);
+        cx.run_until_parked();
+    }
+
+    /// The field report: the dialog is approved, the window comes back to
+    /// the front, and LaunchServices still names the old browser for a
+    /// moment. That read is not a no: the poll keeps reading and the state
+    /// flips on the first read that reports PwrRoute. A real no still
+    /// settles, `ACTIVATION_GRACE` after the window came back.
+    #[gpui_kit::test]
+    fn a_stale_answer_when_the_window_returns_is_not_a_no(cx: &mut TestAppContext) {
+        let reads = Rc::new(Cell::new(0));
+        let stale = Rc::new(Cell::new(4));
+        let registrar = cx.update(|cx| install(flips_after(stale.clone(), reads.clone()), cx));
+        let note = |cx: &mut TestAppContext| cx.update(|cx| super::card(cx)).note;
+        let waiting = |cx: &mut TestAppContext| registrar.read_with(cx, |r, _| r.waiting());
+        assert_eq!(reads.get(), 1);
+
+        cx.update(|cx| request(cx).unwrap());
+        // Approved; the window is active again before LaunchServices knows.
+        cx.update(activated);
+        assert_eq!(reads.get(), 2);
+        assert!(waiting(cx), "a read on activation alone must not settle");
+        assert!(note(cx).is_some_and(|note| note.starts_with("Waiting")));
+        tick(cx);
+        tick(cx);
+        assert_eq!(reads.get(), 4);
+        assert!(waiting(cx));
+        assert!(!registrar.read_with(cx, |r, _| r.kept));
+        // Read 5 is the first to report PwrRoute: the state flips on it.
+        tick(cx);
+        assert_eq!(reads.get(), 5);
+        assert!(cx.update(|cx| state(cx).is_default()));
+        assert!(!waiting(cx));
+        assert_eq!(note(cx), None);
+        // The poll stopped with the answer.
+        tick(cx);
+        assert_eq!(reads.get(), 5);
+
+        // A refusal: the answer never changes. The window comes back, and
+        // the request settles as no once the grace has run, not before.
+        let reads = Rc::new(Cell::new(0));
+        let stale = Rc::new(Cell::new(usize::MAX));
+        let registrar = cx.update(|cx| install(flips_after(stale, reads), cx));
+        let waiting = |cx: &mut TestAppContext| registrar.read_with(cx, |r, _| r.waiting());
+        cx.update(|cx| request(cx).unwrap());
+        cx.update(activated);
+        for _ in 1..reads_in(ACTIVATION_GRACE) {
+            tick(cx);
+            assert!(waiting(cx));
+        }
+        tick(cx);
+        assert!(!waiting(cx));
+        assert!(registrar.read_with(cx, |r, _| r.kept));
+        assert_eq!(
+            note(cx).as_deref(),
+            Some("Google Chrome is still the default.")
+        );
+    }
+
+    /// First run's step 3 reads the answer every second while its window
+    /// is open, so it flips even after the request's own poll gave up (the
+    /// dialog sat unanswered for over a minute), and stops reading once the
+    /// window is gone.
+    #[gpui_kit::test]
+    fn first_run_follows_the_answer_after_the_poll_gave_up(cx: &mut TestAppContext) {
+        let reads = Rc::new(Cell::new(0));
+        let stale = Rc::new(Cell::new(usize::MAX));
+        let registrar = cx.update(|cx| install(flips_after(stale.clone(), reads.clone()), cx));
+        let open = Rc::new(Cell::new(true));
+        let keep = open.clone();
+        cx.update(|cx| follow_while(move |_| keep.get(), cx));
+
+        cx.update(|cx| request(cx).unwrap());
+        for _ in 0..POLL_FOR.as_secs() {
+            tick(cx);
+        }
+        assert!(registrar.read_with(cx, |r, _| !r.waiting() && r.kept));
+        assert!(!cx.update(|cx| state(cx).is_default()));
+
+        // Approved at last; LaunchServices reports it two reads later.
+        stale.set(reads.get() + 2);
+        tick(cx);
+        assert!(!cx.update(|cx| state(cx).is_default()));
+        tick(cx);
+        assert!(!cx.update(|cx| state(cx).is_default()));
+        tick(cx);
+        assert!(cx.update(|cx| state(cx).is_default()));
+        assert!(registrar.read_with(cx, |r, _| !r.kept));
+        // Done: no more reads while PwrRoute is the default.
+        let done = reads.get();
+        tick(cx);
+        assert_eq!(reads.get(), done);
+
+        // Another browser takes the default back (the slow re-read sees
+        // it); the open window reads every second again, and not once it
+        // closes.
+        stale.set(usize::MAX);
+        cx.update(|cx| refresh(false, cx));
+        assert!(!cx.update(|cx| state(cx).is_default()));
+        let before = reads.get();
+        tick(cx);
+        assert_eq!(reads.get(), before + 1);
+        open.set(false);
+        tick(cx);
+        tick(cx);
+        assert_eq!(reads.get(), before + 1);
     }
 }
