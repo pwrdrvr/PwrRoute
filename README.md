@@ -8,7 +8,7 @@
 rewrites, to the browser and profile your rules pick.<br>
 macOS first, then Windows and Linux.</p>
 
-<sub>Status: pre-release. Nothing to download yet. · MIT</sub>
+<sub>Status: pre-release · MIT</sub>
 
 </div>
 
@@ -16,12 +16,26 @@ macOS first, then Windows and Linux.</p>
 
 PwrRoute is an early port. It is a Rust workspace with a native window built
 on [GPUI](https://www.gpui.rs) and a rules engine that runs Finicky v4 configs
-in QuickJS. The window draws the Rules screen from sample data. The engine
-resolves URLs the way Finicky does and is tested against it. A resident
-router receives links from the OS and resolves each one with the engine, but
-it cannot open a browser yet, and the window still shows sample rules. There
-are no releases, and the behavior described below is the design, not the
-current build.
+in QuickJS. The engine resolves URLs the way Finicky does and is tested
+against it. A resident router receives links from the OS, resolves each one
+with the engine and opens the browser and profile the rules pick; when that
+browser cannot be opened, the link goes to the fallback browser instead. The
+window's Rules screen edits your `rules.json`, Test a link and Activity run
+on the real engine and router, and Settings shows and changes the running
+app. Not done yet: importing a Finicky config into `rules.json`, and
+expanding short links in Test a link. Releases are pre-releases.
+
+## Install (macOS)
+
+Download the DMG (`PwrRoute-<version>-universal.dmg`) from the
+[GitHub release](https://github.com/pwrdrvr/PwrRoute/releases), drag
+PwrRoute.app to Applications and open it once. Its first-run window offers
+to make PwrRoute the default browser; macOS asks you to confirm. After that
+PwrRoute stays in the menu bar with its windows closed.
+
+While this repository is private, the in-app updater cannot see its
+releases: it polls GitHub Releases without a token. Update by hand for now:
+quit PwrRoute, download the newer DMG and replace the app in Applications.
 
 ## What it does
 
@@ -34,11 +48,12 @@ current build.
   unmatched falls through to the default browser. Rules can match on URL
   wildcards, regular expressions and the app that sent the link.
 - **Visual rules or code.** Rules you edit in the app are stored as JSON. A
-  Finicky v4 `.js` or `.ts` config can be selected instead, for function
-  matchers and URL transformers.
+  Finicky v4 `.js` or `.ts` config in Finicky's usual places runs first, for
+  function matchers and URL transformers, with the JSON rules after it.
 - **A trace for every link.** Test a link shows each step that fired. Activity
-  keeps the same trace for recent dispatches. Full URLs stay in memory; disk
-  logs carry timings, never URL contents.
+  keeps the same trace for recent dispatches. Full URLs stay in memory
+  unless you turn on the activity journal; disk logs carry timings, never
+  URL contents.
 - **An MCP server for agents.** The running app serves MCP on a socket only
   your user can reach, with an approval window and per-agent roles. A local
   agent can resolve a URL to its trace, open a link through the router, list

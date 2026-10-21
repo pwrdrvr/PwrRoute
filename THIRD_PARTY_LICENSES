@@ -9400,13 +9400,13 @@ MIT License (193)
 - is-wsl@0.4.0 | https://github.com/TheLarkInn/is-wsl
 - core_maths@0.1.1 | https://github.com/robertbastian/core_maths
 - convert_case@0.10.0 | https://github.com/rutrum/convert-case
-- pwrroute-app@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
-- pwrroute-browsers@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
-- pwrroute-engine@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
-- pwrroute-mcp@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
-- pwrroute-os@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
-- pwrroute-router@0.0.1-alpha.0 | https://github.com/pwrdrvr/PwrRoute
-- xtask@0.0.1-alpha.0
+- pwrroute-app@0.1.0-rc.1 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-browsers@0.1.0-rc.1 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-engine@0.1.0-rc.1 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-mcp@0.1.0-rc.1 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-os@0.1.0-rc.1 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-router@0.1.0-rc.1 | https://github.com/pwrdrvr/PwrRoute
+- xtask@0.1.0-rc.1
 - base64-simd@0.8.0 | https://github.com/Nugine/simd
 - block2@0.6.2 | https://github.com/madsmtm/objc2
 - block@0.1.6 | http://github.com/SSheldon/rust-block
@@ -23738,13 +23738,13 @@ MIT License (MIT)
 -----------------------------------------------------------
 
 Applies to:
-- pwrroute-app@0.0.1-alpha.0
-- pwrroute-browsers@0.0.1-alpha.0
-- pwrroute-engine@0.0.1-alpha.0
-- pwrroute-mcp@0.0.1-alpha.0
-- pwrroute-os@0.0.1-alpha.0
-- pwrroute-router@0.0.1-alpha.0
-- xtask@0.0.1-alpha.0
+- pwrroute-app@0.1.0-rc.1
+- pwrroute-browsers@0.1.0-rc.1
+- pwrroute-engine@0.1.0-rc.1
+- pwrroute-mcp@0.1.0-rc.1
+- pwrroute-os@0.1.0-rc.1
+- pwrroute-router@0.1.0-rc.1
+- xtask@0.1.0-rc.1
 - base64-simd@0.8.0
 - block2@0.6.2
 - block@0.1.6

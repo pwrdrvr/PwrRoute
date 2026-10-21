@@ -9,8 +9,9 @@ Keep this file short; see **Docs & conventions** below.
 
 A Cargo workspace with a GPUI window, a Finicky-compatible rules engine, a
 resident router that receives links from the OS, and a browser launcher. The
-router resolves and records every link, but does not use the launcher yet, so
-it cannot open a browser (run with `--dry-run` to see dispatches succeed).
+router resolves every link, opens it through `pwrroute-browsers`' launcher
+(or the fallback browser, when that fails) and records it;
+`--dry-run` swaps in a launcher that opens nothing.
 
 - `crates/pwrroute-engine` — loads Finicky v4 `.js`/`.ts` configs in QuickJS
   (rquickjs) with oxc for TypeScript, and resolves URLs. See its `AGENTS.md`.
@@ -22,11 +23,15 @@ it cannot open a browser (run with `--dry-run` to see dispatches succeed).
   See its `AGENTS.md`.
 - `crates/pwrroute-os` — link receipt and default-browser registration per
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
-- `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It draws the
-  design's Rules and Test a link screens and the first-run window from
-  contrived fixture data (`fixtures/`), and hosts the router. Test a link
-  runs the real engine; Activity and the tray's recents show the router's
-  real dispatches. See its `AGENTS.md`.
+- `crates/pwrroute-mcp` — the MCP server for local agents, served by the
+  running app and reached through `pwrroute mcp`. See its `AGENTS.md`.
+- `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It hosts the
+  router and the MCP server and draws the design's screens over live data:
+  Rules edits the real `rules.json`, Test a link runs the real engine,
+  Activity and the tray show the router's dispatches, Settings and the
+  first-run window read and change the running app. Contrived fixture data
+  (`fixtures/`) is for tests and the `screens` example only. See its
+  `AGENTS.md`.
 - `xtask` — lint, test, license notices, release checks and packaging.
 
 Port, don't invent: the design in `design/` decides the shape. Read
@@ -57,7 +62,7 @@ cargo run -p pwrroute-app        # the window
 cargo xtask lint                 # everything CI's Typecheck job runs
 cargo xtask test                 # every workspace test
 cargo xtask licenses             # regenerate THIRD_PARTY_LICENSES
-cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG
+cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG ($CARGO_TARGET_DIR if set)
 cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
 cargo run -p pwrroute-app --example screens -- DIR   # macOS: each screen as a PNG
 ```

@@ -16,7 +16,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail, ensure};
 
-use crate::{package_version, read, root, run};
+use crate::{package_version, read, root, run, target_dir};
 
 const TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
@@ -61,24 +61,25 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
     let options = parse(args)?;
     let root = root();
     let version = package_version()?;
-    let out = root.join("target/bundle");
+    let built = target_dir();
+    let out = built.join("bundle");
     fs::create_dir_all(&out)?;
 
     let (binary, arch) = if options.universal {
-        for target in TARGETS {
-            build(&root, Some(target))?;
+        for triple in TARGETS {
+            build(&root, Some(triple))?;
         }
         let universal = out.join("pwrroute-universal");
         let mut lipo = Command::new("lipo");
         lipo.arg("-create").arg("-output").arg(&universal);
-        for target in TARGETS {
-            lipo.arg(root.join("target").join(target).join("release/pwrroute"));
+        for triple in TARGETS {
+            lipo.arg(built.join(triple).join("release/pwrroute"));
         }
         run(&mut lipo)?;
         (universal, "universal")
     } else {
         build(&root, None)?;
-        (root.join("target/release/pwrroute"), std::env::consts::ARCH)
+        (built.join("release/pwrroute"), std::env::consts::ARCH)
     };
 
     let app = out.join("PwrRoute.app");

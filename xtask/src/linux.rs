@@ -1,11 +1,11 @@
 //! `cargo xtask package-linux`: a tar.gz and a .deb for the host
-//! architecture, with a SHA-256 manifest, in `target/package`.
+//! architecture, with a SHA-256 manifest, in `<target dir>/package`.
 
 use std::{fs, path::Path, process::Command};
 
 use anyhow::{Result, bail, ensure};
 
-use crate::{package_version, root, run};
+use crate::{package_version, root, run, target_dir};
 
 const SUMMARY: &str = "Every link to the right browser";
 const DESCRIPTION: &str = "PwrRoute routes every link to the right browser and profile by rules.";
@@ -25,8 +25,9 @@ pub(crate) fn package() -> Result<()> {
     run(Command::new("cargo")
         .args(["build", "--release", "--locked", "-p", "pwrroute-app"])
         .current_dir(&root))?;
-    let binary = root.join("target/release/pwrroute");
-    let out = root.join("target/package");
+    let target = target_dir();
+    let binary = target.join("release/pwrroute");
+    let out = target.join("package");
     if out.exists() {
         fs::remove_dir_all(&out)?;
     }
