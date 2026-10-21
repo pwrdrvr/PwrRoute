@@ -155,8 +155,12 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
     // A fallback after a launch failure is the chosen browser missing, not
     // a config out of charge.
     let mut launch_failed = false;
+    let mut received = None;
+    let mut expanded = None;
     for step in &record.steps {
         match step {
+            Step::Received { url } => received = Some(url.clone()),
+            Step::Expanded { url } => expanded = Some(url.clone()),
             Step::Rewrite { rule, url } => steps.push(TraceStep {
                 kind: StepKind::Rewrite,
                 index: *rule,
@@ -222,10 +226,7 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
             Step::ConfigError { message } | Step::Rejected { reason: message } => {
                 error.get_or_insert_with(|| message.clone());
             }
-            Step::Received { .. }
-            | Step::Browser { .. }
-            | Step::NotOpened
-            | Step::Launched { .. } => {}
+            Step::Browser { .. } | Step::NotOpened | Step::Launched { .. } => {}
         }
     }
     let browser = record.browser.clone().unwrap_or_else(|| Browser {
@@ -238,8 +239,18 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
         private: false,
         privacy: record.privacy,
     });
+    // A short link was followed: the rules matched where it landed, and
+    // the trace says what arrived.
+    let (url, original_url) = match expanded {
+        Some(landed) => (
+            landed,
+            Some(received.unwrap_or_else(|| record.link.url.clone())),
+        ),
+        None => (record.link.url.clone(), None),
+    };
     Trace {
-        url: record.link.url.clone(),
+        url,
+        original_url,
         steps,
         browser,
         error,
@@ -424,7 +435,12 @@ mod tests {
     struct Levels;
 
     impl pwrroute_router::Resolver for Levels {
-        fn resolve(&self, url: &str, _opener: Option<&Opener>) -> Result<Resolved> {
+        fn resolve(
+            &self,
+            link: &pwrroute_engine::Link,
+            _opener: Option<&Opener>,
+        ) -> Result<Resolved> {
+            let url = link.url.as_str();
             let host = url::Url::parse(url)?
                 .host_str()
                 .unwrap_or_default()
@@ -576,6 +592,78 @@ mod tests {
 
         assert!(live.journal(10).unwrap().is_empty(), "the journal is off");
         assert!(live.retention().starts_with("Kept in memory only"));
+    }
+
+    /// Sends `bit.ly/gh` to GitHub; anything else is offline.
+    struct GitHubShortener;
+
+    impl pwrroute_engine::Network for GitHubShortener {
+        fn request(
+            &self,
+            _method: pwrroute_engine::Method,
+            url: &str,
+            _timeout: std::time::Duration,
+        ) -> Result<pwrroute_engine::Reply> {
+            match url {
+                "https://bit.ly/gh" => Ok(pwrroute_engine::Reply {
+                    status: 301,
+                    location: Some("https://github.com/pwrdrvr/x".into()),
+                }),
+                "https://github.com/pwrdrvr/x" => Ok(pwrroute_engine::Reply {
+                    status: 200,
+                    location: None,
+                }),
+                _ => Err(anyhow::anyhow!("offline")),
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_link_resolve_reports_where_it_landed_and_what_arrived() {
+        let rules = RulesFile {
+            default_browser: "Safari".into(),
+            rules: vec![Rule {
+                patterns: vec!["github.com/*".into()],
+                browser: "Firefox".into(),
+                ..Rule::default()
+            }],
+            ..RulesFile::default()
+        };
+        let router = RealRouter::spawn(
+            Options {
+                network: Some(std::sync::Arc::new(GitHubShortener)),
+                ..Options::default()
+            },
+            Some(Box::new(move || {
+                let engine = pwrroute_engine::Engine::from_sources(
+                    &pwrroute_engine::Sources {
+                        config: None,
+                        rules,
+                    },
+                    std::rc::Rc::new(pwrroute_engine::DefaultHost),
+                    pwrroute_engine::Limits::default(),
+                )?;
+                Ok(Box::new(engine))
+            })),
+            DryRunLauncher::new(),
+        )
+        .unwrap();
+        let live = LiveRouter::new(router.handle());
+        let trace = live.resolve("https://bit.ly/gh", None).unwrap();
+        assert_eq!(trace.url, "https://github.com/pwrdrvr/x");
+        assert_eq!(trace.original_url.as_deref(), Some("https://bit.ly/gh"));
+        assert_eq!(trace.browser.name, "Firefox");
+        assert_eq!(trace.browser.url, "https://github.com/pwrdrvr/x");
+        assert_eq!(
+            trace.steps.len(),
+            1,
+            "the expansion is not a step: {trace:?}"
+        );
+        assert_eq!(trace.steps[0].kind, StepKind::Handler);
+
+        let plain = live.resolve("https://github.com/direct", None).unwrap();
+        assert_eq!(plain.url, "https://github.com/direct");
+        assert_eq!(plain.original_url, None);
     }
 
     #[test]

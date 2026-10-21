@@ -10,12 +10,17 @@
 //! the engine's own ([`Engine::trace`]), so it names each rule that fired
 //! and cannot disagree with the destination.
 
-use std::{path::PathBuf, rc::Rc, sync::mpsc, thread};
+use std::{
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, mpsc},
+    thread,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use pwrroute_engine::{
-    self as engine, ConfigChoice, Engine, Limits, Link, Matcher, NativeHost, Opener, Reloader,
-    RulesFile, Source, Sources, Stage, TestReport,
+    self as engine, ConfigChoice, Engine, HttpNetwork, Limits, Link, Matcher, NativeHost, Network,
+    Opener, Reloader, RulesFile, Source, Sources, Stage, TestReport,
 };
 
 use crate::backend::{Resolver, RulesTester, StepKind, Trace, TraceStep};
@@ -118,19 +123,40 @@ impl EngineThread {
 }
 
 /// Resolves against a Finicky config loaded into an [`Engine`] on its own
-/// thread, with the OS answering the config's `finicky.*` calls
-/// ([`NativeHost`]). A run's `console` output comes back in the trace; the
-/// config's load-time output is dropped, since it often carries URLs and
-/// no result carries it.
-#[derive(Debug)]
+/// thread, expanding a short link first as the router does, so the trace
+/// matches the router's, with the OS answering the config's `finicky.*`
+/// calls ([`NativeHost`]). A run's `console` output comes back in the
+/// trace; the config's load-time output is dropped, since it often carries
+/// URLs and no result carries it.
 pub struct EngineResolver {
     thread: EngineThread,
+    /// Expands short links, on the engine's thread: the one request a
+    /// resolve makes off the machine, to the shortener's host.
+    network: Arc<dyn Network + Send + Sync>,
+}
+
+impl std::fmt::Debug for EngineResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineResolver")
+            .field("thread", &self.thread)
+            .finish_non_exhaustive()
+    }
 }
 
 impl EngineResolver {
     /// Loads `config` on a new thread and returns once it has loaded, or
-    /// with the load error.
+    /// with the load error. Short links expand over the real network.
     pub fn spawn(config: PathBuf, limits: Limits) -> Result<Self> {
+        Self::spawn_with(config, limits, Arc::new(HttpNetwork::new()))
+    }
+
+    /// [`spawn`](Self::spawn) with the network that expands short links;
+    /// tests pass a fake.
+    pub fn spawn_with(
+        config: PathBuf,
+        limits: Limits,
+        network: Arc<dyn Network + Send + Sync>,
+    ) -> Result<Self> {
         let thread = EngineThread::spawn("pwrroute-mcp-engine", move || {
             Ok(Fixed(Engine::load(
                 &config,
@@ -138,7 +164,7 @@ impl EngineResolver {
                 limits,
             )?))
         })?;
-        Ok(Self { thread })
+        Ok(Self { thread, network })
     }
 }
 
@@ -146,9 +172,11 @@ impl Resolver for EngineResolver {
     fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Trace> {
         let url = url.to_owned();
         let opener = opener.cloned();
-        let trace = self
-            .thread
-            .run(move |engine| engine.trace(&Link::new(url), opener.as_ref()))?;
+        let network = Arc::clone(&self.network);
+        let trace = self.thread.run(move |engine| {
+            let link = engine.short_links().expand(&url, network.as_ref());
+            engine.trace(&link, opener.as_ref())
+        })?;
         Ok(trace_of(trace))
     }
 }
@@ -271,8 +299,10 @@ pub(crate) fn trace_of(trace: engine::Trace) -> Trace {
             url: s.rewritten_to.clone(),
         })
         .collect();
+    let original_url = (trace.original_url != trace.url).then_some(trace.original_url);
     Trace {
         url: trace.url,
+        original_url,
         steps,
         browser: trace.resolution.browser,
         error,
@@ -306,11 +336,84 @@ fn summary(step: &engine::Step) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, sync::Mutex, time::Duration};
 
-    use pwrroute_engine::{Expectation, RouteTest, Rule};
+    use pwrroute_engine::{Expectation, Method, Reply, RouteTest, Rule};
 
     use super::*;
+
+    /// A shortener that sends one link to GitHub and counts what it was
+    /// asked; anything else is offline.
+    #[derive(Default)]
+    struct FakeShortener {
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Network for FakeShortener {
+        fn request(&self, method: Method, url: &str, _timeout: Duration) -> Result<Reply> {
+            self.asked.lock().unwrap().push(format!("{method:?} {url}"));
+            match url {
+                "https://bit.ly/gh" => Ok(Reply {
+                    status: 301,
+                    location: Some("https://github.com/pwrdrvr/PwrRoute".into()),
+                }),
+                "https://github.com/pwrdrvr/PwrRoute" => Ok(Reply {
+                    status: 200,
+                    location: None,
+                }),
+                _ => Err(anyhow!("offline")),
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_link_is_expanded_before_the_trace_and_both_urls_are_reported() {
+        let dir =
+            std::env::temp_dir().join(format!("pwrroute-mcp-engine-short-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.js");
+        fs::write(
+            &config,
+            r#"export default {
+                defaultBrowser: "Safari",
+                handlers: [{ match: "github.com/*", browser: "Firefox" }],
+            };"#,
+        )
+        .unwrap();
+        let net = Arc::new(FakeShortener::default());
+        let resolver = EngineResolver::spawn_with(
+            config,
+            Limits::default(),
+            Arc::clone(&net) as Arc<dyn Network + Send + Sync>,
+        )
+        .unwrap();
+
+        let trace = resolver.resolve("https://bit.ly/gh", None).unwrap();
+        assert_eq!(trace.url, "https://github.com/pwrdrvr/PwrRoute");
+        assert_eq!(trace.original_url.as_deref(), Some("https://bit.ly/gh"));
+        assert_eq!(trace.browser.name, "Firefox");
+        assert_eq!(trace.steps[0].kind, StepKind::Handler);
+        assert_eq!(
+            *net.asked.lock().unwrap(),
+            [
+                "Head https://bit.ly/gh",
+                "Head https://github.com/pwrdrvr/PwrRoute"
+            ]
+        );
+        let json = serde_json::to_string(&trace).unwrap();
+        assert!(
+            json.contains(r#""originalUrl":"https://bit.ly/gh""#),
+            "{json}"
+        );
+
+        // Not short: no request, no originalUrl.
+        let trace = resolver.resolve("https://github.com/direct", None).unwrap();
+        assert_eq!(trace.original_url, None);
+        assert_eq!(net.asked.lock().unwrap().len(), 2);
+        let json = serde_json::to_string(&trace).unwrap();
+        assert!(!json.contains("originalUrl"), "{json}");
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn traces_each_rule_that_fired_through_a_loaded_config() {
