@@ -2,7 +2,7 @@
 
 use std::{
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
@@ -11,7 +11,10 @@ use std::{
 };
 
 use anyhow::Result;
-use pwrroute_engine::{AppType, Browser, Engine, Opener, Source, Stage, Step as TraceStep, Trace};
+use pwrroute_engine::{
+    AppType, Browser, Engine, HttpNetwork, Link as EngineLink, Network, Opener, ShortLinks, Source,
+    Stage, Step as TraceStep, Trace,
+};
 
 use crate::{
     ipc::{Request, Response},
@@ -38,7 +41,19 @@ pub const FALLBACK_BROWSER: &str = if cfg!(target_os = "macos") {
 /// answers. Built and used on the dispatch thread only, so it need not be
 /// `Send` (QuickJS is not).
 pub trait Resolver {
-    fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved>;
+    /// Resolves a link whose short link, if any, the router already
+    /// expanded: `link.url` is what the rules see, `link.original_url` what
+    /// arrived.
+    fn resolve(&self, link: &EngineLink, opener: Option<&Opener>) -> Result<Resolved>;
+
+    /// Which links the router expands before [`resolve`](Self::resolve), as
+    /// the config in charge says; `None` expands nothing. Called on the
+    /// dispatch thread before each resolve, and done with before the
+    /// expansion runs, so a resolver that borrows an engine to answer
+    /// releases it first.
+    fn short_links(&self) -> Option<ShortLinks> {
+        None
+    }
 
     /// Catches up with the files behind the resolver and says whether
     /// anything is in charge. The router calls it before each resolve, for
@@ -70,14 +85,18 @@ pub struct Resolved {
 }
 
 impl Resolver for Engine {
-    fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Resolved> {
-        let trace = self.trace(&pwrroute_engine::Link::new(url), opener)?;
+    fn resolve(&self, link: &EngineLink, opener: Option<&Opener>) -> Result<Resolved> {
+        let trace = self.trace(link, opener)?;
         Ok(Resolved {
             rule_steps: rule_steps(&trace),
             privacy: trace.resolution.browser.privacy,
             browser: trace.resolution.browser,
             error: trace.resolution.error,
         })
+    }
+
+    fn short_links(&self) -> Option<ShortLinks> {
+        Some(Engine::short_links(self).clone())
     }
 }
 
@@ -171,6 +190,11 @@ pub struct Options {
     /// [`FALLBACK_BROWSER`] by default.
     pub fallback: FallbackSource,
     pub on_dispatch: Option<DispatchCallback>,
+    /// What expands short links: the one request a dispatch makes off the
+    /// machine, to the shortener's host, as Finicky made it. `None`, the
+    /// default, is the real network ([`HttpNetwork`]), built on the dispatch
+    /// thread the first time a short link arrives; tests pass a fake.
+    pub network: Option<Arc<dyn Network + Send + Sync>>,
 }
 
 impl Options {
@@ -188,6 +212,7 @@ impl std::fmt::Debug for Options {
             .field("journal", &self.journal)
             .field("fallback", &self.fallback)
             .field("on_dispatch", &self.on_dispatch.is_some())
+            .field("network", &self.network.is_some())
             .finish()
     }
 }
@@ -348,6 +373,10 @@ impl Router {
         let thread = thread::Builder::new()
             .name("pwrroute-dispatch".into())
             .spawn(move || {
+                let network = OnceLock::new();
+                if let Some(fake) = options.network.clone() {
+                    let _ = network.set(fake);
+                }
                 Worker {
                     resolver: build(resolver),
                     launcher: Box::new(launcher),
@@ -355,6 +384,7 @@ impl Router {
                     journal: options.journal.clone().map(Journal::new),
                     journal_config: worker_journal,
                     paused: worker_paused,
+                    network,
                     options,
                 }
                 .run(&rx);
@@ -633,6 +663,8 @@ struct Worker {
     journal_config: Arc<Mutex<Option<JournalConfig>>>,
     /// The handle's pause state, read once per dispatch.
     paused: Paused,
+    /// `Options::network`, or the real one once a short link needed it.
+    network: OnceLock<Arc<dyn Network + Send + Sync>>,
     options: Options,
 }
 
@@ -795,7 +827,8 @@ impl Worker {
 
     /// The browser for `url`, with every step that chose it, and how much
     /// of the link its rule lets the record keep. A link no rule routed is
-    /// kept in full.
+    /// kept in full. A short link is expanded first, so the rules match
+    /// where it lands.
     fn resolve(&self, url: &str, link: &Link, steps: &mut Vec<Step>) -> (Browser, Privacy) {
         let resolver = match self.in_charge() {
             Ok(resolver) => resolver,
@@ -805,8 +838,10 @@ impl Worker {
             }
         };
         let opener = link.opener.as_ref().map(Opener::from);
+        let expanded = self.expand(resolver, url, steps);
+        let url = expanded.url.as_str();
         let mut privacy = Privacy::Full;
-        let mut browser = match resolver.resolve(url, opener.as_ref()) {
+        let mut browser = match resolver.resolve(&expanded, opener.as_ref()) {
             Ok(resolved) => {
                 privacy = resolved.privacy;
                 if resolved.rule_steps.is_empty() {
@@ -844,6 +879,30 @@ impl Worker {
             browser = self.fallback(&browser.url);
         }
         (browser, privacy)
+    }
+
+    /// Expands `url` when the resolver's shortener list says it is a short
+    /// link: the one request a dispatch makes off the machine, made here on
+    /// the dispatch thread, after the resolver's list is read and before
+    /// its resolve. The link goes on unchanged when it is not short, the
+    /// list is empty, or the shortener does not answer; nothing is logged.
+    fn expand(&self, resolver: &dyn Resolver, url: &str, steps: &mut Vec<Step>) -> EngineLink {
+        let Some(short_links) = resolver.short_links() else {
+            return EngineLink::new(url);
+        };
+        if !short_links.is_short(url) {
+            return EngineLink::new(url);
+        }
+        let network = self
+            .network
+            .get_or_init(|| Arc::new(HttpNetwork::new()) as Arc<dyn Network + Send + Sync>);
+        let link = short_links.expand(url, network.as_ref());
+        if link.was_expanded() {
+            steps.push(Step::Expanded {
+                url: link.url.clone(),
+            });
+        }
+        link
     }
 
     /// Opens the link in `browser`, or, when that fails and `browser` is not
