@@ -637,7 +637,11 @@ fn the_fallback_browser_and_profile_come_from_the_options() {
     assert_eq!(app_type_of("Google Chrome"), AppType::AppName);
     assert_eq!(app_type_of("org.mozilla.firefox"), AppType::BundleId);
     assert_eq!(app_type_of("/Applications/Arc.app"), AppType::Path);
+    assert_eq!(app_type_of("~/Applications/Arc.app"), AppType::Path);
     assert_eq!(app_type_of(""), AppType::AppName);
+    // Neither a bundle id nor an .app path: Finicky calls it an app name.
+    assert_eq!(app_type_of("Brave Browser (Beta)"), AppType::AppName);
+    assert_eq!(app_type_of("Chrome_Canary"), AppType::AppName);
 }
 
 #[test]

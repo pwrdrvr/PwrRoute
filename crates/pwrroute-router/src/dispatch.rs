@@ -934,19 +934,26 @@ fn same_app(a: &Browser, b: &Browser) -> bool {
 }
 
 /// How Finicky types a browser string (`autodetectAppStringType`): letters,
-/// digits and spaces are an app name, dots and dashes make a bundle id, and
-/// anything else is a path.
+/// digits and spaces are an app name, letters, digits, dots and dashes a
+/// bundle id, an absolute or `~/` path ending in `.app` a path, and
+/// anything else an app name.
 fn app_type_of(name: &str) -> AppType {
     let name = name.trim();
-    if name.is_empty() || name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ') {
+    let is_app_path = (name.starts_with('/') || name.starts_with("~/"))
+        && std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"));
+    if name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ') {
         AppType::AppName
     } else if name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
     {
         AppType::BundleId
-    } else {
+    } else if is_app_path {
         AppType::Path
+    } else {
+        AppType::AppName
     }
 }
 
