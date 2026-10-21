@@ -299,6 +299,43 @@ var __pwrroute = (function (api) {
     });
   }
 
+  // For each of `urls`, whether each of the config's own handlers matches
+  // it. One openUrl run per link calls every matcher through the API's
+  // isMatch with what routing passes it (a FinickyURL and the options
+  // openUrl builds, here without an opener); each wrapper records the
+  // answer and declines, so no rewrite applies and no handler wins. A
+  // matcher that throws, or a link openUrl rejects, counts as no match.
+  function probe(urls) {
+    var handlers = finalConfig.handlers || [];
+    return urls.map(function (u) {
+      var row = handlers.map(function () {
+        return false;
+      });
+      var cfg = {
+        defaultBrowser: "Safari",
+        handlers: handlers.map(function (h, i) {
+          return {
+            match: function (url, options) {
+              try {
+                row[i] = !!api.isMatch(h.match, url, options);
+              } catch (ex) {
+                row[i] = false;
+              }
+              return false;
+            },
+            browser: "Safari",
+          };
+        }),
+      };
+      try {
+        api.openUrl(u, null, null, cfg);
+      } catch (ex) {
+        // An invalid link: every row stays false.
+      }
+      return row;
+    });
+  }
+
   return {
     // Called once at load. `rules` is RulesFile::plan(); `base` is set when
     // rules.json is the whole config.
@@ -330,6 +367,7 @@ var __pwrroute = (function (api) {
     trace: trace,
     describe: description,
     matches: matches,
+    probe: probe,
     // `options.urlShorteners` as the config set it: null when it did not,
     // so the host can tell "use the built-in list" from "expand nothing".
     shorteners: function () {

@@ -7,9 +7,8 @@ use gpui_kit::{
 };
 
 use super::controls::{
-    Kind, Tone, action_tag, button_when, card_description, checkbox, chip, command_box, field,
-    field_help, field_sub, field_sub_code, fn_tag, heading, note, pane_head, radio_dot,
-    row_actions, slot, tag,
+    Kind, Tone, action_tag, card_description, chip, command_box, field, field_help, field_sub,
+    field_sub_code, fn_tag, heading, note, pane_head, radio_dot, row_actions, slot, tag,
 };
 use super::model::{ImportCandidate, Piece, RulesSource, SettingsRequest};
 use super::style::para;
@@ -18,8 +17,8 @@ use crate::theme::{self, mono, text};
 
 pub const VISUAL_SLOT_ID: &str = "config-source-visual";
 pub const FINICKY_SLOT_ID: &str = "config-source-finicky";
-pub const IMPORT_ID: &str = "config-import";
-pub const KEEP_CONFIG_ID: &str = "config-import-keep";
+/// The importer card's "Review import…".
+pub const REVIEW_IMPORT_ID: &str = "config-review-import";
 
 impl SettingsWindow {
     fn set_source(&mut self, source: RulesSource, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -33,41 +32,6 @@ impl SettingsWindow {
         configuration.active = source;
         self.request(SettingsRequest::SetRulesSource(source), window, cx);
         cx.notify();
-    }
-
-    fn toggle_candidate(&mut self, index: usize, cx: &mut Context<'_, Self>) {
-        if let Some(candidate) = self
-            .model
-            .configuration
-            .import
-            .as_mut()
-            .and_then(|plan| plan.candidates.get_mut(index))
-            .filter(|candidate| candidate.importable)
-        {
-            candidate.checked = !candidate.checked;
-            cx.notify();
-        }
-    }
-
-    fn import(&mut self, keep_config: bool, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(plan) = self.model.configuration.import.as_ref() else {
-            return;
-        };
-        let candidates = plan
-            .candidates
-            .iter()
-            .enumerate()
-            .filter(|(_, candidate)| candidate.importable && candidate.checked)
-            .map(|(index, _)| index)
-            .collect();
-        self.request(
-            SettingsRequest::Import {
-                candidates,
-                keep_config,
-            },
-            window,
-            cx,
-        );
     }
 }
 
@@ -196,16 +160,6 @@ fn source_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
     )
 }
 
-/// A small count as a word, the way the design's sentences spell it.
-fn count_word(count: usize) -> String {
-    const WORDS: [&str; 10] = [
-        "no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    ];
-    WORDS
-        .get(count)
-        .map_or_else(|| count.to_string(), |word| (*word).to_owned())
-}
-
 /// The summary column of an `.imp` row. A function matcher's source is one
 /// truncated line, with any aside below it.
 fn summary(candidate: &ImportCandidate) -> Div {
@@ -219,7 +173,6 @@ fn summary(candidate: &ImportCandidate) -> Div {
             pieces_row(&ImportCandidate {
                 summary: pieces,
                 importable: false,
-                checked: false,
             })
         };
         return div()
@@ -282,7 +235,9 @@ fn import_card(
         || SharedString::from("the config"),
         |config| config.path.clone(),
     );
-    let lines = plan.candidates.iter().enumerate().map(|(index, candidate)| {
+    // A summary: the verdicts, read-only. The importer itself (Review,
+    // Place, Choose source) is where rules are picked.
+    let lines = plan.candidates.iter().map(|candidate| {
         let verdict = if candidate.importable {
             chip("Imports", Tone::Ok)
         } else {
@@ -296,69 +251,37 @@ fn import_card(
             .py(px(7.0))
             .border_b_1()
             .border_color(theme::border_faint())
-            .child(
-                div().w(px(24.0)).flex_none().child(
-                    checkbox(("config-import-check", index), candidate.checked, candidate.importable)
-                        .on_change({
-                            let toggle = cx.listener(move |this, _: &(), _, cx| {
-                                this.toggle_candidate(index, cx);
-                            });
-                            move |_, _, window, cx| toggle(&(), window, cx)
-                        }),
-                ),
-            )
             .child(summary(candidate))
             // A grid item stretches: the chip fills its 100px column.
             .child(div().w(px(100.0)).flex_none().flex().child(verdict.flex_1()))
             .into_any_element()
     });
-    let checked = plan.checked();
     let stays = plan.stays_js();
-    let import_label = SharedString::from(match checked {
-        1 => "Import 1 rule".to_owned(),
-        count => format!("Import {count} rules"),
-    });
-    let enabled = checked > 0;
-    // Keeping the config only means something while some rules stay JS.
     let actions = row_actions()
         .mt(px(6.0))
-        .child(
-            button_when(IMPORT_ID, import_label, Kind::Primary, false, enabled)
-                .on_click(cx.listener(|this, _, window, cx| this.import(false, window, cx))),
-        )
-        .when(stays > 0, |actions| {
-            actions.child(
-                button_when(
-                    KEEP_CONFIG_ID,
-                    "Import and keep the config for the rest",
-                    Kind::Default,
-                    false,
-                    enabled,
-                )
-                .on_click(cx.listener(|this, _, window, cx| this.import(true, window, cx))),
-            )
-        })
-        .into_any_element();
-    let matchers = if stays == 1 {
-        "function matcher keeps"
-    } else {
-        "function matchers keep"
-    };
-    let help = (stays > 0).then(|| {
-        field_help(format!(
-            "The second button leaves {path} selected so the {} {matchers} working, with the \
-             imported rules running after it.",
-            count_word(stays),
+        .child(request_button(
+            REVIEW_IMPORT_ID,
+            "Review import\u{2026}",
+            Kind::Primary,
+            false,
+            SettingsRequest::ReviewImport,
+            cx,
         ))
-        .into_any_element()
-    });
+        .into_any_element();
+    let help = field_help(format!(
+        "{} of {} import exactly. Review shows each rule's source, its verdict and the visual \
+         rule it becomes; nothing is written until you import, and {path} is never changed.",
+        plan.importable(),
+        plan.candidates.len()
+    ))
+    .into_any_element();
     let rows = vec![field(
         "Rules found",
         Some(field_sub(
-            "Checked rows become visual rules. Unchecked ones keep running from the config if it \
-             stays selected.",
+            "What the visual rules can hold. Rules that stay JS keep running from the config \
+             while it is selected.",
         )),
-        lines.chain([actions]).chain(help),
+        lines.chain([actions, help]),
     )];
     let stays_chip =
         (stays > 0).then(|| chip(format!("{stays} stay JS"), Tone::Warn).into_any_element());

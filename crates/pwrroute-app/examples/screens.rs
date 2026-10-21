@@ -49,6 +49,12 @@ mod first_run;
 #[path = "../src/fixtures.rs"]
 mod fixtures;
 #[cfg(target_os = "macos")]
+#[path = "../src/importer.rs"]
+mod importer;
+#[cfg(target_os = "macos")]
+#[path = "../src/importer_view.rs"]
+mod importer_view;
+#[cfg(target_os = "macos")]
 #[path = "../src/router.rs"]
 mod router;
 #[cfg(target_os = "macos")]
@@ -364,6 +370,74 @@ fn main() {
             image.save(&path).expect("write the PNG");
             println!("{}", path.display());
         }
+    }
+
+    // The Finicky importer (Finicky Importer 2a–3a) over its fixture
+    // config, at the design's window size, with the design's two visual
+    // handlers for Place.
+    let importer_config =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/importer/finicky.ts");
+    for (name, step, selected) in [
+        ("importer-review", importer::Step::Review, 3),
+        ("importer-review-exact", importer::Step::Review, 4),
+        ("importer-place", importer::Step::Place, 0),
+        ("importer-source", importer::Step::Source, 0),
+    ] {
+        let mut cx = HeadlessAppContext::with_platform(
+            gpui_kit::platform::current_platform(true).text_system(),
+            Arc::new(assets::Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(|cx| assets::load_fonts(cx));
+        let existing = pwrroute_engine::RulesFile {
+            default_browser: "Google Chrome".into(),
+            rules: vec![
+                pwrroute_engine::Rule {
+                    patterns: vec!["localhost:*".into()],
+                    browser: "Arc".into(),
+                    ..pwrroute_engine::Rule::default()
+                },
+                pwrroute_engine::Rule {
+                    patterns: vec!["bsky.app/*".into()],
+                    browser: "Firefox".into(),
+                    ..pwrroute_engine::Rule::default()
+                },
+            ],
+            ..pwrroute_engine::RulesFile::default()
+        };
+        // Read as the config in charge, as the design draws it.
+        let mut model = importer::ImportModel::read(
+            &importer_config,
+            None,
+            Some(&importer_config),
+            &[],
+            existing,
+        );
+        // Shown as the design names it, not by the fixture's path.
+        model.shown = "~/.finicky.ts".into();
+        model.selected = selected;
+        model.step = step;
+        let handle = cx
+            .open_window(size(px(1180.0), px(640.0)), |_, cx| {
+                cx.new(|cx| importer_view::Importer::new(model, cx))
+            })
+            .expect("open a headless window");
+        cx.allow_parking();
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .expect("draw");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let image = cx
+            .capture_screenshot(handle.into())
+            .expect("render with Metal");
+        let path = dir.join(format!("{name}.png"));
+        image.save(&path).expect("write the PNG");
+        println!("{}", path.display());
     }
 
     // Settings, at each option's `.dv-card` size in headless Chrome less

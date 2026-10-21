@@ -1,8 +1,9 @@
 //! The producer behind Settings › Configuration: which file is in charge
 //! as the router reports it (`router::routing_source`), the counts of
-//! `rules.json` and of the Finicky config, and the files on disk. The
-//! importer is not built, so the pane offers no plan; the source tiles
-//! only show the choice, since the router follows the files on disk.
+//! `rules.json` and of the Finicky config, the importer's summary of that
+//! config (discovered even while visual rules are in charge), and the files
+//! on disk. Review import… opens the importer (`importer_view`); the source
+//! tiles only show the choice, which the importer's Choose source makes.
 
 use std::{
     fs,
@@ -12,11 +13,17 @@ use std::{
 };
 
 use gpui_kit::{App, SharedString};
-use pwrroute_engine::{DEFAULT_SHORTENERS, DefaultHost, Engine, Limits, RulesFile, discovery};
+use pwrroute_engine::{
+    DEFAULT_SHORTENERS, DefaultHost, Description, Engine, Limits, Review, RulesFile, Verdict,
+    discovery,
+};
 
-use super::model::{Configuration, FinickyConfig, RulesSource, SettingsRequest};
-use crate::config_view::display_path;
+use super::model::{
+    Configuration, FinickyConfig, ImportCandidate, ImportPlan, Piece, RulesSource, SettingsRequest,
+};
+use crate::config_view::{self, display_path};
 use crate::router::{self, RoutingSource};
+use crate::rules_model::{Destination, Matcher};
 use crate::{settings, settings_store};
 
 /// How long after Reload now the window reads the router's status again:
@@ -38,7 +45,7 @@ pub struct Facts {
     pub home: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ConfigFacts {
     pub path: PathBuf,
     /// Rewrites and handlers, when the config loaded.
@@ -48,6 +55,8 @@ pub struct ConfigFacts {
     /// it turned expansion off.
     pub shorteners: Option<Vec<String>>,
     pub modified: Option<SystemTime>,
+    /// The importer's verdict on each rule, when it loaded.
+    pub import: Option<ImportPlan>,
 }
 
 /// The pane's model as things stand.
@@ -66,16 +75,32 @@ fn facts() -> Facts {
         .map(|path| RulesFile::load(path).map_err(|error| format!("{error:#}")));
     let rules_modified = rules_path.as_deref().and_then(modified);
     // Counting the config's rules means evaluating it, as the Rules screen
-    // does at open; the same load says which short links it expands.
-    let config = source.config.clone().map(|path| {
+    // does at open; the same load says which short links it expands and
+    // what the importer makes of it. While visual rules are in charge, the
+    // config discovery finds is still offered to the importer.
+    let in_charge = source.config.clone();
+    let found = in_charge
+        .clone()
+        .or_else(|| discovery::find_config(&discovery::config_candidates(&environment)));
+    let config = found.map(|path| {
         let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).ok();
+        let description = engine
+            .as_ref()
+            .and_then(|engine| engine.describe().ok().flatten());
+        let import = engine
+            .as_ref()
+            .and_then(|engine| engine.review_import(&[]).ok().flatten())
+            .zip(description.as_ref())
+            .map(|(review, description)| import_plan(description, review));
         ConfigFacts {
-            counts: engine
+            counts: description
                 .as_ref()
-                .and_then(|engine| engine.describe().ok().flatten())
                 .map(|description| (description.rewrites.len(), description.handlers.len())),
-            shorteners: engine.map(|engine| engine.short_links().domains.clone()),
+            shorteners: engine
+                .filter(|_| in_charge.is_some())
+                .map(|engine| engine.short_links().domains.clone()),
             modified: modified(&path),
+            import,
             path,
         }
     });
@@ -143,6 +168,10 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             found: found.into(),
         }
     });
+    let import = facts
+        .config
+        .as_ref()
+        .and_then(|config| config.import.clone());
     let active = if facts.source.config.is_some() {
         RulesSource::Finicky
     } else {
@@ -153,7 +182,7 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
         can_switch: false,
         visual_summary: visual_summary.into(),
         finicky,
-        import: None,
+        import,
         shorteners: shorteners(facts),
         rules_path: facts.rules_path.as_deref().map_or_else(
             || SharedString::from("no data folder"),
@@ -161,6 +190,79 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
         ),
         rules_status: rules_status.into(),
     }
+}
+
+/// The importer card's rows: each rewrite, handler and the default with its
+/// verdict, a suggestion as an aside.
+fn import_plan(description: &Description, review: Review) -> ImportPlan {
+    let row = |what: &str, rule: &crate::rules_model::Rule, verdict: &Verdict| {
+        let mut summary = vec![Piece::Text(format!("{what} \u{00b7}").into())];
+        let mut function = None;
+        for matcher in &rule.matchers {
+            match matcher {
+                Matcher::Pattern(p) | Matcher::Regex(p) => summary.push(Piece::Tag(p.clone())),
+                Matcher::Function(source) => function = Some(source.clone()),
+                _ => {}
+            }
+        }
+        let to = match &rule.destination {
+            Destination::Browser { name, profile, .. } => match profile {
+                Some(profile) => format!("\u{2192} {name} \u{00b7} {profile}"),
+                None => format!("\u{2192} {name}"),
+            },
+            Destination::Rewrite(changes) => changes
+                .first()
+                .map_or_else(String::new, |c| format!("\u{2192} {} {}", c.kind, c.value)),
+            Destination::Function(_) => "\u{2192} fn".to_owned(),
+            Destination::Unset(_) => String::new(),
+        };
+        if let Some(source) = function {
+            summary = vec![Piece::Source(format!("{source} {to}").into())];
+        } else {
+            summary.push(Piece::Text(to.into()));
+        }
+        if let Verdict::StaysJs {
+            suggestion: Some(suggested),
+            ..
+        } = verdict
+        {
+            summary.push(Piece::Aside(
+                format!(
+                    "could be {}; tested, not proved",
+                    suggested.rule.patterns.join(" ")
+                )
+                .into(),
+            ));
+        }
+        ImportCandidate {
+            summary,
+            importable: matches!(verdict, Verdict::Imports(_)),
+        }
+    };
+    let mut candidates = Vec::new();
+    for (rule, reviewed) in description.rewrites.iter().zip(&review.rewrites) {
+        candidates.push(row(
+            "rewrite",
+            &config_view::rewrite_row(rule),
+            &reviewed.verdict,
+        ));
+    }
+    for (rule, reviewed) in description.handlers.iter().zip(&review.handlers) {
+        candidates.push(row(
+            "handler",
+            &config_view::handler_row(rule),
+            &reviewed.verdict,
+        ));
+    }
+    let default = crate::rules_model::Rule::plain(
+        Vec::new(),
+        config_view::destination(&description.default_browser),
+    );
+    let mut last = row("defaultBrowser", &default, &review.default_browser.verdict);
+    last.summary.remove(0);
+    last.summary.insert(0, Piece::Text("defaultBrowser".into()));
+    candidates.push(last);
+    ImportPlan { candidates }
 }
 
 /// The hosts expanded before matching: the loaded config's list, else the
@@ -215,6 +317,16 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
             }
         }
         SettingsRequest::OpenDataFolder => open_data_folder(cx),
+        SettingsRequest::ReviewImport => {
+            let environment = discovery::Environment::current();
+            let config = router::routing_source()
+                .config
+                .or_else(|| discovery::find_config(&discovery::config_candidates(&environment)));
+            match config {
+                Some(path) => crate::importer_view::open(path, false, cx),
+                None => eprintln!("pwrroute: settings: no Finicky config to import"),
+            }
+        }
         SettingsRequest::ReloadRules => {
             if let Some(router) = settings_store::router(cx) {
                 let _ = router.refresh();
@@ -321,6 +433,7 @@ mod tests {
             counts: Some((2, 6)),
             shorteners: None,
             modified: Some(SystemTime::now() - Duration::from_secs(3 * 3600)),
+            import: None,
         });
         let model = build(&facts, SystemTime::now());
         assert_eq!(model.active, RulesSource::Finicky);
@@ -369,6 +482,7 @@ mod tests {
             counts: None,
             shorteners: None,
             modified: None,
+            import: None,
         });
         assert!(
             build(&facts, SystemTime::now())

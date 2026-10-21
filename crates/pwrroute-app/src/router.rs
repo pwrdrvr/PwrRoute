@@ -277,6 +277,25 @@ pub fn routing_source() -> RoutingSource {
     ROUTING.get()
 }
 
+/// A source the window chose (the importer's Choose source) for the
+/// router to switch to on its next refresh.
+static CHOSEN: LazyLock<Mutex<Option<ConfigChoice>>> = LazyLock::new(Mutex::default);
+
+/// Switches the running router to `choice`: no config, one by path, or
+/// discovery. The dispatch thread applies it on the refresh this asks for,
+/// before the next link, and [`routing_source`] follows. The new source is
+/// published here at once, so a window opened meanwhile already shows it.
+pub fn choose_source(choice: ConfigChoice, router: Option<&RouterHandle>) {
+    ROUTING.set(RoutingSource {
+        config: chosen_config(&choice),
+        ..ROUTING.get()
+    });
+    *CHOSEN.lock().unwrap_or_else(PoisonError::into_inner) = Some(choice);
+    if let Some(router) = router {
+        let _ = router.refresh();
+    }
+}
+
 /// The Finicky config in charge of routing, if the router found one. The
 /// window shows it read-only and tests links against it.
 pub fn config_in_charge() -> Option<PathBuf> {
@@ -300,7 +319,10 @@ fn spawn_router(
     let environment = Environment::current();
     let choice = match &args.config {
         Some(path) => ConfigChoice::Path(path.clone()),
-        None => ConfigChoice::Discover(discovery::config_candidates(&environment)),
+        None => settings
+            .settings()
+            .source
+            .choice(discovery::config_candidates(&environment)),
     };
     let rules_path = discovery::rules_path(&environment);
     let fallback = fallback_source(rules_path.clone());
@@ -461,6 +483,13 @@ impl Resolver for LiveResolver {
 
     fn refresh(&self) -> Result<(), String> {
         let mut reloader = self.reloader.borrow_mut();
+        let chosen = CHOSEN.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(choice) = chosen {
+            if let Err(e) = reloader.set_choice(choice) {
+                eprintln!("pwrroute: the chosen source did not load: {e:#}");
+            }
+            self.publish(&reloader);
+        }
         if let Some(result) = reloader.reload_if_changed() {
             if let Err(e) = result {
                 eprintln!("pwrroute: the config did not reload: {e:#}");

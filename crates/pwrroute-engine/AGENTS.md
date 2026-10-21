@@ -70,6 +70,15 @@ crate docs map the modules.
   proposed file is tested on a temporary engine built from the same config.
   `suggest_rule` only shapes candidate patterns; whether one matches is
   always the API's `isMatch`, through `Engine::collisions`.
+- **The importer reads what the config produced (`src/import.rs`).**
+  `Engine::review_import` classifies `describe()`'s rules: wildcard
+  matchers, fixed browsers (their `appType` must be the one `rules.json`
+  would detect) and string rewrites import; regexes (`rules.json` holds
+  none), functions and arguments stay JS. A suggestion is found by
+  probing, never by reading JS: literals make candidate patterns, and
+  `host.js`'s `probe` runs the real matchers inside `openUrl` beside
+  `isMatch` on each pattern. Probe links are built from literals plus the
+  caller's recent links, in memory only.
 - **Unsafe is confined.** The crate denies `unsafe_code`; only
   `src/native/macos.rs` and `src/native/windows.rs` allow it, for FFI, with a
   safety comment on each block. `src/native/mod.rs` documents what each OS

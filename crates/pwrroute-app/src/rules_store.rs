@@ -654,6 +654,27 @@ impl RulesStore {
         at
     }
 
+    /// Replaces every rule and the file's other fields with `file`, as one
+    /// edit: the importer's write and Undo import. Written on the next save.
+    pub fn replace_all(&mut self, file: RulesFile) {
+        self.base = RulesFile {
+            rewrites: Vec::new(),
+            rules: Vec::new(),
+            ..file.clone()
+        };
+        self.rewrites.clear();
+        self.rules.clear();
+        for value in file.rewrites {
+            let id = self.next();
+            self.rewrites.push(Entry { id, value });
+        }
+        for value in file.rules {
+            let id = self.next();
+            self.rules.push(Entry { id, value });
+        }
+        self.touch();
+    }
+
     // --- the file --------------------------------------------------------
 
     /// Compares the file to what was last read or written here. A changed
@@ -717,16 +738,33 @@ impl RulesStore {
         result
     }
 
-    fn write(&mut self, force: bool) -> Result<(), String> {
+    /// Why the next save would be refused before writing anything: the
+    /// file did not load, there is no directory for it, or it changed on
+    /// disk since it was read. `None` when it would be written.
+    pub fn save_refused(&self) -> Option<String> {
+        self.refusal(false)
+    }
+
+    fn refusal(&self, force: bool) -> Option<String> {
         if self.unreadable {
-            return Err("rules.json did not load, so it is not overwritten.".into());
+            return Some("rules.json did not load, so it is not overwritten.".into());
+        }
+        let Some(path) = &self.path else {
+            return Some("No configuration directory: edits last for this session.".into());
+        };
+        if !force && Stamp::of(path) != self.stamp {
+            return Some(CHANGED_ON_DISK.into());
+        }
+        None
+    }
+
+    fn write(&mut self, force: bool) -> Result<(), String> {
+        if let Some(reason) = self.refusal(force) {
+            return Err(reason);
         }
         let Some(path) = self.path.clone() else {
             return Err("No configuration directory: edits last for this session.".into());
         };
-        if !force && Stamp::of(&path) != self.stamp {
-            return Err(CHANGED_ON_DISK.into());
-        }
         self.status = Status::Saving;
         let file = self.written();
         file.save(&path)

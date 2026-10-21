@@ -1,7 +1,9 @@
 //! `settings.json` in the data directory: what Settings keeps between
 //! launches, as plain data. Today that is the Activity retention and the
-//! journal (Settings › Privacy) and the browsers hidden from the pickers
-//! (Settings › Browsers); other panes join as their producers land.
+//! journal (Settings › Privacy), the browsers hidden from the pickers
+//! (Settings › Browsers) and the rules source the importer's Choose source
+//! picked, with the config notices dismissed (`source`); other panes join
+//! as their producers land.
 //!
 //! [`Settings::load`] reads the file (absent means the defaults) and
 //! [`Settings::save`] writes it through a sibling file and a rename, like
@@ -39,6 +41,47 @@ pub struct Settings {
     /// before this field existed reads and writes back unchanged.
     #[serde(skip_serializing_if = "BrowserSettings::is_default")]
     pub browsers: BrowserSettings,
+    /// Left out while discovery decides, as before this field existed.
+    #[serde(skip_serializing_if = "SourceSettings::is_default")]
+    pub source: SourceSettings,
+}
+
+/// Which file the router reads its rules from. The default is Finicky's
+/// discovery: the first config found is in charge, `rules.json` runs after
+/// it. The importer's Choose source changes it; paths are config files,
+/// never links.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SourceSettings {
+    /// "Visual rules only": no Finicky config is read, even when one is
+    /// found.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub visual_only: bool,
+    /// A config kept in charge by path (one discovery would not find).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<PathBuf>,
+    /// Configs whose "Found …" notice on the Rules screen was dismissed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dismissed: Vec<PathBuf>,
+}
+
+impl SourceSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The router's choice: no config, the one kept by path, or discovery
+    /// over `candidates`.
+    pub fn choice(&self, candidates: Vec<PathBuf>) -> pwrroute_engine::ConfigChoice {
+        use pwrroute_engine::ConfigChoice;
+        if self.visual_only {
+            ConfigChoice::None
+        } else if let Some(path) = &self.config {
+            ConfigChoice::Path(path.clone())
+        } else {
+            ConfigChoice::Discover(candidates)
+        }
+    }
 }
 
 /// Settings › Browsers: which apps the reader switched off.
@@ -403,6 +446,46 @@ mod tests {
                 .days,
             1
         );
+    }
+
+    #[test]
+    fn the_rules_source_round_trips_and_names_the_routers_choice() {
+        use pwrroute_engine::ConfigChoice;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = SettingsStore::load(Some(dir.path().to_path_buf()));
+        let found = vec![dir.path().join(".finicky.js")];
+        assert_eq!(
+            store.settings().source.choice(found.clone()),
+            ConfigChoice::Discover(found.clone())
+        );
+        store
+            .update(|settings| {
+                settings.source.visual_only = true;
+                settings.source.dismissed.push(found[0].clone());
+            })
+            .unwrap();
+        let again = SettingsStore::load(Some(dir.path().to_path_buf()));
+        assert_eq!(again.settings().source, store.settings().source);
+        assert_eq!(
+            again.settings().source.choice(found.clone()),
+            ConfigChoice::None
+        );
+        store
+            .update(|settings| {
+                settings.source.visual_only = false;
+                settings.source.config = Some(found[0].clone());
+            })
+            .unwrap();
+        assert_eq!(
+            store.settings().source.choice(Vec::new()),
+            ConfigChoice::Path(found[0].clone())
+        );
+        // Back to discovery with nothing dismissed: the section goes.
+        store
+            .update(|settings| settings.source = SourceSettings::default())
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(!text.contains("source"), "{text}");
     }
 
     #[test]

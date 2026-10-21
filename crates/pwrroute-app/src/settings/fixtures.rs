@@ -237,7 +237,6 @@ fn candidate(importable: bool, summary: Vec<Piece>) -> ImportCandidate {
     ImportCandidate {
         summary,
         importable,
-        checked: importable,
     }
 }
 

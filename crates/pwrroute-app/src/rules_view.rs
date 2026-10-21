@@ -1365,8 +1365,10 @@ pub fn pane(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement 
     } else {
         format!("{status} \u{00b7} tests run on every save")
     };
+    let banners = crate::importer_view::rules_banners(app, cx);
     pane_frame("rules-pane")
         .child(heading(app, cx))
+        .children(banners)
         .children(strip)
         .child(visual_cards(app, cx))
         .child(everything_else)

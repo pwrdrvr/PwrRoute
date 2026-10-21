@@ -2,7 +2,7 @@
 //! option 1b): a banner with the ways out, the config's handlers read-only,
 //! and the visual rules folded below, since they run after it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::Context as _;
@@ -12,7 +12,8 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
 };
 use pwrroute_engine::{
-    AppType, BrowserSpec, Description, Engine, FunctionSpec, MatcherSpec, UrlSpec,
+    AppType, BrowserSpec, Description, Engine, FunctionSpec, HandlerRule, MatcherSpec, RewriteRule,
+    UrlSpec,
 };
 
 use crate::app::PwrRoute;
@@ -35,6 +36,8 @@ const MAX_TEXT: usize = 240;
 pub struct ConfigInCharge {
     /// The config's path as the user knows it: `~/.finicky.ts`.
     pub path: String,
+    /// The file itself, for the importer.
+    pub file: PathBuf,
     /// When the file last changed, for the banner to say how long ago.
     pub modified: Option<SystemTime>,
     /// Why the engine could not read the config; then there are no rows.
@@ -58,9 +61,10 @@ impl ConfigInCharge {
                     .context("the engine has no JS config to describe")
             });
         match described {
-            Ok(description) => Self::from_description(shown, modified(path), &description),
+            Ok(description) => Self::from_description(path, shown, modified(path), &description),
             Err(error) => Self {
                 path: shown,
+                file: path.to_path_buf(),
                 modified: None,
                 problem: Some(one_line(&format!("It did not load: {error:#}"))),
                 rewrites: Vec::new(),
@@ -72,33 +76,18 @@ impl ConfigInCharge {
 
     /// The rows for an engine's description of the config.
     pub fn from_description(
+        file: &Path,
         path: String,
         modified: Option<SystemTime>,
         description: &Description,
     ) -> Self {
         Self {
             path,
+            file: file.to_path_buf(),
             modified,
             problem: None,
-            rewrites: description
-                .rewrites
-                .iter()
-                .map(|rewrite| {
-                    let destination = match &rewrite.url {
-                        UrlSpec::Url(url) => Destination::Rewrite(vec![Change {
-                            kind: "url",
-                            value: url.clone().into(),
-                        }]),
-                        UrlSpec::Function(function) => Destination::Function(source(function)),
-                    };
-                    row(&rewrite.matchers, destination)
-                })
-                .collect(),
-            handlers: description
-                .handlers
-                .iter()
-                .map(|handler| row(&handler.matchers, destination(&handler.browser)))
-                .collect(),
+            rewrites: description.rewrites.iter().map(rewrite_row).collect(),
+            handlers: description.handlers.iter().map(handler_row).collect(),
             default_browser: Some(destination(&description.default_browser)),
         }
     }
@@ -131,6 +120,23 @@ impl ConfigInCharge {
     }
 }
 
+/// A config rewrite's read-only row.
+pub(crate) fn rewrite_row(rewrite: &RewriteRule) -> Rule {
+    let destination = match &rewrite.url {
+        UrlSpec::Url(url) => Destination::Rewrite(vec![Change {
+            kind: "url",
+            value: url.clone().into(),
+        }]),
+        UrlSpec::Function(function) => Destination::Function(source(function)),
+    };
+    row(&rewrite.matchers, destination)
+}
+
+/// A config handler's read-only row.
+pub(crate) fn handler_row(handler: &HandlerRule) -> Rule {
+    row(&handler.matchers, destination(&handler.browser))
+}
+
 fn row(matchers: &[MatcherSpec], destination: Destination) -> Rule {
     Rule::plain(matchers.iter().map(matcher).collect(), destination)
 }
@@ -146,7 +152,7 @@ fn matcher(spec: &MatcherSpec) -> Matcher {
     }
 }
 
-fn destination(browser: &BrowserSpec) -> Destination {
+pub(crate) fn destination(browser: &BrowserSpec) -> Destination {
     match browser {
         BrowserSpec::Browser(fixed) if fixed.app_type == AppType::None => Destination::Browser {
             badge: NOT_OPENED_BADGE.into(),
@@ -218,8 +224,12 @@ pub fn display_path(path: &Path, home: Option<&Path>) -> String {
     }
 }
 
+/// The banner's "Import to visual rules…".
+pub const IMPORT_ID: &str = "config-import";
+
 /// `.banner`
-fn banner(config: &ConfigInCharge) -> Div {
+fn banner(config: &ConfigInCharge, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let file = config.file.clone();
     div()
         .flex()
         .flex_none()
@@ -266,11 +276,15 @@ fn banner(config: &ConfigInCharge) -> Div {
                 .items_center()
                 .gap(px(8.0))
                 .child(button("Open in editor", ButtonKind::Default, true))
-                .child(button(
-                    "Import to visual rules\u{2026}",
-                    ButtonKind::Default,
-                    true,
-                ))
+                .child(
+                    button("Import to visual rules\u{2026}", ButtonKind::Default, true)
+                        .id(IMPORT_ID)
+                        .debug_selector(|| IMPORT_ID.into())
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let file = file.clone();
+                            cx.defer(move |cx| crate::importer_view::open(file, false, cx));
+                        })),
+                )
                 .child(button("Stop using", ButtonKind::Quiet, true)),
         )
 }
@@ -401,7 +415,8 @@ pub fn pane(
     );
 
     pane_frame("config-pane")
-        .child(banner(config))
+        .children(crate::importer_view::rules_banners(app, cx))
+        .child(banner(config, cx))
         .children(rewrites)
         .children(handlers)
         .child(visual)

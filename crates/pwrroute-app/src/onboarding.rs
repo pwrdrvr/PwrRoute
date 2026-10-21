@@ -10,8 +10,8 @@
 //!   tests write their own and build the model with [`model`].
 //! - [`hooks`] makes the window's choices real: the fallback goes to
 //!   `rules.json`'s `defaultBrowser` and `defaultProfile` (empty for the
-//!   browser's own default profile), the Finicky choice is recorded (there
-//!   is no importer yet, so the config stays in charge either way), "Set as
+//!   browser's own default profile), the Finicky choice is recorded and
+//!   "Import N rules" opens the importer on Choose source, "Set as
 //!   default browser" asks the OS through [`crate::default_browser`], and
 //!   "Open PwrRoute" or "Later" marks first run done and opens the main
 //!   window on Rules, on the display the first-run window was on, so
@@ -132,6 +132,8 @@ pub struct FinickyFound {
     pub path: PathBuf,
     pub rewrites: usize,
     pub handlers: usize,
+    /// The rules the importer proves visual rules hold exactly.
+    pub importable: usize,
 }
 
 /// What first run is built from.
@@ -179,16 +181,29 @@ impl Facts {
                 // Counting the config's rules means evaluating it, as the
                 // Rules screen does. A config that fails to load is still
                 // found; it just has no counts.
-                let counts = Engine::load(&path, Rc::new(DefaultHost), Limits::default())
-                    .ok()
+                let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).ok();
+                let counts = engine
+                    .as_ref()
                     .and_then(|engine| engine.describe().ok().flatten())
                     .map_or((0, 0), |config| {
                         (config.rewrites.len(), config.handlers.len())
+                    });
+                let importable = engine
+                    .and_then(|engine| engine.review_import(&[]).ok().flatten())
+                    .map_or(0, |review| {
+                        review
+                            .rewrites
+                            .iter()
+                            .chain(&review.handlers)
+                            .chain([&review.default_browser])
+                            .filter(|r| matches!(r.verdict, pwrroute_engine::Verdict::Imports(_)))
+                            .count()
                     });
                 FinickyFound {
                     path,
                     rewrites: counts.0,
                     handlers: counts.1,
+                    importable,
                 }
             }),
             rules_default,
@@ -236,8 +251,7 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
             path: tilde(&found.path, home),
             rewrites: found.rewrites,
             handlers: found.handlers,
-            // No importer yet: the window says so and offers to keep the file.
-            importable: 0,
+            importable: found.importable,
         }),
         import: facts.state.import,
         current_default: facts.handler.current_name(),
@@ -309,6 +323,7 @@ pub fn hooks_with(
 ) -> FirstRunHooks {
     let fallback_dir = data_dir.clone();
     let import_dir = data_dir.clone();
+    let config = crate::router::config_in_charge();
     let finish_dir = data_dir;
     FirstRunHooks {
         on_fallback: Rc::new(move |choice: first_run::Fallback, _| {
@@ -327,10 +342,15 @@ pub fn hooks_with(
                 state.fallback_profile.clone_from(&choice.profile);
             });
         }),
-        on_import: Rc::new(move |choice, _| {
-            // Recorded only: with no importer the config stays in charge,
-            // which is what the router does on its own.
+        on_import: Rc::new(move |choice, cx| {
             edit_state(import_dir.as_deref(), |state| state.import = Some(choice));
+            // "Import N rules" goes straight to Choose source with every
+            // proven rule checked; the importer writes rules.json.
+            if choice == ImportChoice::Import
+                && let Some(path) = config.clone()
+            {
+                cx.defer(move |cx| crate::importer_view::open(path, true, cx));
+            }
         }),
         on_set_default_browser: Rc::new(|(), cx| match default_browser::request(cx) {
             Ok(outcome) => {
@@ -447,6 +467,7 @@ mod tests {
                 path: PathBuf::from("/Users/u/.finicky.ts"),
                 rewrites: 2,
                 handlers: 6,
+                importable: 5,
             }),
             rules_default: String::new(),
             rules_profile: String::new(),
@@ -492,16 +513,15 @@ mod tests {
         let finicky = built.finicky.as_ref().unwrap();
         assert_eq!(finicky.path, "~/.finicky.ts");
         assert_eq!((finicky.rewrites, finicky.handlers), (2, 6));
-        assert_eq!(finicky.importable, 0);
+        assert_eq!(finicky.importable, 5);
         assert_eq!(
             built.steps(),
             [StepState::Current, StepState::Todo, StepState::Todo]
         );
-        assert_eq!(
-            built.import_detail(),
-            "Found ~/.finicky.ts with 2 rewrites and 6 handlers. It stays in charge and runs \
-             as it did under Finicky; the file is never modified. Importing it into editable \
-             rules is coming."
+        assert!(
+            built
+                .import_detail()
+                .contains("Import what the visual rules can hold")
         );
     }
 

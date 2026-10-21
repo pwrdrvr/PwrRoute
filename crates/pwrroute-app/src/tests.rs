@@ -1814,3 +1814,248 @@ fn an_in_process_rules_apply_reloads_the_rules_screen(cx: &mut TestAppContext) {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// --- the Finicky importer ----------------------------------------------------
+
+/// The importer's fixture config: the design's 2a, one rule of each verdict.
+fn importer_config() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/importer/finicky.ts")
+}
+
+/// The open importer window, after whatever opened it has run.
+fn importer_window(
+    cx: &mut VisualTestContext,
+) -> Option<gpui_kit::WindowHandle<crate::importer_view::Importer>> {
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        cx.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<crate::importer_view::Importer>())
+    })
+}
+
+#[gpui_kit::test]
+fn the_banners_import_button_opens_the_importer(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let (_view, cx) = open_with(cx, Some(config));
+    assert!(importer_window(cx).is_none());
+    click(cx, crate::config_view::IMPORT_ID);
+    let importer = importer_window(cx).expect("Import to visual rules… opens the importer");
+    let model = cx
+        .update(|_, cx| importer.read(cx).map(|importer| importer.model.clone()))
+        .expect("the importer's model");
+    assert_eq!(model.shown, "~/.finicky.ts");
+    assert_eq!(model.step, crate::importer::Step::Review);
+    // Design 1b's config: two function matchers stay JS, the patterns and
+    // the default import.
+    assert_eq!(model.counts(), (3, 2, 0));
+    assert_eq!(
+        model.review_footer(),
+        "3 of 5 selected. Nothing is written yet."
+    );
+}
+
+#[gpui_kit::test]
+fn an_import_writes_rules_json_once_and_undo_takes_it_back(cx: &mut TestAppContext) {
+    let dir = scratch("import");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let before = RulesFile::load(&path).unwrap();
+
+    // Outside any window's update, as the app's deferred open runs; the
+    // file under review is the config in charge.
+    cx.cx.update(|cx| {
+        crate::importer_view::open_with(importer_config(), false, Some(importer_config()), cx);
+    });
+    let window = importer_window(cx).expect("the importer opened");
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    // Take the suggestion for the meet.google.com helper, then step
+    // through: the file has handlers, so Place asks where they go.
+    click(&mut importer, "importer-item-3");
+    click(&mut importer, crate::importer_view::SUGGESTION_ID);
+    click(&mut importer, crate::importer_view::NEXT_ID);
+    assert_eq!(
+        window
+            .read_with(&importer, |importer, _| importer.model.step)
+            .unwrap(),
+        crate::importer::Step::Place
+    );
+    click(&mut importer, "importer-place-1");
+    click(&mut importer, crate::importer_view::NEXT_ID);
+    click(&mut importer, "importer-source-1");
+    // Nothing is written before Import.
+    assert_eq!(RulesFile::load(&path).unwrap(), before);
+    // Import closes the window, so there is no frame to draw after it.
+    let import = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .expect("Import");
+    importer.simulate_click(import.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(importer_window(cx).is_none(), "Import closes the importer");
+
+    // One save: the imported handlers after the file's own (After yours),
+    // the string rewrite after its rewrites, and the default.
+    let after = RulesFile::load(&path).unwrap();
+    assert_eq!(after.rules.len(), before.rules.len() + 4);
+    assert_eq!(after.rules[..before.rules.len()], before.rules[..]);
+    let imported: Vec<&str> = after.rules[before.rules.len()..]
+        .iter()
+        .map(|rule| rule.patterns[0].as_str())
+        .collect();
+    assert_eq!(
+        imported,
+        [
+            "meet.google.com/*",
+            "bsky.app/*",
+            "google.com/*",
+            "*.atlassian.net/*"
+        ]
+    );
+    assert_eq!(after.rules[before.rules.len() + 3].profile, "Work");
+    assert_eq!(after.rewrites.len(), before.rewrites.len() + 1);
+    assert_eq!(after.default_browser, "Google Chrome");
+    // The Rules screen shows the file as written, with the banner.
+    let (handlers, done) =
+        view.read_with(cx, |app, _| (app.handlers.len(), app.last_import.clone()));
+    assert_eq!(handlers, after.rules.len());
+    let done = done.expect("the import is remembered");
+    assert_eq!((done.count, done.suggestions), (6, 1));
+    draw(cx);
+    assert!(cx.debug_bounds("import-done").is_some());
+
+    click(cx, crate::importer_view::UNDO_ID);
+    // The same rules as before the import (the store writes them again,
+    // so a hand-written file comes back in its own format).
+    assert_eq!(RulesFile::load(&path).unwrap(), before);
+    assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// File › Import Finicky Config… on a file that is not the config in
+/// charge: Choose source names the one in charge, and Keep leaves
+/// `settings.json`'s source as it was.
+#[gpui_kit::test]
+fn importing_a_file_not_in_charge_keeps_the_config_in_charge(cx: &mut TestAppContext) {
+    let dir = scratch("import-other");
+    let path = dir.join("rules.json");
+    let in_charge = fixture_home().join(".finicky.ts");
+    let mut settings = crate::settings_store::SettingsStore::load(Some(dir.clone()));
+    settings
+        .update(|settings| settings.source.config = Some(in_charge.clone()))
+        .unwrap();
+    let source = settings.settings().source.clone();
+    cx.update(|cx| crate::settings_store::install(settings, None, cx));
+    let (view, cx) = open_store(cx, Some(in_charge.clone()), fixture_store(&dir));
+    let before = RulesFile::load(&path).unwrap();
+
+    cx.cx.update(|cx| {
+        crate::importer_view::open_with(importer_config(), false, Some(in_charge.clone()), cx);
+    });
+    let window = importer_window(cx).expect("the importer opened");
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    let model = window
+        .read_with(&importer, |importer, _| importer.model.clone())
+        .unwrap();
+    assert_eq!(
+        model.charge,
+        crate::importer::Charge::Other {
+            path: in_charge.clone(),
+            shown: "~/.finicky.ts".to_owned()
+        }
+    );
+    // Place, then Choose source: asked, with Keep selected.
+    click(&mut importer, crate::importer_view::NEXT_ID);
+    click(&mut importer, crate::importer_view::NEXT_ID);
+    let model = window
+        .read_with(&importer, |importer, _| importer.model.clone())
+        .unwrap();
+    assert_eq!(model.step, crate::importer::Step::Source);
+    assert_eq!(model.source, crate::importer::SourceChoice::KeepConfig);
+    let import = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .expect("Import");
+    importer.simulate_click(import.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(importer_window(cx).is_none(), "Import closes the importer");
+
+    // The rules went in; the source did not move.
+    let after = RulesFile::load(&path).unwrap();
+    assert!(after.rules.len() > before.rules.len());
+    let saved = crate::settings_store::Settings::load(&dir).unwrap();
+    assert_eq!(saved.source, source);
+    let outcome = view.read_with(cx, |app, _| {
+        app.last_import.as_ref().map(|done| done.outcome.clone())
+    });
+    assert_eq!(
+        outcome.as_deref(),
+        Some("~/.finicky.ts stays in charge and runs first.")
+    );
+
+    // Another writer changes rules.json before Undo: Undo ends rather than
+    // overwrite that change, and the source is not touched.
+    let other = RulesFile {
+        default_browser: "Firefox".into(),
+        ..RulesFile::default()
+    };
+    other.save(&path).unwrap();
+    let restored = view.update(cx, |app, cx| app.undo_import(cx));
+    assert_eq!(restored, None);
+    assert_eq!(RulesFile::load(&path).unwrap(), other);
+    let undoable = view.read_with(cx, |app, _| {
+        app.last_import.as_ref().map(|done| done.undoable)
+    });
+    assert_eq!(undoable, Some(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An import the store would refuse (`rules.json` changed under unsaved
+/// edits) writes nothing and opens the importer again with the reason.
+#[gpui_kit::test]
+fn a_refused_import_opens_the_importer_again_with_the_reason(cx: &mut TestAppContext) {
+    let dir = scratch("import-refused");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    // An unsaved edit, then another writer.
+    view.update(cx, |app, _| app.store.replace_all(RulesFile::default()));
+    let other = RulesFile {
+        default_browser: "Firefox".into(),
+        ..RulesFile::default()
+    };
+    other.save(&path).unwrap();
+
+    cx.cx.update(|cx| {
+        crate::importer_view::open_with(importer_config(), false, Some(importer_config()), cx);
+    });
+    let window = importer_window(cx).expect("the importer opened");
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    // No visual handlers to place among: Review, then Choose source.
+    click(&mut importer, crate::importer_view::NEXT_ID);
+    let import = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .expect("Import");
+    importer.simulate_click(import.center(), Modifiers::default());
+    cx.run_until_parked();
+
+    let window = importer_window(cx).expect("the importer opened again");
+    let model = cx
+        .update(|_, cx| window.read(cx).map(|importer| importer.model.clone()))
+        .unwrap();
+    assert_eq!(
+        model.refused.as_deref(),
+        Some(crate::rules_store::CHANGED_ON_DISK)
+    );
+    assert_eq!(model.step, crate::importer::Step::Source);
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    assert!(importer.debug_bounds("importer-refused").is_some());
+    assert_eq!(
+        RulesFile::load(&path).unwrap(),
+        other,
+        "nothing was written"
+    );
+    assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
