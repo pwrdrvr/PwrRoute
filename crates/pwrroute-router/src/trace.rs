@@ -129,10 +129,13 @@ pub enum Step {
     ConfigError {
         message: String,
     },
-    /// No config is loaded, so the fallback browser applies.
+    /// The fallback browser applies: no config is loaded, the config could
+    /// not resolve the link, or (after a [`LaunchFailed`](Self::LaunchFailed))
+    /// the chosen browser could not be opened, so the fallback opens it.
     Fallback {
         reason: String,
     },
+
     /// The config sent the link back to PwrRoute, which would loop. The
     /// fallback browser opens it instead.
     RefusedLoop {

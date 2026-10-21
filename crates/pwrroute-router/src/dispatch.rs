@@ -22,8 +22,10 @@ use crate::{
     trace::{DispatchId, DispatchRecord, Matched, Outcome, Privacy, Step, Timings},
 };
 
-/// Where links go when no config is loaded, or the config sends a link back
-/// to PwrRoute: the browser every install of the OS has.
+/// Where links go when no config is loaded, the config sends a link back
+/// to PwrRoute, or the chosen browser cannot be opened: the browser every
+/// install of the OS has. [`Options::fallback_browser`] replaces it with
+/// the user's choice.
 pub const FALLBACK_BROWSER: &str = if cfg!(target_os = "macos") {
     "Safari"
 } else if cfg!(windows) {
@@ -119,8 +121,12 @@ pub struct Options {
     /// The on-disk journal of dispatches. `None`, the default, writes
     /// nothing: links live in memory only.
     pub journal: Option<JournalConfig>,
-    /// An app name, used when no config is loaded or the config would loop.
+    /// An app name, bundle id or `.app` path, used when no config is loaded,
+    /// the config would loop, or the browser a rule chose cannot be opened.
+    /// [`FALLBACK_BROWSER`] by default.
     pub fallback_browser: String,
+    /// The profile the fallback browser opens links in; empty for none.
+    pub fallback_profile: String,
     pub on_dispatch: Option<DispatchCallback>,
 }
 
@@ -130,6 +136,7 @@ impl Default for Options {
             retention: Retention::default(),
             journal: None,
             fallback_browser: FALLBACK_BROWSER.to_owned(),
+            fallback_profile: String::new(),
             on_dispatch: None,
         }
     }
@@ -149,6 +156,7 @@ impl std::fmt::Debug for Options {
             .field("retention", &self.retention)
             .field("journal", &self.journal)
             .field("fallback_browser", &self.fallback_browser)
+            .field("fallback_profile", &self.fallback_profile)
             .field("on_dispatch", &self.on_dispatch.is_some())
             .finish()
     }
@@ -728,16 +736,20 @@ impl Worker {
             record.steps.push(Step::Browser {
                 browser: browser.clone(),
             });
+            let mut opened = None;
             record.outcome = match mode {
                 Mode::Test => Outcome::Tested,
                 Mode::Dispatch => {
                     let launch = Instant::now();
-                    let outcome = self.launch(&browser, &mut record.steps);
+                    let launched = self.launch(&browser, &mut record.steps);
                     record.timings.launch_us = Timings::micros(launch.elapsed());
-                    outcome
+                    opened = launched.opened;
+                    launched.outcome
                 }
             };
-            record.browser = Some(browser);
+            // The browser that took the link: the fallback when the chosen
+            // one could not be opened, so Activity and the tray name it.
+            record.browser = Some(opened.unwrap_or(browser));
         }
         record.timings.total_us = Timings::micros(request.received.elapsed());
         record
@@ -804,28 +816,59 @@ impl Worker {
         (browser, privacy)
     }
 
-    fn launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Outcome {
+    /// Opens the link in `browser`, or, when that fails and `browser` is not
+    /// the fallback already, in the fallback browser: a rule that names a
+    /// browser this machine does not have must not lose the link. The
+    /// fallback is tried once; `Failed` means both failed.
+    fn launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Launched {
         if is_self(browser) {
             steps.push(Step::LaunchFailed {
                 message: "the fallback browser is PwrRoute itself".into(),
             });
-            return Outcome::Failed;
+            return Launched::failed();
         }
+        if let Ok(outcome) = self.try_launch(browser, steps) {
+            return Launched {
+                outcome,
+                opened: None,
+            };
+        }
+        let fallback = self.fallback(&browser.url);
+        if same_app(browser, &fallback) || is_self(&fallback) {
+            return Launched::failed();
+        }
+        // The browser's name only: the launcher's message is withheld in a
+        // host-only record, this reason is kept.
+        steps.push(Step::Fallback {
+            reason: format!("{} could not be opened", browser.name),
+        });
+        match self.try_launch(&fallback, steps) {
+            Ok(outcome) => Launched {
+                outcome,
+                opened: Some(fallback),
+            },
+            Err(()) => Launched::failed(),
+        }
+    }
+
+    /// One launch, traced: `Launched` on success, `LaunchFailed` with the
+    /// launcher's message otherwise.
+    fn try_launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Result<Outcome, ()> {
         let dry_run = self.launcher.is_dry_run();
         match self.launcher.launch(browser) {
             Ok(()) => {
                 steps.push(Step::Launched { dry_run });
-                if dry_run {
+                Ok(if dry_run {
                     Outcome::DryRun
                 } else {
                     Outcome::Opened
-                }
+                })
             }
             Err(e) => {
                 steps.push(Step::LaunchFailed {
                     message: format!("{e:#}"),
                 });
-                Outcome::Failed
+                Err(())
             }
         }
     }
@@ -837,12 +880,15 @@ impl Worker {
             .clone()
     }
 
+    /// The fallback browser with `url`: [`Options::fallback_browser`] and
+    /// [`Options::fallback_profile`], typed as Finicky types a browser
+    /// string.
     fn fallback(&self, url: &str) -> Browser {
         Browser {
             name: self.options.fallback_browser.clone(),
-            app_type: AppType::AppName,
+            app_type: app_type_of(&self.options.fallback_browser),
             url: url.to_owned(),
-            profile: String::new(),
+            profile: self.options.fallback_profile.clone(),
             args: Vec::new(),
             open_in_background: None,
             private: false,
@@ -862,6 +908,46 @@ fn skipped_handler(steps: &[Step]) -> Option<usize> {
         } => Some(*index),
         _ => None,
     })
+}
+
+/// What [`Worker::launch`] did.
+struct Launched {
+    outcome: Outcome,
+    /// The fallback browser, when it opened the link instead of the one
+    /// chosen.
+    opened: Option<Browser>,
+}
+
+impl Launched {
+    fn failed() -> Self {
+        Self {
+            outcome: Outcome::Failed,
+            opened: None,
+        }
+    }
+}
+
+/// Whether two browsers are the same app, whatever the profile: a launch
+/// that failed in one would fail in the other.
+fn same_app(a: &Browser, b: &Browser) -> bool {
+    a.app_type == b.app_type && a.name.eq_ignore_ascii_case(&b.name)
+}
+
+/// How Finicky types a browser string (`autodetectAppStringType`): letters,
+/// digits and spaces are an app name, dots and dashes make a bundle id, and
+/// anything else is a path.
+fn app_type_of(name: &str) -> AppType {
+    let name = name.trim();
+    if name.is_empty() || name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ') {
+        AppType::AppName
+    } else if name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+    {
+        AppType::BundleId
+    } else {
+        AppType::Path
+    }
 }
 
 /// Whether two URLs are the same once parsed. The engine re-serializes
