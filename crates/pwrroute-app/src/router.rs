@@ -21,7 +21,7 @@ use std::{
 
 use pwrroute_browsers::{Env, LaunchError, LaunchOptions, Note};
 use pwrroute_engine::{
-    ConfigChoice, DefaultHost, Limits, Reloader, RulesFile, Status, Watcher,
+    ConfigChoice, Host, Limits, NativeHost, Reloader, RulesFile, Status, Watcher,
     discovery::{self, Environment},
 };
 use pwrroute_router::{
@@ -316,8 +316,12 @@ fn spawn_router(
     // it gets the router's handle from here to wake it when a file changes.
     let (handle_tx, handle_rx) = mpsc::channel::<RouterHandle>();
     let factory: ResolverFactory = Box::new(move || {
-        let mut resolver =
-            LiveResolver::new(choice, rules_path, source.clone()).inspect_err(|e| {
+        // The OS answers the config's finicky.* calls: the modifier keys
+        // held, the apps running. Its console output stays with the
+        // engine's trace, which the router does not keep.
+        let host = Rc::new(NativeHost::new());
+        let mut resolver = LiveResolver::new(choice, rules_path, source.clone(), host)
+            .inspect_err(|e| {
                 // The router falls back with this reason; say so where the
                 // window looks, next to the config it was going to load.
                 source.set(RoutingSource {
@@ -386,7 +390,8 @@ fn chosen_config(choice: &ConfigChoice) -> Option<PathBuf> {
 /// The router's resolver: a [`Reloader`] over the chosen config and
 /// `rules.json`, caught up with the files before each link. A failed reload
 /// keeps the last engine that worked; the window learns of it through
-/// [`RoutingSource::error`].
+/// [`RoutingSource::error`]. The [`Host`] answers the config's `finicky.*`
+/// calls: the OS in the app, a fixed answer in a test.
 struct LiveResolver {
     reloader: RefCell<Reloader>,
     rules_path: Option<PathBuf>,
@@ -400,13 +405,9 @@ impl LiveResolver {
         choice: ConfigChoice,
         rules_path: Option<PathBuf>,
         source: SharedSource,
+        host: Rc<dyn Host>,
     ) -> anyhow::Result<Self> {
-        let reloader = Reloader::new(
-            choice,
-            rules_path.clone(),
-            Rc::new(DefaultHost),
-            Limits::default(),
-        )?;
+        let reloader = Reloader::new(choice, rules_path.clone(), host, Limits::default())?;
         let resolver = Self {
             reloader: RefCell::new(reloader),
             rules_path,
@@ -598,6 +599,7 @@ mod tests {
     use std::fs;
 
     use pwrroute_browsers::Platform;
+    use pwrroute_engine::{DefaultHost, ModifierKeys};
     use pwrroute_router::{AppType, FALLBACK_BROWSER, Outcome, Step};
 
     use super::*;
@@ -749,12 +751,31 @@ mod tests {
         }
 
         fn resolver(&self) -> LiveResolver {
+            self.resolver_with(Rc::new(DefaultHost))
+        }
+
+        fn resolver_with(&self, host: Rc<dyn Host>) -> LiveResolver {
             LiveResolver::new(
                 self.choice(),
                 Some(self.rules_path()),
                 SharedSource::default(),
+                host,
             )
             .unwrap()
+        }
+    }
+
+    /// A host with a fixed answer to `finicky.getModifierKeys()`.
+    struct KeysHost {
+        option: bool,
+    }
+
+    impl Host for KeysHost {
+        fn modifier_keys(&self) -> ModifierKeys {
+            ModifierKeys {
+                option: self.option,
+                ..ModifierKeys::default()
+            }
         }
     }
 
@@ -784,6 +805,26 @@ mod tests {
                 error: None,
             }
         );
+    }
+
+    #[test]
+    fn a_config_sees_the_hosts_modifier_keys() {
+        // Finicky's idiom: hold Option to open the link elsewhere.
+        let home = Home::new();
+        home.write(
+            ".finicky.js",
+            r#"export default {
+              defaultBrowser: "Safari",
+              handlers: [{ match: () => finicky.getModifierKeys().option, browser: "Firefox" }],
+            };"#,
+        );
+        let held = home.resolver_with(Rc::new(KeysHost { option: true }));
+        assert_eq!(held.refresh(), Ok(()));
+        assert_eq!(resolve(&held, "https://example.com/"), "Firefox");
+
+        let plain = home.resolver_with(Rc::new(KeysHost { option: false }));
+        assert_eq!(plain.refresh(), Ok(()));
+        assert_eq!(resolve(&plain, "https://example.com/"), "Safari");
     }
 
     #[test]
@@ -992,7 +1033,12 @@ mod tests {
         let factory: ResolverFactory = {
             let (choice, rules, source) = (home.choice(), home.rules_path(), source.clone());
             Box::new(move || {
-                Ok(Box::new(LiveResolver::new(choice, Some(rules), source)?) as Box<dyn Resolver>)
+                Ok(Box::new(LiveResolver::new(
+                    choice,
+                    Some(rules),
+                    source,
+                    Rc::new(DefaultHost),
+                )?) as Box<dyn Resolver>)
             })
         };
         let launcher = Missing::new(&["Brave"]);
@@ -1050,7 +1096,12 @@ mod tests {
         let factory: ResolverFactory = {
             let (choice, rules, source) = (home.choice(), home.rules_path(), source.clone());
             Box::new(move || {
-                Ok(Box::new(LiveResolver::new(choice, Some(rules), source)?) as Box<dyn Resolver>)
+                Ok(Box::new(LiveResolver::new(
+                    choice,
+                    Some(rules),
+                    source,
+                    Rc::new(DefaultHost),
+                )?) as Box<dyn Resolver>)
             })
         };
         let launcher = DryRunLauncher::new();
@@ -1092,7 +1143,11 @@ mod tests {
         let factory: ResolverFactory = {
             let (choice, rules, source) = (home.choice(), home.rules_path(), source.clone());
             Box::new(move || {
-                Ok(Box::new(LiveResolver::new(choice, Some(rules), source)?) as Box<dyn Resolver>)
+                let host = Rc::new(DefaultHost);
+                Ok(
+                    Box::new(LiveResolver::new(choice, Some(rules), source, host)?)
+                        as Box<dyn Resolver>,
+                )
             })
         };
         let launcher = DryRunLauncher::new();
@@ -1127,7 +1182,8 @@ mod tests {
         let factory: ResolverFactory = {
             let (choice, rules, source) = (home.choice(), home.rules_path(), source.clone());
             Box::new(move || {
-                let mut resolver = LiveResolver::new(choice, Some(rules), source)?;
+                let mut resolver =
+                    LiveResolver::new(choice, Some(rules), source, Rc::new(DefaultHost))?;
                 if let Ok(handle) = handle_rx.recv() {
                     resolver.watch(handle);
                 }

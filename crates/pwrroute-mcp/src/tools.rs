@@ -35,7 +35,8 @@ use crate::{
     approval::{Answer as Decision, ApprovalDecision, Approvals, Verdict},
     audit::{AuditRecord, AuditSink, Outcome},
     backend::{
-        ActivityEntry, ActivityOutcome, ActivitySource, AgentRef, Backends, RulesError, host_of,
+        ActivityEntry, ActivityOutcome, ActivitySource, AgentRef, Backends, ConsoleLine,
+        RulesError, host_of,
     },
     roles::{Permission, Permissions, Role},
 };
@@ -221,7 +222,7 @@ fn specs() -> Vec<Spec> {
             "pwrroute_resolve",
             Permission::Resolve,
             "Resolve a link",
-            "Resolve a URL (and optionally the app it came from) to its trace and destination: each rewrite and handler that fired, then the browser and profile. Never opens anything.",
+            "Resolve a URL (and optionally the app it came from) to its trace and destination: each rewrite and handler that fired, then the browser and profile, and what the config printed with console when the engine ran it here. Never opens anything.",
             read_only(),
         ),
         spec::<LinkInput>(
@@ -253,7 +254,7 @@ fn specs() -> Vec<Spec> {
             "pwrroute_rules_test",
             Permission::RulesRead,
             "Test the rules",
-            "Run the examples and tests saved in rules.json through the config and rules in charge, or against a proposal: a whole rules.json, or one extra handler with the links it must route. Reports what passed and each failure. Nothing is written.",
+            "Run the examples and tests saved in rules.json through the config and rules in charge, or against a proposal: a whole rules.json, or one extra handler with the links it must route. Reports what passed, each failure, and what the config printed with console. Nothing is written.",
             read_only(),
         ),
         spec::<SuggestInput>(
@@ -610,11 +611,13 @@ fn rules_test(b: &Backends, input: RulesTestInput) -> anyhow::Result<Value> {
 }
 
 fn report_json(report: &TestReport) -> Value {
+    let console: Vec<ConsoleLine> = report.console.iter().map(Into::into).collect();
     json!({
         "total": report.total,
         "passed": report.passed,
         "failed": report.failures.len(),
         "failures": report.failures,
+        "console": console,
     })
 }
 

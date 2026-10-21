@@ -14,7 +14,7 @@ use std::{path::PathBuf, rc::Rc, sync::mpsc, thread};
 
 use anyhow::{Context as _, Result, anyhow};
 use pwrroute_engine::{
-    self as engine, ConfigChoice, DefaultHost, Engine, Limits, Link, Matcher, Opener, Reloader,
+    self as engine, ConfigChoice, Engine, Limits, Link, Matcher, NativeHost, Opener, Reloader,
     RulesFile, Source, Sources, Stage, TestReport,
 };
 
@@ -118,8 +118,10 @@ impl EngineThread {
 }
 
 /// Resolves against a Finicky config loaded into an [`Engine`] on its own
-/// thread. Config `console` output is dropped ([`DefaultHost`]): it often
-/// carries URLs.
+/// thread, with the OS answering the config's `finicky.*` calls
+/// ([`NativeHost`]). A run's `console` output comes back in the trace; the
+/// config's load-time output is dropped, since it often carries URLs and
+/// no result carries it.
 #[derive(Debug)]
 pub struct EngineResolver {
     thread: EngineThread,
@@ -130,7 +132,11 @@ impl EngineResolver {
     /// with the load error.
     pub fn spawn(config: PathBuf, limits: Limits) -> Result<Self> {
         let thread = EngineThread::spawn("pwrroute-mcp-engine", move || {
-            Ok(Fixed(Engine::load(&config, Rc::new(DefaultHost), limits)?))
+            Ok(Fixed(Engine::load(
+                &config,
+                Rc::new(NativeHost::new()),
+                limits,
+            )?))
         })?;
         Ok(Self { thread })
     }
@@ -168,7 +174,7 @@ impl EngineTester {
             Ok(Following(Reloader::new(
                 choice,
                 rules_path,
-                Rc::new(DefaultHost),
+                Rc::new(NativeHost::new()),
                 limits,
             )?))
         })?;
@@ -201,7 +207,7 @@ fn build(rules: &RulesFile, limits: Limits) -> Result<Engine> {
             config: None,
             rules: rules.clone(),
         },
-        Rc::new(DefaultHost),
+        Rc::new(NativeHost::new()),
         limits,
     )
 }
@@ -270,6 +276,7 @@ pub(crate) fn trace_of(trace: engine::Trace) -> Trace {
         steps,
         browser: trace.resolution.browser,
         error,
+        console: trace.console.iter().map(Into::into).collect(),
     }
 }
 
@@ -316,7 +323,7 @@ mod tests {
                 defaultBrowser: "Safari",
                 rewrite: [
                     { match: "nothing.invalid/*", url: "https://elsewhere.invalid/" },
-                    { match: "x.com/*", url: (u) => { u.host = "xcancel.com"; return u; } },
+                    { match: "x.com/*", url: (u) => { console.log("unshortening", u.href); u.host = "xcancel.com"; return u; } },
                 ],
                 handlers: [
                     { match: "*.example.org/*", browser: "Firefox" },
@@ -343,6 +350,14 @@ mod tests {
         assert_eq!(trace.steps[0].summary, "config rewrite 2 matched x.com/*");
         assert_eq!(trace.steps[0].url.as_deref(), Some("https://xcancel.com/a"));
         assert!(trace.error.is_some(), "the throwing matcher is reported");
+        assert_eq!(
+            trace.console,
+            [crate::backend::ConsoleLine {
+                level: "log".to_owned(),
+                message: "unshortening https://x.com/a".to_owned(),
+            }],
+            "the run's console output rides along"
+        );
 
         let trace = resolver
             .resolve("https://docs.example.org/b", None)
@@ -356,6 +371,49 @@ mod tests {
             "config handler 1 matched *.example.org/*"
         );
         assert!(trace.error.is_none());
+        assert!(trace.console.is_empty(), "{trace:?}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_tester_reports_what_the_config_printed() {
+        let dir = std::env::temp_dir().join(format!(
+            "pwrroute-mcp-tester-console-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.js");
+        fs::write(
+            &config,
+            r#"export default {
+                defaultBrowser: "Safari",
+                handlers: [{ match: (u) => { console.warn("checking", u.href); return false; }, browser: "Chrome" }],
+            };"#,
+        )
+        .unwrap();
+        let path = dir.join("rules.json");
+        rules().save(&path).unwrap();
+        let tester = EngineTester::spawn(
+            ConfigChoice::Path(config),
+            Some(path.clone()),
+            Limits::default(),
+        )
+        .unwrap();
+        let report = tester.test(None).unwrap();
+        assert_eq!((report.total, report.passed), (2, 2), "{report:?}");
+        let lines: Vec<(&str, &str)> = report
+            .console
+            .iter()
+            .map(|l| (l.level.name(), l.message.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("warn", "checking https://docs.example.org/a"),
+                ("warn", "checking https://example.net/"),
+            ]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

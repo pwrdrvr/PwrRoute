@@ -53,7 +53,13 @@ door; this crate supersedes that part of it.
 - **URLs stay in memory.** Arguments and results are never logged or
   written. `AuditRecord` has no field for them; do not add one. The only
   file is `mcp-agents.json` (names, roles, timestamps);
-  `tests/protocol.rs` checks it holds no routed URL.
+  `tests/protocol.rs` checks it holds no routed URL. A config's `console`
+  lines (`Trace::console`, `rules_test`'s `console`) are results like any
+  other: returned to the agent, cleared by `hosts_only`, never kept.
+- **The engine thread resolves with a `NativeHost`** (`engine.rs`), so a
+  config's `finicky.getModifierKeys()` and `isAppRunning()` answer from
+  the OS as they do in the router; a config's load-time console output
+  has no result to ride in and is dropped.
 - **Backends are traits.** The router, launcher, rules store and activity
   log are other crates' work; `backend.rs` holds only the calls the tools
   need, `fake.rs` the in-memory stand-ins. Narrow a trait rather than widen

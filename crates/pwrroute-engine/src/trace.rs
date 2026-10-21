@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Resolution;
+use crate::{ConsoleLine, Resolution};
 
 /// One resolution, step by step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +24,11 @@ pub struct Trace {
     /// evaluated until one matches, so handlers after the winner are absent.
     pub steps: Vec<Step>,
     pub resolution: Resolution,
+    /// What the config printed with `console` during this run (not while
+    /// loading), newest last, at most [`ConsoleLog::CAPACITY`](crate::ConsoleLog::CAPACITY)
+    /// lines. Lines often quote the URL: show them, never write them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub console: Vec<ConsoleLine>,
 }
 
 impl Trace {

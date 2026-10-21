@@ -10,7 +10,7 @@ use gpui_kit::{
     ParentElement as _, Render, Styled as _, Window, div,
 };
 
-use pwrroute_engine::{DefaultHost, Engine, Limits, discovery};
+use pwrroute_engine::{Engine, Limits, NativeHost, discovery};
 
 use crate::activity::Activity;
 use crate::activity_actions::{self, Actions, BrowserChoice};
@@ -114,10 +114,12 @@ impl PwrRoute {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         // One engine for the config: the Rules screen describes it and Test a
-        // link resolves with it, so the config is evaluated once here.
+        // link resolves with it, so the config is evaluated once here. Test
+        // a link's runs see the OS's answers (modifier keys, running apps)
+        // and its console output, as the router's do.
         let engine = config
             .as_deref()
-            .map(|path| Engine::load(path, Rc::new(DefaultHost), Limits::default()));
+            .map(|path| Engine::load(path, Rc::new(NativeHost::new()), Limits::default()));
         let in_charge = config
             .as_deref()
             .zip(engine.as_ref())
