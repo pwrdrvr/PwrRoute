@@ -1,11 +1,13 @@
 //! What the menu bar dropdown and the tray menu show, as plain data.
 //!
 //! The recents and the count come from the router's dispatch records
-//! ([`Recent::from_record`], [`TrayModel::sync`]). The pause state and
-//! whether PwrRoute is the default browser are not wired yet, so
-//! [`TrayModel::starting`] carries the design's values for those;
-//! [`TrayModel::fixture`] is the whole design example, for screenshots and
-//! tests. Everything here is testable without a window.
+//! ([`Recent::from_record`], [`TrayModel::sync`]), the pause state from the
+//! tray's own toggle (`tray::toggle_pause`, which pauses the router), and
+//! whether PwrRoute is the default browser from the OS
+//! (`tray::follow_default_browser`). [`TrayModel::starting`] is the model
+//! before any of them has reported; [`TrayModel::fixture`] is the whole
+//! design example, for screenshots and tests. Everything here is testable
+//! without a window.
 //!
 //! Recent links keep a host, never a full URL: the dropdown is visible to
 //! whoever is looking at the screen.
@@ -69,7 +71,8 @@ pub enum RecentRoute {
     /// No config, or the config pointed back at PwrRoute: the router's
     /// fallback browser.
     Fallback,
-    /// Routing was paused. `skipped` is the handler that would have matched.
+    /// Routing was paused. `skipped` is the 1-based number of the handler
+    /// that matched and was passed over, when the router numbers it.
     Paused { skipped: Option<usize> },
 }
 
@@ -132,6 +135,12 @@ impl Recent {
                     };
                 }
                 Step::Fallback { .. } | Step::RefusedLoop { .. } => route = RecentRoute::Fallback,
+                // After the step that chose the browser: the pause took it.
+                Step::Paused { skipped } => {
+                    route = RecentRoute::Paused {
+                        skipped: skipped.map(|index| index + 1),
+                    };
+                }
                 _ => {}
             }
         }
@@ -249,7 +258,8 @@ pub struct TrayModel {
     pub routing: Routing,
     /// PwrRoute is the OS default browser.
     pub is_default_browser: bool,
-    /// Where links go while paused: the fallback browser.
+    /// Where links go while paused: the target in force, or where a pause
+    /// would send them now (`tray::pause_target`).
     pub pause_target: BrowserLabel,
     /// Newest first. The dropdown shows the first [`RECENT_LIMIT`].
     pub recents: Vec<Recent>,
@@ -298,7 +308,7 @@ impl TrayModel {
 
     /// The model at launch: routing, nothing routed yet, not the default
     /// browser until the OS says so (`tray::follow_default_browser`), and
-    /// `pause_target` as `rules.json` names the fallback.
+    /// `pause_target` as the files name it (`tray::pause_target`).
     pub fn starting(pause_target: BrowserLabel) -> Self {
         Self {
             routing: Routing::Active,
@@ -577,6 +587,73 @@ mod tests {
             model.pause_detail(),
             "Send every link to Google Chrome \u{00b7} Personal until switched back."
         );
+    }
+
+    #[test]
+    fn a_paused_record_names_the_skipped_handler() {
+        use pwrroute_router::{AppType, Browser, DispatchId, DispatchRecord, Privacy, Timings};
+        let url = "https://bsky.app/profile/example";
+        let chrome = Browser {
+            name: "Google Chrome".into(),
+            app_type: AppType::AppName,
+            url: url.into(),
+            profile: String::new(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy: Privacy::Full,
+        };
+        let record = |steps: Vec<Step>| DispatchRecord {
+            id: DispatchId(1),
+            received_at: now(),
+            privacy: Privacy::Full,
+            link: pwrroute_router::Link::new(url, pwrroute_router::Source::CommandLine),
+            forwarded: false,
+            final_url: Some(url.into()),
+            browser: Some(chrome.clone()),
+            steps,
+            outcome: Outcome::Opened,
+            timings: Timings::default(),
+        };
+        let skipped = record(vec![
+            Step::Received { url: url.into() },
+            Step::Matched {
+                by: Matched::Handler { index: 3 },
+            },
+            Step::Paused { skipped: Some(3) },
+            Step::Browser {
+                browser: chrome.clone(),
+            },
+            Step::Launched { dry_run: false },
+        ]);
+        let recent = Recent::from_record(&skipped).expect("it opened");
+        assert_eq!(recent.route, RecentRoute::Paused { skipped: Some(4) });
+        assert_eq!(recent.host, "bsky.app");
+        assert_eq!(
+            recent.detail(),
+            "Google Chrome \u{00b7} paused \u{00b7} skipped handler 4"
+        );
+        // The design's paused fixture is this same entry.
+        assert_eq!(
+            recent.detail(),
+            TrayModel::paused_fixture(now()).recents[0].detail()
+        );
+
+        // No handler to skip: the default would have had it anyway.
+        let default = record(vec![
+            Step::Received { url: url.into() },
+            Step::Matched {
+                by: Matched::Default,
+            },
+            Step::Paused { skipped: None },
+            Step::Browser {
+                browser: chrome.clone(),
+            },
+            Step::Launched { dry_run: false },
+        ]);
+        let recent = Recent::from_record(&default).unwrap();
+        assert_eq!(recent.route, RecentRoute::Paused { skipped: None });
+        assert_eq!(recent.detail(), "Google Chrome \u{00b7} paused");
     }
 
     #[test]

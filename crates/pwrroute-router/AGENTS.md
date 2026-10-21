@@ -35,6 +35,13 @@ runs on every platform.
   rule with no level is `Host`); a test resolver sets it directly.
   `dispatch/tests.rs` proves the path with a `rules.json`-only engine and
   the `DryRunLauncher`; keep those tests when the seam changes.
+- **Pause is a dispatch-time swap, not a resolver.**
+  `RouterHandle::set_paused(Some(PauseTarget))` is read once per link in
+  `Worker::process`, after `resolve`: the rules have run, so the rewrites,
+  the rule steps and the record's privacy level stand; `Step::Paused {
+  skipped }` names the numbered handler that matched, and the target
+  replaces the browser, a `browser: null` or `private` handler included.
+  Test a link ignores the pause. Keep it out of `launch` and `fallback()`.
 - **The trace is the product.** Activity, Test a link and the MCP tool all
   read `DispatchRecord`. The engine names the rules that fired through
   `Engine::trace`, which becomes `Resolved::rule_steps`; report more that way

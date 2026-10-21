@@ -210,6 +210,39 @@ pub struct RouterStatus {
     pub journal_error: Option<String>,
 }
 
+/// Where every link goes while routing is paused: the browser the user
+/// chose as the fallback, with its profile. Rewrites still run; every
+/// handler is passed over, `browser: null` and `private` ones included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauseTarget {
+    /// An app name, bundle id or path, as `rules.json`'s `defaultBrowser`
+    /// or a config's `defaultBrowser` names it.
+    pub browser: String,
+    /// Empty for the browser's own profile.
+    pub profile: String,
+}
+
+impl PauseTarget {
+    /// The target as the launcher opens it, for `url` (the URL after every
+    /// rewrite) at the level the rules gave the link. Nothing else a
+    /// handler said carries over: no extra arguments, no private window.
+    fn browser_for(&self, url: &str, privacy: Privacy) -> Browser {
+        Browser {
+            name: self.browser.clone(),
+            app_type: AppType::AppName,
+            url: url.to_owned(),
+            profile: self.profile.clone(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy,
+        }
+    }
+}
+
+/// The pause state the handle writes and the dispatch thread reads.
+type Paused = Arc<Mutex<Option<PauseTarget>>>;
+
 enum Command {
     Dispatch {
         request: Queued,
@@ -272,6 +305,8 @@ impl Router {
         let worker_recent = Arc::clone(&recent);
         let journal = Arc::new(Mutex::new(options.journal.clone()));
         let worker_journal = Arc::clone(&journal);
+        let paused: Paused = Arc::default();
+        let worker_paused = Arc::clone(&paused);
         let thread = thread::Builder::new()
             .name("pwrroute-dispatch".into())
             .spawn(move || {
@@ -281,6 +316,7 @@ impl Router {
                     recent: worker_recent,
                     journal: options.journal.clone().map(Journal::new),
                     journal_config: worker_journal,
+                    paused: worker_paused,
                     options,
                 }
                 .run(&rx);
@@ -290,6 +326,7 @@ impl Router {
                 tx,
                 recent,
                 journal,
+                paused,
                 next_id: Arc::new(AtomicU64::new(1)),
             },
             thread: Some(thread),
@@ -331,6 +368,11 @@ pub struct RouterHandle {
     /// [`journal`](Self::journal) describe. The dispatch thread writes it
     /// when [`set_journal`](Self::set_journal) takes effect.
     journal: Arc<Mutex<Option<JournalConfig>>>,
+    /// Where links go while routing is paused, when it is. Read by the
+    /// dispatch thread for each link; written by [`set_paused`].
+    ///
+    /// [`set_paused`]: Self::set_paused
+    paused: Paused,
     next_id: Arc<AtomicU64>,
 }
 
@@ -366,7 +408,8 @@ impl RouterHandle {
     }
 
     /// Test a link: resolves it and returns the trace without opening it or
-    /// recording it in Activity.
+    /// recording it in Activity. The rules answer, paused or not: a pause
+    /// only changes where dispatches go.
     pub fn test(&self, link: Link) -> std::result::Result<DispatchRecord, RouterGone> {
         let (reply, rx) = mpsc::channel();
         let request = self.request(link, false);
@@ -464,6 +507,23 @@ impl RouterHandle {
         rx.recv().map_err(|_| RouterGone)
     }
 
+    /// Pauses routing: from the next dispatch on, every link goes to
+    /// `target` after its rewrites, with [`Step::Paused`] in its trace
+    /// naming the handler it skipped. `None` resumes. The record keeps the
+    /// privacy level the rules gave it, since the rewrites still ran and a
+    /// rule that keeps less of a link keeps less of it paused too.
+    pub fn set_paused(&self, target: Option<PauseTarget>) {
+        *self.paused.lock().unwrap_or_else(PoisonError::into_inner) = target;
+    }
+
+    /// Where links go while paused, or `None` while routing.
+    pub fn paused(&self) -> Option<PauseTarget> {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn journal_config(&self) -> Option<JournalConfig> {
         self.journal
             .lock()
@@ -533,6 +593,8 @@ struct Worker {
     /// `journal` so a reader never sees a journal that is not the one being
     /// written.
     journal_config: Arc<Mutex<Option<JournalConfig>>>,
+    /// The handle's pause state, read once per dispatch.
+    paused: Paused,
     options: Options,
 }
 
@@ -641,7 +703,18 @@ impl Worker {
         };
         record.steps.push(Step::Received { url: url.clone() });
 
-        let (browser, privacy) = self.resolve(&url, &record.link, &mut record.steps);
+        let (mut browser, privacy) = self.resolve(&url, &record.link, &mut record.steps);
+        // Paused: the rules ran (so the rewrites and the privacy level
+        // stand), and the pause target takes the link from whatever they
+        // chose. A test still reports what the rules say.
+        if mode == Mode::Dispatch
+            && let Some(target) = self.pause_target()
+        {
+            record.steps.push(Step::Paused {
+                skipped: skipped_handler(&record.steps),
+            });
+            browser = target.browser_for(&browser.url, privacy);
+        }
         record.timings.resolve_us = Timings::micros(dequeued.elapsed());
         record.final_url = Some(browser.url.clone());
         // Noted here; the record is reduced when it is dispatched, not
@@ -757,6 +830,13 @@ impl Worker {
         }
     }
 
+    fn pause_target(&self) -> Option<PauseTarget> {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     fn fallback(&self, url: &str) -> Browser {
         Browser {
             name: self.options.fallback_browser.clone(),
@@ -769,6 +849,19 @@ impl Worker {
             privacy: Privacy::Full,
         }
     }
+}
+
+/// The numbered handler the trace says chose the browser, for
+/// [`Step::Paused`]: `None` when the default did, when nothing was in
+/// charge, or when a `rules.json` handler did (the router does not number
+/// those).
+fn skipped_handler(steps: &[Step]) -> Option<usize> {
+    steps.iter().find_map(|step| match step {
+        Step::Matched {
+            by: Matched::Handler { index },
+        } => Some(*index),
+        _ => None,
+    })
 }
 
 /// Whether two URLs are the same once parsed. The engine re-serializes

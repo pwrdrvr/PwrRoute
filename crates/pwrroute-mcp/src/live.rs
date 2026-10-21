@@ -110,6 +110,7 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
             Step::Matched {
                 by: Matched::Default
             } | Step::Fallback { .. }
+                | Step::Paused { .. }
         )
     });
     let rewritten = record
@@ -192,6 +193,19 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
                 kind: StepKind::Default,
                 index: None,
                 summary: format!("{browser} would send the link back: the fallback browser"),
+                url: None,
+            }),
+            Step::Paused { skipped } => steps.push(TraceStep {
+                kind: StepKind::Default,
+                index: *skipped,
+                summary: match skipped {
+                    Some(n) => format!(
+                        "routing is paused: config handler {} skipped, the pause target instead",
+                        n + 1
+                    ),
+                    None => "routing is paused: every handler skipped, the pause target instead"
+                        .to_owned(),
+                },
                 url: None,
             }),
             Step::ConfigError { message }
