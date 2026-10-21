@@ -18,6 +18,7 @@ use pwrroute_engine::{
 
 use crate::config_view::{self, display_path};
 use crate::rules_model::{self, Destination, RowBadge, Rule};
+use crate::settings_store::SourceSettings;
 use crate::widgets::badge_for;
 
 /// The window's three steps.
@@ -148,12 +149,50 @@ pub enum Placement {
 /// What the router reads after the import.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SourceChoice {
-    /// The config stays in charge with what stayed JS; the imported rules
-    /// run after it.
+    /// The config in charge stays in charge; the imported rules run after
+    /// it. When that is the file under review, what stayed JS keeps
+    /// running in it.
     #[default]
     KeepConfig,
-    /// The router stops reading the config.
+    /// The router stops reading the config in charge.
     VisualOnly,
+}
+
+/// Which config the router reads while the importer is open, against the
+/// file under review. File › Import Finicky Config… takes any file, so it
+/// need not be the one in charge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Charge {
+    /// The file under review is the config in charge.
+    This,
+    /// Another config is in charge; Keep leaves it there.
+    Other { path: PathBuf, shown: String },
+    /// No config is in charge: the visual rules are, and stay so.
+    NoConfig,
+}
+
+impl Charge {
+    /// `in_charge` (the router's config) against the file at `path`.
+    pub fn of(path: &Path, in_charge: Option<&Path>, home: Option<&Path>) -> Self {
+        match in_charge {
+            None => Self::NoConfig,
+            Some(config) if same_file(config, path) => Self::This,
+            Some(config) => Self::Other {
+                path: config.to_path_buf(),
+                shown: display_path(config, home),
+            },
+        }
+    }
+}
+
+/// Whether `a` and `b` name one file: the same path, or the same file once
+/// links are followed.
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (a.canonicalize(), b.canonicalize()),
+            (Ok(a), Ok(b)) if a == b
+        )
 }
 
 /// What an import writes, against the file as it stands.
@@ -190,6 +229,8 @@ pub struct ImportModel {
     pub step: Step,
     pub placement: Placement,
     pub source: SourceChoice,
+    /// The config the router read when the importer opened.
+    pub charge: Charge,
     /// `rules.json` when the importer opened, for Place's preview. Import
     /// plans against the file as it stands then.
     pub existing: RulesFile,
@@ -199,27 +240,39 @@ pub struct ImportModel {
     pub recent: usize,
     /// Why the config could not be read: there is nothing to review.
     pub problem: Option<String>,
+    /// Why the last Import was not written, for the footer.
+    pub refused: Option<String>,
 }
 
 impl ImportModel {
     /// Reads the config at `path` the way the router does and reviews it,
-    /// probing suggestions on `recent` links too. `existing` is
-    /// `rules.json` as it stands.
-    pub fn read(path: &Path, home: Option<&Path>, recent: &[&str], existing: RulesFile) -> Self {
+    /// probing suggestions on `recent` links too. `in_charge` is the config
+    /// the router reads now, if any; `existing` is `rules.json` as it
+    /// stands.
+    pub fn read(
+        path: &Path,
+        home: Option<&Path>,
+        in_charge: Option<&Path>,
+        recent: &[&str],
+        existing: RulesFile,
+    ) -> Self {
         let shown = display_path(path, home);
+        let charge = Charge::of(path, in_charge, home);
         let engine = Engine::load(path, Rc::new(NativeHost::new()), Limits::default());
         let reviewed = engine.and_then(|engine| {
             let description = engine.describe()?;
             let review = engine.review_import(recent)?;
             Ok(description.zip(review))
         });
-        match reviewed {
+        let mut model = match reviewed {
             Ok(Some((description, review))) => {
                 Self::from_review(path, shown, &description, review, existing)
             }
             Ok(None) => Self::failed(path, shown, "it is not a Finicky config".to_owned()),
             Err(error) => Self::failed(path, shown, format!("{error:#}")),
-        }
+        };
+        model.charge = charge;
+        model
     }
 
     /// The model for an engine's description and review of the config.
@@ -267,10 +320,12 @@ impl ImportModel {
             step: Step::Review,
             placement: Placement::Before,
             source: SourceChoice::KeepConfig,
+            charge: Charge::This,
             existing,
             probes: review.probes,
             recent: review.recent,
             problem: None,
+            refused: None,
         }
     }
 
@@ -285,10 +340,12 @@ impl ImportModel {
             step: Step::Review,
             placement: Placement::Before,
             source: SourceChoice::KeepConfig,
+            charge: Charge::This,
             existing: RulesFile::default(),
             probes: 0,
             recent: 0,
             problem: Some(problem),
+            refused: None,
         }
     }
 
@@ -381,10 +438,17 @@ impl ImportModel {
                 .any(|item| item.checked && matches!(item.visual(), Some(Visual::Handler(_))))
     }
 
-    /// Choose source is a choice only when something stays behind; with
-    /// nothing left in JS, visual rules are selected.
+    /// Choose source is a choice when the file under review is in charge
+    /// and something stays behind (with nothing left in JS, visual rules
+    /// are selected), and always when another config is in charge: only
+    /// the reader turns that one off. With no config in charge there is
+    /// nothing to choose.
     pub fn source_needed(&self) -> bool {
-        self.items.iter().any(|item| !item.checked)
+        match self.charge {
+            Charge::This => self.items.iter().any(|item| !item.checked),
+            Charge::Other { .. } => true,
+            Charge::NoConfig => false,
+        }
     }
 
     /// What stops running if the router stops reading the config.
@@ -393,12 +457,53 @@ impl ImportModel {
     }
 
     /// The source the import ends with: the reader's choice, or visual
-    /// rules when nothing stays in JS.
+    /// rules when nothing stays in JS or no config is in charge.
     pub fn final_source(&self) -> SourceChoice {
         if self.source_needed() {
             self.source
         } else {
             SourceChoice::VisualOnly
+        }
+    }
+
+    /// The import turns off a config that is in charge now.
+    pub fn stops_config(&self) -> bool {
+        self.final_source() == SourceChoice::VisualOnly && self.charge != Charge::NoConfig
+    }
+
+    /// `settings.json`'s source after the import, from `current`. Keep
+    /// leaves it as it is, whichever config is in charge; Visual rules only
+    /// turns the config in charge off. While visual rules are in charge,
+    /// the file just imported is dismissed from the Rules screen's "Found
+    /// …" notice.
+    pub fn source_after(&self, current: &SourceSettings) -> SourceSettings {
+        let mut next = current.clone();
+        if self.stops_config() {
+            next.visual_only = true;
+            next.config = None;
+        }
+        if next.visual_only && !next.dismissed.iter().any(|d| same_file(d, &self.path)) {
+            next.dismissed.push(self.path.clone());
+        }
+        next
+    }
+
+    /// What the router reads after the import, for the Rules screen's
+    /// banner.
+    pub fn outcome(&self) -> String {
+        match (self.final_source(), &self.charge) {
+            (SourceChoice::KeepConfig, Charge::Other { shown, .. }) => {
+                format!("{shown} stays in charge and runs first.")
+            }
+            (SourceChoice::KeepConfig, _) => format!(
+                "{} stays in charge for its {} and runs first.",
+                self.shown,
+                plural(self.left_behind().len(), "JS rule")
+            ),
+            (SourceChoice::VisualOnly, Charge::NoConfig) => {
+                "The router reads visual rules only, as before.".to_owned()
+            }
+            (SourceChoice::VisualOnly, _) => "The router reads visual rules only now.".to_owned(),
         }
     }
 
@@ -624,8 +729,10 @@ mod tests {
         }
     }
 
+    /// The fixture config, read while it is the config in charge.
     fn model(existing: RulesFile) -> ImportModel {
-        ImportModel::read(&fixture_config(), None, &[], existing)
+        let config = fixture_config();
+        ImportModel::read(&config, None, Some(&config), &[], existing)
     }
 
     #[test]
@@ -782,6 +889,94 @@ mod tests {
     }
 
     #[test]
+    fn importing_the_config_in_charge_changes_the_source_only_for_visual_rules() {
+        let mut model = model(RulesFile::default());
+        assert_eq!(model.charge, Charge::This);
+        let current = SourceSettings::default();
+        // Keep: settings.json's source is left as it is.
+        assert_eq!(model.final_source(), SourceChoice::KeepConfig);
+        assert!(!model.stops_config());
+        assert_eq!(model.source_after(&current), current);
+        assert!(
+            model
+                .outcome()
+                .ends_with(" stays in charge for its 4 JS rules and runs first."),
+            "{}",
+            model.outcome()
+        );
+        // Visual rules only: the config goes, and its notice with it.
+        model.source = SourceChoice::VisualOnly;
+        let after = model.source_after(&current);
+        assert!(after.visual_only);
+        assert_eq!(after.config, None);
+        assert_eq!(after.dismissed, [fixture_config()]);
+    }
+
+    #[test]
+    fn importing_a_file_not_in_charge_leaves_the_config_in_charge() {
+        let config = fixture_config();
+        let other = config.with_file_name("in-charge.js");
+        let home = config.parent().unwrap().to_path_buf();
+        let current = SourceSettings {
+            config: Some(other.clone()),
+            ..SourceSettings::default()
+        };
+        let mut model = ImportModel::read(&config, Some(&home), Some(&other), &[], existing());
+        assert_eq!(
+            model.charge,
+            Charge::Other {
+                path: other.clone(),
+                shown: "~/in-charge.js".to_owned()
+            }
+        );
+        // Every rule ticked: Choose source is still asked, since only the
+        // reader turns the config in charge off, and Keep is the default.
+        model.items.retain(|item| item.label() == Label::Imports);
+        assert!(model.source_needed());
+        model.step = Step::Place;
+        assert_eq!(model.next_step(), Some(Step::Source));
+        assert_eq!(model.final_source(), SourceChoice::KeepConfig);
+        assert!(!model.stops_config());
+        assert_eq!(model.source_after(&current), current);
+        assert_eq!(
+            model.outcome(),
+            "~/in-charge.js stays in charge and runs first."
+        );
+        // Visual rules only turns the one in charge off.
+        model.source = SourceChoice::VisualOnly;
+        assert!(model.stops_config());
+        let after = model.source_after(&current);
+        assert!(after.visual_only);
+        assert_eq!(after.config, None);
+    }
+
+    #[test]
+    fn with_no_config_in_charge_an_import_adds_rules_and_nothing_else() {
+        let mut model = ImportModel::read(&fixture_config(), None, None, &[], RulesFile::default());
+        assert_eq!(model.charge, Charge::NoConfig);
+        assert!(!model.source_needed(), "nothing is in charge to switch");
+        model.step = Step::Review;
+        assert_eq!(model.next_step(), None);
+        assert!(!model.stops_config());
+        // Discovery stays on: a config added later is still found.
+        let discovering = SourceSettings::default();
+        assert_eq!(model.source_after(&discovering), discovering);
+        // Visual rules were already in charge (1a): the notice for the
+        // file just imported does not come back.
+        let visual = SourceSettings {
+            visual_only: true,
+            ..SourceSettings::default()
+        };
+        let after = model.source_after(&visual);
+        assert!(after.visual_only);
+        assert_eq!(after.dismissed, [fixture_config()]);
+        assert_eq!(
+            model.outcome(),
+            "The router reads visual rules only, as before."
+        );
+    }
+
+    #[test]
     fn first_run_goes_straight_to_choose_source_with_every_proven_rule() {
         let mut model = model(RulesFile::default());
         model.set_all(false);
@@ -794,7 +989,7 @@ mod tests {
     #[test]
     fn a_config_that_does_not_load_has_nothing_to_review() {
         let missing = fixture_config().with_file_name("missing.ts");
-        let model = ImportModel::read(&missing, None, &[], RulesFile::default());
+        let model = ImportModel::read(&missing, None, None, &[], RulesFile::default());
         assert!(model.problem.is_some());
         assert_eq!(model.found(), 0);
     }

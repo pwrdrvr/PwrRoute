@@ -16,7 +16,7 @@ use crate::activity::Activity;
 use crate::activity_actions::{self, Actions, BrowserChoice};
 use crate::config_view::{self, ConfigInCharge};
 use crate::editor::{Field, Rail};
-use crate::importer::{ImportModel, SourceChoice};
+use crate::importer::ImportModel;
 use crate::importer_view::{FoundConfig, ImportDone};
 use crate::rules_model::{self, Handler, Rewrite};
 use crate::rules_store::{Disk, RulesStore};
@@ -312,25 +312,27 @@ impl PwrRoute {
 
     /// Writes an import into `rules.json` in one save, over the file as it
     /// stands, and keeps the file and `source` as they were for Undo
-    /// import. Returns whether the file was written; the store's status
-    /// says why not.
+    /// import. A save the store would refuse (the file changed under
+    /// unsaved edits, or did not load) leaves the rules untouched and comes
+    /// back as the reason, for the importer to show.
     pub fn apply_import(
         &mut self,
         model: &ImportModel,
         previous_source: Option<SourceSettings>,
         cx: &mut Context<'_, Self>,
-    ) -> bool {
+    ) -> Result<(), String> {
         self.sync_with_disk(cx);
+        if let Some(reason) = self.store.save_refused() {
+            return Err(reason);
+        }
         let previous = self.store.written();
         let plan = model.plan(&previous);
         self.store.replace_all(plan.file.clone());
         let saved = self.store.save();
         self.reloaded(cx);
-        if saved.is_err() {
-            // Nothing reached the file: the edit stays on screen with the
-            // reason, as any other refused save does.
-            return false;
-        }
+        // A write that failed leaves the edit on screen with the reason, as
+        // any other failed save does.
+        saved?;
         self.found_config = None;
         self.last_import = Some(ImportDone {
             shown: model.shown.clone(),
@@ -338,25 +340,34 @@ impl PwrRoute {
             count: plan.count(),
             suggestions: plan.suggestions,
             stays: model.left_behind().len(),
-            kept_config: model.final_source() == SourceChoice::KeepConfig,
+            outcome: model.outcome(),
             at: std::time::SystemTime::now(),
             previous,
             previous_source,
             undoable: true,
         });
         cx.notify();
-        true
+        Ok(())
     }
 
     /// Undo import: `rules.json` as it was before, in one save. Returns the
-    /// source to restore, when the import changed it.
+    /// source to restore once that save went through. Another writer's
+    /// change since the import ends Undo instead of being overwritten.
     pub fn undo_import(&mut self, cx: &mut Context<'_, Self>) -> Option<SourceSettings> {
+        let disk = self.sync_with_disk(cx);
+        let undoable = self.last_import.as_ref()?.undoable;
+        if !undoable || disk != Disk::Unchanged || self.store.save_refused().is_some() {
+            if let Some(done) = &mut self.last_import {
+                done.undoable = false;
+            }
+            cx.notify();
+            return None;
+        }
         let done = self.last_import.take()?;
-        self.sync_with_disk(cx);
         self.store.replace_all(done.previous);
-        let _ = self.store.save();
+        let saved = self.store.save();
         self.reloaded(cx);
-        done.previous_source
+        saved.ok().and(done.previous_source)
     }
 
     /// The config in charge changed (the importer's Choose source, or its

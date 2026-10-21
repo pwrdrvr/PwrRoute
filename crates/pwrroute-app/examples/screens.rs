@@ -405,7 +405,14 @@ fn main() {
             ],
             ..pwrroute_engine::RulesFile::default()
         };
-        let mut model = importer::ImportModel::read(&importer_config, None, &[], existing);
+        // Read as the config in charge, as the design draws it.
+        let mut model = importer::ImportModel::read(
+            &importer_config,
+            None,
+            Some(&importer_config),
+            &[],
+            existing,
+        );
         // Shown as the design names it, not by the fixture's path.
         model.shown = "~/.finicky.ts".into();
         model.selected = selected;

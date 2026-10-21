@@ -6,7 +6,9 @@
 //! `rules.json` through the main window's store, so the Rules screen reloads
 //! at once and keeps the previous file for Undo import, then switches the
 //! router's source when Choose source asked for it (`settings.json`'s
-//! `source`, `router::choose_source`). The config file is never written.
+//! `source`, `router::choose_source`). A write the store refuses opens the
+//! importer again with the reason. The config file is never written, and
+//! a file that is not the config in charge never takes its place.
 //! Recent links reach the engine's probes from the Activity feed, in
 //! memory only.
 
@@ -26,7 +28,9 @@ use pwrroute_engine::{ConfigChoice, RulesFile, SourceLines, Verdict, Visual, dis
 
 use crate::app::{PwrRoute, Screen};
 use crate::config_view::display_path;
-use crate::importer::{ImportModel, Item, Kind, Label, Placement, SourceChoice, Step};
+use crate::importer::{
+    Charge, ImportModel, Item, Kind, Label, Placement, SourceChoice, Step, same_file,
+};
 use crate::rules_store::{RulesStore, clock};
 use crate::rules_view::{RowState, card, rule_row};
 use crate::settings_store::{self, SourceSettings};
@@ -72,7 +76,8 @@ pub struct ImportDone {
     pub suggestions: usize,
     /// Rules that stayed in the config.
     pub stays: usize,
-    pub kept_config: bool,
+    /// What the router reads now: `ImportModel::outcome`.
+    pub outcome: String,
     pub at: SystemTime,
     /// `rules.json` before the import, and the source before it.
     pub previous: RulesFile,
@@ -125,6 +130,12 @@ fn recent_links(cx: &App) -> Vec<String> {
 /// run's "Import N rules" (`first_run`) on Choose source with every proven
 /// rule checked. A second call replaces what the open importer shows.
 pub fn open(path: PathBuf, first_run: bool, cx: &mut App) {
+    open_with(path, first_run, crate::router::config_in_charge(), cx);
+}
+
+/// [`open`], with the config the router reads now given: tests name it,
+/// since the router's source is one for the whole process.
+pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBuf>, cx: &mut App) {
     let (existing, home) = main_window(cx)
         .and_then(|main| {
             main.read(cx)
@@ -140,10 +151,21 @@ pub fn open(path: PathBuf, first_run: bool, cx: &mut App) {
         });
     let recent = recent_links(cx);
     let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
-    let mut model = ImportModel::read(&path, home.as_deref(), &refs, existing);
+    let mut model = ImportModel::read(
+        &path,
+        home.as_deref(),
+        in_charge.as_deref(),
+        &refs,
+        existing,
+    );
     if first_run {
         model.start_at_source();
     }
+    show(model, cx);
+}
+
+/// Shows `model` in the importer, opening it when none is open.
+fn show(model: ImportModel, cx: &mut App) {
     if let Some(window) = importer_window(cx) {
         let _ = window.update(cx, |this, window, cx| {
             this.model = model;
@@ -224,11 +246,19 @@ impl Importer {
         }
     }
 
-    /// Import: the window closes and the main window writes the file.
+    /// Import: the window closes and the main window writes the file. A
+    /// write the store refuses opens the importer again, as it was, with
+    /// the reason in the footer.
     fn import(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let model = self.model.clone();
+        let mut model = self.model.clone();
+        model.refused = None;
         window.remove_window();
-        cx.defer(move |cx| finish(&model, cx));
+        cx.defer(move |cx| {
+            if let Err(reason) = finish(&model, cx) {
+                model.refused = Some(reason);
+                show(model, cx);
+            }
+        });
     }
 
     fn choose_another(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -258,63 +288,38 @@ pub fn prompt_for_config(cx: &mut App) {
 
 /// Writes the import into `rules.json` through the main window (opening it
 /// on Rules when none is), then switches the router's source as Choose
-/// source said. The source changes only when the write went through.
-pub fn finish(model: &ImportModel, cx: &mut App) {
+/// source said. The source changes only when the write went through; a
+/// refused write comes back as the reason.
+pub fn finish(model: &ImportModel, cx: &mut App) -> Result<(), String> {
     if main_window(cx).is_none()
         && let Some(host) = cx.try_global::<ImporterHost>().cloned()
     {
         (host.show_rules)(cx);
     }
-    let Some(main) = main_window(cx) else {
-        eprintln!("pwrroute: no window to import into");
-        return;
-    };
+    let main = main_window(cx).ok_or("No PwrRoute window to import into.")?;
     let previous_source =
         settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
-    let written = main
-        .update(cx, |app, window, cx| {
-            app.navigate(Screen::Rules, window, cx);
-            app.apply_import(model, previous_source.clone(), cx)
-        })
-        .unwrap_or(false);
-    if !written {
-        return;
-    }
+    main.update(cx, |app, window, cx| {
+        app.navigate(Screen::Rules, window, cx);
+        app.apply_import(model, previous_source.clone(), cx)
+    })
+    .map_err(|error| format!("{error:#}"))??;
     if let Some(config) = switch_source(model, cx) {
         let _ = main.update(cx, |app, _, cx| app.set_config(config, cx));
     }
+    Ok(())
 }
 
-/// Saves the source Choose source picked and hands it to the router.
-/// Returns the config now in charge when that changed; `None` when nothing
-/// did, or there is no settings store (the window harness).
+/// Saves the source Choose source picked (`ImportModel::source_after`) and
+/// hands it to the router. Keep never touches it, so a file that is not
+/// the config in charge never takes its place. Returns the config now in
+/// charge when that changed; `None` when nothing did, or there is no
+/// settings store (the window harness).
 fn switch_source(model: &ImportModel, cx: &mut App) -> Option<Option<PathBuf>> {
     let store = settings_store::store(cx)?;
     let current = store.read(cx).settings().source.clone();
-    let mut wanted = current.clone();
-    let candidates = discovery::config_candidates(&discovery::Environment::current());
-    let file = model
-        .path
-        .canonicalize()
-        .unwrap_or_else(|_| model.path.clone());
-    match model.final_source() {
-        SourceChoice::VisualOnly => {
-            wanted.visual_only = true;
-            wanted.config = None;
-        }
-        SourceChoice::KeepConfig => {
-            wanted.visual_only = false;
-            let discovered = discovery::find_config(&candidates)
-                .map(|found| found.canonicalize().unwrap_or(found));
-            wanted.config = (discovered.as_deref() != Some(file.as_path())).then(|| file.clone());
-        }
-    }
-    let in_charge = crate::router::config_in_charge();
-    let now = match model.final_source() {
-        SourceChoice::VisualOnly => None,
-        SourceChoice::KeepConfig => Some(file),
-    };
-    if wanted == current && in_charge == now {
+    let wanted = model.source_after(&current);
+    if wanted == current && !model.stops_config() {
         return None;
     }
     set_source(wanted, cx)
@@ -382,7 +387,11 @@ pub fn found_config(home: Option<&Path>, cx: &App) -> Option<FoundConfig> {
     let file = discovery::find_config(&discovery::config_candidates(
         &discovery::Environment::current(),
     ))?;
-    if source.dismissed.contains(&file) {
+    if source
+        .dismissed
+        .iter()
+        .any(|dismissed| same_file(dismissed, &file))
+    {
         return None;
     }
     let holds = pwrroute_engine::Engine::load(
@@ -451,15 +460,7 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
     let mut banners = Vec::new();
     if let Some(done) = &app.last_import {
         let saved = clock(done.at);
-        let mut body = if done.kept_config {
-            format!(
-                "{} stays in charge for its {} and runs first. Saved {saved}; reloaded.",
-                done.shown,
-                plural(done.stays, "JS rule")
-            )
-        } else {
-            format!("The router reads visual rules only now. Saved {saved}; reloaded.")
-        };
+        let mut body = format!("{} Saved {saved}; reloaded.", done.outcome);
         if done.suggestions > 0 {
             body.push_str(&format!(" {} from a suggestion.", done.suggestions));
         }
@@ -1531,32 +1532,67 @@ fn place(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
         .child(preview)
 }
 
-/// 3a: what the router reads afterwards.
+/// 3a: what the router reads afterwards. The choice is about the config
+/// in charge, which need not be the file under review.
 fn choose_source(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
     let behind = model.left_behind();
     let plan = model.plan(&model.existing);
     let stays = behind.len();
-    let mut lose = vec![(
-        format!(
-            "The router stops reading {}. These stop running:",
-            model.shown
+    let imported = plural(plan.count(), "rule");
+    let (in_charge, keep, lose, title, help) = match &model.charge {
+        Charge::Other { shown, .. } => (
+            shown.clone(),
+            format!(
+                "{shown} runs first, as now; the {imported} imported run after it. Nothing \
+                 stops working."
+            ),
+            vec![(
+                format!("The router stops reading {shown}: every rule in it stops running."),
+                false,
+            )],
+            format!("{shown} is in charge"),
+            format!(
+                "{} is not the config the router reads, so its {} that stay in JavaScript do \
+                 not run either way. Choose what the router reads after the import.",
+                model.shown,
+                plural(stays, "rule")
+            ),
         ),
-        false,
-    )];
-    lose.extend(behind.iter().map(|item| (item.describe(), true)));
+        Charge::This | Charge::NoConfig => {
+            let mut lose = vec![(
+                format!(
+                    "The router stops reading {}. These stop running:",
+                    model.shown
+                ),
+                false,
+            )];
+            lose.extend(behind.iter().map(|item| (item.describe(), true)));
+            (
+                model.shown.clone(),
+                format!(
+                    "The config runs first, as now, with the {}; the {imported} imported run \
+                     after it. Nothing stops working.",
+                    plural(stays, "JS rule")
+                ),
+                lose,
+                format!(
+                    "{} {} in JavaScript",
+                    plural(stays, "rule"),
+                    if stays == 1 { "stays" } else { "stay" }
+                ),
+                format!(
+                    "They only run while {} is selected. Choose what the router reads after \
+                     the import.",
+                    model.shown
+                ),
+            )
+        }
+    };
     let choices = [
         (
             SourceChoice::KeepConfig,
-            format!("Keep {} in charge", model.shown),
-            vec![(
-                format!(
-                    "The config runs first, as now, with the {}; the {} imported run after it. \
-                     Nothing stops working. Switch later in Settings \u{203a} Configuration.",
-                    plural(stays, "JS rule"),
-                    plural(plan.count(), "rule")
-                ),
-                false,
-            )],
+            format!("Keep {in_charge} in charge"),
+            vec![(keep, false)],
         ),
         (
             SourceChoice::VisualOnly,
@@ -1590,19 +1626,7 @@ fn choose_source(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Statefu
         .py(px(20.0))
         .px(px(24.0))
         .overflow_y_scroll()
-        .child(step_heading(
-            "Choose source",
-            format!(
-                "{} {} in JavaScript",
-                plural(stays, "rule"),
-                if stays == 1 { "stays" } else { "stay" }
-            ),
-            format!(
-                "They only run while {} is selected. Choose what the router reads after the \
-                 import.",
-                model.shown
-            ),
-        ))
+        .child(step_heading("Choose source", title, help))
         .child(slots)
         .child(paragraph(
             format!(
@@ -1651,7 +1675,19 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
                 .when(first && model.problem.is_none(), |row| {
                     row.child(checkbox(model.checked() > 0, true))
                 })
-                .child(text(summary, 11.5, 500.0, theme::text_secondary())),
+                .map(|row| match &model.refused {
+                    Some(reason) => row.child(
+                        div()
+                            .debug_selector(|| "importer-refused".into())
+                            .child(text(
+                                format!("Nothing was imported: {reason}"),
+                                11.5,
+                                500.0,
+                                theme::danger_text(),
+                            )),
+                    ),
+                    None => row.child(text(summary, 11.5, 500.0, theme::text_secondary())),
+                }),
         )
         .map(|row| {
             if first {
