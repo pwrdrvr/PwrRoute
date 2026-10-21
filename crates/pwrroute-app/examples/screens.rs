@@ -79,6 +79,9 @@ mod trace_view;
 #[path = "../src/try_it.rs"]
 mod try_it;
 #[cfg(target_os = "macos")]
+#[path = "../src/updater.rs"]
+mod updater;
+#[cfg(target_os = "macos")]
 #[path = "../src/widgets.rs"]
 mod widgets;
 
@@ -257,6 +260,10 @@ fn main() {
         ("settings-1b", settings::Pane::Configuration, 1315.0),
         ("settings-1c", settings::Pane::Browsers, 880.0),
         ("settings-privacy", settings::Pane::Privacy, 1560.0),
+        // The family's panes, at a height that holds their cards.
+        ("settings-updates", settings::Pane::Updates, 760.0),
+        ("settings-diagnostics", settings::Pane::Diagnostics, 900.0),
+        ("settings-about", settings::Pane::About, 700.0),
     ] {
         let mut cx = HeadlessAppContext::with_platform(
             gpui_kit::platform::current_platform(true).text_system(),

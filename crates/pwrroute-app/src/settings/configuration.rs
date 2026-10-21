@@ -7,9 +7,9 @@ use gpui_kit::{
 };
 
 use super::controls::{
-    Kind, Tone, action_tag, add_pill, button_when, card_description, checkbox, chip, command_box,
-    field, field_help, field_sub, field_sub_code, fn_tag, heading, pane_head, radio_dot,
-    row_actions, slot, switch, tag,
+    Kind, Tone, action_tag, button_when, card_description, checkbox, chip, command_box, field,
+    field_help, field_sub, field_sub_code, fn_tag, heading, note, pane_head, radio_dot,
+    row_actions, slot, tag,
 };
 use super::model::{ImportCandidate, Piece, RulesSource, SettingsRequest};
 use super::style::para;
@@ -24,7 +24,8 @@ pub const KEEP_CONFIG_ID: &str = "config-import-keep";
 impl SettingsWindow {
     fn set_source(&mut self, source: RulesSource, window: &mut Window, cx: &mut Context<'_, Self>) {
         let configuration = &mut self.model.configuration;
-        if configuration.active == source
+        if !configuration.can_switch
+            || configuration.active == source
             || (source == RulesSource::Finicky && configuration.finicky.is_none())
         {
             return;
@@ -68,17 +69,6 @@ impl SettingsWindow {
             cx,
         );
     }
-
-    fn set_expand_short_links(
-        &mut self,
-        on: bool,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.model.configuration.expand_short_links = on;
-        self.request(SettingsRequest::SetExpandShortLinks(on), window, cx);
-        cx.notify();
-    }
 }
 
 pub fn pane(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> Div {
@@ -103,6 +93,7 @@ fn source_slot(
     about: SharedString,
     active: RulesSource,
     available: bool,
+    enabled: bool,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> impl IntoElement {
     let (id, title) = match source {
@@ -116,8 +107,10 @@ fn source_slot(
     } else {
         theme::text_primary()
     };
+    // Dimmed only when there is no such file; a tile that merely cannot be
+    // chosen still shows the source in charge at full strength.
     slot(id, selected)
-        .disabled(!available)
+        .disabled(!available || !enabled)
         .accessibility_label(title)
         .on_change(move |on, _, window, cx| set(&on, window, cx))
         .when(!available, |slot| slot.opacity(0.5))
@@ -149,6 +142,7 @@ fn source_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
         },
         |config| (config.summary.clone(), config.found.clone()),
     );
+    let can_switch = configuration.can_switch;
     let tiles = div()
         .w_full()
         .flex()
@@ -159,6 +153,7 @@ fn source_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
             "Edited in the Rules view and by Editor agents. Hot-reloaded by the router.".into(),
             active,
             true,
+            can_switch,
             cx,
         ))
         .child(source_slot(
@@ -167,30 +162,29 @@ fn source_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
             finicky_about,
             active,
             configuration.finicky.is_some(),
+            can_switch,
             cx,
         ));
     let chosen = match active {
         RulesSource::Visual => "Visual rules",
         RulesSource::Finicky => "Finicky config",
     };
+    let sub = if can_switch {
+        "Switching takes effect on the next link. Nothing is deleted either way."
+    } else {
+        "The router follows the files on disk: a Finicky config at one of its usual paths runs \
+         first and owns the default browser; without one, rules.json is the whole config. \
+         Choosing here is not built yet."
+    };
     let rows = vec![field(
         "Active source",
-        Some(field_sub(
-            "Switching takes effect on the next link. Nothing is deleted either way.",
-        )),
+        Some(field_sub(sub)),
         [
             tiles.into_any_element(),
-            row_actions()
-                .child(request_button(
-                    "config-choose-file",
-                    "Choose another file\u{2026}",
-                    Kind::Default,
-                    true,
-                    SettingsRequest::ChooseConfigFile,
-                    cx,
-                ))
-                .child(field_help(".js or .ts, Finicky v4 shape."))
-                .into_any_element(),
+            field_help(
+                "Looked for ~/.finicky.js, ~/.finicky.ts and ~/.config/finicky/finicky.js or .ts.",
+            )
+            .into_any_element(),
         ],
     )];
     this.disclosure(
@@ -390,33 +384,19 @@ fn short_links_card(
         .iter()
         .fold(div().flex().flex_wrap().gap(px(5.0)), |hosts, host| {
             hosts.child(tag(host.clone()))
-        })
-        .child(
-            add_pill("config-add-shortener", "+ host").on_click(cx.listener(
-                |this, _, window, cx| this.request(SettingsRequest::AddShortener, window, cx),
-            )),
-        );
+        });
     let rows = vec![field(
-        "Expand short links before matching",
+        "Expanded before matching",
         Some(field_sub_code(
-            "Follows one redirect for these hosts so rules see the real destination. Finicky\u{2019}s ",
+            "Links from these hosts are followed one redirect so rules see the real \
+             destination. A Finicky config adds its ",
             "urlShorteners",
             ".",
         )),
         [
-            switch(
-                "config-expand-short-links",
-                configuration.expand_short_links,
-            )
-            .accessibility_label("Expand short links before matching")
-            .on_change({
-                let set = cx.listener(|this, on: &bool, window, cx| {
-                    this.set_expand_short_links(*on, window, cx);
-                });
-                move |on, _, window, cx| set(&on, window, cx)
-            })
-            .into_any_element(),
             hosts.into_any_element(),
+            note("The list is the engine\u{2019}s; rules.json cannot change it yet.")
+                .into_any_element(),
         ],
     )];
     this.disclosure(
@@ -440,6 +420,7 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
                 None,
             )
             .into_any_element(),
+            field_help(this.model.configuration.rules_status.clone()).into_any_element(),
             row_actions()
                 .child(request_button(
                     "config-reveal",

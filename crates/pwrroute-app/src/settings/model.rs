@@ -19,6 +19,9 @@ pub struct SettingsModel {
     pub configuration: Configuration,
     pub privacy: Privacy,
     pub browsers: Browsers,
+    pub updates: Updates,
+    pub diagnostics: Diagnostics,
+    pub about: About,
 }
 
 // ---- Local agents ---------------------------------------------------------
@@ -180,16 +183,24 @@ pub enum RulesSource {
 #[derive(Clone, Debug)]
 pub struct Configuration {
     pub active: RulesSource,
+    /// The tiles pick the source. Off, they only show which one is in
+    /// charge: the router follows the files on disk and cannot be told
+    /// otherwise yet.
+    pub can_switch: bool,
     /// "rules.json · 3 rewrites · 7 handlers".
     pub visual_summary: SharedString,
     /// The Finicky config discovery found, if any.
     pub finicky: Option<FinickyConfig>,
     /// What the importer offers from that config.
     pub import: Option<ImportPlan>,
-    pub expand_short_links: bool,
+    /// The hosts whose links are followed one redirect before matching:
+    /// the engine's built-in list, plus a config's own.
     pub shorteners: Vec<SharedString>,
     /// Where `rules.json` lives, as the reader would type it.
     pub rules_path: SharedString,
+    /// How the file stands: "Loaded · edited 5 min ago", "No rules.json
+    /// yet", or why it did not load.
+    pub rules_status: SharedString,
 }
 
 #[derive(Clone, Debug)]
@@ -348,6 +359,102 @@ pub enum Usage {
     NotInstalled,
 }
 
+// ---- Updates --------------------------------------------------------------
+
+/// Settings › Updates: this copy, and what the updater last said.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Updates {
+    /// "0.0.1-alpha.0".
+    pub version: SharedString,
+    /// "stable" or "prerelease": which releases this copy follows.
+    pub channel: SharedString,
+    /// Where this copy came from: "Installed by Velopack", "A development
+    /// build", "Installed from a package".
+    pub install: SharedString,
+    pub state: UpdateState,
+    /// "Today 08:13", or `None` while no check has finished.
+    pub last_checked: Option<SharedString>,
+}
+
+/// What the updater last said, for the state row and its chip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateState {
+    /// No check has run since launch.
+    NeverChecked,
+    Checking,
+    /// The checked version is the newest on the channel.
+    UpToDate,
+    /// `version` is downloaded; a restart installs it.
+    Ready(SharedString),
+    /// Why the last check failed; routing is unaffected.
+    Failed(SharedString),
+    /// This copy cannot update itself, and the text says who does.
+    NotUpdatable(SharedString),
+}
+
+// ---- Diagnostics ----------------------------------------------------------
+
+/// Settings › Diagnostics: where things are and whether they run. Paths
+/// and states, never a link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostics {
+    /// "0.0.1-alpha.0 · release · arm64".
+    pub version: SharedString,
+    /// "macOS 15.6 (arm64)".
+    pub os: SharedString,
+    /// The data directory, as the reader would type it.
+    pub data_dir: SharedString,
+    /// The directory exists on disk, so it can be opened.
+    pub data_dir_exists: bool,
+    /// The router's socket and whether this process listens on it.
+    pub router: SharedString,
+    pub router_listening: bool,
+    /// What routes links right now: the config in charge, `rules.json`, or
+    /// why everything goes to the fallback.
+    pub routing: SharedString,
+    /// `--dry-run`: links are resolved and recorded, never opened.
+    pub dry_run: bool,
+    /// The MCP endpoint and whether it listens.
+    pub agents: SharedString,
+    /// Where messages go: there is no log file today.
+    pub log: SharedString,
+}
+
+impl Diagnostics {
+    /// The report as plain lines, for the Copy button.
+    pub fn report(&self) -> String {
+        let dry_run = if self.dry_run {
+            "\nDry run: links are resolved and recorded, not opened"
+        } else {
+            ""
+        };
+        format!(
+            "PwrRoute {}\nOS: {}\nData folder: {}\nRouter: {}\nRouting: {}{dry_run}\nLocal agents: {}\nLog: {}\n",
+            self.version, self.os, self.data_dir, self.router, self.routing, self.agents, self.log
+        )
+    }
+}
+
+// ---- About ----------------------------------------------------------------
+
+/// Settings › About: the version, the license and where to find the
+/// project, as plain text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct About {
+    pub version: SharedString,
+    /// "release build for arm64".
+    pub build: SharedString,
+    /// The license line: "MIT. Includes code from Finicky, …".
+    pub license: SharedString,
+    /// `THIRD_PARTY_LICENSES` ships with this copy and can be revealed.
+    pub has_third_party_notices: bool,
+    /// `CHANGELOG.md` ships with this copy and can be opened.
+    pub has_release_notes: bool,
+    /// Where to find the project: each a label and the address as text,
+    /// never a link the window opens.
+    pub links: Vec<(SharedString, SharedString)>,
+}
+
 // ---- Requests -------------------------------------------------------------
 
 /// What the window asks of the rest of the app.
@@ -366,14 +473,11 @@ pub enum SettingsRequest {
     NewCustomRole,
     OpenActivity,
     SetRulesSource(RulesSource),
-    ChooseConfigFile,
     /// Import the checked candidates, by index into the plan.
     Import {
         candidates: Vec<usize>,
         keep_config: bool,
     },
-    SetExpandShortLinks(bool),
-    AddShortener,
     RevealRules,
     OpenDataFolder,
     ReloadRules,
@@ -386,7 +490,14 @@ pub enum SettingsRequest {
         app: SharedString,
         visible: bool,
     },
-    AddApp,
+    /// Updates: ask GitHub Releases now.
+    CheckForUpdates,
+    /// Updates: install the downloaded release and start again.
+    RestartToUpdate,
+    /// About: show `THIRD_PARTY_LICENSES` in the file manager.
+    RevealThirdPartyNotices,
+    /// About: open this copy's `CHANGELOG.md`.
+    OpenReleaseNotes,
     /// Privacy: keep the last `count` links for at most `hours`.
     SetRetention {
         count: usize,

@@ -1,12 +1,14 @@
-//! Contrived Settings data, transcribed from the design's three panes
-//! (`design/PwrRoute Settings.dc.html`). Nothing here is read from this
-//! machine.
+//! Contrived Settings data, transcribed from the design's panes
+//! (`design/PwrRoute Settings.dc.html`, `design/PwrRoute Updates and
+//! Default Browser.dc.html`). Nothing here is read from this machine: the
+//! shipped app builds every pane from `live.rs`, and these draw the design
+//! canvas (the `screens` example) and the window's tests.
 
 use super::model::{
-    AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, Configuration, DefaultBrowser,
-    DefaultState, FinickyConfig, Grant, ImportCandidate, ImportPlan, JournalFiles, JournalLevel,
-    Listener, LocalAgents, Permission, Piece, Privacy, RoleId, RulesSource, SessionId,
-    SettingsModel, Status, Usage,
+    About, AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, Configuration,
+    DefaultBrowser, DefaultState, Diagnostics, FinickyConfig, Grant, ImportCandidate, ImportPlan,
+    JournalFiles, JournalLevel, Listener, LocalAgents, Permission, Piece, Privacy, RoleId,
+    RulesSource, SessionId, SettingsModel, Status, UpdateState, Updates, Usage,
 };
 
 pub fn model() -> SettingsModel {
@@ -15,6 +17,58 @@ pub fn model() -> SettingsModel {
         configuration: configuration(),
         privacy: privacy(),
         browsers: browsers(),
+        updates: updates(),
+        diagnostics: diagnostics(),
+        about: about(),
+    }
+}
+
+/// Updates as the design's 1a draws it: a release downloaded and waiting.
+pub fn updates() -> Updates {
+    Updates {
+        version: "0.2.0".into(),
+        channel: "stable".into(),
+        install: "Installed by Velopack; updates apply on a restart.".into(),
+        state: UpdateState::Ready("0.2.1".into()),
+        last_checked: Some("Today 08:13".into()),
+    }
+}
+
+/// Diagnostics for a contrived machine; nothing here is read from this one.
+pub fn diagnostics() -> Diagnostics {
+    Diagnostics {
+        version: "0.2.0 \u{00b7} release \u{00b7} arm64".into(),
+        os: "macOS 15.6 (arm64)".into(),
+        data_dir: "~/Library/Application Support/PwrRoute".into(),
+        data_dir_exists: true,
+        router: "Listening on ~/Library/Application Support/PwrRoute/router.sock \u{00b7} pid 4242"
+            .into(),
+        router_listening: true,
+        routing: "~/.finicky.ts runs first; rules.json follows it.".into(),
+        dry_run: false,
+        agents: "Listening on ~/Library/Application Support/PwrRoute/mcp.sock".into(),
+        log: "No log file. Messages go to the terminal that launched PwrRoute, if any.".into(),
+    }
+}
+
+/// About for the contrived 0.2.0 copy.
+pub fn about() -> About {
+    About {
+        version: "0.2.0".into(),
+        build: "release build for arm64".into(),
+        license: "MIT. Includes code from Finicky, copyright John Sterling, under the MIT \
+                  license; see LICENSE."
+            .into(),
+        has_third_party_notices: true,
+        has_release_notes: true,
+        links: vec![
+            ("Source".into(), "github.com/pwrdrvr/PwrRoute".into()),
+            (
+                "Releases".into(),
+                "github.com/pwrdrvr/PwrRoute/releases".into(),
+            ),
+            ("Issues".into(), "github.com/pwrdrvr/PwrRoute/issues".into()),
+        ],
     }
 }
 
@@ -190,6 +244,7 @@ fn candidate(importable: bool, summary: Vec<Piece>) -> ImportCandidate {
 pub fn configuration() -> Configuration {
     Configuration {
         active: RulesSource::Visual,
+        can_switch: true,
         visual_summary: "rules.json \u{00b7} 3 rewrites \u{00b7} 7 handlers".into(),
         finicky: Some(FinickyConfig {
             path: "~/.finicky.ts".into(),
@@ -258,12 +313,12 @@ pub fn configuration() -> Configuration {
                 candidate(true, vec![text("defaultBrowser \u{2192} Google Chrome")]),
             ],
         }),
-        expand_short_links: true,
         shorteners: ["t.co", "bit.ly", "tinyurl.com", "lnkd.in", "buff.ly"]
             .into_iter()
             .map(Into::into)
             .collect(),
         rules_path: "~/Library/Application Support/PwrRoute/rules.json".into(),
+        rules_status: "Loaded \u{00b7} edited 12 min ago.".into(),
     }
 }
 

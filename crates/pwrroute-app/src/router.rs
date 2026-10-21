@@ -11,7 +11,11 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, LazyLock, Mutex, PoisonError, mpsc},
+    sync::{
+        Arc, LazyLock, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 
@@ -39,6 +43,24 @@ const WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
 /// A dispatch slower than this is reported on stderr, as the Go router did.
 const SLOW_DISPATCH_US: u64 = 500_000;
+
+/// This process serves the router's socket, so later launches reach it.
+/// Set once by [`start`]; Settings › Diagnostics reads it.
+static LISTENING: AtomicBool = AtomicBool::new(false);
+
+/// Whether this process listens for other launches' links.
+pub fn listening() -> bool {
+    LISTENING.load(Ordering::Acquire)
+}
+
+/// The router's Unix socket, when the OS gives it a directory. Windows
+/// has a named pipe instead, and no file.
+pub fn socket_path() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return None;
+    }
+    pwrroute_os::router_dir().map(|dir| Endpoint::new(dir).socket_path())
+}
 
 /// What the command line asked for.
 #[derive(Debug, Default)]
@@ -170,6 +192,7 @@ pub fn start(args: &Args) -> Start {
             .map_err(|e| eprintln!("pwrroute: cannot listen for other launches: {e}"))
             .ok()
     });
+    LISTENING.store(server.is_some(), Ordering::Release);
     let launched_with_links = !links.is_empty();
     for link in links {
         let _ = handle.dispatch(link);
