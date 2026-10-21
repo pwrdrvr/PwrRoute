@@ -1152,3 +1152,127 @@ fn a_hosts_journal_keeps_no_full_url_and_a_failing_one_does_not_stop_dispatch() 
         "{error}"
     );
 }
+
+#[test]
+fn set_retention_takes_effect_at_once_and_the_description_follows() {
+    let router = Router::spawn(
+        Options::default(),
+        Some(leveled_factory()),
+        DryRunLauncher::new(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    for n in 0..5 {
+        handle
+            .dispatch_and_wait(link(&format!("https://full.example.com/{n}")))
+            .unwrap();
+    }
+    assert_eq!(handle.recent().len(), 5);
+
+    let tighter = Retention { count: 2, hours: 1 };
+    handle.set_retention(tighter).unwrap();
+    // The buffer dropped the oldest three on the spot, newest first stays.
+    let kept: Vec<String> = handle.recent().iter().map(|r| r.link.url.clone()).collect();
+    assert_eq!(
+        kept,
+        ["https://full.example.com/4", "https://full.example.com/3"]
+    );
+    let retention = handle.retention();
+    assert_eq!(retention.memory, tighter);
+    assert_eq!(
+        retention.description,
+        "Kept in memory only: the last 2 links or 1 hour, cleared when PwrRoute quits."
+    );
+    // Later dispatches honor it.
+    handle
+        .dispatch_and_wait(link("https://full.example.com/5"))
+        .unwrap();
+    assert_eq!(handle.recent().len(), 2);
+    assert_eq!(handle.recent()[0].link.url, "https://full.example.com/5");
+
+    // Nothing kept: the buffer empties and stays empty.
+    handle
+        .set_retention(Retention { count: 0, hours: 0 })
+        .unwrap();
+    assert!(handle.recent().is_empty());
+    handle
+        .dispatch_and_wait(link("https://full.example.com/6"))
+        .unwrap();
+    assert!(handle.recent().is_empty());
+    assert_eq!(
+        handle.retention().description,
+        "Nothing is kept: not in memory, and nothing is written to disk."
+    );
+}
+
+#[test]
+fn set_journal_opens_and_closes_the_journal_from_the_next_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = Router::spawn(
+        Options::default(),
+        Some(leveled_factory()),
+        DryRunLauncher::new(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    handle
+        .dispatch_and_wait(link("https://full.example.com/before?token=hunter2"))
+        .unwrap();
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+    assert_eq!(handle.retention().journal, None);
+
+    // On, hosts only: the next dispatch is a line, the earlier one is not.
+    let hosts = JournalConfig::new(dir.path().join("journal"), JournalMode::Hosts);
+    handle.set_journal(Some(hosts.clone())).unwrap();
+    let retention = handle.retention();
+    assert_eq!(retention.journal, Some(hosts.clone()));
+    assert!(
+        retention
+            .description
+            .contains("journaled as scheme and host only"),
+        "{}",
+        retention.description
+    );
+    handle
+        .dispatch_and_wait(link("https://full.example.com/during?token=hunter2"))
+        .unwrap();
+    let journaled = handle.journal(10).unwrap();
+    assert_eq!(journaled.len(), 1);
+    assert_eq!(journaled[0].privacy, Privacy::Host);
+    assert_eq!(journaled[0].link.url, "https://full.example.com");
+    assert_eq!(handle.status().unwrap().journal_error, None);
+
+    // Changed to full URLs: the same directory, the next line in full.
+    let full = JournalConfig::new(dir.path().join("journal"), JournalMode::Full);
+    handle.set_journal(Some(full.clone())).unwrap();
+    assert_eq!(handle.retention().journal, Some(full));
+    handle
+        .dispatch_and_wait(link("https://full.example.com/after?token=hunter2"))
+        .unwrap();
+    let journaled = handle.journal(10).unwrap();
+    assert_eq!(journaled.len(), 2);
+    assert_eq!(
+        journaled[0].link.url,
+        "https://full.example.com/after?token=hunter2"
+    );
+
+    // Off: nothing more is written, the files stay, and reading reports
+    // nothing (there is no journal to read).
+    handle.set_journal(None).unwrap();
+    assert_eq!(handle.retention().journal, None);
+    assert!(handle.journal(10).unwrap().is_empty());
+    handle
+        .dispatch_and_wait(link("https://full.example.com/off?token=hunter2"))
+        .unwrap();
+    let text = std::fs::read_dir(dir.path().join("journal"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert_eq!(text.lines().count(), 2);
+    assert!(!text.contains("/off"));
+    assert!(!text.contains("/before"));
+    assert_eq!(
+        handle.retention().description,
+        Options::default().retention_description()
+    );
+}

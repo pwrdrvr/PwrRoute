@@ -2,7 +2,7 @@
 
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
@@ -226,6 +226,14 @@ enum Command {
     Status {
         reply: mpsc::Sender<RouterStatus>,
     },
+    SetRetention {
+        retention: Retention,
+        reply: mpsc::Sender<()>,
+    },
+    SetJournal {
+        config: Option<JournalConfig>,
+        reply: mpsc::Sender<()>,
+    },
     Refresh,
     Shutdown,
 }
@@ -262,7 +270,8 @@ impl Router {
         let (tx, rx) = mpsc::channel();
         let recent = Arc::new(RecentDispatches::new(options.retention));
         let worker_recent = Arc::clone(&recent);
-        let journal = options.journal.clone();
+        let journal = Arc::new(Mutex::new(options.journal.clone()));
+        let worker_journal = Arc::clone(&journal);
         let thread = thread::Builder::new()
             .name("pwrroute-dispatch".into())
             .spawn(move || {
@@ -271,6 +280,7 @@ impl Router {
                     launcher: Box::new(launcher),
                     recent: worker_recent,
                     journal: options.journal.clone().map(Journal::new),
+                    journal_config: worker_journal,
                     options,
                 }
                 .run(&rx);
@@ -317,7 +327,10 @@ impl std::error::Error for RouterGone {}
 pub struct RouterHandle {
     tx: mpsc::Sender<Command>,
     recent: Arc<RecentDispatches>,
-    journal: Option<JournalConfig>,
+    /// The journal as it is on: what [`retention`](Self::retention) and
+    /// [`journal`](Self::journal) describe. The dispatch thread writes it
+    /// when [`set_journal`](Self::set_journal) takes effect.
+    journal: Arc<Mutex<Option<JournalConfig>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -403,13 +416,16 @@ impl RouterHandle {
     }
 
     /// Where dispatches are kept and for how long: the in-memory retention,
-    /// the journal when it is on, and both in words.
+    /// the journal when it is on, and both in words. Describes the values
+    /// in force now, after any [`set_retention`](Self::set_retention) or
+    /// [`set_journal`](Self::set_journal).
     pub fn retention(&self) -> RetentionInfo {
         let memory = self.recent.retention();
+        let journal = self.journal_config();
         RetentionInfo {
+            description: describe_retention(memory, journal.as_ref()),
             memory,
-            journal: self.journal.clone(),
-            description: describe_retention(memory, self.journal.as_ref()),
+            journal,
         }
     }
 
@@ -417,10 +433,42 @@ impl RouterHandle {
     /// journal is off. Each is reduced to what the journal kept, with
     /// [`DispatchRecord::privacy`] saying how much.
     pub fn journal(&self, limit: usize) -> std::io::Result<Vec<DispatchRecord>> {
-        match &self.journal {
+        match self.journal_config() {
             Some(journal) => journal.read(limit),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Changes how many dispatches stay in memory, and for how long, from
+    /// now on: the buffer drops at once whatever the new retention does not
+    /// keep. Waits until the dispatch thread has applied it, so
+    /// [`retention`](Self::retention) describes the new values on return.
+    pub fn set_retention(&self, retention: Retention) -> std::result::Result<(), RouterGone> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Command::SetRetention { retention, reply })?;
+        rx.recv().map_err(|_| RouterGone)
+    }
+
+    /// Turns the journal on, changes it, or turns it off (`None`), from the
+    /// next dispatch on. Turning it off closes the day's file and deletes
+    /// nothing; the files stay until they are pruned or cleared. Waits
+    /// until the dispatch thread has applied it, so
+    /// [`retention`](Self::retention) and [`journal`](Self::journal) see the
+    /// change on return.
+    pub fn set_journal(
+        &self,
+        config: Option<JournalConfig>,
+    ) -> std::result::Result<(), RouterGone> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Command::SetJournal { config, reply })?;
+        rx.recv().map_err(|_| RouterGone)
+    }
+
+    fn journal_config(&self) -> Option<JournalConfig> {
+        self.journal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Answers a second launch's IPC request: queues forwarded links, and
@@ -481,6 +529,10 @@ struct Worker {
     launcher: Box<dyn Launcher>,
     recent: Arc<RecentDispatches>,
     journal: Option<Journal>,
+    /// The handle's copy of the journal's config, kept in step with
+    /// `journal` so a reader never sees a journal that is not the one being
+    /// written.
+    journal_config: Arc<Mutex<Option<JournalConfig>>>,
     options: Options,
 }
 
@@ -533,6 +585,23 @@ impl Worker {
                             .as_ref()
                             .and_then(|j| j.error().map(str::to_owned)),
                     });
+                }
+                Command::SetRetention { retention, reply } => {
+                    self.recent.set_retention(retention);
+                    self.options.retention = retention;
+                    let _ = reply.send(());
+                }
+                Command::SetJournal { config, reply } => {
+                    // The old writer is dropped first: its day's file closes
+                    // before a new one could open the same path.
+                    self.journal = None;
+                    self.journal = config.clone().map(Journal::new);
+                    *self
+                        .journal_config
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = config.clone();
+                    self.options.journal = config;
+                    let _ = reply.send(());
                 }
                 Command::Refresh => {
                     let _ = self.in_charge();

@@ -46,65 +46,86 @@ impl Retention {
 /// retention is ever handed out.
 #[derive(Debug)]
 pub struct RecentDispatches {
+    inner: Mutex<Inner>,
+}
+
+/// The retention and the records it bounds, under one lock, so a change
+/// to the retention sweeps the records it no longer keeps in the same
+/// step.
+#[derive(Debug)]
+struct Inner {
     retention: Retention,
-    records: Mutex<VecDeque<DispatchRecord>>,
+    records: VecDeque<DispatchRecord>,
 }
 
 impl RecentDispatches {
     pub fn new(retention: Retention) -> Self {
         Self {
-            retention,
-            records: Mutex::new(VecDeque::with_capacity(retention.count.min(1024))),
+            inner: Mutex::new(Inner {
+                retention,
+                records: VecDeque::with_capacity(retention.count.min(1024)),
+            }),
         }
     }
 
     pub fn retention(&self) -> Retention {
-        self.retention
+        self.lock().retention
     }
 
     /// The most dispatches ever kept: `retention.count`.
     pub fn capacity(&self) -> usize {
-        self.retention.count
+        self.retention().count
+    }
+
+    /// Changes the retention and drops at once whatever the new one does
+    /// not keep: the oldest beyond the count, and everything past the age.
+    pub(crate) fn set_retention(&self, retention: Retention) {
+        let mut inner = self.lock();
+        inner.retention = retention;
+        inner.records.truncate(retention.count);
+        sweep(&mut inner.records, retention, SystemTime::now());
     }
 
     pub(crate) fn push(&self, record: DispatchRecord) {
-        if self.retention.count == 0 {
+        let mut inner = self.lock();
+        let retention = inner.retention;
+        if retention.count == 0 {
             return;
         }
-        let mut records = self.lock();
-        records.push_front(record);
-        records.truncate(self.retention.count);
-        sweep(&mut records, self.retention, SystemTime::now());
+        inner.records.push_front(record);
+        inner.records.truncate(retention.count);
+        sweep(&mut inner.records, retention, SystemTime::now());
     }
 
     /// Every record, newest first.
     pub fn snapshot(&self) -> Vec<DispatchRecord> {
-        self.lock().iter().cloned().collect()
+        self.lock().records.iter().cloned().collect()
     }
 
     pub fn get(&self, id: DispatchId) -> Option<DispatchRecord> {
-        self.lock().iter().find(|r| r.id == id).cloned()
+        self.lock().records.iter().find(|r| r.id == id).cloned()
     }
 
     pub fn len(&self) -> usize {
-        self.lock().len()
+        self.lock().records.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lock().is_empty()
+        self.lock().records.is_empty()
     }
 
     /// Forget every record, for Activity's Clear.
     pub fn clear(&self) {
-        self.lock().clear();
+        self.lock().records.clear();
     }
 
-    /// The deque with everything past its age dropped.
-    fn lock(&self) -> MutexGuard<'_, VecDeque<DispatchRecord>> {
+    /// The state with everything past its age dropped.
+    fn lock(&self) -> MutexGuard<'_, Inner> {
         // A panic mid-push leaves the deque intact; keep serving it.
-        let mut records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
-        sweep(&mut records, self.retention, SystemTime::now());
-        records
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let retention = inner.retention;
+        sweep(&mut inner.records, retention, SystemTime::now());
+        inner
     }
 }
 
@@ -168,12 +189,49 @@ mod tests {
         // A record that expires while it sits in the buffer is dropped on
         // the next read: age one through the deque, behind the sweep.
         recent
-            .records
+            .inner
             .lock()
             .unwrap()
+            .records
             .push_back(record(0, now - 30 * hour));
         assert_eq!(recent.len(), 2);
         assert!(recent.get(DispatchId(0)).is_none());
+    }
+
+    #[test]
+    fn a_new_retention_sweeps_at_once() {
+        let recent = RecentDispatches::new(Retention {
+            count: 10,
+            hours: 0,
+        });
+        let now = SystemTime::now();
+        let hour = Duration::from_secs(60 * 60);
+        recent.push(record(1, now - 30 * hour));
+        recent.push(record(2, now - 2 * hour));
+        recent.push(record(3, now - hour / 2));
+        recent.push(record(4, now));
+        assert_eq!(recent.len(), 4);
+
+        // Fewer by count: the oldest go.
+        recent.set_retention(Retention { count: 3, hours: 0 });
+        assert_eq!(
+            recent.snapshot().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            vec![4, 3, 2]
+        );
+        // Shorter by age: the expired go, and later pushes honor it.
+        recent.set_retention(Retention { count: 3, hours: 1 });
+        assert_eq!(
+            recent.snapshot().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            vec![4, 3]
+        );
+        assert_eq!(recent.retention().hours, 1);
+        recent.push(record(5, now));
+        assert_eq!(recent.len(), 3);
+        // Nothing kept at all.
+        recent.set_retention(Retention { count: 0, hours: 0 });
+        assert!(recent.is_empty());
+        recent.push(record(6, now));
+        assert!(recent.is_empty());
     }
 
     #[test]
