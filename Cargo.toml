@@ -13,7 +13,7 @@ members = [
 [workspace.package]
 # The release version. `cargo xtask release-check` compares it with the tag
 # and CHANGELOG.md, so bump all three together.
-version = "0.0.1-alpha.0"
+version = "0.1.0-rc.1"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"

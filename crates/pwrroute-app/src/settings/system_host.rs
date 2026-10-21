@@ -126,7 +126,7 @@ fn routing(source: &RoutingSource, home: Option<&Path>) -> String {
     sentence
 }
 
-/// "0.0.1-alpha.0 · release · arm64".
+/// "0.1.0-rc.1 · release · arm64".
 fn version_line() -> String {
     format!(
         "{} \u{00b7} {} \u{00b7} {}",
