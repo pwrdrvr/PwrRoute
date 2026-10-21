@@ -112,12 +112,23 @@ their own modules.
   PwrRoute" (every step done) and "Later" mark it done and open the main
   window on Rules; closing the window only marks it done.
   `default_browser.rs` is the only caller of
-  `pwrroute_os::set_default_browser`, from a click; its `Os` struct takes
+  `pwrroute_os::set_default_browser`, from a click (Settings, first run's
+  step 3, the tray's "Make default browser…" row); its `Os` struct takes
   fakes, so tests never reach the OS. After a request it re-reads the
   status every second for a minute (`POLL_EVERY`, `POLL_FOR`) and on
   window activation; first run's step 3 shows the wait and "Ask again".
-  Never wire registration into a test or a launch path that runs without
-  a click.
+  It also re-reads every `RECHECK_EVERY` (a minute) for the life of the
+  app and when the tray dropdown opens, so a router with no window
+  notices losing the default; the tray chip and its Make default row
+  follow the registrar. Never wire registration into a test or a launch
+  path that runs without a click.
+- **Updates (`updater.rs`).** Velopack's auto-apply at startup is off
+  (`STARTUP`): a launch is usually for a link, and applying first would
+  drop it. A downloaded package installs from Quit (`app_menu::quit`,
+  which the tray's Quit also calls: `apply_pending_on_quit` hands it to
+  Velopack's updater, no restart) or from Settings' Restart to update.
+  `updater::install` checks again every `CHECK_EVERY` on a Velopack
+  install only. Route every new Quit through `app_menu::quit`.
 - **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
   sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`

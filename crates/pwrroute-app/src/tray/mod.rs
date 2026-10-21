@@ -38,11 +38,14 @@ pub enum TrayCommand {
     Settings,
     About,
     TogglePause,
+    /// Ask the OS to make PwrRoute the default browser: the dropdown's row
+    /// while another app has it.
+    MakeDefault,
     Quit,
 }
 
 impl TrayCommand {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::OpenMain,
         Self::TestLink,
         Self::Rules,
@@ -50,6 +53,7 @@ impl TrayCommand {
         Self::Settings,
         Self::About,
         Self::TogglePause,
+        Self::MakeDefault,
         Self::Quit,
     ];
 
@@ -64,6 +68,7 @@ impl TrayCommand {
             Self::Settings => "pwrroute.settings",
             Self::About => "pwrroute.about",
             Self::TogglePause => "pwrroute.pause",
+            Self::MakeDefault => "pwrroute.make-default",
             Self::Quit => "pwrroute.quit",
         }
     }
@@ -271,6 +276,9 @@ fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
         return;
     }
     let model = tray.model.clone();
+    // The chip and the Make default row draw what the OS says now, not what
+    // it said at the last tick.
+    default_browser::refresh(false, cx);
     let anchor = crate::macos::status_item_anchor(position, size);
     let (origin, display) = match &anchor {
         Some(anchor) => (
@@ -316,7 +324,14 @@ pub fn run(command: TrayCommand, cx: &mut App) {
                 toggle_pause(&model, cx);
             }
         }
-        TrayCommand::Quit => cx.quit(),
+        // A click, as the Settings button is: the one way to the OS.
+        TrayCommand::MakeDefault => {
+            default_browser::handle_settings_request(
+                &crate::settings::model::SettingsRequest::RegisterDefaultBrowser,
+                cx,
+            );
+        }
+        TrayCommand::Quit => crate::app_menu::quit(cx),
     }
 }
 

@@ -32,6 +32,7 @@ use crate::widgets::{badge, key_cap, switch};
 /// The element ids tests and the inspector find things by.
 pub const CARD_ID: &str = "tray-card";
 pub const PAUSE_ID: &str = "tray-pause";
+pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
 
 /// `.tray { width: 300px }`.
 pub const WIDTH: f32 = 300.0;
@@ -305,7 +306,17 @@ fn card(
                     TrayCommand::Settings,
                     hovered,
                     cx,
-                )),
+                ))
+                .when(model.shows_make_default_row(), |section| {
+                    section.child(menu_row(
+                        MAKE_DEFAULT_ID,
+                        "Make default browser\u{2026}",
+                        None,
+                        TrayCommand::MakeDefault,
+                        hovered,
+                        cx,
+                    ))
+                }),
         )
         .child(div().flex().flex_col().p(px(6.0)).child(menu_row(
             "tray-quit",
@@ -494,7 +505,10 @@ fn menu_row(
     } else {
         theme::text_primary()
     };
+    // Every command row is the height of one with a key cap, so a row
+    // without a shortcut (Make default browser…) adds up the same.
     row_frame(id, command, hovered, cx)
+        .h(px(MENU_ROW))
         .child(label_text(label, 12.0, color))
         .when_some(shortcut, |row, shortcut| {
             row.child(div().ml_auto().child(key_cap(shortcut)))
@@ -510,6 +524,7 @@ fn row_frame(
 ) -> gpui_kit::Stateful<Div> {
     div()
         .id(id)
+        .debug_selector(|| id.into())
         .flex()
         .items_center()
         .gap(px(8.0))
@@ -569,6 +584,8 @@ struct Rows {
     /// "Open Activity", or the empty-state row.
     small_rows: usize,
     pause_lines: usize,
+    /// "Make default browser…" under the commands.
+    make_default: bool,
 }
 
 impl Rows {
@@ -579,6 +596,7 @@ impl Rows {
             recents,
             small_rows: usize::from(recents == 0) + usize::from(model.shows_activity_row()),
             pause_lines: pause_lines(&model.pause_detail(), text_system),
+            make_default: model.shows_make_default_row(),
         }
     }
 
@@ -590,7 +608,8 @@ impl Rows {
             + 1.0;
         let pause =
             SECTION_PADDING + 14.0 + PAUSE_TITLE + 3.0 + PAUSE_LINE * self.pause_lines as f32 + 1.0;
-        let commands = SECTION_PADDING + MENU_ROW * 3.0 + 1.0;
+        let commands =
+            SECTION_PADDING + MENU_ROW * (3.0 + f32::from(u8::from(self.make_default))) + 1.0;
         let quit = SECTION_PADDING + MENU_ROW;
         px(2.0 + HEADER + recents + pause + commands + quit)
     }
@@ -614,8 +633,9 @@ pub fn card_height(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>) 
 }
 
 /// The tallest the card can get for this pause target: every recent row,
-/// whichever pause line wraps more, and the activity row. A few px spare
-/// absorb GPUI's rounding.
+/// whichever pause line wraps more, the activity row and the Make default
+/// row, which another browser can make appear while the dropdown is open.
+/// A few px spare absorb GPUI's rounding.
 pub fn window_height(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>) -> Pixels {
     let mut other = model.clone();
     other.set_paused(!model.is_paused());
@@ -624,6 +644,7 @@ pub fn window_height(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>
         small_rows: 1,
         pause_lines: pause_lines(&model.pause_detail(), text_system)
             .max(pause_lines(&other.pause_detail(), text_system)),
+        make_default: true,
     };
     rows.height() + px(4.0)
 }
