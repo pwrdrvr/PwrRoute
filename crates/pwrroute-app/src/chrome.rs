@@ -223,8 +223,10 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                     .child(theme::dot(theme::status_ok()))
                     // `.rail-foot .st` loses to the later `.st` rule in
                     // the stylesheet, so this line is sans 11px.
+                    // The first launch is the router, so the pid is this
+                    // process's.
                     .child(text(
-                        "router \u{00b7} running \u{00b7} pid 4182",
+                        format!("router \u{00b7} running \u{00b7} pid {}", std::process::id()),
                         11.0,
                         500.0,
                         theme::text_secondary(),

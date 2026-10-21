@@ -314,3 +314,175 @@ fn the_source_tiles_pick_the_rules_source(cx: &mut TestAppContext) {
         )]
     );
 }
+
+#[gpui_kit::test]
+fn the_privacy_pane_switches_the_journal_and_confirms_full_urls(cx: &mut TestAppContext) {
+    use super::model::JournalLevel;
+    use super::privacy::{self, Sheet};
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Privacy.nav_id());
+    assert!(visible(cx, Pane::Privacy.pane_id()));
+    for id in [
+        privacy::KEEP_COUNT_ID,
+        privacy::KEEP_HOURS_ID,
+        privacy::DESCRIPTION_ID,
+        privacy::JOURNAL_HOSTS_ID,
+        privacy::REVEAL_ID,
+        privacy::CLEAR_JOURNAL_ID,
+        privacy::EXPORT_ID,
+    ] {
+        assert!(visible(cx, id), "{id} is drawn");
+    }
+    assert!(!visible(cx, privacy::SHEET_ID));
+    let journal =
+        |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.model.privacy.journal);
+    assert_eq!(journal(cx), JournalLevel::Hosts);
+
+    // The level in force is inert; Off applies at once.
+    click(cx, privacy::JOURNAL_HOSTS_ID);
+    assert!(requests.borrow().is_empty());
+    click(cx, privacy::JOURNAL_OFF_ID);
+    assert_eq!(journal(cx), JournalLevel::Off);
+    assert_eq!(
+        *requests.borrow(),
+        [SettingsRequest::SetJournal(JournalLevel::Off)]
+    );
+
+    // Full URLs opens the sheet and moves nothing until it is confirmed.
+    click(cx, privacy::JOURNAL_FULL_ID);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.privacy.sheet()),
+        Some(Sheet::WriteFull)
+    );
+    assert!(visible(cx, privacy::SHEET_ID));
+    assert_eq!(journal(cx), JournalLevel::Off);
+    assert_eq!(requests.borrow().len(), 1);
+    click(cx, privacy::SHEET_CANCEL_ID);
+    assert_eq!(view.read_with(cx, |view, _| view.privacy.sheet()), None);
+    assert_eq!(journal(cx), JournalLevel::Off);
+    assert_eq!(requests.borrow().len(), 1);
+
+    // Escape is Cancel.
+    click(cx, privacy::JOURNAL_FULL_ID);
+    assert!(visible(cx, privacy::SHEET_ID));
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.privacy.sheet()), None);
+    assert!(!visible(cx, privacy::SHEET_ID));
+
+    click(cx, privacy::JOURNAL_FULL_ID);
+    click(cx, privacy::SHEET_CONFIRM_ID);
+    assert_eq!(view.read_with(cx, |view, _| view.privacy.sheet()), None);
+    assert_eq!(journal(cx), JournalLevel::Full);
+    assert_eq!(
+        requests.borrow()[1],
+        SettingsRequest::SetJournal(JournalLevel::Full)
+    );
+
+    // Clear now on the journal confirms too, and takes the files with it.
+    click(cx, privacy::CLEAR_JOURNAL_ID);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.privacy.sheet()),
+        Some(Sheet::ClearJournal)
+    );
+    click(cx, privacy::SHEET_CONFIRM_ID);
+    assert_eq!(requests.borrow()[2], SettingsRequest::ClearJournal);
+    assert!(view.read_with(cx, |view, _| view.model.privacy.journal_files.is_none()));
+
+    // The other buttons each send their request.
+    click(cx, privacy::CLEAR_RECENT_ID);
+    click(cx, privacy::REVEAL_ID);
+    click(cx, privacy::EXPORT_ID);
+    assert_eq!(
+        requests.borrow()[3..],
+        [
+            SettingsRequest::ClearRecent,
+            SettingsRequest::RevealJournal,
+            SettingsRequest::ExportActivity,
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn the_privacy_pane_applies_a_retention_on_return_and_keeps_it_in_range(cx: &mut TestAppContext) {
+    use super::privacy;
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Privacy.nav_id());
+    let keep = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            (view.model.privacy.keep_count, view.model.privacy.keep_hours)
+        })
+    };
+    assert_eq!(keep(cx), (500, 72));
+
+    click(cx, privacy::KEEP_COUNT_ID);
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("200");
+    draw(cx);
+    // Typing alone changes nothing: Return applies.
+    assert_eq!(keep(cx), (500, 72));
+    assert!(requests.borrow().is_empty());
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(keep(cx), (200, 72));
+    assert_eq!(
+        *requests.borrow(),
+        [SettingsRequest::SetRetention {
+            count: 200,
+            hours: 72
+        }]
+    );
+
+    // Out of range reverts to the value in force and sends nothing.
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("5");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(keep(cx), (200, 72));
+    assert_eq!(requests.borrow().len(), 1);
+
+    click(cx, privacy::KEEP_HOURS_ID);
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("24");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(keep(cx), (200, 24));
+    assert_eq!(
+        requests.borrow()[1],
+        SettingsRequest::SetRetention {
+            count: 200,
+            hours: 24
+        }
+    );
+}
+
+#[gpui_kit::test]
+fn the_privacy_pane_draws_the_journal_off_state(cx: &mut TestAppContext) {
+    use super::model::JournalLevel;
+    use super::privacy;
+    let (view, cx, requests) = settings(cx, |model| {
+        model.privacy.journal = JournalLevel::Off;
+        model.privacy.journal_files = None;
+        model.privacy.rules_keep_less = None;
+    });
+    click(cx, Pane::Privacy.nav_id());
+    assert!(visible(cx, privacy::DESCRIPTION_ID));
+    // Nothing on disk: Reveal and Clear now are inert, Export is not.
+    click(cx, privacy::CLEAR_JOURNAL_ID);
+    assert_eq!(view.read_with(cx, |view, _| view.privacy.sheet()), None);
+    click(cx, privacy::REVEAL_ID);
+    assert!(requests.borrow().is_empty());
+    click(cx, privacy::EXPORT_ID);
+    assert_eq!(*requests.borrow(), [SettingsRequest::ExportActivity]);
+
+    // Switching panes closes an open sheet.
+    click(cx, privacy::JOURNAL_FULL_ID);
+    assert!(visible(cx, privacy::SHEET_ID));
+    click(cx, Pane::Browsers.nav_id());
+    click(cx, Pane::Privacy.nav_id());
+    assert!(!visible(cx, privacy::SHEET_ID));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.model.privacy.journal),
+        JournalLevel::Off
+    );
+}

@@ -56,6 +56,8 @@ pub fn browser(name: &str, app_type: AppType) -> Browser {
         profile: String::new(),
         args: Vec::new(),
         open_in_background: None,
+        private: false,
+        privacy: pwrroute_engine::Privacy::Full,
     }
 }
 

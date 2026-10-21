@@ -27,6 +27,8 @@ use pwrroute_router::{
     ipc::Request,
 };
 
+use crate::settings_store::SettingsStore;
+
 /// How long a second launch waits for the running router to answer.
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -99,8 +101,9 @@ impl Args {
 pub enum Start {
     /// Another process routes the links; this one is done.
     Exit,
-    /// This process is the router.
-    Resident(Resident),
+    /// This process is the router. Boxed: it carries the settings and the
+    /// channels, and `Exit` nothing.
+    Resident(Box<Resident>),
 }
 
 /// The router and its IPC server, alive until the app quits.
@@ -115,6 +118,9 @@ pub struct Resident {
     /// The command line carried links, so this launch is for routing, not
     /// for the window.
     pub launched_with_links: bool,
+    /// `settings.json` as the router was started from: Settings edits it
+    /// and applies the change to the router through its handle.
+    pub settings: SettingsStore,
 }
 
 impl Resident {
@@ -171,7 +177,7 @@ pub fn start(args: &Args) -> Start {
     };
 
     let (dispatched_tx, dispatched) = async_channel::unbounded();
-    let router = spawn_router(args, Some(dispatched_tx));
+    let (router, settings) = spawn_router(args, Some(dispatched_tx));
     let handle = router.handle();
     let (activate_tx, activate) = async_channel::unbounded();
     let server = primary.and_then(|primary| {
@@ -189,13 +195,14 @@ pub fn start(args: &Args) -> Start {
     for link in links {
         let _ = handle.dispatch(link);
     }
-    Start::Resident(Resident {
+    Start::Resident(Box::new(Resident {
         router,
         _server: server,
         activate,
         dispatched,
         launched_with_links,
-    })
+        settings,
+    }))
 }
 
 /// Links the OS handed over while the app runs: GPUI's open-URLs callback.
@@ -215,7 +222,7 @@ pub fn dispatch_os_links(handle: &RouterHandle, urls: Vec<String>) {
 /// Routes the links in this process without the lock or a window, waits for
 /// each to finish, and returns.
 fn route_here_and_exit(args: &Args, links: Vec<Link>) {
-    let router = spawn_router(args, None);
+    let (router, _) = spawn_router(args, None);
     let handle = router.handle();
     for link in links {
         let _ = handle.dispatch_and_wait(link);
@@ -279,7 +286,15 @@ pub fn config_in_charge() -> Option<PathBuf> {
 /// link, so the window seeds Activity from this channel alone: nothing the
 /// router routed before the window came up is missing from it, and nothing
 /// is on it twice.
-fn spawn_router(args: &Args, dispatched: Option<async_channel::Sender<DispatchRecord>>) -> Router {
+///
+/// `settings.json` is read first: the retention and the journal it names
+/// are the router's `Options` from the first link, and the store comes back
+/// with the router so Settings edits the same values.
+fn spawn_router(
+    args: &Args,
+    dispatched: Option<async_channel::Sender<DispatchRecord>>,
+) -> (Router, SettingsStore) {
+    let settings = SettingsStore::load(pwrroute_os::data_dir());
     let environment = Environment::current();
     let choice = match &args.config {
         Some(path) => ConfigChoice::Path(path.clone()),
@@ -319,6 +334,8 @@ fn spawn_router(args: &Args, dispatched: Option<async_channel::Sender<DispatchRe
     };
     let report_all = env::var_os("PWRROUTE_DIAGNOSTICS").is_some_and(|v| v == "1");
     let options = Options {
+        retention: settings.retention(),
+        journal: settings.journal(),
         on_dispatch: Some(Arc::new(move |record| {
             report_timing(record, report_all);
             if let Some(dispatched) = &dispatched {
@@ -332,7 +349,7 @@ fn spawn_router(args: &Args, dispatched: Option<async_channel::Sender<DispatchRe
     let router =
         Router::spawn(options, Some(factory), launcher).expect("start the dispatch thread");
     let _ = handle_tx.send(router.handle());
-    router
+    (router, settings)
 }
 
 /// The config a choice names right now, before anything is loaded.
@@ -597,6 +614,8 @@ mod tests {
             profile: String::new(),
             args: Vec::new(),
             open_in_background: None,
+            private: false,
+            privacy: pwrroute_engine::Privacy::Full,
         }
     }
 

@@ -285,6 +285,20 @@ var __pwrroute = (function (api) {
     return { steps: steps, result: result };
   }
 
+  // Which of `urls` `pattern` would match, by the API's own isMatch, as a
+  // handler with that pattern would. A URL that does not parse never matches.
+  function matches(pattern, urls) {
+    return urls.map(function (u) {
+      var url;
+      try {
+        url = new URL(u);
+      } catch (ex) {
+        return false;
+      }
+      return !!api.isMatch(pattern, url, {});
+    });
+  }
+
   return {
     // Called once at load. `rules` is RulesFile::plan(); `base` is set when
     // rules.json is the whole config.
@@ -315,6 +329,7 @@ var __pwrroute = (function (api) {
     config: config,
     trace: trace,
     describe: description,
+    matches: matches,
     shorteners: function () {
       var list = api.getOption("urlShorteners", finalConfig, []);
       return Array.isArray(list) ? list.map(String) : [];

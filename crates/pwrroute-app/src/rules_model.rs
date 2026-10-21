@@ -7,7 +7,7 @@
 //! the same [`Rule`].
 
 use gpui_kit::SharedString;
-use pwrroute_engine::{self as engine, RewriteAction};
+use pwrroute_engine::{self as engine, Privacy, PrivacySetting, RewriteAction, RewriteExample};
 
 use crate::widgets::badge_for;
 
@@ -29,6 +29,9 @@ pub enum Matcher {
     Function(SharedString),
     /// The rule is switched off.
     Off,
+    /// What the rule keeps of the links it takes, when less than
+    /// everything: "private · host only", "nothing".
+    Privacy(SharedString),
 }
 
 /// One change a rewrite row shows: `kind` dimmed before the value.
@@ -100,8 +103,27 @@ pub struct Handler {
     pub openers: Vec<String>,
     pub browser: String,
     pub profile: String,
+    /// `rules[].private`: open the link in a private window.
+    pub private: bool,
+    /// `rules[].privacy` as written; `None` is the default for `private`.
+    pub privacy: Option<PrivacySetting>,
+    /// `rules[].examples`: URLs that must resolve to this handler.
+    pub examples: Vec<String>,
     /// Why the editor cannot save it, in `RulesFile::problems`'s words.
     pub problems: Vec<String>,
+}
+
+impl Handler {
+    /// The level the handler keeps links at, as the Keep control shows it:
+    /// `None` for a word the engine does not know.
+    pub fn keep(&self) -> Option<Privacy> {
+        match &self.privacy {
+            Some(PrivacySetting::Level(level)) => Some(*level),
+            Some(PrivacySetting::Unknown(_)) => None,
+            None if self.private => Some(Privacy::Host),
+            None => Some(Privacy::Full),
+        }
+    }
 }
 
 /// A rewrite row plus what its editor shows.
@@ -111,6 +133,9 @@ pub struct Rewrite {
     pub title: SharedString,
     pub patterns: Vec<String>,
     pub actions: Vec<RewriteAction>,
+    /// `rewrites[].examples`: URLs this rewrite must match, and what each
+    /// becomes.
+    pub examples: Vec<RewriteExample>,
     pub problems: Vec<String>,
 }
 
@@ -131,6 +156,9 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
         matchers.push(Matcher::Label("and"));
     }
     matchers.extend(rule.patterns.iter().map(|p| pattern(p)));
+    if let Some(label) = privacy_chip(rule.private, rule.effective_privacy()) {
+        matchers.push(Matcher::Privacy(label.into()));
+    }
     if !rule.enabled {
         matchers.push(Matcher::Off);
     }
@@ -156,13 +184,43 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
         openers: rule.opener.clone(),
         browser: rule.browser.clone(),
         profile: rule.profile.clone(),
+        private: rule.private,
+        privacy: rule.privacy.clone(),
+        examples: rule.examples.clone(),
         problems,
     }
 }
 
+/// The row chip for a rule that keeps less than everything, or opens a
+/// private window: "private · host only", "private", "nothing". `None`
+/// for a plain rule.
+pub fn privacy_chip(private: bool, level: Privacy) -> Option<String> {
+    let keep = match level {
+        Privacy::Full => None,
+        Privacy::Host => Some("host only"),
+        Privacy::None => Some("nothing"),
+    };
+    match (private, keep) {
+        (false, None) => None,
+        (true, None) => Some("private".into()),
+        (false, Some(keep)) => Some(keep.into()),
+        (true, Some(keep)) => Some(format!("private \u{00b7} {keep}")),
+    }
+}
+
+/// The Keep control's three choices, in order, with their labels.
+pub const KEEP_LEVELS: [(Privacy, &str); 3] = [
+    (Privacy::Full, "Full"),
+    (Privacy::Host, "Host only"),
+    (Privacy::None, "Nothing"),
+];
+
 /// The row and editor model of a rewrite.
 pub fn rewrite(rewrite: &engine::Rewrite, badge: RowBadge, problems: Vec<String>) -> Rewrite {
     let mut matchers: Vec<Matcher> = rewrite.patterns.iter().map(|p| pattern(p)).collect();
+    if let Some(label) = privacy_chip(false, rewrite.effective_privacy()) {
+        matchers.push(Matcher::Privacy(label.into()));
+    }
     if !rewrite.enabled {
         matchers.push(Matcher::Off);
     }
@@ -182,6 +240,7 @@ pub fn rewrite(rewrite: &engine::Rewrite, badge: RowBadge, problems: Vec<String>
         title: title(&rewrite.patterns, "New rewrite"),
         patterns: rewrite.patterns.clone(),
         actions: rewrite.actions.clone(),
+        examples: rewrite.examples.clone(),
         problems,
     }
 }
@@ -359,6 +418,7 @@ mod tests {
                 profile: "default-release".into(),
                 opener: vec!["com.tinyspeck.slackmacgap".into()],
                 enabled: false,
+                ..engine::Rule::default()
             },
             RowBadge::None,
             Vec::new(),
@@ -420,6 +480,7 @@ mod tests {
                 patterns: vec!["x.com/*".into()],
                 actions: actions[..2].to_vec(),
                 enabled: true,
+                ..engine::Rewrite::default()
             },
             RowBadge::None,
             Vec::new(),
@@ -436,6 +497,54 @@ mod tests {
                     value: "https".into()
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn a_private_handler_says_what_it_keeps() {
+        let row = handler(
+            &engine::Rule {
+                patterns: vec!["bank.example/*".into()],
+                browser: "Safari".into(),
+                private: true,
+                ..engine::Rule::default()
+            },
+            RowBadge::None,
+            Vec::new(),
+        );
+        assert_eq!(
+            row.rule.matchers,
+            [
+                Matcher::Pattern("bank.example/*".into()),
+                Matcher::Privacy("private \u{00b7} host only".into()),
+            ]
+        );
+        assert!(row.private);
+        assert_eq!(row.keep(), Some(Privacy::Host));
+        assert_eq!(privacy_chip(false, Privacy::Full), None);
+        assert_eq!(
+            privacy_chip(true, Privacy::Full).as_deref(),
+            Some("private")
+        );
+        assert_eq!(
+            privacy_chip(false, Privacy::None).as_deref(),
+            Some("nothing")
+        );
+        let unknown = handler(
+            &engine::Rule {
+                patterns: vec!["a/*".into()],
+                browser: "Safari".into(),
+                privacy: Some(PrivacySetting::Unknown("hidden".into())),
+                ..engine::Rule::default()
+            },
+            RowBadge::None,
+            Vec::new(),
+        );
+        assert_eq!(unknown.keep(), None);
+        assert_eq!(
+            unknown.rule.matchers[1],
+            Matcher::Privacy("nothing".into()),
+            "an unknown word keeps nothing, as the engine treats it"
         );
     }
 

@@ -7,16 +7,56 @@ their own modules.
 - **Fixtures only for tests and the `screens` example.** The Rules screen
   reads and writes the real `rules.json` through `rules_store.rs` (tests
   write `fixtures/rules.json` to a scratch directory); Activity draws the
-  router's real records; first run is built from `onboarding.rs` facts.
-  The tray's pause state still draws contrived data (`TrayModel::fixture`).
+  router's real records; first run is built from `onboarding.rs` facts;
+  Test a link starts empty, and its app picker offers the apps the rules
+  name plus `fixtures::OPENERS` under an "Examples" heading (their order
+  is fixed: Activity's re-test picks by position). The tray follows the
+  feed and the OS; its pause target is `rules.json`'s fallback, read once
+  at launch. Settings still draws `settings::fixtures::model()` for every
+  pane but the default-browser card and Privacy (see `settings/AGENTS.md`).
   Never a real URL, Activity entry or trace, in code or in a screenshot:
   `fixtures::activity()` and `FirstRunModel::fixture` exist for tests.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.
-  Rows, today's counts and Clear all go through the feed, never around it.
+  Rows, today's counts and Clear all go through the feed, never around it
+  (`Feed::reload` takes the router's buffer back after Settings changes the
+  retention or clears the journal). A record is a row at `Full` or `Host`
+  (the host-only chip) and a count at `None`; the filters are All,
+  Unrouted (the default or the fallback took it), Failed, Rewritten and
+  Private, each with its count. The retention sentence under the list and
+  the toolbar's note come from `RouterHandle::retention()`, never from a
+  literal here. With the journal on, journaled records no longer in memory
+  are listed below a "From the journal" divider (`Feed::journal`, read from
+  disk on each sync, at most `JOURNAL_ROWS`). Export… goes through
+  `settings::privacy_host::export`, the OS save dialog and nothing else.
   Full URLs stay in that entity and the router's buffer; nothing in the app
-  writes one to disk or a log.
+  writes one to disk or a log. The row's "⋯" opens `activity::row_menu`
+  and the expanded row's "Add a rule…" calls `PwrRoute::add_rule`, both in
+  `activity_actions.rs`; a `RowKey` names the row, and `Feed::record` reads
+  a journaled row's record back from the journal.
+- **Settings persist in `settings.json` (`settings_store.rs`).** The data
+  directory's `settings.json` holds Activity's retention and the journal
+  (`activity.keep`, `activity.journal`, `activity.journalDays`); an absent
+  file is the defaults, and a bad one is reported and ignored. `router.rs`
+  reads it before the router spawns, so `Options::retention` and
+  `Options::journal` (`<data dir>/journal`) are in force from the first
+  link; `settings_store::install` then makes the same store and the
+  router's handle the globals Settings › Privacy edits, saving first and
+  applying through `set_retention` / `set_journal`. The file carries
+  numbers and a level, never a link.
+- **Examples and tests are the only URLs that reach disk, and only by
+  hand.** `rules_store.rs` writes a rule's `examples`, a rewrite's
+  `url`/`becomes` pairs, `rules[].private` / `rules[].privacy` and the
+  top-level `tests[]` with the rest of `rules.json`; every control that adds
+  one (the editor's Add example, Test a link's Save as test, Activity's Add a
+  rule / Save as example / Save as test in the row's "⋯" menu,
+  `activity_actions.rs`) says so in its copy. `try_it::TestRuns` runs them through an engine built from the
+  config in charge and the edited rules (the same sources as the router's
+  resolver, so indexes match the rows) at window open, after every debounced
+  save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
+  Activity records report a `rules.json` handler as `Matched::Unreported`,
+  so Save as example resolves the link again through `Probe` at click time.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
   `PopUp` window (design 1a/1b); recents there are hosts only
@@ -34,11 +74,16 @@ their own modules.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
   buttons do; `onboarding.rs` builds the real ones and the model from
   `Facts` (tests write their own facts and count hook calls). `state.json`
-  in the data directory says whether first run already ran.
+  in the data directory says whether first run already ran. "Open
+  PwrRoute" (every step done) and "Later" mark it done and open the main
+  window on Rules; closing the window only marks it done.
   `default_browser.rs` is the only caller of
   `pwrroute_os::set_default_browser`, from a click; its `Os` struct takes
-  fakes, so tests never reach the OS. Never wire registration into a test
-  or a launch path that runs without a click.
+  fakes, so tests never reach the OS. After a request it re-reads the
+  status every second for a minute (`POLL_EVERY`, `POLL_FOR`) and on
+  window activation; first run's step 3 shows the wait and "Ask again".
+  Never wire registration into a test or a launch path that runs without
+  a click.
 - **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
   sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`

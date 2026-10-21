@@ -1,0 +1,53 @@
+{
+  "defaultBrowser": "Firefox",
+  "rewrites": [
+    {
+      "match": ["x.com/*", "twitter.com/*"],
+      "actions": [{ "setHost": "xcancel.com" }, { "dropQuery": ["utm_*"] }],
+      "privacy": "host",
+      "examples": [
+        {
+          "url": "https://x.com/pwrdrvr/status/1?utm_source=slack",
+          "becomes": "https://xcancel.com/pwrdrvr/status/1"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "match": "*.atlassian.net/*",
+      "browser": "Google Chrome",
+      "profile": "Work",
+      "examples": ["https://acme.atlassian.net/browse/X-1", "https://acme.atlassian.net/wiki/"]
+    },
+    {
+      "match": "xcancel.com/*",
+      "browser": "Safari",
+      "private": true,
+      "examples": ["https://x.com/pwrdrvr/status/1"]
+    },
+    {
+      "match": "bank.example/*",
+      "browser": "Safari",
+      "privacy": "none",
+      "examples": ["https://bank.example/login"]
+    },
+    {
+      "match": "zoom.us/*",
+      "browser": "us.zoom.xos",
+      "enabled": false,
+      "examples": ["https://zoom.us/j/1"]
+    }
+  ],
+  "tests": [
+    {
+      "url": "https://acme.atlassian.net/browse/X-1",
+      "expect": { "browser": "google chrome", "profile": "Work" }
+    },
+    {
+      "url": "https://x.com/pwrdrvr/status/1?utm_source=slack",
+      "expect": { "browser": "Safari", "url": "https://xcancel.com/pwrdrvr/status/1" }
+    },
+    { "url": "https://unrouted.example/", "expect": { "browser": "Firefox" } }
+  ]
+}

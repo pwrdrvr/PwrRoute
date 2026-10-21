@@ -19,6 +19,9 @@
 #[path = "../src/activity.rs"]
 mod activity;
 #[cfg(target_os = "macos")]
+#[path = "../src/activity_actions.rs"]
+mod activity_actions;
+#[cfg(target_os = "macos")]
 #[path = "../src/app.rs"]
 mod app;
 #[cfg(target_os = "macos")]
@@ -73,6 +76,9 @@ mod rules_view;
 #[cfg(target_os = "macos")]
 #[path = "../src/settings/mod.rs"]
 mod settings;
+#[cfg(target_os = "macos")]
+#[path = "../src/settings_store.rs"]
+mod settings_store;
 #[cfg(target_os = "macos")]
 #[path = "../src/test_link.rs"]
 mod test_link;
@@ -162,15 +168,102 @@ fn main() {
     });
     shoot("app-1b", Some(config), &|_, _, _| {});
     shoot("app-2a", None, &|app, window, cx| {
+        // The design's example; the window itself starts empty.
+        app.test.url.set(fixtures::TEST_URL);
+        app.test.opener = fixtures::TEST_OPENER;
         app.navigate(Screen::TestLink, window, cx);
+    });
+    shoot("app-2a-empty", None, &|app, window, cx| {
+        app.navigate(Screen::TestLink, window, cx);
+    });
+    shoot("app-2a-picker", None, &|app, window, cx| {
+        app.navigate(Screen::TestLink, window, cx);
+        app.test.picking = true;
     });
     shoot("app-2b", None, &|app, window, cx| {
         app.activity.load(fixtures::activity());
-        app.activity.expanded = Some(app.activity.rows[1].id);
+        app.activity.expanded = Some(app.activity.rows[1].key);
         app.navigate(Screen::Activity, window, cx);
     });
     shoot("app-2b-empty", None, &|app, window, cx| {
         app.navigate(Screen::Activity, window, cx);
+    });
+
+    // Examples, saved tests and the Run tests strip, over a copy of the
+    // design's rules with contrived examples on them (one wrong on purpose).
+    // The store is given a scratch path so a debounced save never reaches
+    // the fixture file.
+    fn with_examples(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+        let mut file = fixtures::rules_file();
+        file.rewrites[0]
+            .examples
+            .push(pwrroute_engine::RewriteExample {
+                url: "https://x.com/pwrdrvr/status/1842".into(),
+                becomes: "https://xcancel.com/pwrdrvr/status/1842".into(),
+            });
+        file.rules[0]
+            .examples
+            .push("https://meet.google.com/abc-defg-hij".into());
+        file.rules[1]
+            .examples
+            .push("https://github.com/pwrdrvr/PwrGit/pull/361".into());
+        file.rules[3].examples.extend([
+            "https://news.ycombinator.com/item?id=41".to_owned(),
+            "https://example.atlassian.net/browse/PG-12".to_owned(),
+        ]);
+        file.rules[3].private = true;
+        file.tests.push(pwrroute_engine::RouteTest {
+            url: "https://docs.google.com/document/d/1".into(),
+            opener: Some("Slack:com.tinyspeck.slackmacgap".into()),
+            expect: pwrroute_engine::Expectation {
+                browser: "Firefox".into(),
+                profile: Some("default-release".into()),
+                url: None,
+            },
+        });
+        app.store = rules_store::RulesStore::from_file(
+            Some(std::env::temp_dir().join("pwrroute-screens-rules.json")),
+            file,
+            true,
+            Some(std::time::SystemTime::now()),
+        );
+        app.refresh(cx);
+        app.run_tests(cx);
+    }
+    shoot("app-1a-examples", None, &|app, _, cx| {
+        with_examples(app, cx);
+        app.select(Selection::Handler(3), cx);
+    });
+
+    // Activity's Add a rule sheet for the design's apple.com record, which
+    // the default browser took, with contrived browsers to pick from.
+    shoot("app-2b-add-rule", None, &|app, window, cx| {
+        let records = fixtures::activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.browsers = vec![
+            activity_actions::BrowserChoice {
+                name: "Google Chrome".into(),
+                profiles: vec!["Personal".into(), "Work".into()],
+            },
+            activity_actions::BrowserChoice {
+                name: "Firefox".into(),
+                profiles: vec!["default-release".into()],
+            },
+            activity_actions::BrowserChoice {
+                name: "Safari".into(),
+                profiles: Vec::new(),
+            },
+        ];
+        app.navigate(Screen::Activity, window, cx);
+        app.add_rule(
+            activity::RowKey {
+                id: pwrroute_router::DispatchId(2),
+                journaled: false,
+            },
+            window,
+            cx,
+        );
     });
 
     // Settings, at each option's `.dv-card` size in headless Chrome less
@@ -179,6 +272,7 @@ fn main() {
         ("settings-1a", settings::Pane::LocalAgents, 1603.0),
         ("settings-1b", settings::Pane::Configuration, 1315.0),
         ("settings-1c", settings::Pane::Browsers, 880.0),
+        ("settings-privacy", settings::Pane::Privacy, 1560.0),
     ] {
         let mut cx = HeadlessAppContext::with_platform(
             gpui_kit::platform::current_platform(true).text_system(),

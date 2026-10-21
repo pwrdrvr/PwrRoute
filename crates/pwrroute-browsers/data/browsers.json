@@ -2,7 +2,8 @@
   "_origin": [
     "Entries with \"finicky\": true come from Finicky's apps/finicky/src/browser/browsers.json (MIT, Copyright (c) 2015-2025 John Sterling); their macOS bundle_id, app_name, engine and profile directory are Finicky's.",
     "Everything else (Windows, Linux, and the browsers Finicky lacks) was added for PwrRoute; each entry's sources say where its facts came from.",
-    "Path templates start with a base-directory token; see Env::expand in src/env.rs."
+    "Path templates start with a base-directory token; see Env::expand in src/env.rs.",
+    "private_flag is the engine's by default: Chromium's --incognito (chrome/common/chrome_switches.cc, kIncognito) and Firefox's --private-window (wiki.mozilla.org/Firefox/CommandLineOptions); WebKit browsers have none. An entry sets it only to override: Edge spells it --inprivate, and Arc and Dia take none."
   ],
   "browsers": [
     {
@@ -244,6 +245,7 @@
       "id": "edge",
       "name": "Microsoft Edge",
       "engine": "chromium",
+      "private_flag": "inprivate",
       "finicky": true,
       "macos": {
         "bundle_id": "com.microsoft.edgemac",
@@ -280,14 +282,16 @@
         "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
         "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
         "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
-        "https://packages.microsoft.com/yumrepos/edge"
+        "https://packages.microsoft.com/yumrepos/edge",
+        "https://answers.microsoft.com/en-us/microsoftedge/forum/msedge_open-msedge_win10/access-microsoft-edge-using-command-line/03a4add6-9ca4-4fbb-a183-aaa763a0ab76"
       ],
-      "notes": "/usr/bin/microsoft-edge is shared by every channel's package, so only microsoft-edge-stable is used. Linux profile directories follow Chromium's naming; Microsoft does not document them."
+      "notes": "Edge spells the private-window switch --inprivate. /usr/bin/microsoft-edge is shared by every channel's package, so only microsoft-edge-stable is used. Linux profile directories follow Chromium's naming; Microsoft does not document them."
     },
     {
       "id": "edge-beta",
       "name": "Microsoft Edge Beta",
       "engine": "chromium",
+      "private_flag": "inprivate",
       "macos": {
         "bundle_id": "com.microsoft.edgemac.Beta",
         "app_name": "Microsoft Edge Beta",
@@ -322,14 +326,16 @@
         "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
         "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
         "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
-        "https://packages.microsoft.com/yumrepos/edge"
+        "https://packages.microsoft.com/yumrepos/edge",
+        "https://answers.microsoft.com/en-us/microsoftedge/forum/msedge_open-msedge_win10/access-microsoft-edge-using-command-line/03a4add6-9ca4-4fbb-a183-aaa763a0ab76"
       ],
-      "notes": "Linux profile directories follow Chromium's naming; Microsoft does not document them."
+      "notes": "Edge spells the private-window switch --inprivate. Linux profile directories follow Chromium's naming; Microsoft does not document them."
     },
     {
       "id": "edge-dev",
       "name": "Microsoft Edge Dev",
       "engine": "chromium",
+      "private_flag": "inprivate",
       "macos": {
         "bundle_id": "com.microsoft.edgemac.Dev",
         "app_name": "Microsoft Edge Dev",
@@ -364,14 +370,16 @@
         "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
         "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
         "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
-        "https://packages.microsoft.com/yumrepos/edge"
+        "https://packages.microsoft.com/yumrepos/edge",
+        "https://answers.microsoft.com/en-us/microsoftedge/forum/msedge_open-msedge_win10/access-microsoft-edge-using-command-line/03a4add6-9ca4-4fbb-a183-aaa763a0ab76"
       ],
-      "notes": "Linux profile directories follow Chromium's naming; Microsoft does not document them."
+      "notes": "Edge spells the private-window switch --inprivate. Linux profile directories follow Chromium's naming; Microsoft does not document them."
     },
     {
       "id": "edge-canary",
       "name": "Microsoft Edge Canary",
       "engine": "chromium",
+      "private_flag": "inprivate",
       "macos": {
         "bundle_id": "com.microsoft.edgemac.Canary",
         "app_name": "Microsoft Edge Canary",
@@ -404,9 +412,10 @@
         "https://learn.microsoft.com/en-us/deployedge/edge-default-browser",
         "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
         "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
-        "https://packages.microsoft.com/yumrepos/edge"
+        "https://packages.microsoft.com/yumrepos/edge",
+        "https://answers.microsoft.com/en-us/microsoftedge/forum/msedge_open-msedge_win10/access-microsoft-edge-using-command-line/03a4add6-9ca4-4fbb-a183-aaa763a0ab76"
       ],
-      "notes": "Windows Canary is per-user; its ProgID is unverified. Linux profile directories follow Chromium's naming; Microsoft does not document them."
+      "notes": "Edge spells the private-window switch --inprivate. Windows Canary is per-user; its ProgID is unverified. Linux profile directories follow Chromium's naming; Microsoft does not document them."
     },
     {
       "id": "brave",
@@ -916,6 +925,7 @@
       "name": "Arc",
       "engine": "chromium",
       "profile_flag": "none",
+      "private_flag": "none",
       "macos": {
         "bundle_id": "company.thebrowser.Browser",
         "app_name": "Arc"
@@ -927,13 +937,14 @@
         "https://sindresorhus.com/velja",
         "https://github.com/microsoft/winget-pkgs/tree/master/manifests/t/TheBrowserCompany/Arc"
       ],
-      "notes": "Arc ignores --profile-directory (its Spaces are reachable only from AppleScript). No Windows entry: it ships as an MSIX package with no fixed executable path. No Linux build."
+      "notes": "Arc ignores --profile-directory (its Spaces are reachable only from AppleScript); whether it honors --incognito is unverified, so no private-window flag is sent. No Windows entry: it ships as an MSIX package with no fixed executable path. No Linux build."
     },
     {
       "id": "dia",
       "name": "Dia",
       "engine": "chromium",
       "profile_flag": "none",
+      "private_flag": "none",
       "macos": {
         "bundle_id": "company.thebrowser.dia",
         "app_name": "Dia"
@@ -944,7 +955,7 @@
         "https://github.com/raycast/extensions/blob/main/extensions/browser-bookmarks/src/hooks/useAvailableBrowsers.ts",
         "https://sindresorhus.com/velja"
       ],
-      "notes": "Dia ignores --profile-directory. No Windows entry (MSIX, early build). No Linux build."
+      "notes": "Dia ignores --profile-directory; whether it honors --incognito is unverified, so no private-window flag is sent. No Windows entry (MSIX, early build). No Linux build."
     },
     {
       "id": "firefox",

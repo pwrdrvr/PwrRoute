@@ -13,13 +13,14 @@ use gpui_kit::{
 use pwrroute_engine::{DefaultHost, Engine, Limits, discovery};
 
 use crate::activity::Activity;
+use crate::activity_actions::{self, Actions, BrowserChoice};
 use crate::config_view::{self, ConfigInCharge};
 use crate::editor::{Field, Rail};
 use crate::rules_model::{self, Handler, Rewrite};
 use crate::rules_store::RulesStore;
 use crate::test_link::TestLink;
 use crate::text_field::{Edit, TextField};
-use crate::try_it::Probe;
+use crate::try_it::{Probe, TestRuns};
 use crate::{activity, chrome, e2e, editor, router, rules_view, test_link, theme};
 
 /// The element id of the window's root, for tests and the inspector.
@@ -70,14 +71,23 @@ pub struct PwrRoute {
     pub selection: Option<Selection>,
     /// The editor's fields for the selected rule.
     pub rail: Option<Rail>,
-    /// Try it's engine over the rules as edited.
-    probe: Probe,
+    /// Try it's engine over the rules as edited, which Activity's Add a
+    /// rule sheet also asks about collisions.
+    pub(crate) probe: Probe,
+    /// The file's examples and tests, run on every save.
+    pub tests: TestRuns,
     /// A Finicky config is in charge: the Rules screen is option 1b.
     pub config: Option<ConfigInCharge>,
     /// 1b's folded visual rules are open.
     pub visual_rules_expanded: bool,
     pub test: TestLink,
     pub activity: Activity,
+    /// Activity's row actions: the Add a rule sheet and what the last
+    /// action did.
+    pub actions: Actions,
+    /// The browsers the sheet offers, with their profiles: detected at
+    /// launch; a test or screenshot sets its own.
+    pub browsers: Vec<BrowserChoice>,
     /// A debounced save is on its way.
     save_scheduled: bool,
 }
@@ -87,7 +97,10 @@ impl PwrRoute {
     /// `rules.json`.
     pub fn new(cx: &mut Context<'_, Self>) -> Self {
         let store = RulesStore::load(discovery::rules_path(&discovery::Environment::current()));
-        Self::with_store(router::config_in_charge(), std::env::home_dir(), store, cx)
+        let mut this =
+            Self::with_store(router::config_in_charge(), std::env::home_dir(), store, cx);
+        this.browsers = activity_actions::detected_browsers();
+        this
     }
 
     /// The window as it is with `config` in charge (`None`: the visual
@@ -122,15 +135,22 @@ impl PwrRoute {
             selection,
             rail: None,
             probe: Probe::new(config.clone(), store.edited()),
+            tests: TestRuns::new(config.clone(), store.edited()),
             test: TestLink::new(config, engine.and_then(Result::ok), store.written(), cx),
             store,
             home,
             config: in_charge,
             visual_rules_expanded: false,
             activity: Activity::new(cx),
+            actions: Actions::default(),
+            browsers: Vec::new(),
             save_scheduled: false,
         };
         this.rebuild_rail(cx);
+        // The file's examples and tests, as it was opened.
+        if this.tests.counts() != (0, 0) {
+            this.tests.run();
+        }
         this
     }
 
@@ -195,10 +215,10 @@ impl PwrRoute {
 
     // --- edits -----------------------------------------------------------
 
-    /// The store changed: redraw the rows, hand Test a link and Try it the
-    /// new rules, and write the file after the debounce. The rail's fields
-    /// are kept, so typing keeps its focus.
-    fn refresh(&mut self, cx: &mut Context<'_, Self>) {
+    /// The store changed: redraw the rows, hand Test a link, Try it and the
+    /// test runs the new rules, and write the file after the debounce. The
+    /// rail's fields are kept, so typing keeps its focus.
+    pub(crate) fn refresh(&mut self, cx: &mut Context<'_, Self>) {
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
         let order = self.order();
@@ -208,6 +228,7 @@ impl PwrRoute {
             .or_else(|| order.last().copied());
         self.test.set_rules(self.store.written());
         self.probe.set_rules(self.store.edited());
+        self.tests.set_rules(self.store.edited());
         self.try_it();
         if self.store.needs_save() {
             self.schedule_save(cx);
@@ -216,7 +237,7 @@ impl PwrRoute {
     }
 
     /// The selected rule's editor, fresh from the store, and its Try it.
-    fn rebuild_rail(&mut self, cx: &mut Context<'_, Self>) {
+    pub(crate) fn rebuild_rail(&mut self, cx: &mut Context<'_, Self>) {
         self.rail = match self.selection {
             Some(Selection::Handler(i)) => self.handlers.get(i).map(|h| Rail::for_handler(h, cx)),
             Some(Selection::Rewrite(i)) => self.rewrites.get(i).map(|r| Rail::for_rewrite(r, cx)),
@@ -285,6 +306,11 @@ impl PwrRoute {
             // A save turns drafts into saved rules: the badges change.
             self.rewrites = self.store.rewrites();
             self.handlers = self.store.handlers();
+        }
+        // Tests run on save: every example and test, against the rules as
+        // they now stand.
+        if self.tests.report().is_none() && self.tests.counts() != (0, 0) {
+            self.tests.run();
         }
         cx.notify();
     }
@@ -522,6 +548,8 @@ impl Render for PwrRoute {
             (Screen::Activity, _) => activity::pane(self, window, cx).into_any_element(),
         };
         let rail = self.editing().then(|| editor::rail(self, window, cx));
+        // Activity's Add a rule sheet, over everything.
+        let sheet = activity_actions::sheet(self, window, cx);
         div()
             .on_children_prepainted(|bounds, window, cx| {
                 e2e::frame(window);
@@ -533,6 +561,7 @@ impl Render for PwrRoute {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_key_down(event, window, cx);
             }))
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -550,5 +579,6 @@ impl Render for PwrRoute {
                     .child(pane)
                     .children(rail),
             )
+            .children(sheet)
     }
 }

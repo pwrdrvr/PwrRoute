@@ -4,11 +4,18 @@
 //! The rail runs its own [`Engine`] over the rules as edited, drafts and
 //! all, so a new handler can say "this handler would take it" before it is
 //! complete enough to be saved. Test a link resolves the saved file instead.
+//!
+//! [`TestRuns`] runs the file's examples and tests the same way, over the
+//! config in charge and the rules as edited, and keeps the report until the
+//! rules change; the Rules screen's chips and Run tests strip read it. The
+//! examples and tests are URLs the user saved into `rules.json`; nothing
+//! here writes one anywhere.
 
-use std::{path::PathBuf, rc::Rc};
+use std::{path::PathBuf, rc::Rc, time::SystemTime};
 
 use pwrroute_engine::{
-    DefaultHost, Engine, Limits, Link, Opener, RulesFile, Source, Stage, Step, Trace,
+    DefaultHost, Engine, Limits, Link, Opener, RulesFile, Source, Stage, Step, TestFailure,
+    TestReport, TestSource, Trace,
 };
 
 use crate::app::Selection;
@@ -78,6 +85,16 @@ impl Probe {
         }
     }
 
+    /// The engine over the rules as they stand, built on first use.
+    fn engine(&mut self) -> Result<&Engine, String> {
+        if self.engine.is_none() {
+            self.engine = Some(load(self.config.as_deref(), &self.rules)?);
+        }
+        self.engine
+            .as_ref()
+            .ok_or_else(|| "The rules did not load.".to_owned())
+    }
+
     /// What `selection` makes of `sample`, as from `opener`.
     pub fn run(&mut self, sample: &str, opener: Option<&str>, selection: Selection) -> TryResult {
         let url = match pwrroute_router::normalize_url(sample) {
@@ -89,33 +106,138 @@ impl Probe {
                 );
             }
         };
-        if self.engine.is_none() {
-            let sources = pwrroute_engine::Sources {
-                config: self.config.clone(),
-                rules: self.rules.clone(),
-            };
-            match Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default()) {
-                Ok(engine) => self.engine = Some(engine),
-                Err(error) => {
-                    return TryResult::text(
-                        Verdict::Broken,
-                        format!("The rules did not load: {error:#}"),
-                    );
-                }
-            }
-        }
-        let Some(engine) = &self.engine else {
-            return TryResult::text(Verdict::Broken, "The rules did not load.");
-        };
         let opener = opener.map(|app| Opener {
             name: app.to_owned(),
             bundle_id: app.to_owned(),
             ..Opener::default()
         });
-        match engine.trace(&Link::new(url), opener.as_ref()) {
+        match self.trace(&url, opener.as_ref()) {
             Ok(trace) => interpret(&trace, &self.rules, selection),
-            Err(error) => TryResult::text(Verdict::Broken, format!("The rules failed: {error:#}")),
+            Err(error) => TryResult::text(Verdict::Broken, error),
         }
+    }
+
+    /// Resolves `url` (already normalized) as from `opener`, with every
+    /// step.
+    pub fn trace(&mut self, url: &str, opener: Option<&Opener>) -> Result<Trace, String> {
+        self.engine()?
+            .trace(&Link::new(url), opener)
+            .map_err(|error| format!("The rules failed: {error:#}"))
+    }
+
+    /// Which of `urls` `pattern` would match, by Finicky's own `isMatch`:
+    /// what a candidate rule would also catch.
+    pub fn collisions(&mut self, pattern: &str, urls: &[&str]) -> Result<Vec<String>, String> {
+        self.engine()?
+            .collisions(pattern, urls)
+            .map_err(|error| format!("The pattern could not be matched: {error:#}"))
+    }
+
+    /// The handler of `rules.json` that takes `url`, as from `opener`, by
+    /// its position in the file; `None` when the default, a config handler
+    /// or nothing takes it.
+    pub fn winning_handler(&mut self, url: &str, opener: Option<&Opener>) -> Option<usize> {
+        let trace = self.trace(url, opener).ok()?;
+        let winner = trace.winner()?;
+        (winner.source == Source::Rules && winner.stage == Stage::Handler).then_some(winner.index)
+    }
+}
+
+/// An engine over `config` (when one is in charge) and `rules`, as the
+/// router loads the two together.
+fn load(config: Option<&std::path::Path>, rules: &RulesFile) -> Result<Engine, String> {
+    let sources = pwrroute_engine::Sources {
+        config: config.map(std::path::Path::to_path_buf),
+        rules: rules.clone(),
+    };
+    Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())
+        .map_err(|error| format!("The rules did not load: {error:#}"))
+}
+
+/// The file's examples and tests, run through an engine over the config in
+/// charge and the rules as edited (so a rule's report sits on its row), and
+/// the report kept until the rules change.
+pub struct TestRuns {
+    config: Option<PathBuf>,
+    rules: RulesFile,
+    report: Option<Result<TestReport, String>>,
+    ran_at: Option<SystemTime>,
+}
+
+impl TestRuns {
+    pub fn new(config: Option<PathBuf>, rules: RulesFile) -> Self {
+        Self {
+            config,
+            rules,
+            report: None,
+            ran_at: None,
+        }
+    }
+
+    /// The rules changed: the report is stale until [`TestRuns::run`].
+    pub fn set_rules(&mut self, rules: RulesFile) {
+        if self.rules != rules {
+            self.rules = rules;
+            self.report = None;
+        }
+    }
+
+    /// Runs every example and test now and keeps the report.
+    pub fn run(&mut self) -> &Result<TestReport, String> {
+        let report = load(self.config.as_deref(), &self.rules).and_then(|engine| {
+            engine
+                .test_rules(None)
+                .map_err(|error| format!("The tests did not run: {error:#}"))
+        });
+        self.report = Some(report);
+        self.ran_at = Some(SystemTime::now());
+        self.report.as_ref().expect("just set")
+    }
+
+    /// The last report, when the rules have not changed since it ran.
+    pub fn report(&self) -> Option<&Result<TestReport, String>> {
+        self.report.as_ref()
+    }
+
+    /// When the report was made.
+    pub fn ran_at(&self) -> Option<SystemTime> {
+        self.ran_at
+    }
+
+    /// How many examples the rules carry (handlers and rewrites), and how
+    /// many saved tests.
+    pub fn counts(&self) -> (usize, usize) {
+        let examples: usize = self
+            .rules
+            .rules
+            .iter()
+            .map(|r| r.examples.len())
+            .sum::<usize>()
+            + self
+                .rules
+                .rewrites
+                .iter()
+                .map(|r| r.examples.len())
+                .sum::<usize>();
+        (examples, self.rules.tests.len())
+    }
+
+    /// The failure of one example or test, if it failed in the last report.
+    pub fn failure(&self, source: TestSource) -> Option<&TestFailure> {
+        self.report
+            .as_ref()?
+            .as_ref()
+            .ok()?
+            .failures
+            .iter()
+            .find(|f| f.source == source)
+    }
+
+    /// Whether `source` ran and passed in the last report: `None` while
+    /// there is no report.
+    pub fn passed(&self, source: TestSource) -> Option<bool> {
+        let report = self.report.as_ref()?.as_ref().ok()?;
+        Some(!report.failures.iter().any(|f| f.source == source))
     }
 }
 
@@ -378,6 +500,84 @@ mod tests {
             result,
             TryResult::text(Verdict::Takes, "This handler opens that link in Firefox.")
         );
+    }
+
+    #[test]
+    fn test_runs_report_each_example_and_test_by_its_place() {
+        let mut rules = crate::fixtures::rules_file();
+        rules.rules[1].examples = vec![
+            "https://pwrdrvr.atlassian.net/browse/PG-12".into(),
+            "https://github.com/pwrdrvr/PwrGit/pull/361".into(),
+        ];
+        rules.rewrites[0].examples = vec![pwrroute_engine::RewriteExample {
+            url: "https://x.com/a".into(),
+            becomes: "https://xcancel.com/a".into(),
+        }];
+        rules.tests = vec![pwrroute_engine::RouteTest {
+            url: "https://www.apple.com/macos/".into(),
+            opener: None,
+            expect: pwrroute_engine::Expectation {
+                browser: "Google Chrome".into(),
+                profile: Some("Personal".into()),
+                url: None,
+            },
+        }];
+        let mut runs = TestRuns::new(None, rules.clone());
+        assert!(runs.report().is_none());
+        assert_eq!(runs.counts(), (3, 1));
+        let report = runs.run().as_ref().expect("the tests ran");
+        assert_eq!((report.total, report.passed), (4, 4));
+        let example = TestSource::RuleExample {
+            rule: 1,
+            example: 1,
+        };
+        assert_eq!(runs.passed(example), Some(true));
+
+        // A new handler above takes the GitHub example: that one fails.
+        rules.rules.insert(
+            1,
+            pwrroute_engine::Rule {
+                patterns: vec!["github.com/*".into()],
+                browser: "Firefox".into(),
+                ..pwrroute_engine::Rule::default()
+            },
+        );
+        runs.set_rules(rules);
+        assert!(runs.report().is_none(), "stale until run");
+        let report = runs.run().as_ref().expect("the tests ran");
+        assert_eq!((report.total, report.passed), (4, 3));
+        let example = TestSource::RuleExample {
+            rule: 2,
+            example: 1,
+        };
+        assert_eq!(runs.passed(example), Some(false));
+        let failure = runs.failure(example).expect("the failure");
+        assert_eq!(failure.input, "https://github.com/pwrdrvr/PwrGit/pull/361");
+        assert_eq!(failure.winner.as_ref().map(|w| w.index), Some(1));
+        assert!(runs.ran_at().is_some());
+    }
+
+    #[test]
+    fn the_probe_finds_collisions_and_the_winning_handler() {
+        let mut probe = probe();
+        let recent = [
+            "https://github.com/pwrdrvr/PwrGit/pull/361",
+            "https://github.com/rust-lang/rust",
+            "https://example.com/",
+            "not a url",
+        ];
+        assert_eq!(
+            probe.collisions("github.com/*", &recent).unwrap(),
+            [
+                "https://github.com/pwrdrvr/PwrGit/pull/361",
+                "https://github.com/rust-lang/rust"
+            ]
+        );
+        assert_eq!(
+            probe.winning_handler("https://github.com/pwrdrvr/PwrGit/pull/361", None),
+            Some(1)
+        );
+        assert_eq!(probe.winning_handler("https://example.com/", None), None);
     }
 
     #[test]

@@ -13,13 +13,19 @@
 //! - [`Launcher`] is the seam to the browser launcher. [`DryRunLauncher`]
 //!   records what would open and opens nothing.
 //! - [`DispatchRecord`] is one dispatch with its trace. The last
-//!   [`Options::capacity`] of them stay in memory for Activity; Test a link
+//!   [`Options::retention`] of them stay in memory for Activity; Test a link
 //!   gets the same record without opening anything or recording it.
 //! - [`instance`] keeps one router per user: a second launch forwards its
 //!   links over a local socket ([`ipc`]) and exits.
 //!
-//! Privacy: full URLs stay in memory. Nothing here writes a URL to disk;
-//! [`DispatchRecord::timing`] is the URL-free view meant for logs.
+//! Privacy: each record is reduced to the [`Privacy`] of the rule that
+//! routed it (full, host only, or counted only) before anything stores or
+//! sees it, and stays in memory for [`Options::retention`]. Nothing here
+//! writes a URL to disk unless [`Options::journal`] is set; then each record
+//! goes to a daily JSON-lines file, at its own level or the journal's,
+//! whichever keeps less. [`DispatchRecord::timing`] is the URL-free view
+//! meant for logs, and [`Options::retention_description`] says in words
+//! what is kept where.
 //!
 //! The pipeline follows the PwrFinicky router (a fork of Finicky, MIT,
 //! Copyright (c) 2015-2025 John Sterling); see `LICENSE`.
@@ -27,19 +33,24 @@
 mod dispatch;
 pub mod instance;
 pub mod ipc;
+mod journal;
 mod launcher;
 mod link;
 mod recent;
 mod trace;
 
 pub use dispatch::{
-    DispatchCallback, FALLBACK_BROWSER, Options, Resolved, Resolver, ResolverFactory, Router,
-    RouterGone, RouterHandle, RouterStatus,
+    DispatchCallback, FALLBACK_BROWSER, Options, Resolved, Resolver, ResolverFactory,
+    RetentionInfo, Router, RouterGone, RouterHandle, RouterStatus,
 };
+pub use journal::{JournalConfig, JournalMode, read_recent as read_journal};
 pub use launcher::{DryRunLauncher, Launcher};
 pub use link::{Link, LinkError, MAX_URL_LEN, OpenerInfo, Source, normalize_url};
-pub use recent::RecentDispatches;
-pub use trace::{DispatchId, DispatchRecord, DispatchTiming, Matched, Outcome, Step, Timings};
+pub use recent::{RecentDispatches, Retention};
+pub use trace::{
+    DispatchId, DispatchRecord, DispatchTiming, Matched, Outcome, Privacy, PrivacyExt, Step,
+    Timings, WITHHELD, host_only,
+};
 
 /// Re-exported so a launcher or UI can name the engine's types without a
 /// direct dependency on the engine crate.

@@ -5,13 +5,18 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px};
-use pwrroute_engine::RulesFile;
+use gpui_kit::{
+    Bounds, Entity, InputEvent, Modifiers, Pixels, ScrollDelta, ScrollWheelEvent, TestAppContext,
+    VisualTestContext, point, px,
+};
+use pwrroute_engine::{Privacy, PrivacySetting, RouteTest, RulesFile, TestSource};
 use pwrroute_router::{
-    DispatchId, DispatchRecord, DryRunLauncher, Link, Options, Outcome, Router, Source,
+    DispatchId, DispatchRecord, DryRunLauncher, Link, Matched, Options, Outcome, Router, Source,
+    Step,
 };
 
-use crate::activity::{self, EMPTY_ID, Feed, Filter};
+use crate::activity::{self, EMPTY_ID, Feed, Filter, RowKey};
+use crate::activity_actions::{BrowserChoice, RowMenu, Save};
 use crate::app::{PwrRoute, ROOT_ID, Screen, Selection};
 use crate::fixtures;
 use crate::rules_model::{Destination, Matcher, RowBadge};
@@ -91,6 +96,39 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
     draw(cx);
 }
 
+/// Scrolls the pane under `selector` until the element is inside the window,
+/// the way a wheel does; a click below the fold reaches nothing.
+fn scroll_to(cx: &mut VisualTestContext, selector: &'static str) {
+    for _ in 0..20 {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("no element {selector} on screen"));
+        let height = cx.update(|window, _| window.viewport_size().height);
+        let below = bounds.bottom() + px(24.0) - height;
+        if below <= px(0.0) {
+            return;
+        }
+        let event = ScrollWheelEvent {
+            position: point(bounds.center().x, height / 2.0),
+            delta: ScrollDelta::Pixels(point(px(0.0), -below)),
+            ..Default::default()
+        };
+        cx.update(|window, cx| window.dispatch_event(event.to_platform_input(), cx));
+        draw(cx);
+    }
+    panic!("{selector} never came into view");
+}
+
+/// Types the design's test link, from Slack, into the open Test a link
+/// screen, which starts empty, and runs it.
+fn type_sample(cx: &mut VisualTestContext) {
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input(fixtures::TEST_URL);
+    click(cx, "test-opener");
+    click(cx, "test-opener-choice-1");
+}
+
 fn trace(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> TraceView {
     view.read_with(cx, |app, _| app.test.outcome.clone())
         .expect("Test a link ran")
@@ -158,7 +196,8 @@ fn the_rail_switches_screens(cx: &mut TestAppContext) {
 
     click(cx, "nav-test");
     assert_eq!(screen(cx), Screen::TestLink);
-    assert!(cx.debug_bounds("test-trace").is_some());
+    assert!(cx.debug_bounds("test-run").is_some());
+    assert!(cx.debug_bounds("test-trace").is_none());
     assert!(cx.debug_bounds("editor-rail").is_none());
 
     click(cx, "nav-activity");
@@ -179,7 +218,17 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     click(cx, "nav-test");
 
+    // The screen starts empty: no link, no app, nothing traced, and Test
+    // with nothing typed is not an error.
+    assert_eq!(view.read_with(cx, |app, _| app.test.url.text.clone()), "");
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener()), None);
+    assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
+    click(cx, "test-run");
+    assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
+    assert!(cx.debug_bounds("test-trace").is_none());
+
     // The design's example: two rewrites apply, handler 3 wins on Slack.
+    type_sample(cx);
     let first = trace(&view, cx);
     assert_eq!(
         titles(&first),
@@ -222,6 +271,15 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
 fn the_opener_picker_reruns_the_test(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     click(cx, "nav-test");
+    click(cx, "test-url");
+    cx.simulate_input(fixtures::TEST_URL);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    // From no app: handler 3 does not match and the default opens it.
+    let none = trace(&view, cx);
+    assert_eq!(none.result.title, "Google Chrome \u{00b7} Personal");
+    assert!(titles(&none).contains(&"Everything else"));
+
     let picking = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.test.picking);
     // The picker opens its menu and, clicked again, closes it.
     click(cx, "test-opener");
@@ -230,12 +288,58 @@ fn the_opener_picker_reruns_the_test(cx: &mut TestAppContext) {
     assert!(!picking(cx));
     click(cx, "test-opener");
     assert!(picking(cx));
-    // Not from Slack: handler 3 no longer matches and the default opens it.
-    click(cx, "test-opener-choice-0");
-    let none = trace(&view, cx);
-    assert_eq!(none.result.title, "Google Chrome \u{00b7} Personal");
-    assert!(titles(&none).contains(&"Everything else"));
-    assert!(!view.read_with(cx, |app, _| app.test.picking));
+    // The fixture rules name Slack by bundle id: the example is offered
+    // as an app in the rules, and from it handler 3 wins.
+    let slack = view.read_with(cx, |app, _| {
+        let choices = app.test.openers();
+        let slack = choices[1].clone().expect("the first example");
+        assert_eq!(slack.bundle_id.as_ref(), "com.tinyspeck.slackmacgap");
+        app.test.named_by_rules(&slack)
+    });
+    assert!(slack);
+    click(cx, "test-opener-choice-1");
+    let from_slack = trace(&view, cx);
+    assert_eq!(from_slack.result.title, "Firefox \u{00b7} default-release");
+    assert!(!picking(cx));
+}
+
+/// The picker offers an app a rule names as written, after the examples,
+/// so a "sent from" rule can be tried; it goes when the rule does.
+#[gpui_kit::test]
+fn the_opener_picker_offers_the_apps_the_rules_name(cx: &mut TestAppContext) {
+    let dir = scratch("openers");
+    let path = dir.join("rules.json");
+    let mut rules = crate::fixtures::rules_file();
+    rules.rules[1].opener = vec!["com.microsoft.teams2".to_owned()];
+    rules.save(&path).expect("write the rules");
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path)));
+    click(cx, "nav-test");
+    let choices = view.read_with(cx, |app, _| app.test.openers());
+    let teams = choices.len() - 1;
+    assert_eq!(teams, fixtures::OPENERS.len());
+    let last = choices[teams].clone().expect("the app from the rules");
+    assert_eq!(last.name.as_ref(), "com.microsoft.teams2");
+    assert_eq!(last.bundle_id.as_ref(), "com.microsoft.teams2");
+
+    click(cx, "test-url");
+    cx.simulate_input("https://github.com/pwrdrvr/PwrGit");
+    click(cx, "test-opener");
+    let id: &'static str = Box::leak(format!("test-opener-choice-{teams}").into_boxed_str());
+    click(cx, id);
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener), teams);
+    assert_eq!(trace(&view, cx).result.title, "Google Chrome \u{00b7} Work");
+
+    // The rule stops naming it: the picker falls back to no app.
+    view.update(cx, |app, _| {
+        let mut rules = crate::fixtures::rules_file();
+        rules.rules[1].opener = Vec::new();
+        app.test.set_rules(rules);
+    });
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener), 0);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.test.openers().len()),
+        fixtures::OPENERS.len()
+    );
 }
 
 #[gpui_kit::test]
@@ -245,7 +349,7 @@ fn activity_expands_filters_and_retests(cx: &mut TestAppContext) {
     click(cx, "nav-activity");
     let expanded = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.activity.expanded);
     let id = |cx: &mut VisualTestContext, index: usize| {
-        view.read_with(cx, |app, _| app.activity.rows[index].id)
+        view.read_with(cx, |app, _| app.activity.rows[index].key)
     };
     assert_eq!(expanded(cx), None);
 
@@ -309,7 +413,7 @@ fn activity_follows_the_dispatch_feed(cx: &mut TestAppContext) {
             app.activity
                 .rows
                 .iter()
-                .map(|row| row.id)
+                .map(|row| row.key.id)
                 .collect::<Vec<_>>()
         })
     };
@@ -330,7 +434,7 @@ fn activity_follows_the_dispatch_feed(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(rows(cx), ids);
     assert_eq!(
-        view.read_with(cx, |app, _| app.activity.expanded),
+        view.read_with(cx, |app, _| app.activity.expanded.map(|key| key.id)),
         Some(ids[1])
     );
     let today = view.read_with(cx, |app, _| app.activity.today);
@@ -415,6 +519,7 @@ fn switching_a_rule_off_changes_test_a_link(cx: &mut TestAppContext) {
     assert!(!saved(cx, &dir.join("rules.json")).rewrites[0].enabled);
     assert!(view.read_with(cx, |app, _| !app.store.needs_save()));
     click(cx, "nav-test");
+    type_sample(cx);
     let off = trace(&view, cx);
     assert_eq!(off.result.url, "https://x.com/pwrdrvr/status/1842?s=20");
     assert!(titles(&off).contains(&"Rewrite 2"));
@@ -441,6 +546,7 @@ fn test_a_link_reloads_a_changed_config(cx: &mut TestAppContext) {
     write("Firefox");
     let (view, cx) = open_with(cx, Some(config.clone()));
     click(cx, "nav-test");
+    type_sample(cx);
     assert_eq!(trace(&view, cx).result.title, "Firefox");
 
     // A later modification time, as an edit gives it.
@@ -511,6 +617,7 @@ fn a_finicky_config_in_charge_is_read_only(cx: &mut TestAppContext) {
 
     // Test a link runs the config first: its Slack function handler wins.
     click(cx, "nav-test");
+    type_sample(cx);
     let slack = trace(&view, cx);
     assert_eq!(slack.result.title, "Firefox");
     assert!(titles(&slack).contains(&"Config handler 2"));
@@ -724,6 +831,797 @@ fn a_file_with_only_a_default_shows_empty_cards(cx: &mut TestAppContext) {
     );
     // Test a link resolves this file: everything goes to Firefox.
     click(cx, "nav-test");
+    type_sample(cx);
     assert_eq!(trace(&view, cx).result.title, "Firefox");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The fixture records plus one kept at host only and one kept at nothing,
+/// reduced the way the router reduces them before the feed sees them.
+fn leveled_activity() -> Vec<DispatchRecord> {
+    use pwrroute_router::Privacy;
+    let mut records = fixtures::activity();
+    let mut host = records[0].clone();
+    host.id = DispatchId(901);
+    host.privacy = Privacy::Host;
+    host.reduce(Privacy::Host);
+    let mut none = records[1].clone();
+    none.id = DispatchId(902);
+    none.privacy = Privacy::None;
+    none.reduce(Privacy::None);
+    records.insert(0, host);
+    records.insert(0, none);
+    records
+}
+
+#[gpui_kit::test]
+fn activity_filters_by_privacy_level_and_says_what_is_kept(cx: &mut TestAppContext) {
+    let records = leveled_activity();
+    let total = records.len();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open(cx);
+    click(cx, "nav-activity");
+
+    // The record kept at nothing is a count, not a row; the host-only one
+    // is a row with its host and nothing more.
+    let rows = view.read_with(cx, |app, _| app.activity.rows.clone());
+    assert_eq!(rows.len(), total - 1);
+    assert_eq!(view.read_with(cx, |app, _| app.activity.kept_nothing), 1);
+    assert_eq!(rows[0].privacy, pwrroute_router::Privacy::Host);
+    assert_eq!(
+        rows[0].url,
+        pwrroute_router::host_only(&fixtures::activity()[0].link.url)
+    );
+    let counts = view.read_with(cx, |app, _| app.activity.counts);
+    assert_eq!(counts.routed, total as u64);
+    assert_eq!(counts.private, 2);
+    assert_eq!(view.read_with(cx, |app, _| app.activity.today.private), 2);
+    // The retention sentence is the router's (here the defaults), never a
+    // literal of the screen's.
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.retention.description.clone()),
+        Options::default().retention_description()
+    );
+    assert!(cx.debug_bounds("activity-retention").is_some());
+
+    // Private: the count cards and only the host-only rows.
+    click(cx, "activity-filter-Private");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.filter),
+        Filter::Private
+    );
+    let cards = view.read_with(cx, |app, _| app.activity.private_counts());
+    assert_eq!(cards.len(), 2);
+    assert_eq!((cards[0].count, cards[1].count), (1, 1));
+    assert_eq!(cards[1].rule, "kept nothing");
+    assert!(cx.debug_bounds("activity-row-0").is_some());
+    assert!(cx.debug_bounds("activity-row-1").is_none());
+
+    // Unrouted: the rows the default took, and no others.
+    click(cx, "activity-filter-Unrouted");
+    let unrouted: Vec<usize> = view.read_with(cx, |app, _| {
+        app.activity
+            .visible()
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect()
+    });
+    assert!(!unrouted.is_empty());
+    assert_eq!(unrouted.len() as u64, counts.unrouted);
+    for index in &unrouted {
+        assert!(
+            cx.debug_bounds(format!("activity-row-{index}").leak())
+                .is_some(),
+            "row {index}"
+        );
+    }
+    assert!(cx.debug_bounds("activity-row-0").is_none());
+
+    // A host-only row expands to its trace, with nothing to re-test.
+    click(cx, "activity-filter-All");
+    click(cx, "activity-row-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.expanded.map(|key| key.id)),
+        Some(DispatchId(901))
+    );
+    assert!(cx.debug_bounds("activity-retest-0").is_none());
+    assert!(cx.debug_bounds("activity-add-rule-0").is_none());
+    // A full row offers Add a rule: the sheet, over this screen.
+    click(cx, "activity-row-1");
+    assert!(cx.debug_bounds("activity-add-rule-1").is_some());
+    click(cx, "activity-add-rule-1");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Activity);
+    assert!(cx.debug_bounds("add-rule-sheet").is_some());
+    click(cx, "add-rule-cancel");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    // The row's "⋯" opens its menu and leaves the row as it was; the next
+    // click closes it.
+    click(cx, "activity-more-1");
+    assert!(cx.debug_bounds("activity-menu-1").is_some());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.actions.menu.as_ref().map(|menu| menu.key)),
+        view.read_with(cx, |app, _| app.activity.expanded)
+    );
+    click(cx, "activity-more-1");
+    assert!(cx.debug_bounds("activity-menu-1").is_none());
+    assert!(view.read_with(cx, |app, _| app.activity.expanded.is_some()));
+}
+
+/// With the journal on, records that fell out of memory are listed below
+/// the in-memory ones, read from the journal at the level it kept.
+#[gpui_kit::test]
+fn activity_lists_journaled_records_below_the_in_memory_ones(cx: &mut TestAppContext) {
+    use pwrroute_router::{JournalConfig, JournalMode, Retention};
+    let dir = scratch("journal");
+    let (dispatched_tx, dispatched) = async_channel::unbounded();
+    // Held here: the router's own copy goes with its thread, and a channel
+    // closed from there would wake the feed's pump off the test thread.
+    let _sender = dispatched_tx.clone();
+    let options = Options {
+        journal: Some(JournalConfig::new(dir.join("journal"), JournalMode::Hosts)),
+        on_dispatch: Some(std::sync::Arc::new(move |record: &DispatchRecord| {
+            let _ = dispatched_tx.try_send(record.clone());
+        })),
+        ..Options::default()
+    };
+    let router = Router::spawn(options, None, DryRunLauncher::new()).expect("spawn the router");
+    let handle = router.handle();
+    let ids: Vec<DispatchId> = ["one", "two", "three"]
+        .into_iter()
+        .map(|path| {
+            let link = Link::new(format!("https://a.example/{path}?q=1"), Source::CommandLine);
+            handle.dispatch_and_wait(link).expect("routed").id
+        })
+        .collect();
+    // Memory keeps the newest only from now on; the journal has all three.
+    handle
+        .set_retention(Retention {
+            count: 1,
+            hours: 24,
+        })
+        .unwrap();
+    assert_eq!(handle.recent().len(), 1);
+    assert_eq!(handle.journal(10).unwrap().len(), 3);
+
+    cx.update(|cx| activity::install(handle.clone(), dispatched, cx));
+    let (view, cx) = open(cx);
+    click(cx, "nav-activity");
+    let keys = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            (
+                app.activity.rows.iter().map(|r| r.key).collect::<Vec<_>>(),
+                app.activity
+                    .journal_rows
+                    .iter()
+                    .map(|r| r.key)
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+    let (memory, journaled) = keys(cx);
+    assert_eq!(memory.len(), 1);
+    assert_eq!(memory[0].id, ids[2]);
+    assert!(!memory[0].journaled);
+    assert_eq!(
+        journaled.iter().map(|key| key.id).collect::<Vec<_>>(),
+        vec![ids[1], ids[0]]
+    );
+    assert!(journaled.iter().all(|key| key.journaled));
+    // Journaled at hosts only: the row shows the host, whatever memory
+    // kept.
+    let rows = view.read_with(cx, |app, _| app.activity.journal_rows.clone());
+    assert_eq!(rows[0].url, "https://a.example");
+    assert_eq!(rows[0].privacy, pwrroute_router::Privacy::Host);
+    let in_memory = view.read_with(cx, |app, _| app.activity.rows[0].url.clone());
+    assert_eq!(in_memory, "https://a.example/three?q=1");
+    // The toolbar and the footer say so, in the router's words.
+    let retention = view.read_with(cx, |app, _| app.activity.retention.clone());
+    assert!(retention.journal.is_some());
+    assert!(
+        retention
+            .description
+            .contains("journaled as scheme and host only")
+    );
+    assert_eq!(
+        activity::memory_note(&retention),
+        "last 1 \u{00b7} 24 h \u{00b7} in memory \u{00b7} journaled"
+    );
+    // Journaled rows are indexed after the in-memory ones and expand.
+    assert!(cx.debug_bounds("activity-row-0").is_some());
+    assert!(cx.debug_bounds("activity-row-2").is_some());
+    click(cx, "activity-row-2");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.expanded),
+        Some(journaled[1])
+    );
+    // Clear empties memory; the journal's rows stay until Settings clears
+    // the journal.
+    click(cx, "activity-clear");
+    let (memory, journaled) = keys(cx);
+    assert!(memory.is_empty());
+    assert_eq!(journaled.len(), 3);
+    drop(router);
+}
+
+// --- examples, tests and Activity's row actions ----------------------------
+
+/// The fixture rules with examples on handler 2 and a saved test, written
+/// to `dir`: every one passes.
+fn rules_with_examples() -> RulesFile {
+    let mut rules = fixtures::rules_file();
+    rules.rules[1].examples = vec![
+        "https://pwrdrvr.atlassian.net/browse/PG-12".into(),
+        "https://github.com/pwrdrvr/PwrGit/pull/361".into(),
+    ];
+    rules.rewrites[0].examples = vec![pwrroute_engine::RewriteExample {
+        url: "https://x.com/pwrdrvr/status/1842".into(),
+        becomes: "https://xcancel.com/pwrdrvr/status/1842".into(),
+    }];
+    rules.tests = vec![RouteTest {
+        url: "https://www.apple.com/macos/".into(),
+        opener: None,
+        expect: pwrroute_engine::Expectation {
+            browser: "Google Chrome".into(),
+            profile: Some("Personal".into()),
+            url: None,
+        },
+    }];
+    rules
+}
+
+fn store_for(dir: &Path, rules: &RulesFile) -> RulesStore {
+    let path = dir.join("rules.json");
+    rules.save(&path).expect("write the rules");
+    RulesStore::load(Some(path))
+}
+
+#[gpui_kit::test]
+fn example_chips_and_the_tests_strip_follow_the_file(cx: &mut TestAppContext) {
+    let dir = scratch("examples");
+    let (view, cx) = open_store(cx, None, store_for(&dir, &rules_with_examples()));
+    // Run on open: every example and test passed.
+    let report = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            app.tests
+                .report()
+                .cloned()
+                .expect("ran")
+                .expect("the tests ran")
+        })
+    };
+    assert_eq!(view.read_with(cx, |app, _| app.tests.counts()), (3, 1));
+    assert_eq!(
+        view.read_with(cx, |app, _| (
+            app.tests.ran_at().is_some(),
+            app.store.needs_save()
+        )),
+        (true, false)
+    );
+    assert_eq!((report(cx).total, report(cx).passed), (4, 4));
+    assert!(cx.debug_bounds("tests-strip").is_some());
+    assert!(cx.debug_bounds("handler-1-examples").is_some());
+    assert!(cx.debug_bounds("rewrite-0-examples").is_some());
+    assert!(cx.debug_bounds("handler-0-examples").is_none());
+    assert!(cx.debug_bounds("saved-test-0").is_some());
+    assert!(cx.debug_bounds("failure-edit-0").is_none());
+
+    // A wider handler added above takes handler 2's GitHub example.
+    view.update(cx, |app, cx| {
+        app.store.insert_rule(
+            0,
+            pwrroute_engine::Rule {
+                patterns: vec!["github.com/*".into()],
+                browser: "Firefox".into(),
+                ..pwrroute_engine::Rule::default()
+            },
+        );
+        app.refresh(cx);
+    });
+    draw(cx);
+    // Stale until the save runs the tests again.
+    assert!(view.read_with(cx, |app, _| app.tests.report().is_none()));
+    // The debounce timer starts when the save task first runs.
+    cx.run_until_parked();
+    let on_disk = saved(cx, &dir.join("rules.json"));
+    assert_eq!(on_disk.rules.len(), 8, "the save ran");
+    assert_eq!(
+        view.read_with(cx, |app, _| (
+            app.store.needs_save(),
+            app.tests.counts(),
+            app.tests.report().is_some()
+        )),
+        (false, (3, 1), true)
+    );
+    draw(cx);
+    let after = report(cx);
+    assert_eq!((after.total, after.passed), (4, 3));
+    assert_eq!(
+        after.failures[0].input,
+        "https://github.com/pwrdrvr/PwrGit/pull/361"
+    );
+    assert_eq!(
+        after.failures[0].source,
+        TestSource::RuleExample {
+            rule: 2,
+            example: 1
+        }
+    );
+    assert_eq!(
+        view.read_with(cx, |app, _| app.tests.passed(TestSource::RuleExample {
+            rule: 2,
+            example: 1
+        })),
+        Some(false)
+    );
+    // The failure row's Edit handler 1 selects the winner.
+    click(cx, "failure-edit-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(0))
+    );
+    // Run tests runs them again, on demand.
+    // The report goes stale when the rules change under it.
+    view.update(cx, |app, _| {
+        let mut changed = app.store.edited();
+        changed.default_browser = "Firefox".into();
+        app.tests.set_rules(changed);
+    });
+    assert!(view.read_with(cx, |app, _| app.tests.report().is_none()));
+    draw(cx);
+    click(cx, "run-tests");
+    assert_eq!(report(cx).total, 4);
+    // Removing the saved test takes its card away.
+    scroll_to(cx, "test-remove-0");
+    click(cx, "test-remove-0");
+    assert!(view.read_with(cx, |app, _| app.store.tests().is_empty()));
+    assert!(cx.debug_bounds("saved-test-0").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
+    let dir = scratch("editor-examples");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    // Handler 1: an example, on Return. It is written with the rule.
+    click(cx, "example-add");
+    cx.simulate_input("https://meet.google.com/abc-defg-hij");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let handler = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.handlers[0].clone());
+    assert_eq!(
+        handler(cx).examples,
+        ["https://meet.google.com/abc-defg-hij"]
+    );
+    assert_eq!(
+        view.read_with(cx, |app, _| app.rail.as_ref().unwrap().example.text.clone()),
+        "",
+        "the field clears once the example is taken"
+    );
+    assert!(cx.debug_bounds("example-remove-0").is_some());
+    assert!(cx.debug_bounds("handler-0-examples").is_some());
+    assert_eq!(
+        saved(cx, &path).rules[0].examples,
+        ["https://meet.google.com/abc-defg-hij"]
+    );
+    draw(cx);
+    // Saved, so the tests ran: the example resolves here.
+    assert_eq!(
+        view.read_with(cx, |app, _| app.tests.passed(TestSource::RuleExample {
+            rule: 0,
+            example: 0
+        })),
+        Some(true)
+    );
+    assert!(cx.debug_bounds("tests-strip").is_some());
+
+    // Private window and Keep write `private` and `privacy`.
+    click(cx, "handler-private");
+    assert!(handler(cx).private);
+    assert_eq!(handler(cx).keep(), Some(Privacy::Host));
+    assert!(
+        handler(cx)
+            .rule
+            .matchers
+            .contains(&Matcher::Privacy("private \u{00b7} host only".into()))
+    );
+    click(cx, "keep-none");
+    assert_eq!(handler(cx).keep(), Some(Privacy::None));
+    let file = saved(cx, &path);
+    assert!(file.rules[0].private);
+    assert_eq!(file.rules[0].privacy, Some(Privacy::None.into()));
+    click(cx, "handler-private");
+    click(cx, "keep-full");
+    let file = saved(cx, &path);
+    assert!(!file.rules[0].private);
+    assert_eq!(file.rules[0].privacy, Some(Privacy::Full.into()));
+
+    // A bad example is a problem under the field; removing it clears it.
+    click(cx, "example-add");
+    cx.simulate_input("meet.google.com/x");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::NotSaved);
+    assert!(handler(cx).problems[0].starts_with("Examples must be full URLs"));
+    click(cx, "example-remove-1");
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+
+    // A rewrite's example says what the URL becomes.
+    cx.simulate_keystrokes("up up up");
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Rewrite(0))
+    );
+    click(cx, "example-add");
+    cx.simulate_input("https://x.com/pwrdrvr/status/1842");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    // Not taken without what it becomes.
+    assert!(view.read_with(cx, |app, _| app.rewrites[0].examples.is_empty()));
+    click(cx, "example-becomes");
+    cx.simulate_input("https://xcancel.com/pwrdrvr/status/1842");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let file = saved(cx, &path);
+    assert_eq!(
+        file.rewrites[0].examples,
+        [pwrroute_engine::RewriteExample {
+            url: "https://x.com/pwrdrvr/status/1842".into(),
+            becomes: "https://xcancel.com/pwrdrvr/status/1842".into(),
+        }]
+    );
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.tests.passed(TestSource::RewriteExample {
+            rewrite: 0,
+            example: 0
+        })),
+        Some(true)
+    );
+    assert!(cx.debug_bounds("rewrite-0-examples").is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_rewrite_with_a_bad_privacy_word_shows_the_problem(cx: &mut TestAppContext) {
+    let dir = scratch("rewrite-privacy-problem");
+    let mut rules = fixtures::rules_file();
+    rules.rewrites[0].privacy = Some(PrivacySetting::Unknown("hidden".into()));
+    let (view, cx) = open_store(cx, None, store_for(&dir, &rules));
+    click(cx, "rewrite-0");
+    draw(cx);
+    let rewrite = view.read_with(cx, |app, _| app.rewrites[0].clone());
+    assert_eq!(rewrite.problems, ["Privacy must be full, host or none."]);
+    assert_eq!(rewrite.rule.badge, RowBadge::NotSaved);
+    // The rewrite editor has no Keep control, so the row is drawn under
+    // Changes rather than nowhere.
+    assert!(cx.debug_bounds("rewrite-keep-problems").is_some());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.rail_label(Selection::Rewrite(0))),
+        "1 problem \u{00b7} not saved"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn test_a_link_saves_the_run_as_a_test(cx: &mut TestAppContext) {
+    let dir = scratch("save-as-test");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-test");
+    assert!(cx.debug_bounds("test-save").is_none());
+    type_sample(cx);
+    assert!(cx.debug_bounds("test-save").is_some());
+    click(cx, "test-save");
+    let tests = view.read_with(cx, |app, _| app.store.tests().to_vec());
+    assert_eq!(
+        tests,
+        [RouteTest {
+            url: fixtures::TEST_URL.into(),
+            opener: Some("Slack:com.tinyspeck.slackmacgap".into()),
+            expect: pwrroute_engine::Expectation {
+                browser: "Firefox".into(),
+                profile: Some("default-release".into()),
+                url: Some("https://xcancel.com/pwrdrvr/status/1842?s=20".into()),
+            },
+        }]
+    );
+    // The run stays on screen, with the banner and no second Save.
+    assert!(cx.debug_bounds("test-trace").is_some());
+    assert!(cx.debug_bounds("test-saved").is_some());
+    assert!(cx.debug_bounds("test-save").is_none());
+    assert_eq!(view.read_with(cx, |app, _| app.test.saved_as), Some(0));
+    assert_eq!(saved(cx, &path).tests, tests);
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.tests.passed(TestSource::Test { test: 0 })),
+        Some(true)
+    );
+    click(cx, "test-show-rules");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Rules);
+    assert!(cx.debug_bounds("saved-test-0").is_some());
+    // The next run offers Save as test again.
+    click(cx, "nav-test");
+    click(cx, "test-run");
+    assert!(cx.debug_bounds("test-save").is_some());
+    assert!(cx.debug_bounds("test-saved").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A contrived record like the fixtures', with its own id, link and match.
+fn record_like(base: &DispatchRecord, id: u64, url: &str, by: Matched) -> DispatchRecord {
+    let mut record = base.clone();
+    record.id = DispatchId(id);
+    record.link.url = url.into();
+    record.final_url = Some(url.into());
+    if let Some(browser) = &mut record.browser {
+        browser.url = url.into();
+    }
+    for step in &mut record.steps {
+        match step {
+            Step::Received { url: received } => *received = url.into(),
+            Step::Matched { by: matched } => *matched = by,
+            Step::Browser { browser } => browser.url = url.into(),
+            _ => {}
+        }
+    }
+    record
+}
+
+#[gpui_kit::test]
+fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule");
+    let path = dir.join("rules.json");
+    let records = fixtures::activity();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records.clone()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    view.update(cx, |app, _| {
+        app.browsers = vec![
+            BrowserChoice {
+                name: "Google Chrome".into(),
+                profiles: vec!["Personal".into(), "Work".into()],
+            },
+            BrowserChoice {
+                name: "Firefox".into(),
+                profiles: Vec::new(),
+            },
+        ];
+    });
+    click(cx, "nav-activity");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    // Row 4 is the GitHub pull request, routed by handler 2.
+    click(cx, "activity-row-4");
+    assert!(cx.debug_bounds("activity-add-rule-4").is_some());
+    click(cx, "activity-add-rule-4");
+    assert!(cx.debug_bounds("add-rule-sheet").is_some());
+    let sheet = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let sheet = app.actions.sheet.as_ref().expect("the sheet is open");
+            (
+                sheet.pattern.text.clone(),
+                sheet.selected,
+                sheet
+                    .collisions
+                    .iter()
+                    .map(|c| c.url.clone())
+                    .collect::<Vec<_>>(),
+                sheet.collision_caption(),
+            )
+        })
+    };
+    let (pattern, selected, collisions, caption) = sheet(cx);
+    assert_eq!(pattern, "github.com/pwrdrvr/*");
+    assert_eq!(selected, Some(0));
+    assert!(collisions.is_empty());
+    assert_eq!(caption, "No other recent link matches this pattern.");
+    assert!(cx.debug_bounds("add-rule-candidate-1").is_some());
+    assert!(cx.debug_bounds("add-rule-only-from").is_some());
+
+    // The host alone, then a pattern typed by hand: everything.
+    click(cx, "add-rule-candidate-1");
+    assert_eq!(sheet(cx).0, "github.com/*");
+    click(cx, "add-rule-pattern");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("*");
+    draw(cx);
+    let (pattern, selected, collisions, caption) = sheet(cx);
+    assert_eq!(pattern, "*");
+    assert_eq!(selected, None);
+    // Every other full record that was routed; the failed launch is left out.
+    assert_eq!(collisions.len(), 6, "{collisions:?}");
+    assert!(collisions.contains(&"https://www.apple.com/macos/".to_owned()));
+    assert!(!collisions.iter().any(|url| url.contains("zoom.us")));
+    assert!(
+        caption
+            .starts_with("Would also catch these 6 recent links \u{00b7} 5 routed by a rule now"),
+        "{caption}"
+    );
+    assert!(cx.debug_bounds("add-rule-collision-5").is_some());
+
+    // Browser and profile from the detected browsers; the rule's privacy.
+    click(cx, "add-rule-browser");
+    click(cx, "add-rule-browser-choice-0");
+    click(cx, "add-rule-profile");
+    click(cx, "add-rule-profile-choice-2");
+    click(cx, "add-rule-private");
+    click(cx, "add-rule-keep-none");
+    click(cx, "add-rule-position-top");
+    let rule = view.read_with(cx, |app, _| {
+        app.actions.sheet.as_ref().unwrap().rule().unwrap()
+    });
+    assert_eq!(rule.browser, "Google Chrome");
+    assert_eq!(rule.profile, "Work");
+    assert!(rule.opener.is_empty());
+    assert!(rule.private);
+    assert_eq!(rule.privacy, Some(Privacy::None.into()));
+    assert_eq!(
+        rule.examples,
+        ["https://github.com/pwrdrvr/PwrGit/pull/361"]
+    );
+    // Only from the app that sent it: the link is saved as a test with
+    // that app, since a rule's examples run from no app.
+    click(cx, "add-rule-only-from");
+    let (rule, test) = view.read_with(cx, |app, _| {
+        let sheet = app.actions.sheet.as_ref().unwrap();
+        (sheet.rule().unwrap(), sheet.test())
+    });
+    assert_eq!(
+        rule.opener,
+        ["PwrAgnt"],
+        "the record's app, by name when it has no bundle id"
+    );
+    assert!(rule.examples.is_empty());
+    let test = test.expect("a test with the opener");
+    assert_eq!(test.url, "https://github.com/pwrdrvr/PwrGit/pull/361");
+    assert_eq!(test.opener.as_deref(), Some("PwrAgnt"));
+    assert_eq!(test.expect.browser, "Google Chrome");
+    assert_eq!(test.expect.profile.as_deref(), Some("Work"));
+
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    assert!(cx.debug_bounds("activity-action-note").is_some());
+    let first = view.read_with(cx, |app, _| app.handlers[0].clone());
+    assert_eq!(first.patterns, ["*"]);
+    assert_eq!(first.openers, ["PwrAgnt"]);
+    assert_eq!(view.read_with(cx, |app, _| app.handlers.len()), 8);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.tests().to_vec()),
+        [test]
+    );
+    // The tests ran: the saved test resolves to the new rule.
+    assert_eq!(
+        view.read_with(cx, |app, _| app.tests.passed(TestSource::Test { test: 0 })),
+        Some(true)
+    );
+    let file = saved(cx, &path);
+    assert_eq!(file.rules[0].patterns, ["*"]);
+    assert_eq!(file.rules[0].opener, ["PwrAgnt"]);
+    assert!(file.rules[0].private);
+    assert_eq!(file.rules.len(), 8);
+    assert_eq!(file.tests.len(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut TestAppContext) {
+    let dir = scratch("row-actions");
+    let path = dir.join("rules.json");
+    let mut records = fixtures::activity();
+    let base = records[0].clone();
+    // A rules.json handler took this one (the router does not number
+    // those); an id in this one's path needs JS; this one kept host only.
+    records.insert(
+        0,
+        record_like(
+            &base,
+            30,
+            "https://meet.google.com/xyz",
+            Matched::Unreported,
+        ),
+    );
+    records.insert(
+        0,
+        record_like(
+            &base,
+            31,
+            "https://issues.example/12345/comments",
+            Matched::Default,
+        ),
+    );
+    let mut host = record_like(&base, 32, "https://bank.example/login", Matched::Unreported);
+    host.reduce(Privacy::Host);
+    records.insert(0, host);
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+
+    // Row 0, host only: the expanded row has no Add a rule, the menu
+    // offers no Save, and its Add a rule opens the sheet's disabled state
+    // with the reason.
+    click(cx, "activity-row-0");
+    assert!(cx.debug_bounds("activity-add-rule-0").is_none());
+    click(cx, "activity-more-0");
+    assert!(cx.debug_bounds("activity-menu-0").is_some());
+    assert!(cx.debug_bounds("activity-save-0").is_none());
+    click(cx, "activity-add-rule-menu-0");
+    assert!(cx.debug_bounds("activity-menu-0").is_none());
+    let disabled = view.read_with(cx, |app, _| {
+        app.actions.sheet.as_ref().unwrap().disabled.clone()
+    });
+    assert!(
+        disabled
+            .as_deref()
+            .is_some_and(|why| why.contains("keeps host only")),
+        "{disabled:?}"
+    );
+    assert!(cx.debug_bounds("add-rule-save").is_none());
+    click(cx, "add-rule-cancel");
+    assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()));
+
+    // Row 1, an id in the path: the sheet says it needs a JS handler, and
+    // Add anyway still adds it.
+    click(cx, "activity-row-1");
+    click(cx, "activity-add-rule-1");
+    let needs_js = view.read_with(cx, |app, _| {
+        app.actions.sheet.as_ref().unwrap().needs_js.clone()
+    });
+    assert_eq!(needs_js.len(), 1);
+    assert!(needs_js[0].contains("looks like an id"), "{needs_js:?}");
+    click(cx, "add-rule-save");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers.last().unwrap().patterns.clone()),
+        ["issues.example/12345/*"]
+    );
+
+    // Row 2, taken by a rules.json handler: the menu's Save names the
+    // handler that takes it now (handler 1, meet.google.com/*) and the
+    // example goes there; the menu stays, with the note in its footer.
+    click(cx, "activity-more-2");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.actions.menu.clone()),
+        Some(RowMenu {
+            key: RowKey {
+                id: DispatchId(30),
+                journaled: false
+            },
+            save: Some(Save::Example {
+                handler: 0,
+                pattern: Some("meet.google.com/*".into()),
+            }),
+        })
+    );
+    click(cx, "activity-save-2");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[0].examples.clone()),
+        ["https://meet.google.com/xyz"]
+    );
+    assert!(cx.debug_bounds("activity-action-note").is_some());
+    let note = view.read_with(cx, |app, _| app.actions.note.clone().unwrap().1);
+    assert!(
+        note.starts_with("Saved to rules.json under handler 1."),
+        "{note}"
+    );
+
+    // Row 9, apple.com, went to the default: Save as test pins that. The
+    // "⋯" there closes row 2's menu and opens its own.
+    click(cx, "activity-more-9");
+    assert!(cx.debug_bounds("activity-menu-2").is_none());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.actions.menu.clone().and_then(|m| m.save)),
+        Some(Save::Test {
+            expects: "Google Chrome \u{00b7} Personal".into()
+        })
+    );
+    click(cx, "activity-save-9");
+    let tests = view.read_with(cx, |app, _| app.store.tests().to_vec());
+    assert_eq!(tests.len(), 1);
+    assert_eq!(tests[0].url, "https://www.apple.com/macos/");
+    assert_eq!(tests[0].opener.as_deref(), Some("Safari"));
+    assert_eq!(tests[0].expect.browser, "Google Chrome");
+    assert_eq!(tests[0].expect.profile.as_deref(), Some("Personal"));
+    let file = saved(cx, &path);
+    assert_eq!(file.tests, tests);
+    assert_eq!(file.rules[0].examples, ["https://meet.google.com/xyz"]);
     let _ = std::fs::remove_dir_all(dir);
 }

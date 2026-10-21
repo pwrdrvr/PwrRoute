@@ -8,19 +8,34 @@
 //! them is also on the channel (the sender exists before the router starts),
 //! so reading both would show each record dispatched before `install` twice.
 //! The window's [`Activity`] observes the feed and draws one [`ActivityRow`]
-//! per `DispatchRecord`; the tray observes it for its recents and count. Full
-//! URLs stay in memory, as the footer says: nothing here writes one anywhere.
+//! per `DispatchRecord` kept at `Full` or `Host`; a record kept at `None`
+//! is a count, never a row. The tray observes it for its recents and count.
+//! The footer and the toolbar's note are the router's own words about
+//! where links are kept (`RouterHandle::retention`), never a literal here.
+//! When the journal is on, journaled records that are no longer in memory
+//! are listed below the in-memory ones, under a divider. Nothing here
+//! writes a URL anywhere: Export… hands over to Settings' producer, which
+//! writes only to the file the reader picks.
+//!
+//! The row's "⋯" opens [`row_menu`] (`activity_actions.rs`): Add a rule
+//! for this link, Save as example or Save as test, over the record the
+//! [`RowKey`] names; the expanded row's "Add a rule…" is
+//! [`PwrRoute::add_rule`], the same sheet.
 
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Local, NaiveDate};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, div, px,
+    AnyElement, App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Window, div, px,
 };
-use pwrroute_router::{DispatchId, DispatchRecord, Matched, Options, Outcome, RouterHandle, Step};
+use pwrroute_router::{
+    DispatchId, DispatchRecord, Matched, Options, Outcome, Privacy, RetentionInfo, RouterHandle,
+    Step,
+};
 
 use crate::app::{PwrRoute, Screen};
 use crate::fixtures;
@@ -28,8 +43,8 @@ use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{
-    ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, badge, badge_for, button, note, one_line, paragraph,
-    segment, segmented, status, tag,
+    ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge, badge_for, button, chip, note, one_line,
+    paragraph, segment, segmented, status, tag, toned_chip,
 };
 
 /// The element id of the empty state, for tests.
@@ -38,6 +53,10 @@ pub const EMPTY_ID: &str = "activity-empty";
 /// The From column when the OS did not say which app sent the link.
 const NO_APP: &str = "\u{2014}";
 
+/// How many journaled records the screen reads back, at most: the design's
+/// list is one screen of recent links, not the whole week.
+const JOURNAL_ROWS: usize = 500;
+
 /// How many links were routed on one local day.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counts {
@@ -45,16 +64,53 @@ pub struct Counts {
     pub routed: u64,
     /// Rejected before routing, or the launch failed.
     pub failed: u64,
+    /// No handler matched: the default or the fallback browser took it.
+    pub unrouted: u64,
+    /// A rewrite ran.
+    pub rewritten: u64,
+    /// Kept at host only or nothing: the rule that took it keeps less.
+    pub private: u64,
 }
 
 impl Counts {
-    /// The strip chip: "1,412 today · 2 failed".
+    /// The strip chip: "1,412 today · 2 failed · 14 private".
     pub fn label(&self) -> String {
         let mut label = format!("{} today", thousands(self.routed));
         if self.failed > 0 {
             label.push_str(&format!(" \u{00b7} {} failed", self.failed));
         }
+        if self.private > 0 {
+            label.push_str(&format!(" \u{00b7} {} private", self.private));
+        }
         label
+    }
+
+    /// Adds one record to the day.
+    fn count(&mut self, record: &DispatchRecord) {
+        self.routed += 1;
+        if record.outcome == Outcome::Failed {
+            self.failed += 1;
+        }
+        if is_unrouted(record) {
+            self.unrouted += 1;
+        }
+        if is_rewritten(record) {
+            self.rewritten += 1;
+        }
+        if record.privacy != Privacy::Full {
+            self.private += 1;
+        }
+    }
+
+    /// The count a filter shows beside its label.
+    pub fn of(&self, filter: Filter) -> u64 {
+        match filter {
+            Filter::All => self.routed,
+            Filter::Unrouted => self.unrouted,
+            Filter::Failed => self.failed,
+            Filter::Rewritten => self.rewritten,
+            Filter::Private => self.private,
+        }
     }
 
     /// The rail badge: "31", "1.4k", "12k"; nothing before the first link.
@@ -90,9 +146,10 @@ pub fn thousands(n: u64) -> String {
 
 /// The dispatch history behind Activity, the tray's recents and the counts.
 pub struct Feed {
-    /// Newest first, at most `capacity`: the records the channel delivered,
-    /// bounded like the router's buffer.
+    /// Newest first, at most [`capacity`](Self::capacity): the records the
+    /// channel delivered, bounded like the router's buffer.
     records: Vec<DispatchRecord>,
+    /// The bound without a router; with one, the router's retention count.
     capacity: usize,
     /// The local day `counts` is for.
     day: Option<NaiveDate>,
@@ -107,7 +164,7 @@ impl Feed {
     pub fn new(handle: Option<RouterHandle>) -> Self {
         Self {
             records: Vec::new(),
-            capacity: Options::default().capacity,
+            capacity: Options::default().retention.count,
             day: None,
             counts: Counts::default(),
             handle,
@@ -135,12 +192,20 @@ impl Feed {
             self.day = Some(day);
             self.counts = Counts::default();
         }
-        self.counts.routed += 1;
-        if record.outcome == Outcome::Failed {
-            self.counts.failed += 1;
-        }
+        self.counts.count(&record);
         self.records.insert(0, record);
-        self.records.truncate(self.capacity);
+        let capacity = self.capacity();
+        self.records.truncate(capacity);
+    }
+
+    /// Takes the router's buffer as the list, after its retention changed
+    /// or Settings cleared it: the buffer is swept to the new retention,
+    /// and every record in it was on the channel once, so nothing is lost
+    /// or doubled. Today's counts stay.
+    pub fn reload(&mut self) {
+        if let Some(handle) = &self.handle {
+            self.records = handle.recent();
+        }
     }
 
     /// Every record, newest first.
@@ -148,9 +213,60 @@ impl Feed {
         &self.records
     }
 
-    /// How many the router keeps.
+    /// How many the router keeps: its retention count as set now.
     pub fn capacity(&self) -> usize {
-        self.capacity
+        match &self.handle {
+            Some(handle) => handle.retention().memory.count,
+            None => self.capacity,
+        }
+    }
+
+    /// Where the router keeps dispatches and for how long, in its own
+    /// words. Without a router (tests, screenshots), the defaults.
+    pub fn retention(&self) -> RetentionInfo {
+        match &self.handle {
+            Some(handle) => handle.retention(),
+            None => {
+                let options = Options::default();
+                RetentionInfo {
+                    memory: options.retention,
+                    journal: None,
+                    description: options.retention_description(),
+                }
+            }
+        }
+    }
+
+    /// Journaled dispatches, newest first, at most `limit`: empty while
+    /// the journal is off. Read from disk each time, so a screen asks only
+    /// when it is about to draw them.
+    pub fn journal(&self, limit: usize) -> Vec<DispatchRecord> {
+        let Some(handle) = &self.handle else {
+            return Vec::new();
+        };
+        if handle.retention().journal.is_none() {
+            return Vec::new();
+        }
+        handle.journal(limit).unwrap_or_else(|error| {
+            eprintln!("pwrroute: cannot read the activity journal: {error}");
+            Vec::new()
+        })
+    }
+
+    /// The record behind a row: from memory, or read back from the journal
+    /// for a journaled row (the journal is read on each call, like
+    /// [`journal`](Self::journal)).
+    pub fn record(&self, key: RowKey) -> Option<DispatchRecord> {
+        if key.journaled {
+            self.journal(JOURNAL_ROWS)
+                .into_iter()
+                .find(|record| record.id == key.id)
+        } else {
+            self.records
+                .iter()
+                .find(|record| record.id == key.id)
+                .cloned()
+        }
     }
 
     /// Today's counts, by the local calendar; zero once the day has turned.
@@ -227,12 +343,21 @@ fn clock(at: SystemTime) -> String {
     DateTime::<Local>::from(at).format("%H:%M:%S").to_string()
 }
 
+/// Which row: a dispatch's id, and whether it came from the journal. Ids
+/// are unique within one router process, so a journaled record from an
+/// earlier run can repeat an in-memory one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RowKey {
+    pub id: DispatchId,
+    pub journaled: bool,
+}
+
 /// One dispatch.
 #[derive(Clone, Debug)]
 pub struct ActivityRow {
-    pub id: DispatchId,
+    pub key: RowKey,
+    /// The link as received: scheme and host only for a host-only record.
     pub time: SharedString,
-    /// The link as received.
     pub url: SharedString,
     /// The app it came from.
     pub from: SharedString,
@@ -250,6 +375,11 @@ pub struct ActivityRow {
     pub steps: Vec<ActivityStep>,
     /// The URL the browser was asked to open.
     pub final_url: SharedString,
+    /// How much of the link the record keeps: `Host` draws the "host only"
+    /// chip. Never `None`: those records are counted, not listed.
+    pub privacy: Privacy,
+    /// Listed from the journal, below the in-memory rows.
+    pub journaled: bool,
 }
 
 /// Where a dispatch went.
@@ -259,6 +389,8 @@ pub enum Opened {
         badge: SharedString,
         name: SharedString,
         profile: Option<SharedString>,
+        /// The rule asked for a private window.
+        private: bool,
     },
     /// The config chose `browser: null`.
     Nowhere,
@@ -286,28 +418,62 @@ pub enum StepMark {
     Fail,
 }
 
-/// The `.seg` filters.
+/// The `.seg` filters: the questions people have of the list.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Filter {
     #[default]
     All,
-    Rewritten,
-    Default,
+    /// No handler matched: the default or the fallback browser took it.
+    /// The list of links to add a rule for.
+    Unrouted,
     Failed,
+    Rewritten,
+    /// Kept at host only or nothing: counts, and the host-only rows.
+    Private,
 }
 
 impl Filter {
-    const ALL: [(Self, &'static str); 4] = [
+    pub const ALL: [(Self, &'static str); 5] = [
         (Self::All, "All"),
-        (Self::Rewritten, "Rewritten"),
-        (Self::Default, "Default"),
+        (Self::Unrouted, "Unrouted"),
         (Self::Failed, "Failed"),
+        (Self::Rewritten, "Rewritten"),
+        (Self::Private, "Private"),
     ];
+}
+
+/// No handler matched: `defaultBrowser` applied, or nothing was in charge
+/// and the fallback browser took it.
+fn is_unrouted(record: &DispatchRecord) -> bool {
+    record.steps.iter().any(|step| {
+        matches!(
+            step,
+            Step::Matched {
+                by: Matched::Default
+            } | Step::Fallback { .. }
+        )
+    })
+}
+
+fn is_rewritten(record: &DispatchRecord) -> bool {
+    record
+        .steps
+        .iter()
+        .any(|step| matches!(step, Step::Rewrite { .. }))
 }
 
 impl ActivityRow {
     /// One record as the screen draws it.
     pub fn from_record(record: &DispatchRecord) -> Self {
+        Self::build(record, false)
+    }
+
+    /// One journaled record, as [`from_record`](Self::from_record) draws it.
+    pub fn from_journal(record: &DispatchRecord) -> Self {
+        Self::build(record, true)
+    }
+
+    fn build(record: &DispatchRecord, journaled: bool) -> Self {
         let received = received_url(record);
         let from = record
             .link
@@ -316,29 +482,27 @@ impl ActivityRow {
             .map(|opener| opener.name.as_str())
             .filter(|name| !name.is_empty())
             .unwrap_or(NO_APP);
-        let matched = record.steps.iter().find_map(|step| match step {
-            Step::Matched { by } => Some(*by),
-            _ => None,
-        });
         Self {
-            id: record.id,
+            key: RowKey {
+                id: record.id,
+                journaled,
+            },
             time: clock(record.received_at).into(),
             url: received.into(),
             from: from.into(),
             rule: rule_label(&record.steps).into(),
             opened: opened(record),
             took: took_label(record.timings.total_us).into(),
-            rewritten: record
-                .steps
-                .iter()
-                .any(|step| matches!(step, Step::Rewrite { .. })),
-            default: matched == Some(Matched::Default),
+            rewritten: is_rewritten(record),
+            default: is_unrouted(record),
             dry_run: record
                 .steps
                 .iter()
                 .any(|step| matches!(step, Step::Launched { dry_run: true })),
             steps: trace_lines(record),
             final_url: record.final_url.as_deref().unwrap_or(received).into(),
+            privacy: record.privacy,
+            journaled,
         }
     }
 
@@ -349,9 +513,10 @@ impl ActivityRow {
     fn passes(&self, filter: Filter, search: &str) -> bool {
         let kind = match filter {
             Filter::All => true,
+            Filter::Unrouted => self.default,
             Filter::Rewritten => self.rewritten,
-            Filter::Default => self.default,
             Filter::Failed => self.failed(),
+            Filter::Private => self.privacy != Privacy::Full,
         };
         if !kind {
             return false;
@@ -361,9 +526,16 @@ impl ActivityRow {
         }
         let needle = search.to_lowercase();
         let opened = match &self.opened {
-            Opened::Browser { name, profile, .. } => {
-                format!("{name} {}", profile.as_deref().unwrap_or_default())
-            }
+            Opened::Browser {
+                name,
+                profile,
+                private,
+                ..
+            } => format!(
+                "{name} {}{}",
+                profile.as_deref().unwrap_or_default(),
+                if *private { " private window" } else { "" }
+            ),
             Opened::Nowhere => NOT_OPENED.to_owned(),
             Opened::Failed(why) => why.to_string(),
         };
@@ -447,6 +619,7 @@ fn opened(record: &DispatchRecord) -> Opened {
             badge: badge_for(&browser.name),
             name: browser.name.clone().into(),
             profile: (!browser.profile.is_empty()).then(|| browser.profile.clone().into()),
+            private: browser.private,
         },
         None => Opened::Failed("not routed".into()),
     }
@@ -582,15 +755,36 @@ fn describe_rewrite(before: &str, after: &str) -> String {
     }
 }
 
+/// A rule that keeps less than full, and how many of today's links it
+/// took: one `.cnt-card` under the Private filter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateCount {
+    /// "handler 8", or "kept nothing" for the records that say nothing.
+    pub rule: SharedString,
+    pub count: u64,
+    /// "Safari, private window. Keeps host only."
+    pub detail: SharedString,
+}
+
 /// The screen's state.
 pub struct Activity {
+    /// The in-memory records, newest first, each kept at `Full` or
+    /// `Host`.
     pub rows: Vec<ActivityRow>,
-    pub expanded: Option<DispatchId>,
+    /// Journaled records not among `rows`, newest first, while the journal
+    /// is on.
+    pub journal_rows: Vec<ActivityRow>,
+    pub expanded: Option<RowKey>,
     pub filter: Filter,
     pub search: TextField,
     pub today: Counts,
-    /// How many the router keeps, for the toolbar's note.
-    pub capacity: usize,
+    /// The filters' counts, over the records listed (and the ones kept at
+    /// nothing, which are counted here and listed nowhere).
+    pub counts: Counts,
+    /// Records kept at nothing: a count, never a row.
+    pub kept_nothing: u64,
+    /// Where the router keeps dispatches, in its words.
+    pub retention: RetentionInfo,
     _feed: Option<Subscription>,
 }
 
@@ -599,11 +793,14 @@ impl Activity {
     pub fn new(cx: &mut Context<'_, PwrRoute>) -> Self {
         let mut activity = Self {
             rows: Vec::new(),
+            journal_rows: Vec::new(),
             expanded: None,
             filter: Filter::All,
             search: TextField::new("", cx),
             today: Counts::default(),
-            capacity: Options::default().capacity,
+            counts: Counts::default(),
+            kept_nothing: 0,
+            retention: Feed::new(None).retention(),
             _feed: None,
         };
         if let Some(feed) = feed(cx) {
@@ -619,19 +816,82 @@ impl Activity {
     /// The rows and counts as the feed has them now. The expanded row stays
     /// expanded while it is still listed.
     pub fn sync(&mut self, feed: &Feed) {
-        self.rows = feed
-            .records()
+        let records = feed.records();
+        let mut counts = Counts::default();
+        for record in records {
+            counts.count(record);
+        }
+        self.counts = counts;
+        self.kept_nothing = records
             .iter()
+            .filter(|record| record.privacy == Privacy::None)
+            .count() as u64;
+        self.rows = records
+            .iter()
+            .filter(|record| record.privacy != Privacy::None)
             .map(ActivityRow::from_record)
             .collect();
+        self.retention = feed.retention();
+        // The journal holds the same dispatches as memory, and more: only
+        // what memory no longer has is listed again, below. A journal line
+        // keeps the time to the millisecond, so that is what is compared.
+        let stamp = |record: &DispatchRecord| {
+            (
+                record.id,
+                record
+                    .received_at
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0),
+            )
+        };
+        let in_memory: HashSet<(DispatchId, u128)> = records.iter().map(stamp).collect();
+        self.journal_rows = feed
+            .journal(JOURNAL_ROWS)
+            .iter()
+            .filter(|record| record.privacy != Privacy::None && !in_memory.contains(&stamp(record)))
+            .map(ActivityRow::from_journal)
+            .collect();
         self.today = feed.today(SystemTime::now());
-        self.capacity = feed.capacity();
-        if self
-            .expanded
-            .is_some_and(|id| !self.rows.iter().any(|row| row.id == id))
-        {
+        if self.expanded.is_some_and(|key| {
+            !self
+                .rows
+                .iter()
+                .chain(&self.journal_rows)
+                .any(|row| row.key == key)
+        }) {
             self.expanded = None;
         }
+    }
+
+    /// The count a filter shows: the records it would list, plus, for
+    /// Private, the ones kept at nothing.
+    pub fn count(&self, filter: Filter) -> u64 {
+        self.counts.of(filter)
+    }
+
+    /// Under Private: each rule that keeps less than full, with how many
+    /// of the listed links it took, then the records that kept nothing.
+    pub fn private_counts(&self) -> Vec<PrivateCount> {
+        let mut cards: Vec<PrivateCount> = Vec::new();
+        for row in self.rows.iter().filter(|row| row.privacy != Privacy::Full) {
+            match cards.iter_mut().find(|card| card.rule == row.rule) {
+                Some(card) => card.count += 1,
+                None => cards.push(PrivateCount {
+                    rule: row.rule.clone(),
+                    count: 1,
+                    detail: private_detail(row),
+                }),
+            }
+        }
+        if self.kept_nothing > 0 {
+            cards.push(PrivateCount {
+                rule: "kept nothing".into(),
+                count: self.kept_nothing,
+                detail: "No URL, no host, no sending app: counted, not listed.".into(),
+            });
+        }
+        cards
     }
 
     /// Rows from records outside any feed: tests and screenshots.
@@ -652,17 +912,32 @@ impl Activity {
             .collect()
     }
 
-    pub fn toggle(&mut self, id: DispatchId) {
-        self.expanded = if self.expanded == Some(id) {
+    /// The journaled rows the filter and search let through, indexed
+    /// after the in-memory rows.
+    pub fn visible_journal(&self) -> Vec<(usize, &ActivityRow)> {
+        let offset = self.rows.len();
+        self.journal_rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.passes(self.filter, &self.search.text))
+            .map(|(index, row)| (offset + index, row))
+            .collect()
+    }
+
+    pub fn toggle(&mut self, key: RowKey) {
+        self.expanded = if self.expanded == Some(key) {
             None
         } else {
-            Some(id)
+            Some(key)
         };
     }
 
-    /// Clear: here, in the feed and in the router.
+    /// Clear: here, in the feed and in the router. The journal is not
+    /// touched: that is Settings › Privacy's Clear now.
     pub fn clear(&mut self, cx: &mut App) {
         self.rows.clear();
+        self.kept_nothing = 0;
+        self.counts = Counts::default();
         self.expanded = None;
         if let Some(feed) = feed(cx) {
             feed.update(cx, |feed, cx| {
@@ -673,22 +948,57 @@ impl Activity {
     }
 }
 
-/// Column widths: the design's grid `54px minmax(0,1fr) 84px 118px 160px
-/// 52px` with a 12px gap.
+/// "Safari, private window. Keeps host only.": a `.cnt-card`'s line.
+fn private_detail(row: &ActivityRow) -> SharedString {
+    let went = match &row.opened {
+        Opened::Browser {
+            name,
+            profile,
+            private,
+            ..
+        } => {
+            let mut went = name.to_string();
+            if let Some(profile) = profile {
+                went.push_str(&format!(" \u{00b7} {profile}"));
+            }
+            if *private {
+                went.push_str(", private window");
+            }
+            went
+        }
+        Opened::Nowhere => NOT_OPENED.to_owned(),
+        Opened::Failed(_) => "Failed".to_owned(),
+    };
+    let keeps = match row.privacy {
+        Privacy::Full => "the full URL",
+        Privacy::Host => "host only",
+        Privacy::None => "nothing",
+    };
+    format!("{went}. Keeps {keeps}.").into()
+}
+
+// The row's "⋯" menu (design 2b) and the expanded row's "Add a rule…"
+// (design 2c) live in `activity_actions.rs`: `row_menu` draws the menu
+// `PwrRoute::actions.menu` holds open, `PwrRoute::add_rule` opens the sheet.
+pub use crate::activity_actions::row_menu;
+
+/// Column widths: the design's grid `54px minmax(0,1fr) 76px 110px 176px
+/// 48px 18px` with a 12px gap.
 mod column {
     pub const TIME: f32 = 54.0;
-    pub const FROM: f32 = 84.0;
-    pub const RULE: f32 = 118.0;
-    pub const OPENED: f32 = 160.0;
-    pub const TOOK: f32 = 52.0;
+    pub const FROM: f32 = 76.0;
+    pub const RULE: f32 = 110.0;
+    pub const OPENED: f32 = 176.0;
+    pub const TOOK: f32 = 48.0;
+    pub const MORE: f32 = 18.0;
     pub const GAP: f32 = 12.0;
     /// Where the expanded trace starts: the link column.
     pub const TRACE_INDENT: f32 = 14.0 + TIME + GAP;
 }
 
 /// `.ar`'s cells around their contents.
-fn grid_row(cells: [Div; 6]) -> Div {
-    let [time, link, from, rule, opened, took] = cells;
+fn grid_row(cells: [Div; 7]) -> Div {
+    let [time, link, from, rule, opened, took, more] = cells;
     div()
         .flex()
         .items_center()
@@ -700,6 +1010,7 @@ fn grid_row(cells: [Div; 6]) -> Div {
         .child(rule.w(px(column::RULE)).flex_none().min_w_0())
         .child(opened.w(px(column::OPENED)).flex_none().min_w_0())
         .child(took.w(px(column::TOOK)).flex_none().flex().justify_end())
+        .child(more.w(px(column::MORE)).flex_none().flex().justify_center())
 }
 
 /// `.ar.head`
@@ -712,6 +1023,7 @@ fn head_row() -> Div {
         cell("Rule"),
         cell("Opened in"),
         cell("Took"),
+        div(),
     ])
     .py(px(7.0))
     .bg(theme::bg_elevated())
@@ -735,6 +1047,7 @@ fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
             badge: badge_label,
             name,
             profile,
+            private,
         } => div()
             .flex()
             .items_center()
@@ -744,6 +1057,9 @@ fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
             .child(text(name.clone(), 11.5, 400.0, theme::text_secondary()))
             .when_some(profile.clone(), |cell, profile| {
                 cell.child(mono(profile, 10.5, 500.0, theme::text_muted()))
+            })
+            .when(*private, |cell| {
+                cell.child(mono("private window", 10.5, 500.0, theme::text_muted()))
             })
             .when(dry_run, |cell| cell.child(tag("dry run"))),
         Opened::Nowhere => div()
@@ -761,6 +1077,7 @@ fn row(
     index: usize,
     row: &ActivityRow,
     expanded: bool,
+    menu: Option<AnyElement>,
     last: bool,
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl IntoElement + use<> {
@@ -769,14 +1086,44 @@ fn row(
     } else {
         theme::text_primary()
     };
-    let id = row.id;
+    let key = row.key;
+    // `.u`: the link, with the "host only" chip for a host-only record.
+    let link = div()
+        .flex()
+        .items_center()
+        .gap(px(7.0))
+        .min_w_0()
+        .child(clipped(row.url.clone(), true, 11.5, link_color).min_w_0())
+        .when(row.privacy == Privacy::Host, |cell| {
+            cell.child(chip("host only").flex_none())
+        });
+    // `.ar.unr .tag`: an unrouted row's rule chip is amber.
+    let rule = if row.default {
+        toned_chip(row.rule.clone(), Tone::Warn)
+    } else {
+        tag(row.rule.clone())
+    };
+    // "⋯" opens the row's menu, drawn under the button, and closes it
+    // again: the menu closes itself on a mouse down outside it, which this
+    // button is, so the click looks at what was open before that.
+    let more = button("\u{22ef}", ButtonKind::Quiet, true)
+        .id(("activity-more", index))
+        .debug_selector(move || format!("activity-more-{index}"))
+        .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+            this.actions.menu_was = this.actions.menu.as_ref().map(|menu| menu.key);
+        }))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            cx.stop_propagation();
+            this.toggle_row_menu(key, cx);
+        }));
     grid_row([
         div().child(mono(row.time.clone(), 10.5, 500.0, theme::text_subtle())),
-        clipped(row.url.clone(), true, 11.5, link_color),
+        link,
         clipped(row.from.clone(), false, 11.5, theme::text_secondary()),
-        div().flex().child(tag(row.rule.clone())),
+        div().flex().child(rule),
         opened_cell(&row.opened, row.dry_run),
         div().child(mono(row.took.clone(), 10.5, 500.0, theme::text_subtle())),
+        div().relative().child(more).children(menu),
     ])
     .py(px(8.0))
     .when(expanded, |row| row.bg(theme::bg_row_active()))
@@ -790,7 +1137,7 @@ fn row(
     .debug_selector(move || format!("activity-row-{index}"))
     .cursor_pointer()
     .on_click(cx.listener(move |this, _, _, cx| {
-        this.activity.toggle(id);
+        this.activity.toggle(key);
         cx.notify();
     }))
 }
@@ -827,6 +1174,9 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
     };
     let url = row.url.to_string();
     let from = row.from.to_string();
+    let key = row.key;
+    // A host-only record has no full URL to re-test or add a rule for.
+    let whole = row.privacy == Privacy::Full;
     row.steps
         .iter()
         .fold(
@@ -856,16 +1206,29 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
                     500.0,
                     theme::text_secondary(),
                 ))
+                .when(row.journaled, |actions| actions.child(tag("from the journal")))
+                .when(whole, |actions| {
+                    actions.child(
+                        button("Add a rule\u{2026}", ButtonKind::Quiet, true)
+                            .id(("activity-add-rule", index))
+                            .debug_selector(move || format!("activity-add-rule-{index}"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.add_rule(key, window, cx);
+                            })),
+                    )
+                })
                 // Opening again waits for the browser launcher.
                 .child(button("Open again", ButtonKind::Quiet, true))
-                .child(
-                    button("Re-test", ButtonKind::Quiet, true)
-                        .id(("activity-retest", index))
-                        .debug_selector(move || format!("activity-retest-{index}"))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.retest(&url, &from, window, cx);
-                        })),
-                ),
+                .when(whole, |actions| {
+                    actions.child(
+                        button("Re-test", ButtonKind::Quiet, true)
+                            .id(("activity-retest", index))
+                            .debug_selector(move || format!("activity-retest-{index}"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.retest(&url, &from, window, cx);
+                            })),
+                    )
+                }),
         )
 }
 
@@ -896,8 +1259,24 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
     let filters = Filter::ALL
         .into_iter()
         .fold(segmented(), |seg, (filter, label)| {
+            let selected = app.activity.filter == filter;
+            let count_color = if selected {
+                theme::accent_bright()
+            } else {
+                theme::text_subtle()
+            };
             seg.child(
-                segment(label, app.activity.filter == filter)
+                segment(label, selected)
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    // `.seg span i`: the count beside the label.
+                    .child(mono(
+                        thousands(app.activity.count(filter)),
+                        10.0,
+                        500.0,
+                        count_color,
+                    ))
                     .id(label)
                     .debug_selector(move || format!("activity-filter-{label}"))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -913,10 +1292,164 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
         .gap(px(8.0))
         .child(div().w(px(260.0)).flex_none().flex().child(search))
         .child(filters)
-        .child(div().ml_auto().child(note(format!(
-            "last {} \u{00b7} in memory",
-            app.activity.capacity
-        ))))
+        .child(
+            div()
+                .ml_auto()
+                .child(note(memory_note(&app.activity.retention))),
+        )
+}
+
+/// "last 200 · 24 h · in memory": the toolbar's note, from the router's
+/// retention.
+pub fn memory_note(retention: &RetentionInfo) -> String {
+    let memory = retention.memory;
+    let mut note = format!("last {}", thousands(memory.count as u64));
+    if memory.hours > 0 {
+        note.push_str(&format!(" \u{00b7} {} h", memory.hours));
+    }
+    note.push_str(" \u{00b7} in memory");
+    if retention.journal.is_some() {
+        note.push_str(" \u{00b7} journaled");
+    }
+    note
+}
+
+/// `.cnts`: under Private, one `.cnt-card` per rule that keeps less than
+/// full, over the host-only rows.
+fn private_cards(app: &PwrRoute) -> Option<Div> {
+    let cards = app.activity.private_counts();
+    if cards.is_empty() {
+        return None;
+    }
+    let total = app.activity.count(Filter::Private);
+    let heading = div()
+        .flex()
+        .flex_col()
+        .pt(px(13.0))
+        .px(px(16.0))
+        .child(tracked(
+            "Counts only",
+            9.5,
+            600.0,
+            0.14,
+            theme::text_muted(),
+        ))
+        .child(
+            text(
+                format!(
+                    "{} private {}",
+                    thousands(total),
+                    if total == 1 { "link" } else { "links" }
+                ),
+                13.5,
+                600.0,
+                theme::text_primary(),
+            )
+            .mt(px(6.0)),
+        )
+        .child(
+            paragraph(
+                "Rules that keep host only or nothing. What they dropped was never recorded, so \
+                 there is nothing more to show.",
+                11.5,
+                18.4,
+                theme::text_muted(),
+            )
+            .mt(px(6.0))
+            .max_w(px(520.0)),
+        );
+    let grid = cards.into_iter().fold(
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(px(10.0))
+            .py(px(14.0))
+            .px(px(16.0)),
+        |grid, card| {
+            grid.child(
+                div()
+                    .w(px(220.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .py(px(12.0))
+                    .px(px(14.0))
+                    .border_1()
+                    .border_color(theme::border_subtle())
+                    .rounded(px(8.0))
+                    .bg(theme::bg_app())
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(6.0))
+                            .child(mono(
+                                thousands(card.count),
+                                22.0,
+                                700.0,
+                                theme::text_primary(),
+                            ))
+                            .child(text("listed", 11.0, 500.0, theme::text_muted())),
+                    )
+                    .child(div().flex().child(tag(card.rule)))
+                    .child(paragraph(card.detail, 10.5, 15.75, theme::text_subtle())),
+            )
+        },
+    );
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .border_b_1()
+            .border_color(theme::border_faint())
+            .child(heading)
+            .child(grid),
+    )
+}
+
+/// `.ar.sum`: the records kept at nothing, as one line at the end.
+fn kept_nothing_row(count: u64) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(column::GAP))
+        .px(px(14.0))
+        .py(px(8.0))
+        .bg(theme::bg_input())
+        .child(div().w(px(column::TIME)).flex_none())
+        .child(text(
+            format!(
+                "{} {} kept nothing. Counted, not listed.",
+                thousands(count),
+                if count == 1 { "link" } else { "links" }
+            ),
+            11.0,
+            400.0,
+            theme::text_subtle(),
+        ))
+}
+
+/// The divider over the journaled rows.
+fn journal_divider() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .px(px(14.0))
+        .py(px(7.0))
+        .bg(theme::bg_elevated())
+        .border_b_1()
+        .border_color(theme::border_faint())
+        .child(tracked(
+            "From the journal",
+            9.5,
+            600.0,
+            0.14,
+            theme::text_muted(),
+        ))
+        .child(note(
+            "no longer in memory \u{00b7} read from disk, at each record\u{2019}s level",
+        ))
 }
 
 /// `.empty`: nothing has been routed yet (`design/PwrRoute Empty and Error
@@ -969,31 +1502,54 @@ pub fn pane(
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl IntoElement + use<> {
     let visible = app.activity.visible();
-    let count = visible.len();
-    let list = if app.activity.rows.is_empty() {
+    let journaled = app.activity.visible_journal();
+    let private = app.activity.filter == Filter::Private;
+    let kept_nothing = app.activity.kept_nothing;
+    let nothing_to_list =
+        app.activity.rows.is_empty() && app.activity.journal_rows.is_empty() && kept_nothing == 0;
+    let list = if nothing_to_list {
         card().child(empty_state(cx))
     } else {
-        let list = visible.into_iter().enumerate().fold(
-            card().child(head_row()),
-            |list, (position, (index, item))| {
-                let last = position + 1 == count;
-                let expanded = app.activity.expanded == Some(item.id);
-                list.child(row(index, item, expanded, last, cx))
-                    .when(expanded, |list| {
-                        list.child(expansion(index, item, last, cx))
-                    })
-            },
-        );
-        if count == 0 {
-            list.child(div().py(px(14.0)).px(px(14.0)).child(text(
+        let count = visible.len() + journaled.len();
+        let mut list = card();
+        if private && let Some(cards) = private_cards(app) {
+            list = list.child(cards);
+        }
+        let rows = |list: Div,
+                    rows: Vec<(usize, &ActivityRow)>,
+                    offset: usize,
+                    cx: &mut Context<'_, PwrRoute>| {
+            rows.into_iter()
+                .enumerate()
+                .fold(list, |list, (position, (index, item))| {
+                    let last = offset + position + 1 == count && kept_nothing == 0;
+                    let expanded = app.activity.expanded == Some(item.key);
+                    let menu = row_menu(app, index, item.key, cx);
+                    list.child(row(index, item, expanded, menu, last, cx))
+                        .when(expanded, |list| {
+                            list.child(expansion(index, item, last, cx))
+                        })
+                })
+        };
+        let memory_rows = visible.len();
+        let mut list = rows(list.child(head_row()), visible, 0, cx);
+        if !journaled.is_empty() {
+            list = rows(list.child(journal_divider()), journaled, memory_rows, cx);
+        }
+        if count == 0
+            && (kept_nothing == 0 || !matches!(app.activity.filter, Filter::All | Filter::Private))
+        {
+            list = list.child(div().py(px(14.0)).px(px(14.0)).child(text(
                 "No dispatch matches.",
                 11.5,
                 400.0,
                 theme::text_muted(),
-            )))
-        } else {
-            list
+            )));
         }
+        if kept_nothing > 0 && matches!(app.activity.filter, Filter::All | Filter::Private) {
+            list = list.child(kept_nothing_row(kept_nothing));
+        }
+        list
     };
     pane_frame("activity-pane")
         .child(
@@ -1003,21 +1559,42 @@ pub fn pane(
                 .gap(px(16.0))
                 .child(pane_heading("Recent", "Activity", None))
                 .child(
-                    button("Clear", ButtonKind::Quiet, true)
-                        .id("activity-clear")
-                        .debug_selector(|| "activity-clear".into())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.activity.clear(cx);
-                            cx.notify();
-                        })),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            button("Export\u{2026}", ButtonKind::Quiet, true)
+                                .id("activity-export")
+                                .debug_selector(|| "activity-export".into())
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    // Writes the links in memory, each at
+                                    // its level, to a file the reader picks
+                                    // in the OS's dialog: the one way out of
+                                    // memory from this screen.
+                                    crate::settings::privacy_host::export(cx);
+                                })),
+                        )
+                        .child(
+                            button("Clear", ButtonKind::Quiet, true)
+                                .id("activity-clear")
+                                .debug_selector(|| "activity-clear".into())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.activity.clear(cx);
+                                    cx.notify();
+                                })),
+                        ),
                 ),
         )
         .child(toolbar(app, window, cx))
         .child(list)
-        .child(note(
-            "Full URLs are kept in memory for this session only. Logs on disk carry rule \
-             numbers and timings, never URL contents.",
-        ))
+        // The router's sentence, verbatim: the same one Settings › Privacy
+        // shows under the journal switch.
+        .child(
+            note(app.activity.retention.description.clone())
+                .id("activity-retention")
+                .debug_selector(|| "activity-retention".into()),
+        )
 }
 
 impl PwrRoute {
@@ -1047,8 +1624,8 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use pwrroute_router::{
-        AppType, Browser, DispatchId, DispatchRecord, Link, Matched, OpenerInfo, Outcome, Source,
-        Step, Timings,
+        AppType, Browser, DispatchId, DispatchRecord, JournalConfig, JournalMode, Link, Matched,
+        OpenerInfo, Outcome, Privacy, Retention, Source, Step, Timings,
     };
 
     use super::*;
@@ -1061,6 +1638,8 @@ mod tests {
             profile: profile.into(),
             args: Vec::new(),
             open_in_background: None,
+            private: false,
+            privacy: pwrroute_engine::Privacy::Full,
         }
     }
 
@@ -1084,6 +1663,7 @@ mod tests {
         DispatchRecord {
             id: DispatchId(id),
             received_at: SystemTime::now(),
+            privacy: Privacy::Full,
             link: Link::new(url, Source::AppleEvent).with_opener(from.map(|name| OpenerInfo {
                 name: name.into(),
                 ..OpenerInfo::default()
@@ -1137,7 +1717,9 @@ mod tests {
             ],
         );
         let row = ActivityRow::from_record(&record);
-        assert_eq!(row.id, DispatchId(7));
+        assert_eq!(row.key.id, DispatchId(7));
+        assert!(!row.key.journaled && !row.journaled);
+        assert_eq!(row.privacy, Privacy::Full);
         assert_eq!(row.time.len(), "09:41:08".len());
         assert_eq!(row.url, received);
         assert_eq!(row.from, "Slack");
@@ -1149,12 +1731,14 @@ mod tests {
             badge,
             name,
             profile,
+            private,
         } = &row.opened
         else {
             panic!("opened in a browser");
         };
         assert_eq!((badge.as_ref(), name.as_ref()), ("Ff", "Firefox"));
         assert_eq!(profile.as_deref(), Some("default-release"));
+        assert!(!private);
         assert_eq!(
             texts(&row),
             [
@@ -1202,7 +1786,8 @@ mod tests {
             "Google Chrome \u{00b7} Personal \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms \
              \u{00b7} dry run"
         );
-        assert!(row.passes(Filter::Default, "chrome"));
+        assert!(row.passes(Filter::Unrouted, "chrome"));
+        assert!(!row.passes(Filter::Private, ""));
         assert!(!row.passes(Filter::Rewritten, ""));
     }
 
@@ -1342,7 +1927,10 @@ mod tests {
             feed.today(now),
             Counts {
                 routed: 3,
-                failed: 1
+                failed: 1,
+                unrouted: 3,
+                rewritten: 0,
+                private: 0,
             }
         );
         assert_eq!(feed.today(now).label(), "3 today \u{00b7} 1 failed");
@@ -1370,13 +1958,142 @@ mod tests {
         assert_eq!(feed.today(now).routed, 3 + feed.capacity() as u64);
     }
 
+    /// Records at every privacy level, as the router reduces them before
+    /// the feed sees them: a full unrouted one, a host-only private-window
+    /// one, and one kept at nothing.
+    fn leveled_records() -> Vec<DispatchRecord> {
+        let unrouted = "https://app.metrics.example/dashboard/abc?from_ts=1";
+        let full = record(
+            1,
+            unrouted,
+            Some("Slack"),
+            vec![
+                Step::Received {
+                    url: unrouted.into(),
+                },
+                Step::Matched {
+                    by: Matched::Default,
+                },
+                Step::Browser {
+                    browser: browser("Google Chrome", "Personal", unrouted),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let bank = "https://mybank.example/accounts/42?session=abc";
+        let mut private = browser("Safari", "", bank);
+        private.private = true;
+        let mut host = record(
+            2,
+            bank,
+            Some("Mail"),
+            vec![
+                Step::Received { url: bank.into() },
+                Step::Matched {
+                    by: Matched::Handler { index: 7 },
+                },
+                Step::Browser { browser: private },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        host.privacy = Privacy::Host;
+        host.reduce(Privacy::Host);
+        let mut none = record(
+            3,
+            "https://clinic.example/visit/9",
+            Some("Mail"),
+            vec![
+                Step::Received {
+                    url: "https://clinic.example/visit/9".into(),
+                },
+                Step::Matched {
+                    by: Matched::Handler { index: 8 },
+                },
+                Step::Browser {
+                    browser: browser("Firefox", "", "https://clinic.example/visit/9"),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        none.privacy = Privacy::None;
+        none.reduce(Privacy::None);
+        vec![none, host, full]
+    }
+
+    #[test]
+    fn a_host_only_record_keeps_the_host_and_one_kept_at_nothing_is_a_count() {
+        let records = leveled_records();
+        let feed = Feed::from_records(records.clone());
+        let today = feed.today(SystemTime::now());
+        assert_eq!((today.routed, today.unrouted, today.private), (3, 1, 2));
+        assert_eq!(today.label(), "3 today \u{00b7} 2 private");
+
+        let host = ActivityRow::from_record(&records[1]);
+        assert_eq!(host.privacy, Privacy::Host);
+        assert_eq!(host.url, "https://mybank.example");
+        assert!(!host.url.contains("session"));
+        assert_eq!(host.final_url, "https://mybank.example");
+        assert_eq!(host.rule, "handler 8");
+        assert!(matches!(
+            &host.opened,
+            Opened::Browser {
+                private: true,
+                profile: None,
+                ..
+            }
+        ));
+        assert!(host.passes(Filter::Private, "private window"));
+        assert!(!host.passes(Filter::Unrouted, ""));
+        assert_eq!(
+            private_detail(&host),
+            "Safari, private window. Keeps host only."
+        );
+
+        let full = ActivityRow::from_record(&records[2]);
+        assert!(full.default && full.passes(Filter::Unrouted, ""));
+        assert!(!full.passes(Filter::Private, ""));
+
+        let journaled = ActivityRow::from_journal(&records[2]);
+        assert!(journaled.journaled && journaled.key.journaled);
+        assert_eq!(journaled.key.id, full.key.id);
+        assert_ne!(journaled.key, full.key);
+    }
+
+    #[test]
+    fn memory_notes_follow_the_retention() {
+        let note = |count, hours, journal: Option<JournalMode>| {
+            let options = Options {
+                retention: Retention { count, hours },
+                journal: journal.map(|mode| JournalConfig::new("/tmp/j", mode)),
+                ..Options::default()
+            };
+            memory_note(&RetentionInfo {
+                memory: options.retention,
+                journal: options.journal.clone(),
+                description: options.retention_description(),
+            })
+        };
+        assert_eq!(
+            note(200, 24, None),
+            "last 200 \u{00b7} 24 h \u{00b7} in memory"
+        );
+        assert_eq!(note(2000, 0, None), "last 2,000 \u{00b7} in memory");
+        assert_eq!(
+            note(500, 72, Some(JournalMode::Hosts)),
+            "last 500 \u{00b7} 72 h \u{00b7} in memory \u{00b7} journaled"
+        );
+    }
+
     #[test]
     fn counts_read_as_the_design_writes_them() {
         assert_eq!(thousands(0), "0");
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1412), "1,412");
         assert_eq!(thousands(1_234_567), "1,234,567");
-        let counts = |routed| Counts { routed, failed: 0 };
+        let counts = |routed| Counts {
+            routed,
+            ..Counts::default()
+        };
         assert_eq!(counts(0).compact(), None);
         assert_eq!(counts(31).compact().as_deref(), Some("31"));
         assert_eq!(counts(999).compact().as_deref(), Some("999"));
@@ -1387,10 +2104,21 @@ mod tests {
         assert_eq!(
             Counts {
                 routed: 1412,
-                failed: 2
+                failed: 2,
+                ..Counts::default()
             }
             .label(),
             "1,412 today \u{00b7} 2 failed"
+        );
+        assert_eq!(
+            Counts {
+                routed: 1412,
+                failed: 2,
+                private: 14,
+                ..Counts::default()
+            }
+            .label(),
+            "1,412 today \u{00b7} 2 failed \u{00b7} 14 private"
         );
     }
 }

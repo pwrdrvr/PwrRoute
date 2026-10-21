@@ -204,6 +204,87 @@ fn macos_args_replace_the_url() {
     );
 }
 
+#[test]
+fn private_window_adds_the_catalog_flag() {
+    let fx = Fixture::new(Platform::MacOs);
+    for (name, flag) in [
+        ("Google Chrome", "--incognito"),
+        ("Microsoft Edge", "--inprivate"),
+        ("Firefox", "--private-window"),
+    ] {
+        let mut b = browser(name, AppType::AppName);
+        b.private = true;
+        let p = plan(&fx, &b);
+        assert_eq!(
+            open_args(&p),
+            ["-a", name, "-n", "--args", flag, URL],
+            "{name}"
+        );
+        assert!(p.notes.is_empty(), "{name}");
+    }
+
+    // The config's args already carry the flag: it is not doubled.
+    let mut b = browser("Google Chrome", AppType::AppName);
+    b.private = true;
+    b.args = strings(&["--incognito", URL]);
+    let p = plan(&fx, &b);
+    assert_eq!(
+        open_args(&p),
+        ["-a", "Google Chrome", "--args", "--incognito", URL]
+    );
+    assert!(p.notes.is_empty());
+
+    // Safari has no private-window flag: the link still opens, with a note.
+    let mut b = browser("Safari", AppType::AppName);
+    b.private = true;
+    let p = plan(&fx, &b);
+    assert_eq!(open_args(&p), ["-a", "Safari", URL]);
+    assert_eq!(
+        p.notes,
+        [Note::PrivateUnsupported {
+            browser: "Safari".into()
+        }]
+    );
+
+    // Without the request, nothing is added and nothing is noted.
+    let b = browser("Google Chrome", AppType::AppName);
+    assert!(!b.private);
+    let p = plan(&fx, &b);
+    assert_eq!(open_args(&p), ["-a", "Google Chrome", URL]);
+    assert!(p.notes.is_empty());
+}
+
+#[test]
+fn private_window_on_windows_and_linux() {
+    let fx = windows_with_chrome();
+    let mut b = browser("Google Chrome", AppType::AppName);
+    b.private = true;
+    let p = plan(&fx, &b);
+    assert!(p.program.ends_with("chrome.exe"));
+    assert_eq!(p.args, strings(&["--incognito", URL]));
+    assert!(p.notes.is_empty());
+
+    let fx = linux_fixture();
+    let mut b = browser("Firefox", AppType::AppName);
+    b.private = true;
+    let p = plan(&fx, &b);
+    assert_eq!(p.program, PathBuf::from("/usr/bin/flatpak"));
+    assert_eq!(
+        p.args,
+        strings(&[
+            "run",
+            "--branch=stable",
+            "--arch=x86_64",
+            "--command=firefox",
+            "--file-forwarding",
+            "org.mozilla.firefox",
+            "--private-window",
+            URL
+        ])
+    );
+    assert!(p.notes.is_empty());
+}
+
 fn windows_with_chrome() -> Fixture {
     let fx = Fixture::new(Platform::Windows);
     fx.write("Program Files/Google/Chrome/Application/chrome.exe", "");

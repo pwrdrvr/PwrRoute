@@ -206,7 +206,14 @@ fn edited(age: std::time::Duration) -> String {
 /// `path` with the home directory written `~`, as the design names configs.
 pub fn display_path(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok()) {
-        Some(rest) => format!("~/{}", rest.display()),
+        Some(rest) => {
+            let rest = rest.display().to_string();
+            // Shown with "/" after the "~" on every platform, so a nested
+            // path on Windows does not mix separators ("~/journal\\x").
+            #[cfg(windows)]
+            let rest = rest.replace('\\', "/");
+            format!("~/{rest}")
+        }
         None => path.display().to_string(),
     }
 }

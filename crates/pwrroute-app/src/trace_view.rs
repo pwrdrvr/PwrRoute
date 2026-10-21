@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use pwrroute_engine::{AppType, Matcher, RewriteAction, RulesFile, Source, Stage, Step, Trace};
 
-use crate::fixtures::Opener;
+use crate::test_link::OpenerChoice;
 use crate::widgets::{NOT_OPENED, NOT_OPENED_BADGE, badge_for};
 
 /// A resolution, step by step.
@@ -106,7 +106,7 @@ impl TraceView {
     pub fn from_engine(
         trace: &Trace,
         rules: &RulesFile,
-        opener: Option<&Opener>,
+        opener: Option<&OpenerChoice>,
         took: Duration,
         unfold: bool,
     ) -> Self {
@@ -260,7 +260,7 @@ fn rule_name(step: &Step, plural: bool) -> String {
 fn engine_step(
     step: &Step,
     rules: &RulesFile,
-    opener: Option<&Opener>,
+    opener: Option<&OpenerChoice>,
     threw: bool,
     number: usize,
 ) -> TraceStep {
@@ -347,7 +347,7 @@ fn engine_step(
                 (Some(_), Some(app)) => (
                     format!("sent from {} \u{00b7} first match", app.name),
                     StepBody::Chips(
-                        vec![Chip::App(app.badge.into(), app.name.into())],
+                        vec![Chip::App(app.badge.to_string(), app.name.to_string())],
                         Some(match &pattern {
                             Some(p) => format!("matched the opener; pattern {p} matched the URL"),
                             None => "matched the opener and the URL".into(),

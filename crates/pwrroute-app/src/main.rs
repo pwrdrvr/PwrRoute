@@ -11,6 +11,7 @@
 #![windows_subsystem = "windows"]
 
 mod activity;
+mod activity_actions;
 mod app;
 mod app_menu;
 mod assets;
@@ -32,6 +33,7 @@ mod rules_model;
 mod rules_store;
 mod rules_view;
 mod settings;
+mod settings_store;
 mod test_link;
 #[cfg(test)]
 mod tests;
@@ -44,6 +46,8 @@ mod updater;
 mod widgets;
 
 use std::{
+    io::Write,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
@@ -105,10 +109,14 @@ fn main() {
     // First: Velopack's install, update and uninstall hooks run here and
     // exit, before this process could take the router lock.
     updater::run_startup_hooks();
+    // `pwrroute rules test` runs without the router or a window.
+    if let Some(code) = rules_command(std::env::args().skip(1).collect()) {
+        std::process::exit(code);
+    }
     let args = router::Args::from_env();
     let resident = match router::start(&args) {
         router::Start::Exit => return,
-        router::Start::Resident(resident) => resident,
+        router::Start::Resident(resident) => *resident,
     };
     let handle = resident.handle();
     let e2e_hook = e2e::start(handle.clone());
@@ -152,17 +160,22 @@ fn main() {
         dock::install(cx);
         // Before the tray, which follows the feed from the start.
         activity::install(resident.handle(), resident.dispatched.clone(), cx);
+        settings_store::install(resident.settings.clone(), Some(resident.handle()), cx);
         tray::install(cx);
         default_browser::install(default_browser::Os::real(), cx);
+        tray::follow_default_browser(cx);
         cx.set_global(settings::SettingsHost {
             model: Rc::new(|window, cx| {
                 default_browser::watch(window, cx);
                 let mut model = settings::fixtures::model();
                 model.browsers.default = default_browser::card(cx);
+                model.privacy = settings::privacy_host::model(cx);
                 model
             }),
             on_request: Rc::new(|request, _, cx| {
-                if !default_browser::handle_settings_request(request, cx) {
+                if !default_browser::handle_settings_request(request, cx)
+                    && !settings::privacy_host::handle_request(request, cx)
+                {
                     eprintln!("pwrroute: settings: {request:?} is not wired up yet");
                 }
             }),
@@ -213,6 +226,150 @@ fn main() {
     });
 }
 
+/// `pwrroute rules test [--rules PATH] [--config PATH]`: runs the examples
+/// and tests `rules.json` carries through the engine, with the Finicky
+/// config in charge (discovered as the router does, or `--config`), and
+/// exits 0 when every one passes, 1 on a failure, 2 when they could not
+/// run. `None` when the command line is not this command.
+fn rules_command(args: Vec<String>) -> Option<i32> {
+    let mut rest = args.iter().map(String::as_str);
+    if rest.next() != Some("rules") {
+        return None;
+    }
+    let mut rules = None;
+    let mut config = None;
+    let mut verb = None;
+    while let Some(arg) = rest.next() {
+        match arg {
+            "--rules" => rules = rest.next().map(PathBuf::from),
+            "--config" => config = rest.next().map(PathBuf::from),
+            other if other.starts_with("--rules=") => {
+                rules = Some(PathBuf::from(&other["--rules=".len()..]));
+            }
+            other if other.starts_with("--config=") => {
+                config = Some(PathBuf::from(&other["--config=".len()..]));
+            }
+            other if verb.is_none() => verb = Some(other.to_owned()),
+            other => {
+                eprintln!("pwrroute rules: unexpected argument {other}");
+                return Some(2);
+            }
+        }
+    }
+    if verb.as_deref() != Some("test") {
+        eprintln!("usage: pwrroute rules test [--rules PATH] [--config PATH]");
+        return Some(2);
+    }
+    // No flags: the rules.json and config the router routes by. An explicit
+    // `--rules` runs that file on its own unless `--config` names one too, so
+    // a file under test is not read against a config it was not written for.
+    let environment = pwrroute_engine::discovery::Environment::current();
+    let (rules, config) = match rules {
+        Some(rules) => (Some(rules), config),
+        None => (
+            pwrroute_engine::discovery::rules_path(&environment),
+            config.or_else(|| {
+                pwrroute_engine::discovery::find_config(
+                    &pwrroute_engine::discovery::config_candidates(&environment),
+                )
+            }),
+        ),
+    };
+    if let Some(path) = rules.as_deref().filter(|p| !p.is_file()) {
+        eprintln!("pwrroute rules test: no rules file at {}", path.display());
+        return Some(2);
+    }
+    let mut out = std::io::stdout().lock();
+    Some(run_rules_tests(
+        rules.as_deref(),
+        config.as_deref(),
+        &mut out,
+    ))
+}
+
+/// Runs the file's examples and tests and prints the result: one line per
+/// failure with the input, what was expected, what happened and which rule
+/// won. The inputs are the user's own saved examples, so printing them is
+/// what the command is for.
+fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Write) -> i32 {
+    use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, Sources, TestSource};
+
+    let rules_file = match rules {
+        Some(path) => match RulesFile::load(path) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = writeln!(out, "rules.json did not load: {error:#}");
+                return 2;
+            }
+        },
+        None => RulesFile::default(),
+    };
+    let sources = Sources {
+        config: config.map(Path::to_path_buf),
+        rules: rules_file,
+    };
+    let engine = match Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default()) {
+        Ok(engine) => engine,
+        Err(error) => {
+            let _ = writeln!(out, "the rules did not load: {error:#}");
+            return 2;
+        }
+    };
+    let report = match engine.test_rules(None) {
+        Ok(report) => report,
+        Err(error) => {
+            let _ = writeln!(out, "the tests did not run: {error:#}");
+            return 2;
+        }
+    };
+    for failure in &report.failures {
+        let source = match failure.source {
+            TestSource::RuleExample { rule, example } => {
+                format!("rules[{rule}].examples[{example}]")
+            }
+            TestSource::RewriteExample { rewrite, example } => {
+                format!("rewrites[{rewrite}].examples[{example}]")
+            }
+            TestSource::Test { test } => format!("tests[{test}]"),
+        };
+        let from = match &failure.opener {
+            Some(opener) => format!(" from {opener}"),
+            None => String::new(),
+        };
+        let winner = match &failure.winner {
+            Some(step) => {
+                let list = match step.source {
+                    pwrroute_engine::Source::Rules => "",
+                    pwrroute_engine::Source::Config => "config ",
+                };
+                match step.stage {
+                    pwrroute_engine::Stage::Default => "the default".to_owned(),
+                    pwrroute_engine::Stage::Handler => {
+                        format!("{list}handler {}", step.index + 1)
+                    }
+                    pwrroute_engine::Stage::Rewrite => {
+                        format!("{list}rewrite {}", step.index + 1)
+                    }
+                }
+            }
+            None => "no handler".to_owned(),
+        };
+        let _ = writeln!(
+            out,
+            "FAIL {source}\n  input:    {}{from}\n  expected: {}\n  actual:   {}\n  winner:   {winner}",
+            failure.input, failure.expected, failure.actual
+        );
+    }
+    let _ = writeln!(
+        out,
+        "{} passed, {} failed, {} total",
+        report.passed,
+        report.failures.len(),
+        report.total
+    );
+    i32::from(!report.is_ok())
+}
+
 /// Brings the main window forward, opening it if it is closed.
 pub(crate) fn show_main_window(cx: &mut App) {
     // Not `first()`: the Settings window, the tray dropdown or the first-run
@@ -253,4 +410,110 @@ pub(crate) fn show_main_window(cx: &mut App) {
         window.focus(&focus, cx);
     });
     cx.activate(true);
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn rules_test_exits_by_the_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let passing = write(
+            dir.path(),
+            "passing.json",
+            r#"{ "defaultBrowser": "Firefox",
+                 "rules": [{ "match": "github.com/*", "browser": "Arc", "examples": ["https://github.com/x"] }],
+                 "tests": [{ "url": "https://example.com/", "expect": { "browser": "Firefox" } }] }"#,
+        );
+        let mut out = Vec::new();
+        assert_eq!(run_rules_tests(Some(&passing), None, &mut out), 0);
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text, "2 passed, 0 failed, 2 total\n");
+
+        // A wider rule above takes the example: 1, with the failure row.
+        let failing = write(
+            dir.path(),
+            "failing.json",
+            r#"{ "defaultBrowser": "Firefox",
+                 "rules": [{ "match": "*", "browser": "Safari" },
+                           { "match": "github.com/*", "browser": "Arc", "examples": ["https://github.com/x"] }] }"#,
+        );
+        let mut out = Vec::new();
+        assert_eq!(run_rules_tests(Some(&failing), None, &mut out), 1);
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.starts_with("FAIL rules[1].examples[0]\n  input:    https://github.com/x\n"),
+            "{text}"
+        );
+        assert!(text.contains("  winner:   handler 1\n"), "{text}");
+        assert!(text.ends_with("0 passed, 1 failed, 1 total\n"), "{text}");
+
+        // A file that does not load: 2.
+        let broken = write(dir.path(), "broken.json", "{ not json");
+        let mut out = Vec::new();
+        assert_eq!(run_rules_tests(Some(&broken), None, &mut out), 2);
+        // No file at all is an empty one: nothing to run, and that passes.
+        let mut out = Vec::new();
+        assert_eq!(
+            run_rules_tests(Some(&dir.path().join("missing.json")), None, &mut out),
+            0
+        );
+        // The JS config runs first: its handler takes the example.
+        let config = write(
+            dir.path(),
+            "finicky.js",
+            "module.exports = { defaultBrowser: \"Firefox\", handlers: [{ match: \"github.com/*\", browser: \"Safari\" }] };\n",
+        );
+        let mut out = Vec::new();
+        assert_eq!(run_rules_tests(Some(&passing), Some(&config), &mut out), 1);
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("winner:   config handler 1")
+        );
+    }
+
+    #[test]
+    fn only_the_rules_command_is_taken() {
+        assert_eq!(rules_command(vec![]), None);
+        assert_eq!(rules_command(vec!["https://example.com/".into()]), None);
+        assert_eq!(rules_command(vec!["rules".into()]), Some(2));
+        assert_eq!(
+            rules_command(vec!["rules".into(), "test".into(), "--bogus".into()]),
+            Some(2)
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let rules = write(
+            dir.path(),
+            "rules.json",
+            r#"{ "defaultBrowser": "Firefox", "rules": [] }"#,
+        );
+        assert_eq!(
+            rules_command(vec![
+                "rules".into(),
+                "test".into(),
+                format!("--rules={}", rules.display()),
+                "--config".into(),
+                dir.path().join("none.js").display().to_string(),
+            ]),
+            Some(2),
+            "a config that does not exist cannot load"
+        );
+        assert_eq!(
+            rules_command(vec![
+                "rules".into(),
+                "test".into(),
+                "--rules".into(),
+                rules.display().to_string(),
+            ]),
+            Some(0)
+        );
+    }
 }
