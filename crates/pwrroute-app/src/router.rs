@@ -1033,7 +1033,12 @@ mod tests {
         let factory: ResolverFactory = {
             let (choice, rules, source) = (home.choice(), home.rules_path(), source.clone());
             Box::new(move || {
-                Ok(Box::new(LiveResolver::new(choice, Some(rules), source)?) as Box<dyn Resolver>)
+                Ok(Box::new(LiveResolver::new(
+                    choice,
+                    Some(rules),
+                    source,
+                    Rc::new(DefaultHost),
+                )?) as Box<dyn Resolver>)
             })
         };
         let launcher = Missing::new(&["Brave"]);
@@ -1091,7 +1096,12 @@ mod tests {
         let factory: ResolverFactory = {
             let (choice, rules, source) = (home.choice(), home.rules_path(), source.clone());
             Box::new(move || {
-                Ok(Box::new(LiveResolver::new(choice, Some(rules), source)?) as Box<dyn Resolver>)
+                Ok(Box::new(LiveResolver::new(
+                    choice,
+                    Some(rules),
+                    source,
+                    Rc::new(DefaultHost),
+                )?) as Box<dyn Resolver>)
             })
         };
         let launcher = DryRunLauncher::new();
