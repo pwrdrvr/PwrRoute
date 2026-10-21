@@ -22,8 +22,10 @@ the family's panes in the same controls. General is a placeholder.
   case) and the apps the rules name that the scan did not find under
   Other apps; a switch saves `browsers.hidden` and refreshes the main
   window's pickers. `configuration_host`: `router::routing_source` says
-  which file is in charge; the tiles only show it (`can_switch` is off,
-  the router follows the files on disk), the importer offers no plan yet,
+  which file is in charge; the tiles only show it (`can_switch` is off;
+  the importer's Choose source picks the source), the importer card is a
+  read-only summary of `Engine::review_import` whose Review import… opens
+  the importer (`importer_view::open`),
   Short links lists the engine's built-in hosts, and Reveal, Open data
   folder and Reload now act. `updates_host`: `updater::installation` and
   `updater::state`; a dev build reads "not updatable", no check reads

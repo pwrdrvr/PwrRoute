@@ -253,18 +253,6 @@ fn a_role_follows_its_session_when_the_list_changes(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn keep_the_config_is_offered_only_while_rules_stay_js(cx: &mut TestAppContext) {
-    let (_view, cx, _) = settings(cx, |model| {
-        if let Some(plan) = model.configuration.import.as_mut() {
-            plan.candidates.retain(|candidate| candidate.importable);
-        }
-    });
-    click(cx, Pane::Configuration.nav_id());
-    assert!(visible(cx, configuration::IMPORT_ID));
-    assert!(!visible(cx, configuration::KEEP_CONFIG_ID));
-}
-
-#[gpui_kit::test]
 fn collapse_all_folds_and_unfolds_the_cards(cx: &mut TestAppContext) {
     let (_view, cx, _) = settings(cx, |_| {});
     click(cx, Pane::LocalAgents.nav_id());
@@ -287,21 +275,11 @@ fn the_switch_turns_agent_access_off(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_importer_sends_the_checked_rules(cx: &mut TestAppContext) {
+fn the_importer_card_is_a_summary_that_opens_the_importer(cx: &mut TestAppContext) {
     let (_view, cx, requests) = settings(cx, |_| {});
     click(cx, Pane::Configuration.nav_id());
-
-    // Uncheck the first rewrite; the function matchers cannot be checked.
-    click(cx, ("config-import-check", 0_usize));
-    click(cx, ("config-import-check", 4_usize));
-    click(cx, configuration::IMPORT_ID);
-    assert_eq!(
-        *requests.borrow(),
-        [SettingsRequest::Import {
-            candidates: vec![1, 2, 3, 6],
-            keep_config: false,
-        }]
-    );
+    click(cx, configuration::REVIEW_IMPORT_ID);
+    assert_eq!(*requests.borrow(), [SettingsRequest::ReviewImport]);
 }
 
 #[gpui_kit::test]

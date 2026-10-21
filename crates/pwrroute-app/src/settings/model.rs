@@ -222,11 +222,11 @@ pub struct ImportPlan {
 }
 
 impl ImportPlan {
-    /// Candidates that will import as things stand.
-    pub fn checked(&self) -> usize {
+    /// Candidates that import exactly.
+    pub fn importable(&self) -> usize {
         self.candidates
             .iter()
-            .filter(|candidate| candidate.importable && candidate.checked)
+            .filter(|candidate| candidate.importable)
             .count()
     }
 
@@ -245,8 +245,6 @@ pub struct ImportCandidate {
     pub summary: Vec<Piece>,
     /// Whether visual rules can hold it. A function matcher usually cannot.
     pub importable: bool,
-    /// Whether the reader left it checked. Ignored when not importable.
-    pub checked: bool,
 }
 
 /// One run of an import row's summary.
@@ -483,11 +481,8 @@ pub enum SettingsRequest {
     NewCustomRole,
     OpenActivity,
     SetRulesSource(RulesSource),
-    /// Import the checked candidates, by index into the plan.
-    Import {
-        candidates: Vec<usize>,
-        keep_config: bool,
-    },
+    /// Open the importer on the Finicky config (Finicky Importer 1a).
+    ReviewImport,
     RevealRules,
     OpenDataFolder,
     ReloadRules,

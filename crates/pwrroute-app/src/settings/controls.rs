@@ -2,10 +2,10 @@
 //! in `design/pwrroute.css` or the Settings canvas's own `<style>`.
 //!
 //! Interactive controls are gpui-kit's unstyled primitives (`base::Button`,
-//! `Switch`, `Checkbox`, `Radio`), which own focus, keyboard activation and
+//! `Switch`, `Radio`), which own focus, keyboard activation and
 //! accessibility; these functions only dress them in the tokens.
 
-use gpui_kit::base::{Button, Checkbox, Radio, Switch};
+use gpui_kit::base::{Button, Radio, Switch};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Div, ElementId, Hsla, InteractiveElement as _, ParentElement as _, SharedString,
@@ -127,33 +127,6 @@ pub fn switch(id: impl Into<ElementId>, on: bool) -> Switch {
                 .rounded_full()
                 .bg(knob),
         )
-}
-
-/// `.ck2`: the importer's checkbox; `.na` (dimmed, inert) when `available`
-/// is false.
-pub fn checkbox(id: impl Into<ElementId>, checked: bool, available: bool) -> Checkbox {
-    Checkbox::new(id)
-        .checked(checked && available)
-        .disabled(!available)
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .size(px(14.0))
-        .rounded(px(4.0))
-        .border_1()
-        .map(|checkbox| {
-            if checked && available {
-                checkbox
-                    .bg(theme::accent())
-                    .border_color(theme::transparent())
-                    .child(text("\u{2713}", 9.0, 600.0, theme::accent_on()))
-            } else {
-                checkbox.border_color(theme::border_strong())
-            }
-        })
-        .when(!available, |checkbox| checkbox.opacity(0.4))
-        .when(available, |checkbox| checkbox.cursor_pointer())
 }
 
 /// `.radio`, drawn inside a `Radio` the caller builds around a whole tile.

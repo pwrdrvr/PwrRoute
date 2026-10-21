@@ -31,6 +31,8 @@ mod menu_actions {
             CloseWindow,
             /// Check GitHub Releases for a newer PwrRoute and download it.
             CheckForUpdates,
+            /// Import any Finicky `.js` or `.ts` into the visual rules.
+            ImportFinickyConfig,
         ]
     );
 }
@@ -52,6 +54,7 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, _| {
         updater::check_in_background(updater::Trigger::Menu);
     });
+    cx.on_action(|_: &ImportFinickyConfig, cx| crate::importer_view::prompt_for_config(cx));
     cx.on_action(|_: &CloseWindow, cx| {
         if let Some(window) = cx.active_window() {
             let _ = window.update(cx, |_, window, _| window.remove_window());
@@ -87,6 +90,10 @@ pub fn install(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Quit PwrRoute", Quit),
         ]),
-        Menu::new("File").items([MenuItem::action("Close Window", CloseWindow)]),
+        Menu::new("File").items([
+            MenuItem::action("Import Finicky Config\u{2026}", ImportFinickyConfig),
+            MenuItem::separator(),
+            MenuItem::action("Close Window", CloseWindow),
+        ]),
     ]);
 }
