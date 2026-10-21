@@ -9,6 +9,7 @@ use gpui_kit::{
 };
 
 use crate::app::{PwrRoute, Screen};
+use crate::e2e;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{ButtonKind, button, key_cap, status_chip};
 
@@ -93,6 +94,14 @@ pub fn strip() -> Div {
         },
     )]);
     div()
+        .on_children_prepainted(e2e::regions(&[
+            "titleStrip.brand",
+            "titleStrip.chevron",
+            "titleStrip.breadcrumb",
+            "titleStrip.spacer",
+            "titleStrip.chip1",
+            "titleStrip.chip2",
+        ]))
         .h(px(STRIP_HEIGHT + 1.0))
         .flex_none()
         .flex()
@@ -288,6 +297,14 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
             .children(app.store.changed_on_disk().then(|| changed_actions(cx)))
     };
     div()
+        .on_children_prepainted(e2e::regions(&[
+            "rail.rules",
+            "rail.test",
+            "rail.activity",
+            "rail.settingsHeading",
+            "rail.openSettings",
+            "rail.foot",
+        ]))
         .w(px(196.0))
         .flex_none()
         .flex()

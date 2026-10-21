@@ -24,7 +24,7 @@ use crate::settings_store::SourceSettings;
 use crate::test_link::TestLink;
 use crate::text_field::{Edit, TextField};
 use crate::try_it::{Probe, TestRuns};
-use crate::{activity, chrome, editor, router, rules_view, test_link, theme};
+use crate::{activity, chrome, e2e, editor, router, rules_view, test_link, theme};
 
 /// The element id of the window's root, for tests and the inspector.
 pub const ROOT_ID: &str = "pwrroute-root";
@@ -752,6 +752,10 @@ impl Render for PwrRoute {
         // Activity's Add a rule sheet, over everything.
         let sheet = activity_actions::sheet(self, window, cx);
         div()
+            .on_children_prepainted(|bounds, window, cx| {
+                e2e::frame(window);
+                e2e::regions(&["titleStrip", "body"])(bounds, window, cx);
+            })
             .id(ROOT_ID)
             .debug_selector(|| ROOT_ID.into())
             .track_focus(&self.focus)
@@ -768,6 +772,7 @@ impl Render for PwrRoute {
             .child(chrome::title_strip(self))
             .child(
                 div()
+                    .on_children_prepainted(e2e::regions(&["rail", "pane", "editor"]))
                     .flex_1()
                     .min_h_0()
                     .flex()

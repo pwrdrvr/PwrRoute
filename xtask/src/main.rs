@@ -1,6 +1,7 @@
 //! Repository tasks: `cargo xtask <task>`. CI runs these same commands, so a
 //! green local run means a green CI run.
 
+mod e2e;
 mod linux;
 mod macos;
 
@@ -31,6 +32,9 @@ usage: cargo xtask <task>
                        --require-icon-catalog: fail, not fall back to the
                        legacy .icns, without Xcode 26's actool)
   package-linux        Linux: <target>/package/*.tar.gz and *.deb
+  e2e [--release] [--pending] [--screenshots] [-- TEST-ARGS]
+                       build the app and run the Desktop E2E suite against
+                       it (--pending: also the scenarios not yet met)
 
 <target> is $CARGO_TARGET_DIR when set, else target/ in the workspace.";
 
@@ -48,6 +52,7 @@ fn main() -> Result<()> {
         "release-check" => release_check(rest),
         "bundle" => macos::bundle(rest),
         "package-linux" => linux::package(),
+        "e2e" => e2e::e2e(rest),
         "-h" | "--help" | "help" => {
             println!("{USAGE}");
             Ok(())

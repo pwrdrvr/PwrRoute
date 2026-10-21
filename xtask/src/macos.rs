@@ -182,7 +182,7 @@ fn build(root: &Path, target: Option<&str>) -> Result<()> {
 }
 
 /// `0.0.1-alpha.0` becomes `0.0.1`: macOS wants three numbers.
-fn short_version(version: &str) -> &str {
+pub(crate) fn short_version(version: &str) -> &str {
     version.split(['-', '+']).next().unwrap_or(version)
 }
 
@@ -379,7 +379,7 @@ fn without_key(plist: &str, key: &str) -> String {
     kept.join("\n") + if plist.ends_with('\n') { "\n" } else { "" }
 }
 
-fn sign(app: &Path, identity: Option<&str>) -> Result<()> {
+pub(crate) fn sign(app: &Path, identity: Option<&str>) -> Result<()> {
     let mut codesign = Command::new("codesign");
     codesign.arg("--force");
     match identity {

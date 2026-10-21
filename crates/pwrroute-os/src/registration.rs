@@ -194,11 +194,24 @@ pub fn desktop_entry(exe: &Path) -> String {
     )
 }
 
-/// Quotes a path for `Exec=`, per the Desktop Entry Specification: inside
-/// double quotes, `"`, `` ` ``, `$` and `\` take a backslash; then, because
-/// `Exec` is a string value, every backslash is doubled again; and `%` is
-/// written `%%` so it is not a field code.
+/// Writes a path for `Exec=`, per the Desktop Entry Specification. `%` is
+/// written `%%` so it is not a field code. A path with a reserved character
+/// is quoted: inside double quotes, `"`, `` ` ``, `$` and `\` take a
+/// backslash; then, because `Exec` is a string value, every backslash is
+/// doubled again.
+///
+/// Quoted only when the spec requires it: xdg-utils 1.1.3's generic
+/// `xdg-open` (Ubuntu's, used without a desktop environment) looks the first
+/// word of `Exec` up with `which`, quotes and all, and runs nothing for a
+/// quoted path.
 fn exec_arg(path: &str) -> String {
+    const RESERVED: &[char] = &[
+        ' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(',
+        ')', '`',
+    ];
+    if !path.contains(RESERVED) {
+        return path.replace('%', "%%");
+    }
     let mut quoted = String::from("\"");
     for c in path.chars() {
         match c {
@@ -445,7 +458,7 @@ mod tests {
     fn the_desktop_entry_handles_web_links() {
         let entry = desktop_entry(Path::new("/opt/PwrRoute/pwrroute"));
         assert!(entry.starts_with("[Desktop Entry]\n"));
-        assert!(entry.contains("\nExec=\"/opt/PwrRoute/pwrroute\" %u\n"));
+        assert!(entry.contains("\nExec=/opt/PwrRoute/pwrroute %u\n"));
         assert!(entry.contains("\nMimeType=x-scheme-handler/http;x-scheme-handler/https;\n"));
         assert!(entry.contains("\nCategories=Network;WebBrowser;\n"));
         assert!(entry.contains(&format!("\n{DESKTOP_MARKER}\n")));
@@ -454,7 +467,9 @@ mod tests {
     #[test]
     fn exec_paths_are_escaped() {
         assert_eq!(exec_arg("/a b/pwrroute"), r#""/a b/pwrroute""#);
-        assert_eq!(exec_arg("/100%/x"), r#""/100%%/x""#);
+        assert_eq!(exec_arg("/opt/PwrRoute/pwrroute"), "/opt/PwrRoute/pwrroute");
+        assert_eq!(exec_arg("/100%/x"), "/100%%/x");
+        assert_eq!(exec_arg("/100% off/x"), r#""/100%% off/x""#);
         assert_eq!(exec_arg("/$HOME/x"), r#""/\\$HOME/x""#);
         assert_eq!(exec_arg(r#"/q"t/x"#), r#""/q\\"t/x""#);
         assert_eq!(exec_arg(r"/b\s/x"), r#""/b\\\\s/x""#);

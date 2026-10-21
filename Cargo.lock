@@ -5984,6 +5984,7 @@ dependencies = [
  "async-channel",
  "chrono",
  "gpui-kit",
+ "interprocess",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -6011,6 +6012,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-registry 0.6.1",
+]
+
+[[package]]
+name = "pwrroute-e2e"
+version = "0.1.0-rc.1"
+dependencies = [
+ "anyhow",
+ "interprocess",
+ "pwrroute-engine",
+ "pwrroute-router",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

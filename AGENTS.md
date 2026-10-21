@@ -32,7 +32,10 @@ router resolves every link, opens it through `pwrroute-browsers`' launcher
   first-run window read and change the running app. Contrived fixture data
   (`fixtures/`) is for tests and the `screens` example only. See its
   `AGENTS.md`.
-- `xtask` — lint, test, license notices, release checks and packaging.
+- `e2e` — Desktop E2E: launches the built app and drives it through an
+  env-gated control socket (`crates/pwrroute-app/src/e2e.rs`). See its
+  `AGENTS.md` and `CONTRACT.md`.
+- `xtask` — lint, test, license notices, release checks, packaging and E2E.
 
 Port, don't invent: the design in `design/` decides the shape. Read
 `design/PwrRoute - Name and Brief.dc.html` first. The PwrFinicky rough cut (a
@@ -62,6 +65,7 @@ cargo run -p pwrroute-app        # the window
 cargo xtask lint                 # everything CI's Typecheck job runs
 cargo xtask test                 # every workspace test
 cargo xtask licenses             # regenerate THIRD_PARTY_LICENSES
+cargo xtask e2e                  # build the app, run Desktop E2E against it
 cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG ($CARGO_TARGET_DIR if set)
 cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
 cargo run -p pwrroute-app --example screens -- DIR   # macOS: each screen as a PNG
@@ -115,7 +119,8 @@ PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in`,
 Becoming the default is an explicit action in the app; never change the
 default browser on a developer machine as a side effect of a test or launch,
 and never call `pwrroute_os::set_default_browser` or `register_browser` from
-one.
+one. The one exception is the E2E registration scenarios, which run only on
+throwaway CI runners (`e2e/AGENTS.md`).
 
 ## Packaging & releases
 

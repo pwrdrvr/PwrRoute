@@ -78,7 +78,23 @@ pub struct Args {
 
 impl Args {
     pub fn from_env() -> Self {
-        Self::parse(env::args_os().collect())
+        Self::parse(env::args_os().collect()).with_e2e_env(|key| env::var_os(key))
+    }
+
+    /// Under the E2E hook, a copy the OS starts for a link gets no arguments
+    /// of the harness's, so the harness passes `--dry-run` and `--config` in
+    /// the environment instead (e2e/CONTRACT.md, R8). Ignored otherwise.
+    fn with_e2e_env(mut self, var: impl Fn(&str) -> Option<OsString>) -> Self {
+        if var(crate::e2e::SOCKET_ENV).is_none() {
+            return self;
+        }
+        if var(crate::e2e::DRY_RUN_ENV).is_some_and(|v| v == "1") {
+            self.dry_run = true;
+        }
+        if let Some(config) = var(crate::e2e::CONFIG_ENV) {
+            self.config = Some(PathBuf::from(config));
+        }
+        self
     }
 
     fn parse(raw: Vec<OsString>) -> Self {
@@ -143,7 +159,12 @@ pub fn start(args: &Args) -> Start {
         .map(|url| Link::new(url.as_str(), Source::CommandLine))
         .collect();
 
-    let primary = match pwrroute_os::router_dir().map(|dir| instance::claim(&Endpoint::new(dir))) {
+    // Under the E2E harness the router keeps to the harness's directory, so a
+    // test run neither forwards to nor blocks the developer's own PwrRoute.
+    let dir = env::var_os(crate::e2e::ROUTER_DIR_ENV)
+        .map(PathBuf::from)
+        .or_else(pwrroute_os::router_dir);
+    let primary = match dir.map(|dir| instance::claim(&Endpoint::new(dir))) {
         Some(Ok(Claim::Primary(primary))) => Some(primary),
         Some(Ok(Claim::Running(client))) => {
             let request = if links.is_empty() {
@@ -681,6 +702,33 @@ mod tests {
             private: false,
             privacy: pwrroute_engine::Privacy::Full,
         }
+    }
+
+    #[test]
+    fn the_e2e_environment_stands_in_for_flags_only_under_the_hook() {
+        fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+            move |key| {
+                vars.iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| OsString::from(v))
+            }
+        }
+        let flags = [
+            ("PWRROUTE_E2E_DRY_RUN", "1"),
+            ("PWRROUTE_E2E_CONFIG", "/e2e/routing.js"),
+        ];
+        let args = parse(&["pwrroute", "https://example.com/a"]).with_e2e_env(env(&flags));
+        assert!(!args.dry_run && args.config.is_none(), "no hook, no effect");
+
+        let hooked = [
+            ("PWRROUTE_E2E_SOCKET", "/tmp/e2e.sock"),
+            ("PWRROUTE_E2E_DRY_RUN", "1"),
+            ("PWRROUTE_E2E_CONFIG", "/e2e/routing.js"),
+        ];
+        let args = parse(&["pwrroute", "https://example.com/a"]).with_e2e_env(env(&hooked));
+        assert!(args.dry_run);
+        assert_eq!(args.config.as_deref(), Some(Path::new("/e2e/routing.js")));
+        assert_eq!(args.links, ["https://example.com/a"]);
     }
 
     #[test]

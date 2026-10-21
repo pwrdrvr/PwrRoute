@@ -1,0 +1,33 @@
+{
+  "defaultBrowser": "Firefox",
+  "rewrites": [
+    {
+      "match": "*",
+      "actions": [{ "dropQuery": ["utm_*"] }]
+    }
+  ],
+  "rules": [
+    {
+      "match": "https://work.example.com/*",
+      "browser": "Google Chrome",
+      "profile": "Work"
+    },
+    {
+      "match": "*.example.org/*",
+      "browser": "Safari"
+    },
+    {
+      "match": ["*.example.net/*", "example.net/*"],
+      "browser": "Firefox"
+    },
+    {
+      "match": "localhost:*",
+      "browser": "Firefox"
+    },
+    {
+      "match": "*.example.edu/*",
+      "browser": "Google Chrome",
+      "enabled": false
+    }
+  ]
+}

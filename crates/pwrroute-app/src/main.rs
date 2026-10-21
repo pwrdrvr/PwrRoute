@@ -22,6 +22,7 @@ mod chrome;
 mod config_view;
 mod default_browser;
 mod dock;
+mod e2e;
 mod editor;
 mod first_run;
 mod fixtures;
@@ -129,11 +130,14 @@ fn main() -> ExitCode {
         router::Start::Resident(resident) => *resident,
     };
     let handle = resident.handle();
+    let e2e_hook = e2e::start(handle.clone());
     // `--first-run` forces the window; otherwise it opens once, on the first
     // launch that is for the window rather than a link, until it is done or
-    // closed.
+    // closed. Not on its own under the E2E hook: the suite drives the main
+    // window, from an empty home where onboarding is always pending.
     let first_run = args.first_run
-        || pwrroute_os::data_dir().is_some_and(|dir| onboarding::State::pending(&dir));
+        || (e2e_hook.is_none()
+            && pwrroute_os::data_dir().is_some_and(|dir| onboarding::State::pending(&dir)));
     let forced_first_run = args.first_run;
     let last_link = LastLink::default();
     if resident.launched_with_links {
@@ -189,7 +193,11 @@ fn main() -> ExitCode {
             on_request: Rc::new(|request, _, cx| settings_live::handle_request(request, cx)),
         });
         updater::install(cx);
-        updater::check_in_background(updater::Trigger::Startup);
+        if let Some(hook) = e2e_hook {
+            e2e::attach(hook, cx);
+        } else {
+            updater::check_in_background(updater::Trigger::Startup);
+        }
 
         let activate = resident.activate.clone();
         cx.spawn(async move |cx| {
