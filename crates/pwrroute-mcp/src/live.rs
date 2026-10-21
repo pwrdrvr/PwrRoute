@@ -484,8 +484,13 @@ mod tests {
         };
         let link = || Link::new(PUBLIC, Source::CommandLine);
 
+        // A fixed fallback: on Linux the OS's own browser is Firefox, the
+        // very app this test makes missing.
         let router = RealRouter::spawn(
-            Options::default(),
+            Options {
+                fallback: pwrroute_router::FallbackSource::fixed("Brave", ""),
+                ..Options::default()
+            },
             Some(Box::new(|| Ok(Box::new(Levels)))),
             NoFirefox,
         )
