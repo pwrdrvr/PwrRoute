@@ -8,51 +8,48 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::link::{Link, Source};
 
-/// How much of a link a record keeps, in memory and in the journal.
+/// How much of a link a record keeps, in memory and in the journal: the
+/// engine's level, re-exported so the router and the engine cannot disagree.
 ///
 /// The rule that routed the link decides (the engine's `Browser` carries the
-/// level the winning `rules.json` rule set); a link no rule matched is kept
-/// in full. The router reduces the record to this level before anything
-/// stores it, sees it or writes it, so a `Host` record never held the full
-/// URL anywhere outside the dispatch thread.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Privacy {
-    /// The URL, the opener and every step, as received.
-    #[default]
-    Full,
-    /// Scheme and host only, in the link, the final URL and every step; no
-    /// error text, which can quote the URL. The opener stays, including its
-    /// `window_title`, which an app can fill with a page title or a URL;
-    /// dropping the title at this level is a follow-up.
-    Host,
-    /// No URL, no host, no opener, no steps: the dispatch is only counted,
-    /// with its outcome and timings.
-    None,
-}
+/// tightest level of the `rules.json` rewrites that matched and the handler
+/// that won); a link no rule matched is kept in full. The router reduces
+/// the record to this level before anything stores it, sees it or writes
+/// it, so a `Host` record never held the full URL anywhere outside the
+/// dispatch thread. What each level keeps of a record:
+///
+/// - `Full`: the URL, the opener and every step, as received.
+/// - `Host`: scheme and host only, in the link, the final URL and every
+///   step; no error text, which can quote the URL. The opener stays,
+///   including its `window_title`, which an app can fill with a page title
+///   or a URL; dropping the title at this level is a follow-up.
+/// - `None`: no URL, no host, no opener, no steps: the dispatch is only
+///   counted, with its outcome and timings.
+pub use pwrroute_engine::Privacy;
 
-impl Privacy {
+/// What the router asks of a [`Privacy`] level beyond the engine's
+/// `tighter`: capping a record and naming the level for logs.
+pub trait PrivacyExt: Copy {
     /// The lesser of two levels: what a record kept at `self` may become
-    /// under a cap such as the journal's mode.
+    /// under a cap such as the journal's mode. The engine's `tighter`
+    /// decides the order, so it is the same here as in `rules.json`.
     #[must_use]
-    pub fn at_most(self, cap: Privacy) -> Privacy {
-        if self.rank() <= cap.rank() { self } else { cap }
-    }
+    fn at_most(self, cap: Privacy) -> Privacy;
 
     /// A fixed label, for logs and descriptions. Never carries link data.
-    pub fn label(self) -> &'static str {
+    fn label(self) -> &'static str;
+}
+
+impl PrivacyExt for Privacy {
+    fn at_most(self, cap: Privacy) -> Privacy {
+        self.tighter(cap)
+    }
+
+    fn label(self) -> &'static str {
         match self {
             Self::Full => "full",
             Self::Host => "host",
             Self::None => "none",
-        }
-    }
-
-    fn rank(self) -> u8 {
-        match self {
-            Self::None => 0,
-            Self::Host => 1,
-            Self::Full => 2,
         }
     }
 }
@@ -353,6 +350,8 @@ mod tests {
             profile: "Work".into(),
             args: vec![format!("--open={url}")],
             open_in_background: None,
+            private: false,
+            privacy: Privacy::Full,
         }
     }
 
@@ -487,6 +486,30 @@ mod tests {
         assert_eq!(Privacy::Host.at_most(Privacy::Full), Privacy::Host);
         assert_eq!(Privacy::Full.at_most(Privacy::Host), Privacy::Host);
         assert_eq!(Privacy::Host.at_most(Privacy::None), Privacy::None);
+    }
+
+    #[test]
+    fn the_level_is_the_engines_and_serializes_as_lowercase_words() {
+        // One type: a rule's level is a record's level with no conversion.
+        let level: pwrroute_engine::Privacy = Privacy::Host;
+        assert_eq!(level, Privacy::Host);
+        for (level, word) in [
+            (Privacy::Full, "full"),
+            (Privacy::Host, "host"),
+            (Privacy::None, "none"),
+        ] {
+            assert_eq!(level.label(), word);
+            assert_eq!(serde_json::to_string(&level).unwrap(), format!("{word:?}"));
+            let back: Privacy = serde_json::from_str(&format!("{word:?}")).unwrap();
+            assert_eq!(back, level);
+        }
+        // The order is the engine's, so the two can never disagree.
+        assert_eq!(Privacy::Full.at_most(Privacy::None), Privacy::None);
+        assert_eq!(Privacy::None.at_most(Privacy::Full), Privacy::None);
+        assert_eq!(
+            Privacy::Full.tighter(Privacy::Host),
+            Privacy::Full.at_most(Privacy::Host)
+        );
     }
 
     #[test]

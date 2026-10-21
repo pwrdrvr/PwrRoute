@@ -23,9 +23,17 @@ runs on every platform.
   is the only other view meant for logs; tests check both carry no link data
   beyond their level. `Options::retention_description()` is the sentence the
   UI and MCP show about all this; keep it true.
+- **`Privacy` is the engine's type.** `trace.rs` re-exports
+  `pwrroute_engine::Privacy` (serialized `full`/`host`/`none`) and adds what
+  the router needs through `PrivacyExt` (`at_most`, `label`), written in
+  terms of the engine's `tighter()` so the two crates cannot disagree on
+  which level is tighter. Do not define a second level type here.
 - **`Resolved::privacy` is the seam to the engine.** `impl Resolver for
-  Engine` sets it; a test resolver sets it directly. Until the engine's
-  `Browser` carries the rule's level it is `Privacy::Full` there.
+  Engine` copies `trace.resolution.browser.privacy`, the tightest level of
+  the `rules.json` rewrites that matched and the handler that won (a private
+  rule with no level is `Host`); a test resolver sets it directly.
+  `dispatch/tests.rs` proves the path with a `rules.json`-only engine and
+  the `DryRunLauncher`; keep those tests when the seam changes.
 - **The trace is the product.** Activity, Test a link and the MCP tool all
   read `DispatchRecord`. The engine names the rules that fired through
   `Engine::trace`, which becomes `Resolved::rule_steps`; report more that way

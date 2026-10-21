@@ -432,6 +432,8 @@ mod tests {
             profile: String::new(),
             args: Vec::new(),
             open_in_background: None,
+            private: false,
+            privacy: Privacy::Full,
         };
         let mut record = DispatchRecord {
             id: DispatchId(id),
