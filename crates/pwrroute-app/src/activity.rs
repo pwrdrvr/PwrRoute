@@ -432,7 +432,7 @@ pub struct ActivityRow {
     pub took: SharedString,
     /// A rewrite ran.
     pub rewritten: bool,
-    /// No handler matched.
+    /// No rule routed it: the default, the fallback or a pause took it.
     pub default: bool,
     /// Resolved and recorded, nothing opened (`--dry-run`).
     pub dry_run: bool,
@@ -507,8 +507,9 @@ impl Filter {
     ];
 }
 
-/// No handler matched: `defaultBrowser` applied, or nothing was in charge
-/// and the fallback browser took it.
+/// No rule routed it: `defaultBrowser` applied, nothing was in charge and
+/// the fallback browser took it, or routing was paused and the pause target
+/// did.
 fn is_unrouted(record: &DispatchRecord) -> bool {
     record.steps.iter().any(|step| {
         matches!(
@@ -516,6 +517,7 @@ fn is_unrouted(record: &DispatchRecord) -> bool {
             Step::Matched {
                 by: Matched::Default
             } | Step::Fallback { .. }
+                | Step::Paused { .. }
         )
     })
 }
@@ -623,7 +625,8 @@ fn received_url(record: &DispatchRecord) -> &str {
         .unwrap_or(&record.link.url)
 }
 
-/// The Rule column: "rw 1, 2 · h 3", "handler 2", "default", "fallback".
+/// The Rule column: "rw 1, 2 · h 3", "handler 2", "default", "fallback",
+/// and while paused "paused · skipped h 3" (what would have routed it).
 fn rule_label(steps: &[Step]) -> String {
     let mut numbered = Vec::new();
     let mut unnumbered = false;
@@ -642,23 +645,33 @@ fn rule_label(steps: &[Step]) -> String {
     } else if unnumbered {
         parts.push("rw".into());
     }
+    let paused = steps.iter().any(|step| matches!(step, Step::Paused { .. }));
+    if paused {
+        parts.push("paused".into());
+    }
     for step in steps {
         match step {
             Step::Matched {
                 by: Matched::Handler { index },
-            } => parts.push(if parts.is_empty() {
+            } => parts.push(if paused {
+                format!("skipped h {}", index + 1)
+            } else if parts.is_empty() {
                 format!("handler {}", index + 1)
             } else {
                 format!("h {}", index + 1)
             }),
-            Step::Matched {
-                by: Matched::Default,
-            } => parts.push("default".into()),
             // A rules.json handler: the router does not number those.
             Step::Matched {
                 by: Matched::Unreported,
-            } => parts.push("handler".into()),
-            Step::Fallback { .. } | Step::RefusedLoop { .. } => parts.push("fallback".into()),
+            } => parts.push(if paused { "skipped h" } else { "handler" }.into()),
+            // Paused, the pause target took what these would have sent to
+            // the default or the fallback: "paused" says it all.
+            Step::Matched {
+                by: Matched::Default,
+            } if !paused => parts.push("default".into()),
+            Step::Fallback { .. } | Step::RefusedLoop { .. } if !paused => {
+                parts.push("fallback".into());
+            }
             Step::Rejected { .. } => parts.push("rejected".into()),
             _ => {}
         }
@@ -749,6 +762,13 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
             Step::RefusedLoop { browser } => (
                 StepMark::Miss(number),
                 format!("{browser} is PwrRoute \u{00b7} fallback instead"),
+            ),
+            Step::Paused { skipped } => (
+                StepMark::Miss(number),
+                match skipped {
+                    Some(index) => format!("paused \u{00b7} skipped handler {}", index + 1),
+                    None => "paused \u{00b7} every handler skipped".to_owned(),
+                },
             ),
             Step::NotOpened => (
                 StepMark::Miss(number),
@@ -1943,6 +1963,70 @@ mod tests {
         assert!(row.passes(Filter::Unrouted, "chrome"));
         assert!(!row.passes(Filter::Private, ""));
         assert!(!row.passes(Filter::Rewritten, ""));
+    }
+
+    #[test]
+    fn a_paused_dispatch_names_the_handler_it_skipped() {
+        let url = "https://bsky.app/profile/example";
+        let paused = record(
+            4,
+            url,
+            None,
+            vec![
+                Step::Received { url: url.into() },
+                Step::Matched {
+                    by: Matched::Handler { index: 3 },
+                },
+                Step::Paused { skipped: Some(3) },
+                Step::Browser {
+                    browser: browser("Google Chrome", "Personal", url),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let row = ActivityRow::from_record(&paused);
+        assert_eq!(row.rule, "paused \u{00b7} skipped h 4");
+        assert!(row.default, "a paused link is unrouted");
+        assert!(row.passes(Filter::Unrouted, ""));
+        assert_eq!(
+            texts(&row),
+            [
+                "handler 4",
+                "paused \u{00b7} skipped handler 4",
+                "Google Chrome \u{00b7} Personal \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
+            ]
+        );
+        assert_eq!(row.steps[1].mark, StepMark::Miss(2));
+
+        // Rewritten first, then nothing to skip: the default would have had
+        // it, and the pause target did.
+        let rewritten = "https://xcancel.com/example/status/1";
+        let unskipped = record(
+            5,
+            "https://x.com/example/status/1",
+            None,
+            vec![
+                Step::Received {
+                    url: "https://x.com/example/status/1".into(),
+                },
+                Step::Rewrite {
+                    rule: Some(0),
+                    url: rewritten.into(),
+                },
+                Step::Matched {
+                    by: Matched::Default,
+                },
+                Step::Paused { skipped: None },
+                Step::Browser {
+                    browser: browser("Google Chrome", "Personal", rewritten),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let row = ActivityRow::from_record(&unskipped);
+        assert_eq!(row.rule, "rw 1 \u{00b7} paused");
+        assert!(row.rewritten && row.default);
+        assert_eq!(texts(&row)[2], "paused \u{00b7} every handler skipped");
     }
 
     #[test]

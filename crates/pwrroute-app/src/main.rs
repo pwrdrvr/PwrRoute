@@ -166,7 +166,7 @@ fn main() -> ExitCode {
         // Before the tray, which follows the feed from the start.
         activity::install(resident.handle(), resident.dispatched.clone(), cx);
         settings_store::install(resident.settings.clone(), Some(resident.handle()), cx);
-        tray::install(cx);
+        tray::install(Some(resident.handle()), cx);
         default_browser::install(default_browser::Os::real(), cx);
         tray::follow_default_browser(cx);
         // Local agents: MCP on <data dir>/mcp.sock, beside the router's.

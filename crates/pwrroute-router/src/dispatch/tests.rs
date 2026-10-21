@@ -196,6 +196,165 @@ fn a_route_back_to_pwrroute_goes_to_the_fallback() {
     assert_eq!(launcher.launched()[0].url, "https://loop.example.com/x");
 }
 
+fn pause_target() -> PauseTarget {
+    PauseTarget {
+        browser: "Google Chrome".into(),
+        profile: "Personal".into(),
+    }
+}
+
+#[test]
+fn paused_every_link_opens_in_the_pause_target_and_the_skipped_handler_is_traced() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    assert_eq!(handle.paused(), None);
+    handle.set_paused(Some(pause_target()));
+    assert_eq!(handle.paused(), Some(pause_target()));
+
+    let record = handle
+        .dispatch_and_wait(link("https://team.slack.com/archives/1"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    let browser = record.browser.clone().unwrap();
+    assert_eq!(browser.name, "Google Chrome");
+    assert_eq!(browser.profile, "Personal");
+    assert_eq!(browser.url, "https://team.slack.com/archives/1");
+    assert_eq!(
+        record.steps,
+        vec![
+            Step::Received {
+                url: "https://team.slack.com/archives/1".into()
+            },
+            Step::Matched {
+                by: Matched::Handler { index: 0 }
+            },
+            Step::Paused { skipped: Some(0) },
+            Step::Browser { browser },
+            Step::Launched { dry_run: true },
+        ]
+    );
+    assert_eq!(launcher.launched()[0].name, "Google Chrome");
+    assert_eq!(launcher.launched()[0].profile, "Personal");
+
+    // Resumed: the handler routes again, and nothing says paused.
+    handle.set_paused(None);
+    assert_eq!(handle.paused(), None);
+    let record = handle
+        .dispatch_and_wait(link("https://team.slack.com/archives/2"))
+        .unwrap();
+    assert_eq!(record.browser.unwrap().name, "Firefox");
+    assert!(
+        !record
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Paused { .. }))
+    );
+    assert_eq!(launcher.launched()[1].name, "Firefox");
+}
+
+#[test]
+fn paused_rewrites_still_run_and_the_default_skips_no_handler() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_paused(Some(pause_target()));
+    let record = handle
+        .dispatch_and_wait(link("https://example.com/old/page"))
+        .unwrap();
+    assert_eq!(record.final_url.as_deref(), Some("https://example.com/new"));
+    assert_eq!(
+        record.steps[1..4],
+        [
+            Step::Rewrite {
+                rule: Some(0),
+                url: "https://example.com/new".into()
+            },
+            Step::Matched {
+                by: Matched::Default
+            },
+            Step::Paused { skipped: None },
+        ]
+    );
+    assert_eq!(launcher.launched()[0].url, "https://example.com/new");
+    assert_eq!(launcher.launched()[0].name, "Google Chrome");
+}
+
+#[test]
+fn paused_a_browser_null_handler_is_skipped_too() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_paused(Some(pause_target()));
+    let record = handle
+        .dispatch_and_wait(link("https://blocked.example.com/ad"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert!(record.steps.contains(&Step::Paused { skipped: Some(2) }));
+    assert!(!record.steps.contains(&Step::NotOpened));
+    assert_eq!(record.browser.unwrap().name, "Google Chrome");
+    assert_eq!(launcher.launched()[0].url, "https://blocked.example.com/ad");
+}
+
+#[test]
+fn paused_a_private_rule_opens_a_normal_window_and_still_keeps_the_host() {
+    let (router, launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+    handle.set_paused(Some(pause_target()));
+    let secret = "https://private.example.com/inbox?token=hunter2";
+    let reply = handle.dispatch_and_wait(link(secret)).unwrap();
+    // The launcher opens the full URL in the pause target, not privately.
+    assert_eq!(launcher.launched()[0].url, secret);
+    assert_eq!(launcher.launched()[0].name, "Google Chrome");
+    assert!(!launcher.launched()[0].private);
+    // A rules.json handler has no number to skip.
+    assert!(reply.steps.contains(&Step::Paused { skipped: None }));
+    // The rule's level stands: the record keeps the host only.
+    let stored = handle.get(reply.id).unwrap();
+    for record in [&reply, &stored] {
+        assert_eq!(record.privacy, Privacy::Host);
+        assert_eq!(record.link.url, "https://private.example.com");
+        let browser = record.browser.as_ref().unwrap();
+        assert!(!browser.private);
+        assert_eq!(browser.privacy, Privacy::Host);
+        assert_eq!(browser.url, "https://private.example.com");
+        let json = serde_json::to_string(record).unwrap();
+        for private in ["hunter2", "/inbox", "token"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+    }
+}
+
+#[test]
+fn paused_test_a_link_still_answers_by_the_rules() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_paused(Some(pause_target()));
+    let record = handle.test(link("https://team.slack.com/x")).unwrap();
+    assert_eq!(record.outcome, Outcome::Tested);
+    assert_eq!(record.browser.unwrap().name, "Firefox");
+    assert!(
+        !record
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Paused { .. }))
+    );
+    assert!(launcher.launched().is_empty());
+}
+
+#[test]
+fn paused_with_no_config_the_pause_target_takes_the_fallbacks_links() {
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(Options::default(), None, launcher.clone()).unwrap();
+    let handle = router.handle();
+    handle.set_paused(Some(pause_target()));
+    let record = handle
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    assert!(record.steps.contains(&Step::Fallback {
+        reason: "no config is selected".into()
+    }));
+    assert!(record.steps.contains(&Step::Paused { skipped: None }));
+    assert_eq!(launcher.launched()[0].name, "Google Chrome");
+}
+
 #[test]
 fn with_no_config_links_go_to_the_fallback() {
     let launcher = DryRunLauncher::new();

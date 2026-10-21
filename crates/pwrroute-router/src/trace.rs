@@ -138,6 +138,12 @@ pub enum Step {
     RefusedLoop {
         browser: String,
     },
+    /// Routing was paused: every handler is ignored and the link goes to the
+    /// pause target instead, after the rewrites. `skipped` is the handler
+    /// that matched and was passed over, when the resolver numbers it.
+    Paused {
+        skipped: Option<usize>,
+    },
     /// The chosen browser.
     Browser {
         browser: Browser,
@@ -319,6 +325,7 @@ fn reduce_step(step: &mut Step) {
         Step::Matched { .. }
         | Step::Fallback { .. }
         | Step::RefusedLoop { .. }
+        | Step::Paused { .. }
         | Step::NotOpened
         | Step::Launched { .. }
         | Step::Rejected { .. } => {}
@@ -388,6 +395,7 @@ mod tests {
                 Step::Matched {
                     by: Matched::Handler { index: 2 },
                 },
+                Step::Paused { skipped: Some(2) },
                 Step::Browser {
                     browser: browser(rewritten),
                 },
@@ -451,6 +459,7 @@ mod tests {
                 Step::Matched {
                     by: Matched::Handler { index: 2 }
                 },
+                Step::Paused { skipped: Some(2) },
                 Step::Browser {
                     browser: browser.clone()
                 },
