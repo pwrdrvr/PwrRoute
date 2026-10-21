@@ -21,7 +21,7 @@ use std::{
     time::SystemTime,
 };
 
-use pwrroute_engine::{self as engine, Place, Problem, RulesFile};
+use pwrroute_engine::{self as engine, Place, Privacy, Problem, RouteTest, RulesFile};
 
 use crate::app::Selection;
 use crate::config_view::display_path;
@@ -56,7 +56,8 @@ pub struct RulesStore {
     /// for the session only, and the status says so.
     path: Option<PathBuf>,
     /// The file's fields the lists do not hold: default browser and
-    /// profile, options. Its `rewrites` and `rules` stay empty.
+    /// profile, options, and the saved `tests`. Its `rewrites` and `rules`
+    /// stay empty.
     base: RulesFile,
     rewrites: Vec<Entry<engine::Rewrite>>,
     rules: Vec<Entry<engine::Rule>>,
@@ -462,6 +463,127 @@ impl RulesStore {
         }
     }
 
+    // --- privacy, examples and tests ------------------------------------
+
+    /// `rules[].private`: open the link in a private window.
+    pub fn set_private(&mut self, handler: usize, private: bool) {
+        if let Some(rule) = self.rule_mut(handler)
+            && rule.private != private
+        {
+            rule.private = private;
+            self.touch();
+        }
+    }
+
+    /// `rules[].privacy`: what the router keeps of a link this handler
+    /// routes. Written as the level's word; an unknown word the file had
+    /// is replaced.
+    pub fn set_privacy(&mut self, handler: usize, level: Privacy) {
+        let setting = Some(engine::PrivacySetting::from(level));
+        if let Some(rule) = self.rule_mut(handler)
+            && rule.privacy != setting
+        {
+            rule.privacy = setting;
+            self.touch();
+        }
+    }
+
+    /// Appends a URL that must resolve to this handler. It is the one way
+    /// a link reaches `rules.json` from the Rules screen, and only by the
+    /// user's choice. Returns its index; a blank URL, or one already there,
+    /// is not added.
+    pub fn add_example(&mut self, handler: usize, url: &str) -> Option<usize> {
+        let url = url.trim();
+        let rule = self.rule_mut(handler)?;
+        if url.is_empty() {
+            return None;
+        }
+        if let Some(i) = rule.examples.iter().position(|e| e == url) {
+            return Some(i);
+        }
+        rule.examples.push(url.to_owned());
+        let index = rule.examples.len() - 1;
+        self.touch();
+        Some(index)
+    }
+
+    pub fn remove_example(&mut self, handler: usize, index: usize) {
+        if let Some(rule) = self.rule_mut(handler)
+            && index < rule.examples.len()
+        {
+            rule.examples.remove(index);
+            self.touch();
+        }
+    }
+
+    /// Appends a URL this rewrite must match, with what it must become.
+    pub fn add_rewrite_example(
+        &mut self,
+        rewrite: usize,
+        url: &str,
+        becomes: &str,
+    ) -> Option<usize> {
+        let (url, becomes) = (url.trim(), becomes.trim());
+        let entry = self.rewrites.get_mut(rewrite).map(|e| &mut e.value)?;
+        if url.is_empty() || becomes.is_empty() {
+            return None;
+        }
+        let example = engine::RewriteExample {
+            url: url.to_owned(),
+            becomes: becomes.to_owned(),
+        };
+        if let Some(i) = entry.examples.iter().position(|e| *e == example) {
+            return Some(i);
+        }
+        entry.examples.push(example);
+        let index = entry.examples.len() - 1;
+        self.touch();
+        Some(index)
+    }
+
+    pub fn remove_rewrite_example(&mut self, rewrite: usize, index: usize) {
+        if let Some(entry) = self.rewrites.get_mut(rewrite).map(|e| &mut e.value)
+            && index < entry.examples.len()
+        {
+            entry.examples.remove(index);
+            self.touch();
+        }
+    }
+
+    /// The top-level `tests`: whole resolutions the file pins.
+    pub fn tests(&self) -> &[RouteTest] {
+        &self.base.tests
+    }
+
+    /// Appends a test and returns its index; a test already there is not
+    /// added twice.
+    pub fn add_test(&mut self, test: RouteTest) -> usize {
+        if let Some(i) = self.base.tests.iter().position(|t| *t == test) {
+            return i;
+        }
+        self.base.tests.push(test);
+        self.touch();
+        self.base.tests.len() - 1
+    }
+
+    pub fn remove_test(&mut self, index: usize) {
+        if index < self.base.tests.len() {
+            self.base.tests.remove(index);
+            self.touch();
+        }
+    }
+
+    /// Inserts a whole handler at `at` (clamped to the end) and returns its
+    /// position. Activity's Add a rule sheet builds the rule and lands it
+    /// here, complete, so it is written on the next save.
+    pub fn insert_rule(&mut self, at: usize, rule: engine::Rule) -> usize {
+        let id = self.next();
+        let at = at.min(self.rules.len());
+        self.rules.insert(at, Entry { id, value: rule });
+        self.touch();
+        at
+    }
+
     // --- the file --------------------------------------------------------
 
     /// Writes every saveable edit to the file, now. The status says how it
@@ -745,6 +867,185 @@ mod tests {
         assert!(store.is_empty());
         store.save().unwrap();
         assert_eq!(json(&path), json!({ "defaultBrowser": "", "rules": [] }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A `rules.json` the Go host wrote, plus every field this editor adds:
+    /// each comes back out as it went in, around an unrelated edit, and a
+    /// file with none of them gains none.
+    #[test]
+    fn privacy_examples_and_tests_round_trip_through_the_store() {
+        let dir = scratch("privacy-round-trip");
+        let path = dir.join("rules.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = r#"{
+          "defaultBrowser": "Firefox",
+          "defaultProfile": "",
+          "options": { "keepRunning": true },
+          "rewrites": [
+            { "match": "x.com/*", "actions": [{ "setHost": "xcancel.com" }], "privacy": "none",
+              "examples": [{ "url": "https://x.com/a", "becomes": "https://xcancel.com/a" }] }
+          ],
+          "rules": [
+            { "match": "github.com/*", "browser": "Arc" },
+            { "match": "bank.example/*", "browser": "Safari", "private": true,
+              "examples": ["https://bank.example/"] },
+            { "match": "a.example/*", "browser": "Safari", "privacy": "host" },
+            { "match": "b.example/*", "browser": "Safari", "private": true, "privacy": "full" },
+            { "match": "c.example/*", "browser": "Safari", "privacy": "hidden" }
+          ],
+          "tests": [
+            { "url": "https://bank.example/", "expect": { "browser": "Safari" } },
+            { "url": "https://x.com/a", "opener": "Slack:com.tinyspeck.slackmacgap",
+              "expect": { "browser": "Firefox", "profile": "Work", "url": "https://xcancel.com/a" } }
+          ]
+        }"#;
+        std::fs::write(&path, text).unwrap();
+        let mut store = RulesStore::load(Some(path.clone()));
+        let handlers = store.handlers();
+        assert!(handlers[1].private);
+        assert_eq!(handlers[1].examples, ["https://bank.example/"]);
+        assert_eq!(handlers[1].keep(), Some(Privacy::Host));
+        assert_eq!(handlers[2].keep(), Some(Privacy::Host));
+        assert_eq!(handlers[3].keep(), Some(Privacy::Full));
+        // The unknown word is a problem the editor shows; the file keeps it.
+        assert_eq!(handlers[4].keep(), None);
+        assert_eq!(
+            handlers[4].problems,
+            ["Privacy must be full, host or none."]
+        );
+        assert_eq!(handlers[4].rule.badge, RowBadge::NotSaved);
+        assert_eq!(store.rewrites()[0].examples.len(), 1);
+        assert_eq!(store.tests().len(), 2);
+
+        store.set_profile(0, "Work");
+        store.save().unwrap();
+        let expected: serde_json::Value = serde_json::from_str(text).unwrap();
+        let mut written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["rules"][0]["profile"], "Work");
+        written["rules"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("profile");
+        // `defaultProfile: ""` is the one key the Go host wrote that the
+        // engine leaves out when empty.
+        let mut expected = expected;
+        expected.as_object_mut().unwrap().remove("defaultProfile");
+        assert_eq!(written, expected);
+
+        // A Go-host file gains none of the new keys.
+        let go = dir.join("go.json");
+        std::fs::write(
+            &go,
+            r#"{ "defaultBrowser": "Safari", "rules": [{ "match": "a/*", "browser": "Firefox" }] }"#,
+        )
+        .unwrap();
+        let mut store = RulesStore::load(Some(go.clone()));
+        store.set_profile(0, "Home");
+        store.save().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&go).unwrap())
+                .unwrap(),
+            json!({ "defaultBrowser": "Safari", "rules": [{ "match": "a/*", "browser": "Firefox", "profile": "Home" }] })
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn examples_tests_and_privacy_are_edited_and_written() {
+        let dir = scratch("examples");
+        let path = dir.join("rules.json");
+        let mut store = RulesStore::load(Some(path.clone()));
+        let h = store.add_handler();
+        let p = store.add_pattern(Selection::Handler(h)).unwrap();
+        store.set_pattern(Selection::Handler(h), p, "bank.example/*");
+        store.set_browser(h, "Safari");
+        assert_eq!(store.add_example(h, " https://bank.example/ "), Some(0));
+        assert_eq!(
+            store.add_example(h, "https://bank.example/"),
+            Some(0),
+            "not twice"
+        );
+        assert_eq!(store.add_example(h, "  "), None);
+        assert_eq!(store.add_example(h, "https://bank.example/login"), Some(1));
+        store.set_private(h, true);
+        store.set_privacy(h, Privacy::None);
+        let r = store.add_rewrite();
+        let p = store.add_pattern(Selection::Rewrite(r)).unwrap();
+        store.set_pattern(Selection::Rewrite(r), p, "x.com/*");
+        let a = store.add_action(r).unwrap();
+        store.set_action(r, a, rules_model::action(0, "xcancel.com"));
+        assert_eq!(
+            store.add_rewrite_example(r, "https://x.com/a", "https://xcancel.com/a"),
+            Some(0)
+        );
+        assert_eq!(store.add_rewrite_example(r, "https://x.com/a", ""), None);
+        let t = store.add_test(RouteTest {
+            url: "https://bank.example/".into(),
+            opener: None,
+            expect: engine::Expectation {
+                browser: "Safari".into(),
+                ..engine::Expectation::default()
+            },
+        });
+        assert_eq!(t, 0);
+        store.save().unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            json["rules"][0],
+            json!({ "match": "bank.example/*", "browser": "Safari", "private": true, "privacy": "none",
+                    "examples": ["https://bank.example/", "https://bank.example/login"] })
+        );
+        assert_eq!(
+            json["rewrites"][0]["examples"],
+            json!([{ "url": "https://x.com/a", "becomes": "https://xcancel.com/a" }])
+        );
+        assert_eq!(
+            json["tests"],
+            json!([{ "url": "https://bank.example/", "expect": { "browser": "Safari" } }])
+        );
+
+        // A bad example is a problem: the file keeps the saved rule.
+        store.add_example(h, "bank.example/x");
+        assert_eq!(store.handlers()[0].rule.badge, RowBadge::NotSaved);
+        assert_eq!(
+            store.handlers()[0].problems,
+            ["Examples must be full URLs, such as https://example.com/path."]
+        );
+        store.remove_example(h, 2);
+        assert_eq!(store.handlers()[0].rule.badge, RowBadge::None);
+        store.remove_example(h, 0);
+        store.remove_rewrite_example(r, 0);
+        store.remove_test(0);
+        // Inserting a complete rule at the top renumbers the rest.
+        let at = store.insert_rule(
+            0,
+            engine::Rule {
+                patterns: vec!["a.example/*".into()],
+                browser: "Arc".into(),
+                examples: vec!["https://a.example/".into()],
+                ..engine::Rule::default()
+            },
+        );
+        assert_eq!(at, 0);
+        assert_eq!(store.insert_rule(99, engine::Rule::default()), 2);
+        store.save().unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["rules"][0]["match"], "a.example/*");
+        assert_eq!(
+            json["rules"][1]["examples"],
+            json!(["https://bank.example/login"])
+        );
+        assert_eq!(
+            json["rules"].as_array().unwrap().len(),
+            2,
+            "the draft is not written"
+        );
+        assert_eq!(json["rewrites"][0].get("examples"), None);
+        assert_eq!(json.get("tests"), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
