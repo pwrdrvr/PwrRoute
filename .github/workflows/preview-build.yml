@@ -132,7 +132,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force vpk-input | Out-Null
           Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES vpk-input/
-          ./scripts/release/vpk-pack-windows.ps1 -Version $env:PREVIEW_VERSION -PackDir vpk-input -OutputDir releases
+          ./scripts/release/vpk-pack-windows.ps1 -Version $env:PREVIEW_VERSION -PackDir vpk-input -OutputDir releases -Icon packaging/windows/PwrRoute.ico
           Get-ChildItem releases | Format-Table Name, Length
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $portable = [IO.Compression.ZipFile]::OpenRead((Resolve-Path releases/PwrRoute-win-Portable.zip).Path)

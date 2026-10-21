@@ -99,9 +99,9 @@ runs cargo or installs project dependencies.
 |---|---|---|
 | `distribution-audit` | — | Stub (see below). |
 | `prepare` | — | `cargo xtask release-check`, `lint`, `test` on Linux. |
-| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
+| `macos-prepare` | — | `cargo xtask bundle --universal --app-only`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
 | `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
-| `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1` and the release notes. |
+| `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1`, `PwrRoute.ico` and the release notes. |
 | `windows-sign` | windows-signing | `vpk pack` with Setup.exe and MSI; verifies. |
 | `linux` | — | `cargo xtask package-linux` on x64 and arm64. |
 | `publish` | — (`contents: write`) | Creates the Pre-release with every platform's assets. |
@@ -197,8 +197,13 @@ the release. The sign jobs read the previous release with `github.token`.
   instead.
 - **Windows arm64.** disktree builds it on `windows-11-arm`; add it when there
   is a user for it. vpk would pack it as its own channel.
-- **An app icon.** The design draws placeholder tiles only; `vpk pack
-  --icon` will take it.
+- **An Icon Composer `.icon`.** macOS 26 normalizes the legacy `.icns` the
+  bundle ships into its squircle itself; PwrSnap ships a `.icon` package
+  compiled by `actool` into `Assets.car` beside it, so macOS 26 draws the
+  glass variants and never guesses. Port that when the DMG icon is revisited.
+- **Icons for pwrroute.exe and the Linux .deb.** `vpk pack --icon` covers
+  Setup.exe, the MSI and the shortcut; the executable has no icon resource,
+  and the desktop entry no `Icon=`.
 - **Update UI.** A log line and the macOS "Check for Updates…" menu item
   until the update design lands.
 

@@ -114,8 +114,8 @@ jobs:
           stage="$RUNNER_TEMP/macos-release-input"
           mkdir -p "$stage"
           ditto target/bundle/PwrRoute.app "$stage/PwrRoute.app"
-          cp packaging/macos/PwrRoute.entitlements scripts/release/macos-dmg.sh \
-            scripts/release/install-vpk.sh "$stage/"
+          cp packaging/macos/PwrRoute.entitlements packaging/macos/PwrRoute.icns \
+            scripts/release/macos-dmg.sh scripts/release/install-vpk.sh "$stage/"
           cargo xtask release-check --notes-file "$stage/RELEASE_NOTES.md"
 
       - name: Archive signing input
@@ -274,6 +274,7 @@ jobs:
             --packAuthors "PwrDrvr LLC"
             --releaseNotes input/RELEASE_NOTES.md
             --signEntitlements input/PwrRoute.entitlements
+            --icon input/PwrRoute.icns
             --noInst
             --outputDir releases
           )
@@ -389,7 +390,7 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP "windows-release-input"
           New-Item -ItemType Directory -Force "$stage/app" | Out-Null
           Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES "$stage/app/"
-          Copy-Item scripts/release/install-vpk.sh, scripts/release/vpk-pack-windows.ps1 "$stage/"
+          Copy-Item scripts/release/install-vpk.sh, scripts/release/vpk-pack-windows.ps1, packaging/windows/PwrRoute.ico "$stage/"
           cargo xtask release-check --notes-file "$stage/RELEASE_NOTES.md"
           if ($LASTEXITCODE -ne 0) { throw "release-check failed (exit code $LASTEXITCODE)." }
 
@@ -525,6 +526,7 @@ jobs:
             Version = $env:RELEASE_TAG.TrimStart("v")
             PackDir = "input/app"
             OutputDir = "releases"
+            Icon = "input/PwrRoute.ico"
             ReleaseNotes = "input/RELEASE_NOTES.md"
           }
           if ($env:SIGNED -eq "true") {
