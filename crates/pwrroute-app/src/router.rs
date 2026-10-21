@@ -349,8 +349,8 @@ fn spawn_router(
                 let _ = dispatched.try_send(record.clone());
             }
         })),
-        ..Options::default()
     };
+
     let router =
         Router::spawn(options, Some(factory), launcher).expect("start the dispatch thread");
     let _ = handle_tx.send(router.handle());

@@ -186,7 +186,8 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
             Step::Fallback { reason } => steps.push(TraceStep {
                 kind: StepKind::Default,
                 index: None,
-                summary: format!("no config in charge: the fallback browser ({reason})"),
+                summary: format!("the fallback browser: {reason}"),
+
                 url: None,
             }),
             Step::RefusedLoop { browser } => steps.push(TraceStep {
