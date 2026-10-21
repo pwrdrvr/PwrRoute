@@ -239,9 +239,10 @@ impl FirstRunModel {
     pub fn import_detail(&self) -> String {
         match (&self.finicky, self.import) {
             (Some(config), None) if config.importable == 0 => format!(
-                "Found {} with {} rewrites and {} handlers. It stays in charge and runs as it \
-                 did under Finicky; the file is never modified. Importing it into editable \
-                 rules is coming.",
+                "Found {} with {} rewrites and {} handlers, none of which a visual rule can \
+                 hold exactly. It stays in charge and runs as it did under Finicky; the file \
+                 is never modified. Review import in the Rules screen offers tested \
+                 suggestions.",
                 config.path, config.rewrites, config.handlers
             ),
             (Some(config), None) => format!(
@@ -929,7 +930,7 @@ fn import_actions(
         return row;
     }
     match &model.finicky {
-        // No importer yet: the file stays in charge, and the step says so.
+        // Nothing imports exactly: the file stays in charge, and the step says so.
         Some(config) if config.importable == 0 => row.child(
             button(
                 "first-run-keep",
