@@ -10,8 +10,12 @@
 //!   tests write their own and build the model with [`model`].
 //! - [`hooks`] makes the window's choices real: the fallback goes to
 //!   `rules.json`'s `defaultBrowser`, the Finicky choice is recorded (there
-//!   is no importer yet, so the config stays in charge either way), and
-//!   "Set as default browser" asks the OS through [`crate::default_browser`].
+//!   is no importer yet, so the config stays in charge either way), "Set as
+//!   default browser" asks the OS through [`crate::default_browser`], and
+//!   "Open PwrRoute" or "Later" marks first run done and opens the main
+//!   window on Rules, so leaving the window never leaves the app without
+//!   one. Closing the window instead only marks first run done: the menu
+//!   bar item stays, as the window's own help line says.
 
 use std::{
     fs, io,
@@ -25,6 +29,7 @@ use pwrroute_browsers::{Env, detect_installed};
 use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, discovery};
 use serde::{Deserialize, Serialize};
 
+use crate::app::Screen;
 use crate::default_browser::{self, DefaultState};
 use crate::first_run::{
     self, BrowserChoice, FinickyConfig, FirstRun, FirstRunHooks, FirstRunModel, ImportChoice,
@@ -93,6 +98,11 @@ impl State {
             }
         }
     }
+}
+
+/// First run is over: it does not open on its own again.
+fn mark_completed(dir: Option<&Path>) {
+    edit_state(dir, |state| state.first_run_completed = true);
 }
 
 /// Loads, edits and saves the state, reporting a failure on stderr: the
@@ -217,6 +227,7 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
         import: facts.state.import,
         current_default: facts.handler.current_name(),
         default_requested: false,
+        waiting: false,
         is_default: facts.handler.is_default(),
     }
 }
@@ -231,10 +242,23 @@ fn tilde(path: &Path, home: Option<&Path>) -> String {
 
 /// The window's choices, made real.
 pub fn hooks() -> FirstRunHooks {
-    let data_dir = pwrroute_os::data_dir();
-    let rules_path = discovery::rules_path(&discovery::Environment::current());
+    hooks_with(
+        pwrroute_os::data_dir(),
+        discovery::rules_path(&discovery::Environment::current()),
+        Rc::new(|cx| crate::tray::show_screen(Screen::Rules, cx)),
+    )
+}
+
+/// [`hooks`] over these files, with `open_main` as what follows the
+/// window: tests give it a scratch directory and count the calls.
+pub fn hooks_with(
+    data_dir: Option<PathBuf>,
+    rules_path: Option<PathBuf>,
+    open_main: Rc<dyn Fn(&mut App)>,
+) -> FirstRunHooks {
     let fallback_dir = data_dir.clone();
-    let import_dir = data_dir;
+    let import_dir = data_dir.clone();
+    let finish_dir = data_dir;
     FirstRunHooks {
         on_fallback: Rc::new(move |choice, _| {
             if let Some(path) = &rules_path {
@@ -263,6 +287,12 @@ pub fn hooks() -> FirstRunHooks {
                 eprintln!("pwrroute: first run could not ask for the default browser: {error}");
             }
         }),
+        // Done or Later alike: the window closes itself next, and the main
+        // window is what the reader is left with.
+        on_finish: Rc::new(move |_, cx| {
+            mark_completed(finish_dir.as_deref());
+            open_main(cx);
+        }),
     }
 }
 
@@ -275,7 +305,9 @@ struct Open {
 impl gpui_kit::Global for Open {}
 
 /// Opens first run over the machine's facts. Step 3 follows the OS's
-/// answer, and closing the window, however, marks first run done.
+/// answer (read back on a timer after the request, and whenever the window
+/// comes to the front), and closing the window, however, marks first run
+/// done.
 pub fn open(cx: &mut App) {
     let facts = Facts::probe(cx);
     let model = model(&facts, std::env::home_dir().as_deref());
@@ -289,12 +321,15 @@ pub fn open(cx: &mut App) {
     let _ = window.update(cx, |_, window, cx| default_browser::watch(window, cx));
     let answers = default_browser::registrar(cx).map(|registrar| {
         cx.observe(&registrar, move |registrar, cx| {
-            let state = registrar.read(cx).state.clone();
-            let _ = window.update(cx, |view, _, cx| view.set_default_state(&state, cx));
+            let (state, waiting) = {
+                let registrar = registrar.read(cx);
+                (registrar.state.clone(), registrar.waiting())
+            };
+            let _ = window.update(cx, |view, _, cx| {
+                view.set_default_state(&state, waiting, cx);
+            });
             if state.is_default() {
-                edit_state(pwrroute_os::data_dir().as_deref(), |state| {
-                    state.first_run_completed = true;
-                });
+                mark_completed(pwrroute_os::data_dir().as_deref());
             }
         })
     });
@@ -302,9 +337,7 @@ pub fn open(cx: &mut App) {
         let open = cx.try_global::<Open>().map(|open| open.window.window_id());
         if open == Some(id) {
             cx.remove_global::<Open>();
-            edit_state(pwrroute_os::data_dir().as_deref(), |state| {
-                state.first_run_completed = true;
-            });
+            mark_completed(pwrroute_os::data_dir().as_deref());
         }
     })
     .detach();
@@ -316,6 +349,8 @@ pub fn open(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::TestAppContext;
+
     use super::*;
     use crate::first_run::StepState;
 
@@ -414,6 +449,40 @@ mod tests {
                 None
             ))
         );
+    }
+
+    /// Done and Later both end first run in `state.json` and open the main
+    /// window; the file's other choices stay.
+    #[gpui_kit::test]
+    fn done_and_later_end_first_run_and_open_the_main_window(cx: &mut TestAppContext) {
+        use crate::first_run::Finish;
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("PwrRoute");
+        State {
+            fallback: Some("com.google.Chrome".to_owned()),
+            ..State::default()
+        }
+        .save(&data_dir)
+        .unwrap();
+        let opened = Rc::new(std::cell::Cell::new(0));
+        let count = opened.clone();
+        let hooks = hooks_with(
+            Some(data_dir.clone()),
+            None,
+            Rc::new(move |_| count.set(count.get() + 1)),
+        );
+        assert!(State::pending(&data_dir));
+
+        cx.update(|cx| (hooks.on_finish)(Finish::Later, cx));
+        assert_eq!(opened.get(), 1);
+        assert!(!State::pending(&data_dir));
+        let state = State::load(&data_dir).unwrap();
+        assert!(state.first_run_completed);
+        assert_eq!(state.fallback.as_deref(), Some("com.google.Chrome"));
+
+        cx.update(|cx| (hooks.on_finish)(Finish::Done, cx));
+        assert_eq!(opened.get(), 2);
+        assert!(!State::pending(&data_dir));
     }
 
     #[test]

@@ -296,13 +296,17 @@ impl TrayModel {
         }
     }
 
-    /// The model at launch: nothing routed yet, and the design's pause target
-    /// and default-browser state until those are wired to the OS.
-    pub fn starting(now: SystemTime) -> Self {
-        let mut model = Self::fixture(now);
-        model.recents.clear();
-        model.links_today = 0;
-        model
+    /// The model at launch: routing, nothing routed yet, not the default
+    /// browser until the OS says so (`tray::follow_default_browser`), and
+    /// `pause_target` as `rules.json` names the fallback.
+    pub fn starting(pause_target: BrowserLabel) -> Self {
+        Self {
+            routing: Routing::Active,
+            is_default_browser: false,
+            pause_target,
+            recents: Vec::new(),
+            links_today: 0,
+        }
     }
 
     /// The recents and the count from the dispatch feed.
@@ -526,14 +530,30 @@ mod tests {
     #[test]
     fn counts_get_separators() {
         assert_eq!(TrayModel::fixture(now()).today_label(), "1,412 today");
-        assert_eq!(TrayModel::starting(now()).today_label(), "0 today");
+        assert_eq!(TrayModel::starting(chrome()).today_label(), "0 today");
+    }
+
+    fn chrome() -> BrowserLabel {
+        BrowserLabel::new("Ch", "Google Chrome", Some("Personal"))
+    }
+
+    #[test]
+    fn the_model_at_launch_claims_nothing() {
+        let model = TrayModel::starting(chrome());
+        assert_eq!(model.chip(), HeaderChip::NotDefault);
+        assert!(!model.is_paused());
+        assert!(model.recents.is_empty());
+        assert_eq!(
+            model.pause_detail(),
+            "Send every link to Google Chrome \u{00b7} Personal until switched back."
+        );
     }
 
     #[test]
     fn the_model_follows_the_feed() {
         let records = crate::fixtures::activity();
         let feed = Feed::from_records(records.clone());
-        let mut model = TrayModel::starting(now());
+        let mut model = TrayModel::starting(chrome());
         assert!(model.recents.is_empty());
         model.sync(Dispatched::of(&feed, SystemTime::now()));
         // The failed launch is skipped; the three newest that opened show.

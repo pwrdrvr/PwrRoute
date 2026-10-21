@@ -143,7 +143,17 @@ fn main() {
     });
     shoot("app-1b", Some(config), &|_, _, _| {});
     shoot("app-2a", None, &|app, window, cx| {
+        // The design's example; the window itself starts empty.
+        app.test.url.set(fixtures::TEST_URL);
+        app.test.opener = fixtures::TEST_OPENER;
         app.navigate(Screen::TestLink, window, cx);
+    });
+    shoot("app-2a-empty", None, &|app, window, cx| {
+        app.navigate(Screen::TestLink, window, cx);
+    });
+    shoot("app-2a-picker", None, &|app, window, cx| {
+        app.navigate(Screen::TestLink, window, cx);
+        app.test.picking = true;
     });
     shoot("app-2b", None, &|app, window, cx| {
         app.activity.load(fixtures::activity());

@@ -46,7 +46,9 @@ const fn app(badge: &'static str, name: &'static str, bundle_id: &'static str) -
     })
 }
 
-/// The apps Test a link offers as the opener, the first being none.
+/// The apps Test a link offers as examples of a sender, the first being
+/// none. They keep this order: Activity's re-test picks a record's app by
+/// its position here.
 pub const OPENERS: &[Option<Opener>] = &[
     None,
     app("Sl", "Slack", "com.tinyspeck.slackmacgap"),
@@ -55,11 +57,17 @@ pub const OPENERS: &[Option<Opener>] = &[
     app("Gh", "Ghostty", "com.mitchellh.ghostty"),
 ];
 
-/// The link Test a link starts with, from Slack: two rewrites apply and
-/// handler 3 wins.
+/// The design's test link, from Slack: two rewrites apply and handler 3
+/// wins. The window's Test a link starts empty; tests and the `screens`
+/// example type this one.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
 pub const TEST_URL: &str = "https://x.com/pwrdrvr/status/1842?utm_source=slack&s=20";
 
-/// The index into [`OPENERS`] Test a link starts with: Slack.
+/// The index into [`OPENERS`] of the design's sender: Slack.
+#[allow(dead_code, reason = "the screens example")]
 pub const TEST_OPENER: usize = 1;
 
 /// Contrived dispatch records in the shape of option 2b's Activity rows,

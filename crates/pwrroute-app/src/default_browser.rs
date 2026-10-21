@@ -21,11 +21,12 @@ use crate::settings::model::{DefaultBrowser, SettingsRequest};
 use crate::theme;
 use crate::widgets::status_chip;
 
-/// How often the status is re-read after a request, and for how long: the
-/// design's "checked every 2 s while this page is open", bounded so a
-/// refused prompt does not poll forever.
-const POLL_EVERY: Duration = Duration::from_secs(2);
-const POLL_FOR: Duration = Duration::from_secs(60);
+/// How often the status is re-read after a request, and for how long. The
+/// OS answers in its own dialog, which need not hand the window back, so
+/// the poll is what notices the answer; once a second keeps first run's
+/// step 3 close behind the click, and a minute bounds a refused prompt.
+pub const POLL_EVERY: Duration = Duration::from_secs(1);
+pub const POLL_FOR: Duration = Duration::from_secs(60);
 
 /// Who the OS hands web links to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +139,9 @@ pub struct Registrar {
     /// The last request ended with the same browser as before: the OS said
     /// no, or the reader did. Shown once, until the next change.
     pub kept: bool,
+    /// Counts requests. A poll stops when a newer request has started its
+    /// own, so "Ask again" never leaves two running.
+    generation: u64,
 }
 
 impl Registrar {
@@ -148,7 +152,13 @@ impl Registrar {
             state,
             pending: None,
             kept: false,
+            generation: 0,
         }
+    }
+
+    /// A request went out and the OS has not answered since.
+    pub fn waiting(&self) -> bool {
+        self.pending.is_some()
     }
 
     /// Re-reads the OS. `settled` says the OS had its chance to answer (the
@@ -279,25 +289,35 @@ pub fn watch(window: &mut Window, cx: &mut App) {
 
 /// Asks the OS to make PwrRoute the default browser. The explicit action,
 /// and the only caller of `set_default_browser` in the app: wire it to a
-/// click and nothing else. Then reads the answer back for a while.
+/// click and nothing else. Then reads the answer back every [`POLL_EVERY`]
+/// for [`POLL_FOR`]: until PwrRoute is the default, the answer settles the
+/// other way (the window came to the front, or a newer request took over),
+/// or the time is up, which settles it too.
 pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
     let Some(registrar) = registrar(cx) else {
         anyhow::bail!("default-browser registration is not installed");
     };
     let os = registrar.read(cx).os.clone();
     let request = (os.set_default)()?;
-    registrar.update(cx, |registrar, cx| {
+    let generation = registrar.update(cx, |registrar, cx| {
         registrar.pending = Some(request);
         registrar.kept = false;
+        registrar.generation += 1;
         cx.notify();
+        registrar.generation
     });
     cx.spawn(async move |cx| {
         let ticks = POLL_FOR.as_secs() / POLL_EVERY.as_secs();
         for tick in 1..=ticks {
             cx.background_executor().timer(POLL_EVERY).await;
             let done = cx.update(|cx| {
+                let current = registrar.read(cx);
+                if current.generation != generation || !current.waiting() {
+                    return true;
+                }
                 refresh(tick == ticks, cx);
-                state(cx).is_default()
+                let registrar = registrar.read(cx);
+                registrar.state.is_default() || !registrar.waiting()
             });
             if done {
                 break;
@@ -457,5 +477,66 @@ mod tests {
         assert_eq!(card(cx).state, DefaultState::PwrRoute);
         assert_eq!(card(cx).note, None);
         assert!(cx.update(|cx| state(cx).is_default()));
+    }
+
+    /// The poll behind a request: once a second, until the OS agrees, or
+    /// a minute is up and the answer counts as no. Asking again hands the
+    /// poll to the new request.
+    #[gpui_kit::test]
+    fn the_poll_reads_the_answer_back_once_a_second_for_a_minute(cx: &mut TestAppContext) {
+        let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
+        let ours = || status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID));
+        let os_status = Rc::new(RefCell::new(Some(chrome())));
+        let requests = Rc::new(Cell::new(0));
+        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), requests.clone()), cx));
+        let waiting = |cx: &mut TestAppContext| registrar.read_with(cx, |r, _| r.waiting());
+        let tick = |cx: &mut TestAppContext| {
+            cx.executor().advance_clock(POLL_EVERY);
+            cx.run_until_parked();
+        };
+        let ticks = (POLL_FOR.as_secs() / POLL_EVERY.as_secs()) as usize;
+        assert_eq!(ticks, 60);
+
+        // The OS agrees on the third second: the poll sees it and stops.
+        cx.update(|cx| request(cx).unwrap());
+        assert!(waiting(cx));
+        tick(cx);
+        tick(cx);
+        assert!(waiting(cx));
+        *os_status.borrow_mut() = Some(ours());
+        tick(cx);
+        assert!(!waiting(cx));
+        assert!(cx.update(|cx| state(cx).is_default()));
+        assert!(!registrar.read_with(cx, |r, _| r.kept));
+
+        // The prompt is refused and the window never comes back: after a
+        // minute the answer settles as no.
+        *os_status.borrow_mut() = Some(chrome());
+        cx.update(|cx| refresh(false, cx));
+        cx.update(|cx| request(cx).unwrap());
+        for _ in 0..ticks - 1 {
+            tick(cx);
+            assert!(waiting(cx));
+        }
+        tick(cx);
+        assert!(!waiting(cx));
+        assert!(registrar.read_with(cx, |r, _| r.kept));
+        assert_eq!(
+            cx.update(|cx| super::card(cx)).note.as_deref(),
+            Some("Google Chrome is still the default.")
+        );
+
+        // Ask again a second in: the first poll stops, and only the new one
+        // settles, a minute after its own request.
+        cx.update(|cx| request(cx).unwrap());
+        tick(cx);
+        cx.update(|cx| request(cx).unwrap());
+        assert_eq!(requests.get(), 4);
+        for _ in 0..ticks - 1 {
+            tick(cx);
+            assert!(waiting(cx), "the first poll must not settle the second");
+        }
+        tick(cx);
+        assert!(!waiting(cx));
     }
 }

@@ -1,6 +1,11 @@
 //! Test a link (design option 2a): a URL, the app it comes from, and the
 //! trace of how the rules resolve it. Nothing is opened.
 //!
+//! The screen starts empty: no link and no app, so nothing on it looks
+//! like something that happened. The app picker offers the apps the rules
+//! name (the only ones that change an answer) and, marked as such, the
+//! design's examples, so a "sent from" rule can be tried without the app.
+//!
 //! The window runs its own [`Engine`]: over the Finicky config when one is
 //! in charge, exactly as the router loads it, and otherwise over the
 //! `rules.json` the Rules screen edits, as the file stands once every
@@ -16,33 +21,70 @@ use std::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, ClipboardItem, Context, Div, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, StatefulInteractiveElement as _, StrikethroughStyle,
-    Styled as _, StyledText, Window, deferred, div, px,
+    KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    StrikethroughStyle, Styled as _, StyledText, Window, deferred, div, px,
 };
 use pwrroute_engine::{DefaultHost, Engine, Limits, Link, RulesFile, Sources, Trace};
 
 use crate::app::PwrRoute;
-use crate::fixtures::{self, Opener};
+use crate::fixtures;
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, mono, text};
 use crate::trace_view::{Chip, StepBody, StepState, TraceStep, TraceView, UrlMark, UrlPart};
 use crate::widgets::{
-    ButtonKind, action_tag, app_tag, badge, button, caret, input_box, paragraph, tag,
+    ButtonKind, action_tag, app_tag, badge, badge_for, button, caret, input_box, paragraph, tag,
 };
+
+/// An app the picker offers as the link's sender.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenerChoice {
+    pub badge: SharedString,
+    pub name: SharedString,
+    pub bundle_id: SharedString,
+}
+
+impl From<fixtures::Opener> for OpenerChoice {
+    fn from(app: fixtures::Opener) -> Self {
+        Self {
+            badge: app.badge.into(),
+            name: app.name.into(),
+            bundle_id: app.bundle_id.into(),
+        }
+    }
+}
+
+impl OpenerChoice {
+    /// An app as a rule names it: a name or a bundle id, matched by the
+    /// engine against either, so it serves as both here.
+    fn as_written(written: &str) -> Self {
+        Self {
+            badge: badge_for(written),
+            name: written.to_owned().into(),
+            bundle_id: written.to_owned().into(),
+        }
+    }
+
+    /// Whether `written`, from a rule, names this app.
+    fn is_named(&self, written: &str) -> bool {
+        self.name.eq_ignore_ascii_case(written) || self.bundle_id.eq_ignore_ascii_case(written)
+    }
+}
 
 /// The last run, kept so folding and unfolding redraw without resolving
 /// again.
 struct Run {
     trace: Trace,
-    opener: Option<Opener>,
+    opener: Option<OpenerChoice>,
     took: Duration,
 }
 
 /// The screen's state.
 pub struct TestLink {
     pub url: TextField,
-    /// Index into [`fixtures::OPENERS`].
+    /// Index into [`TestLink::openers`]: 0 is no app. The first entries
+    /// are [`fixtures::OPENERS`], in order, which Activity's re-test
+    /// counts on.
     pub opener: usize,
     /// The opener menu is open.
     pub picking: bool,
@@ -86,8 +128,8 @@ impl TestLink {
             rules
         };
         Self {
-            url: TextField::new(fixtures::TEST_URL, cx),
-            opener: fixtures::TEST_OPENER,
+            url: TextField::new("", cx),
+            opener: 0,
             picking: false,
             was_picking: false,
             unfold: false,
@@ -101,16 +143,57 @@ impl TestLink {
         }
     }
 
-    pub fn opener(&self) -> Option<Opener> {
-        fixtures::OPENERS.get(self.opener).copied().flatten()
+    /// What the picker offers: no app, the design's examples, then every
+    /// app the rules name that is not among them, as written.
+    pub fn openers(&self) -> Vec<Option<OpenerChoice>> {
+        let mut choices: Vec<Option<OpenerChoice>> = fixtures::OPENERS
+            .iter()
+            .map(|app| app.map(OpenerChoice::from))
+            .collect();
+        for written in self.named_openers() {
+            let offered = choices
+                .iter()
+                .flatten()
+                .any(|choice| choice.is_named(written));
+            if !offered {
+                choices.push(Some(OpenerChoice::as_written(written)));
+            }
+        }
+        choices
     }
 
-    /// Resolves the field's URL and records the trace.
+    /// The apps the rules require a link to come from, as written.
+    fn named_openers(&self) -> impl Iterator<Item = &str> {
+        self.rules
+            .rules
+            .iter()
+            .flat_map(|rule| rule.opener.iter())
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|written| !written.is_empty())
+    }
+
+    /// Whether a rule names this app: the picker groups those first.
+    pub fn named_by_rules(&self, choice: &OpenerChoice) -> bool {
+        self.named_openers().any(|written| choice.is_named(written))
+    }
+
+    pub fn opener(&self) -> Option<OpenerChoice> {
+        self.openers().get(self.opener).cloned().flatten()
+    }
+
+    /// Resolves the field's URL and records the trace. An empty field is
+    /// nothing to test, not an error.
     pub fn run(&mut self) {
         self.copied = false;
         self.picking = false;
         // Each test starts folded, as the design draws it.
         self.unfold = false;
+        if self.url.text.trim().is_empty() {
+            self.run = None;
+            self.outcome = None;
+            return;
+        }
         let url = match pwrroute_router::normalize_url(&self.url.text) {
             Ok(url) => url,
             Err(error) => {
@@ -120,9 +203,9 @@ impl TestLink {
             }
         };
         let opener = self.opener();
-        let engine_opener = opener.map(|app| pwrroute_engine::Opener {
-            name: app.name.into(),
-            bundle_id: app.bundle_id.into(),
+        let engine_opener = opener.as_ref().map(|app| pwrroute_engine::Opener {
+            name: app.name.to_string(),
+            bundle_id: app.bundle_id.to_string(),
             ..pwrroute_engine::Opener::default()
         });
         let started = Instant::now();
@@ -194,6 +277,10 @@ impl TestLink {
             return;
         }
         self.rules = rules;
+        // An app only the old rules named is gone from the picker.
+        if self.opener >= self.openers().len() {
+            self.opener = 0;
+        }
         // Rebuild on the next test, and run it again when the screen opens.
         self.engine = None;
         self.run = None;
@@ -438,61 +525,87 @@ fn step_row(
         .child(dim(body))
 }
 
-/// The opener picker and its menu.
+/// The opener picker and its menu: no app, the apps the rules name, and
+/// the design's examples under their own heading.
 fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
-    let label = |opener: Option<Opener>| -> Div {
+    let label = |opener: Option<&OpenerChoice>| -> Div {
         match opener {
             Some(app) => div()
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .child(badge(app.badge))
-                .child(text(app.name, 12.5, 400.0, theme::text_primary())),
+                .child(badge(app.badge.clone()))
+                .child(text(app.name.clone(), 12.5, 400.0, theme::text_primary())),
             None => div().child(text("no app", 12.5, 400.0, theme::text_subtle())),
         }
     };
-    let menu = fixtures::OPENERS.iter().copied().enumerate().fold(
+    let choices = app.test.openers();
+    let row = |index: usize, choice: Option<&OpenerChoice>| {
+        let selected = index == app.test.opener;
         div()
-            .id("test-opener-menu")
-            .occlude()
-            .absolute()
-            .top(px(34.0))
-            .left_0()
-            .w(px(170.0))
-            .flex()
-            .flex_col()
-            .p(px(4.0))
-            .bg(theme::bg_elevated())
-            .border_1()
-            .border_color(theme::border_default())
-            .rounded(px(7.0))
-            .shadow_lg()
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            .id(("test-opener-choice", index))
+            .debug_selector(move || format!("test-opener-choice-{index}"))
+            .px(px(8.0))
+            .py(px(6.0))
+            .rounded(px(5.0))
+            .cursor_pointer()
+            .when(selected, |row| row.bg(theme::bg_row_active()))
+            .hover(|row| row.bg(theme::bg_hover()))
+            .child(label(choice))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.test.opener = index;
                 this.test.picking = false;
+                this.test.run();
                 cx.notify();
-            })),
-        |menu, (index, opener)| {
-            let selected = index == app.test.opener;
-            menu.child(
-                div()
-                    .id(("test-opener-choice", index))
-                    .debug_selector(move || format!("test-opener-choice-{index}"))
-                    .px(px(8.0))
-                    .py(px(6.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .when(selected, |row| row.bg(theme::bg_row_active()))
-                    .hover(|row| row.bg(theme::bg_hover()))
-                    .child(label(opener))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.test.opener = index;
-                        this.test.picking = false;
-                        this.test.run();
-                        cx.notify();
-                    })),
+            }))
+    };
+    let heading = |title: &'static str| {
+        div().px(px(8.0)).pt(px(8.0)).pb(px(3.0)).child(text(
+            title,
+            10.0,
+            600.0,
+            theme::text_subtle(),
+        ))
+    };
+    let (named, examples): (Vec<_>, Vec<_>) = choices
+        .iter()
+        .enumerate()
+        .filter_map(|(index, choice)| choice.as_ref().map(|choice| (index, choice)))
+        .partition(|(_, choice)| app.test.named_by_rules(choice));
+    let menu = div()
+        .id("test-opener-menu")
+        .occlude()
+        .absolute()
+        .top(px(34.0))
+        .left_0()
+        .w(px(170.0))
+        .flex()
+        .flex_col()
+        .p(px(4.0))
+        .bg(theme::bg_elevated())
+        .border_1()
+        .border_color(theme::border_default())
+        .rounded(px(7.0))
+        .shadow_lg()
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            this.test.picking = false;
+            cx.notify();
+        }))
+        .child(row(0, None))
+        .when(!named.is_empty(), |menu| {
+            menu.child(heading("In your rules")).children(
+                named
+                    .iter()
+                    .map(|(index, choice)| row(*index, Some(choice))),
             )
-        },
-    );
+        })
+        .when(!examples.is_empty(), |menu| {
+            menu.child(heading("Examples")).children(
+                examples
+                    .iter()
+                    .map(|(index, choice)| row(*index, Some(choice))),
+            )
+        });
     div()
         .relative()
         .w(px(170.0))
@@ -503,7 +616,7 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
                 .debug_selector(|| "test-opener".into())
                 .cursor_pointer()
                 .child(text("from", 10.5, 400.0, theme::text_subtle()))
-                .child(label(app.test.opener()))
+                .child(label(app.test.opener().as_ref()))
                 .child(caret())
                 // Capture runs in paint order: before the deferred menu's
                 // press-outside handler closes it.

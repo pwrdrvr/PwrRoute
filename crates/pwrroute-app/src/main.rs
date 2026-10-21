@@ -150,6 +150,7 @@ fn main() {
         activity::install(resident.handle(), resident.dispatched.clone(), cx);
         tray::install(cx);
         default_browser::install(default_browser::Os::real(), cx);
+        tray::follow_default_browser(cx);
         cx.set_global(settings::SettingsHost {
             model: Rc::new(|window, cx| {
                 default_browser::watch(window, cx);

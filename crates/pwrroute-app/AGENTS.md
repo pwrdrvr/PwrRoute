@@ -7,10 +7,15 @@ their own modules.
 - **Fixtures only for tests and the `screens` example.** The Rules screen
   reads and writes the real `rules.json` through `rules_store.rs` (tests
   write `fixtures/rules.json` to a scratch directory); Activity draws the
-  router's real records; first run is built from `onboarding.rs` facts.
-  The tray's pause state still draws contrived data (`TrayModel::fixture`).
-  Never a real URL, Activity entry or trace, in code or in a screenshot:
-  `fixtures::activity()` and `FirstRunModel::fixture` exist for tests.
+  router's real records; first run is built from `onboarding.rs` facts;
+  Test a link starts empty, and its app picker offers the apps the rules
+  name plus `fixtures::OPENERS` under an "Examples" heading (their order
+  is fixed: Activity's re-test picks by position). The tray follows the
+  feed and the OS; its pause target is `rules.json`'s fallback, read once
+  at launch. Settings still draws `settings::fixtures::model()` for every
+  pane but the default-browser card. Never a real URL, Activity entry or
+  trace, in code or in a screenshot: `fixtures::activity()` and
+  `FirstRunModel::fixture` exist for tests.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.
@@ -34,11 +39,16 @@ their own modules.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
   buttons do; `onboarding.rs` builds the real ones and the model from
   `Facts` (tests write their own facts and count hook calls). `state.json`
-  in the data directory says whether first run already ran.
+  in the data directory says whether first run already ran. "Open
+  PwrRoute" (every step done) and "Later" mark it done and open the main
+  window on Rules; closing the window only marks it done.
   `default_browser.rs` is the only caller of
   `pwrroute_os::set_default_browser`, from a click; its `Os` struct takes
-  fakes, so tests never reach the OS. Never wire registration into a test
-  or a launch path that runs without a click.
+  fakes, so tests never reach the OS. After a request it re-reads the
+  status every second for a minute (`POLL_EVERY`, `POLL_FOR`) and on
+  window activation; first run's step 3 shows the wait and "Ask again".
+  Never wire registration into a test or a launch path that runs without
+  a click.
 - **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
   sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`
