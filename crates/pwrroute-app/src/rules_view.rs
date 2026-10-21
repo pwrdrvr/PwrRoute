@@ -1353,7 +1353,9 @@ pub fn pane(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement 
     ));
 
     let (dot, status) = match app.store.status() {
-        crate::rules_store::Status::Failed(_) => (theme::status_error(), app.store.status_label()),
+        crate::rules_store::Status::Failed(_) | crate::rules_store::Status::Changed => {
+            (theme::status_error(), app.store.status_label())
+        }
         _ => (theme::status_ok(), "saved on change".to_owned()),
     };
     let strip = tests_strip(app, cx);

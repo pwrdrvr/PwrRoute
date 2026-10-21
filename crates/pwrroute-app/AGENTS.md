@@ -48,6 +48,20 @@ their own modules.
   router's handle the globals Settings › Privacy edits, saving first and
   applying through `set_retention` / `set_journal`. The file carries
   numbers and a level, never a link.
+- **The Rules screen follows `rules.json`'s other writers.** The store
+  (`rules_store.rs`) stamps the bytes it last read or wrote, and
+  `RulesStore::check_disk` compares the file to them: changed with nothing
+  unsaved, it reads the file again (`Status::Reloaded`, "reloaded 09:41");
+  changed under unsaved edits, it keeps them, refuses the next save
+  (`Status::Changed`) and the rail foot offers Reload (drop the edits) and
+  Overwrite (write them anyway). Its own saves restamp, so they are never
+  a change. `PwrRoute::sync_with_disk` runs the check when the window
+  comes to the front (`watch_activation`), on every dispatch, before the
+  Add a rule sheet and Test a link read the store, at the top of `refresh`,
+  and from `mcp::follow_rules_writes` right after an in-process
+  `pwrroute_rules_apply` the audit reports as written. Never write the
+  file around the store from the app; agents and editors go through the
+  check instead.
 - **Examples and tests are the only URLs that reach disk, and only by
   hand.** `rules_store.rs` writes a rule's `examples`, a rewrite's
   `url`/`becomes` pairs, `rules[].private` / `rules[].privacy` and the

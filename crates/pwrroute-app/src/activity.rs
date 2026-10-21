@@ -872,6 +872,9 @@ impl Activity {
             activity.sync(feed.read(cx));
             activity._feed = Some(cx.observe(&feed, |this, feed, cx| {
                 this.activity.sync(feed.read(cx));
+                // A dispatch is a moment the file may have changed: an
+                // agent wrote a rule the router just used.
+                this.sync_with_disk(cx);
                 cx.notify();
             }));
         }

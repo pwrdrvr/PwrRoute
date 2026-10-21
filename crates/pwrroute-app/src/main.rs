@@ -412,7 +412,10 @@ pub(crate) fn show_main_window(cx: &mut App) {
             |window, cx| {
                 // The strip's default-browser chip follows the OS's answer.
                 default_browser::watch(window, cx);
-                cx.new(PwrRoute::new)
+                let view = cx.new(PwrRoute::new);
+                // And the Rules screen follows rules.json.
+                view.update(cx, |this, cx| this.watch_activation(window, cx));
+                view
             },
         )
         .expect("open the PwrRoute window");

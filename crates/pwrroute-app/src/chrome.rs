@@ -10,10 +10,14 @@ use gpui_kit::{
 
 use crate::app::{PwrRoute, Screen};
 use crate::theme::{self, icon, mono, text, tracked};
-use crate::widgets::{key_cap, status_chip};
+use crate::widgets::{ButtonKind, button, key_cap, status_chip};
 
 /// The rail's "Open Settings…" item.
 pub const OPEN_SETTINGS_ID: &str = "nav-settings";
+
+/// The rail foot's way out when `rules.json` changed under unsaved edits.
+pub const RELOAD_ID: &str = "rules-reload";
+pub const OVERWRITE_ID: &str = "rules-overwrite";
 
 /// Where the brand starts, after the traffic lights. The family spec.
 pub const BRAND_X: f32 = 96.0;
@@ -168,6 +172,28 @@ fn section(
     .on_click(cx.listener(move |this, _, window, cx| this.navigate(screen, window, cx)))
 }
 
+/// The foot's Reload and Overwrite, under the status, while the file
+/// changed on disk under unsaved edits: Reload drops the edits and reads
+/// the file; Overwrite writes them over it.
+fn changed_actions(cx: &mut Context<'_, PwrRoute>) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .child(
+            button("Reload", ButtonKind::Default, true)
+                .id(RELOAD_ID)
+                .debug_selector(|| RELOAD_ID.into())
+                .on_click(cx.listener(|this, _, _, cx| this.reload_rules(cx))),
+        )
+        .child(
+            button("Overwrite", ButtonKind::Danger, true)
+                .id(OVERWRITE_ID)
+                .debug_selector(|| OVERWRITE_ID.into())
+                .on_click(cx.listener(|this, _, _, cx| this.overwrite_rules(cx))),
+        )
+}
+
 /// `.rail`: the sections, Settings, and the router's status at the foot.
 pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
     let count = |label: String| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
@@ -229,9 +255,14 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                     .font_weight(theme::weight(500.0))
                     .text_size(px(10.5))
                     .line_height(px(14.7))
-                    .text_color(theme::text_subtle())
+                    .text_color(if app.store.changed_on_disk() {
+                        theme::status_error()
+                    } else {
+                        theme::text_subtle()
+                    })
                     .child(app.store.status_label()),
             )
+            .children(app.store.changed_on_disk().then(|| changed_actions(cx)))
     };
     div()
         .w(px(196.0))

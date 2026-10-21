@@ -474,6 +474,8 @@ impl PwrRoute {
         let Some(record) = record(key, cx) else {
             return;
         };
+        // "Becomes handler N" counts the file as it is.
+        self.sync_with_disk(cx);
         let mut sheet = if record.privacy == Privacy::Full {
             AddRule::new(&record, &self.browsers, cx)
         } else {
