@@ -321,7 +321,7 @@ fn activity_expands_filters_and_retests(cx: &mut TestAppContext) {
     click(cx, "nav-activity");
     let expanded = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.activity.expanded);
     let id = |cx: &mut VisualTestContext, index: usize| {
-        view.read_with(cx, |app, _| app.activity.rows[index].id)
+        view.read_with(cx, |app, _| app.activity.rows[index].key)
     };
     assert_eq!(expanded(cx), None);
 
@@ -385,7 +385,7 @@ fn activity_follows_the_dispatch_feed(cx: &mut TestAppContext) {
             app.activity
                 .rows
                 .iter()
-                .map(|row| row.id)
+                .map(|row| row.key.id)
                 .collect::<Vec<_>>()
         })
     };
@@ -406,7 +406,7 @@ fn activity_follows_the_dispatch_feed(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(rows(cx), ids);
     assert_eq!(
-        view.read_with(cx, |app, _| app.activity.expanded),
+        view.read_with(cx, |app, _| app.activity.expanded.map(|key| key.id)),
         Some(ids[1])
     );
     let today = view.read_with(cx, |app, _| app.activity.today);
@@ -806,4 +806,200 @@ fn a_file_with_only_a_default_shows_empty_cards(cx: &mut TestAppContext) {
     type_sample(cx);
     assert_eq!(trace(&view, cx).result.title, "Firefox");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The fixture records plus one kept at host only and one kept at nothing,
+/// reduced the way the router reduces them before the feed sees them.
+fn leveled_activity() -> Vec<DispatchRecord> {
+    use pwrroute_router::Privacy;
+    let mut records = fixtures::activity();
+    let mut host = records[0].clone();
+    host.id = DispatchId(901);
+    host.privacy = Privacy::Host;
+    host.reduce(Privacy::Host);
+    let mut none = records[1].clone();
+    none.id = DispatchId(902);
+    none.privacy = Privacy::None;
+    none.reduce(Privacy::None);
+    records.insert(0, host);
+    records.insert(0, none);
+    records
+}
+
+#[gpui_kit::test]
+fn activity_filters_by_privacy_level_and_says_what_is_kept(cx: &mut TestAppContext) {
+    let records = leveled_activity();
+    let total = records.len();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open(cx);
+    click(cx, "nav-activity");
+
+    // The record kept at nothing is a count, not a row; the host-only one
+    // is a row with its host and nothing more.
+    let rows = view.read_with(cx, |app, _| app.activity.rows.clone());
+    assert_eq!(rows.len(), total - 1);
+    assert_eq!(view.read_with(cx, |app, _| app.activity.kept_nothing), 1);
+    assert_eq!(rows[0].privacy, pwrroute_router::Privacy::Host);
+    assert_eq!(
+        rows[0].url,
+        pwrroute_router::host_only(&fixtures::activity()[0].link.url)
+    );
+    let counts = view.read_with(cx, |app, _| app.activity.counts);
+    assert_eq!(counts.routed, total as u64);
+    assert_eq!(counts.private, 2);
+    assert_eq!(view.read_with(cx, |app, _| app.activity.today.private), 2);
+    // The retention sentence is the router's (here the defaults), never a
+    // literal of the screen's.
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.retention.description.clone()),
+        Options::default().retention_description()
+    );
+    assert!(cx.debug_bounds("activity-retention").is_some());
+
+    // Private: the count cards and only the host-only rows.
+    click(cx, "activity-filter-Private");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.filter),
+        Filter::Private
+    );
+    let cards = view.read_with(cx, |app, _| app.activity.private_counts());
+    assert_eq!(cards.len(), 2);
+    assert_eq!((cards[0].count, cards[1].count), (1, 1));
+    assert_eq!(cards[1].rule, "kept nothing");
+    assert!(cx.debug_bounds("activity-row-0").is_some());
+    assert!(cx.debug_bounds("activity-row-1").is_none());
+
+    // Unrouted: the rows the default took, and no others.
+    click(cx, "activity-filter-Unrouted");
+    let unrouted: Vec<usize> = view.read_with(cx, |app, _| {
+        app.activity
+            .visible()
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect()
+    });
+    assert!(!unrouted.is_empty());
+    assert_eq!(unrouted.len() as u64, counts.unrouted);
+    for index in &unrouted {
+        assert!(
+            cx.debug_bounds(format!("activity-row-{index}").leak())
+                .is_some(),
+            "row {index}"
+        );
+    }
+    assert!(cx.debug_bounds("activity-row-0").is_none());
+
+    // A host-only row expands to its trace, with nothing to re-test.
+    click(cx, "activity-filter-All");
+    click(cx, "activity-row-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.expanded.map(|key| key.id)),
+        Some(DispatchId(901))
+    );
+    assert!(cx.debug_bounds("activity-retest-0").is_none());
+    assert!(cx.debug_bounds("activity-add-rule-0").is_none());
+    // A full row offers the rules-ui unit's entry point (a no-op here).
+    click(cx, "activity-row-1");
+    assert!(cx.debug_bounds("activity-add-rule-1").is_some());
+    click(cx, "activity-add-rule-1");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Activity);
+    // The row's "⋯" asks the (empty) menu slot and toggles the row.
+    click(cx, "activity-more-1");
+    assert_eq!(view.read_with(cx, |app, _| app.activity.expanded), None);
+}
+
+/// With the journal on, records that fell out of memory are listed below
+/// the in-memory ones, read from the journal at the level it kept.
+#[gpui_kit::test]
+fn activity_lists_journaled_records_below_the_in_memory_ones(cx: &mut TestAppContext) {
+    use pwrroute_router::{JournalConfig, JournalMode, Retention};
+    let dir = scratch("journal");
+    let (dispatched_tx, dispatched) = async_channel::unbounded();
+    // Held here: the router's own copy goes with its thread, and a channel
+    // closed from there would wake the feed's pump off the test thread.
+    let _sender = dispatched_tx.clone();
+    let options = Options {
+        journal: Some(JournalConfig::new(dir.join("journal"), JournalMode::Hosts)),
+        on_dispatch: Some(std::sync::Arc::new(move |record: &DispatchRecord| {
+            let _ = dispatched_tx.try_send(record.clone());
+        })),
+        ..Options::default()
+    };
+    let router = Router::spawn(options, None, DryRunLauncher::new()).expect("spawn the router");
+    let handle = router.handle();
+    let ids: Vec<DispatchId> = ["one", "two", "three"]
+        .into_iter()
+        .map(|path| {
+            let link = Link::new(format!("https://a.example/{path}?q=1"), Source::CommandLine);
+            handle.dispatch_and_wait(link).expect("routed").id
+        })
+        .collect();
+    // Memory keeps the newest only from now on; the journal has all three.
+    handle
+        .set_retention(Retention {
+            count: 1,
+            hours: 24,
+        })
+        .unwrap();
+    assert_eq!(handle.recent().len(), 1);
+    assert_eq!(handle.journal(10).unwrap().len(), 3);
+
+    cx.update(|cx| activity::install(handle.clone(), dispatched, cx));
+    let (view, cx) = open(cx);
+    click(cx, "nav-activity");
+    let keys = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            (
+                app.activity.rows.iter().map(|r| r.key).collect::<Vec<_>>(),
+                app.activity
+                    .journal_rows
+                    .iter()
+                    .map(|r| r.key)
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+    let (memory, journaled) = keys(cx);
+    assert_eq!(memory.len(), 1);
+    assert_eq!(memory[0].id, ids[2]);
+    assert!(!memory[0].journaled);
+    assert_eq!(
+        journaled.iter().map(|key| key.id).collect::<Vec<_>>(),
+        vec![ids[1], ids[0]]
+    );
+    assert!(journaled.iter().all(|key| key.journaled));
+    // Journaled at hosts only: the row shows the host, whatever memory
+    // kept.
+    let rows = view.read_with(cx, |app, _| app.activity.journal_rows.clone());
+    assert_eq!(rows[0].url, "https://a.example");
+    assert_eq!(rows[0].privacy, pwrroute_router::Privacy::Host);
+    let in_memory = view.read_with(cx, |app, _| app.activity.rows[0].url.clone());
+    assert_eq!(in_memory, "https://a.example/three?q=1");
+    // The toolbar and the footer say so, in the router's words.
+    let retention = view.read_with(cx, |app, _| app.activity.retention.clone());
+    assert!(retention.journal.is_some());
+    assert!(
+        retention
+            .description
+            .contains("journaled as scheme and host only")
+    );
+    assert_eq!(
+        activity::memory_note(&retention),
+        "last 1 \u{00b7} 24 h \u{00b7} in memory \u{00b7} journaled"
+    );
+    // Journaled rows are indexed after the in-memory ones and expand.
+    assert!(cx.debug_bounds("activity-row-0").is_some());
+    assert!(cx.debug_bounds("activity-row-2").is_some());
+    click(cx, "activity-row-2");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.expanded),
+        Some(journaled[1])
+    );
+    // Clear empties memory; the journal's rows stay until Settings clears
+    // the journal.
+    click(cx, "activity-clear");
+    let (memory, journaled) = keys(cx);
+    assert!(memory.is_empty());
+    assert_eq!(journaled.len(), 3);
+    drop(router);
 }

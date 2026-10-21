@@ -4,15 +4,49 @@
 
 use super::model::{
     AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, Configuration, DefaultBrowser,
-    DefaultState, FinickyConfig, Grant, ImportCandidate, ImportPlan, Listener, LocalAgents,
-    Permission, Piece, RoleId, RulesSource, SessionId, SettingsModel, Status, Usage,
+    DefaultState, FinickyConfig, Grant, ImportCandidate, ImportPlan, JournalFiles, JournalLevel,
+    Listener, LocalAgents, Permission, Piece, Privacy, RoleId, RulesSource, SessionId,
+    SettingsModel, Status, Usage,
 };
 
 pub fn model() -> SettingsModel {
     SettingsModel {
         local_agents: local_agents(),
         configuration: configuration(),
+        privacy: privacy(),
         browsers: browsers(),
+    }
+}
+
+/// Privacy as the design's 1b draws it: hosts only, with files on disk.
+/// The sentences are the router's for these values, transcribed; the real
+/// pane takes them from `RouterHandle::retention()`.
+pub fn privacy() -> Privacy {
+    const FILE: &str = "~/Library/Application Support/PwrRoute/journal/activity-YYYY-MM-DD.jsonl";
+    Privacy {
+        keep_count: 500,
+        keep_hours: 72,
+        journal: JournalLevel::Hosts,
+        journal_days: 7,
+        description: format!(
+            "Kept in memory for the last 500 links or 72 hours, cleared when PwrRoute quits, \
+             and journaled as scheme and host only to {FILE} for 7 days."
+        )
+        .into(),
+        full_description: format!(
+            "Kept in memory for the last 500 links or 72 hours, cleared when PwrRoute quits, \
+             and journaled with full URLs (except links whose rule keeps less) to {FILE} for \
+             7 days."
+        )
+        .into(),
+        journal_path: FILE.into(),
+        journal_files: Some(JournalFiles {
+            summary: "1.2 MB \u{00b7} 8,114 lines \u{00b7} 6 days".into(),
+            since: "2026-10-14".into(),
+        }),
+        journal_error: None,
+        rules_keep_less: Some("Handler 9 keeps host only and handler 10 keeps nothing".into()),
+        can_save: true,
     }
 }
 

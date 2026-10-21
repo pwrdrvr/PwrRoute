@@ -55,6 +55,9 @@ mod rules_view;
 #[path = "../src/settings/mod.rs"]
 mod settings;
 #[cfg(target_os = "macos")]
+#[path = "../src/settings_store.rs"]
+mod settings_store;
+#[cfg(target_os = "macos")]
 #[path = "../src/test_link.rs"]
 mod test_link;
 #[cfg(target_os = "macos")]
@@ -157,7 +160,7 @@ fn main() {
     });
     shoot("app-2b", None, &|app, window, cx| {
         app.activity.load(fixtures::activity());
-        app.activity.expanded = Some(app.activity.rows[1].id);
+        app.activity.expanded = Some(app.activity.rows[1].key);
         app.navigate(Screen::Activity, window, cx);
     });
     shoot("app-2b-empty", None, &|app, window, cx| {
@@ -170,6 +173,7 @@ fn main() {
         ("settings-1a", settings::Pane::LocalAgents, 1603.0),
         ("settings-1b", settings::Pane::Configuration, 1315.0),
         ("settings-1c", settings::Pane::Browsers, 880.0),
+        ("settings-privacy", settings::Pane::Privacy, 1560.0),
     ] {
         let mut cx = HeadlessAppContext::with_platform(
             gpui_kit::platform::current_platform(true).text_system(),

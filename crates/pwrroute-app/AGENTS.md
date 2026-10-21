@@ -13,15 +13,37 @@ their own modules.
   is fixed: Activity's re-test picks by position). The tray follows the
   feed and the OS; its pause target is `rules.json`'s fallback, read once
   at launch. Settings still draws `settings::fixtures::model()` for every
-  pane but the default-browser card. Never a real URL, Activity entry or
-  trace, in code or in a screenshot: `fixtures::activity()` and
-  `FirstRunModel::fixture` exist for tests.
+  pane but the default-browser card and Privacy (see `settings/AGENTS.md`).
+  Never a real URL, Activity entry or trace, in code or in a screenshot:
+  `fixtures::activity()` and `FirstRunModel::fixture` exist for tests.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.
-  Rows, today's counts and Clear all go through the feed, never around it.
+  Rows, today's counts and Clear all go through the feed, never around it
+  (`Feed::reload` takes the router's buffer back after Settings changes the
+  retention or clears the journal). A record is a row at `Full` or `Host`
+  (the host-only chip) and a count at `None`; the filters are All,
+  Unrouted (the default or the fallback took it), Failed, Rewritten and
+  Private, each with its count. The retention sentence under the list and
+  the toolbar's note come from `RouterHandle::retention()`, never from a
+  literal here. With the journal on, journaled records no longer in memory
+  are listed below a "From the journal" divider (`Feed::journal`, read from
+  disk on each sync, at most `JOURNAL_ROWS`). Export… goes through
+  `settings::privacy_host::export`, the OS save dialog and nothing else.
   Full URLs stay in that entity and the router's buffer; nothing in the app
-  writes one to disk or a log.
+  writes one to disk or a log. Two insertion points for the rule-adding
+  flow are no-ops: `activity::row_menu` (the row's "⋯") and
+  `PwrRoute::add_rule` (the expanded row's "Add a rule…").
+- **Settings persist in `settings.json` (`settings_store.rs`).** The data
+  directory's `settings.json` holds Activity's retention and the journal
+  (`activity.keep`, `activity.journal`, `activity.journalDays`); an absent
+  file is the defaults, and a bad one is reported and ignored. `router.rs`
+  reads it before the router spawns, so `Options::retention` and
+  `Options::journal` (`<data dir>/journal`) are in force from the first
+  link; `settings_store::install` then makes the same store and the
+  router's handle the globals Settings › Privacy edits, saving first and
+  applying through `set_retention` / `set_journal`. The file carries
+  numbers and a level, never a link.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
   `PopUp` window (design 1a/1b); recents there are hosts only

@@ -235,7 +235,14 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
 /// `~/.finicky.ts` for a path under `home`; the path as it is otherwise.
 fn tilde(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok()) {
-        Some(rest) => format!("~/{}", rest.display()),
+        Some(rest) => {
+            let rest = rest.display().to_string();
+            // Shown with "/" after the "~" on every platform, so a nested
+            // path on Windows does not mix separators ("~/journal\\x").
+            #[cfg(windows)]
+            let rest = rest.replace('\\', "/");
+            format!("~/{rest}")
+        }
         None => path.display().to_string(),
     }
 }

@@ -10,12 +10,14 @@
 use gpui_kit::SharedString;
 
 pub use crate::default_browser::DefaultState;
+pub use crate::settings_store::JournalLevel;
 
 /// Everything the Settings window draws.
 #[derive(Clone, Debug)]
 pub struct SettingsModel {
     pub local_agents: LocalAgents,
     pub configuration: Configuration,
+    pub privacy: Privacy,
     pub browsers: Browsers,
 }
 
@@ -252,6 +254,51 @@ pub enum Piece {
     Code(SharedString),
 }
 
+// ---- Privacy --------------------------------------------------------------
+
+/// Settings › Privacy: what the router keeps of each link, where, and for
+/// how long. The numbers and the level are the settings as saved; the
+/// sentences are the router's own, rendered verbatim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Privacy {
+    /// "Keep the last N links".
+    pub keep_count: usize,
+    /// "For at most H hours".
+    pub keep_hours: u64,
+    pub journal: JournalLevel,
+    /// How many days of journal files are kept.
+    pub journal_days: u32,
+    /// `RouterHandle::retention().description`: where links are kept and
+    /// for how long, as things stand. The `.disc` under the switch and the
+    /// Activity footer show it verbatim.
+    pub description: SharedString,
+    /// The same sentence as it would read with the journal at full URLs:
+    /// what the confirm sheet repeats before the switch moves.
+    pub full_description: SharedString,
+    /// The journal's files, as the reader would type the path:
+    /// "~/Library/Application Support/PwrRoute/journal/activity-YYYY-MM-DD.jsonl".
+    pub journal_path: SharedString,
+    /// What is on disk now, or `None` while no journal file exists.
+    pub journal_files: Option<JournalFiles>,
+    /// Why the journal's last write failed, when it is on and did.
+    pub journal_error: Option<SharedString>,
+    /// The rules that keep less than full, for the confirm sheet: "Handler
+    /// 9 keeps host only and handler 10 keeps nothing". `None` when none.
+    pub rules_keep_less: Option<SharedString>,
+    /// The data directory exists: settings can be saved and the journal
+    /// can be turned on.
+    pub can_save: bool,
+}
+
+/// The journal's files on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JournalFiles {
+    /// "1.2 MB · 8,114 lines · 6 days".
+    pub summary: SharedString,
+    /// The day of the oldest file: "2026-10-14".
+    pub since: SharedString,
+}
+
 // ---- Browsers -------------------------------------------------------------
 
 #[derive(Clone, Debug)]
@@ -341,4 +388,22 @@ pub enum SettingsRequest {
         visible: bool,
     },
     AddApp,
+    /// Privacy: keep the last `count` links for at most `hours`.
+    SetRetention {
+        count: usize,
+        hours: u64,
+    },
+    /// Privacy: the journal switch. `Full` arrives only after the sheet
+    /// confirmed it.
+    SetJournal(JournalLevel),
+    /// Privacy: show the journal's directory in the file manager.
+    RevealJournal,
+    /// Privacy: delete every journal file and empty the links in memory.
+    /// Arrives only after the sheet confirmed it.
+    ClearJournal,
+    /// Privacy: empty the links in memory, here, in Activity and the tray.
+    ClearRecent,
+    /// Privacy: write the links in memory, each at its level, to a file the
+    /// reader picks.
+    ExportActivity,
 }
