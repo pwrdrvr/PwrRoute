@@ -28,6 +28,9 @@ mod app;
 #[path = "../src/assets.rs"]
 mod assets;
 #[cfg(target_os = "macos")]
+#[path = "../src/browser_scan.rs"]
+mod browser_scan;
+#[cfg(target_os = "macos")]
 #[path = "../src/chrome.rs"]
 mod chrome;
 #[cfg(target_os = "macos")]

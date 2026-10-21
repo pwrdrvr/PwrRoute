@@ -85,8 +85,9 @@ pub struct PwrRoute {
     /// Activity's row actions: the Add a rule sheet and what the last
     /// action did.
     pub actions: Actions,
-    /// The browsers the sheet offers, with their profiles: detected at
-    /// launch; a test or screenshot sets its own.
+    /// The browsers the sheet offers, with their profiles: the app's one
+    /// scan (`browser_scan`), less the apps hidden in Settings › Browsers;
+    /// a test or screenshot sets its own.
     pub browsers: Vec<BrowserChoice>,
     /// A debounced save is on its way.
     save_scheduled: bool,
@@ -99,7 +100,8 @@ impl PwrRoute {
         let store = RulesStore::load(discovery::rules_path(&discovery::Environment::current()));
         let mut this =
             Self::with_store(router::config_in_charge(), std::env::home_dir(), store, cx);
-        this.browsers = activity_actions::detected_browsers();
+        // The one scan the app makes, less the apps hidden in Settings.
+        this.browsers = crate::browser_scan::choices(cx);
         this
     }
 

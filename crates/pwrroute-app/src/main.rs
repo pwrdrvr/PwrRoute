@@ -17,6 +17,7 @@ mod app_menu;
 mod assets;
 #[cfg(target_os = "windows")]
 mod browser_registration;
+mod browser_scan;
 mod chrome;
 mod config_view;
 mod default_browser;
@@ -175,6 +176,8 @@ fn main() -> ExitCode {
             },
             cx,
         );
+        // The one browser scan, read when a picker or Settings first asks.
+        browser_scan::install(pwrroute_browsers::Env::system(), cx);
         cx.set_global(settings::SettingsHost {
             model: Rc::new(|window, cx| {
                 default_browser::watch(window, cx);
