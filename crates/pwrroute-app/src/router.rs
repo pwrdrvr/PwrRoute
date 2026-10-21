@@ -743,10 +743,17 @@ mod tests {
             self.dir.path().join(name)
         }
 
+        /// Writes `name` the way [`RulesFile::save`] does: to a sibling file
+        /// renamed into place. The router reads `rules.json` on its own
+        /// thread, and a plain write truncates the file first, so it could
+        /// read an empty one and keep that parse error.
         fn write(&self, name: &str, text: &str) -> PathBuf {
             let path = self.path(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, text).unwrap();
+            let mut staging = path.as_os_str().to_owned();
+            staging.push(".saving");
+            fs::write(&staging, text).unwrap();
+            fs::rename(&staging, &path).unwrap();
             path
         }
 
