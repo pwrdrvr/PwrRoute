@@ -422,7 +422,16 @@ impl App {
     ) -> Result<T> {
         let deadline = Instant::now() + timeout;
         loop {
-            let state = self.state()?;
+            // A UI thread still busy (a cold first launch compiling shaders
+            // under software Vulkan) is something to wait out, not a failure.
+            let state = match self.state() {
+                Ok(state) => state,
+                Err(e) if is_busy(&e) && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => return Err(e.context(format!("waiting for {what}"))),
+            };
             if let Some(found) = check(&state) {
                 return Ok(found);
             }
@@ -630,6 +639,12 @@ fn socket_name(dir: &Path) -> String {
     } else {
         dir.join("e2e.sock").display().to_string()
     }
+}
+
+/// Whether a request failed only because the app's UI thread did not get to
+/// it in time (`e2e.rs`, `UI_TIMEOUT`).
+fn is_busy(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("the UI thread did not answer in time")
 }
 
 /// Whether `state`'s main window is presented. `false` only when the hook
