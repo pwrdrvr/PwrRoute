@@ -56,6 +56,8 @@ const CONFIG_ENV: &str = "PWRROUTE_E2E_CONFIG";
 pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// The default for [`App::wait_for`].
 pub const WAIT: Duration = Duration::from_secs(10);
+/// Where the app serves local agents (`pwrroute_mcp::link::ENDPOINT_ENV`).
+const MCP_ENDPOINT_ENV: &str = "PWRROUTE_MCP_ENDPOINT";
 /// One request's exchange, once connected.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// The registration actions' exchange: they run the OS's tools, and
@@ -267,6 +269,16 @@ impl App {
         let mut env = vec![(SOCKET_ENV, socket.clone())];
         if let Some(router_dir) = &router_dir {
             env.push((ROUTER_DIR_ENV, router_dir.display().to_string()));
+            // Local agents are on by default, and their endpoint sits beside
+            // the per-user router socket (Linux) or is a per-user pipe
+            // (Windows): give this copy its own, or it would take the
+            // developer's running PwrRoute's.
+            let mcp = if cfg!(windows) {
+                format!(r"\\.\pipe\{socket}-mcp")
+            } else {
+                dir.path().join("mcp.sock").display().to_string()
+            };
+            env.push((MCP_ENDPOINT_ENV, mcp));
             // An empty home, so the router never finds the developer's
             // Finicky config or rules.json. `env::home_dir` reads HOME, or
             // USERPROFILE on Windows; on Linux the XDG variables win over

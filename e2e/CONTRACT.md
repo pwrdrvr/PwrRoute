@@ -15,6 +15,7 @@ turns it on when the app starts:
 |---|---|
 | `PWRROUTE_E2E_SOCKET` | Serve the control socket here: a file path on Unix, a named pipe name on Windows. Also skips the startup update check, so a run makes no network call, and opens the first-run window only for `--first-run`, never because onboarding is pending. |
 | `PWRROUTE_E2E_ROUTER_DIR` | Keep the router's lock and IPC socket in this directory instead of the per-user one, so a test run neither forwards to nor blocks the developer's own PwrRoute. |
+| `PWRROUTE_MCP_ENDPOINT` | Not the hook's: the app's own override for where it serves local agents. The harness sets it on every isolated launch, since the default endpoint is per user and would take the developer's. |
 
 The harness also passes `--dry-run` on every launch, so nothing opens, and
 points `HOME`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (on Windows
