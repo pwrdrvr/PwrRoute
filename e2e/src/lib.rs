@@ -437,12 +437,33 @@ impl App {
     }
 
     /// Waits for the main window to open and paint, and returns its state.
+    ///
+    /// A launch from a test starts in the background, where another window
+    /// may cover it, so a main window the platform reports hidden is brought
+    /// forward once, as the Dock icon would. Hidden alone does not fail the
+    /// wait: macOS reports a covered window hidden and GPUI still draws it.
     pub fn wait_for_main_window(&self) -> Result<Value> {
-        self.wait_for("the main window to paint", LAUNCH_TIMEOUT, |state| {
+        let state = self.wait_for("the main window to paint", LAUNCH_TIMEOUT, |state| {
             let painted = state["main"]["frames"].as_u64().unwrap_or(0) > 0
                 && state["main"]["regions"]["titleStrip"].is_object();
             painted.then(|| state.clone())
-        })
+        })?;
+        if main_visible(&state) {
+            return Ok(state);
+        }
+        self.action("showWindow")?;
+        match self.wait_for("the main window to be shown", WAIT, |state| {
+            main_visible(state).then(|| state.clone())
+        }) {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                eprintln!(
+                    "{}: the main window stays hidden after showWindow",
+                    self.harness.test
+                );
+                self.state()
+            }
+        }
     }
 
     /// Types keystrokes into the main window: `"down"`, `"cmd-q"`.
@@ -609,6 +630,15 @@ fn socket_name(dir: &Path) -> String {
     } else {
         dir.join("e2e.sock").display().to_string()
     }
+}
+
+/// Whether `state`'s main window is presented. `false` only when the hook
+/// says so.
+fn main_visible(state: &Value) -> bool {
+    state["windows"]
+        .as_array()
+        .and_then(|w| w.iter().find(|w| w["main"] == true))
+        .is_some_and(|w| w["visible"] != false)
 }
 
 /// One request on the hook's socket: a line of JSON each way.

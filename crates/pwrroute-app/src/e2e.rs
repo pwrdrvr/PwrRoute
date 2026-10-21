@@ -467,6 +467,10 @@ fn state(cx: &mut App) -> Value {
                 // only; elsewhere the harness asks the OS (`e2e/src/os.rs`).
                 "title": cfg!(target_os = "macos").then(|| window.window_title()),
                 "active": window.is_window_active(),
+                // Whether the platform presents its frames: GPUI draws no
+                // frame for a window that is covered, on another Space, or on
+                // a sleeping or locked display.
+                "visible": window.is_visible(),
                 "main": view.is_some(),
                 "bounds": rect(window.bounds()),
                 "viewport": {

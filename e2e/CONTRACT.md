@@ -55,7 +55,7 @@ timeouts).
 
 ```json
 {
-  "windows": [{ "title": "PwrRoute", "active": false, "main": true,
+  "windows": [{ "title": "PwrRoute", "active": false, "visible": true, "main": true,
                 "bounds": {"x":…,"y":…,"width":1240,"height":820},
                 "viewport": {"width":1240,"height":820}, "scaleFactor": 2 }],
   "main": { "frames": 12, "focused": true,
@@ -68,6 +68,12 @@ timeouts).
 }
 ```
 
+`visible` is GPUI's `Window::is_visible`: whether the platform presents the
+window's frames. macOS reports a window hidden when it is covered, on another
+Space, or on a sleeping or locked display (`WindowVisibility`). A covered
+window still draws; one on a sleeping display does not, since its display
+link stops. The harness brings a hidden main window forward once with
+`showWindow`, and the macOS CI job wakes the display and keeps it awake.
 `title` is the platform's title on macOS and `null` elsewhere: gpui-pre
 reads a title back only from AppKit. The harness checks the title through the
 OS's own window list on every platform (`e2e/src/os.rs`). `main` is `null`

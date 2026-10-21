@@ -363,7 +363,11 @@ jobs:
 
       - name: Desktop E2E
         timeout-minutes: 30
-        run: cargo xtask e2e
+        # GPUI draws nothing for a window on a sleeping display: wake it, and
+        # hold it awake for this step only (power assertions, no settings).
+        run: |
+          caffeinate -u -t 2
+          caffeinate -dims cargo xtask e2e
 
       - name: Upload Desktop E2E artifacts
         uses: actions/upload-artifact@v7
