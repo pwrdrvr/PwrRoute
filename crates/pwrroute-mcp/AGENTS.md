@@ -57,7 +57,9 @@ door; this crate supersedes that part of it.
 - **Backends are traits.** The router, launcher, rules store and activity
   log are other crates' work; `backend.rs` holds only the calls the tools
   need, `fake.rs` the in-memory stand-ins. Narrow a trait rather than widen
-  it. Backend calls run on blocking threads.
+  it. Backend calls run on blocking threads. `LiveRules` holds one lock
+  from the revision check to the write (and across a read), so two agents
+  writing at once cannot both pass the check; the loser gets a conflict.
 - **Tests run a real server.** `tests/` start one on a private socket (a
   pipe on Windows) with the fakes, and drive it with rmcp clients over the
   link and through the `pwrroute-mcp-proxy` binary. CI runs them on macOS,
