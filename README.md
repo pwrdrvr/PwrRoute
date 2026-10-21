@@ -59,6 +59,25 @@ cargo xtask test
 cargo xtask bundle          # macOS app, zip and DMG
 ```
 
+### Route tests from the command line
+
+The examples and tests saved in `rules.json` (each rule's `examples`, each
+rewrite's `url` / `becomes` pairs, and the top-level `tests`) run through the
+same engine as the window's "Run tests":
+
+```bash
+pwrroute rules test                       # the rules.json and config the router uses
+pwrroute rules test --rules path/to/rules.json [--config path/to/finicky.js]
+```
+
+With `--rules`, the file runs on its own unless `--config` names the config
+to pair it with.
+
+It prints one block per failure (input, expected, actual, winner) and a
+`N passed, M failed, T total` line, and exits 0 when everything passed, 1
+when something failed and 2 when the rules could not be loaded or run. It
+never launches a browser and writes nothing.
+
 ## Thanks, Finicky
 
 PwrRoute started from [Finicky](https://github.com/johnste/finicky), by

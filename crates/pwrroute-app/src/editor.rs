@@ -4,7 +4,12 @@
 //! and the store writes the file after a short debounce. The design draws
 //! the handler editor (Rule Editing 1a) and the rewrite editor (2a); a draft
 //! has a chip where a saved rule has its switch, and a rule with problems
-//! shows them under the fields they belong to (5a, 5b).
+//! shows them under the fields they belong to (5a, 5b). Open in carries
+//! "Open in a private window" and Keep (Activity Privacy 3b), and every
+//! rule has an Examples section: the URLs that must resolve to it, each with
+//! its result from the last test run, and a field that adds one. An example
+//! is the one way a link reaches `rules.json` from this rail, on Return, and
+//! the help under the field says so.
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -12,15 +17,20 @@ use gpui_kit::{
     KeyDownEvent, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _,
     Styled as _, StyledText, Window, deferred, div, px,
 };
+use pwrroute_engine::{Privacy, TestSource};
 
 use crate::app::{PwrRoute, Selection};
-use crate::rules_model::{Destination, Handler, KINDS, Rewrite, RowBadge, Rule, kind_of};
-use crate::rules_view::{ChipTone, chip_in};
-use crate::text_field::TextField;
+use crate::rules_model::{
+    Destination, Handler, KEEP_LEVELS, KINDS, Rewrite, RowBadge, Rule, kind_of,
+};
+use crate::rules_view::{ChipTone, chip_in, example_mark, winner_label};
+use crate::text_field::{Edit, TextField};
 use crate::theme::{self, mono, text, tracked};
 use crate::trace_view::{UrlMark, url_diff};
 use crate::try_it::{TryResult, Verdict, sample_url};
-use crate::widgets::{ButtonKind, badge, button, caret, focus_ring, input_box, switch};
+use crate::widgets::{
+    ButtonKind, badge, button, caret, focus_ring, input_box, segment, segmented, switch,
+};
 
 /// The rail's width.
 pub const WIDTH: f32 = 372.0;
@@ -37,6 +47,10 @@ pub enum Field {
     Value(usize),
     /// Try it's link.
     Sample,
+    /// A URL to add as the rule's example.
+    Example,
+    /// For a rewrite's example: what the URL must become.
+    Becomes,
 }
 
 /// The editor's fields for the selected rule. Built when the selection
@@ -48,6 +62,9 @@ pub struct Rail {
     pub profile: TextField,
     pub values: Vec<TextField>,
     pub sample: TextField,
+    /// The example to add, and (for a rewrite) what it must become.
+    pub example: TextField,
+    pub becomes: TextField,
     /// The sample was typed: it no longer follows the first pattern.
     pub sample_edited: bool,
     /// Which change's kind menu is open.
@@ -67,6 +84,8 @@ impl Rail {
             profile: TextField::new(handler.profile.clone(), cx),
             values: Vec::new(),
             sample: TextField::new(sample_url(&handler.patterns), cx),
+            example: TextField::new("", cx),
+            becomes: TextField::new("", cx),
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
@@ -87,6 +106,8 @@ impl Rail {
             profile: TextField::new("", cx),
             values: fields(&values, cx),
             sample: TextField::new(sample_url(&rewrite.patterns), cx),
+            example: TextField::new("", cx),
+            becomes: TextField::new("", cx),
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
@@ -102,6 +123,8 @@ impl Rail {
             Field::Profile => Some(&mut self.profile),
             Field::Value(i) => self.values.get_mut(i),
             Field::Sample => Some(&mut self.sample),
+            Field::Example => Some(&mut self.example),
+            Field::Becomes => Some(&mut self.becomes),
         }
     }
 
@@ -113,6 +136,8 @@ impl Rail {
             Field::Profile => Some(&self.profile),
             Field::Value(i) => self.values.get(i),
             Field::Sample => Some(&self.sample),
+            Field::Example => Some(&self.example),
+            Field::Becomes => Some(&self.becomes),
         }
     }
 }
@@ -196,6 +221,9 @@ enum Under {
     Openers,
     Browser,
     Changes,
+    /// The Keep control: a privacy word the engine does not know.
+    Keep,
+    Examples,
 }
 
 fn under(message: &str) -> Under {
@@ -203,6 +231,10 @@ fn under(message: &str) -> Under {
         Under::Patterns
     } else if message.contains("App names") {
         Under::Openers
+    } else if message.starts_with("Privacy") {
+        Under::Keep
+    } else if message.starts_with("Examples") {
+        Under::Examples
     } else if message.contains("browser") || message.contains("PwrRoute") {
         Under::Browser
     } else {
@@ -340,7 +372,11 @@ fn editable(
         .cursor_text()
         .child(boxed)
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-            if this.rail_key(field, event, cx) {
+            let taken = match field {
+                Field::Example | Field::Becomes => this.example_key(field, event, cx),
+                _ => this.rail_key(field, event, cx),
+            };
+            if taken {
                 cx.stop_propagation();
                 cx.notify();
             }
@@ -550,6 +586,22 @@ fn open_in_section(
         window,
         cx,
     ));
+    let private = div()
+        .id("handler-private")
+        .debug_selector(|| "handler-private".into())
+        .cursor_pointer()
+        .child(switch(handler.private))
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_private(cx)));
+    let keep = handler.keep();
+    let keep_control = KEEP_LEVELS.iter().fold(segmented(), |seg, (level, label)| {
+        let level = *level;
+        seg.child(
+            segment(*label, keep == Some(level))
+                .id(ElementId::Name(format!("keep-{}", level_key(level)).into()))
+                .debug_selector(move || format!("keep-{}", level_key(level)))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_keep(level, cx))),
+        )
+    });
     section()
         .child(section_title("Open in"))
         .child(browser)
@@ -560,6 +612,15 @@ fn open_in_section(
             15.75,
         ))
         .child(labeled_row("Profile", profile))
+        .child(labeled_row("Open in a private window", private).mt(px(4.0)))
+        .child(labeled_row("Keep", keep_control))
+        .children(problems_under(&handler.problems, Under::Keep))
+        .child(paragraph(
+            "What Activity and the journal remember about links this handler takes. A \
+             private window keeps host only unless set here.",
+            10.5,
+            15.75,
+        ))
         // rules.json has no field for these yet; drawn as the design shows
         // them, not wired.
         .child(labeled_row("Open in background", switch(false)).opacity(0.5))
@@ -573,6 +634,253 @@ fn open_in_section(
             )
             .opacity(0.5),
         )
+}
+
+/// A Keep level as an element id and selector suffix.
+fn level_key(level: Privacy) -> &'static str {
+    match level {
+        Privacy::Full => "full",
+        Privacy::Host => "host",
+        Privacy::None => "none",
+    }
+}
+
+/// One saved example (`.exl .inp`): its result from the last run, the URL,
+/// where it went instead when it failed, and the × that removes it.
+fn example_row(
+    index: usize,
+    url: &str,
+    passed: Option<bool>,
+    went_to: Option<String>,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let failed = passed == Some(false);
+    let remove = remove_button(
+        format!("example-remove-{index}"),
+        move |this, window, cx| this.remove_example(index, window, cx),
+        cx,
+    );
+    input_box()
+        .w_full()
+        .gap(px(7.0))
+        .pr(px(6.0))
+        .when(failed, |row| row.border_color(theme::status_error()))
+        .child(example_mark(passed))
+        .child(
+            crate::widgets::one_line(
+                url.to_owned(),
+                theme::mono_family(500.0),
+                500.0,
+                12.0,
+                12.0,
+                if failed {
+                    theme::danger_text()
+                } else {
+                    theme::text_primary()
+                },
+            )
+            .flex_1(),
+        )
+        .when_some(went_to, |row, went_to| {
+            row.child(
+                text(
+                    format!("\u{2192} {went_to}"),
+                    10.0,
+                    500.0,
+                    theme::danger_text(),
+                )
+                .whitespace_nowrap(),
+            )
+        })
+        .child(div().ml_auto().child(remove))
+}
+
+/// `Examples`: the URLs that must resolve to the selected rule, with the
+/// field that adds one. For a rewrite, each example also says what the URL
+/// must become.
+fn examples_section(
+    app: &PwrRoute,
+    selection: Selection,
+    rail: &Rail,
+    problems: &[String],
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let (title, rows, help): (&str, Vec<Div>, &str) = match selection {
+        Selection::Handler(h) => {
+            let examples = app
+                .handlers
+                .get(h)
+                .map(|handler| handler.examples.as_slice())
+                .unwrap_or_default();
+            let rows = examples
+                .iter()
+                .enumerate()
+                .map(|(i, url)| {
+                    let source = TestSource::RuleExample {
+                        rule: h,
+                        example: i,
+                    };
+                    let went_to = app.tests.failure(source).map(|f| {
+                        f.winner
+                            .as_ref()
+                            .map_or_else(|| f.actual.clone(), winner_label)
+                    });
+                    example_row(i, url, app.tests.passed(source), went_to, cx)
+                })
+                .collect();
+            (
+                "Examples \u{00b7} must resolve here",
+                rows,
+                "Saved to rules.json as this handler's example. Run tests checks it still \
+                 resolves here; a rule that takes it later fails the run.",
+            )
+        }
+        Selection::Rewrite(r) => {
+            let examples = app
+                .rewrites
+                .get(r)
+                .map(|rewrite| rewrite.examples.as_slice())
+                .unwrap_or_default();
+            let rows = examples
+                .iter()
+                .enumerate()
+                .map(|(i, example)| {
+                    let source = TestSource::RewriteExample {
+                        rewrite: r,
+                        example: i,
+                    };
+                    let went_to = app.tests.failure(source).map(|f| f.actual.clone());
+                    let shown = format!("{} \u{2192} {}", example.url, example.becomes);
+                    example_row(i, &shown, app.tests.passed(source), went_to, cx)
+                })
+                .collect();
+            (
+                "Examples \u{00b7} what each becomes",
+                rows,
+                "Saved to rules.json as this rewrite's example: the URL and what it must \
+                 become. Run tests checks it on every save.",
+            )
+        }
+    };
+    let add = editable(
+        rail,
+        Field::Example,
+        "example-add".into(),
+        Look {
+            mono: true,
+            placeholder: "https://",
+            error: false,
+        },
+        None,
+        window,
+        cx,
+    );
+    let becomes = matches!(selection, Selection::Rewrite(_)).then(|| {
+        editable(
+            rail,
+            Field::Becomes,
+            "example-becomes".into(),
+            Look {
+                mono: true,
+                placeholder: "becomes https://",
+                error: false,
+            },
+            None,
+            window,
+            cx,
+        )
+    });
+    section()
+        .child(section_title(title))
+        .when(!rows.is_empty(), |section| {
+            section.child(div().flex().flex_col().gap(px(5.0)).children(rows))
+        })
+        .children(problems_under(problems, Under::Examples))
+        .child(add)
+        .children(becomes)
+        .child(paragraph(
+            "Return adds the link. It is written to rules.json with the rule.",
+            10.5,
+            15.75,
+        ))
+        .child(paragraph(help, 10.5, 15.75))
+}
+
+impl PwrRoute {
+    /// Switches the selected handler's private window on or off.
+    pub fn toggle_private(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(Selection::Handler(h)) = self.selection
+            && let Some(handler) = self.handlers.get(h)
+        {
+            let private = !handler.private;
+            self.store.set_private(h, private);
+            self.refresh(cx);
+        }
+    }
+
+    /// Sets what the selected handler keeps of the links it takes.
+    pub fn set_keep(&mut self, level: Privacy, cx: &mut Context<'_, Self>) {
+        if let Some(Selection::Handler(h)) = self.selection {
+            self.store.set_privacy(h, level);
+            self.refresh(cx);
+        }
+    }
+
+    /// A keystroke in the example fields: Return adds the example to the
+    /// selected rule. Returns whether the field took the key.
+    pub fn example_key(
+        &mut self,
+        field: Field,
+        event: &KeyDownEvent,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        let Some(text_field) = self.rail.as_mut().and_then(|rail| rail.field_mut(field)) else {
+            return false;
+        };
+        match text_field.key(&event.keystroke, cx) {
+            Edit::Ignored => false,
+            Edit::Handled | Edit::Changed => true,
+            Edit::Submit => {
+                self.add_example_from_rail(cx);
+                true
+            }
+        }
+    }
+
+    /// Adds the example typed in the rail to the selected rule, and clears
+    /// the fields once it is taken.
+    pub fn add_example_from_rail(&mut self, cx: &mut Context<'_, Self>) {
+        let (Some(selection), Some(rail)) = (self.selection, self.rail.as_mut()) else {
+            return;
+        };
+        let url = rail.example.text.clone();
+        let becomes = rail.becomes.text.clone();
+        let added = match selection {
+            Selection::Handler(h) => self.store.add_example(h, &url),
+            Selection::Rewrite(r) => self.store.add_rewrite_example(r, &url, &becomes),
+        };
+        if added.is_some() {
+            rail.example.set("");
+            rail.becomes.set("");
+            self.refresh(cx);
+        }
+    }
+
+    pub fn remove_example(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match self.selection {
+            Some(Selection::Handler(h)) => self.store.remove_example(h, index),
+            Some(Selection::Rewrite(r)) => self.store.remove_rewrite_example(r, index),
+            None => return,
+        }
+        self.refresh(cx);
+        window.focus(&self.focus, cx);
+    }
 }
 
 /// `.try`: the dot and what the rule makes of the sample.
@@ -945,7 +1253,9 @@ pub fn rail(
         .border_l_1()
         .border_color(theme::border_subtle())
         .bg(theme::bg_panel())
-        .overflow_hidden();
+        // The rail outgrows a short window now that it has Keep and
+        // Examples: scroll rather than clip the foot.
+        .overflow_y_scroll();
     let (Some(selection), Some(rail)) = (app.selection, &app.rail) else {
         return frame;
     };
@@ -963,6 +1273,14 @@ pub fn rail(
                     ))
                     .child(match_section(handler, rail, window, cx))
                     .child(open_in_section(handler, rail, window, cx))
+                    .child(examples_section(
+                        app,
+                        selection,
+                        rail,
+                        &handler.problems,
+                        window,
+                        cx,
+                    ))
                     .child(try_section(rail, &handler.problems, window, cx))
                     .child(rail_end(
                         if draft {
@@ -994,6 +1312,14 @@ pub fn rail(
                             .children(pattern_list(rail, &rewrite.problems, window, cx)),
                     )
                     .child(changes_section(rewrite, rail, window, cx))
+                    .child(examples_section(
+                        app,
+                        selection,
+                        rail,
+                        &rewrite.problems,
+                        window,
+                        cx,
+                    ))
                     .child(try_section(rail, &rewrite.problems, window, cx))
                     .child(rail_end(
                         if draft {

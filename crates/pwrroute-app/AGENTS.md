@@ -31,9 +31,10 @@ their own modules.
   disk on each sync, at most `JOURNAL_ROWS`). Export… goes through
   `settings::privacy_host::export`, the OS save dialog and nothing else.
   Full URLs stay in that entity and the router's buffer; nothing in the app
-  writes one to disk or a log. Two insertion points for the rule-adding
-  flow are no-ops: `activity::row_menu` (the row's "⋯") and
-  `PwrRoute::add_rule` (the expanded row's "Add a rule…").
+  writes one to disk or a log. The row's "⋯" opens `activity::row_menu`
+  and the expanded row's "Add a rule…" calls `PwrRoute::add_rule`, both in
+  `activity_actions.rs`; a `RowKey` names the row, and `Feed::record` reads
+  a journaled row's record back from the journal.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
   (`activity.keep`, `activity.journal`, `activity.journalDays`); an absent
@@ -44,6 +45,18 @@ their own modules.
   router's handle the globals Settings › Privacy edits, saving first and
   applying through `set_retention` / `set_journal`. The file carries
   numbers and a level, never a link.
+- **Examples and tests are the only URLs that reach disk, and only by
+  hand.** `rules_store.rs` writes a rule's `examples`, a rewrite's
+  `url`/`becomes` pairs, `rules[].private` / `rules[].privacy` and the
+  top-level `tests[]` with the rest of `rules.json`; every control that adds
+  one (the editor's Add example, Test a link's Save as test, Activity's Add a
+  rule / Save as example / Save as test in the row's "⋯" menu,
+  `activity_actions.rs`) says so in its copy. `try_it::TestRuns` runs them through an engine built from the
+  config in charge and the edited rules (the same sources as the router's
+  resolver, so indexes match the rows) at window open, after every debounced
+  save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
+  Activity records report a `rules.json` handler as `Matched::Unreported`,
+  so Save as example resolves the link again through `Probe` at click time.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
   `PopUp` window (design 1a/1b); recents there are hosts only

@@ -17,9 +17,10 @@
 //! writes a URL anywhere: Export… hands over to Settings' producer, which
 //! writes only to the file the reader picks.
 //!
-//! Insertion points for the rules-ui unit, both no-ops here:
-//! [`row_menu`], which the row's "⋯" calls with the record, and
-//! [`PwrRoute::add_rule`], the "Add a rule for this link" entry point.
+//! The row's "⋯" opens [`row_menu`] (`activity_actions.rs`): Add a rule
+//! for this link, Save as example or Save as test, over the record the
+//! [`RowKey`] names; the expanded row's "Add a rule…" is
+//! [`PwrRoute::add_rule`], the same sheet.
 
 use std::collections::HashSet;
 use std::time::SystemTime;
@@ -27,9 +28,9 @@ use std::time::SystemTime;
 use chrono::{DateTime, Local, NaiveDate};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, div, px,
+    AnyElement, App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Window, div, px,
 };
 use pwrroute_router::{
     DispatchId, DispatchRecord, Matched, Options, Outcome, Privacy, RetentionInfo, RouterHandle,
@@ -250,6 +251,22 @@ impl Feed {
             eprintln!("pwrroute: cannot read the activity journal: {error}");
             Vec::new()
         })
+    }
+
+    /// The record behind a row: from memory, or read back from the journal
+    /// for a journaled row (the journal is read on each call, like
+    /// [`journal`](Self::journal)).
+    pub fn record(&self, key: RowKey) -> Option<DispatchRecord> {
+        if key.journaled {
+            self.journal(JOURNAL_ROWS)
+                .into_iter()
+                .find(|record| record.id == key.id)
+        } else {
+            self.records
+                .iter()
+                .find(|record| record.id == key.id)
+                .cloned()
+        }
     }
 
     /// Today's counts, by the local calendar; zero once the day has turned.
@@ -960,22 +977,10 @@ fn private_detail(row: &ActivityRow) -> SharedString {
     format!("{went}. Keeps {keeps}.").into()
 }
 
-/// Insertion point for the rules-ui unit: the row's "⋯" menu (design 2b:
-/// Add a rule for this link, Save as test or example, Open again, Re-test,
-/// Copy link, Forget this link). Called with the record's key when the
-/// reader clicks the row's "⋯"; returns the menu to draw under it, or
-/// `None` for no menu. A no-op here: nothing opens.
-pub fn row_menu(_key: RowKey, _cx: &mut Context<'_, PwrRoute>) -> Option<gpui_kit::AnyElement> {
-    None
-}
-
-impl PwrRoute {
-    /// Insertion point for the rules-ui unit: "Add a rule for this link"
-    /// (design 2c), from the expanded row's actions. Opens the sheet with
-    /// the narrowest pattern that still matches, once that unit lands. A
-    /// no-op here.
-    pub fn add_rule(&mut self, _key: RowKey, _window: &mut Window, _cx: &mut Context<'_, Self>) {}
-}
+// The row's "⋯" menu (design 2b) and the expanded row's "Add a rule…"
+// (design 2c) live in `activity_actions.rs`: `row_menu` draws the menu
+// `PwrRoute::actions.menu` holds open, `PwrRoute::add_rule` opens the sheet.
+pub use crate::activity_actions::row_menu;
 
 /// Column widths: the design's grid `54px minmax(0,1fr) 76px 110px 176px
 /// 48px 18px` with a 12px gap.
@@ -1072,6 +1077,7 @@ fn row(
     index: usize,
     row: &ActivityRow,
     expanded: bool,
+    menu: Option<AnyElement>,
     last: bool,
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl IntoElement + use<> {
@@ -1097,15 +1103,18 @@ fn row(
     } else {
         tag(row.rule.clone())
     };
+    // "⋯" opens the row's menu, drawn under the button, and closes it
+    // again: the menu closes itself on a mouse down outside it, which this
+    // button is, so the click looks at what was open before that.
     let more = button("\u{22ef}", ButtonKind::Quiet, true)
         .id(("activity-more", index))
         .debug_selector(move || format!("activity-more-{index}"))
+        .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+            this.actions.menu_was = this.actions.menu.as_ref().map(|menu| menu.key);
+        }))
         .on_click(cx.listener(move |this, _, _, cx| {
-            // The rules-ui unit's menu; nothing yet.
-            let _ = row_menu(key, cx);
             cx.stop_propagation();
-            this.activity.toggle(key);
-            cx.notify();
+            this.toggle_row_menu(key, cx);
         }));
     grid_row([
         div().child(mono(row.time.clone(), 10.5, 500.0, theme::text_subtle())),
@@ -1114,7 +1123,7 @@ fn row(
         div().flex().child(rule),
         opened_cell(&row.opened, row.dry_run),
         div().child(mono(row.took.clone(), 10.5, 500.0, theme::text_subtle())),
-        div().child(more),
+        div().relative().child(more).children(menu),
     ])
     .py(px(8.0))
     .when(expanded, |row| row.bg(theme::bg_row_active()))
@@ -1515,7 +1524,8 @@ pub fn pane(
                 .fold(list, |list, (position, (index, item))| {
                     let last = offset + position + 1 == count && kept_nothing == 0;
                     let expanded = app.activity.expanded == Some(item.key);
-                    list.child(row(index, item, expanded, last, cx))
+                    let menu = row_menu(app, index, item.key, cx);
+                    list.child(row(index, item, expanded, menu, last, cx))
                         .when(expanded, |list| {
                             list.child(expansion(index, item, last, cx))
                         })

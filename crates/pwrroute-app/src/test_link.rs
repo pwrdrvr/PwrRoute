@@ -6,6 +6,11 @@
 //! name (the only ones that change an answer) and, marked as such, the
 //! design's examples, so a "sent from" rule can be tried without the app.
 //!
+//! The result card's Save as test turns the run into a top-level `tests[]`
+//! entry: the link, the app it came from, and the browser, profile and URL
+//! that came out. That is a URL the user chose to write to `rules.json`, by
+//! that click alone, and the card says so.
+//!
 //! The window runs its own [`Engine`]: over the Finicky config when one is
 //! in charge, exactly as the router loads it, and otherwise over the
 //! `rules.json` the Rules screen edits, as the file stands once every
@@ -24,7 +29,9 @@ use gpui_kit::{
     KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
     StrikethroughStyle, Styled as _, StyledText, Window, deferred, div, px,
 };
-use pwrroute_engine::{DefaultHost, Engine, Limits, Link, RulesFile, Sources, Trace};
+use pwrroute_engine::{
+    AppType, DefaultHost, Engine, Expectation, Limits, Link, RouteTest, RulesFile, Sources, Trace,
+};
 
 use crate::app::PwrRoute;
 use crate::fixtures;
@@ -96,6 +103,9 @@ pub struct TestLink {
     pub unfold: bool,
     /// Copy trace was pressed since the last run.
     pub copied: bool,
+    /// The run was saved as this test (its index in `tests`) since the
+    /// last run.
+    pub saved_as: Option<usize>,
     config: Option<PathBuf>,
     rules: RulesFile,
     /// Handed in by the window, or built on the first test. A load error is
@@ -134,6 +144,7 @@ impl TestLink {
             was_picking: false,
             unfold: false,
             copied: false,
+            saved_as: None,
             config,
             rules,
             loaded: engine.as_ref().map(stamps).unwrap_or_default(),
@@ -186,6 +197,7 @@ impl TestLink {
     /// nothing to test, not an error.
     pub fn run(&mut self) {
         self.copied = false;
+        self.saved_as = None;
         self.picking = false;
         // Each test starts folded, as the design draws it.
         self.unfold = false;
@@ -270,10 +282,50 @@ impl TestLink {
         }
     }
 
+    /// The run as a saved test would pin it: the link as tested, the app it
+    /// came from, and the browser, profile and URL that came out. `None`
+    /// before a run, or when the config chose not to open the link.
+    pub fn proposed_test(&self) -> Option<RouteTest> {
+        let run = self.run.as_ref()?;
+        let browser = &run.trace.resolution.browser;
+        if browser.app_type == AppType::None || browser.name.trim().is_empty() {
+            return None;
+        }
+        let opener = run.opener.as_ref().map(|app| {
+            if app.name == app.bundle_id {
+                app.name.to_string()
+            } else {
+                format!("{}:{}", app.name, app.bundle_id)
+            }
+        });
+        Some(RouteTest {
+            url: run.trace.url.clone(),
+            opener,
+            expect: Expectation {
+                browser: browser.name.clone(),
+                profile: (!browser.profile.is_empty()).then(|| browser.profile.clone()),
+                url: Some(browser.url.clone()),
+            },
+        })
+    }
+
     /// The visual rules changed: test against the change. With a config in
-    /// charge the visual rules are not loaded, so nothing changes.
+    /// charge the visual rules are not loaded, so nothing changes. A change
+    /// to the saved tests alone routes nothing differently, so the run on
+    /// screen stays.
     pub fn set_rules(&mut self, rules: RulesFile) {
         if self.config.is_some() || self.rules == rules {
+            return;
+        }
+        let routing_unchanged = RulesFile {
+            tests: Vec::new(),
+            ..self.rules.clone()
+        } == RulesFile {
+            tests: Vec::new(),
+            ..rules.clone()
+        };
+        if routing_unchanged {
+            self.rules = rules;
             return;
         }
         self.rules = rules;
@@ -631,62 +683,147 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
         .when(app.test.picking, |picker| picker.child(deferred(menu)))
 }
 
-/// `.res`: where the link opens, and the two actions.
-fn result_card(view: &TraceView, copied: bool, cx: &mut Context<'_, PwrRoute>) -> Div {
-    card().child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(14.0))
-            .py(px(14.0))
-            .px(px(16.0))
-            .child(
-                div()
-                    .size(px(44.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(10.0))
-                    .border_1()
-                    .border_color(theme::border_strong())
-                    .bg(theme::bg_elevated())
-                    .child(mono(
-                        view.result.badge.clone(),
-                        13.0,
-                        700.0,
-                        theme::text_secondary(),
-                    )),
+/// `.saved`: what Save as test wrote, and where.
+fn saved_banner(
+    test: &RouteTest,
+    index: usize,
+    cx: &mut Context<'_, PwrRoute>,
+) -> impl IntoElement + use<> {
+    let from = match &test.opener {
+        Some(opener) => format!(
+            " from {}",
+            opener
+                .split_once(':')
+                .map_or(opener.as_str(), |(name, _)| name)
+        ),
+        None => String::new(),
+    };
+    let mut expects = test.expect.browser.clone();
+    if let Some(profile) = &test.expect.profile {
+        expects.push_str(&format!(" \u{00b7} {profile}"));
+    }
+    if let Some(url) = &test.expect.url {
+        expects.push_str(&format!(" and {url}"));
+    }
+    div()
+        .id("test-saved")
+        .debug_selector(|| "test-saved".into())
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .py(px(10.0))
+        .px(px(16.0))
+        .border_t_1()
+        .border_color(theme::border_faint())
+        .bg(theme::bg_row_active())
+        .child(
+            paragraph(
+                format!(
+                    "Saved to rules.json \u{203a} tests as test {}. This link{from} expects \
+                     {expects}. Run tests checks it on every save.",
+                    index + 1
+                ),
+                11.5,
+                17.25,
+                theme::text_secondary(),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.0))
-                    .child(
-                        text(
-                            view.result.title.clone(),
-                            15.0,
-                            600.0,
-                            theme::text_primary(),
+            .flex_1()
+            .min_w_0(),
+        )
+        .child(
+            button("Show in Rules", ButtonKind::Quiet, true)
+                .id("test-show-rules")
+                .debug_selector(|| "test-show-rules".into())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.navigate(crate::app::Screen::Rules, window, cx);
+                })),
+        )
+}
+
+/// `.res`: where the link opens, and the actions: Copy trace, Save as test
+/// and Open now.
+fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let copied = app.test.copied;
+    let proposed = app.test.proposed_test();
+    let saved = app.test.saved_as.and_then(|index| {
+        app.store
+            .tests()
+            .get(index)
+            .map(|test| (test.clone(), index))
+    });
+    let save: Option<gpui_kit::AnyElement> = match (&saved, proposed.is_some()) {
+        (Some((_, index)), _) => Some(
+            button(
+                format!("Saved as test {}", index + 1),
+                ButtonKind::Default,
+                false,
+            )
+            .into_any_element(),
+        ),
+        (None, true) => Some(
+            button("Save as test", ButtonKind::Default, false)
+                .id("test-save")
+                .debug_selector(|| "test-save".into())
+                .on_click(cx.listener(|this, _, _, cx| this.save_as_test(cx)))
+                .into_any_element(),
+        ),
+        (None, false) => None,
+    };
+    card()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(14.0))
+                .py(px(14.0))
+                .px(px(16.0))
+                .child(
+                    div()
+                        .size(px(44.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_color(theme::border_strong())
+                        .bg(theme::bg_elevated())
+                        .child(mono(
+                            view.result.badge.clone(),
+                            13.0,
+                            700.0,
+                            theme::text_secondary(),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(
+                            text(
+                                view.result.title.clone(),
+                                15.0,
+                                600.0,
+                                theme::text_primary(),
+                            )
+                            .line_height(px(18.0)),
                         )
-                        .line_height(px(18.0)),
-                    )
-                    .child(url(
-                        &[UrlPart {
-                            text: view.result.url.clone(),
-                            mark: UrlMark::Same,
-                        }],
-                        theme::text_secondary(),
-                    ))
-                    .when_some(view.result.error.clone(), |column, error| {
-                        column.child(paragraph(error, 11.0, 16.5, theme::danger_text()))
-                    }),
-            )
-            .child(
-                div()
+                        .child(url(
+                            &[UrlPart {
+                                text: view.result.url.clone(),
+                                mark: UrlMark::Same,
+                            }],
+                            theme::text_secondary(),
+                        ))
+                        .when_some(view.result.error.clone(), |column, error| {
+                            column.child(paragraph(error, 11.0, 16.5, theme::danger_text()))
+                        }),
+                )
+                .child(
+                    div()
                     .flex()
                     .items_center()
                     .gap(px(8.0))
@@ -706,10 +843,25 @@ fn result_card(view: &TraceView, copied: bool, cx: &mut Context<'_, PwrRoute>) -
                             }
                         })),
                     )
+                    .children(save)
                     // Dispatching from here waits for the browser launcher.
                     .child(button("Open now", ButtonKind::Primary, false)),
-            ),
-    )
+                ),
+        )
+        .children(saved.map(|(test, index)| saved_banner(&test, index, cx)))
+}
+
+impl PwrRoute {
+    /// Save as test: the last run becomes a top-level test in `rules.json`,
+    /// written on the next save.
+    pub fn save_as_test(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(test) = self.test.proposed_test() else {
+            return;
+        };
+        let index = self.store.add_test(test);
+        self.test.saved_as = Some(index);
+        self.refresh(cx);
+    }
 }
 
 pub fn pane(
@@ -781,7 +933,7 @@ pub fn pane(
                     .flex_col()
                     .gap(px(18.0))
                     .child(trace)
-                    .child(result_card(view, app.test.copied, cx))
+                    .child(result_card(app, view, cx))
                     .into_any_element(),
             )
         }
