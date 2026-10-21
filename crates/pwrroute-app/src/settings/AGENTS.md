@@ -9,9 +9,10 @@ About are placeholders until the family's panes are ported.
 - **The window draws a `SettingsModel` and nothing else.** `model.rs` is the
   contract for the MCP server, config discovery and the browser catalog:
   they fill it in their own words, with display-ready strings, and the
-  window never depends on their crates. `fixtures.rs` is contrived data
-  transcribed from the design; keep it that way. Privacy is real:
-  `main.rs` replaces the fixture's `privacy` with `privacy_host::model`.
+  window never depends on their crates (`crate::mcp` fills Local agents).
+  `fixtures.rs` is contrived data transcribed from the design; keep it that
+  way. Privacy is real: `main.rs` replaces the fixture's `privacy` with
+  `privacy_host::model`.
 - **Privacy (`privacy.rs`, `privacy_host.rs`).** The view keeps the two
   number fields (applied on Return, clamped to `COUNT_RANGE` /
   `HOURS_RANGE`) and the open sheet; Full URLs and the journal's Clear now

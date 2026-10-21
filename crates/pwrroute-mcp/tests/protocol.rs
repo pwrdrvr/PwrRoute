@@ -7,6 +7,7 @@ mod support;
 use std::{fs, time::Duration};
 
 use pwrroute_mcp::{Config, McpServer, MemoryAudit, Outcome, Role, fake};
+use rmcp::ServiceExt as _;
 use serde_json::json;
 use support::{Harness, call, eventually, private_endpoint, proxy_command, text};
 
@@ -323,4 +324,43 @@ async fn a_2025_protocol_client_speaks_plain_json_lines() {
     );
     assert_eq!(h.approver.asked()[0].client_version, "2.1.0");
     h.finish().await;
+}
+
+#[tokio::test]
+async fn a_host_thread_serves_until_stopped() {
+    let endpoint = private_endpoint();
+    let state_dir = std::env::temp_dir().join(format!("pwrroute-mcp-host-{}", std::process::id()));
+    let agents = pwrroute_mcp::Agents::open(Some(&state_dir)).unwrap();
+    let (backends, _, _) = fake::backends();
+    let host = tokio::task::spawn_blocking({
+        let endpoint = endpoint.clone();
+        move || {
+            pwrroute_mcp::McpHost::start(
+                Config {
+                    endpoint,
+                    approval_wait: Duration::from_secs(1),
+                },
+                agents,
+                backends,
+                std::sync::Arc::new(fake::FakeApprover::approving(Role::Reader)),
+                std::sync::Arc::new(MemoryAudit::default()),
+            )
+        }
+    })
+    .await
+    .unwrap()
+    .expect("the host starts");
+    assert_eq!(host.endpoint(), &endpoint);
+    let stream = pwrroute_mcp::link::connect(&endpoint).await.unwrap();
+    let client = support::client_config("test-agent")
+        .serve(stream)
+        .await
+        .unwrap();
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 8);
+    client.cancel().await.unwrap();
+    tokio::task::spawn_blocking(move || host.stop())
+        .await
+        .unwrap();
+    assert!(pwrroute_mcp::link::connect(&endpoint).await.is_err());
+    let _ = fs::remove_dir_all(state_dir);
 }

@@ -32,7 +32,7 @@ mod server;
 mod tools;
 
 pub use agents::{AgentInfo, Agents, MAX_AGENTS, MAX_NAME};
-pub use approval::{ApprovalDecision, ApprovalReply, ApprovalRequest, Approver};
+pub use approval::{ApprovalAnswer, ApprovalDecision, ApprovalReply, ApprovalRequest, Approver};
 pub use audit::{AuditRecord, AuditSink, MemoryAudit, NoAudit, Outcome};
 pub use backend::{
     ActivityEntry, ActivityLog, ActivityOutcome, ActivitySource, AgentRef, Backends,
@@ -42,4 +42,4 @@ pub use backend::{
 pub use engine::{EngineResolver, EngineTester, EngineThread, Loader};
 pub use link::Endpoint;
 pub use roles::{Permission, Permissions, Role};
-pub use server::{Config, McpServer};
+pub use server::{Config, McpHost, McpServer};

@@ -68,7 +68,8 @@ pub fn local_agents() -> LocalAgents {
     LocalAgents {
         enabled: true,
         listener: Listener::Listening,
-        endpoint: "http://127.0.0.1:51731/mcp".into(),
+        endpoint: "~/Library/Application Support/PwrRoute/mcp.sock".into(),
+        command: "pwrroute mcp".into(),
         sessions: vec![
             AgentSession {
                 id: SessionId("s1".into()),

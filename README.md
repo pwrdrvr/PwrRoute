@@ -39,13 +39,55 @@ current build.
 - **A trace for every link.** Test a link shows each step that fired. Activity
   keeps the same trace for recent dispatches. Full URLs stay in memory; disk
   logs carry timings, never URL contents.
-- **An MCP server for agents.** A loopback MCP server, authorized with OAuth
-  and per-session roles as in PwrSnap and PwrGit, lets a local agent resolve a
-  URL to its trace, open a link through the router, list browsers, and read or
-  change rules.
+- **An MCP server for agents.** The running app serves MCP on a socket only
+  your user can reach, with an approval window and per-agent roles. A local
+  agent can resolve a URL to its trace, open a link through the router, list
+  browsers, read Activity, find the links no rule routed, propose a narrow
+  rule, test it against the examples saved with your rules, and apply it.
+  See [Local agents](#local-agents).
 
 The design lives in [design/](design/); start with
 [PwrRoute - Name and Brief](design/PwrRoute%20-%20Name%20and%20Brief.dc.html).
+
+## Local agents
+
+The app serves MCP while it runs. `pwrroute mcp` is the command an MCP
+client launches: it pipes the client's stdio to the app's per-user socket
+(`mcp.sock` beside the router's, in the data directory; a named pipe on
+Windows). Register it once:
+
+```bash
+claude mcp add --scope user pwrroute -- pwrroute mcp
+codex mcp add pwrroute -- pwrroute mcp
+```
+
+Settings › Local agents shows the exact command, with the binary's path
+when it is not on the `PATH`. The first time a client name connects, PwrRoute
+opens an approval window and you pick a role: **Reader** (resolve links, list
+browsers, read rules, see Activity as hosts only), **Opener** (plus opening
+links, with full URLs in Activity) or **Editor** (plus writing `rules.json`
+and reading the activity journal). The name is what the client sends, so a
+role is a guardrail against an agent overreaching, not proof of who is
+calling. Change, revoke or forget an agent in the same pane.
+
+The tools:
+
+| Tool | Role | What it does |
+| --- | --- | --- |
+| `pwrroute_resolve` | Reader | Where a link would go and why. Opens nothing. |
+| `pwrroute_browsers` | Reader | Installed browsers, their profiles, and whether PwrRoute is the OS default. |
+| `pwrroute_rules_list` | Reader | `rules.json` as written, with the revision a write must name. |
+| `pwrroute_rules_test` | Reader | Runs the examples and tests saved in `rules.json`, as they are or against a proposal: a whole file, or one extra handler with the links it must route. Writes nothing. |
+| `pwrroute_suggest_rule` | Reader | Wildcard patterns that would route a link, narrowest first, whether a precise rule needs a JS config, and which recent links each pattern would also catch. |
+| `pwrroute_activity` | Reader | Recent dispatches, newest first. `filter` finds the `unrouted`, `failed`, `rewritten` or `private` ones; `retention` says where they are kept and for how long; each entry's `privacy` says how much of the link it keeps. Readers see hosts only. `source: "journal"` reads the on-disk journal, when it is on, for Editors. |
+| `pwrroute_open` | Opener | Dispatches a link through the router, as a click would, recorded in Activity against the agent. |
+| `pwrroute_rules_apply` | Editor | Writes a JSON Merge Patch to `rules.json`, naming the revision read. It runs the saved examples and tests first and refuses, with the failures, a change that makes one fail, unless `force` is true. |
+
+Links that pass through these tools stay in memory. The only things written
+to disk are the approvals (`mcp-agents.json`: names, roles, timestamps) and,
+through `pwrroute_rules_apply`, `rules.json` itself, including the examples
+and tests an agent writes into it. The router's activity journal is a
+separate, opt-in setting.
 
 ## Development
 

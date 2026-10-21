@@ -26,6 +26,7 @@ mod first_run;
 mod fixtures;
 #[cfg(target_os = "macos")]
 mod macos;
+mod mcp;
 mod onboarding;
 mod router;
 mod rules_model;
@@ -47,6 +48,7 @@ mod widgets;
 use std::{
     io::Write,
     path::{Path, PathBuf},
+    process::ExitCode,
     rc::Rc,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
@@ -104,7 +106,12 @@ struct ResidentRouter(#[allow(dead_code, reason = "held for its Drop")] Resident
 
 impl Global for ResidentRouter {}
 
-fn main() {
+fn main() -> ExitCode {
+    // `pwrroute mcp`: the stdio end an MCP client launches. A byte pipe to
+    // the running app's socket, with no window, no router and no lock.
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
+        return pwrroute_mcp::proxy::main();
+    }
     // First: Velopack's install, update and uninstall hooks run here and
     // exit, before this process could take the router lock.
     updater::run_startup_hooks();
@@ -114,7 +121,7 @@ fn main() {
     }
     let args = router::Args::from_env();
     let resident = match router::start(&args) {
-        router::Start::Exit => return,
+        router::Start::Exit => return ExitCode::SUCCESS,
         router::Start::Resident(resident) => *resident,
     };
     let handle = resident.handle();
@@ -160,17 +167,27 @@ fn main() {
         tray::install(cx);
         default_browser::install(default_browser::Os::real(), cx);
         tray::follow_default_browser(cx);
+        // Local agents: MCP on <data dir>/mcp.sock, beside the router's.
+        mcp::install(
+            mcp::Wiring {
+                handle: resident.handle(),
+                config: args.config.clone(),
+            },
+            cx,
+        );
         cx.set_global(settings::SettingsHost {
             model: Rc::new(|window, cx| {
                 default_browser::watch(window, cx);
                 let mut model = settings::fixtures::model();
                 model.browsers.default = default_browser::card(cx);
                 model.privacy = settings::privacy_host::model(cx);
+                model.local_agents = mcp::local_agents(cx);
                 model
             }),
             on_request: Rc::new(|request, _, cx| {
                 if !default_browser::handle_settings_request(request, cx)
                     && !settings::privacy_host::handle_request(request, cx)
+                    && !mcp::handle_settings_request(request, cx)
                 {
                     eprintln!("pwrroute: settings: {request:?} is not wired up yet");
                 }
@@ -216,6 +233,7 @@ fn main() {
             show(cx);
         }
     });
+    ExitCode::SUCCESS
 }
 
 /// `pwrroute rules test [--rules PATH] [--config PATH]`: runs the examples
@@ -363,7 +381,7 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
 }
 
 /// Brings the main window forward, opening it if it is closed.
-fn show_main_window(cx: &mut App) {
+pub(crate) fn show_main_window(cx: &mut App) {
     // Not `first()`: the Settings window, the tray dropdown or the first-run
     // window may be the only one open.
     let main = cx

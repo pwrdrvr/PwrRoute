@@ -13,9 +13,11 @@ their own modules.
   is fixed: Activity's re-test picks by position). The tray follows the
   feed and the OS; its pause target is `rules.json`'s fallback, read once
   at launch. Settings still draws `settings::fixtures::model()` for every
-  pane but the default-browser card and Privacy (see `settings/AGENTS.md`).
-  Never a real URL, Activity entry or trace, in code or in a screenshot:
-  `fixtures::activity()` and `FirstRunModel::fixture` exist for tests.
+  pane but the default-browser card, Privacy (see `settings/AGENTS.md`)
+  and Local agents (`mcp.rs` produces that one from the real store and
+  audit). Never a real URL, Activity entry or trace, in code or in a
+  screenshot: `fixtures::activity()` and `FirstRunModel::fixture` exist
+  for tests.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.
@@ -57,6 +59,14 @@ their own modules.
   save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
   Activity records report a `rules.json` handler as `Matched::Unreported`,
   so Save as example resolves the link again through `Probe` at click time.
+- **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
+  `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
+  handle and an engine that follows the same files; `pwrroute mcp` in
+  `main.rs` is the stdio proxy and runs before anything else. Prompts
+  become `ApprovalWindow`s on the GPUI thread; closing one denies. The
+  pane's "Recent agent actions" is the audit: tool, agent, time, outcome,
+  never an argument. The switch is `mcp.json`; approvals are
+  `mcp-agents.json`.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
   `PopUp` window (design 1a/1b); recents there are hosts only

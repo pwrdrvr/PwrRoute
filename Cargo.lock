@@ -5989,6 +5989,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "pwrroute-browsers",
  "pwrroute-engine",
+ "pwrroute-mcp",
  "pwrroute-os",
  "pwrroute-router",
  "resvg 0.46.0",
@@ -6035,8 +6036,10 @@ name = "pwrroute-mcp"
 version = "0.0.1-alpha.0"
 dependencies = [
  "anyhow",
+ "pwrroute-browsers",
  "pwrroute-engine",
  "pwrroute-os",
+ "pwrroute-router",
  "rmcp",
  "schemars",
  "serde",

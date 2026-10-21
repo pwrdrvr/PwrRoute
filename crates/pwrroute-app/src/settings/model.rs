@@ -29,8 +29,12 @@ pub struct LocalAgents {
     /// The "Enable local-agent access" switch.
     pub enabled: bool,
     pub listener: Listener,
-    /// The loopback URL agents connect to, e.g. `http://127.0.0.1:51731/mcp`.
+    /// Where the app listens: the per-user socket (a named pipe on
+    /// Windows) that `pwrroute mcp` connects to.
     pub endpoint: SharedString,
+    /// The command an MCP client launches: `pwrroute mcp`, with the
+    /// binary's full path when it is not on the PATH.
+    pub command: SharedString,
     pub sessions: Vec<AgentSession>,
     pub roles: Vec<AgentRole>,
     /// The role card drawn selected.
@@ -52,23 +56,18 @@ impl LocalAgents {
         self.roles.iter().find(|role| &role.id == id)
     }
 
-    /// The commands the "Connect an agent" card offers, for this endpoint.
+    /// The commands the "Connect an agent" card offers: each registers
+    /// `pwrroute mcp` as a stdio MCP server.
     pub fn connect_commands(&self) -> [ConnectCommand; 2] {
-        let url = &self.endpoint;
+        let command = &self.command;
         [
             ConnectCommand {
                 client: "Claude Code".into(),
-                lines: vec![
-                    format!("claude mcp add --scope user --transport http pwrroute {url}").into(),
-                    "claude mcp login pwrroute".into(),
-                ],
+                lines: vec![format!("claude mcp add --scope user pwrroute -- {command}").into()],
             },
             ConnectCommand {
                 client: "Codex CLI".into(),
-                lines: vec![
-                    format!("codex mcp add pwrroute --url {url} --oauth-client-registration dcr")
-                        .into(),
-                ],
+                lines: vec![format!("codex mcp add pwrroute -- {command}").into()],
             },
         ]
     }
