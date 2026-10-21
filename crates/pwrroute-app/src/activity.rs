@@ -459,6 +459,15 @@ pub enum Opened {
     },
     /// The config chose `browser: null`.
     Nowhere,
+    /// The chosen browser could not be opened and the fallback browser took
+    /// the link: the design's "zoom.us not found ↪ opened in Chrome".
+    Fallback {
+        /// Why, as the router traced it: "Arc could not be opened".
+        why: SharedString,
+        badge: SharedString,
+        name: SharedString,
+        profile: Option<SharedString>,
+    },
     /// Rejected, or the launch failed, with why.
     Failed(SharedString),
 }
@@ -604,6 +613,9 @@ impl ActivityRow {
                 if *private { " private window" } else { "" }
             ),
             Opened::Nowhere => NOT_OPENED.to_owned(),
+            Opened::Fallback {
+                why, name, profile, ..
+            } => format!("{why} {name} {}", profile.as_deref().unwrap_or_default()),
             Opened::Failed(why) => why.to_string(),
         };
         [self.url.as_ref(), self.from.as_ref(), opened.as_str()]
@@ -684,13 +696,35 @@ fn rule_label(steps: &[Step]) -> String {
 }
 
 fn opened(record: &DispatchRecord) -> Opened {
+    // The first launch failure, and the router's reason for falling back
+    // after it. A launch that follows them is the fallback browser's.
+    let mut launch_failed: Option<&str> = None;
+    let mut why: Option<&str> = None;
     for step in &record.steps {
         match step {
             Step::Rejected { reason } => return Opened::Failed(reason.clone().into()),
-            Step::LaunchFailed { message } => return Opened::Failed(message.clone().into()),
+            Step::LaunchFailed { message } => {
+                launch_failed.get_or_insert(message);
+            }
+            Step::Fallback { reason } if launch_failed.is_some() => why = Some(reason),
+            Step::Launched { .. } if launch_failed.is_some() => {
+                return match &record.browser {
+                    Some(browser) => Opened::Fallback {
+                        why: why.or(launch_failed).unwrap_or_default().to_owned().into(),
+                        badge: badge_for(&browser.name),
+                        name: browser.name.clone().into(),
+                        profile: (!browser.profile.is_empty())
+                            .then(|| browser.profile.clone().into()),
+                    },
+                    None => Opened::Failed("not routed".into()),
+                };
+            }
             Step::NotOpened => return Opened::Nowhere,
             _ => {}
         }
+    }
+    if let Some(message) = launch_failed {
+        return Opened::Failed(message.to_owned().into());
     }
     match &record.browser {
         Some(browser) => Opened::Browser {
@@ -1055,6 +1089,10 @@ fn private_detail(row: &ActivityRow) -> SharedString {
             went
         }
         Opened::Nowhere => NOT_OPENED.to_owned(),
+        Opened::Fallback { name, profile, .. } => match profile {
+            Some(profile) => format!("{name} \u{00b7} {profile}"),
+            None => name.to_string(),
+        },
         Opened::Failed(_) => "Failed".to_owned(),
     };
     let keeps = match row.privacy {
@@ -1156,6 +1194,36 @@ fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
             .gap(px(6.0))
             .child(badge(NOT_OPENED_BADGE))
             .child(text(NOT_OPENED, 11.5, 400.0, theme::text_muted())),
+        // `.ar .d`: the failure, then `.sub` with where the link went.
+        Opened::Fallback {
+            why,
+            badge: badge_label,
+            name,
+            profile,
+        } => div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .min_w_0()
+            .child(status(why.clone(), theme::status_error()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(text("\u{21aa}", 10.5, 500.0, theme::text_muted()))
+                    .child(badge(badge_label.clone()))
+                    .child(text(
+                        format!("opened in {name}"),
+                        10.5,
+                        500.0,
+                        theme::text_muted(),
+                    ))
+                    .when_some(profile.clone(), |sub, profile| {
+                        sub.child(mono(profile, 10.5, 500.0, theme::text_muted()))
+                    })
+                    .when(dry_run, |sub| sub.child(tag("dry run"))),
+            ),
         Opened::Failed(why) => div().child(status(why.clone(), theme::status_error())),
     }
 }
@@ -2108,6 +2176,85 @@ mod tests {
         assert!(matches!(row.opened, Opened::Nowhere));
         assert_eq!(row.rule, "handler");
         assert!(!row.failed());
+    }
+
+    #[test]
+    fn a_browser_that_could_not_open_shows_the_fallback_that_did() {
+        let url = "https://zoom.us/j/8142201137";
+        let mut record = record(
+            6,
+            url,
+            Some("Calendar"),
+            vec![
+                Step::Received { url: url.into() },
+                Step::Matched {
+                    by: Matched::Handler { index: 5 },
+                },
+                Step::Browser {
+                    browser: browser("zoom.us", "", url),
+                },
+                Step::LaunchFailed {
+                    message: "browser \"zoom.us\" is not installed".into(),
+                },
+                Step::Fallback {
+                    reason: "zoom.us could not be opened".into(),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        // The router names the browser that opened the link.
+        record.browser = Some(browser("Google Chrome", "Personal", url));
+        assert_eq!(record.outcome, Outcome::Opened);
+        let row = ActivityRow::from_record(&record);
+        assert!(!row.failed(), "{:?}", row.opened);
+        let Opened::Fallback {
+            why,
+            badge,
+            name,
+            profile,
+        } = &row.opened
+        else {
+            panic!("opened in the fallback: {:?}", row.opened);
+        };
+        assert_eq!(why.as_ref(), "zoom.us could not be opened");
+        assert_eq!((badge.as_ref(), name.as_ref()), ("Ch", "Google Chrome"));
+        assert_eq!(profile.as_deref(), Some("Personal"));
+        assert_eq!(row.rule, "handler 6 \u{00b7} fallback");
+        assert!(
+            row.default,
+            "the fallback took it: a link to add a rule for"
+        );
+        assert_eq!(
+            texts(&row),
+            [
+                "handler 6",
+                "launch failed \u{00b7} browser \"zoom.us\" is not installed",
+                "fallback \u{00b7} zoom.us could not be opened",
+                "Google Chrome \u{00b7} Personal \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
+            ]
+        );
+        assert_eq!(row.steps[1].mark, StepMark::Fail);
+        assert_eq!(row.steps[2].mark, StepMark::Miss(3));
+        assert_eq!(row.steps[3].mark, StepMark::Done);
+        assert!(row.passes(Filter::Unrouted, "chrome"));
+        assert!(row.passes(Filter::All, "could not be opened"));
+        assert!(!row.passes(Filter::Failed, ""));
+        assert_eq!(
+            private_detail(&row).as_ref(),
+            "Google Chrome \u{00b7} Personal. Keeps the full URL."
+        );
+
+        // Both failed: the row is a failure with the first reason.
+        record.steps.pop();
+        record.steps.push(Step::LaunchFailed {
+            message: "browser \"Google Chrome\" is not installed".into(),
+        });
+        record.outcome = Outcome::Failed;
+        let row = ActivityRow::from_record(&record);
+        assert!(row.failed());
+        assert!(
+            matches!(&row.opened, Opened::Failed(why) if why == "browser \"zoom.us\" is not installed")
+        );
     }
 
     #[test]

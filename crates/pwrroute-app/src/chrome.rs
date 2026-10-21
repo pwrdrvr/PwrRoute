@@ -38,10 +38,17 @@ fn strip_chips(app: &PwrRoute) -> Vec<Div> {
         )
     };
     let config = |path: &str| {
-        status_chip(
-            format!("{path} \u{00b7} in charge"),
-            theme::status_warning(),
-        )
+        if config_fell_back() {
+            status_chip(
+                format!("{path} \u{00b7} did not load"),
+                theme::status_error(),
+            )
+        } else {
+            status_chip(
+                format!("{path} \u{00b7} in charge"),
+                theme::status_warning(),
+            )
+        }
     };
     match (app.screen, &app.config) {
         (Screen::Rules | Screen::TestLink, Some(in_charge)) => vec![config(&in_charge.path)],
@@ -49,6 +56,13 @@ fn strip_chips(app: &PwrRoute) -> Vec<Div> {
         (Screen::TestLink, None) => vec![rules()],
         (Screen::Activity, _) => vec![status_chip(app.activity.today.label(), theme::status_ok())],
     }
+}
+
+/// The config the window shows never loaded, so nothing is in charge and
+/// every link goes to the fallback browser: the chips must not call it in
+/// charge, or the last good config, since there is none.
+fn config_fell_back() -> bool {
+    crate::router::routing_source().fallback.is_some()
 }
 
 /// `.strip`: the brand, the breadcrumb and the status chips.
@@ -214,18 +228,21 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
         .into_any_element()
     };
     let foot = if app.config.is_some() {
+        let (dot, line) = if config_fell_back() {
+            (
+                theme::status_error(),
+                "config did not load \u{00b7} fallback browser",
+            )
+        } else {
+            (theme::status_warning(), "last good config active")
+        };
         div().child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(theme::dot(theme::status_warning()))
-                .child(text(
-                    "last good config active",
-                    11.0,
-                    500.0,
-                    theme::text_secondary(),
-                )),
+                .child(theme::dot(dot))
+                .child(text(line, 11.0, 500.0, theme::text_secondary())),
         )
     } else {
         div()

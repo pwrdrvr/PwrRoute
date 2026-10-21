@@ -25,8 +25,8 @@ use pwrroute_engine::{
     discovery::{self, Environment},
 };
 use pwrroute_router::{
-    Browser, DispatchRecord, DryRunLauncher, Launcher, Link, Opener, Options, Resolved, Resolver,
-    ResolverFactory, Router, RouterHandle, Source,
+    Browser, DispatchRecord, DryRunLauncher, FALLBACK_BROWSER, Launcher, Link, Opener, Options,
+    Resolved, Resolver, ResolverFactory, Router, RouterHandle, Source,
     instance::{self, Claim, Endpoint, Server},
     ipc::Request,
 };
@@ -303,6 +303,7 @@ fn spawn_router(
         None => ConfigChoice::Discover(discovery::config_candidates(&environment)),
     };
     let rules_path = discovery::rules_path(&environment);
+    let (fallback_browser, fallback_profile) = fallback_from_rules(rules_path.as_deref());
     // The window may open before the engine has loaded: say now which
     // config it will load.
     let source = ROUTING.clone();
@@ -338,6 +339,8 @@ fn spawn_router(
     let options = Options {
         retention: settings.retention(),
         journal: settings.journal(),
+        fallback_browser,
+        fallback_profile,
         on_dispatch: Some(Arc::new(move |record| {
             report_timing(record, report_all);
             if let Some(dispatched) = &dispatched {
@@ -352,6 +355,23 @@ fn spawn_router(
         Router::spawn(options, Some(factory), launcher).expect("start the dispatch thread");
     let _ = handle_tx.send(router.handle());
     (router, settings)
+}
+
+/// The router's fallback browser and profile: where a link goes when
+/// nothing is in charge (a config broken at launch), or the browser a rule
+/// chose cannot be opened. `rules.json`'s `defaultBrowser` and
+/// `defaultProfile`, which first run writes from the user's choice; the
+/// OS's own browser when the file names none, cannot be read, or names
+/// PwrRoute. Read once, when the router starts.
+fn fallback_from_rules(rules_path: Option<&Path>) -> (String, String) {
+    rules_path
+        .and_then(|path| RulesFile::load(path).ok())
+        .filter(|rules| {
+            let name = rules.default_browser.trim();
+            !name.is_empty() && !name.to_ascii_lowercase().contains("pwrroute")
+        })
+        .map(|rules| (rules.default_browser, rules.default_profile))
+        .unwrap_or_else(|| (FALLBACK_BROWSER.to_owned(), String::new()))
 }
 
 /// The config a choice names right now, before anything is loaded.
@@ -578,7 +598,7 @@ mod tests {
     use std::fs;
 
     use pwrroute_browsers::Platform;
-    use pwrroute_router::{AppType, FALLBACK_BROWSER, Outcome, Step};
+    use pwrroute_router::{AppType, Outcome, Step};
 
     use super::*;
 
@@ -892,6 +912,78 @@ mod tests {
                 .is_some_and(|e| e.contains(".finicky.js")),
             "{source:?}"
         );
+    }
+
+    #[test]
+    fn the_fallback_is_rules_json_s_default_browser_or_the_os_s_own() {
+        let home = Home::new();
+        let os_browser = (FALLBACK_BROWSER.to_owned(), String::new());
+        // No file, an empty one, a broken one, and one naming PwrRoute.
+        assert_eq!(fallback_from_rules(None), os_browser);
+        assert_eq!(fallback_from_rules(Some(&home.rules_path())), os_browser);
+        home.write("PwrRoute/rules.json", r#"{ "rules": [] }"#);
+        assert_eq!(fallback_from_rules(Some(&home.rules_path())), os_browser);
+        home.write("PwrRoute/rules.json", "{ not json");
+        assert_eq!(fallback_from_rules(Some(&home.rules_path())), os_browser);
+        home.write(
+            "PwrRoute/rules.json",
+            r#"{ "defaultBrowser": "com.pwrdrvr.pwrroute" }"#,
+        );
+        assert_eq!(fallback_from_rules(Some(&home.rules_path())), os_browser);
+
+        // First run's choice: a bundle id, with a profile when one is set.
+        home.write(
+            "PwrRoute/rules.json",
+            r#"{ "defaultBrowser": "com.google.Chrome", "defaultProfile": "Work" }"#,
+        );
+        assert_eq!(
+            fallback_from_rules(Some(&home.rules_path())),
+            ("com.google.Chrome".to_owned(), "Work".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_config_broken_at_launch_falls_back_to_the_browser_rules_json_names() {
+        let home = Home::new();
+        home.write(
+            "PwrRoute/rules.json",
+            r#"{ "defaultBrowser": "com.google.Chrome", "defaultProfile": "Work" }"#,
+        );
+        home.write(".finicky.js", "export default {\n");
+        let (fallback_browser, fallback_profile) = fallback_from_rules(Some(&home.rules_path()));
+        let source = SharedSource::default();
+        let factory: ResolverFactory = {
+            let (choice, rules, source) = (home.choice(), home.rules_path(), source.clone());
+            Box::new(move || {
+                Ok(Box::new(LiveResolver::new(choice, Some(rules), source)?) as Box<dyn Resolver>)
+            })
+        };
+        let launcher = DryRunLauncher::new();
+        let router = Router::spawn(
+            Options {
+                fallback_browser,
+                fallback_profile,
+                ..Options::default()
+            },
+            Some(factory),
+            launcher.clone(),
+        )
+        .unwrap();
+        let record = router
+            .handle()
+            .dispatch_and_wait(Link::new("https://example.com/x", Source::CommandLine))
+            .unwrap();
+        // Nothing has loaded, so the link falls back: to the user's choice,
+        // typed as a bundle id so the launcher can open it, not to Safari.
+        let reason = source.get().fallback.expect("nothing in charge");
+        assert!(reason.contains(".finicky.js"), "{reason}");
+        assert!(record.steps.contains(&Step::Fallback { reason }));
+        assert_eq!(record.outcome, Outcome::DryRun);
+        let launched = &launcher.launched()[0];
+        assert_eq!(launched.name, "com.google.Chrome");
+        assert_eq!(launched.app_type, AppType::BundleId);
+        assert_eq!(launched.profile, "Work");
+        assert_eq!(record.browser.unwrap().name, "com.google.Chrome");
     }
 
     #[test]
