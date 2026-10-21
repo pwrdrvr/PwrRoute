@@ -980,12 +980,13 @@ mod tests {
     #[test]
     fn a_choice_saved_after_the_router_starts_is_the_next_fallback() {
         // The router starts before first run, as `main` does it: no
-        // rules.json yet, and a config whose browser is not installed.
+        // rules.json yet, and a config whose browser is not installed (Brave:
+        // never the OS's own browser, which the fallback would be).
         let home = Home::new();
         home.write(
             ".finicky.js",
-            "export default {\n  defaultBrowser: \"Firefox\",\n  handlers: [{ match: () => true, \
-             browser: \"Firefox\" }],\n};\n",
+            "export default {\n  defaultBrowser: \"Brave\",\n  handlers: [{ match: () => true, \
+             browser: \"Brave\" }],\n};\n",
         );
         let source = SharedSource::default();
         let factory: ResolverFactory = {
@@ -994,7 +995,7 @@ mod tests {
                 Ok(Box::new(LiveResolver::new(choice, Some(rules), source)?) as Box<dyn Resolver>)
             })
         };
-        let launcher = Missing::new(&["Firefox"]);
+        let launcher = Missing::new(&["Brave"]);
         let router = Router::spawn(
             Options {
                 fallback: fallback_source(Some(home.rules_path())),
@@ -1023,7 +1024,7 @@ mod tests {
         let record = dispatch();
         assert_eq!(record.outcome, Outcome::Opened, "{:?}", record.steps);
         assert!(record.steps.contains(&Step::Fallback {
-            reason: "Firefox could not be opened".into()
+            reason: "Brave could not be opened".into()
         }));
         let opened = record.browser.unwrap();
         assert_eq!(
@@ -1037,7 +1038,7 @@ mod tests {
         let attempts: Vec<String> = launcher.attempts().into_iter().map(|b| b.name).collect();
         assert_eq!(
             attempts,
-            ["Firefox", FALLBACK_BROWSER, "Firefox", "com.google.Chrome"]
+            ["Brave", FALLBACK_BROWSER, "Brave", "com.google.Chrome"]
         );
     }
 
