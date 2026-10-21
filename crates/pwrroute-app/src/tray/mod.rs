@@ -23,7 +23,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui_kit::{App, AppContext as _, Entity, Global, WindowHandle};
-use pwrroute_engine::{AppType, BrowserSpec, DefaultHost, Engine, Limits, RulesFile, discovery};
+use pwrroute_engine::{AppType, BrowserSpec, Engine, Limits, NativeHost, RulesFile, discovery};
 use pwrroute_router::{FALLBACK_BROWSER, PauseTarget, RouterHandle};
 
 use self::dropdown::Dropdown;
@@ -250,9 +250,11 @@ impl ConfigDefault {
 }
 
 /// Evaluates the config at `path` for its `defaultBrowser`, as the Rules
-/// screen does to list its rules.
+/// screen does to list its rules. With the native host, so a config that
+/// asks the OS while it loads names the default it routes with; its
+/// console output goes nowhere.
 fn config_default(path: &Path) -> Option<BrowserLabel> {
-    let engine = Engine::load(path, Rc::new(DefaultHost), Limits::default()).ok()?;
+    let engine = Engine::load(path, Rc::new(NativeHost::new()), Limits::default()).ok()?;
     match engine.describe().ok()??.default_browser {
         BrowserSpec::Browser(fixed) if fixed.app_type != AppType::None => {
             Some(label(&fixed.name, &fixed.profile))
