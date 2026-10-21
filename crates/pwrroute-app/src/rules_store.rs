@@ -654,6 +654,27 @@ impl RulesStore {
         at
     }
 
+    /// Replaces every rule and the file's other fields with `file`, as one
+    /// edit: the importer's write and Undo import. Written on the next save.
+    pub fn replace_all(&mut self, file: RulesFile) {
+        self.base = RulesFile {
+            rewrites: Vec::new(),
+            rules: Vec::new(),
+            ..file.clone()
+        };
+        self.rewrites.clear();
+        self.rules.clear();
+        for value in file.rewrites {
+            let id = self.next();
+            self.rewrites.push(Entry { id, value });
+        }
+        for value in file.rules {
+            let id = self.next();
+            self.rules.push(Entry { id, value });
+        }
+        self.touch();
+    }
+
     // --- the file --------------------------------------------------------
 
     /// Compares the file to what was last read or written here. A changed

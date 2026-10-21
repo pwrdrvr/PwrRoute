@@ -90,6 +90,8 @@ tokens! {
     accent_bright = hex(0xffb35c);
     accent_on = hex(0x160a00);
     accent_soft = hex_alpha(0xff8a1f, 0.12);
+    /// `.rr.new`, a line that is the rule in a source frame.
+    accent_tint = hex_alpha(0xff8a1f, 0.08);
     accent_border = hex_alpha(0xff8a1f, 0.42);
     danger_soft = hex_alpha(0xb94232, 0.24);
     danger_text = hex(0xffb0a1);

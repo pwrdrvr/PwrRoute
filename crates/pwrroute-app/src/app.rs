@@ -16,8 +16,11 @@ use crate::activity::Activity;
 use crate::activity_actions::{self, Actions, BrowserChoice};
 use crate::config_view::{self, ConfigInCharge};
 use crate::editor::{Field, Rail};
+use crate::importer::{ImportModel, SourceChoice};
+use crate::importer_view::{FoundConfig, ImportDone};
 use crate::rules_model::{self, Handler, Rewrite};
 use crate::rules_store::{Disk, RulesStore};
+use crate::settings_store::SourceSettings;
 use crate::test_link::TestLink;
 use crate::text_field::{Edit, TextField};
 use crate::try_it::{Probe, TestRuns};
@@ -89,6 +92,12 @@ pub struct PwrRoute {
     /// scan (`browser_scan`), less the apps hidden in Settings › Browsers;
     /// a test or screenshot sets its own.
     pub browsers: Vec<BrowserChoice>,
+    /// The last Finicky import, for its banner and Undo import, until the
+    /// window closes.
+    pub last_import: Option<ImportDone>,
+    /// A config discovery found while visual rules are in charge, whose
+    /// notice was not dismissed (Finicky Importer 1a).
+    pub found_config: Option<FoundConfig>,
     /// A debounced save is on its way.
     save_scheduled: bool,
 }
@@ -148,8 +157,13 @@ impl PwrRoute {
             activity: Activity::new(cx),
             actions: Actions::default(),
             browsers: Vec::new(),
+            last_import: None,
+            found_config: None,
             save_scheduled: false,
         };
+        if this.config.is_none() {
+            this.found_config = crate::importer_view::found_config(this.home.as_deref(), cx);
+        }
         this.rebuild_rail(cx);
         // The file's examples and tests, as it was opened.
         if this.tests.counts() != (0, 0) {
@@ -227,6 +241,10 @@ impl PwrRoute {
     /// checked first: an edit over a file another writer changed is kept
     /// on screen and not saved, and the status says so.
     pub(crate) fn refresh(&mut self, cx: &mut Context<'_, Self>) {
+        // Undo import is good until the next edit.
+        if let Some(done) = &mut self.last_import {
+            done.undoable = false;
+        }
         let disk = self.store.check_disk();
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
@@ -262,7 +280,14 @@ impl PwrRoute {
         let disk = self.store.check_disk();
         match disk {
             Disk::Unchanged => {}
-            Disk::Reloaded => self.reloaded(cx),
+            Disk::Reloaded => {
+                // Another writer changed the file: the import is no longer
+                // what Undo would take back.
+                if let Some(done) = &mut self.last_import {
+                    done.undoable = false;
+                }
+                self.reloaded(cx);
+            }
             Disk::Changed => cx.notify(),
         }
         disk
@@ -281,6 +306,83 @@ impl PwrRoute {
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
         self.run_tests(cx);
+    }
+
+    // --- the Finicky importer ----------------------------------------------
+
+    /// Writes an import into `rules.json` in one save, over the file as it
+    /// stands, and keeps the file and `source` as they were for Undo
+    /// import. Returns whether the file was written; the store's status
+    /// says why not.
+    pub fn apply_import(
+        &mut self,
+        model: &ImportModel,
+        previous_source: Option<SourceSettings>,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        self.sync_with_disk(cx);
+        let previous = self.store.written();
+        let plan = model.plan(&previous);
+        self.store.replace_all(plan.file.clone());
+        let saved = self.store.save();
+        self.reloaded(cx);
+        if saved.is_err() {
+            // Nothing reached the file: the edit stays on screen with the
+            // reason, as any other refused save does.
+            return false;
+        }
+        self.found_config = None;
+        self.last_import = Some(ImportDone {
+            shown: model.shown.clone(),
+            file: model.path.clone(),
+            count: plan.count(),
+            suggestions: plan.suggestions,
+            stays: model.left_behind().len(),
+            kept_config: model.final_source() == SourceChoice::KeepConfig,
+            at: std::time::SystemTime::now(),
+            previous,
+            previous_source,
+            undoable: true,
+        });
+        cx.notify();
+        true
+    }
+
+    /// Undo import: `rules.json` as it was before, in one save. Returns the
+    /// source to restore, when the import changed it.
+    pub fn undo_import(&mut self, cx: &mut Context<'_, Self>) -> Option<SourceSettings> {
+        let done = self.last_import.take()?;
+        self.sync_with_disk(cx);
+        self.store.replace_all(done.previous);
+        let _ = self.store.save();
+        self.reloaded(cx);
+        done.previous_source
+    }
+
+    /// The config in charge changed (the importer's Choose source, or its
+    /// undo): the Rules screen, Test a link and the test runs follow it.
+    pub fn set_config(&mut self, config: Option<PathBuf>, cx: &mut Context<'_, Self>) {
+        let engine = config
+            .as_deref()
+            .map(|path| Engine::load(path, Rc::new(NativeHost::new()), Limits::default()));
+        self.config = config
+            .as_deref()
+            .zip(engine.as_ref())
+            .map(|(path, engine)| ConfigInCharge::new(path, self.home.as_deref(), engine.as_ref()));
+        self.visual_rules_expanded = false;
+        self.probe = Probe::new(config.clone(), self.store.edited());
+        self.tests = TestRuns::new(config.clone(), self.store.edited());
+        self.test = TestLink::new(
+            config,
+            engine.and_then(Result::ok),
+            self.store.written(),
+            cx,
+        );
+        if self.tests.counts() != (0, 0) {
+            self.tests.run();
+        }
+        self.try_it();
+        cx.notify();
     }
 
     /// The store holds the file again: the rows, the selection (cleared

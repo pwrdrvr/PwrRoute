@@ -92,6 +92,18 @@ their own modules.
   save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
   Activity records report a `rules.json` handler as `Matched::Unreported`,
   so Save as example resolves the link again through `Probe` at click time.
+- **The Finicky importer (`importer.rs`, `importer_view.rs`).** The model
+  is plain data over `Engine::review_import` (verdicts, source lines,
+  probed suggestions; recent links come from the feed's `Full` records, in
+  memory); the window draws Review, Place and Choose source from it. Import
+  goes through `PwrRoute::apply_import`: one `RulesStore` save over the
+  file as it stands, the previous file kept for Undo import until the next
+  edit. Choose source saves `settings.json`'s `source` (`visualOnly`, a
+  `config` path, `dismissed` notices) and calls `router::choose_source`,
+  which the dispatch thread applies on its next refresh; `spawn_router`
+  reads the same setting. Entry points: the 1b banner, the 1a notice,
+  Settings' Review import…, File › Import Finicky Config… and first run's
+  Import N rules. The config file is only ever read.
 - **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
   `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
   handle and an engine that follows the same files; `pwrroute mcp` in

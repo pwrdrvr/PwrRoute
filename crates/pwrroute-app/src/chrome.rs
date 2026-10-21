@@ -70,6 +70,21 @@ fn config_fell_back() -> bool {
 /// The traffic lights are AppKit's own, placed by the window's
 /// `TitlebarOptions` (see `main`), so the strip only leaves room for them.
 pub fn title_strip(app: &PwrRoute) -> Div {
+    strip()
+        .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
+        .child(text(
+            app.screen.label(),
+            13.0,
+            500.0,
+            theme::text_secondary(),
+        ))
+        .child(div().flex_1())
+        .children(strip_chips(app))
+}
+
+/// `.strip` with its `.brand`: the mark and the wordmark, after the
+/// traffic lights. The crumb and whatever follows go in as children.
+pub fn strip() -> Div {
     let wordmark = StyledText::new("PwrRoute").with_highlights([(
         3..8,
         HighlightStyle {
@@ -106,15 +121,6 @@ pub fn title_strip(app: &PwrRoute) -> Div {
                         .child(wordmark),
                 ),
         )
-        .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
-        .child(text(
-            app.screen.label(),
-            13.0,
-            500.0,
-            theme::text_secondary(),
-        ))
-        .child(div().flex_1())
-        .children(strip_chips(app))
 }
 
 /// `.rail-item`; `.on` when `selected`.

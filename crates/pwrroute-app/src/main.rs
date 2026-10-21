@@ -25,6 +25,8 @@ mod dock;
 mod editor;
 mod first_run;
 mod fixtures;
+mod importer;
+mod importer_view;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
@@ -179,6 +181,9 @@ fn main() -> ExitCode {
         );
         // The one browser scan, read when a picker or Settings first asks.
         browser_scan::install(pwrroute_browsers::Env::system(), cx);
+        cx.set_global(importer_view::ImporterHost {
+            show_rules: Rc::new(|cx| tray::show_screen(app::Screen::Rules, cx)),
+        });
         cx.set_global(settings::SettingsHost {
             model: Rc::new(settings_live::model),
             on_request: Rc::new(|request, _, cx| settings_live::handle_request(request, cx)),
