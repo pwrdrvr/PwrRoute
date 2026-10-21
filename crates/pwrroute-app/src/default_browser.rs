@@ -4,10 +4,13 @@
 //!
 //! The OS calls come in as [`Os`], so tests supply fakes and nothing here
 //! ever reaches `pwrroute_os` from a test. [`request`] runs only from a
-//! click: the Settings button and the first-run step. The OS has the last
-//! word (a consent prompt on macOS, Settings › Default apps on Windows), so
-//! the answer is read back rather than assumed: on every window activation
-//! ([`watch`]) and, for a while after a request, on a timer.
+//! click: the Settings button, the first-run step and the tray's row. The
+//! OS has the last word (a consent prompt on macOS, Settings › Default apps
+//! on Windows), so the answer is read back rather than assumed: on every
+//! window activation ([`watch`]), when the tray dropdown opens, for a while
+//! after a request on a fast timer, and always on a slow one
+//! ([`RECHECK_EVERY`]), so a router running with no window still notices
+//! when another browser takes the default.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,6 +30,13 @@ use crate::widgets::status_chip;
 /// step 3 close behind the click, and a minute bounds a refused prompt.
 pub const POLL_EVERY: Duration = Duration::from_secs(1);
 pub const POLL_FOR: Duration = Duration::from_secs(60);
+
+/// How often the status is re-read for the life of the app, window or no
+/// window. Another browser's "make me the default" prompt is answered
+/// without PwrRoute's windows ever activating, and the tray chip would
+/// otherwise say "default" until one did. A minute is soon enough for a
+/// chip and cheap enough for a LaunchServices or registry read.
+pub const RECHECK_EVERY: Duration = Duration::from_secs(60);
 
 /// Who the OS hands web links to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,8 +233,9 @@ fn snapshot() -> DefaultState {
     SNAPSHOT.with(|snapshot| snapshot.borrow().clone())
 }
 
-/// Reads the OS once and keeps the answer where every surface can see it.
-/// Call once, before any window opens.
+/// Reads the OS once and keeps the answer where every surface can see it,
+/// re-reading it every [`RECHECK_EVERY`] from then on. Call once, before
+/// any window opens.
 pub fn install(os: Os, cx: &mut App) -> Entity<Registrar> {
     let registrar = cx.new(|_| Registrar::new(os));
     SNAPSHOT.with(|snapshot| *snapshot.borrow_mut() = registrar.read(cx).state.clone());
@@ -238,6 +249,14 @@ pub fn install(os: Os, cx: &mut App) -> Entity<Registrar> {
     })
     .detach();
     cx.set_global(Installed(registrar.clone()));
+    // Not settled: a slow tick says nothing about a request still out.
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(RECHECK_EVERY).await;
+            cx.update(|cx| refresh(false, cx));
+        }
+    })
+    .detach();
     registrar
 }
 
@@ -476,6 +495,60 @@ mod tests {
         cx.update(|cx| refresh(false, cx));
         assert_eq!(card(cx).state, DefaultState::PwrRoute);
         assert_eq!(card(cx).note, None);
+        assert!(cx.update(|cx| state(cx).is_default()));
+    }
+
+    /// No window, no request: the slow re-read alone notices another
+    /// browser taking the default, and everything that follows the
+    /// registrar hears of it.
+    #[gpui_kit::test]
+    fn losing_the_default_is_noticed_without_a_window(cx: &mut TestAppContext) {
+        let ours = || status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID));
+        let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
+        let os_status = Rc::new(RefCell::new(Some(ours())));
+        let requests = Rc::new(Cell::new(0));
+        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), requests.clone()), cx));
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let heard = heard.clone();
+            cx.observe(&registrar, move |registrar, cx| {
+                heard.borrow_mut().push(registrar.read(cx).state.clone());
+            })
+            .detach();
+        });
+        assert!(cx.update(|cx| state(cx).is_default()));
+        assert_eq!(cx.windows().len(), 0);
+
+        // Chrome takes the default between two ticks. Nothing is heard
+        // until the next re-read, and then exactly once.
+        cx.executor().advance_clock(RECHECK_EVERY);
+        cx.run_until_parked();
+        assert!(heard.borrow().is_empty());
+        *os_status.borrow_mut() = Some(chrome());
+        cx.executor().advance_clock(RECHECK_EVERY / 2);
+        cx.run_until_parked();
+        assert!(heard.borrow().is_empty(), "half a tick is too soon");
+        cx.executor().advance_clock(RECHECK_EVERY / 2);
+        cx.run_until_parked();
+        assert_eq!(
+            *heard.borrow(),
+            [DefaultState::Other("Google Chrome".into())]
+        );
+        assert_eq!(
+            cx.update(|cx| state(cx)),
+            DefaultState::Other("Google Chrome".into())
+        );
+        assert_eq!(snapshot(), DefaultState::Other("Google Chrome".into()));
+        // Nothing asked the OS for anything: PwrRoute never re-registers
+        // itself.
+        assert_eq!(requests.get(), 0);
+        assert!(registrar.read_with(cx, |r, _| !r.waiting() && !r.kept));
+
+        // Taken back by hand elsewhere: heard the same way.
+        *os_status.borrow_mut() = Some(ours());
+        cx.executor().advance_clock(RECHECK_EVERY);
+        cx.run_until_parked();
+        assert_eq!(heard.borrow().len(), 2);
         assert!(cx.update(|cx| state(cx).is_default()));
     }
 

@@ -367,6 +367,13 @@ impl TrayModel {
         !self.is_paused()
     }
 
+    /// "Make default browser…" sits under the commands while another app
+    /// has the default: links are not reaching PwrRoute, and this is the
+    /// surface a windowless router shows. Pausing does not hide it.
+    pub fn shows_make_default_row(&self) -> bool {
+        !self.is_default_browser
+    }
+
     /// The line under "Pause routing".
     pub fn pause_detail(&self) -> String {
         let target = self.pause_target.display();
@@ -514,6 +521,29 @@ mod tests {
         model.set_paused(false);
         model.is_default_browser = false;
         assert_eq!(model.chip(), HeaderChip::NotDefault);
+    }
+
+    #[test]
+    fn losing_the_default_flips_the_chip_and_offers_the_row() {
+        // The registrar's re-read says Chrome took the default: the tray
+        // follows it with no window involved.
+        let mut model = TrayModel::fixture(now());
+        assert_eq!(model.chip(), HeaderChip::Default);
+        assert!(!model.shows_make_default_row());
+
+        model.is_default_browser = false;
+        assert_eq!(model.chip(), HeaderChip::NotDefault);
+        assert!(model.shows_make_default_row());
+        // Paused takes the chip, and the row stays: links still do not
+        // reach PwrRoute.
+        model.set_paused(true);
+        assert_eq!(model.chip(), HeaderChip::Paused);
+        assert!(model.shows_make_default_row());
+
+        model.set_paused(false);
+        model.is_default_browser = true;
+        assert_eq!(model.chip(), HeaderChip::Default);
+        assert!(!model.shows_make_default_row());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use gpui_kit::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext, px};
 
-use super::dropdown::{CARD_ID, Dropdown, PAUSE_ID, card_height, window_height};
+use super::dropdown::{CARD_ID, Dropdown, MAKE_DEFAULT_ID, PAUSE_ID, card_height, window_height};
 use super::model::TrayModel;
 
 fn open(model: TrayModel, cx: &mut TestAppContext) -> (Entity<TrayModel>, &mut VisualTestContext) {
@@ -61,6 +61,31 @@ fn an_empty_dropdown_is_as_tall_as_computed(cx: &mut TestAppContext) {
     empty.recents.clear();
     empty.is_default_browser = false;
     let (model, cx) = open(empty, cx);
+    assert_card_fits(&model, cx);
+}
+
+/// The registrar's re-read says another browser took the default while the
+/// dropdown is open: the chip and the Make default row follow the model.
+#[gpui_kit::test]
+fn losing_the_default_shows_the_make_default_row(cx: &mut TestAppContext) {
+    let (model, cx) = open(TrayModel::fixture(SystemTime::now()), cx);
+    assert!(cx.debug_bounds(MAKE_DEFAULT_ID).is_none());
+    assert_card_fits(&model, cx);
+
+    model.update(cx, |model, cx| {
+        model.is_default_browser = false;
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds(MAKE_DEFAULT_ID).is_some(), "the row");
+    assert_card_fits(&model, cx);
+
+    model.update(cx, |model, cx| {
+        model.is_default_browser = true;
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds(MAKE_DEFAULT_ID).is_none());
     assert_card_fits(&model, cx);
 }
 
