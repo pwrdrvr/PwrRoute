@@ -6,8 +6,12 @@
      PwrRoute as a default browser; the router receives them as kAEGetURL
      Apple Events. Becoming the default is still an explicit action in the
      app, answered by the OS consent prompt.
-     CFBundleIconFile names Contents/Resources/PwrRoute.icns, which the bundle
-     task copies from packaging/macos (made by scripts/release/make-icns.sh). -->
+     The icon is two files from one source, as Xcode writes them: `cargo xtask
+     bundle` compiles packaging/icon/PwrRoute.icon with actool into
+     Contents/Resources/Assets.car, which CFBundleIconName names and macOS 26
+     draws, and Icon.icns, which CFBundleIconFile names for older macOS. Without
+     Xcode 26 the bundle task drops CFBundleIconName and copies the legacy
+     packaging/macos/PwrRoute.icns in as Icon.icns instead. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
@@ -19,7 +23,9 @@
 	<key>CFBundleExecutable</key>
 	<string>pwrroute</string>
 	<key>CFBundleIconFile</key>
-	<string>PwrRoute</string>
+	<string>Icon</string>
+	<key>CFBundleIconName</key>
+	<string>Icon</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

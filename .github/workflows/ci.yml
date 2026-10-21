@@ -268,10 +268,10 @@ jobs:
       - name: Test
         run: cargo xtask test
 
-      # Ad hoc signed: catches a broken Info.plist or signature before a
-      # release does.
+      # Ad hoc signed: catches a broken Info.plist, signature or icon asset
+      # catalog before a release does.
       - name: Bundle
-        run: cargo xtask bundle
+        run: cargo xtask bundle --require-icon-catalog
 
   windows:
     # No license-notice check here: it is CPU-bound (cargo-about matches every

@@ -4,12 +4,19 @@
 //! `--app-only` stops at the ad hoc signed app. release.yml hands that app to
 //! `vpk pack`, which adds Velopack's updater, signs and notarizes it.
 //!
+//! The icon is compiled from the Icon Composer package with Xcode 26's actool,
+//! or, without one, copied from the legacy .icns with a warning;
+//! `--require-icon-catalog` (CI, release and preview builds) makes that an
+//! error instead.
+//!
 //! Notarizing reads an App Store Connect API key from the environment:
 //! `APPLE_API_KEY_PATH` (the .p8 file), `APPLE_API_KEY_ID` and
 //! `APPLE_API_ISSUER`.
 
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -26,6 +33,7 @@ struct Options {
     identity: Option<String>,
     notarize: bool,
     app_only: bool,
+    require_icon_catalog: bool,
 }
 
 fn parse(args: &[String]) -> Result<Options> {
@@ -42,6 +50,7 @@ fn parse(args: &[String]) -> Result<Options> {
             }
             "--notarize" => options.notarize = true,
             "--app-only" => options.app_only = true,
+            "--require-icon-catalog" => options.require_icon_catalog = true,
             other => bail!("bundle: unknown argument `{other}`"),
         }
     }
@@ -92,17 +101,44 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
     fs::create_dir_all(contents.join("MacOS"))?;
     fs::create_dir_all(contents.join("Resources"))?;
     fs::copy(&binary, contents.join("MacOS/pwrroute"))?;
+    let resources = contents.join("Resources");
     for file in ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"] {
-        fs::copy(root.join(file), contents.join("Resources").join(file))?;
+        fs::copy(root.join(file), resources.join(file))?;
     }
-    fs::copy(root.join(ICNS), contents.join("Resources/PwrRoute.icns"))?;
-    let plist = read(&root.join("packaging/macos/Info.plist.in"))?
+    let mut plist = read(&root.join("packaging/macos/Info.plist.in"))?
         .replace("@SHORT_VERSION@", short_version(&version));
+    let minimum = plist_string(&plist, "LSMinimumSystemVersion")
+        .context("Info.plist has no LSMinimumSystemVersion")?
+        .to_owned();
+    match icon_catalog(
+        &root.join(ICON_PACKAGE),
+        &out.join("icon-catalog"),
+        &minimum,
+    ) {
+        Ok(compiled) => {
+            for file in [ASSET_CATALOG, &format!("{APP_ICON}.icns")] {
+                fs::copy(compiled.join(file), resources.join(file))?;
+            }
+        }
+        Err(err) if !options.require_icon_catalog => {
+            eprintln!(
+                "warning: bundling the legacy {LEGACY_ICNS} without an asset catalog: {err:#}\n\
+                 warning: macOS 26 redraws a bare .icns itself; release builds pass \
+                 --require-icon-catalog and need Xcode 26 or newer"
+            );
+            fs::copy(
+                root.join(LEGACY_ICNS),
+                resources.join(format!("{APP_ICON}.icns")),
+            )?;
+            plist = without_key(&plist, "CFBundleIconName");
+        }
+        Err(err) => return Err(err.context("--require-icon-catalog: no asset catalog")),
+    }
     fs::write(contents.join("Info.plist"), plist)?;
     run(Command::new("plutil")
         .arg("-lint")
         .arg(contents.join("Info.plist")))?;
-    check_icon(&contents)?;
+    check_icon(&contents, options.require_icon_catalog)?;
 
     sign(&app, options.identity.as_deref())?;
     if options.app_only {
@@ -150,34 +186,197 @@ fn short_version(version: &str) -> &str {
     version.split(['-', '+']).next().unwrap_or(version)
 }
 
-/// The icon set `scripts/release/make-icns.sh` renders from
+/// The Icon Composer package `scripts/release/make-icns.sh` writes from
 /// packaging/icon/PwrRoute.svg; committed, because CI does not rasterize.
-const ICNS: &str = "packaging/macos/PwrRoute.icns";
+const ICON_PACKAGE: &str = "packaging/icon/PwrRoute.icon";
 
-/// The bundle shows an icon only when Info.plist's CFBundleIconFile names
-/// an .icns that is in Contents/Resources; a slip in either leaves the
-/// generic app icon in the Dock and the default-browser chooser.
-fn check_icon(contents: &Path) -> Result<()> {
+/// The icon set the same script renders: the bundle's icon when there is no
+/// actool 26 to compile the package. release.yml also passes it to `vpk
+/// pack --icon`, which reads it only when vpk builds the .app itself.
+const LEGACY_ICNS: &str = "packaging/macos/PwrRoute.icns";
+
+/// The name Info.plist's CFBundleIconName and CFBundleIconFile carry, and the
+/// basename the package is compiled under: actool resolves `--app-icon` by
+/// the package's file name, so compiling `PwrRoute.icon` with `--app-icon
+/// Icon` writes Assets.car and silently no Icon.icns.
+const APP_ICON: &str = "Icon";
+const ASSET_CATALOG: &str = "Assets.car";
+
+/// actool learned to compile `.icon` packages in Xcode 26.
+const MIN_ACTOOL_MAJOR: u32 = 26;
+
+/// Compiles `package` the way Xcode and electron-builder do, into
+/// `work/out`: Assets.car (what macOS 26 draws) and the Icon.icns actool
+/// derives from the same source (what older macOS draws). Returns `work/out`
+/// once both are there and actool's partial Info.plist names them as
+/// Info.plist.in does.
+fn icon_catalog(package: &Path, work: &Path, minimum_system: &str) -> Result<PathBuf> {
+    let version = actool_version()?;
+    ensure!(
+        actool_major(&version).is_some_and(|major| major >= MIN_ACTOOL_MAJOR),
+        "actool {version} cannot compile an Icon Composer package; it needs Xcode \
+         {MIN_ACTOOL_MAJOR} or newer"
+    );
+    if work.exists() {
+        fs::remove_dir_all(work)?;
+    }
+    let out = work.join("out");
+    fs::create_dir_all(&out)?;
+    copy_dir(package, &work.join(format!("{APP_ICON}.icon")))?;
+    run(Command::new("xcrun")
+        .arg("actool")
+        .args(actool_args(work, minimum_system)))?;
+    for file in [ASSET_CATALOG, &format!("{APP_ICON}.icns")] {
+        ensure!(
+            out.join(file).is_file(),
+            "actool wrote no {file}; was the package compiled as {APP_ICON}.icon?"
+        );
+    }
+    let partial = read(&out.join("partial-info.plist"))?;
+    for key in ["CFBundleIconName", "CFBundleIconFile"] {
+        ensure!(
+            plist_string(&partial, key) == Some(APP_ICON),
+            "actool's partial Info.plist does not set {key} to {APP_ICON}:\n{partial}"
+        );
+    }
+    Ok(out)
+}
+
+/// actool's command line for `work/Icon.icon`, as electron-builder's
+/// macosIconComposer.js builds it, minus its `--accent-color` (PwrRoute
+/// has none) and with the app's own minimum macOS.
+fn actool_args(work: &Path, minimum_system: &str) -> Vec<OsString> {
+    let out = work.join("out");
+    let mut args: Vec<OsString> = vec![work.join(format!("{APP_ICON}.icon")).into()];
+    args.push("--compile".into());
+    args.push(out.clone().into());
+    for arg in [
+        "--output-format",
+        "human-readable-text",
+        "--notices",
+        "--warnings",
+        "--output-partial-info-plist",
+    ] {
+        args.push(arg.into());
+    }
+    args.push(out.join("partial-info.plist").into());
+    for arg in [
+        "--app-icon",
+        APP_ICON,
+        "--include-all-app-icons",
+        "--enable-on-demand-resources",
+        "NO",
+        "--development-region",
+        "en",
+        "--target-device",
+        "mac",
+        "--minimum-deployment-target",
+        minimum_system,
+        "--platform",
+        "macosx",
+    ] {
+        args.push(arg.into());
+    }
+    args
+}
+
+/// `actool --version` prints a plist; the version is its
+/// `short-bundle-version`, e.g. `26.5`.
+fn actool_version() -> Result<String> {
+    let output = Command::new("xcrun")
+        .args(["actool", "--version"])
+        .output()
+        .context("no xcrun: install Xcode 26 or newer for the app icon's asset catalog")?;
+    ensure!(
+        output.status.success(),
+        "`xcrun actool --version` failed ({}): install Xcode 26 or newer and select it \
+         with xcode-select\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let plist = String::from_utf8_lossy(&output.stdout);
+    plist_string(&plist, "short-bundle-version")
+        .map(str::to_owned)
+        .with_context(|| format!("no short-bundle-version in `actool --version`:\n{plist}"))
+}
+
+fn actool_major(version: &str) -> Option<u32> {
+    version.split('.').next()?.trim().parse().ok()
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from).with_context(|| from.display().to_string())? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// The bundle shows an icon only when Info.plist names files that are in
+/// Contents/Resources; a slip leaves the generic app icon in the Dock and
+/// the default-browser chooser. CFBundleIconFile must name an .icns there;
+/// CFBundleIconName, which `require_catalog` insists on, an Assets.car.
+fn check_icon(contents: &Path, require_catalog: bool) -> Result<()> {
     let plist = read(&contents.join("Info.plist"))?;
-    let name = icon_file(&plist).context("Info.plist has no CFBundleIconFile")?;
-    let icns = contents
-        .join("Resources")
-        .join(format!("{}.icns", name.trim_end_matches(".icns")));
+    let resources = contents.join("Resources");
+    let name =
+        plist_string(&plist, "CFBundleIconFile").context("Info.plist has no CFBundleIconFile")?;
+    let icns = resources.join(format!("{}.icns", name.trim_end_matches(".icns")));
     let header = fs::read(&icns).with_context(|| icns.display().to_string())?;
     ensure!(
         header.starts_with(b"icns"),
         "{} is not an icns file",
         icns.display()
     );
+    match plist_string(&plist, "CFBundleIconName") {
+        Some(_) => {
+            let car = resources.join(ASSET_CATALOG);
+            let header = fs::read(&car).with_context(|| car.display().to_string())?;
+            ensure!(
+                header.starts_with(b"BOMStore"),
+                "{} is not an asset catalog",
+                car.display()
+            );
+        }
+        None => ensure!(
+            !require_catalog,
+            "Info.plist has no CFBundleIconName, so macOS 26 would redraw the .icns"
+        ),
+    }
     Ok(())
 }
 
-/// The `<string>` after `<key>CFBundleIconFile</key>`.
-fn icon_file(plist: &str) -> Option<&str> {
-    let (_, after_key) = plist.split_once("<key>CFBundleIconFile</key>")?;
-    let (_, after_tag) = after_key.split_once("<string>")?;
+/// The `<string>` after `<key>KEY</key>`.
+fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
+    let (_, after_key) = plist.split_once(&format!("<key>{key}</key>"))?;
+    let (between, after_tag) = after_key.split_once("<string>")?;
+    if !between.trim().is_empty() {
+        return None;
+    }
     let (value, _) = after_tag.split_once("</string>")?;
     Some(value.trim()).filter(|v| !v.is_empty())
+}
+
+/// The plist without `<key>KEY</key>` and the `<string>` after it, each line
+/// removed whole.
+fn without_key(plist: &str, key: &str) -> String {
+    let key_line = format!("<key>{key}</key>");
+    let mut kept = Vec::new();
+    let mut lines = plist.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.trim() == key_line {
+            lines.next_if(|value| value.trim_start().starts_with("<string>"));
+        } else {
+            kept.push(line);
+        }
+    }
+    kept.join("\n") + if plist.ends_with('\n') { "\n" } else { "" }
 }
 
 fn sign(app: &Path, identity: Option<&str>) -> Result<()> {
@@ -276,22 +475,139 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_icon_file_from_a_plist() {
-        let plist = "<dict>\n\t<key>CFBundleIconFile</key>\n\t<string>PwrRoute</string>\n</dict>";
-        assert_eq!(icon_file(plist), Some("PwrRoute"));
-        assert_eq!(icon_file("<dict></dict>"), None);
+    fn the_icon_catalog_is_opt_in_strict() {
+        assert!(!parse(&[]).unwrap().require_icon_catalog);
+        let strict = parse(&args(&[
+            "--universal",
+            "--app-only",
+            "--require-icon-catalog",
+        ]))
+        .unwrap();
+        assert!(strict.require_icon_catalog && strict.app_only && strict.universal);
+    }
+
+    #[test]
+    fn reads_strings_from_a_plist() {
+        let plist = "<dict>\n\t<key>CFBundleIconFile</key>\n\t<string>Icon</string>\n</dict>";
+        assert_eq!(plist_string(plist, "CFBundleIconFile"), Some("Icon"));
+        assert_eq!(plist_string(plist, "CFBundleIconName"), None);
+        assert_eq!(plist_string("<dict></dict>", "CFBundleIconFile"), None);
         assert_eq!(
-            icon_file("<key>CFBundleIconFile</key><string></string>"),
+            plist_string(
+                "<key>CFBundleIconFile</key><string></string>",
+                "CFBundleIconFile"
+            ),
             None
+        );
+        assert_eq!(
+            plist_string("<key>A</key><true/><key>B</key><string>b</string>", "A"),
+            None,
+            "a key's value is the element right after it"
         );
     }
 
     #[test]
-    fn the_plist_template_names_the_committed_icon_set() {
-        let plist = read(&root().join("packaging/macos/Info.plist.in")).unwrap();
-        assert_eq!(icon_file(&plist), Some("PwrRoute"));
-        let icns = fs::read(root().join(ICNS)).unwrap();
-        assert!(icns.starts_with(b"icns"), "{ICNS} is not an icns file");
+    fn the_fallback_drops_only_the_icon_name() {
+        let template = read(&root().join("packaging/macos/Info.plist.in")).unwrap();
+        assert_eq!(plist_string(&template, "CFBundleIconName"), Some(APP_ICON));
+        let fallback = without_key(&template, "CFBundleIconName");
+        assert_eq!(plist_string(&fallback, "CFBundleIconName"), None);
+        assert!(
+            !fallback.contains("<key>CFBundleIconName</key>"),
+            "{fallback}"
+        );
+        assert_eq!(plist_string(&fallback, "CFBundleIconFile"), Some(APP_ICON));
+        assert_eq!(
+            plist_string(&fallback, "CFBundleIdentifier"),
+            Some("com.pwrdrvr.pwrroute")
+        );
+        assert_eq!(
+            template.lines().count() - 2,
+            fallback.lines().count(),
+            "the key and its string, nothing else"
+        );
+        assert!(fallback.ends_with("</plist>\n"));
+        assert_eq!(without_key(&fallback, "CFBundleIconName"), fallback);
+    }
+
+    #[test]
+    fn actool_compiles_the_package_as_icon() {
+        let work = Path::new("work").join("icon-catalog");
+        let out = work.join("out");
+        let args = actool_args(&work, "11.0");
+        assert_eq!(
+            Path::new(&args[0]),
+            work.join("Icon.icon"),
+            "the input comes first, named for --app-icon"
+        );
+        let value = |flag: &str| {
+            let at = args
+                .iter()
+                .position(|a| a == flag)
+                .unwrap_or_else(|| panic!("no {flag}"));
+            PathBuf::from(&args[at + 1])
+        };
+        assert_eq!(value("--compile"), out);
+        assert_eq!(
+            value("--output-partial-info-plist"),
+            out.join("partial-info.plist")
+        );
+        assert_eq!(value("--app-icon"), Path::new(APP_ICON));
+        assert_eq!(value("--platform"), Path::new("macosx"));
+        assert_eq!(value("--target-device"), Path::new("mac"));
+        assert_eq!(value("--minimum-deployment-target"), Path::new("11.0"));
+        assert!(args.iter().any(|a| a == "--include-all-app-icons"));
+    }
+
+    #[test]
+    fn reads_the_actool_major_version() {
+        let output = "<plist version=\"1.0\">\n<dict>\n\t<key>com.apple.actool.version</key>\n\t<dict>\n\t\t<key>bundle-version</key>\n\t\t<string>24765</string>\n\t\t<key>short-bundle-version</key>\n\t\t<string>26.5</string>\n\t</dict>\n</dict>\n</plist>";
+        let version = plist_string(output, "short-bundle-version").unwrap();
+        assert_eq!(actool_major(version), Some(26));
+        assert_eq!(actool_major("16.4"), Some(16));
+        assert_eq!(actool_major("26"), Some(26));
+        assert_eq!(actool_major(""), None);
+    }
+
+    /// The committed artwork: the package make-icns.sh writes (its fill from
+    /// the SVG's ground, a 1024px glyph), the fallback .icns and the .ico.
+    #[test]
+    fn the_committed_icons_are_whole() {
+        let package = root().join(ICON_PACKAGE);
+        let json = read(&package.join("icon.json")).unwrap();
+        assert!(json.contains("\"image-name\" : \"glyph.png\""), "{json}");
+        let svg = read(&root().join("packaging/icon/PwrRoute.svg")).unwrap();
+        for stop in ["#1e1a14", "#0a0908"] {
+            assert!(svg.contains(&format!("stop-color=\"{stop}\"")), "{stop}");
+            let channel =
+                |i: usize| f64::from(u8::from_str_radix(&stop[i..i + 2], 16).unwrap()) / 255.0;
+            let srgb = format!(
+                "srgb:{:.5},{:.5},{:.5},1.00000",
+                channel(1),
+                channel(3),
+                channel(5)
+            );
+            assert!(
+                json.contains(&srgb),
+                "icon.json lacks {srgb}: rerun make-icns.sh"
+            );
+        }
+        let glyph = fs::read(package.join("Assets/glyph.png")).unwrap();
+        assert!(
+            glyph.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "glyph.png is not a PNG"
+        );
+        let (width, height) = (&glyph[16..20], &glyph[20..24]);
+        assert_eq!(
+            (width, height),
+            (&[0, 0, 4, 0][..], &[0, 0, 4, 0][..]),
+            "1024x1024"
+        );
+        let icns = fs::read(root().join(LEGACY_ICNS)).unwrap();
+        assert!(
+            icns.starts_with(b"icns"),
+            "{LEGACY_ICNS} is not an icns file"
+        );
         let ico = fs::read(root().join("packaging/windows/PwrRoute.ico")).unwrap();
         assert!(
             ico.starts_with(&[0, 0, 1, 0]),
@@ -350,23 +666,62 @@ mod tests {
         assert!(String::from_utf8_lossy(&usage.stderr).contains("usage: macos-dmg.sh"));
     }
 
-    /// What `bundle` runs after writing Contents: a bundle laid out like
-    /// ours passes, one missing the .icns or the plist key does not.
+    /// What `bundle` runs after writing Contents: the .icns the plist
+    /// names, and an Assets.car when it names a catalog or the release
+    /// wants one.
     #[test]
-    fn the_bundle_check_wants_the_icns_the_plist_names() {
+    fn the_bundle_check_wants_what_the_plist_names() {
         let dir = env::temp_dir().join(format!("pwrroute-icon-check-{}", std::process::id()));
         let contents = dir.join("Contents");
-        fs::create_dir_all(contents.join("Resources")).unwrap();
-        fs::write(
-            contents.join("Info.plist"),
-            "<key>CFBundleIconFile</key><string>PwrRoute</string>",
-        )
-        .unwrap();
-        assert!(check_icon(&contents).is_err(), "no .icns yet");
-        fs::copy(root().join(ICNS), contents.join("Resources/PwrRoute.icns")).unwrap();
-        check_icon(&contents).unwrap();
-        fs::write(contents.join("Info.plist"), "<dict></dict>").unwrap();
-        assert!(check_icon(&contents).is_err(), "the key is gone");
+        let resources = contents.join("Resources");
+        fs::create_dir_all(&resources).unwrap();
+        let plist = contents.join("Info.plist");
+        let both = "<key>CFBundleIconFile</key>\n<string>Icon</string>\n\
+                    <key>CFBundleIconName</key>\n<string>Icon</string>\n";
+        fs::write(&plist, both).unwrap();
+        assert!(check_icon(&contents, false).is_err(), "no .icns yet");
+        fs::copy(root().join(LEGACY_ICNS), resources.join("Icon.icns")).unwrap();
+        assert!(check_icon(&contents, false).is_err(), "no Assets.car yet");
+        fs::write(resources.join(ASSET_CATALOG), "not a catalog").unwrap();
+        assert!(check_icon(&contents, false).is_err(), "not a BOMStore");
+        fs::write(resources.join(ASSET_CATALOG), "BOMStore\0\0\0\x01").unwrap();
+        check_icon(&contents, true).unwrap();
+
+        let fallback = without_key(both, "CFBundleIconName");
+        fs::write(&plist, fallback).unwrap();
+        check_icon(&contents, false).unwrap();
+        assert!(
+            check_icon(&contents, true).is_err(),
+            "the release wants the catalog"
+        );
+        fs::write(&plist, "<dict></dict>").unwrap();
+        assert!(check_icon(&contents, false).is_err(), "the keys are gone");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The committed package through the real actool, when there is one
+    /// that can compile it: Assets.car, the derived Icon.icns, and the
+    /// partial plist naming both. Skipped, saying why, elsewhere (Linux CI,
+    /// a Mac without Xcode 26).
+    #[test]
+    fn the_committed_package_compiles() {
+        match actool_version() {
+            Ok(version) if actool_major(&version).is_some_and(|m| m >= MIN_ACTOOL_MAJOR) => {}
+            Ok(version) => {
+                println!("skipped: actool {version} is older than {MIN_ACTOOL_MAJOR}");
+                return;
+            }
+            Err(err) => {
+                println!("skipped: no actool ({err:#})");
+                return;
+            }
+        }
+        let work = env::temp_dir().join(format!("pwrroute-icon-catalog-{}", std::process::id()));
+        let out = icon_catalog(&root().join(ICON_PACKAGE), &work, "11.0").unwrap();
+        let car = fs::read(out.join(ASSET_CATALOG)).unwrap();
+        assert!(car.starts_with(b"BOMStore"));
+        let icns = fs::read(out.join("Icon.icns")).unwrap();
+        assert!(icns.starts_with(b"icns"));
+        fs::remove_dir_all(work).unwrap();
     }
 }
