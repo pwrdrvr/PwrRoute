@@ -31,6 +31,7 @@ mod rules_model;
 mod rules_store;
 mod rules_view;
 mod settings;
+mod settings_store;
 mod test_link;
 #[cfg(test)]
 mod tests;
@@ -107,7 +108,7 @@ fn main() {
     let args = router::Args::from_env();
     let resident = match router::start(&args) {
         router::Start::Exit => return,
-        router::Start::Resident(resident) => resident,
+        router::Start::Resident(resident) => *resident,
     };
     let handle = resident.handle();
     // `--first-run` forces the window; otherwise it opens once, on the first
@@ -148,6 +149,7 @@ fn main() {
         dock::install(cx);
         // Before the tray, which follows the feed from the start.
         activity::install(resident.handle(), resident.dispatched.clone(), cx);
+        settings_store::install(resident.settings.clone(), Some(resident.handle()), cx);
         tray::install(cx);
         default_browser::install(default_browser::Os::real(), cx);
         tray::follow_default_browser(cx);
@@ -156,10 +158,13 @@ fn main() {
                 default_browser::watch(window, cx);
                 let mut model = settings::fixtures::model();
                 model.browsers.default = default_browser::card(cx);
+                model.privacy = settings::privacy_host::model(cx);
                 model
             }),
             on_request: Rc::new(|request, _, cx| {
-                if !default_browser::handle_settings_request(request, cx) {
+                if !default_browser::handle_settings_request(request, cx)
+                    && !settings::privacy_host::handle_request(request, cx)
+                {
                     eprintln!("pwrroute: settings: {request:?} is not wired up yet");
                 }
             }),

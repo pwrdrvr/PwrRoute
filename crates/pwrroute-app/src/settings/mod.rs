@@ -12,6 +12,8 @@ mod controls;
 pub mod fixtures;
 mod local_agents;
 pub mod model;
+pub mod privacy;
+pub mod privacy_host;
 mod style;
 #[cfg(test)]
 mod tests;
@@ -84,6 +86,7 @@ pub enum Pane {
     General,
     Browsers,
     Configuration,
+    Privacy,
     LocalAgents,
     Updates,
     Diagnostics,
@@ -91,10 +94,11 @@ pub enum Pane {
 }
 
 impl Pane {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::General,
         Self::Browsers,
         Self::Configuration,
+        Self::Privacy,
         Self::LocalAgents,
         Self::Updates,
         Self::Diagnostics,
@@ -106,6 +110,7 @@ impl Pane {
             Self::General => "General",
             Self::Browsers => "Browsers",
             Self::Configuration => "Configuration",
+            Self::Privacy => "Privacy",
             Self::LocalAgents => "Local agents",
             Self::Updates => "Updates",
             Self::Diagnostics => "Diagnostics",
@@ -119,6 +124,7 @@ impl Pane {
             Self::General => "settings-nav-general",
             Self::Browsers => "settings-nav-browsers",
             Self::Configuration => "settings-nav-configuration",
+            Self::Privacy => "settings-nav-privacy",
             Self::LocalAgents => "settings-nav-local-agents",
             Self::Updates => "settings-nav-updates",
             Self::Diagnostics => "settings-nav-diagnostics",
@@ -132,6 +138,7 @@ impl Pane {
             Self::General => "settings-pane-general",
             Self::Browsers => "settings-pane-browsers",
             Self::Configuration => "settings-pane-configuration",
+            Self::Privacy => "settings-pane-privacy",
             Self::LocalAgents => "settings-pane-local-agents",
             Self::Updates => "settings-pane-updates",
             Self::Diagnostics => "settings-pane-diagnostics",
@@ -268,6 +275,7 @@ pub struct SettingsWindow {
     /// The command whose Copy button reads "Copied".
     copied: Option<usize>,
     pub(crate) agents: local_agents::State,
+    pub(crate) privacy: privacy::State,
     scroll: ScrollHandle,
     on_request: RequestHandler,
 }
@@ -279,6 +287,7 @@ impl SettingsWindow {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let agents = local_agents::State::new(cx);
+        let privacy = privacy::State::new(&model.privacy, cx);
         Self {
             focus: cx.focus_handle(),
             // General is not drawn yet; Browsers is the first pane that is.
@@ -287,6 +296,7 @@ impl SettingsWindow {
             collapsed: HashSet::new(),
             copied: None,
             agents,
+            privacy,
             scroll: ScrollHandle::new(),
             on_request,
         }
@@ -298,6 +308,7 @@ impl SettingsWindow {
             self.pane = pane;
             self.copied = None;
             self.agents.close_menu();
+            self.privacy.close_sheet();
             self.scroll.set_offset(point(px(0.0), px(0.0)));
             cx.notify();
         }
@@ -417,6 +428,7 @@ impl SettingsWindow {
         match self.pane {
             Pane::Browsers => browsers::pane(self, cx),
             Pane::Configuration => configuration::pane(self, cx),
+            Pane::Privacy => privacy::pane(self, window, cx),
             Pane::LocalAgents => local_agents::pane(self, window, cx),
             pane => placeholder(pane),
         }
