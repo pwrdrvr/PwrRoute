@@ -176,6 +176,71 @@ fn visual_rewrites_follow_the_configs_own() {
 }
 
 #[test]
+fn a_rules_json_browser_keeps_its_bundle_id_or_path_with_a_profile() {
+    // The API's object form defaults `appType` to `appName`; the plan sets
+    // it as Finicky's `autodetectAppStringType` would for the string form,
+    // so a bundle id stays `open -b` and a path stays a path.
+    let with_profile = |patterns: &[&str], browser: &str, profile: &str| {
+        let mut r = rule(patterns, browser);
+        r.profile = profile.into();
+        r
+    };
+    let rules = RulesFile {
+        default_browser: "org.mozilla.firefox".into(),
+        default_profile: "Personal".into(),
+        rules: vec![
+            with_profile(&["work.example/*"], "com.google.Chrome", "Work"),
+            with_profile(
+                &["beta.example/*"],
+                "/Applications/Google Chrome Beta.app",
+                "Beta",
+            ),
+            with_profile(&["home.example/*"], "~/Applications/Firefox.app", "Home"),
+            with_profile(&["name.example/*"], "Google Chrome", "Named"),
+            rule(&["plain.example/*"], "com.google.Chrome"),
+        ],
+        ..RulesFile::default()
+    };
+    let e = engine(None, rules);
+    let identity = |url: &str| {
+        let b = e.resolve(url, None).unwrap().browser;
+        (b.name, b.app_type, b.profile)
+    };
+    let expected = |name: &str, app_type: AppType, profile: &str| {
+        (name.to_owned(), app_type, profile.to_owned())
+    };
+    assert_eq!(
+        identity("https://work.example/x"),
+        expected("com.google.Chrome", AppType::BundleId, "Work")
+    );
+    assert_eq!(
+        identity("https://beta.example/x"),
+        expected(
+            "/Applications/Google Chrome Beta.app",
+            AppType::Path,
+            "Beta"
+        )
+    );
+    assert_eq!(
+        identity("https://home.example/x"),
+        expected("~/Applications/Firefox.app", AppType::Path, "Home")
+    );
+    assert_eq!(
+        identity("https://name.example/x"),
+        expected("Google Chrome", AppType::AppName, "Named")
+    );
+    assert_eq!(
+        identity("https://plain.example/x"),
+        expected("com.google.Chrome", AppType::BundleId, "")
+    );
+    // `defaultBrowser` and `defaultProfile` go the same way.
+    assert_eq!(
+        identity("https://unmatched.example/x"),
+        expected("org.mozilla.firefox", AppType::BundleId, "Personal")
+    );
+}
+
+#[test]
 fn a_config_keeps_its_default_browser_and_options() {
     let rules = RulesFile {
         default_browser: "Vivaldi".into(),
