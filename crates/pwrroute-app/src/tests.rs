@@ -9,7 +9,7 @@ use gpui_kit::{
     Bounds, Entity, InputEvent, Modifiers, Pixels, ScrollDelta, ScrollWheelEvent, TestAppContext,
     VisualTestContext, point, px,
 };
-use pwrroute_engine::{Privacy, RouteTest, RulesFile, TestSource};
+use pwrroute_engine::{Privacy, PrivacySetting, RouteTest, RulesFile, TestSource};
 use pwrroute_router::{
     DispatchId, DispatchRecord, DryRunLauncher, Link, Matched, Options, Outcome, Router, Source,
     Step,
@@ -1280,6 +1280,27 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
         Some(true)
     );
     assert!(cx.debug_bounds("rewrite-0-examples").is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_rewrite_with_a_bad_privacy_word_shows_the_problem(cx: &mut TestAppContext) {
+    let dir = scratch("rewrite-privacy-problem");
+    let mut rules = fixtures::rules_file();
+    rules.rewrites[0].privacy = Some(PrivacySetting::Unknown("hidden".into()));
+    let (view, cx) = open_store(cx, None, store_for(&dir, &rules));
+    click(cx, "rewrite-0");
+    draw(cx);
+    let rewrite = view.read_with(cx, |app, _| app.rewrites[0].clone());
+    assert_eq!(rewrite.problems, ["Privacy must be full, host or none."]);
+    assert_eq!(rewrite.rule.badge, RowBadge::NotSaved);
+    // The rewrite editor has no Keep control, so the row is drawn under
+    // Changes rather than nowhere.
+    assert!(cx.debug_bounds("rewrite-keep-problems").is_some());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.rail_label(Selection::Rewrite(0))),
+        "1 problem \u{00b7} not saved"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 

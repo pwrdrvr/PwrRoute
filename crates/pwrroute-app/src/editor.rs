@@ -221,7 +221,9 @@ enum Under {
     Openers,
     Browser,
     Changes,
-    /// The Keep control: a privacy word the engine does not know.
+    /// The Keep control: a privacy word the engine does not know. A
+    /// rewrite has no Keep control, so its editor draws these rows under
+    /// Changes (`changes_section`).
     Keep,
     Examples,
 }
@@ -1074,6 +1076,10 @@ fn changes_section(
         .child(rows)
         .children(help)
         .children(problems_under(&rewrite.problems, Under::Changes))
+        // `rewrites[].privacy` has no control here yet; its problem is
+        // still the rewrite's, so it is drawn where the rewrite's other
+        // fields are, not lost behind the NotSaved badge.
+        .children(keep_problems(&rewrite.problems))
         .child(add_button(
             "change-add",
             "+ change",
@@ -1081,6 +1087,21 @@ fn changes_section(
             |this, window, cx| this.add_action(window, cx),
             cx,
         ))
+}
+
+/// The rewrite's Keep problems, under Changes, as one block the tests can
+/// find; nothing when there are none.
+fn keep_problems(problems: &[String]) -> Option<Stateful<Div>> {
+    let rows = problems_under(problems, Under::Keep);
+    (!rows.is_empty()).then(|| {
+        div()
+            .id("rewrite-keep-problems")
+            .debug_selector(|| "rewrite-keep-problems".into())
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .children(rows)
+    })
 }
 
 /// The kind box of a change and, while open, its menu of the five kinds.
