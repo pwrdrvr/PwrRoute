@@ -165,6 +165,12 @@ it packs anyway, unsigned (ad hoc on macOS), and says so in a warning.
   `macos-dmg.sh` signs, notarizes and staples the DMG. The job then checks
   `codesign --verify`, the team identifier, `xcrun stapler validate` and
   `spctl --assess` for both.
+  Upload them from 1Password instead of pasting: with the `op` and `gh` CLIs
+  signed in, `OP_ACCOUNT=<user id from op account list> scripts/release/upload-csc-link-from-1password.sh`
+  reads the "Apple Signing - PwrDrvr" item in the "PwrDrvr LLC" vault (the
+  .p12 and AuthKey .p8 attachments, the password, key id and issuer) and sets
+  the five secrets on this repository's `apple-signing` environment, which
+  must exist first. The script is PwrGit's with the repository name changed.
 - **windows-signing** — environment variables
   `WIN_AZURE_SIGN_PUBLISHER_NAME`, `WIN_AZURE_SIGN_ENDPOINT`,
   `WIN_AZURE_SIGN_ACCOUNT`, `WIN_AZURE_SIGN_PROFILE`; environment secrets
