@@ -88,6 +88,25 @@ impl ApprovalReply {
     pub fn is_pending(&self) -> bool {
         !self.0.is_closed()
     }
+
+    /// A reply and the answer it will carry, for a host's own tests of its
+    /// approval window.
+    #[must_use]
+    pub fn pair() -> (Self, ApprovalAnswer) {
+        let (tx, rx) = oneshot::channel();
+        (Self(tx), ApprovalAnswer(rx))
+    }
+}
+
+/// The other end of [`ApprovalReply::pair`].
+#[derive(Debug)]
+pub struct ApprovalAnswer(oneshot::Receiver<ApprovalDecision>);
+
+impl ApprovalAnswer {
+    /// The decision, once the reply was answered.
+    pub fn get(&mut self) -> Option<ApprovalDecision> {
+        self.0.try_recv().ok()
+    }
 }
 
 /// The current answer for a client name: `None` while the window is up.

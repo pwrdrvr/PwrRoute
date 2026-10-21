@@ -19,6 +19,7 @@ workspace = true
 anyhow = { workspace = true }
 pwrroute-browsers = { workspace = true }
 pwrroute-engine = { workspace = true }
+pwrroute-mcp = { path = "../pwrroute-mcp" }
 pwrroute-os = { workspace = true }
 pwrroute-router = { workspace = true }
 serde = { workspace = true }

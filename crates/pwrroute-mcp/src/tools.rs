@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use pwrroute_engine::Opener;
+use pwrroute_engine::{Opener, Rule, RulesFile, TestFailure, TestReport, suggest_rule};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
@@ -33,21 +33,34 @@ use crate::{
     agents::{Agents, Standing, clean_name},
     approval::{Answer as Decision, ApprovalDecision, Approvals},
     audit::{AuditRecord, AuditSink, Outcome},
-    backend::{AgentRef, Backends, RulesError},
-    roles::{Permission, Role},
+    backend::{
+        ActivityEntry, ActivityOutcome, ActivitySource, AgentRef, Backends, RulesError, host_of,
+    },
+    roles::{Permission, Permissions, Role},
 };
 
 /// The longest URL a tool accepts.
 const MAX_URL_BYTES: usize = 16 * 1024;
 const DEFAULT_ACTIVITY: usize = 20;
 const MAX_ACTIVITY: usize = 200;
+/// Extra URLs one `pwrroute_rules_test` or `pwrroute_suggest_rule` call
+/// takes.
+const MAX_EXTRA_URLS: usize = 50;
 
 const INSTRUCTIONS: &str = "PwrRoute is the OS default browser and routes each link to a browser and profile by rules. \
 Use pwrroute_resolve to see where a link would go and why; it never opens anything. \
 pwrroute_open dispatches a link through the router as a click would, and is recorded in Activity against this agent. \
-Read the rules with pwrroute_rules_list; change them with pwrroute_rules_apply, naming the revision you read. \
+pwrroute_activity lists recent dispatches; its `retention` says where they are kept and for how long, each entry's `privacy` says how much of the link it keeps, and `filter: \"unrouted\"` finds the links no rule chose. \
+Read the rules with pwrroute_rules_list; pwrroute_suggest_rule proposes narrow patterns for a link and what else they would catch; \
+pwrroute_rules_test runs the saved examples and tests against a proposal without writing; \
+pwrroute_rules_apply writes a JSON Merge Patch, naming the revision you read, and refuses a change that fails a saved example or test unless force is true. \
+Links that pass through these tools stay in memory; only the examples and tests you write into rules.json are saved. \
 The first call from a new client waits while the user approves it in PwrRoute's window. \
 Which tools work depends on the role the user chose; a refused call names the permission it needs.";
+
+/// The words `pwrroute_activity` and the audit use. Fixed, never link data.
+const NOTE_REFUSED: &str = "refused: the change fails saved examples or tests";
+const NOTE_FORCED: &str = "forced: written although saved examples or tests fail";
 
 /// Where a link came from, as rules that match on the sending app see it.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -84,17 +97,74 @@ struct RulesApplyInput {
     /// A JSON Merge Patch (RFC 7396) applied to the `rules` object from
     /// `pwrroute_rules_list`. Lists are replaced whole; `null` removes a key.
     patch: Map<String, Value>,
-    /// Validate only; write nothing.
+    /// Validate and test only; write nothing.
     #[serde(default)]
     dry_run: bool,
+    /// Write even though a saved example or test that passes today would
+    /// fail: the user's old routing changes on purpose.
+    #[serde(default)]
+    force: bool,
+}
+
+/// Which dispatches `pwrroute_activity` lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum ActivityFilter {
+    #[default]
+    All,
+    /// No rule chose the browser: the default or the fallback did. These
+    /// are the links a new rule is for.
+    Unrouted,
+    Failed,
+    /// A rewrite changed the URL.
+    Rewritten,
+    /// Opened in a private window.
+    Private,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ActivityInput {
-    /// How many recent dispatches, newest first. Default 20, at most 200.
+    /// How many dispatches, newest first, after the filter. Default 20, at
+    /// most 200.
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    filter: ActivityFilter,
+    /// `memory` (the default) reads the router's buffer, which is gone when
+    /// PwrRoute quits. `journal` reads the on-disk journal, when the user
+    /// turned it on; it needs the activity.journal permission.
+    #[serde(default)]
+    source: Option<ActivitySource>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RulesTestInput {
+    /// A whole proposed rules.json, in the shape `pwrroute_rules_list`
+    /// returns, tested in place of the saved one. Without it (and without
+    /// `rule`) the saved rules are tested as they are.
+    #[serde(default)]
+    rules: Option<Value>,
+    /// One extra handler to try: `{ "match": …, "browser": …, … }` as in
+    /// rules.json. It is added to the saved rules (or to `rules`) at `at`.
+    #[serde(default)]
+    rule: Option<Value>,
+    /// Where `rule` goes in the handlers list, from 0. Default: the end.
+    #[serde(default)]
+    at: Option<usize>,
+    /// Links `rule` must route: they are tested as its examples, and each
+    /// comes back with the patterns that would catch it and whether a
+    /// precise rule needs a JS config. At most 50.
+    #[serde(default)]
+    urls: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SuggestInput {
+    /// The link a rule is wanted for.
+    url: String,
 }
 
 /// One tool's definition and the permission it needs.
@@ -170,11 +240,25 @@ fn specs() -> Vec<Spec> {
             "The rules as the visual model: rewrites, handlers and the default, with function entries from a Finicky config marked opaque. Includes the revision pwrroute_rules_apply needs.",
             read_only(),
         ),
+        spec::<RulesTestInput>(
+            "pwrroute_rules_test",
+            Permission::RulesRead,
+            "Test the rules",
+            "Run the examples and tests saved in rules.json through the config and rules in charge, or against a proposal: a whole rules.json, or one extra handler with the links it must route. Reports what passed and each failure. Nothing is written.",
+            read_only(),
+        ),
+        spec::<SuggestInput>(
+            "pwrroute_suggest_rule",
+            Permission::RulesRead,
+            "Suggest a rule",
+            "Wildcard patterns that would route a link, narrowest first, whether a precise rule needs a JS config and why, and which recent links each pattern would also catch.",
+            read_only(),
+        ),
         spec::<RulesApplyInput>(
             "pwrroute_rules_apply",
             Permission::RulesWrite,
             "Change the rules",
-            "Validate and write a JSON Merge Patch to rules.json, if the rules are still at baseRevision. Refused while a Finicky config is selected. Use dryRun to validate without writing.",
+            "Validate a JSON Merge Patch to rules.json, run the saved examples and tests against it, and write it if the rules are still at baseRevision. Refused, with the failures, when an example or test that passes today would fail, unless force is true. Use dryRun to validate and test without writing.",
             ToolAnnotations::new()
                 .read_only(false)
                 .destructive(true)
@@ -185,7 +269,7 @@ fn specs() -> Vec<Spec> {
             "pwrroute_activity",
             Permission::ActivityHosts,
             "Recent activity",
-            "Recent dispatches with their traces, newest first. Agents without full-URL access see hosts only.",
+            "Recent dispatches with their traces, newest first, with where they are kept (retention) and how much of each link is kept (privacy). Filter for the unrouted, failed, rewritten or private ones. Agents without full-URL access see hosts only; the on-disk journal needs activity.journal.",
             read_only(),
         ),
     ]
@@ -323,16 +407,19 @@ impl Handler {
         }
     }
 
-    async fn run(&self, name: &str, args: Value, agent: &AgentRef, role: Role) -> Answer {
+    /// Runs one tool. The note, when there is one, goes to the audit.
+    async fn run(&self, name: &str, args: Value, agent: &AgentRef, role: Role) -> Reply {
         let Some(spec) = spec_named(name) else {
-            return Answer::Failed(format!("unknown_tool: PwrRoute has no tool named {name}"));
+            return Reply::of(Answer::Failed(format!(
+                "unknown_tool: PwrRoute has no tool named {name}"
+            )));
         };
         let permissions = role.permissions();
         if !permissions.contains(&spec.permission) {
-            return Answer::Denied(format!(
+            return Reply::of(Answer::Denied(format!(
                 "missing_permission: the {role} role does not allow {} (needs {})",
                 spec.name, spec.permission
-            ));
+            )));
         }
         let b = self.tools.backends.clone();
         let result = match spec.name {
@@ -340,7 +427,7 @@ impl Handler {
                 Ok((url, opener)) => {
                     blocking(move || b.resolver.resolve(&url, opener.as_ref()).map(to_json)).await
                 }
-                Err(e) => return e,
+                Err(e) => return Reply::of(e),
             },
             "pwrroute_open" => match parse::<LinkInput>(args).and_then(link) {
                 Ok((url, opener)) => {
@@ -348,72 +435,298 @@ impl Handler {
                     blocking(move || b.router.open(&url, opener.as_ref(), &agent).map(to_json))
                         .await
                 }
-                Err(e) => return e,
+                Err(e) => return Reply::of(e),
             },
             "pwrroute_browsers" => match parse::<NoInput>(args) {
                 Ok(_) => blocking(move || b.browsers.browsers().map(to_json)).await,
-                Err(e) => return e,
+                Err(e) => return Reply::of(e),
             },
             "pwrroute_rules_list" => match parse::<NoInput>(args) {
                 Ok(_) => blocking(move || b.rules.read().map(to_json)).await,
-                Err(e) => return e,
+                Err(e) => return Reply::of(e),
+            },
+            "pwrroute_rules_test" => match parse::<RulesTestInput>(args) {
+                Ok(input) => blocking(move || rules_test(&b, input)).await,
+                Err(e) => return Reply::of(e),
+            },
+            "pwrroute_suggest_rule" => match parse::<SuggestInput>(args) {
+                Ok(input) => {
+                    let full = permissions.contains(&Permission::ActivityUrls);
+                    blocking(move || suggest(&b, &input.url, full)).await
+                }
+                Err(e) => return Reply::of(e),
             },
             "pwrroute_rules_apply" => match parse::<RulesApplyInput>(args) {
                 Ok(input) => return rules_apply(b, input).await,
-                Err(e) => return e,
+                Err(e) => return Reply::of(e),
             },
             "pwrroute_activity" => match parse::<ActivityInput>(args) {
-                Ok(input) => {
-                    let full = permissions.contains(&Permission::ActivityUrls);
-                    let limit = input
-                        .limit
-                        .unwrap_or(DEFAULT_ACTIVITY)
-                        .clamp(1, MAX_ACTIVITY);
-                    blocking(move || {
-                        let mut entries = b.activity.recent(limit)?;
-                        if !full {
-                            for entry in &mut entries {
-                                entry.trace = entry.trace.hosts_only();
-                            }
-                        }
-                        Ok(json!({ "entries": entries, "fullUrls": full }))
-                    })
-                    .await
-                }
-                Err(e) => return e,
+                Ok(input) => match activity(b, input, &permissions).await {
+                    Ok(answer) => return Reply::of(answer),
+                    Err(e) => Err(e),
+                },
+                Err(e) => return Reply::of(e),
             },
             _ => unreachable!("every spec has an arm"),
         };
-        match result {
+        Reply::of(match result {
             Ok(value) => Answer::Ok(value),
             Err(e) => Answer::Failed(format!("failed: {e:#}")),
-        }
+        })
     }
 }
 
-async fn rules_apply(b: Backends, input: RulesApplyInput) -> Answer {
-    let result = tokio::task::spawn_blocking(move || {
-        let current = b.rules.read().map_err(RulesError::Other)?;
+/// A tool's answer and, when there is more to say in the audit than the
+/// outcome, a fixed word about it.
+struct Reply {
+    answer: Answer,
+    note: Option<&'static str>,
+}
+
+impl Reply {
+    fn of(answer: Answer) -> Self {
+        Self { answer, note: None }
+    }
+}
+
+/// The agent's activity: the buffer or the journal, filtered, cut to the
+/// role's level.
+async fn activity(
+    b: Backends,
+    input: ActivityInput,
+    permissions: &Permissions,
+) -> anyhow::Result<Answer> {
+    let full = permissions.contains(&Permission::ActivityUrls);
+    let source = input.source.unwrap_or(ActivitySource::Memory);
+    if source == ActivitySource::Journal && !permissions.contains(&Permission::ActivityJournal) {
+        return Ok(Answer::Denied(format!(
+            "missing_permission: reading the activity journal needs {}",
+            Permission::ActivityJournal
+        )));
+    }
+    let limit = input
+        .limit
+        .unwrap_or(DEFAULT_ACTIVITY)
+        .clamp(1, MAX_ACTIVITY);
+    let filter = input.filter;
+    blocking(move || {
+        let entries = match source {
+            ActivitySource::Memory => b.activity.recent(MAX_ACTIVITY)?,
+            ActivitySource::Journal => b.activity.journal(MAX_ACTIVITY)?,
+        };
+        let scanned = entries.len();
+        let entries: Vec<ActivityEntry> = entries
+            .into_iter()
+            .filter(|entry| keeps(filter, entry))
+            .map(|entry| if full { entry } else { entry.hosts_only() })
+            .take(limit)
+            .collect();
+        Ok(json!({
+            "entries": entries,
+            "fullUrls": full,
+            "retention": b.activity.retention(),
+            "source": source,
+            "filter": filter,
+            "scanned": scanned,
+        }))
+    })
+    .await
+    .map(Answer::Ok)
+}
+
+fn keeps(filter: ActivityFilter, entry: &ActivityEntry) -> bool {
+    match filter {
+        ActivityFilter::All => true,
+        ActivityFilter::Unrouted => entry.unrouted,
+        ActivityFilter::Failed => entry.outcome == ActivityOutcome::Failed,
+        ActivityFilter::Rewritten => entry.rewritten,
+        ActivityFilter::Private => entry.private,
+    }
+}
+
+/// The saved examples and tests, or a proposal's. `rules` and `rule` are
+/// JSON from the agent; they must parse as rules.json would.
+fn rules_test(b: &Backends, input: RulesTestInput) -> anyhow::Result<Value> {
+    if input.urls.len() > MAX_EXTRA_URLS {
+        anyhow::bail!("invalid_input: at most {MAX_EXTRA_URLS} urls");
+    }
+    let proposal = match (input.rules, input.rule) {
+        (None, None) if input.urls.is_empty() => None,
+        (None, None) => anyhow::bail!("invalid_input: urls need a rule to be examples of"),
+        (rules, rule) => {
+            let mut file: RulesFile = match rules {
+                Some(rules) => serde_json::from_value(rules)
+                    .map_err(|e| anyhow::anyhow!("invalid_input: rules: {e}"))?,
+                None => serde_json::from_value(b.rules.read()?.rules)?,
+            };
+            if let Some(rule) = rule {
+                let mut rule: Rule = serde_json::from_value(rule)
+                    .map_err(|e| anyhow::anyhow!("invalid_input: rule: {e}"))?;
+                rule.examples.extend(input.urls.iter().cloned());
+                let at = input.at.unwrap_or(file.rules.len()).min(file.rules.len());
+                file.rules.insert(at, rule);
+            }
+            Some(file)
+        }
+    };
+    let report = b.tester.test(proposal.as_ref())?;
+    let urls: Vec<Value> = input
+        .urls
+        .iter()
+        .map(|url| {
+            let s = suggest_rule(url);
+            json!({
+                "url": url,
+                "candidates": s.candidates,
+                "needsJs": s.needs_js,
+                "why": s.why,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "proposal": proposal.is_some(),
+        "report": report_json(&report),
+        "urls": urls,
+    }))
+}
+
+fn report_json(report: &TestReport) -> Value {
+    json!({
+        "total": report.total,
+        "passed": report.passed,
+        "failed": report.failures.len(),
+        "failures": report.failures,
+    })
+}
+
+/// Patterns for a link, and what else each would catch among the links
+/// kept in full in memory (a `host` or `none` record cannot be matched).
+/// Without full-URL access the colliding links come back as hosts.
+fn suggest(b: &Backends, url: &str, full: bool) -> anyhow::Result<Value> {
+    if url.len() > MAX_URL_BYTES {
+        anyhow::bail!("invalid_input: the URL is too long");
+    }
+    let suggestion = suggest_rule(url);
+    let mut recent: Vec<String> = b
+        .activity
+        .recent(MAX_ACTIVITY)?
+        .into_iter()
+        .filter(|entry| entry.privacy == pwrroute_engine::Privacy::Full)
+        .filter_map(|entry| entry.trace.map(|t| t.url))
+        .filter(|u| u != url)
+        .collect();
+    recent.sort();
+    recent.dedup();
+    let mut collisions = Vec::new();
+    for pattern in &suggestion.candidates {
+        let hits = b.tester.collisions(pattern, &recent)?;
+        let count = hits.len();
+        let urls: Vec<String> = if full {
+            hits
+        } else {
+            let mut hosts: Vec<String> = hits.iter().map(|u| host_of(u)).collect();
+            hosts.sort();
+            hosts.dedup();
+            hosts
+        };
+        collisions.push(json!({ "pattern": pattern, "count": count, "urls": urls }));
+    }
+    Ok(json!({
+        "url": url,
+        "candidates": suggestion.candidates,
+        "needsJs": suggestion.needs_js,
+        "why": suggestion.why,
+        "collisions": collisions,
+        "fullUrls": full,
+    }))
+}
+
+/// Patches, validates, tests and writes. A patch that makes a saved example
+/// or test fail which passes today is refused, with the failures, unless
+/// `force` is set; nothing is written then, and the audit says why. A dry
+/// run reports the regressions instead of refusing: it writes nothing
+/// either way.
+async fn rules_apply(b: Backends, input: RulesApplyInput) -> Reply {
+    let force = input.force;
+    let dry_run = input.dry_run;
+    type Noted<T> = Result<T, (RulesError, Option<&'static str>)>;
+    let result = tokio::task::spawn_blocking(move || -> Noted<(Value, Option<&'static str>)> {
+        let current = b.rules.read().map_err(|e| (RulesError::Other(e), None))?;
         let mut rules = current.rules;
         merge_patch(&mut rules, &Value::Object(input.patch));
-        b.rules.write(&input.base_revision, rules, input.dry_run)
+        let proposal: RulesFile = serde_json::from_value(rules.clone())
+            .map_err(|e| (RulesError::Invalid(e.to_string()), None))?;
+        if let Some(problem) = proposal.problems().first() {
+            return Err((
+                RulesError::Invalid(format!("{:?}: {}", problem.place, problem.message)),
+                None,
+            ));
+        }
+        let before = b.tester.test(None).map_err(|e| (RulesError::Other(e), None))?;
+        let after = b
+            .tester
+            .test(Some(&proposal))
+            .map_err(|e| (RulesError::Other(e), None))?;
+        let regressions: Vec<&TestFailure> = after
+            .failures
+            .iter()
+            .filter(|f| !before.failures.iter().any(|b| same_case(b, f)))
+            .collect();
+        if !regressions.is_empty() && !force && !dry_run {
+            let n = regressions.len();
+            let body = json!({
+                "regressions": regressions,
+                "report": report_json(&after),
+                "revision": current.revision,
+            });
+            return Err((
+                RulesError::Invalid(format!(
+                    "{n} saved {} would change routing. Nothing was written; pass force: true to change it on purpose.\n{body}",
+                    if n == 1 { "example or test" } else { "examples or tests" }
+                )),
+                Some(NOTE_REFUSED),
+            ));
+        }
+        let note = (!regressions.is_empty() && !dry_run).then_some(NOTE_FORCED);
+        let snapshot = b
+            .rules
+            .write(&input.base_revision, rules, dry_run)
+            .map_err(|e| (e, note))?;
+        let value = json!({
+            "revision": snapshot.revision,
+            "dryRun": dry_run,
+            "written": !dry_run,
+            "rules": snapshot.rules,
+            "report": report_json(&after),
+            "regressions": regressions,
+            "forced": note.is_some(),
+        });
+        Ok((value, note))
     })
     .await;
     match result {
-        Ok(Ok(snapshot)) => Answer::Ok(json!({
-            "revision": snapshot.revision,
-            "dryRun": input.dry_run,
-            "written": !input.dry_run,
-            "rules": snapshot.rules,
-        })),
-        Ok(Err(e @ RulesError::FinickyConfigSelected)) => {
-            Answer::Failed(format!("finicky_config_selected: {e}"))
-        }
-        Ok(Err(e @ RulesError::Conflict { .. })) => Answer::Failed(format!("conflict: {e}")),
-        Ok(Err(e @ RulesError::Invalid(_))) => Answer::Failed(format!("invalid_rules: {e}")),
-        Ok(Err(RulesError::Other(e))) => Answer::Failed(format!("failed: {e:#}")),
-        Err(e) => Answer::Failed(format!("failed: {e}")),
+        Ok(Ok((value, note))) => Reply {
+            answer: Answer::Ok(value),
+            note,
+        },
+        Ok(Err((e, note))) => Reply {
+            answer: Answer::Failed(match &e {
+                RulesError::FinickyConfigSelected => format!("finicky_config_selected: {e}"),
+                RulesError::Conflict { .. } => format!("conflict: {e}"),
+                RulesError::Invalid(m) if note == Some(NOTE_REFUSED) => format!("regressions: {m}"),
+                RulesError::Invalid(_) => format!("invalid_rules: {e}"),
+                RulesError::Other(e) => format!("failed: {e:#}"),
+            }),
+            note,
+        },
+        Err(e) => Reply::of(Answer::Failed(format!("failed: {e}"))),
     }
+}
+
+/// Whether two failures are the same example or test: rule numbers move
+/// when a handler is inserted, so the URL, opener and expectation decide.
+fn same_case(a: &TestFailure, b: &TestFailure) -> bool {
+    a.input == b.input && a.opener == b.opener && a.expected == b.expected
 }
 
 /// RFC 7396 JSON Merge Patch.
@@ -522,9 +835,9 @@ impl ServerHandler for Handler {
             connection: self.connection.id,
         };
         let args = Value::Object(request.arguments.unwrap_or_default());
-        let answer = match self.authorize(&client).await {
+        let Reply { answer, note } = match self.authorize(&client).await {
             Ok(role) => self.run(&request.name, args, &agent, role).await,
-            Err(message) => Answer::Denied(message),
+            Err(message) => Reply::of(Answer::Denied(message)),
         };
         let outcome = match &answer {
             Answer::Ok(_) => Outcome::Ok,
@@ -542,6 +855,7 @@ impl ServerHandler for Handler {
             started,
             duration: clock.elapsed(),
             outcome,
+            note,
         });
         Ok(match answer {
             Answer::Ok(value) => success(value),
@@ -594,6 +908,8 @@ mod tests {
                 ("pwrroute_open", Permission::Open),
                 ("pwrroute_browsers", Permission::Browsers),
                 ("pwrroute_rules_list", Permission::RulesRead),
+                ("pwrroute_rules_test", Permission::RulesRead),
+                ("pwrroute_suggest_rule", Permission::RulesRead),
                 ("pwrroute_rules_apply", Permission::RulesWrite),
                 ("pwrroute_activity", Permission::ActivityHosts),
             ]

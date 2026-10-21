@@ -1,9 +1,9 @@
 //! What the tools read and act on.
 //!
-//! Each tool is backed by one narrow trait. The engine exists today and
-//! [`crate::EngineResolver`] adapts it; the router, browser launcher, rules
-//! store and activity log are being built elsewhere, so they appear here only
-//! as the calls the tools need, with in-memory fakes in [`crate::fake`].
+//! Each tool is backed by one narrow trait. [`crate::live`] implements them
+//! over the real router, engine and browser catalog; [`crate::fake`] has
+//! in-memory stand-ins for tests, and [`crate::EngineResolver`] adapts the
+//! engine alone.
 //!
 //! The traits are synchronous: the server calls them on a blocking thread,
 //! so an implementation may wait on its own thread or lock without stalling
@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use pwrroute_engine::{Browser, Opener};
+use pwrroute_engine::{Browser, Opener, Privacy, RulesFile, TestReport};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -140,9 +140,10 @@ pub struct DetectedBrowser {
 
 /// The visual rules (`rules.json`).
 ///
-/// The rules document is opaque here: its schema belongs to the store, which
-/// validates every write. Function matchers and transformers from a Finicky
-/// config appear in it marked opaque, as the Rules view shows them.
+/// The rules document is the file's own JSON ([`RulesFile`]: `defaultBrowser`,
+/// `rewrites`, `rules` with their `examples`, and `tests`); the store
+/// validates every write against that schema. A Finicky config's own
+/// rewrites and handlers are not in it: they run first, from the config.
 pub trait RulesStore: Send + Sync + 'static {
     fn read(&self) -> anyhow::Result<RulesSnapshot>;
 
@@ -156,6 +157,20 @@ pub trait RulesStore: Send + Sync + 'static {
     ) -> Result<RulesSnapshot, RulesError>;
 }
 
+/// Runs `rules.json`'s saved examples and tests through the engine in
+/// charge, and matches candidate patterns the way routing would. Nothing
+/// here opens or writes anything.
+pub trait RulesTester: Send + Sync + 'static {
+    /// The saved examples and tests, through the config and rules the
+    /// router routes by; or those of `proposal`, through a temporary engine
+    /// built from the same config and the proposal in place of the saved
+    /// rules.
+    fn test(&self, proposal: Option<&RulesFile>) -> anyhow::Result<TestReport>;
+
+    /// Which of `urls` `pattern` matches, by Finicky's own `isMatch`.
+    fn collisions(&self, pattern: &str, urls: &[String]) -> anyhow::Result<Vec<String>>;
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RulesSnapshot {
@@ -163,7 +178,12 @@ pub struct RulesSnapshot {
     /// it read.
     pub revision: String,
     pub source: RulesSource,
-    /// Rewrites, handlers and the default, as the visual model.
+    /// The Finicky config that runs before these rules, when one is in
+    /// charge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
+    /// `rules.json` as written: `defaultBrowser`, `rewrites`, `rules` and
+    /// `tests`.
     pub rules: Value,
 }
 
@@ -171,10 +191,12 @@ pub struct RulesSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum RulesSource {
-    /// `rules.json`, editable.
+    /// `rules.json`, editable. A Finicky config, when one is found, runs
+    /// first and owns the default browser; `rules.json`'s rewrites and
+    /// handlers follow its own.
     Visual,
-    /// A Finicky `.js`/`.ts` config. It runs first and owns the default
-    /// browser, so `rules.json` cannot be changed from here meanwhile.
+    /// A Finicky `.js`/`.ts` config alone: `rules.json` is not in use and
+    /// cannot be changed from here meanwhile.
     FinickyConfig,
 }
 
@@ -190,20 +212,83 @@ pub enum RulesError {
     Other(#[from] anyhow::Error),
 }
 
-/// Recent dispatches with their traces, newest first. Held in memory only.
+/// Recent dispatches with their traces, newest first: the router's
+/// in-memory buffer, and its on-disk journal when the user turned that on.
+/// Every entry arrives already reduced to its rule's [`Privacy`].
 pub trait ActivityLog: Send + Sync + 'static {
+    /// From memory, newest first, at most `limit`.
     fn recent(&self, limit: usize) -> anyhow::Result<Vec<ActivityEntry>>;
+
+    /// From the journal, newest first, at most `limit`. Empty when the
+    /// journal is off.
+    fn journal(&self, limit: usize) -> anyhow::Result<Vec<ActivityEntry>>;
+
+    /// Where dispatches are kept and for how long, in the router's own
+    /// words, shown verbatim.
+    fn retention(&self) -> String;
 }
 
+/// Where an [`ActivityEntry`] was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivitySource {
+    /// The router's buffer: gone when PwrRoute quits.
+    Memory,
+    /// The opt-in journal on disk.
+    Journal,
+}
+
+/// How a dispatch ended, as Activity shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityOutcome {
+    Opened,
+    DryRun,
+    /// `browser: null`: deliberately not opened.
+    NotOpened,
+    Failed,
+}
+
+/// One dispatch, at the level its rule lets the router keep: a `full`
+/// entry has the whole trace, a `host` entry has scheme and host in place
+/// of every URL, and a `none` entry has no trace, no host and no opener,
+/// only that it happened and how it ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityEntry {
+    /// The dispatch's number in this PwrRoute run; a journaled entry from an
+    /// earlier run can repeat one.
+    pub id: u64,
     /// Milliseconds since the Unix epoch.
     pub at_ms: u64,
     /// The app the link came from, or the agent that opened it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
-    pub trace: Trace,
+    /// How much of the link this entry keeps: `full`, `host` or `none`.
+    #[schemars(with = "String")]
+    pub privacy: Privacy,
+    pub source: ActivitySource,
+    pub outcome: ActivityOutcome,
+    /// No rule chose the browser: the default, or the fallback while no
+    /// config was in charge. These are the links a new rule is for.
+    pub unrouted: bool,
+    /// A rewrite changed the URL.
+    pub rewritten: bool,
+    /// Opened in a private window.
+    pub private: bool,
+    /// Absent for a `none` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Trace>,
+}
+
+impl ActivityEntry {
+    /// The same entry with every URL cut down to its host.
+    #[must_use]
+    pub fn hosts_only(&self) -> Self {
+        let mut entry = self.clone();
+        entry.trace = entry.trace.as_ref().map(Trace::hosts_only);
+        entry
+    }
 }
 
 /// Everything the tools are backed by.
@@ -213,6 +298,7 @@ pub struct Backends {
     pub router: Arc<dyn Router>,
     pub browsers: Arc<dyn BrowserCatalog>,
     pub rules: Arc<dyn RulesStore>,
+    pub tester: Arc<dyn RulesTester>,
     pub activity: Arc<dyn ActivityLog>,
 }
 
