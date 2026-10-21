@@ -670,12 +670,12 @@ fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
 /// Routes every link to Brave, a browser no OS has as its own.
 struct ToBrave;
 impl Resolver for ToBrave {
-    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, link: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
         Ok(Resolved {
             browser: Browser {
                 name: "Brave".into(),
                 app_type: AppType::AppName,
-                url: url.into(),
+                url: link.url.clone(),
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,
@@ -692,12 +692,12 @@ impl Resolver for ToBrave {
 /// Routes every link to a private Firefox window.
 struct PrivateFirefox;
 impl Resolver for PrivateFirefox {
-    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, link: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
         Ok(Resolved {
             browser: Browser {
                 name: "Firefox".into(),
                 app_type: AppType::AppName,
-                url: url.into(),
+                url: link.url.clone(),
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,

@@ -352,6 +352,7 @@ fn spawn_router(
                 let _ = dispatched.try_send(record.clone());
             }
         })),
+        network: None,
     };
     let router =
         Router::spawn(options, Some(factory), launcher).expect("start the dispatch thread");

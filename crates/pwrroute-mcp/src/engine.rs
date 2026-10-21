@@ -19,7 +19,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use pwrroute_engine::{
-    self as engine, ConfigChoice, Engine, HttpNetwork, Limits, Link, Matcher, NativeHost, Network,
+    self as engine, ConfigChoice, Engine, HttpNetwork, Limits, Matcher, NativeHost, Network,
     Opener, Reloader, RulesFile, Source, Sources, Stage, TestReport,
 };
 
