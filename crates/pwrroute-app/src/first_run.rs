@@ -241,8 +241,8 @@ impl FirstRunModel {
             (Some(config), None) if config.importable == 0 => format!(
                 "Found {} with {} rewrites and {} handlers, none of which a visual rule can \
                  hold exactly. It stays in charge and runs as it did under Finicky; the file \
-                 is never modified. Review import in the Rules screen offers tested \
-                 suggestions.",
+                 is never modified. Import to visual rules\u{2026} on the Rules screen offers \
+                 tested suggestions.",
                 config.path, config.rewrites, config.handlers
             ),
             (Some(config), None) => format!(
