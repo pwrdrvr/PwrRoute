@@ -18,6 +18,7 @@ use pwrroute_mcp::{
     Agents, Config, Endpoint, McpServer, MemoryAudit,
     fake::{self, FakeAnswer, FakeApprover, FakeRouter, FakeRules},
     link::{self, ENDPOINT_ENV},
+    proxy::CONNECT_WAIT_ENV,
 };
 use rmcp::{
     RoleClient, ServiceExt as _,
@@ -175,10 +176,13 @@ pub fn client_config(name: &str) -> ClientConfig {
     )
 }
 
+/// The proxy binary on `endpoint`, trying to connect once: a test that
+/// wants it to wait for the app sets [`CONNECT_WAIT_ENV`] itself.
 pub fn proxy_command(endpoint: &Endpoint) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_pwrroute-mcp-proxy"));
     command
         .env(ENDPOINT_ENV, endpoint.path())
+        .env(CONNECT_WAIT_ENV, "0")
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     command

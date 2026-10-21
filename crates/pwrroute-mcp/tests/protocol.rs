@@ -6,6 +6,7 @@ mod support;
 
 use std::{fs, time::Duration};
 
+use pwrroute_mcp::proxy::CONNECT_WAIT_ENV;
 use pwrroute_mcp::{McpServer, MemoryAudit, Outcome, Role, fake};
 use rmcp::ServiceExt as _;
 use serde_json::json;
@@ -147,6 +148,41 @@ async fn the_proxy_says_so_when_pwrroute_is_not_running() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PwrRoute is not running"), "{stderr}");
+}
+
+#[tokio::test]
+async fn the_proxy_waits_for_pwrroute_to_start() {
+    let endpoint = private_endpoint();
+    // Claude Code launched the proxy before PwrRoute was up.
+    let mut child = proxy_command(&endpoint)
+        .env(CONNECT_WAIT_ENV, "10")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the proxy keeps waiting while nothing listens"
+    );
+
+    let h = Harness::start_in(
+        std::env::temp_dir().join(format!("pwrroute-mcp-wait-{}", std::process::id())),
+        std::sync::Arc::new(fake::FakeApprover::new(FakeAnswer::Approve(Role::Reader))),
+        config(endpoint, Duration::from_secs(10)),
+    )
+    .await;
+    let stdout = child.stdout.take().unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let client = support::client_config("claude-code")
+        .serve((stdout, stdin))
+        .await
+        .expect("initialize through the waiting proxy");
+    let result = call(&client, "pwrroute_resolve", json!({ "url": SECRET_URL })).await;
+    assert_eq!(result.is_error, Some(false), "{}", text(&result));
+    client.cancel().await.unwrap();
+    h.finish().await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
 }
 
 #[tokio::test]

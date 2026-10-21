@@ -21,6 +21,10 @@ door; this crate supersedes that part of it.
 - **The proxy is a byte pipe.** `proxy.rs` copies stdio to and from the link
   and nothing else; the app runs the one MCP server (`server.rs`, one rmcp
   session per connection). Do not give the proxy its own protocol or tools.
+  Before the first byte it waits for the app to listen (`DEFAULT_CONNECT_WAIT`,
+  20 s at 250 ms; `PWRROUTE_MCP_CONNECT_WAIT` in seconds overrides it, and
+  the tests set `0`), so an MCP client launched before PwrRoute still gets
+  its tools.
 - **Only this user reaches the link.** Unix: a `0600` `mcp.sock` beside the
   router's socket (`pwrroute_os::router_dir()`, the user's own directory),
   and every connection's peer uid must match the socket's owner. Never put
