@@ -57,8 +57,8 @@ use std::{
 };
 
 use gpui_kit::{
-    App, AppContext as _, Bounds, Global, QuitMode, TitlebarOptions, WindowBounds, WindowOptions,
-    point, px, size,
+    App, AppContext as _, Bounds, DisplayId, Global, QuitMode, TitlebarOptions, WindowBounds,
+    WindowOptions, point, px, size,
 };
 
 use crate::{app::PwrRoute, router::Resident};
@@ -390,8 +390,15 @@ fn print_console(console: &pwrroute_engine::ConsoleLog, out: &mut dyn Write) {
     }
 }
 
-/// Brings the main window forward, opening it if it is closed.
+/// Brings the main window forward, opening it if it is closed, centered on
+/// the primary display.
 pub(crate) fn show_main_window(cx: &mut App) {
+    show_main_window_on(None, cx);
+}
+
+/// [`show_main_window`], opening a closed window centered on `display`
+/// (the primary display for `None`). An open window stays where it is.
+pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
     // Not `first()`: the Settings window, the tray dropdown or the first-run
     // window may be the only one open.
     let main = cx
@@ -403,11 +410,12 @@ pub(crate) fn show_main_window(cx: &mut App) {
         cx.activate(true);
         return;
     }
-    let bounds = Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let window = cx
         .open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                display_id: display,
                 titlebar: Some(TitlebarOptions {
                     title: Some("PwrRoute".into()),
                     appears_transparent: true,

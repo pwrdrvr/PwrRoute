@@ -43,6 +43,9 @@ mod default_browser;
 #[path = "../src/editor.rs"]
 mod editor;
 #[cfg(target_os = "macos")]
+#[path = "../src/first_run.rs"]
+mod first_run;
+#[cfg(target_os = "macos")]
 #[path = "../src/fixtures.rs"]
 mod fixtures;
 #[cfg(target_os = "macos")]
@@ -78,9 +81,21 @@ mod trace_view;
 #[cfg(target_os = "macos")]
 #[path = "../src/try_it.rs"]
 mod try_it;
+// The first-run window's browser labels, where it looks for them.
+#[cfg(target_os = "macos")]
+#[path = "../src/tray/model.rs"]
+mod tray_model;
+#[cfg(target_os = "macos")]
+mod tray {
+    pub(crate) use crate::tray_model as model;
+}
 #[cfg(target_os = "macos")]
 #[path = "../src/updater.rs"]
 mod updater;
+
+/// As `main.rs` places the traffic lights, for the first-run window.
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHTS: (f32, f32) = (16.0, 13.0);
 #[cfg(target_os = "macos")]
 #[path = "../src/widgets.rs"]
 mod widgets;
@@ -252,6 +267,104 @@ fn main() {
             cx,
         );
     });
+
+    // First run (design 2a) over contrived browsers: step 1 with a profiled
+    // browser chosen and its profile menu open, then step 3 before and
+    // after the OS agrees. The default it names is an app the catalog does
+    // not list, by the name its bundle gives.
+    {
+        use first_run::{BrowserChoice, FinickyConfig, FirstRun, FirstRunHooks, FirstRunModel};
+        use tray::model::BrowserLabel;
+
+        let model = |fallback: Option<BrowserLabel>| FirstRunModel {
+            fallback,
+            browsers: vec![
+                BrowserChoice {
+                    value: "com.google.Chrome".into(),
+                    label: BrowserLabel::new("Ch", "Google Chrome", None),
+                    profiles: vec!["Personal".into(), "Work".into()],
+                },
+                BrowserChoice {
+                    value: "org.mozilla.firefox".into(),
+                    label: BrowserLabel::new("Ff", "Firefox", None),
+                    profiles: vec!["default-release".into()],
+                },
+                BrowserChoice {
+                    value: "com.apple.Safari".into(),
+                    label: BrowserLabel::new("Sa", "Safari", None),
+                    profiles: Vec::new(),
+                },
+            ],
+            finicky: Some(FinickyConfig {
+                path: "~/.finicky.ts".into(),
+                rewrites: 2,
+                handlers: 6,
+                importable: 0,
+            }),
+            import: None,
+            current_default: "PwrFinicky".into(),
+            default_requested: false,
+            waiting: false,
+            is_default: false,
+        };
+        let chrome_work = || Some(BrowserLabel::new("Ch", "Google Chrome", Some("Work")));
+        let hooks = || FirstRunHooks {
+            on_fallback: std::rc::Rc::new(|_, _| {}),
+            on_import: std::rc::Rc::new(|_, _| {}),
+            on_set_default_browser: std::rc::Rc::new(|(), _| {}),
+            on_finish: std::rc::Rc::new(|_, _| {}),
+        };
+        let mut step_3 = model(chrome_work());
+        step_3.import = Some(first_run::ImportChoice::KeepFile);
+        let mut done = step_3.clone();
+        done.is_default = true;
+        for (name, model, picking) in [
+            (
+                "first-run-1-profile",
+                model(chrome_work()),
+                first_run::Picking::Profile,
+            ),
+            (
+                "first-run-1",
+                model(chrome_work()),
+                first_run::Picking::None,
+            ),
+            ("first-run-3", step_3, first_run::Picking::None),
+            ("first-run-3-done", done, first_run::Picking::None),
+        ] {
+            let mut cx = HeadlessAppContext::with_platform(
+                gpui_kit::platform::current_platform(true).text_system(),
+                Arc::new(assets::Assets),
+                gpui_kit::platform::current_headless_renderer,
+            );
+            cx.update(|cx| assets::load_fonts(cx));
+            let handle = cx
+                .open_window(size(px(680.0), px(600.0)), |_, cx| {
+                    cx.new(|cx| {
+                        let mut view = FirstRun::new(model, hooks(), cx);
+                        view.picking = picking;
+                        view
+                    })
+                })
+                .expect("open a headless window");
+            cx.allow_parking();
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update_window(handle.into(), |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .expect("draw");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let image = cx
+                .capture_screenshot(handle.into())
+                .expect("render with Metal");
+            let path = dir.join(format!("{name}.png"));
+            image.save(&path).expect("write the PNG");
+            println!("{}", path.display());
+        }
+    }
 
     // Settings, at each option's `.dv-card` size in headless Chrome less
     // its 1px border (`design/PwrRoute Settings.dc.html`).

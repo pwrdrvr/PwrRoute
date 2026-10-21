@@ -1,5 +1,6 @@
-//! The two AppKit calls GPUI does not make for us: the Dock icon (the
-//! activation policy) and the screen under the menu bar item.
+//! The AppKit calls GPUI does not make for us: the Dock icon (the
+//! activation policy), the screen under the menu bar item, and the screen
+//! under the mouse.
 //!
 //! GPUI sets `NSApplicationActivationPolicyRegular` when the app finishes
 //! launching and never changes it, so a resident router would keep a Dock
@@ -9,7 +10,7 @@
 
 use gpui_kit::{Bounds, DisplayId, Pixels, Point, Size, point, px, size};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSScreen};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen};
 use objc2_foundation::{NSNumber, NSString};
 
 /// Show or hide the Dock icon (and the app's menu bar while it is active).
@@ -78,6 +79,28 @@ pub fn status_item_anchor(position: (f64, f64), item_size: (f64, f64)) -> Option
         });
     }
     None
+}
+
+/// The display under the mouse pointer, as GPUI names displays. `None` off
+/// the main thread, or when no screen holds the pointer.
+pub fn display_under_mouse() -> Option<DisplayId> {
+    let mtm = MainThreadMarker::new()?;
+    // Both in AppKit's global space: bottom-left origin, in points.
+    let mouse = NSEvent::mouseLocation();
+    NSScreen::screens(mtm).iter().find_map(|screen| {
+        let frame = screen.frame();
+        let inside = (frame.origin.x..frame.origin.x + frame.size.width).contains(&mouse.x)
+            && (frame.origin.y..frame.origin.y + frame.size.height).contains(&mouse.y);
+        if !inside {
+            return None;
+        }
+        let number = screen
+            .deviceDescription()
+            .objectForKey(&NSString::from_str("NSScreenNumber"))?
+            .downcast::<NSNumber>()
+            .ok()?;
+        Some(DisplayId::new(u64::from(number.unsignedIntValue())))
+    })
 }
 
 /// Where a `width` × `height` dropdown opens under the item: centered on it,

@@ -124,15 +124,23 @@ their own modules.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
   buttons do; `onboarding.rs` builds the real ones and the model from
   `Facts` (tests write their own facts and count hook calls). `state.json`
-  in the data directory says whether first run already ran. "Open
-  PwrRoute" (every step done) and "Later" mark it done and open the main
-  window on Rules; closing the window only marks it done.
-  `default_browser.rs` is the only caller of
+  in the data directory says whether first run already ran. Step 1 saves
+  `rules.json`'s `defaultBrowser` and, from its profile menu (shown when
+  the browser has profiles), `defaultProfile` ("" for the browser's own
+  default). "Open PwrRoute" (every step done) and "Later" mark it done and
+  open the main window on Rules, on the first-run window's display
+  (`onboarding::main_window_display`); closing the window only marks it
+  done. `default_browser.rs` is the only caller of
   `pwrroute_os::set_default_browser`, from a click (Settings, first run's
   step 3, the tray's "Make default browser…" row); its `Os` struct takes
   fakes, so tests never reach the OS. After a request it re-reads the
   status every second for a minute (`POLL_EVERY`, `POLL_FOR`) and on
-  window activation; first run's step 3 shows the wait and "Ask again".
+  window activation. LaunchServices can still name the old browser just
+  after the dialog is approved, so an activation only settles a request
+  as refused `ACTIVATION_GRACE` later. While first run is open and step 3
+  is not done it re-reads every second regardless (`follow_while`); step 3
+  shows the wait and "Ask again", and names an uncatalogued default by its
+  bundle's name (`pwrroute_os::app_display_name`).
   It also re-reads every `RECHECK_EVERY` (a minute) for the life of the
   app and when the tray dropdown opens, so a router with no window
   notices losing the default; the tray chip and its Make default row

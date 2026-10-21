@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Bounds, ClickEvent, Context, Div, FocusHandle, HighlightStyle,
+    App, AppContext as _, Bounds, ClickEvent, Context, DisplayId, Div, FocusHandle, HighlightStyle,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, StyledText, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
@@ -66,6 +66,26 @@ pub struct BrowserChoice {
     /// the name elsewhere.
     pub value: String,
     pub label: BrowserLabel,
+    /// Its profiles by the names the browser shows (as Settings › Browsers
+    /// lists them), for step 1's profile menu. Empty: no menu.
+    pub profiles: Vec<String>,
+}
+
+/// Step 1's choice: a browser, and one of its profiles or its default.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fallback {
+    pub browser: BrowserChoice,
+    /// What `rules.json`'s `defaultProfile` gets. `None`: the browser's
+    /// own default profile.
+    pub profile: Option<String>,
+}
+
+/// Which of step 1's menus is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Picking {
+    None,
+    Browser,
+    Profile,
 }
 
 /// A step's state, as the design draws it.
@@ -79,7 +99,8 @@ pub enum StepState {
 /// What the window shows.
 #[derive(Clone, Debug)]
 pub struct FirstRunModel {
-    /// Step 1. `None` until one is picked.
+    /// Step 1, with the chosen profile as the label's. `None` until one is
+    /// picked.
     pub fallback: Option<BrowserLabel>,
     /// What step 1 offers: the browsers found on this machine.
     pub browsers: Vec<BrowserChoice>,
@@ -108,11 +129,18 @@ impl FirstRunModel {
             browsers: vec![
                 BrowserChoice {
                     value: "com.google.Chrome".to_owned(),
-                    label: chrome,
+                    label: BrowserLabel::new("Ch", "Google Chrome", None),
+                    profiles: vec!["Personal".to_owned(), "Work".to_owned()],
                 },
                 BrowserChoice {
                     value: "org.mozilla.firefox".to_owned(),
                     label: BrowserLabel::new("Ff", "Firefox", None),
+                    profiles: vec!["default-release".to_owned()],
+                },
+                BrowserChoice {
+                    value: "com.apple.Safari".to_owned(),
+                    label: BrowserLabel::new("Sa", "Safari", None),
+                    profiles: Vec::new(),
                 },
             ],
             finicky: Some(FinickyConfig {
@@ -127,6 +155,22 @@ impl FirstRunModel {
             waiting: false,
             is_default: false,
         }
+    }
+
+    /// The browser step 1 chose, as this machine lists it.
+    pub fn fallback_choice(&self) -> Option<&BrowserChoice> {
+        let chosen = self.fallback.as_ref()?;
+        self.browsers
+            .iter()
+            .find(|choice| choice.label.name == chosen.name)
+    }
+
+    /// The profiles step 1's profile menu offers after its "Default
+    /// profile": the chosen browser's. Empty, and no menu, for a browser
+    /// without profiles or one not found on this machine.
+    pub fn fallback_profiles(&self) -> &[String] {
+        self.fallback_choice()
+            .map_or(&[], |choice| choice.profiles.as_slice())
     }
 
     pub fn steps(&self) -> [StepState; 3] {
@@ -195,8 +239,9 @@ impl FirstRunModel {
     pub fn import_detail(&self) -> String {
         match (&self.finicky, self.import) {
             (Some(config), None) if config.importable == 0 => format!(
-                "Found {} with {} rewrites and {} handlers. It stays in charge; importing is \
-                 not available yet. The file is never modified.",
+                "Found {} with {} rewrites and {} handlers. It stays in charge and runs as it \
+                 did under Finicky; the file is never modified. Importing it into editable \
+                 rules is coming.",
                 config.path, config.rewrites, config.handlers
             ),
             (Some(config), None) => format!(
@@ -280,17 +325,26 @@ pub enum Finish {
     Later,
 }
 
+/// How the window was left, and where it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Finished {
+    pub how: Finish,
+    /// The display the window was on, for the main window to open on.
+    pub display: Option<DisplayId>,
+}
+
 /// What the window's choices do. The window itself changes nothing.
 #[derive(Clone)]
 pub struct FirstRunHooks {
-    /// Step 1 picked a browser.
-    pub on_fallback: Hook<BrowserChoice>,
+    /// Step 1 picked a browser, or a profile of it.
+    pub on_fallback: Hook<Fallback>,
     pub on_import: Hook<ImportChoice>,
     /// "Set as default browser". Only this asks the OS anything.
     pub on_set_default_browser: Hook<()>,
     /// "Open PwrRoute" or "Later": first run is over, and the window closes
-    /// right after. The app marks it done and shows the main window.
-    pub on_finish: Hook<Finish>,
+    /// right after. The app marks it done and shows the main window, on
+    /// the display this window was on.
+    pub on_finish: Hook<Finished>,
 }
 
 /// Open the first-run window.
@@ -326,8 +380,9 @@ pub struct FirstRun {
     pub model: FirstRunModel,
     hooks: FirstRunHooks,
     pub focus: FocusHandle,
-    /// Step 1's list of browsers is open.
-    pub picker_open: bool,
+    /// Step 1's list of browsers, or of the chosen browser's profiles, is
+    /// open.
+    pub picking: Picking,
 }
 
 impl FirstRun {
@@ -336,21 +391,57 @@ impl FirstRun {
             model,
             hooks,
             focus: cx.focus_handle(),
-            picker_open: false,
+            picking: Picking::None,
         }
     }
 
-    fn toggle_picker(&mut self, cx: &mut Context<'_, Self>) {
-        self.picker_open = !self.picker_open;
+    fn toggle_picker(&mut self, which: Picking, cx: &mut Context<'_, Self>) {
+        self.picking = if self.picking == which {
+            Picking::None
+        } else {
+            which
+        };
         cx.notify();
     }
 
+    /// A browser from step 1's menu, at its default profile.
     fn choose_fallback(&mut self, index: usize, cx: &mut Context<'_, Self>) {
-        self.picker_open = false;
+        self.picking = Picking::None;
         if let Some(choice) = self.model.browsers.get(index).cloned() {
             self.model.fallback = Some(choice.label.clone());
-            (self.hooks.on_fallback)(choice, cx);
+            (self.hooks.on_fallback)(
+                Fallback {
+                    browser: choice,
+                    profile: None,
+                },
+                cx,
+            );
         }
+        cx.notify();
+    }
+
+    /// A profile from step 1's profile menu: 0 is "Default profile", then
+    /// the chosen browser's profiles in order.
+    fn choose_profile(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        self.picking = Picking::None;
+        let Some(browser) = self.model.fallback_choice().cloned() else {
+            cx.notify();
+            return;
+        };
+        let profile = match index {
+            0 => None,
+            n => match browser.profiles.get(n - 1) {
+                Some(profile) => Some(profile.clone()),
+                None => {
+                    cx.notify();
+                    return;
+                }
+            },
+        };
+        if let Some(fallback) = &mut self.model.fallback {
+            fallback.profile.clone_from(&profile);
+        }
+        (self.hooks.on_fallback)(Fallback { browser, profile }, cx);
         cx.notify();
     }
 
@@ -394,9 +485,11 @@ impl FirstRun {
         cx.notify();
     }
 
-    /// "Open PwrRoute" or "Later": tell the app, then close.
-    fn finish(&mut self, finish: Finish, window: &mut Window, cx: &mut Context<'_, Self>) {
-        (self.hooks.on_finish)(finish, cx);
+    /// "Open PwrRoute" or "Later": tell the app, and which display this
+    /// window is on, then close.
+    fn finish(&mut self, how: Finish, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let display = window.display(cx).map(|display| display.id());
+        (self.hooks.on_finish)(Finished { how, display }, cx);
         window.remove_window();
     }
 }
@@ -453,7 +546,7 @@ impl Render for FirstRun {
                                 fallback,
                                 "Fallback browser",
                                 paragraph(model.fallback_detail()),
-                                fallback_picker(model, self.picker_open, cx),
+                                fallback_pickers(model, self.picking, cx),
                             ))
                             .child(step(
                                 2,
@@ -655,21 +748,70 @@ fn import_paragraph(model: &FirstRunModel) -> Div {
 
 /// The element id of step 1's select.
 pub const FALLBACK_ID: &str = "first-run-fallback";
+/// The element id of step 1's profile select.
+pub const PROFILE_ID: &str = "first-run-profile";
 
-/// Step 1's `.inp` select, and the list it opens: the browsers found on
-/// this machine, one row each.
-fn fallback_picker(model: &FirstRunModel, open: bool, cx: &mut Context<'_, FirstRun>) -> Div {
+/// What the profile select says for no profile: the browser opens its own.
+const DEFAULT_PROFILE: &str = "Default profile";
+
+/// Step 1's controls: the browser select and, when the chosen browser has
+/// profiles, the profile select beside it, each the design's `.inp` with
+/// the list it opens under it.
+fn fallback_pickers(
+    model: &FirstRunModel,
+    picking: Picking,
+    cx: &mut Context<'_, FirstRun>,
+) -> Div {
+    let profiles = model.fallback_profiles();
+    let row = div()
+        .flex()
+        .items_start()
+        .gap(px(8.0))
+        .child(browser_picker(
+            model,
+            !profiles.is_empty(),
+            picking == Picking::Browser,
+            cx,
+        ));
+    if profiles.is_empty() {
+        return row;
+    }
+    row.child(profile_picker(
+        model,
+        profiles,
+        picking == Picking::Profile,
+        cx,
+    ))
+}
+
+/// Step 1's browser select: the browsers found on this machine, one row
+/// each. With a profile select beside it, it shows the name alone.
+fn browser_picker(
+    model: &FirstRunModel,
+    profile_beside: bool,
+    open: bool,
+    cx: &mut Context<'_, FirstRun>,
+) -> Div {
     let input = input_box()
         .id(FALLBACK_ID)
         .debug_selector(|| FALLBACK_ID.into())
         .w(px(300.0))
         .cursor_pointer()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_picker(cx)));
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.toggle_picker(Picking::Browser, cx);
+        }));
     let input = match (&model.fallback, model.browsers.is_empty()) {
-        (Some(browser), _) => input
-            .child(badge(browser.badge.clone()))
-            .child(text(browser.display(), 12.5, 400.0, theme::text_primary()))
-            .child(caret()),
+        (Some(browser), _) => {
+            let shown = if profile_beside {
+                browser.name.clone()
+            } else {
+                browser.display()
+            };
+            input
+                .child(badge(browser.badge.clone()))
+                .child(text(shown, 12.5, 400.0, theme::text_primary()))
+                .child(caret())
+        }
         (None, false) => input
             .child(text("Choose a browser", 12.5, 400.0, theme::text_subtle()))
             .child(caret()),
@@ -680,40 +822,98 @@ fn fallback_picker(model: &FirstRunModel, open: bool, cx: &mut Context<'_, First
         return column;
     }
     let rows = model.browsers.iter().enumerate().map(|(index, choice)| {
-        div()
-            .id(("first-run-browser", index))
+        menu_row(("first-run-browser", index))
             .debug_selector(move || format!("first-run-browser-{index}"))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .py(px(6.0))
-            .px(px(10.0))
-            .rounded(px(6.0))
-            .cursor_pointer()
-            .hover(|row| row.bg(theme::bg_hover()))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.choose_fallback(index, cx);
             }))
             .child(badge(choice.label.badge.clone()))
             .child(text(
-                choice.label.display(),
+                choice.label.name.clone(),
                 12.5,
                 400.0,
                 theme::text_primary(),
             ))
     });
-    column.child(
-        div()
-            .w(px(300.0))
-            .flex()
-            .flex_col()
-            .p(px(4.0))
-            .bg(theme::bg_popover())
-            .border_1()
-            .border_color(theme::border_default())
-            .rounded(px(7.0))
-            .children(rows),
-    )
+    column.child(menu(300.0).children(rows))
+}
+
+/// Step 1's profile select: "Default profile", then the chosen browser's
+/// profiles.
+fn profile_picker(
+    model: &FirstRunModel,
+    profiles: &[String],
+    open: bool,
+    cx: &mut Context<'_, FirstRun>,
+) -> Div {
+    let chosen = model
+        .fallback
+        .as_ref()
+        .and_then(|fallback| fallback.profile.clone());
+    let label = match chosen {
+        Some(profile) => text(profile, 12.5, 400.0, theme::text_primary()),
+        None => text(DEFAULT_PROFILE, 12.5, 400.0, theme::text_subtle()),
+    };
+    let input = input_box()
+        .id(PROFILE_ID)
+        .debug_selector(|| PROFILE_ID.into())
+        .w(px(PROFILE_WIDTH))
+        .cursor_pointer()
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.toggle_picker(Picking::Profile, cx);
+        }))
+        .child(label)
+        .child(caret());
+    let column = div().flex().flex_col().gap(px(6.0)).child(input);
+    if !open {
+        return column;
+    }
+    let names = std::iter::once(DEFAULT_PROFILE.to_owned()).chain(profiles.iter().cloned());
+    let rows = names.enumerate().map(|(index, name)| {
+        let color = if index == 0 {
+            theme::text_secondary()
+        } else {
+            theme::text_primary()
+        };
+        menu_row(("first-run-profile", index))
+            .debug_selector(move || format!("first-run-profile-{index}"))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.choose_profile(index, cx);
+            }))
+            .child(text(name, 12.5, 400.0, color))
+    });
+    column.child(menu(PROFILE_WIDTH).children(rows))
+}
+
+/// The profile select's width: room for "Default profile" and a
+/// Firefox profile name beside the 300px browser select.
+const PROFILE_WIDTH: f32 = 180.0;
+
+/// The list a select opens: the popover card under it.
+fn menu(width: f32) -> Div {
+    div()
+        .w(px(width))
+        .flex()
+        .flex_col()
+        .p(px(4.0))
+        .bg(theme::bg_popover())
+        .border_1()
+        .border_color(theme::border_default())
+        .rounded(px(7.0))
+}
+
+/// One row of a select's list.
+fn menu_row(id: impl Into<gpui_kit::ElementId>) -> gpui_kit::Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .py(px(6.0))
+        .px(px(10.0))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .hover(|row| row.bg(theme::bg_hover()))
 }
 
 fn import_actions(
@@ -919,7 +1119,7 @@ mod tests {
     }
 
     struct Calls {
-        fallbacks: Rc<RefCell<Vec<BrowserChoice>>>,
+        fallbacks: Rc<RefCell<Vec<Fallback>>>,
         imports: Rc<RefCell<Vec<ImportChoice>>>,
         defaults: Rc<Cell<usize>>,
         finishes: Rc<RefCell<Vec<Finish>>>,
@@ -948,7 +1148,9 @@ mod tests {
             on_fallback: Rc::new(move |choice, _| fallbacks.borrow_mut().push(choice)),
             on_import: Rc::new(move |choice, _| imports.borrow_mut().push(choice)),
             on_set_default_browser: Rc::new(move |(), _| defaults.set(defaults.get() + 1)),
-            on_finish: Rc::new(move |finish, _| finishes.borrow_mut().push(finish)),
+            on_finish: Rc::new(move |finished: Finished, _| {
+                finishes.borrow_mut().push(finished.how)
+            }),
         };
         let (view, cx) = cx.add_window_view(|_, cx| FirstRun::new(model, hooks, cx));
         draw(cx);
@@ -1100,7 +1302,11 @@ mod tests {
         assert!(cx.debug_bounds("first-run-browser-1").is_some());
         click("first-run-browser-1", cx);
         assert_eq!(calls.fallbacks.borrow().len(), 1);
-        assert_eq!(calls.fallbacks.borrow()[0].value, "org.mozilla.firefox");
+        assert_eq!(
+            calls.fallbacks.borrow()[0].browser.value,
+            "org.mozilla.firefox"
+        );
+        assert_eq!(calls.fallbacks.borrow()[0].profile, None);
         assert_eq!(
             view.read_with(cx, |this, _| this.model.fallback.clone()),
             Some(BrowserLabel::new("Ff", "Firefox", None))
@@ -1109,6 +1315,88 @@ mod tests {
         assert_eq!(
             view.read_with(cx, |this, _| this.model.steps()),
             [StepState::Done, StepState::Current, StepState::Todo]
+        );
+    }
+
+    /// A browser with profiles gets a profile select beside it, starting at
+    /// the browser's own default; each pick goes to the hook with the
+    /// browser.
+    #[gpui_kit::test]
+    fn step_one_picks_a_profile_for_a_browser_that_has_them(cx: &mut TestAppContext) {
+        let mut model = FirstRunModel::fixture();
+        model.fallback = None;
+        let (view, calls, cx) = open_with(cx, model);
+        assert!(cx.debug_bounds(PROFILE_ID).is_none());
+
+        click(FALLBACK_ID, cx);
+        click("first-run-browser-0", cx);
+        assert!(cx.debug_bounds(PROFILE_ID).is_some());
+        let chrome = view.read_with(cx, |this, _| this.model.browsers[0].clone());
+        assert_eq!(
+            *calls.fallbacks.borrow(),
+            [Fallback {
+                browser: chrome.clone(),
+                profile: None
+            }]
+        );
+
+        click(PROFILE_ID, cx);
+        // "Default profile", Personal, Work.
+        assert!(cx.debug_bounds("first-run-profile-2").is_some());
+        assert!(cx.debug_bounds("first-run-profile-3").is_none());
+        click("first-run-profile-2", cx);
+        assert!(cx.debug_bounds("first-run-profile-2").is_none());
+        assert_eq!(
+            calls.fallbacks.borrow().last(),
+            Some(&Fallback {
+                browser: chrome.clone(),
+                profile: Some("Work".to_owned())
+            })
+        );
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback.clone()),
+            Some(BrowserLabel::new("Ch", "Google Chrome", Some("Work")))
+        );
+
+        // Back to the browser's own default.
+        click(PROFILE_ID, cx);
+        click("first-run-profile-0", cx);
+        assert_eq!(
+            calls.fallbacks.borrow().last(),
+            Some(&Fallback {
+                browser: chrome,
+                profile: None
+            })
+        );
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback.clone()),
+            Some(BrowserLabel::new("Ch", "Google Chrome", None))
+        );
+        assert_eq!(calls.fallbacks.borrow().len(), 3);
+    }
+
+    /// Safari has no profiles: no profile select, and switching to it from
+    /// a profiled browser drops the profile.
+    #[gpui_kit::test]
+    fn the_profile_menu_is_hidden_for_a_browser_without_profiles(cx: &mut TestAppContext) {
+        let (view, calls, cx) = open(cx);
+        // The fixture's fallback is Chrome · Personal.
+        assert!(cx.debug_bounds(PROFILE_ID).is_some());
+        click(FALLBACK_ID, cx);
+        click("first-run-browser-2", cx);
+        assert!(cx.debug_bounds(PROFILE_ID).is_none());
+        assert_eq!(
+            calls.fallbacks.borrow()[0].browser.value,
+            "com.apple.Safari"
+        );
+        assert_eq!(calls.fallbacks.borrow()[0].profile, None);
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback_profiles().len()),
+            0
+        );
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback.clone()),
+            Some(BrowserLabel::new("Sa", "Safari", None))
         );
     }
 
