@@ -1814,3 +1814,116 @@ fn an_in_process_rules_apply_reloads_the_rules_screen(cx: &mut TestAppContext) {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// --- the Finicky importer ----------------------------------------------------
+
+/// The importer's fixture config: the design's 2a, one rule of each verdict.
+fn importer_config() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/importer/finicky.ts")
+}
+
+/// The open importer window, after whatever opened it has run.
+fn importer_window(
+    cx: &mut VisualTestContext,
+) -> Option<gpui_kit::WindowHandle<crate::importer_view::Importer>> {
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        cx.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<crate::importer_view::Importer>())
+    })
+}
+
+#[gpui_kit::test]
+fn the_banners_import_button_opens_the_importer(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let (_view, cx) = open_with(cx, Some(config));
+    assert!(importer_window(cx).is_none());
+    click(cx, crate::config_view::IMPORT_ID);
+    let importer = importer_window(cx).expect("Import to visual rules… opens the importer");
+    let model = cx
+        .update(|_, cx| importer.read(cx).map(|importer| importer.model.clone()))
+        .expect("the importer's model");
+    assert_eq!(model.shown, "~/.finicky.ts");
+    assert_eq!(model.step, crate::importer::Step::Review);
+    // Design 1b's config: two function matchers stay JS, the patterns and
+    // the default import.
+    assert_eq!(model.counts(), (3, 2, 0));
+    assert_eq!(
+        model.review_footer(),
+        "3 of 5 selected. Nothing is written yet."
+    );
+}
+
+#[gpui_kit::test]
+fn an_import_writes_rules_json_once_and_undo_takes_it_back(cx: &mut TestAppContext) {
+    let dir = scratch("import");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let before = RulesFile::load(&path).unwrap();
+
+    // Outside any window's update, as the app's deferred open runs.
+    cx.cx
+        .update(|cx| crate::importer_view::open(importer_config(), false, cx));
+    let window = importer_window(cx).expect("the importer opened");
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    // Take the suggestion for the meet.google.com helper, then step
+    // through: the file has handlers, so Place asks where they go.
+    click(&mut importer, "importer-item-3");
+    click(&mut importer, crate::importer_view::SUGGESTION_ID);
+    click(&mut importer, crate::importer_view::NEXT_ID);
+    assert_eq!(
+        window
+            .read_with(&importer, |importer, _| importer.model.step)
+            .unwrap(),
+        crate::importer::Step::Place
+    );
+    click(&mut importer, "importer-place-1");
+    click(&mut importer, crate::importer_view::NEXT_ID);
+    click(&mut importer, "importer-source-1");
+    // Nothing is written before Import.
+    assert_eq!(RulesFile::load(&path).unwrap(), before);
+    // Import closes the window, so there is no frame to draw after it.
+    let import = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .expect("Import");
+    importer.simulate_click(import.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(importer_window(cx).is_none(), "Import closes the importer");
+
+    // One save: the imported handlers after the file's own (After yours),
+    // the string rewrite after its rewrites, and the default.
+    let after = RulesFile::load(&path).unwrap();
+    assert_eq!(after.rules.len(), before.rules.len() + 4);
+    assert_eq!(after.rules[..before.rules.len()], before.rules[..]);
+    let imported: Vec<&str> = after.rules[before.rules.len()..]
+        .iter()
+        .map(|rule| rule.patterns[0].as_str())
+        .collect();
+    assert_eq!(
+        imported,
+        [
+            "meet.google.com/*",
+            "bsky.app/*",
+            "google.com/*",
+            "*.atlassian.net/*"
+        ]
+    );
+    assert_eq!(after.rules[before.rules.len() + 3].profile, "Work");
+    assert_eq!(after.rewrites.len(), before.rewrites.len() + 1);
+    assert_eq!(after.default_browser, "Google Chrome");
+    // The Rules screen shows the file as written, with the banner.
+    let (handlers, done) =
+        view.read_with(cx, |app, _| (app.handlers.len(), app.last_import.clone()));
+    assert_eq!(handlers, after.rules.len());
+    let done = done.expect("the import is remembered");
+    assert_eq!((done.count, done.suggestions), (6, 1));
+    draw(cx);
+    assert!(cx.debug_bounds("import-done").is_some());
+
+    click(cx, crate::importer_view::UNDO_ID);
+    assert_eq!(RulesFile::load(&path).unwrap(), before);
+    assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
+    let _ = std::fs::remove_dir_all(&dir);
+}

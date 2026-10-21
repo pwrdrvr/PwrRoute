@@ -4,6 +4,7 @@
 
 - DMG - The macOS DMG opens to a window laid out like PwrSnap's, PwrAgnt's and PwrGit's: the PwrRoute wordmark, the app and an arrow to Applications on a branded background, the app icon as the volume icon, and a volume named `PwrRoute <version>-universal`.
 - First run - Step 1 offers a profile for a browser that has them (Chrome, Firefox and the like) and saves it as `rules.json`'s `defaultProfile` beside `defaultBrowser`. Step 3 flips to done as soon as macOS reports PwrRoute as the default: the window re-reads the answer every second while it is open, and coming back to the window right after the dialog no longer counts as a refusal while LaunchServices catches up. A default browser PwrRoute's catalog does not list is named by its app ("PwrFinicky"), not its bundle id. The main window opens on the display the first-run window was on.
+- Finicky importer - Import to visual rules…, first run's Import N rules, Settings › Configuration's Review import… and File › Import Finicky Config… open the importer: Review shows each rule's source lines and verdict (imports exactly, stays JS, or a suggested pattern the config's own function agreed with on every probe link), Place puts the imported handlers before, after or instead of yours, and Choose source keeps the config in charge or switches to visual rules; rules.json is written once, with Undo import, and the config is never changed.
 
 ## v0.1.0-rc.1 - 2026-10-21
 
