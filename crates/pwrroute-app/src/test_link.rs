@@ -30,7 +30,7 @@ use gpui_kit::{
     StrikethroughStyle, Styled as _, StyledText, Window, deferred, div, px,
 };
 use pwrroute_engine::{
-    AppType, DefaultHost, Engine, Expectation, Limits, Link, RouteTest, RulesFile, Sources, Trace,
+    AppType, Engine, Expectation, Limits, Link, NativeHost, RouteTest, RulesFile, Sources, Trace,
 };
 
 use crate::app::PwrRoute;
@@ -253,7 +253,10 @@ impl TestLink {
                 config: self.config.clone(),
                 rules: self.rules.clone(),
             };
-            match Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default()) {
+            // The OS answers the config's finicky.* calls, as it does for
+            // the router; the run's console output comes back in the trace.
+            let host = Rc::new(NativeHost::new());
+            match Engine::from_sources(&sources, host, Limits::default()) {
                 Ok(engine) => {
                     self.loaded = stamps(&engine);
                     self.engine = Some(engine);
@@ -491,6 +494,20 @@ fn step_row(
                     theme::danger_text()
                 } else {
                     theme::text_muted()
+                },
+            )),
+            StepBody::Lines(lines) => column.child(lines.iter().fold(
+                div().flex().flex_col().gap(px(2.0)),
+                |column, line| {
+                    column.child(
+                        div()
+                            .font_family(theme::mono_family(500.0))
+                            .font_weight(theme::weight(500.0))
+                            .text_size(px(10.5))
+                            .line_height(px(15.0))
+                            .text_color(theme::text_muted())
+                            .child(line.clone()),
+                    )
                 },
             )),
             StepBody::Folded => column

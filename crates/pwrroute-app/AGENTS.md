@@ -18,6 +18,15 @@ their own modules.
   window's tests (see `settings/AGENTS.md`). Never a real URL, Activity
   entry or trace, in code or in a screenshot: `fixtures::activity()` and
   `FirstRunModel::fixture` exist for tests.
+- **Every engine that resolves a link gets a `NativeHost`.** The router
+  (`router.rs`, injectable for tests), the window's config engine
+  (`app.rs`), Test a link, the Rules screen's `try_it` runs and `pwrroute
+  rules test` all answer `finicky.getModifierKeys()`, `isAppRunning()` and
+  the rest from the OS, as the Go host did; `DefaultHost` stays only where
+  a config is loaded to count or describe its rules. A run's `console`
+  output comes back in the engine's trace: Test a link shows it as a
+  "Config output" row, `rules test` prints it to stdout, and the router
+  drops it with the trace. Never write those lines anywhere.
 - **One browser scan (`browser_scan.rs`).** The machine's browsers and
   their profiles are read once, the first time a picker or Settings asks,
   and again only on Settings › Browsers' Rescan; `PwrRoute::browsers`
