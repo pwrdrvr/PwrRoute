@@ -54,7 +54,12 @@ window-only screenshots of fixture data) for 30 days.
   Fork PRs skip it so untrusted code never reaches the persistent guests.
   `scripts/ci/macos-e2e-pre-run-cleanup.sh` first stops PwrRoute copies an
   earlier job in this workspace left running and clears the app's saved
-  window state.
+  window state. The job then wakes the display, holds it awake with
+  `caffeinate` for the run, and `scripts/ci/macos-e2e-require-desktop.sh`
+  fails it at once if the runner's session is locked or off the console:
+  GPUI draws no window the platform does not present, so behind the lock
+  screen every test that needs a redraw would time out. A locked guest needs
+  its screen lock and screensaver off, which is the lab's to set.
 - **Windows** needs nothing extra: the hosted image has a desktop session.
 
 Hosted runners set `PWRROUTE_E2E_DISPOSABLE=1`; the Tart guests persist, so

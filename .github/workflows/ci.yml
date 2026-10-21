@@ -361,13 +361,20 @@ jobs:
         timeout-minutes: 5
         run: ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
+      # GPUI draws nothing for a window the platform does not present. Wake
+      # the display, and hold it awake for the run (power assertions, no
+      # settings); then require an unlocked desktop, since behind the lock
+      # screen no window is presented.
+      - name: Wake the display
+        run: caffeinate -u -t 2
+
+      - name: Require an unlocked desktop
+        timeout-minutes: 2
+        run: ./scripts/ci/macos-e2e-require-desktop.sh
+
       - name: Desktop E2E
         timeout-minutes: 30
-        # GPUI draws nothing for a window on a sleeping display: wake it, and
-        # hold it awake for this step only (power assertions, no settings).
-        run: |
-          caffeinate -u -t 2
-          caffeinate -dims cargo xtask e2e
+        run: caffeinate -dims cargo xtask e2e
 
       - name: Upload Desktop E2E artifacts
         uses: actions/upload-artifact@v7
