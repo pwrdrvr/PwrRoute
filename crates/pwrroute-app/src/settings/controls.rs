@@ -271,22 +271,6 @@ pub fn fn_tag() -> Div {
         .child(mono("fn", 10.5, 500.0, theme::accent_bright()))
 }
 
-/// `.addp`: the dashed "add one" affordance, from the Rules canvas.
-pub fn add_pill(id: impl Into<ElementId>, label: &'static str) -> Button {
-    Button::new(id)
-        .flex_none()
-        .gap(px(6.0))
-        .py(px(5.0))
-        .px(px(8.0))
-        .border_1()
-        .border_dashed()
-        .border_color(theme::border_default())
-        .rounded(px(7.0))
-        .cursor_pointer()
-        .hover(|style| style.bg(theme::bg_hover()))
-        .child(text(label, 11.0, 500.0, theme::text_muted()))
-}
-
 /// `.bi` at the Browsers list's 20px size.
 pub fn badge(label: impl Into<SharedString>) -> Div {
     div()

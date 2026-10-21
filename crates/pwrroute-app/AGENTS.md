@@ -12,12 +12,20 @@ their own modules.
   name plus `fixtures::OPENERS` under an "Examples" heading (their order
   is fixed: Activity's re-test picks by position). The tray follows the
   feed and the OS; its pause target is `rules.json`'s fallback, read once
-  at launch. Settings still draws `settings::fixtures::model()` for every
-  pane but the default-browser card, Privacy (see `settings/AGENTS.md`)
-  and Local agents (`mcp.rs` produces that one from the real store and
-  audit). Never a real URL, Activity entry or trace, in code or in a
-  screenshot: `fixtures::activity()` and `FirstRunModel::fixture` exist
-  for tests.
+  at launch. Settings is live: `settings_live.rs` builds every pane from
+  its producer (`settings/*_host.rs`, `mcp.rs` for Local agents) and
+  `settings::fixtures::model()` draws only the `screens` example and the
+  window's tests (see `settings/AGENTS.md`). Never a real URL, Activity
+  entry or trace, in code or in a screenshot: `fixtures::activity()` and
+  `FirstRunModel::fixture` exist for tests.
+- **One browser scan (`browser_scan.rs`).** The machine's browsers and
+  their profiles are read once, the first time a picker or Settings asks,
+  and again only on Settings › Browsers' Rescan; `PwrRoute::browsers`
+  (Activity's Add a rule sheet) and the Browsers pane read the same scan.
+  `settings.json`'s `browsers.hidden` (bundle ids, or names where there is
+  none) keeps apps out of the pickers; rules that name a hidden app still
+  resolve. `browser_scan::install_fixture` gives a test a scan; first run
+  (`onboarding.rs`) still scans for itself, since it runs before the window.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.
@@ -40,8 +48,9 @@ their own modules.
   a journaled row's record back from the journal.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
-  (`activity.keep`, `activity.journal`, `activity.journalDays`); an absent
-  file is the defaults, and a bad one is reported and ignored. `router.rs`
+  (`activity.keep`, `activity.journal`, `activity.journalDays`) and the
+  hidden browsers (`browsers.hidden`); an absent file is the defaults, and
+  a bad one is reported and ignored. `router.rs`
   reads it before the router spawns, so `Options::retention` and
   `Options::journal` (`<data dir>/journal`) are in force from the first
   link; `settings_store::install` then makes the same store and the

@@ -10,8 +10,11 @@ use gpui_kit::{
 };
 
 use super::local_agents::{ACCESS_SWITCH_ID, COLLAPSE_ALL_ID};
-use super::model::{DefaultState, RoleId, SessionId, SettingsRequest};
-use super::{Pane, SettingsHost, SettingsWindow, browsers, configuration, fixtures};
+use super::model::{DefaultState, RoleId, SessionId, SettingsRequest, UpdateState};
+use super::{
+    Pane, SettingsHost, SettingsWindow, about, browsers, configuration, diagnostics, fixtures,
+    updates,
+};
 use crate::app::PwrRoute;
 use crate::chrome::OPEN_SETTINGS_ID;
 
@@ -126,6 +129,9 @@ fn the_nav_switches_panes(cx: &mut TestAppContext) {
         Pane::Configuration,
         Pane::LocalAgents,
         Pane::General,
+        Pane::Updates,
+        Pane::Diagnostics,
+        Pane::About,
         Pane::Browsers,
     ] {
         click(cx, target.nav_id());
@@ -313,6 +319,158 @@ fn the_source_tiles_pick_the_rules_source(cx: &mut TestAppContext) {
             super::model::RulesSource::Finicky
         )]
     );
+}
+
+#[gpui_kit::test]
+fn the_source_tiles_only_show_the_choice_while_switching_is_not_built(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |model| model.configuration.can_switch = false);
+    click(cx, Pane::Configuration.nav_id());
+    click(cx, configuration::FINICKY_SLOT_ID);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.model.configuration.active),
+        super::model::RulesSource::Visual
+    );
+    assert!(requests.borrow().is_empty());
+    // The files card, below the fold, still acts.
+    view.update(cx, |view, cx| {
+        view.scroll
+            .set_offset(gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(-2000.0)));
+        cx.notify();
+    });
+    draw(cx);
+    click(cx, "config-reload");
+    click(cx, "config-reveal");
+    click(cx, "config-data-folder");
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::ReloadRules,
+            SettingsRequest::RevealRules,
+            SettingsRequest::OpenDataFolder,
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn the_browsers_pane_hides_an_app_and_rescans(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, ("browsers-visible", 0_usize));
+    assert!(!view.read_with(cx, |view, _| view.model.browsers.detected[0].visible));
+    click(cx, ("browsers-other-visible", 1_usize));
+    click(cx, "browsers-rescan");
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::SetAppVisible {
+                app: "com.google.Chrome".into(),
+                visible: false,
+            },
+            SettingsRequest::SetAppVisible {
+                app: "com.figma.Desktop".into(),
+                visible: false,
+            },
+            SettingsRequest::RescanBrowsers,
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn the_updates_pane_checks_now_and_restarts_into_a_download(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Updates.nav_id());
+    // The fixture has a release downloaded: Restart, not Check now.
+    assert!(visible(cx, updates::RESTART_ID));
+    assert!(!visible(cx, updates::CHECK_ID));
+    click(cx, updates::RESTART_ID);
+    assert_eq!(*requests.borrow(), [SettingsRequest::RestartToUpdate]);
+
+    view.update(cx, |view, cx| {
+        view.model.updates.state = UpdateState::NeverChecked;
+        view.model.updates.last_checked = None;
+        cx.notify();
+    });
+    draw(cx);
+    assert!(visible(cx, updates::CHECK_ID));
+    click(cx, updates::CHECK_ID);
+    assert_eq!(requests.borrow()[1], SettingsRequest::CheckForUpdates);
+
+    // While a check runs the button is inert; a failure offers Try again.
+    view.update(cx, |view, cx| {
+        view.model.updates.state = UpdateState::Checking;
+        cx.notify();
+    });
+    draw(cx);
+    click(cx, updates::CHECK_ID);
+    assert_eq!(requests.borrow().len(), 2);
+    view.update(cx, |view, cx| {
+        view.model.updates.state = UpdateState::Failed("Could not check: timed out.".into());
+        cx.notify();
+    });
+    draw(cx);
+    click(cx, updates::CHECK_ID);
+    assert_eq!(requests.borrow()[2], SettingsRequest::CheckForUpdates);
+    // A copy that cannot update offers nothing.
+    view.update(cx, |view, cx| {
+        view.model.updates.state = UpdateState::NotUpdatable("A development build.".into());
+        cx.notify();
+    });
+    draw(cx);
+    assert!(!visible(cx, updates::CHECK_ID));
+    assert!(!visible(cx, updates::RESTART_ID));
+}
+
+#[gpui_kit::test]
+fn the_diagnostics_pane_copies_the_report_and_opens_the_data_folder(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Diagnostics.nav_id());
+    click(cx, diagnostics::COPY_ID);
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    let report = view.read_with(cx, |view, _| view.model.diagnostics.report());
+    assert_eq!(copied.as_deref(), Some(report.as_str()));
+    assert!(!report.contains("://"), "{report}");
+    assert!(requests.borrow().is_empty());
+
+    click(cx, diagnostics::OPEN_DATA_ID);
+    click(cx, "diagnostics-reload");
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::OpenDataFolder,
+            SettingsRequest::ReloadRules
+        ]
+    );
+    // No data folder: the button is inert.
+    view.update(cx, |view, cx| {
+        view.model.diagnostics.data_dir_exists = false;
+        cx.notify();
+    });
+    draw(cx);
+    click(cx, diagnostics::OPEN_DATA_ID);
+    assert_eq!(requests.borrow().len(), 2);
+}
+
+#[gpui_kit::test]
+fn the_about_pane_reveals_the_notices_it_ships(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::About.nav_id());
+    click(cx, about::NOTICES_ID);
+    click(cx, about::NOTES_ID);
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::RevealThirdPartyNotices,
+            SettingsRequest::OpenReleaseNotes,
+        ]
+    );
+    view.update(cx, |view, cx| {
+        view.model.about.has_third_party_notices = false;
+        view.model.about.has_release_notes = false;
+        cx.notify();
+    });
+    draw(cx);
+    click(cx, about::NOTICES_ID);
+    click(cx, about::NOTES_ID);
+    assert_eq!(requests.borrow().len(), 2);
 }
 
 #[gpui_kit::test]

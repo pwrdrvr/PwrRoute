@@ -17,6 +17,7 @@ mod app_menu;
 mod assets;
 #[cfg(target_os = "windows")]
 mod browser_registration;
+mod browser_scan;
 mod chrome;
 mod config_view;
 mod default_browser;
@@ -33,6 +34,7 @@ mod rules_model;
 mod rules_store;
 mod rules_view;
 mod settings;
+mod settings_live;
 mod settings_store;
 mod test_link;
 #[cfg(test)]
@@ -175,24 +177,13 @@ fn main() -> ExitCode {
             },
             cx,
         );
+        // The one browser scan, read when a picker or Settings first asks.
+        browser_scan::install(pwrroute_browsers::Env::system(), cx);
         cx.set_global(settings::SettingsHost {
-            model: Rc::new(|window, cx| {
-                default_browser::watch(window, cx);
-                let mut model = settings::fixtures::model();
-                model.browsers.default = default_browser::card(cx);
-                model.privacy = settings::privacy_host::model(cx);
-                model.local_agents = mcp::local_agents(cx);
-                model
-            }),
-            on_request: Rc::new(|request, _, cx| {
-                if !default_browser::handle_settings_request(request, cx)
-                    && !settings::privacy_host::handle_request(request, cx)
-                    && !mcp::handle_settings_request(request, cx)
-                {
-                    eprintln!("pwrroute: settings: {request:?} is not wired up yet");
-                }
-            }),
+            model: Rc::new(settings_live::model),
+            on_request: Rc::new(|request, _, cx| settings_live::handle_request(request, cx)),
         });
+        updater::install(cx);
         updater::check_in_background(updater::Trigger::Startup);
 
         let activate = resident.activate.clone();

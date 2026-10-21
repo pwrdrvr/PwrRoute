@@ -2,21 +2,31 @@
 //! PwrGit. A 208px nav on the left, and panes of cards at most 760px wide.
 //!
 //! The window draws a [`SettingsModel`] from [`SettingsHost`] and reports
-//! what the reader asks for as [`SettingsRequest`]s to its handler. Until
-//! the producers are wired up it draws [`fixtures`] and the handler only
-//! logs; a producer that answers later goes through [`update`].
+//! what the reader asks for as [`SettingsRequest`]s to its handler. The
+//! shipped app installs `settings_live`, which builds every pane from its
+//! producer (`*_host` here) and routes each request to the one that
+//! answers it; without a host the window draws [`fixtures`] and the
+//! handler only logs. A producer that answers later goes through
+//! [`update`].
 
+mod about;
 mod browsers;
+pub mod browsers_host;
 mod configuration;
+pub mod configuration_host;
 mod controls;
+mod diagnostics;
 pub mod fixtures;
 mod local_agents;
 pub mod model;
 pub mod privacy;
 pub mod privacy_host;
 mod style;
+pub mod system_host;
 #[cfg(test)]
 mod tests;
+mod updates;
+pub mod updates_host;
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -251,6 +261,14 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
     }
 }
 
+/// Whether a Settings window is open: a producer that reads files to
+/// report back asks first, so a closed window costs nothing.
+pub fn is_open(cx: &App) -> bool {
+    cx.windows()
+        .into_iter()
+        .any(|window| window.downcast::<SettingsWindow>().is_some())
+}
+
 /// Changes the open window's model, if there is one: how a producer reports
 /// back (the OS's answer on the default browser, say). Nothing happens when
 /// Settings is closed; the next open reads the producer afresh.
@@ -426,11 +444,14 @@ impl SettingsWindow {
 
     fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
         match self.pane {
+            Pane::General => placeholder(Pane::General),
             Pane::Browsers => browsers::pane(self, cx),
             Pane::Configuration => configuration::pane(self, cx),
             Pane::Privacy => privacy::pane(self, window, cx),
             Pane::LocalAgents => local_agents::pane(self, window, cx),
-            pane => placeholder(pane),
+            Pane::Updates => updates::pane(self, cx),
+            Pane::Diagnostics => diagnostics::pane(self, cx),
+            Pane::About => about::pane(self, cx),
         }
     }
 }
@@ -502,14 +523,7 @@ fn nav_item(
 
 /// A pane the design leaves to the family and that is not drawn yet.
 fn placeholder(pane: Pane) -> Div {
-    let help = match pane {
-        Pane::General => "Launch at login, the menu bar icon and appearance. Not built yet.",
-        Pane::Updates => "Release channel and automatic downloads. Not built yet.",
-        Pane::Diagnostics => {
-            "Logs, the router's memory and CPU, and a support bundle. Not built yet."
-        }
-        _ => "Version, licenses and links. Not built yet.",
-    };
+    let help = "Launch at login, the menu bar icon and appearance. Not built yet.";
     div().child(controls::pane_head("Settings", pane.label(), help, None))
 }
 

@@ -9,12 +9,22 @@
 //!
 //! Only a copy Velopack installed can update. `cargo run`, the .deb and the
 //! tar.gz have no Velopack manifest, so their check logs that and stops.
+//!
+//! What a check found is kept in [`state`] for Settings › Updates, which
+//! [`install`] redraws when it changes; nothing is persisted, so a fresh
+//! launch starts at "not checked yet".
 
 use std::{
     fmt,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Mutex, OnceLock, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
+    time::SystemTime,
 };
+
+use gpui_kit::App;
 
 use velopack::{
     UpdateCheck, UpdateManager, VelopackApp,
@@ -61,6 +71,85 @@ pub fn run_startup_hooks() {
 pub enum Trigger {
     Startup,
     Menu,
+    Settings,
+}
+
+/// What the updater has said so far this launch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct State {
+    /// A check is running now.
+    pub checking: bool,
+    /// The last check that finished, and when.
+    pub last: Option<(SystemTime, Outcome)>,
+}
+
+static STATE: Mutex<State> = Mutex::new(State {
+    checking: false,
+    last: None,
+});
+
+/// Wakes [`install`]'s task after every change to [`state`].
+static CHANGED: OnceLock<async_channel::Sender<()>> = OnceLock::new();
+
+/// The updater's state as it stands.
+pub fn state() -> State {
+    STATE.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+fn set_state(edit: impl FnOnce(&mut State)) {
+    edit(&mut STATE.lock().unwrap_or_else(PoisonError::into_inner));
+    if let Some(changed) = CHANGED.get() {
+        let _ = changed.try_send(());
+    }
+}
+
+/// Redraws Settings › Updates whenever a check starts or finishes. Call
+/// once, after `settings` is installed.
+pub fn install(cx: &mut App) {
+    let (tx, rx) = async_channel::unbounded::<()>();
+    if CHANGED.set(tx).is_err() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        while rx.recv().await.is_ok() {
+            cx.update(|cx| {
+                let updates = crate::settings::updates_host::model();
+                crate::settings::update(cx, move |model| model.updates = updates);
+            });
+        }
+    })
+    .detach();
+}
+
+/// Where this copy came from, as far as Velopack can tell without the
+/// network: its manifest version, or why there is none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Installation {
+    /// Velopack installed this copy at `version`; it can update itself.
+    Velopack { version: String },
+    /// No Velopack manifest: `cargo run`, the .deb or the tar.gz.
+    NotInstalled { why: String },
+}
+
+/// Reads the manifest beside the executable. Local files only.
+pub fn installation() -> Installation {
+    match locator::auto_locate_app_manifest(LocationContext::FromCurrentExe) {
+        Ok(locator) => Installation::Velopack {
+            version: locator.get_manifest_version().to_string(),
+        },
+        Err(error) => Installation::NotInstalled {
+            why: error.to_string(),
+        },
+    }
+}
+
+/// Which releases a version follows: see [`includes_prereleases`].
+pub fn channel(version: &str) -> &'static str {
+    if includes_prereleases(version) {
+        "prerelease"
+    } else {
+        "stable"
+    }
 }
 
 /// Check for an update, and download it, on a thread of its own: Velopack's
@@ -70,17 +159,43 @@ pub fn check_in_background(trigger: Trigger) {
         log(trigger, &Outcome::AlreadyChecking);
         return;
     }
+    set_state(|state| state.checking = true);
     let spawned = thread::Builder::new()
         .name("pwrroute-updater".to_owned())
         .spawn(move || {
             let outcome = check_and_download();
             CHECKING.store(false, Ordering::Release);
             log(trigger, &outcome);
+            set_state(|state| {
+                state.checking = false;
+                state.last = Some((SystemTime::now(), outcome));
+            });
         });
     if let Err(error) = spawned {
         CHECKING.store(false, Ordering::Release);
-        log(trigger, &Outcome::Failed(error.to_string()));
+        let outcome = Outcome::Failed(error.to_string());
+        log(trigger, &outcome);
+        set_state(|state| {
+            state.checking = false;
+            state.last = Some((SystemTime::now(), outcome));
+        });
     }
+}
+
+/// Installs the downloaded release and starts PwrRoute again: Settings'
+/// "Restart to update". Velopack swaps the package and relaunches, so this
+/// returns only when there is nothing to apply or it could not start.
+pub fn restart_to_update() -> Result<(), String> {
+    // The manager locates the manifest itself and refuses a copy Velopack
+    // did not install; the feed is never read here.
+    let source = GithubSource::new(RELEASES, None, false);
+    let manager = UpdateManager::new(source, None, None).map_err(|e| e.to_string())?;
+    let pending = manager
+        .get_update_pending_restart()
+        .ok_or_else(|| "no downloaded update to install".to_owned())?;
+    manager
+        .apply_updates_and_restart(&pending)
+        .map_err(|e| e.to_string())
 }
 
 fn check_and_download() -> Outcome {
@@ -120,8 +235,9 @@ fn includes_prereleases(version: &str) -> bool {
     version.contains('-')
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Outcome {
+/// How a check went. The version strings are Velopack's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
     AlreadyChecking,
     NotInstalled(String),
     UpToDate(String),
@@ -159,6 +275,7 @@ fn log(trigger: Trigger, outcome: &Outcome) {
     let trigger = match trigger {
         Trigger::Startup => "startup",
         Trigger::Menu => "menu",
+        Trigger::Settings => "settings",
     };
     eprintln!("pwrroute: updates ({trigger}): {outcome}");
 }
@@ -172,6 +289,14 @@ mod tests {
         assert!(includes_prereleases("0.0.1-alpha.0"));
         assert!(includes_prereleases("1.2.0-beta.3"));
         assert!(!includes_prereleases("1.2.0"));
+        assert_eq!(channel("0.0.1-alpha.0"), "prerelease");
+        assert_eq!(channel("1.2.0"), "stable");
+    }
+
+    #[test]
+    fn a_dev_build_has_no_installation_and_nothing_to_restart_into() {
+        assert!(matches!(installation(), Installation::NotInstalled { .. }));
+        assert!(restart_to_update().is_err());
     }
 
     #[test]
