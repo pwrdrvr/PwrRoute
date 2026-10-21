@@ -13,6 +13,9 @@ crate docs map the modules.
   `console`, the `finicky` global (the API's utilities plus the `Host`
   trait's native functions), module loading with oxc, and the `url`,
   `originalUrl`, `opener`, `finalConfig` globals `openUrl` reads.
+  Wherever a real or simulated link is resolved, the host is a
+  `NativeHost`; `DefaultHost` (all keys up, no apps running, no output) is
+  only for loads that count or describe a config's rules.
 - **`src/js/host.js` is PwrRoute's glue, not Finicky's.** It turns
   `rules.json` into Finicky objects, appends them after a config's own (as the
   Go resolver appended JSON handlers), and traces by wrapping matchers around
@@ -39,8 +42,10 @@ crate docs map the modules.
   limit (`Limits`), so a looping or runaway config cannot hang the router.
   Short-link expansion has its own per-attempt deadline and redirect limit.
 - **URLs are private.** `Host::log` receives config `console` output, which
-  often contains URLs. Nothing in this crate writes a URL the user opened to
-  disk, or logs one: `RulesFile::save` writes only the rules it is given, and
+  often contains URLs; each run's lines also come back in `Trace::console`
+  and `TestReport::console` (the last `ConsoleLog::CAPACITY`), for a screen
+  or a tool result, never for a file. Nothing in this crate writes a URL the
+  user opened to disk, or logs one: `RulesFile::save` writes only the rules it is given, and
   a `Network` must not record what it fetches. ureq logs requests through the
   `log` crate at debug level, so a host that writes logs to disk must filter
   `ureq` out. The examples and tests in `rules.json` are URLs the user chose

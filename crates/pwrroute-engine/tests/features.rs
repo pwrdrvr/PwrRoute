@@ -12,9 +12,9 @@ use std::{
 
 use anyhow::{Result, bail};
 use pwrroute_engine::{
-    AppType, BrowserSpec, DefaultHost, Engine, FixedBrowser, Limits, Link, Matcher, MatcherSpec,
-    Method, Network, Opener, Reply, Rewrite, RewriteAction, Rule, RulesFile, Source, Sources,
-    Stage, UrlSpec,
+    AppType, BrowserSpec, ConsoleLine, ConsoleLog, DefaultHost, Engine, Expectation, FixedBrowser,
+    Limits, Link, LogLevel, Matcher, MatcherSpec, Method, NativeHost, Network, Opener, Reply,
+    Rewrite, RewriteAction, RouteTest, Rule, RulesFile, Source, Sources, Stage, UrlSpec,
 };
 
 fn configs() -> PathBuf {
@@ -431,6 +431,132 @@ fn a_trace_sees_the_opener() {
     let winner = trace.winner().unwrap();
     assert_eq!((winner.source, winner.index), (Source::Config, 0));
     assert_eq!(trace.resolution.browser.profile, "Work");
+}
+
+// Console output
+
+/// A config that prints while loading and on every link it sees.
+fn chatty_config(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "pwrroute-features-console-{name}-{}.js",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        r#"console.log("loaded");
+export default {
+  defaultBrowser: "Safari",
+  handlers: [{
+    match: (url) => { console.warn("saw", url.href); return false; },
+    browser: "Firefox",
+  }],
+};"#,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn console_output_reaches_the_native_hosts_log() {
+    let lines: Rc<RefCell<Vec<(LogLevel, String)>>> = Rc::default();
+    let sink = Rc::clone(&lines);
+    let host = NativeHost::with_log(move |level, message| {
+        sink.borrow_mut().push((level, message.to_owned()));
+    });
+    let path = chatty_config("with-log");
+    let e = Engine::load(&path, Rc::new(host), Limits::default()).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        *lines.borrow(),
+        [(LogLevel::Info, "loaded".to_owned())],
+        "load-time output arrives as the config loads"
+    );
+    e.resolve("https://a.example/x", None).unwrap();
+    assert_eq!(
+        lines.borrow()[1],
+        (LogLevel::Warn, "saw https://a.example/x".to_owned())
+    );
+}
+
+#[test]
+fn a_trace_carries_the_runs_console_lines_and_a_log_keeps_the_loads() {
+    let log = ConsoleLog::new();
+    let path = chatty_config("trace");
+    let e = Engine::load(&path, Rc::new(log.native_host()), Limits::default()).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        log.take().len(),
+        1,
+        "the load's line went to the host's log"
+    );
+
+    let trace = e.trace(&Link::new("https://a.example/one"), None).unwrap();
+    assert_eq!(
+        trace.console,
+        [ConsoleLine {
+            level: LogLevel::Warn,
+            message: "saw https://a.example/one".into(),
+        }],
+        "the run's lines, and not the load's"
+    );
+    let trace = e.trace(&Link::new("https://a.example/two"), None).unwrap();
+    assert_eq!(trace.console.len(), 1, "each run starts afresh: {trace:?}");
+    assert_eq!(trace.console[0].message, "saw https://a.example/two");
+    assert_eq!(log.take().len(), 2, "the host's log saw both runs");
+
+    // A trace without output serializes as before.
+    let quiet = engine(None, RulesFile::default())
+        .trace(&Link::new("https://a.example/"), None)
+        .unwrap();
+    let json = serde_json::to_value(&quiet).unwrap();
+    assert!(json.get("console").is_none(), "{json}");
+    assert_eq!(
+        serde_json::from_value::<pwrroute_engine::Trace>(json).unwrap(),
+        quiet
+    );
+}
+
+#[test]
+fn a_test_report_carries_the_console_lines_of_every_run() {
+    let path = chatty_config("report");
+    let rules = RulesFile {
+        tests: vec![
+            RouteTest {
+                url: "https://a.example/one".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "Safari".into(),
+                    ..Expectation::default()
+                },
+            },
+            RouteTest {
+                url: "https://a.example/two".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "Safari".into(),
+                    ..Expectation::default()
+                },
+            },
+        ],
+        ..RulesFile::default()
+    };
+    let e = Engine::from_sources(
+        &Sources {
+            config: Some(path.clone()),
+            rules,
+        },
+        Rc::new(DefaultHost),
+        Limits::default(),
+    )
+    .unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let report = e.test_rules(None).unwrap();
+    assert_eq!((report.total, report.passed), (2, 2), "{report:?}");
+    let messages: Vec<&str> = report.console.iter().map(|l| l.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["saw https://a.example/one", "saw https://a.example/two"]
+    );
 }
 
 // Short links
