@@ -1,9 +1,12 @@
 use std::{
     rc::Rc,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
-use pwrroute_engine::{DefaultHost, Limits, Rewrite, RewriteAction, Rule, RulesFile, Sources};
+use pwrroute_engine::{
+    DefaultHost, Limits, Method, Reply, Rewrite, RewriteAction, Rule, RulesFile, Sources,
+};
 
 use anyhow::anyhow;
 
@@ -390,7 +393,7 @@ fn a_config_that_fails_to_load_leaves_the_fallback_with_the_reason() {
 
 struct Failing;
 impl Resolver for Failing {
-    fn resolve(&self, _: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, _: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
         Err(anyhow!("resolving the URL: timed out"))
     }
 }
@@ -414,7 +417,8 @@ fn a_resolve_error_is_traced_and_the_link_still_opens() {
 /// Reports rule-level steps, as a tracing engine would.
 struct Tracing;
 impl Resolver for Tracing {
-    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, link: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
+        let url = &link.url;
         Ok(Resolved {
             browser: Browser {
                 name: "Firefox".into(),
@@ -666,12 +670,12 @@ fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
 /// Routes every link to Brave, a browser no OS has as its own.
 struct ToBrave;
 impl Resolver for ToBrave {
-    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, link: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
         Ok(Resolved {
             browser: Browser {
                 name: "Brave".into(),
                 app_type: AppType::AppName,
-                url: url.into(),
+                url: link.url.clone(),
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,
@@ -688,12 +692,12 @@ impl Resolver for ToBrave {
 /// Routes every link to a private Firefox window.
 struct PrivateFirefox;
 impl Resolver for PrivateFirefox {
-    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, link: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
         Ok(Resolved {
             browser: Browser {
                 name: "Firefox".into(),
                 app_type: AppType::AppName,
-                url: url.into(),
+                url: link.url.clone(),
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,
@@ -983,12 +987,12 @@ struct Watching {
 }
 
 impl Resolver for Watching {
-    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, link: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
         Ok(Resolved {
             browser: Browser {
                 name: "Watched Browser".into(),
                 app_type: AppType::AppName,
-                url: url.to_owned(),
+                url: link.url.clone(),
                 profile: String::new(),
                 args: Vec::new(),
                 open_in_background: None,
@@ -1056,7 +1060,8 @@ fn refresh_runs_before_each_link_and_its_reason_is_the_fallback_reason() {
 /// counted, anything else in full.
 struct Leveled;
 impl Resolver for Leveled {
-    fn resolve(&self, url: &str, _: Option<&Opener>) -> Result<Resolved> {
+    fn resolve(&self, link: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
+        let url = &link.url;
         let privacy = if url.contains("://host.") {
             Privacy::Host
         } else if url.contains("://none.") {
@@ -1723,4 +1728,273 @@ fn set_journal_opens_and_closes_the_journal_from_the_next_dispatch() {
         handle.retention().description,
         Options::default().retention_description()
     );
+}
+
+/// A shortener that answers from a table and counts what it was asked;
+/// anything else is offline. `Send + Sync`, as the router's network must be.
+#[derive(Default)]
+struct FakeShortener {
+    redirects: Mutex<Vec<(String, String)>>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl FakeShortener {
+    fn redirect(self, from: &str, to: &str) -> Self {
+        self.redirects
+            .lock()
+            .unwrap()
+            .push((from.to_owned(), to.to_owned()));
+        self
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl Network for FakeShortener {
+    fn request(&self, method: Method, url: &str, _timeout: Duration) -> Result<Reply> {
+        self.asked.lock().unwrap().push(format!("{method:?} {url}"));
+        let redirects = self.redirects.lock().unwrap();
+        if let Some((_, to)) = redirects.iter().find(|(from, _)| from == url) {
+            return Ok(Reply {
+                status: 301,
+                location: Some(to.clone()),
+            });
+        }
+        if redirects.iter().any(|(_, to)| to == url) {
+            return Ok(Reply {
+                status: 200,
+                location: None,
+            });
+        }
+        Err(anyhow!("offline"))
+    }
+}
+
+/// `rules.json` alone: the engine's built-in shortener list is in force,
+/// and `github.com` goes to Firefox.
+fn github_rules() -> RulesFile {
+    RulesFile {
+        default_browser: "Safari".into(),
+        rules: vec![
+            Rule {
+                patterns: vec!["github.com/*".into()],
+                browser: "Firefox".into(),
+                ..Rule::default()
+            },
+            Rule {
+                patterns: vec!["host.example.com/*".into()],
+                browser: "Firefox".into(),
+                privacy: Some(Privacy::Host.into()),
+                ..Rule::default()
+            },
+        ],
+        ..RulesFile::default()
+    }
+}
+
+fn shortener_router(rules: RulesFile, network: Arc<FakeShortener>) -> (Router, DryRunLauncher) {
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            network: Some(network),
+            ..Options::default()
+        },
+        Some(rules_factory(rules)),
+        launcher.clone(),
+    )
+    .unwrap();
+    (router, launcher)
+}
+
+#[test]
+fn a_short_link_is_routed_by_where_it_lands_and_the_record_keeps_both() {
+    let net = Arc::new(
+        FakeShortener::default().redirect("https://bit.ly/gh", "https://github.com/pwrdrvr/x"),
+    );
+    let (router, launcher) = shortener_router(github_rules(), Arc::clone(&net));
+    let handle = router.handle();
+    let record = handle.dispatch_and_wait(link("https://bit.ly/gh")).unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    let browser = record.browser.clone().unwrap();
+    assert_eq!(browser.name, "Firefox", "{:?}", record.steps);
+    assert_eq!(browser.url, "https://github.com/pwrdrvr/x");
+    assert_eq!(launcher.launched()[0].url, "https://github.com/pwrdrvr/x");
+    // The record shows the short link and where it landed.
+    assert_eq!(record.link.url, "https://bit.ly/gh");
+    assert_eq!(
+        record.final_url.as_deref(),
+        Some("https://github.com/pwrdrvr/x")
+    );
+    assert_eq!(
+        record.steps,
+        vec![
+            Step::Received {
+                url: "https://bit.ly/gh".into()
+            },
+            Step::Expanded {
+                url: "https://github.com/pwrdrvr/x".into()
+            },
+            Step::Matched {
+                by: Matched::Unreported
+            },
+            Step::Browser { browser },
+            Step::Launched { dry_run: true },
+        ]
+    );
+    assert_eq!(record.timing().rewrites, 0, "an expansion is not a rewrite");
+    // Only the shortener and its target were asked, HEAD first.
+    assert_eq!(
+        net.asked(),
+        [
+            "Head https://bit.ly/gh",
+            "Head https://github.com/pwrdrvr/x"
+        ]
+    );
+
+    // Test a link expands the same way, and makes the same requests.
+    let tested = handle.test(link("https://bit.ly/gh")).unwrap();
+    assert_eq!(tested.outcome, Outcome::Tested);
+    assert_eq!(tested.browser.unwrap().name, "Firefox");
+    assert!(tested.steps.contains(&Step::Expanded {
+        url: "https://github.com/pwrdrvr/x".into()
+    }));
+    assert_eq!(net.asked().len(), 4);
+
+    // A link that is not short is never requested, and has no step.
+    let record = handle
+        .dispatch_and_wait(link("https://github.com/direct"))
+        .unwrap();
+    assert!(
+        !record
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Expanded { .. }))
+    );
+    assert_eq!(net.asked().len(), 4);
+}
+
+#[test]
+fn an_unanswered_short_link_goes_to_the_rules_as_it_is() {
+    let net = Arc::new(FakeShortener::default());
+    let (router, launcher) = shortener_router(github_rules(), Arc::clone(&net));
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://bit.ly/offline"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(record.browser.unwrap().name, "Safari");
+    assert_eq!(launcher.launched()[0].url, "https://bit.ly/offline");
+    assert!(
+        !record
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Expanded { .. }))
+    );
+    // HEAD, then GET, and nothing else.
+    assert_eq!(
+        net.asked(),
+        ["Head https://bit.ly/offline", "Get https://bit.ly/offline"]
+    );
+}
+
+#[test]
+fn a_host_rule_withholds_the_short_link_and_where_it_landed_alike() {
+    let secret = "https://host.example.com/reset?token=hunter2";
+    let net = Arc::new(FakeShortener::default().redirect("https://bit.ly/s3cr3t", secret));
+    let (router, launcher) = shortener_router(github_rules(), net);
+    let handle = router.handle();
+    let reply = handle
+        .dispatch_and_wait(link("https://bit.ly/s3cr3t").with_opener(Some(secret_opener())))
+        .unwrap();
+    // The browser got the real destination, by the host rule.
+    assert_eq!(launcher.launched()[0].url, secret);
+    assert_eq!(launcher.launched()[0].name, "Firefox");
+
+    let stored = handle.get(reply.id).unwrap();
+    for record in [&reply, &stored] {
+        assert_eq!(record.privacy, Privacy::Host);
+        assert_eq!(record.link.url, "https://bit.ly");
+        assert_eq!(
+            record.final_url.as_deref(),
+            Some("https://host.example.com")
+        );
+        assert_eq!(
+            record.steps[..2],
+            [
+                Step::Received {
+                    url: "https://bit.ly".into()
+                },
+                Step::Expanded {
+                    url: "https://host.example.com".into()
+                },
+            ]
+        );
+        let json = serde_json::to_string(record).unwrap();
+        for private in ["s3cr3t", "hunter2", "/reset", "token"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+    }
+}
+
+#[test]
+fn nothing_is_requested_when_no_config_is_in_charge_or_expansion_is_off() {
+    let net = Arc::new(
+        FakeShortener::default().redirect("https://bit.ly/gh", "https://github.com/pwrdrvr/x"),
+    );
+    // No config: the fallback takes the short link as it is.
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            network: Some(Arc::clone(&net) as Arc<dyn Network + Send + Sync>),
+            ..Options::default()
+        },
+        None,
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://bit.ly/gh"))
+        .unwrap();
+    assert_eq!(launcher.launched()[0].url, "https://bit.ly/gh");
+    assert!(record.steps.contains(&Step::Fallback {
+        reason: "no config is selected".into()
+    }));
+    assert!(net.asked().is_empty());
+
+    // A config whose `urlShorteners: []` turned expansion off.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("finicky.js");
+    std::fs::write(
+        &path,
+        r#"export default {
+  defaultBrowser: "Safari",
+  options: { urlShorteners: [] },
+  handlers: [{ match: "github.com/*", browser: "Firefox" }],
+};"#,
+    )
+    .unwrap();
+    let factory: ResolverFactory = Box::new(move || {
+        let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default())?;
+        Ok(Box::new(engine) as Box<dyn Resolver>)
+    });
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            network: Some(Arc::clone(&net) as Arc<dyn Network + Send + Sync>),
+            ..Options::default()
+        },
+        Some(factory),
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://bit.ly/gh"))
+        .unwrap();
+    assert_eq!(record.browser.unwrap().name, "Safari");
+    assert_eq!(launcher.launched()[0].url, "https://bit.ly/gh");
+    assert!(net.asked().is_empty());
 }

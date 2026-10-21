@@ -439,6 +439,9 @@ pub struct ActivityRow {
     pub dry_run: bool,
     /// The trace, for the expanded row.
     pub steps: Vec<ActivityStep>,
+    /// The URL the rules saw (`matched_url`): where a short link landed,
+    /// else `url`. Re-test tries this one.
+    pub matched_url: SharedString,
     /// The URL the browser was asked to open.
     pub final_url: SharedString,
     /// How much of the link the record keeps: `Host` draws the "host only"
@@ -577,6 +580,7 @@ impl ActivityRow {
                 .iter()
                 .any(|step| matches!(step, Step::Launched { dry_run: true })),
             steps: trace_lines(record),
+            matched_url: matched_url(record).into(),
             final_url: record.final_url.as_deref().unwrap_or(received).into(),
             privacy: record.privacy,
             journaled,
@@ -636,6 +640,21 @@ fn received_url(record: &DispatchRecord) -> &str {
             _ => None,
         })
         .unwrap_or(&record.link.url)
+}
+
+/// The URL the rules saw: where a short link landed when the router
+/// expanded it, else the URL as received. Whatever re-resolves a record
+/// (Re-test, Save as test or example, Add a rule) starts from this one,
+/// since Test a link and the saved tests do not expand short links.
+pub(crate) fn matched_url(record: &DispatchRecord) -> &str {
+    record
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            Step::Expanded { url } => Some(url.as_str()),
+            _ => None,
+        })
+        .unwrap_or_else(|| received_url(record))
 }
 
 /// The Rule column: "rw 1, 2 · h 3", "handler 2", "default", "fallback",
@@ -774,6 +793,14 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
         let (mark, line) = match step {
             // The row itself shows the link and where it went.
             Step::Received { .. } | Step::Browser { .. } => continue,
+            Step::Expanded { url: after } => {
+                let line = format!(
+                    "short link \u{00b7} expanded \u{00b7} {}",
+                    describe_rewrite(url, after)
+                );
+                url = after;
+                (StepMark::Hit(number), line)
+            }
             Step::Rewrite { rule, url: after } => {
                 let name = match rule {
                     Some(rule) => format!("rewrite {}", rule + 1),
@@ -1339,7 +1366,7 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
             )
             .child(text(content, 11.0, 400.0, theme::text_muted()).line_height(px(16.5)))
     };
-    let url = row.url.to_string();
+    let url = row.matched_url.to_string();
     let from = row.from.to_string();
     let key = row.key;
     // A host-only record has no full URL to re-test or add a rule for.
@@ -1937,6 +1964,45 @@ mod tests {
 
     fn texts(row: &ActivityRow) -> Vec<&str> {
         row.steps.iter().map(|step| step.text.as_ref()).collect()
+    }
+
+    #[test]
+    fn a_short_link_row_shows_the_link_and_where_it_landed() {
+        let received = "https://bit.ly/gh";
+        let landed = "https://github.com/pwrdrvr/x";
+        let record = record(
+            9,
+            received,
+            Some("Mail"),
+            vec![
+                Step::Received {
+                    url: received.into(),
+                },
+                Step::Expanded { url: landed.into() },
+                Step::Matched {
+                    by: Matched::Unreported,
+                },
+                Step::Browser {
+                    browser: browser("Firefox", "", landed),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let row = ActivityRow::from_record(&record);
+        assert_eq!(row.url, received, "the row is the link as clicked");
+        assert_eq!(row.matched_url, landed, "Re-test tries what the rules saw");
+        assert_eq!(row.final_url, landed);
+        assert_eq!(row.rule, "handler");
+        assert!(!row.rewritten, "an expansion is not a rewrite");
+        assert_eq!(
+            texts(&row)[..2],
+            [
+                "short link \u{00b7} expanded \u{00b7} host \u{2192} github.com \u{00b7} path \u{2192} /pwrdrvr/x",
+                "a handler matched",
+            ]
+        );
+        assert_eq!(row.steps[0].mark, StepMark::Hit(1));
+        assert!(texts(&row)[2].starts_with("Firefox \u{00b7} resolved"));
     }
 
     #[test]

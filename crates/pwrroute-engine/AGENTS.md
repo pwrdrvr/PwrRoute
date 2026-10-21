@@ -41,6 +41,14 @@ crate docs map the modules.
 - **Limits stay on.** Every load and resolve runs under a deadline and a heap
   limit (`Limits`), so a looping or runaway config cannot hang the router.
   Short-link expansion has its own per-attempt deadline and redirect limit.
+- **Short links expand before the rules run, and the config can say which.**
+  `Engine::short_links()` is the built-in list unless the config sets
+  `options.urlShorteners`: a list replaces it, and `[]` turns expansion off
+  (the Go host ignored the option). `host.js`'s `shorteners()` returns
+  `null` for an absent option so the two can be told apart; keep that. The
+  engine never expands on its own: the router and the MCP engine thread
+  call `ShortLinks::expand` with a `Network`, then `trace` the expanded
+  `Link`, so `originalUrl` reaches the config.
 - **URLs are private.** `Host::log` receives config `console` output, which
   often contains URLs; each run's lines also come back in `Trace::console`
   and `TestReport::console` (the last `ConsoleLog::CAPACITY`), for a screen

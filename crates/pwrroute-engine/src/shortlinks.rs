@@ -7,11 +7,11 @@
 //! short link. When expansion fails part way, the last redirect target seen
 //! is used, and with none, the short link itself.
 //!
-//! The domains are the Go host's built-in list plus any a config adds in
-//! `options.urlShorteners`. Finicky v4's schema accepts that option and the Go
-//! host ignored it, so adding to the defaults (rather than replacing them)
-//! keeps every v4 config, including the example's `urlShorteners: []`,
-//! expanding what it expanded under Go.
+//! The domains are the Go host's built-in list unless a config sets
+//! `options.urlShorteners`, which then replaces it: a non-empty list is the
+//! whole list, and an empty one turns expansion off, the opt-out for a
+//! person who would rather no link left the machine before a rule saw it.
+//! (The Go host accepted the option and ignored it.)
 //!
 //! The one network request sits behind [`Network`], so tests use a fake and
 //! the router can run expansion away from the engine's thread. Nothing here
@@ -103,26 +103,47 @@ pub struct ShortLinks {
 }
 
 impl Default for ShortLinks {
+    /// The built-in list.
     fn default() -> Self {
-        Self::with_domains(std::iter::empty::<String>())
+        Self::only(DEFAULT_SHORTENERS.iter().copied())
     }
 }
 
 impl ShortLinks {
-    /// The built-in domains plus `extra`.
-    pub fn with_domains<S: Into<String>>(extra: impl IntoIterator<Item = S>) -> Self {
-        let mut domains: Vec<String> = DEFAULT_SHORTENERS.iter().map(|d| (*d).to_owned()).collect();
-        for d in extra {
+    /// Exactly these domains and no others. Each is trimmed, lowercased and
+    /// stripped of a leading `.`; duplicates and empty entries are dropped.
+    pub fn only<S: Into<String>>(domains: impl IntoIterator<Item = S>) -> Self {
+        let mut list: Vec<String> = Vec::new();
+        for d in domains {
             let d = d.into().trim().trim_start_matches('.').to_ascii_lowercase();
-            if !d.is_empty() && !domains.contains(&d) {
-                domains.push(d);
+            if !d.is_empty() && !list.contains(&d) {
+                list.push(d);
             }
         }
         Self {
-            domains,
+            domains: list,
             max_redirects: 3,
             timeout: Duration::from_millis(750),
         }
+    }
+
+    /// No expansion at all: nothing is a short link.
+    pub fn off() -> Self {
+        Self::only(std::iter::empty::<String>())
+    }
+
+    /// What `options.urlShorteners` means: absent is the built-in list,
+    /// an empty list is off, and anything else is that list alone.
+    pub fn from_option(option: Option<Vec<String>>) -> Self {
+        match option {
+            None => Self::default(),
+            Some(domains) => Self::only(domains),
+        }
+    }
+
+    /// Whether any link is expanded at all.
+    pub fn is_off(&self) -> bool {
+        self.domains.is_empty()
     }
 
     /// Whether `url` is on a shortener's domain.
@@ -266,13 +287,34 @@ mod tests {
     }
 
     #[test]
-    fn a_config_adds_domains() {
-        let links = ShortLinks::with_domains(["go.corp.example", ".bit.ly"]);
+    fn a_configs_list_replaces_the_built_in_one() {
+        let links = ShortLinks::only(["go.corp.example", ".Bit.ly ", "bit.ly", ""]);
+        assert_eq!(links.domains, ["go.corp.example", "bit.ly"]);
         assert!(links.is_short("https://go.corp.example/x"));
+        assert!(
+            !links.is_short("https://t.co/x"),
+            "the built-in list is gone"
+        );
+        assert!(!links.is_off());
+    }
+
+    #[test]
+    fn the_option_means_defaults_off_or_that_list() {
+        assert_eq!(ShortLinks::from_option(None), ShortLinks::default());
+        assert!(!ShortLinks::default().is_off());
+        let off = ShortLinks::from_option(Some(Vec::new()));
+        assert!(off.is_off());
+        assert_eq!(off, ShortLinks::off());
+        assert!(!off.is_short("https://bit.ly/x"));
+        let net = Table::default();
         assert_eq!(
-            links.domains.iter().filter(|d| *d == "bit.ly").count(),
-            1,
-            "duplicates are dropped"
+            off.expand("https://bit.ly/x", &net),
+            Link::new("https://bit.ly/x")
+        );
+        assert!(net.asked.borrow().is_empty(), "off makes no request");
+        assert_eq!(
+            ShortLinks::from_option(Some(vec!["go.corp.example".into()])),
+            ShortLinks::only(["go.corp.example"])
         );
     }
 

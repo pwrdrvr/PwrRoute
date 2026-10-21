@@ -69,6 +69,7 @@ impl Resolver for FakeResolver {
         };
         Ok(Trace {
             url: url.to_owned(),
+            original_url: None,
             steps,
             browser: Browser {
                 name: name.to_owned(),

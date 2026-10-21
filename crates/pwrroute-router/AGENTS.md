@@ -54,6 +54,18 @@ runs on every platform.
   skipped }` names the numbered handler that matched, and the target
   replaces the browser, a `browser: null` or `private` handler included.
   Test a link ignores the pause. Keep it out of `launch` and `fallback()`.
+- **Short links expand on the dispatch thread, before the resolver.**
+  `Worker::expand` reads `Resolver::short_links()` (the engine's list, as
+  the config in charge set it), then follows a short link through
+  `ShortLinks::expand` with `Options::network` (`HttpNetwork` built on the
+  thread the first time it is needed; tests pass a fake). That request to
+  the shortener's host is the only place a link leaves the machine before
+  a rule sees it, as under Finicky. The resolver then gets the expanded
+  `pwrroute_engine::Link`, so a config still sees `originalUrl`, and the
+  record carries `Step::Expanded` with where it landed, reduced like every
+  other URL in it. A resolver that borrows an engine answers
+  `short_links()` with a clone and releases the borrow first; never expand
+  inside it.
 - **The trace is the product.** Activity, Test a link and the MCP tool all
   read `DispatchRecord`. The engine names the rules that fired through
   `Engine::trace`, which becomes `Resolved::rule_steps`; report more that way

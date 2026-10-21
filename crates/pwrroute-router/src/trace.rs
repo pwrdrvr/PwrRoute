@@ -20,7 +20,8 @@ use crate::link::{Link, Source};
 ///
 /// - `Full`: the URL, the opener and every step, as received.
 /// - `Host`: scheme and host only, in the link, the final URL and every
-///   step; no error text, which can quote the URL. The opener's name,
+///   step (where a short link landed included); no error text, which can
+///   quote the URL. The opener's name,
 ///   bundle id and path stay; its `window_title` goes, since an app can
 ///   fill it with the page's title or the URL itself.
 /// - `None`: no URL, no host, no opener, no steps: the dispatch is only
@@ -109,6 +110,13 @@ pub struct DispatchRecord {
 pub enum Step {
     /// The link as received, before any rule ran.
     Received {
+        url: String,
+    },
+    /// The link was on a shortener's domain and was followed to where it
+    /// lands; `url` is that destination, which the rules then saw. Absent
+    /// when the link was not short, expansion is off, or the shortener did
+    /// not answer (the short link then goes to the rules as it is).
+    Expanded {
         url: String,
     },
     /// A rewrite rule matched and ran; `url` is the URL after it, which can
@@ -319,7 +327,9 @@ fn reduce_browser(browser: &mut Browser) {
 
 fn reduce_step(step: &mut Step) {
     match step {
-        Step::Received { url } | Step::Rewrite { url, .. } => *url = host_only(url),
+        Step::Received { url } | Step::Expanded { url } | Step::Rewrite { url, .. } => {
+            *url = host_only(url);
+        }
         Step::Browser { browser } => reduce_browser(browser),
         Step::ConfigError { message } | Step::LaunchFailed { message } => {
             *message = WITHHELD.to_owned();
@@ -476,6 +486,31 @@ mod tests {
         }
         assert_eq!(reduced.outcome, Outcome::Failed);
         assert_eq!(reduced.timings, record().timings);
+    }
+
+    #[test]
+    fn a_host_record_keeps_only_the_host_of_where_a_short_link_landed() {
+        let mut full = record();
+        full.link.url = "https://go.example/s3cr3t".into();
+        full.steps.insert(
+            1,
+            Step::Expanded {
+                url: "https://bank.example.com:8443/account?token=hunter2#x".into(),
+            },
+        );
+        let reduced = full.reduced(Privacy::Host);
+        assert_eq!(reduced.link.url, "https://go.example");
+        assert_eq!(
+            reduced.steps[1],
+            Step::Expanded {
+                url: "https://bank.example.com:8443".into()
+            }
+        );
+        let json = serde_json::to_string(&reduced).unwrap();
+        for private in ["s3cr3t", "hunter2", "/account"] {
+            assert!(!json.contains(private), "{private} leaked into {json}");
+        }
+        assert!(full.reduced(Privacy::None).steps.is_empty());
     }
 
     #[test]
