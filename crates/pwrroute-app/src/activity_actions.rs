@@ -14,6 +14,10 @@
 //! runs the tests; a record kept as host only or nothing has no URL to
 //! write a rule for, so the sheet says so and does nothing else.
 //!
+//! A short link the router expanded is suggested, saved and probed as
+//! where it landed (`activity::matched_url`), the URL the rules saw: the
+//! saved tests and the probe do not expand short links.
+//!
 //! Every URL here comes from the router's in-memory records and goes to
 //! disk only as the example or test the user adds, by that click alone;
 //! the sheet's footer and each note say so.
@@ -28,7 +32,7 @@ use gpui_kit::{
 use pwrroute_engine::{self as engine, Expectation, Opener, Privacy, RouteTest, suggest_rule};
 use pwrroute_router::{DispatchRecord, Matched, OpenerInfo, Outcome, Step};
 
-use crate::activity::{self, RowKey};
+use crate::activity::{self, RowKey, matched_url};
 use crate::app::{PwrRoute, Selection};
 use crate::rules_model::KEEP_LEVELS;
 use crate::text_field::{Edit, TextField};
@@ -115,7 +119,8 @@ pub struct Collision {
 pub struct AddRule {
     pub key: RowKey,
     pub time: String,
-    /// The link as received. Empty when `disabled`.
+    /// The link the rules saw (`matched_url`): where a short link landed,
+    /// else as received. Empty when `disabled`.
     pub url: String,
     pub from: Option<OpenerInfo>,
     /// Why no rule can be written for this record: it was kept as host
@@ -145,7 +150,7 @@ impl AddRule {
     /// The sheet for a record kept in full: the suggestion for its link,
     /// the first candidate selected, `browser` as the first choice.
     pub fn new(record: &DispatchRecord, browsers: &[BrowserChoice], cx: &mut App) -> Self {
-        let url = received_url(record).to_owned();
+        let url = matched_url(record).to_owned();
         let suggestion = suggest_rule(&url);
         let candidates: Vec<(String, &'static str)> = suggestion
             .candidates
@@ -325,19 +330,6 @@ impl AddRule {
     }
 }
 
-/// The URL as received, once trimmed; the raw link when it was rejected
-/// before that.
-fn received_url(record: &DispatchRecord) -> &str {
-    record
-        .steps
-        .iter()
-        .find_map(|step| match step {
-            Step::Received { url } => Some(url.as_str()),
-            _ => None,
-        })
-        .unwrap_or(&record.link.url)
-}
-
 /// What chose the record's browser.
 fn matched(record: &DispatchRecord) -> Option<Matched> {
     record.steps.iter().find_map(|step| match step {
@@ -387,14 +379,15 @@ fn record(key: RowKey, cx: &App) -> Option<DispatchRecord> {
     activity::feed(cx)?.read(cx).record(key)
 }
 
-/// A test that pins where this record went.
+/// A test that pins where this record went, from the URL the rules saw:
+/// a saved test does not expand short links.
 fn test_for(record: &DispatchRecord) -> Option<RouteTest> {
     let browser = record.browser.as_ref()?;
     if browser.name.trim().is_empty() {
         return None;
     }
     Some(RouteTest {
-        url: received_url(record).to_owned(),
+        url: matched_url(record).to_owned(),
         opener: record.link.opener.as_ref().and_then(opener_spec),
         expect: Expectation {
             browser: browser.name.clone(),
@@ -421,7 +414,7 @@ impl PwrRoute {
             _ if record.privacy != Privacy::Full || record.browser.is_none() => None,
             // A rules.json handler took it: the link becomes its example.
             Some(Matched::Unreported) => {
-                let url = received_url(&record).to_owned();
+                let url = matched_url(&record).to_owned();
                 let opener = engine_opener(&record);
                 match self.probe.winning_handler(&url, opener.as_ref()) {
                     Some(handler) => Some(Save::Example {
@@ -494,15 +487,15 @@ impl PwrRoute {
             .filter(|r| !matches!(r.outcome, Outcome::Failed))
             .cloned()
             .collect();
-        let urls: Vec<&str> = records.iter().map(received_url).collect();
+        let urls: Vec<&str> = records.iter().map(matched_url).collect();
         match self.probe.collisions(&pattern, &urls) {
             Ok(hits) => {
                 sheet.collisions = records
                     .iter()
-                    .filter(|r| hits.iter().any(|hit| hit == received_url(r)))
+                    .filter(|r| hits.iter().any(|hit| hit == matched_url(r)))
                     .map(|r| Collision {
                         time: clock(r.received_at),
-                        url: received_url(r).to_owned(),
+                        url: matched_url(r).to_owned(),
                         opened: opened_label(r),
                         routed: !matches!(matched(r), Some(Matched::Default) | None),
                     })
@@ -598,7 +591,7 @@ impl PwrRoute {
         if record.privacy != Privacy::Full {
             return;
         }
-        let url = received_url(&record).to_owned();
+        let url = matched_url(&record).to_owned();
         let opener = engine_opener(&record);
         match self.probe.winning_handler(&url, opener.as_ref()) {
             Some(handler) => {
@@ -1734,5 +1727,68 @@ mod tests {
             Some("https://www.apple.com/macos/")
         );
         assert_eq!(opened_label(&record), "Google Chrome \u{00b7} Personal");
+    }
+
+    /// A short link the router expanded: the rules matched where it landed,
+    /// and Test a link and the saved tests do not expand, so everything
+    /// saved from the row uses the landing URL.
+    #[gpui_kit::test]
+    fn an_expanded_record_saves_and_suggests_the_landing_url(cx: &mut gpui_kit::TestAppContext) {
+        let short = "https://bit.ly/gh";
+        let landed = "https://github.com/pwrdrvr/PwrGit/pull/361";
+        let mut record = record(short, Privacy::Full, Matched::Unreported, None);
+        record
+            .steps
+            .insert(1, Step::Expanded { url: landed.into() });
+        // fixtures/rules.json's handler 2 (github.com/pwrdrvr/*) took it.
+        let browser = Browser {
+            name: "Google Chrome".into(),
+            app_type: AppType::AppName,
+            url: landed.into(),
+            profile: "Work".into(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy: Privacy::Full,
+        };
+        record.final_url = Some(landed.into());
+        record.browser = Some(browser.clone());
+        for step in &mut record.steps {
+            if let Step::Browser { browser: b } = step {
+                *b = browser.clone();
+            }
+        }
+        assert_eq!(matched_url(&record), landed);
+
+        // The menu's probe finds the handler for the landing URL, not the
+        // short one, so the row offers Save as example under it.
+        let mut probe = crate::try_it::Probe::new(None, crate::fixtures::rules_file());
+        assert_eq!(probe.winning_handler(short, None), None);
+        assert_eq!(probe.winning_handler(matched_url(&record), None), Some(1));
+
+        // Save as test pins the landing URL, and it passes as saved.
+        let test = test_for(&record).expect("a test");
+        assert_eq!(test.url, landed);
+        assert_eq!(test.expect.url.as_deref(), Some(landed));
+        let mut rules = crate::fixtures::rules_file();
+        rules.tests = vec![test];
+        rules.rules[1].examples = vec![matched_url(&record).to_owned()];
+        let mut runs = crate::try_it::TestRuns::new(None, rules);
+        let report = runs.run().as_ref().expect("the tests ran");
+        assert_eq!((report.total, report.passed), (2, 2), "{report:?}");
+
+        // Add a rule suggests patterns for the landing host, with it as
+        // the example.
+        let sheet = cx.update(|cx| AddRule::new(&record, &[], cx));
+        assert_eq!(sheet.url, landed);
+        assert!(
+            sheet
+                .candidates
+                .iter()
+                .all(|(p, _)| p.starts_with("github.com/")),
+            "{:?}",
+            sheet.candidates
+        );
+        assert_eq!(sheet.rule().expect("a rule").examples, [landed]);
     }
 }
