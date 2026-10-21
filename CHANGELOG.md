@@ -3,6 +3,7 @@
 ## Unreleased
 
 - DMG - The macOS DMG opens to a window laid out like PwrSnap's, PwrAgnt's and PwrGit's: the PwrRoute wordmark, the app and an arrow to Applications on a branded background, the app icon as the volume icon, and a volume named `PwrRoute <version>-universal`.
+- First run - Step 1 offers a profile for a browser that has them (Chrome, Firefox and the like) and saves it as `rules.json`'s `defaultProfile` beside `defaultBrowser`. Step 3 flips to done as soon as macOS reports PwrRoute as the default: the window re-reads the answer every second while it is open, and coming back to the window right after the dialog no longer counts as a refusal while LaunchServices catches up. A default browser PwrRoute's catalog does not list is named by its app ("PwrFinicky"), not its bundle id. The main window opens on the display the first-run window was on.
 
 ## v0.1.0-rc.1 - 2026-10-21
 
