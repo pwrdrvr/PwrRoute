@@ -193,8 +193,10 @@ pub struct Configuration {
     pub finicky: Option<FinickyConfig>,
     /// What the importer offers from that config.
     pub import: Option<ImportPlan>,
-    /// The hosts whose links are followed one redirect before matching:
-    /// the engine's built-in list, plus a config's own.
+    /// The hosts whose links are followed to where they land before the
+    /// rules run: the engine's built-in list, or the config's own
+    /// `urlShorteners` when it sets one. Empty when the config turned
+    /// expansion off.
     pub shorteners: Vec<SharedString>,
     /// Where `rules.json` lives, as the reader would type it.
     pub rules_path: SharedString,

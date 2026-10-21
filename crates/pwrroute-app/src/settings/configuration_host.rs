@@ -43,6 +43,10 @@ pub struct ConfigFacts {
     pub path: PathBuf,
     /// Rewrites and handlers, when the config loaded.
     pub counts: Option<(usize, usize)>,
+    /// The shortener domains the config expands, when it loaded: its
+    /// `urlShorteners`, or the built-in list when it sets none. Empty when
+    /// it turned expansion off.
+    pub shorteners: Option<Vec<String>>,
     pub modified: Option<SystemTime>,
 }
 
@@ -62,14 +66,18 @@ fn facts() -> Facts {
         .map(|path| RulesFile::load(path).map_err(|error| format!("{error:#}")));
     let rules_modified = rules_path.as_deref().and_then(modified);
     // Counting the config's rules means evaluating it, as the Rules screen
-    // does at open.
-    let config = source.config.clone().map(|path| ConfigFacts {
-        counts: Engine::load(&path, Rc::new(DefaultHost), Limits::default())
-            .ok()
-            .and_then(|engine| engine.describe().ok().flatten())
-            .map(|description| (description.rewrites.len(), description.handlers.len())),
-        modified: modified(&path),
-        path,
+    // does at open; the same load says which short links it expands.
+    let config = source.config.clone().map(|path| {
+        let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).ok();
+        ConfigFacts {
+            counts: engine
+                .as_ref()
+                .and_then(|engine| engine.describe().ok().flatten())
+                .map(|description| (description.rewrites.len(), description.handlers.len())),
+            shorteners: engine.map(|engine| engine.short_links().domains.clone()),
+            modified: modified(&path),
+            path,
+        }
     });
     Facts {
         source,
@@ -146,15 +154,28 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
         visual_summary: visual_summary.into(),
         finicky,
         import: None,
-        shorteners: DEFAULT_SHORTENERS
-            .iter()
-            .map(|host| (*host).into())
-            .collect(),
+        shorteners: shorteners(facts),
         rules_path: facts.rules_path.as_deref().map_or_else(
             || SharedString::from("no data folder"),
             |path| display_path(path, home).into(),
         ),
         rules_status: rules_status.into(),
+    }
+}
+
+/// The hosts expanded before matching: the loaded config's list, else the
+/// engine's built-in one, which is what `rules.json` alone gets.
+fn shorteners(facts: &Facts) -> Vec<SharedString> {
+    match facts
+        .config
+        .as_ref()
+        .and_then(|config| config.shorteners.as_ref())
+    {
+        Some(domains) => domains.iter().map(|host| host.clone().into()).collect(),
+        None => DEFAULT_SHORTENERS
+            .iter()
+            .map(|host| (*host).into())
+            .collect(),
     }
 }
 
@@ -298,6 +319,7 @@ mod tests {
         facts.config = Some(ConfigFacts {
             path: config,
             counts: Some((2, 6)),
+            shorteners: None,
             modified: Some(SystemTime::now() - Duration::from_secs(3 * 3600)),
         });
         let model = build(&facts, SystemTime::now());
@@ -327,6 +349,41 @@ mod tests {
                 .found
                 .contains("The last reload failed: SyntaxError: unexpected token.")
         );
+    }
+
+    #[test]
+    fn the_shortener_list_is_the_engines_in_charge() {
+        // rules.json alone, or a config that did not load: the built-in
+        // list, as the engine applies it.
+        let model = build(&Facts::default(), SystemTime::now());
+        assert_eq!(model.shorteners.len(), DEFAULT_SHORTENERS.len());
+        assert!(model.shorteners.iter().any(|host| host == "bit.ly"));
+        let mut facts = rules(r#"{ "rules": [] }"#);
+        let config = facts.home.clone().unwrap().join(".finicky.js");
+        facts.source = RoutingSource {
+            config: Some(config.clone()),
+            ..RoutingSource::default()
+        };
+        facts.config = Some(ConfigFacts {
+            path: config,
+            counts: None,
+            shorteners: None,
+            modified: None,
+        });
+        assert!(
+            build(&facts, SystemTime::now())
+                .shorteners
+                .iter()
+                .any(|host| host == "bit.ly")
+        );
+
+        // A config's own list replaces it; an empty one is expansion off.
+        let config = facts.config.as_mut().unwrap();
+        config.shorteners = Some(vec!["go.corp.example".into()]);
+        let model = build(&facts, SystemTime::now());
+        assert_eq!(model.shorteners, ["go.corp.example"]);
+        facts.config.as_mut().unwrap().shorteners = Some(Vec::new());
+        assert!(build(&facts, SystemTime::now()).shorteners.is_empty());
     }
 
     #[test]

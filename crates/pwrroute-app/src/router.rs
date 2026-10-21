@@ -21,7 +21,7 @@ use std::{
 
 use pwrroute_browsers::{Env, LaunchError, LaunchOptions, Note};
 use pwrroute_engine::{
-    ConfigChoice, Host, Limits, NativeHost, Reloader, RulesFile, Status, Watcher,
+    ConfigChoice, Host, Limits, NativeHost, Reloader, RulesFile, ShortLinks, Status, Watcher,
     discovery::{self, Environment},
 };
 use pwrroute_router::{
@@ -442,10 +442,20 @@ impl LiveResolver {
 }
 
 impl Resolver for LiveResolver {
-    fn resolve(&self, url: &str, opener: Option<&Opener>) -> anyhow::Result<Resolved> {
+    fn resolve(
+        &self,
+        link: &pwrroute_engine::Link,
+        opener: Option<&Opener>,
+    ) -> anyhow::Result<Resolved> {
         // The trait's resolve, not the engine's own: it carries the trace's
         // rule steps.
-        Resolver::resolve(self.reloader.borrow().engine(), url, opener)
+        Resolver::resolve(self.reloader.borrow().engine(), link, opener)
+    }
+
+    fn short_links(&self) -> Option<ShortLinks> {
+        // A clone, so the borrow ends here: the router expands the link
+        // (a network request) after this returns, never inside it.
+        Some(self.reloader.borrow().engine().short_links().clone())
     }
 
     fn refresh(&self) -> Result<(), String> {
@@ -785,7 +795,11 @@ mod tests {
     }"#;
 
     fn resolve(resolver: &LiveResolver, url: &str) -> String {
-        resolver.resolve(url, None).unwrap().browser.name
+        resolver
+            .resolve(&pwrroute_engine::Link::new(url), None)
+            .unwrap()
+            .browser
+            .name
     }
 
     #[test]

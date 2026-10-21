@@ -774,6 +774,14 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
         let (mark, line) = match step {
             // The row itself shows the link and where it went.
             Step::Received { .. } | Step::Browser { .. } => continue,
+            Step::Expanded { url: after } => {
+                let line = format!(
+                    "short link \u{00b7} expanded \u{00b7} {}",
+                    describe_rewrite(url, after)
+                );
+                url = after;
+                (StepMark::Hit(number), line)
+            }
             Step::Rewrite { rule, url: after } => {
                 let name = match rule {
                     Some(rule) => format!("rewrite {}", rule + 1),
@@ -1937,6 +1945,44 @@ mod tests {
 
     fn texts(row: &ActivityRow) -> Vec<&str> {
         row.steps.iter().map(|step| step.text.as_ref()).collect()
+    }
+
+    #[test]
+    fn a_short_link_row_shows_the_link_and_where_it_landed() {
+        let received = "https://bit.ly/gh";
+        let landed = "https://github.com/pwrdrvr/x";
+        let record = record(
+            9,
+            received,
+            Some("Mail"),
+            vec![
+                Step::Received {
+                    url: received.into(),
+                },
+                Step::Expanded { url: landed.into() },
+                Step::Matched {
+                    by: Matched::Unreported,
+                },
+                Step::Browser {
+                    browser: browser("Firefox", "", landed),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let row = ActivityRow::from_record(&record);
+        assert_eq!(row.url, received, "the row is the link as clicked");
+        assert_eq!(row.final_url, landed);
+        assert_eq!(row.rule, "handler");
+        assert!(!row.rewritten, "an expansion is not a rewrite");
+        assert_eq!(
+            texts(&row)[..2],
+            [
+                "short link \u{00b7} expanded \u{00b7} host \u{2192} github.com \u{00b7} path \u{2192} /pwrdrvr/x",
+                "a handler matched",
+            ]
+        );
+        assert_eq!(row.steps[0].mark, StepMark::Hit(1));
+        assert!(texts(&row)[2].starts_with("Firefox \u{00b7} resolved"));
     }
 
     #[test]

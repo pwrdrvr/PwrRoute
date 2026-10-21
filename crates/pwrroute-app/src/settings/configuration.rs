@@ -385,18 +385,29 @@ fn short_links_card(
         .fold(div().flex().flex_wrap().gap(px(5.0)), |hosts, host| {
             hosts.child(tag(host.clone()))
         });
+    let off = configuration.shorteners.is_empty();
     let rows = vec![field(
-        "Expanded before matching",
+        if off {
+            "Expansion is off"
+        } else {
+            "Expanded before matching"
+        },
         Some(field_sub_code(
-            "Links from these hosts are followed one redirect so rules see the real \
-             destination. A Finicky config adds its ",
+            "A link from one of these hosts is followed to where it lands (HEAD, then GET, up \
+             to 3 redirects, 750 ms each) before any rule runs, so rules match the \
+             destination and Activity shows both. A Finicky config sets its own list with ",
             "urlShorteners",
-            ".",
+            "; an empty list turns expansion off.",
         )),
         [
             hosts.into_any_element(),
-            note("The list is the engine\u{2019}s; rules.json cannot change it yet.")
-                .into_any_element(),
+            note(if off {
+                "The config in charge sets urlShorteners to an empty list, so no link is \
+                 followed and nothing leaves this Mac before a rule sees it."
+            } else {
+                "The list is the engine\u{2019}s; rules.json cannot change it yet."
+            })
+            .into_any_element(),
         ],
     )];
     this.disclosure(
