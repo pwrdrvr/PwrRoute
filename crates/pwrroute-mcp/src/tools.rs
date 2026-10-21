@@ -96,6 +96,9 @@ struct RulesApplyInput {
     base_revision: String,
     /// A JSON Merge Patch (RFC 7396) applied to the `rules` object from
     /// `pwrroute_rules_list`. Lists are replaced whole; `null` removes a key.
+    /// A `browser` (a rule's or `defaultBrowser`) is an app name, a bundle
+    /// id as `pwrroute_browsers` lists them, or a `.app` path (`~/` allowed);
+    /// `profile` is a profile name from the same listing.
     patch: Map<String, Value>,
     /// Validate and test only; write nothing.
     #[serde(default)]
@@ -147,7 +150,10 @@ struct RulesTestInput {
     #[serde(default)]
     rules: Option<Value>,
     /// One extra handler to try: `{ "match": …, "browser": …, … }` as in
-    /// rules.json. It is added to the saved rules (or to `rules`) at `at`.
+    /// rules.json. `browser` is an app name, a bundle id as
+    /// `pwrroute_browsers` lists them, or a `.app` path (`~/` allowed);
+    /// `profile` is a profile name from the same listing. It is added to the
+    /// saved rules (or to `rules`) at `at`.
     #[serde(default)]
     rule: Option<Value>,
     /// Where `rule` goes in the handlers list, from 0. Default: the end.

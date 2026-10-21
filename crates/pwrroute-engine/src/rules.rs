@@ -11,7 +11,7 @@
 //! | --- | --- | --- |
 //! | `defaultBrowser`, `defaultProfile` | yes | Where everything else goes. Used only when no JS config is in charge. |
 //! | `options` | yes | Finicky's `options`, used only when no JS config is in charge. |
-//! | `rules[].match`, `.browser`, `.profile` | yes | Handlers: the first match wins. `match` is a string or a list. |
+//! | `rules[].match`, `.browser`, `.profile` | yes | Handlers: the first match wins. `match` is a string or a list. `browser` is an app name (`Google Chrome`), a bundle id (`com.google.Chrome`) or a `.app` path (`/Applications/Google Chrome.app`, `~/Applications/…`), told apart as Finicky tells them apart (`app_type`); `defaultBrowser` takes the same. |
 //! | `rules[].opener` | no | Also require the link to come from one of these apps (name or bundle id). |
 //! | `rules[].enabled` | no | `false` switches a rule off but keeps its place. |
 //! | `rewrites` | no | Rewrites: every match applies, in order, before the handlers. |
@@ -422,11 +422,7 @@ impl RulesFile {
             .filter_map(|i| {
                 let r = &self.rules[i];
                 let matches = non_empty(&r.patterns)?;
-                let browser = if r.profile.is_empty() {
-                    json!(r.browser)
-                } else {
-                    json!({ "name": r.browser, "profile": r.profile })
-                };
+                let browser = browser_spec(&r.browser, &r.profile);
                 let mut handler = json!({ "match": matches, "browser": browser });
                 if !r.opener.is_empty() {
                     handler["opener"] = json!(r.opener);
@@ -478,12 +474,7 @@ impl RulesFile {
         } else {
             &self.default_browser
         };
-        let default_browser = if self.default_profile.is_empty() {
-            json!(name)
-        } else {
-            json!({ "name": name, "profile": self.default_profile })
-        };
-        let mut config = json!({ "defaultBrowser": default_browser });
+        let mut config = json!({ "defaultBrowser": browser_spec(name, &self.default_profile) });
         if let Some(options) = &self.options {
             config["options"] = serde_json::to_value(options).unwrap_or_default();
         }
@@ -513,6 +504,51 @@ impl RewriteAction {
             _ => None,
         }
     }
+}
+
+/// A browser as a Finicky handler names one: the plain string when there is
+/// no profile (the API classifies it itself), else the object form with
+/// `appType` set by [`app_type`]. The API's `createBrowserConfig` leaves an
+/// object's `appType` at `appName` when it is absent, which turns a bundle
+/// id into `open -a com.google.Chrome`; and the `"name:profile"` string form
+/// splits on the first `:`, so it is never used.
+fn browser_spec(browser: &str, profile: &str) -> Value {
+    if profile.is_empty() {
+        json!(browser)
+    } else {
+        json!({ "name": browser, "appType": app_type(browser), "profile": profile })
+    }
+}
+
+/// How Finicky reads a browser string (`autodetectAppStringType` in its
+/// configuration API): letters, digits and spaces are an app name; letters,
+/// digits, `.` and `-` a bundle id; `/x/y.app`, optionally after `~`, a
+/// path; anything else an app name. The words are the API's `appType`
+/// values and [`crate::AppType`]'s serialized names.
+fn app_type(app: &str) -> &'static str {
+    let all = |ok: fn(char) -> bool| !app.is_empty() && app.chars().all(ok);
+    if all(|c| c.is_ascii_alphanumeric() || c == ' ') {
+        "appName"
+    } else if all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        "bundleId"
+    } else if is_app_path(app) {
+        "path"
+    } else {
+        "appName"
+    }
+}
+
+/// Finicky's path shape: `^(~?(?:\/[^/\n]+)+\/[^/\n]+\.app)$`, that is at
+/// least two non-empty `/`-separated components, the last ending in `.app`.
+fn is_app_path(app: &str) -> bool {
+    let rest = app.strip_prefix('~').unwrap_or(app);
+    let Some(rest) = rest.strip_prefix('/') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() >= 2
+        && parts.iter().all(|p| !p.is_empty() && !p.contains('\n'))
+        && parts.last().is_some_and(|p| p.ends_with(".app"))
 }
 
 const EXAMPLE_URL: &str = "Examples must be full URLs, such as https://example.com/path.";
@@ -729,9 +765,91 @@ mod tests {
             file.plan()["handlers"],
             json!([
                 { "match": "a/*", "browser": "Firefox" },
-                { "match": ["c/*", "d/*"], "browser": { "name": "Arc", "profile": "Work" } }
+                { "match": ["c/*", "d/*"], "browser": { "name": "Arc", "appType": "appName", "profile": "Work" } }
             ])
         );
+    }
+
+    #[test]
+    fn a_profiled_browser_carries_the_app_type_finicky_would_detect() {
+        // The object form is the only one with a profile that keeps a bundle
+        // id or path whole; without `appType`, the API reads it as a name.
+        let with_profile = |browser: &str| Rule {
+            patterns: vec!["a/*".into()],
+            browser: browser.into(),
+            profile: "Work".into(),
+            ..Rule::default()
+        };
+        let file = RulesFile {
+            default_browser: "com.google.Chrome".into(),
+            default_profile: "Personal".into(),
+            rules: vec![
+                with_profile("com.google.Chrome"),
+                with_profile("/Applications/Google Chrome.app"),
+                with_profile("~/Applications/Google Chrome.app"),
+                with_profile("Google Chrome"),
+            ],
+            ..RulesFile::default()
+        };
+        let browsers: Vec<Value> = file.plan()["handlers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["browser"].clone())
+            .collect();
+        assert_eq!(
+            browsers,
+            [
+                json!({ "name": "com.google.Chrome", "appType": "bundleId", "profile": "Work" }),
+                json!({ "name": "/Applications/Google Chrome.app", "appType": "path", "profile": "Work" }),
+                json!({ "name": "~/Applications/Google Chrome.app", "appType": "path", "profile": "Work" }),
+                json!({ "name": "Google Chrome", "appType": "appName", "profile": "Work" }),
+            ]
+        );
+        assert_eq!(
+            file.base_config()["defaultBrowser"],
+            json!({ "name": "com.google.Chrome", "appType": "bundleId", "profile": "Personal" })
+        );
+        // Without a profile the string form is kept, as the Go host wrote it,
+        // and the API classifies it the same way.
+        let file = RulesFile {
+            default_browser: "com.google.Chrome".into(),
+            ..RulesFile::default()
+        };
+        assert_eq!(
+            file.base_config()["defaultBrowser"],
+            json!("com.google.Chrome")
+        );
+    }
+
+    #[test]
+    fn app_type_matches_finickys_autodetect() {
+        for (app, expected) in [
+            ("Safari", "appName"),
+            ("Google Chrome", "appName"),
+            ("Firefox Developer Edition", "appName"),
+            ("com.apple.Safari", "bundleId"),
+            ("org.mozilla.firefox", "bundleId"),
+            ("company.thebrowser.Browser", "bundleId"),
+            ("us.zoom.xos", "bundleId"),
+            ("/Applications/Firefox.app", "path"),
+            ("/Applications/Google Chrome.app", "path"),
+            ("~/Applications/Firefox.app", "path"),
+            ("/Users/me/Applications/Beta/Firefox Nightly.app", "path"),
+            // Finicky's shape needs two components and a `.app` end.
+            ("/Firefox.app", "appName"),
+            ("~/Firefox.app", "appName"),
+            ("/Applications/Firefox.app/", "appName"),
+            ("/Applications//Firefox.app", "appName"),
+            ("/usr/bin/firefox", "appName"),
+            ("Applications/Firefox.app", "appName"),
+            // Anything else is a name, as in the API.
+            ("Brave Browser (Beta)", "appName"),
+            ("Firefox:Work", "appName"),
+            ("", "appName"),
+        ] {
+            assert_eq!(app_type(app), expected, "{app:?}");
+        }
     }
 
     #[test]
@@ -752,7 +870,7 @@ mod tests {
         assert_eq!(
             file.base_config(),
             json!({
-                "defaultBrowser": { "name": "Firefox", "profile": "Work" },
+                "defaultBrowser": { "name": "Firefox", "appType": "appName", "profile": "Work" },
                 "options": { "logRequests": false }
             })
         );
