@@ -12,7 +12,8 @@ runs on every platform.
 - **URLs never touch disk unless the journal is on, and then only at the
   record's privacy level.** Each `DispatchRecord` is reduced to the
   `Privacy` of the rule that routed it (`Full`, `Host`: scheme and host
-  only, `None`: counted only) on the dispatch thread, before the buffer, the
+  only, no error text and no opener window title, `None`: counted only)
+  on the dispatch thread, before the buffer, the
   journal, `on_dispatch` or a reply sees it; a link no rule routed stays
   `Full`. The buffer (`recent.rs`) is memory only, bounded by
   `Options::retention` (count and age, swept on push and read). The journal

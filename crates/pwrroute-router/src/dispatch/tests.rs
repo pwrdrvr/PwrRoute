@@ -690,11 +690,20 @@ fn a_host_rule_reduces_the_record_everywhere_but_the_launcher_opens_the_full_url
             record.final_url.as_deref(),
             Some("https://host.example.com")
         );
-        assert_eq!(record.link.opener.as_ref().unwrap().name, "Secret Opener");
+        let opener = record.link.opener.as_ref().unwrap();
+        assert_eq!(opener.name, "Secret Opener");
+        assert_eq!(opener.window_title, None);
         assert_eq!(record.outcome, Outcome::DryRun);
         assert_eq!(record.browser.as_ref().unwrap().profile, "Work");
         let json = serde_json::to_string(record).unwrap();
-        for private in ["hunter2", "/reset", "rewritten", "--url", "warned about"] {
+        for private in [
+            "hunter2",
+            "/reset",
+            "rewritten",
+            "--url",
+            "warned about",
+            "Inbox",
+        ] {
             assert!(!json.contains(private), "{private} leaked into {json}");
         }
         assert!(record.steps.contains(&Step::ConfigError {
