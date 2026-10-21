@@ -62,6 +62,30 @@ pub const TEST_URL: &str = "https://x.com/pwrdrvr/status/1842?utm_source=slack&s
 /// The index into [`OPENERS`] Test a link starts with: Slack.
 pub const TEST_OPENER: usize = 1;
 
+/// `now` less `secs`, kept on today's local calendar day.
+///
+/// The records below are minutes old, so in the minutes after local
+/// midnight the plain subtraction would put most of them on yesterday and
+/// the "today" counts the tests assert would stop adding up (seen on CI at
+/// 00:03 UTC). When less time than the longest offset has passed since
+/// midnight, the offsets are compressed into that window, in order.
+fn ago(now: SystemTime, secs: u64) -> SystemTime {
+    use chrono::Timelike;
+    /// Longer than any offset the fixtures use.
+    const SPAN: u64 = 20 * 60;
+    let since_midnight = u64::from(
+        chrono::DateTime::<chrono::Local>::from(now)
+            .time()
+            .num_seconds_from_midnight(),
+    );
+    let secs = if since_midnight > SPAN {
+        secs
+    } else {
+        secs * since_midnight / (SPAN + 1)
+    };
+    now - Duration::from_secs(secs)
+}
+
 /// Contrived dispatch records in the shape of option 2b's Activity rows,
 /// newest first, for tests and screenshots: the second ran two rewrites and
 /// handler 3, the fourth failed to launch. The window draws the router's
@@ -103,7 +127,7 @@ pub fn activity() -> Vec<DispatchRecord> {
                   browser: Browser,
                   total_ms: u64| DispatchRecord {
         id: DispatchId(id),
-        received_at: now - Duration::from_secs(secs_ago),
+        received_at: ago(now, secs_ago),
         privacy: Privacy::Full,
         link: link(url, from),
         forwarded: false,
@@ -128,7 +152,7 @@ pub fn activity() -> Vec<DispatchRecord> {
         let firefox = browser("Firefox", "default-release", final_url);
         DispatchRecord {
             id: DispatchId(7),
-            received_at: now - Duration::from_secs(17),
+            received_at: ago(now, 17),
             privacy: Privacy::Full,
             link: link(TEST_URL, "Slack"),
             forwarded: false,
@@ -161,7 +185,7 @@ pub fn activity() -> Vec<DispatchRecord> {
         let zoom = browser("zoom.us", "", url);
         DispatchRecord {
             id: DispatchId(5),
-            received_at: now - Duration::from_secs(9 * 60 + 28),
+            received_at: ago(now, 9 * 60 + 28),
             privacy: Privacy::Full,
             link: link(url, "Calendar"),
             forwarded: false,
@@ -244,6 +268,7 @@ pub fn activity() -> Vec<DispatchRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Local, TimeZone, Timelike};
 
     /// The sample rules are the design's: three rewrites and seven handlers,
     /// one of them off.
@@ -254,5 +279,32 @@ mod tests {
         assert_eq!(file.rules.len(), 7);
         assert_eq!(file.rules.iter().filter(|r| !r.enabled).count(), 1);
         assert_eq!(file.default_browser, "Google Chrome");
+    }
+
+    #[test]
+    fn fixture_times_stay_on_today_right_after_midnight() {
+        let today = Local::now().date_naive();
+        let at = |h, m, sec| {
+            SystemTime::from(
+                Local
+                    .from_local_datetime(&today.and_hms_opt(h, m, sec).expect("a valid time"))
+                    .single()
+                    .expect("an unambiguous local time"),
+            )
+        };
+        let just_after = at(0, 0, 5);
+        let offsets = [0, 17, 2 * 60 + 56, 9 * 60 + 28, 18 * 60 + 20];
+        let times: Vec<SystemTime> = offsets.iter().map(|&s| ago(just_after, s)).collect();
+        for t in &times {
+            assert_eq!(chrono::DateTime::<Local>::from(*t).date_naive(), today);
+        }
+        assert!(
+            times.windows(2).all(|w| w[0] >= w[1]),
+            "older offsets stay older"
+        );
+        // Well into the day the offsets are used as written.
+        let noon = at(12, 0, 0);
+        assert_eq!(ago(noon, 17), noon - Duration::from_secs(17));
+        assert_eq!(chrono::DateTime::<Local>::from(ago(noon, 17)).hour(), 11);
     }
 }
