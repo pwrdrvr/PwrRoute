@@ -62,7 +62,7 @@ cargo run -p pwrroute-app        # the window
 cargo xtask lint                 # everything CI's Typecheck job runs
 cargo xtask test                 # every workspace test
 cargo xtask licenses             # regenerate THIRD_PARTY_LICENSES
-cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG
+cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG ($CARGO_TARGET_DIR if set)
 cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
 cargo run -p pwrroute-app --example screens -- DIR   # macOS: each screen as a PNG
 ```
