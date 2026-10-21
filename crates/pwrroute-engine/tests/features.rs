@@ -588,16 +588,29 @@ impl Network for FakeShortener {
     }
 }
 
+/// `rules.json` alone, so the built-in shortener list applies: nothing in
+/// the file can set `urlShorteners`.
+fn github_to_firefox() -> Engine {
+    engine(
+        None,
+        RulesFile {
+            default_browser: "Safari".into(),
+            rules: vec![rule(&["github.com/*"], "Firefox")],
+            ..RulesFile::default()
+        },
+    )
+}
+
 #[test]
 fn a_short_link_resolves_where_it_lands() {
-    let e = engine(Some("stress.ts"), RulesFile::default());
+    let e = github_to_firefox();
     let net = FakeShortener::default();
     let r = e
         .expand_and_resolve("https://bit.ly/gh", None, &net)
         .unwrap();
     assert_eq!(
         r.browser.name, "Firefox",
-        "stress.ts sends github.com to Firefox"
+        "the rule matched the landing URL"
     );
     assert_eq!(r.browser.url, "https://github.com/pwrdrvr/PwrRoute");
     assert_eq!(
@@ -625,43 +638,94 @@ fn a_config_sees_the_short_link_as_original_url() {
     assert_eq!(trace.url, "https://elsewhere.example/");
 }
 
-#[test]
-fn a_config_adds_shorteners_and_the_example_keeps_the_defaults() {
+fn config_with(options: &str) -> Engine {
     let path = std::env::temp_dir().join(format!(
-        "pwrroute-features-shorteners-{}.js",
-        std::process::id()
+        "pwrroute-features-shorteners-{}-{}.js",
+        std::process::id(),
+        options.len()
     ));
     std::fs::write(
         &path,
-        r#"export default {
+        format!(
+            r#"export default {{
   defaultBrowser: "Safari",
-  options: { urlShorteners: ["go.corp.example"] },
-  handlers: [{ match: "corp.example.com/*", browser: "Google Chrome" }],
-};"#,
+  {options}
+  handlers: [
+    {{ match: "corp.example.com/*", browser: "Google Chrome" }},
+    {{ match: "github.com/*", browser: "Firefox" }},
+  ],
+}};"#
+        ),
     )
     .unwrap();
     let e = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).unwrap();
     std::fs::remove_file(&path).unwrap();
-    assert!(e.short_links().is_short("https://go.corp.example/wiki"));
+    e
+}
+
+#[test]
+fn a_config_without_url_shorteners_expands_the_built_in_list() {
+    let e = config_with("");
     assert!(e.short_links().is_short("https://bit.ly/gh"));
+    assert!(e.short_links().is_short("https://t.co/x"));
+    assert!(!e.short_links().is_short("https://go.corp.example/wiki"));
     let r = e
-        .expand_and_resolve(
-            "https://go.corp.example/wiki",
-            None,
-            &FakeShortener::default(),
-        )
+        .expand_and_resolve("https://bit.ly/gh", None, &FakeShortener::default())
+        .unwrap();
+    assert_eq!(r.browser.name, "Firefox");
+}
+
+#[test]
+fn a_configs_url_shorteners_replace_the_built_in_list() {
+    let e = config_with(r#"options: { urlShorteners: ["go.corp.example"] },"#);
+    assert!(e.short_links().is_short("https://go.corp.example/wiki"));
+    assert!(
+        !e.short_links().is_short("https://bit.ly/gh"),
+        "the config's list is the whole list"
+    );
+    let net = FakeShortener::default();
+    let r = e
+        .expand_and_resolve("https://go.corp.example/wiki", None, &net)
         .unwrap();
     assert_eq!(r.browser.name, "Google Chrome");
+    let r = e
+        .expand_and_resolve("https://bit.ly/gh", None, &net)
+        .unwrap();
+    assert_eq!(r.browser.name, "Safari", "bit.ly was not expanded");
+    assert_eq!(r.browser.url, "https://bit.ly/gh");
+    assert!(
+        !net.asked.borrow().iter().any(|q| q.contains("bit.ly")),
+        "{:?}",
+        net.asked.borrow()
+    );
+}
 
-    // Finicky's example sets `urlShorteners: []`; the Go host expanded the
-    // built-in list anyway, and so does the engine.
-    let example = engine(Some("finicky-example.js"), RulesFile::default());
-    assert!(example.short_links().is_short("https://t.co/x"));
+#[test]
+fn an_empty_url_shorteners_turns_expansion_off() {
+    let e = config_with("options: { urlShorteners: [] },");
+    assert!(e.short_links().is_off());
+    assert!(!e.short_links().is_short("https://bit.ly/gh"));
+    let net = FakeShortener::default();
+    let r = e
+        .expand_and_resolve("https://bit.ly/gh", None, &net)
+        .unwrap();
+    assert_eq!(r.browser.url, "https://bit.ly/gh");
+    assert_eq!(r.browser.name, "Safari");
+    assert!(net.asked.borrow().is_empty(), "nothing left the machine");
+
+    // Finicky's own example and stress.ts set `urlShorteners: []`: under
+    // the Go host that still expanded the built-in list, here it is the
+    // opt-out.
+    for config in ["finicky-example.js", "stress.ts"] {
+        let e = engine(Some(config), RulesFile::default());
+        assert!(e.short_links().is_off(), "{config}");
+        assert!(!e.short_links().is_short("https://t.co/x"), "{config}");
+    }
 }
 
 #[test]
 fn an_unreachable_shortener_routes_the_short_link() {
-    let e = engine(Some("stress.ts"), RulesFile::default());
+    let e = github_to_firefox();
     let r = e
         .expand_and_resolve("https://bit.ly/unknown", None, &FakeShortener::default())
         .unwrap();

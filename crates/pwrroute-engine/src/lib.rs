@@ -352,13 +352,13 @@ impl Engine {
                 load_config(&ctx, path, source)?;
             }
             adopt_config(&ctx, config.is_some())?;
-            let list: Vec<String> = ctx
-                .eval::<Vec<String>, _>("__pwrroute.shorteners()")
+            let list: Option<Vec<String>> = ctx
+                .eval::<Option<Vec<String>>, _>("__pwrroute.shorteners()")
                 .catch(&ctx)
                 .map_err(|e| js_error("reading options.urlShorteners", &e))?;
             Ok(list)
         })?;
-        engine.short_links = ShortLinks::with_domains(shorteners);
+        engine.short_links = ShortLinks::from_option(shorteners);
         Ok(engine)
     }
 
@@ -380,8 +380,9 @@ impl Engine {
     }
 
     /// Which links this config expands before resolving: the built-in
-    /// shorteners plus the config's `options.urlShorteners`. Cloneable and
-    /// `Send`, so expansion can run off the engine's thread.
+    /// shorteners, or the config's own `options.urlShorteners` when it sets
+    /// the option (an empty list expands nothing). Cloneable and `Send`, so
+    /// expansion can run off the engine's thread, as the router does it.
     pub fn short_links(&self) -> &ShortLinks {
         &self.short_links
     }

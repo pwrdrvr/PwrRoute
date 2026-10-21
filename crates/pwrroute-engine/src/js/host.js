@@ -330,8 +330,11 @@ var __pwrroute = (function (api) {
     trace: trace,
     describe: description,
     matches: matches,
+    // `options.urlShorteners` as the config set it: null when it did not,
+    // so the host can tell "use the built-in list" from "expand nothing".
     shorteners: function () {
-      var list = api.getOption("urlShorteners", finalConfig, []);
+      var list = api.getOption("urlShorteners", finalConfig, null);
+      if (list === null || list === undefined) return null;
       return Array.isArray(list) ? list.map(String) : [];
     },
   };
