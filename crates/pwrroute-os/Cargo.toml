@@ -32,6 +32,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "libc",
     "NSRunningApplication",
+    # URLForApplicationWithBundleIdentifier, for a handler's display name.
+    "NSWorkspace",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
     "std",

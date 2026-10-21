@@ -77,6 +77,23 @@ pub fn default_browser_status() -> Result<DefaultStatus> {
     imp::status()
 }
 
+/// The name an installed app goes by, from the id the OS reports for a
+/// handler: on macOS the bundle's display name (`CFBundleDisplayName`, else
+/// `CFBundleName`, else the bundle's file name) for a bundle id. `None`
+/// when no app has that id, and on Windows and Linux, where the caller
+/// keeps the id. Reads only.
+pub fn app_display_name(id: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::app_display_name(id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = id;
+        None
+    }
+}
+
 /// Opens the OS's own default-apps page, where the user can pick or change
 /// the default browser by hand. Changes nothing itself.
 pub fn open_default_apps_settings() -> Result<()> {
@@ -381,6 +398,17 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finder is on every Mac; no app has the made-up id. Reads only.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_installed_app_is_named_by_its_bundle() {
+        assert_eq!(
+            app_display_name("com.apple.finder").as_deref(),
+            Some("Finder")
+        );
+        assert_eq!(app_display_name("com.example.no-such-app"), None);
+    }
 
     #[test]
     fn windows_points_http_and_https_at_the_prog_id() {

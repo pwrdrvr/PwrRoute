@@ -2,11 +2,11 @@
 
 mod launch_services;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use objc2_app_kit::NSRunningApplication;
-use objc2_foundation::{NSAppleEventManager, NSBundle};
+use objc2_app_kit::{NSRunningApplication, NSWorkspace};
+use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
 use pwrroute_router::OpenerInfo;
 
 use crate::registration::{BUNDLE_ID, DefaultRequest, DefaultStatus};
@@ -84,6 +84,33 @@ pub fn open_settings() -> Result<()> {
         .spawn()
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
+}
+
+/// The installed app with `bundle_id`, by the name Finder shows: the
+/// bundle's (localized) `CFBundleDisplayName`, else `CFBundleName`, else
+/// the bundle's file name without `.app`. `None` when LaunchServices knows
+/// no app with that id.
+pub fn app_display_name(bundle_id: &str) -> Option<String> {
+    let url = NSWorkspace::sharedWorkspace()
+        .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))?;
+    let from_plist = NSBundle::bundleWithURL(&url).and_then(|bundle| {
+        ["CFBundleDisplayName", "CFBundleName"]
+            .into_iter()
+            .find_map(|key| {
+                bundle
+                    .objectForInfoDictionaryKey(&NSString::from_str(key))?
+                    .downcast::<NSString>()
+                    .ok()
+                    .map(|name| name.to_string())
+                    .filter(|name| !name.trim().is_empty())
+            })
+    });
+    from_plist.or_else(|| {
+        let path = url.path()?.to_string();
+        Path::new(&path)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+    })
 }
 
 pub fn status() -> Result<DefaultStatus> {
