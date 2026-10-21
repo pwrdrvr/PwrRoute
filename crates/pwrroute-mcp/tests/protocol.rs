@@ -153,14 +153,19 @@ async fn the_proxy_says_so_when_pwrroute_is_not_running() {
 #[tokio::test]
 async fn the_proxy_waits_for_pwrroute_to_start() {
     let endpoint = private_endpoint();
-    // Claude Code launched the proxy before PwrRoute was up.
+    // Claude Code launched the proxy before PwrRoute was up. The proxy's
+    // clock starts when it does, and under load the server below can take
+    // many seconds to start, so its budget is far longer than any start; a
+    // passing run connects as soon as the server listens and never waits it
+    // out.
     let mut child = proxy_command(&endpoint)
-        .env(CONNECT_WAIT_ENV, "10")
+        .env(CONNECT_WAIT_ENV, "120")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    // Several of the proxy's retry intervals with nothing listening.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(
         child.try_wait().unwrap().is_none(),
         "the proxy keeps waiting while nothing listens"
@@ -174,10 +179,21 @@ async fn the_proxy_waits_for_pwrroute_to_start() {
     .await;
     let stdout = child.stdout.take().unwrap();
     let stdin = child.stdin.take().unwrap();
-    let client = support::client_config("claude-code")
+    let client = match support::client_config("claude-code")
         .serve((stdout, stdin))
         .await
-        .expect("initialize through the waiting proxy");
+    {
+        Ok(client) => client,
+        Err(e) => {
+            // Say why the proxy gave up, not only that it did.
+            let output = child.wait_with_output().await.unwrap();
+            panic!(
+                "initialize through the waiting proxy: {e}; the proxy {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    };
     let result = call(&client, "pwrroute_resolve", json!({ "url": SECRET_URL })).await;
     assert_eq!(result.is_error, Some(false), "{}", text(&result));
     client.cancel().await.unwrap();
