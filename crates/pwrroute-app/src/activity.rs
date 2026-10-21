@@ -1211,19 +1211,26 @@ fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
+                    .min_w_0()
                     .child(text("\u{21aa}", 10.5, 500.0, theme::text_muted()))
                     .child(badge(badge_label.clone()))
-                    .child(text(
-                        format!("opened in {name}"),
-                        10.5,
-                        500.0,
-                        theme::text_muted(),
-                    ))
-                    .when_some(profile.clone(), |sub, profile| {
-                        sub.child(mono(profile, 10.5, 500.0, theme::text_muted()))
-                    })
+                    .child(
+                        one_line(
+                            match profile {
+                                Some(profile) => format!("opened in {name} \u{00b7} {profile}"),
+                                None => format!("opened in {name}"),
+                            },
+                            theme::SANS,
+                            500.0,
+                            10.5,
+                            10.5,
+                            theme::text_muted(),
+                        )
+                        .min_w_0(),
+                    )
                     .when(dry_run, |sub| sub.child(tag("dry run"))),
             ),
+
         Opened::Failed(why) => div().child(status(why.clone(), theme::status_error())),
     }
 }
