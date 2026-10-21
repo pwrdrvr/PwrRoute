@@ -116,7 +116,9 @@ jobs:
           stage="$RUNNER_TEMP/macos-release-input"
           mkdir -p "$stage"
           ditto target/bundle/PwrRoute.app "$stage/PwrRoute.app"
+          # macos-dmg.sh finds background.png and PwrRoute.icns beside itself.
           cp packaging/macos/PwrRoute.entitlements packaging/macos/PwrRoute.icns \
+            packaging/dmg/background.png \
             scripts/release/macos-dmg.sh scripts/release/install-vpk.sh "$stage/"
           cargo xtask release-check --notes-file "$stage/RELEASE_NOTES.md"
 
@@ -297,7 +299,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist "$RUNNER_TEMP/packed"
           ditto -x -k releases/PwrRoute-osx-Portable.zip "$RUNNER_TEMP/packed"
-          input/macos-dmg.sh "$RUNNER_TEMP/packed/PwrRoute.app" \
+          DMG_VERSION="${RELEASE_TAG#v}" input/macos-dmg.sh "$RUNNER_TEMP/packed/PwrRoute.app" \
             "dist/PwrRoute-${RELEASE_TAG#v}-universal.dmg" "$IDENTITY"
 
       - name: Verify macOS signature and notarization

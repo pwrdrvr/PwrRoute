@@ -120,7 +120,7 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
         archive(&app, &zip)?;
     }
     let dmg = out.join(format!("PwrRoute-{version}-{arch}.dmg"));
-    disk_image(&app, &dmg)?;
+    disk_image(&app, &dmg, &version)?;
     if let Some(identity) = &options.identity {
         run(Command::new("codesign")
             .args(["--force", "--timestamp", "--sign", identity])
@@ -208,12 +208,17 @@ fn archive(app: &Path, zip: &Path) -> Result<()> {
 
 /// The DMG layout comes from scripts/release/macos-dmg.sh, which release.yml
 /// also runs on the vpk-packed app, so both build the same image. Called
-/// without an identity: signing and notarizing the DMG stay here.
-fn disk_image(app: &Path, dmg: &Path) -> Result<()> {
-    run(Command::new(root().join("scripts/release/macos-dmg.sh"))
+/// without an identity: signing and notarizing the DMG stay here. The full
+/// version (prerelease included) goes in the volume name; the app's
+/// Info.plist has only the short one.
+fn disk_image(app: &Path, dmg: &Path, version: &str) -> Result<()> {
+    run(Command::new(root().join(DMG_SCRIPT))
+        .env("DMG_VERSION", version)
         .arg(app)
         .arg(dmg))
 }
+
+const DMG_SCRIPT: &str = "scripts/release/macos-dmg.sh";
 
 fn notarize(file: &Path) -> Result<()> {
     let key: PathBuf = env::var_os("APPLE_API_KEY_PATH")
@@ -292,6 +297,57 @@ mod tests {
             ico.starts_with(&[0, 0, 1, 0]),
             "the .ico has no icon header"
         );
+    }
+
+    /// macos-dmg.sh places the icons and generate-dmg-background.swift paints
+    /// the arrow between them; the committed PNG is the size of the window.
+    #[test]
+    fn the_dmg_layout_matches_its_background() {
+        let script = read(&root().join(DMG_SCRIPT)).unwrap();
+        let swift = read(&root().join("scripts/release/generate-dmg-background.swift")).unwrap();
+        for (shell, swift_name, value) in [
+            ("window_width", "width", 660),
+            ("window_height", "height", 400),
+            ("icon_size", "iconSize", 112),
+            ("app_x", "appIconX", 170),
+            ("applications_x", "applicationsX", 500),
+            ("icon_y", "iconY", 230),
+        ] {
+            assert!(
+                script.lines().any(|l| l == format!("{shell}={value}")),
+                "macos-dmg.sh: {shell} is not {value}"
+            );
+            assert!(
+                swift
+                    .lines()
+                    .any(|l| l == format!("let {swift_name} = {value}")),
+                "generate-dmg-background.swift: {swift_name} is not {value}"
+            );
+        }
+        let png = fs::read(root().join("packaging/dmg/background.png")).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"), "not a PNG");
+        // IHDR's width and height, big-endian, at bytes 16..24.
+        let size = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+        assert_eq!((size(16), size(20)), (660, 400));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_dmg_script_parses_and_wants_two_or_three_arguments() {
+        let script = root().join(DMG_SCRIPT);
+        let syntax = Command::new("bash")
+            .arg("-n")
+            .arg(&script)
+            .status()
+            .unwrap();
+        assert!(syntax.success(), "bash -n {DMG_SCRIPT}");
+        let usage = Command::new("bash")
+            .arg(&script)
+            .arg("only-one")
+            .output()
+            .unwrap();
+        assert_eq!(usage.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&usage.stderr).contains("usage: macos-dmg.sh"));
     }
 
     /// What `bundle` runs after writing Contents: a bundle laid out like
