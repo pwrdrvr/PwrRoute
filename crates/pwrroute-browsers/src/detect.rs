@@ -27,6 +27,8 @@ use crate::{
 /// be offered as a destination: opening a link in one sends it back here.
 const ROUTERS: &[&str] = &[
     "com.pwrdrvr.pwrroute",
+    // PwrRoute's macOS link helper, nested in PwrRoute.app.
+    "com.pwrdrvr.pwrroute.links",
     "com.pwrdrvr.pwrfinicky",
     "se.johnste.finicky",
     "net.kassett.finicky",
@@ -255,4 +257,23 @@ fn sorted_entries(dir: &Path, ext: &str) -> Vec<PathBuf> {
         .collect();
     paths.sort();
     paths
+}
+
+#[cfg(test)]
+mod router_tests {
+    use super::is_router;
+
+    #[test]
+    fn link_routers_are_never_offered() {
+        for id in [
+            "com.pwrdrvr.pwrroute",
+            "com.pwrdrvr.pwrroute.links",
+            "COM.PWRDRVR.PWRROUTE.LINKS",
+            "se.johnste.finicky",
+            "pwrroute.desktop",
+        ] {
+            assert!(is_router(id), "{id}");
+        }
+        assert!(!is_router("com.google.Chrome"));
+    }
 }

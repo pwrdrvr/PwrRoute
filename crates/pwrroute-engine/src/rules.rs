@@ -697,10 +697,17 @@ fn check_patterns(patterns: &[String], place: Place, flag: &mut impl FnMut(Place
     }
 }
 
-/// PwrRoute as a destination would hand the link straight back.
+/// PwrRoute as a destination would hand the link straight back: the app,
+/// or its macOS link helper.
 fn is_self(browser: &str) -> bool {
     let name = browser.split(':').next().unwrap_or(browser).trim();
-    name.eq_ignore_ascii_case("PwrRoute") || name.eq_ignore_ascii_case("com.pwrdrvr.pwrroute")
+    [
+        "PwrRoute",
+        "com.pwrdrvr.pwrroute",
+        "com.pwrdrvr.pwrroute.links",
+    ]
+    .iter()
+    .any(|ours| name.eq_ignore_ascii_case(ours))
 }
 
 /// The non-empty patterns, as one string when there is one (Go's shape).
@@ -1016,6 +1023,25 @@ mod tests {
             places,
             [Place::DefaultBrowser, Place::Rule(0), Place::Rewrite(0)]
         );
+    }
+
+    #[test]
+    fn pwrroute_and_its_link_helper_are_never_a_destination() {
+        for name in [
+            "PwrRoute",
+            "com.pwrdrvr.pwrroute",
+            "com.pwrdrvr.pwrroute.links",
+            "COM.PWRDRVR.PWRROUTE.LINKS:Work",
+        ] {
+            assert!(is_self(name), "{name}");
+        }
+        for name in [
+            "Firefox",
+            "com.pwrdrvr.pwrfinicky",
+            "com.pwrdrvr.pwrroute.other",
+        ] {
+            assert!(!is_self(name), "{name}");
+        }
     }
 
     #[test]

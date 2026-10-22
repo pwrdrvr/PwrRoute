@@ -119,8 +119,12 @@ The first launch becomes the router and stays running with its windows
 closed; a later launch forwards its links (or asks for the window) and exits.
 Quit from the app menu, or kill the process, to stop it.
 
-PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in`,
-`packaging/linux/pwrroute.desktop`), so the OS can offer it as a browser.
+PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in` and
+the link helper's `LinkHelper.Info.plist.in`, `packaging/linux/pwrroute.desktop`),
+so the OS can offer it as a browser. On macOS "Make default browser" makes
+the link helper the handler; the app keeps its own declaration so a default
+registered before the helper (v0.1.0-rc.1) keeps working, reported as a
+legacy registration.
 Becoming the default is an explicit action in the app; never change the
 default browser on a developer machine as a side effect of a test or launch,
 and never call `pwrroute_os::set_default_browser` or `register_browser` from

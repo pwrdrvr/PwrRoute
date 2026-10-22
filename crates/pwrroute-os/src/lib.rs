@@ -13,7 +13,10 @@
 //! - **Registration.** [`register_browser`] makes the OS list PwrRoute as a
 //!   browser and [`unregister_browser`] takes it off, for installers.
 //!   [`set_default_browser`] asks the OS to make PwrRoute the default, which
-//!   always ends in the OS's own consent: a prompt or the Settings page.
+//!   always ends in the OS's own consent: a prompt or the Settings page. On
+//!   macOS the handler is the link helper ([`LINK_HELPER_ID`]); the app's own
+//!   id, which earlier builds registered, still counts as the default and is
+//!   reported as [`DefaultStatus::legacy`].
 //!   [`open_default_apps_settings`] only shows that page.
 //!   Nothing calls any of them at launch, and tests never do.
 //! - **Paths.** [`router_dir`] is where the router's lock and socket live.
@@ -34,9 +37,9 @@ mod registration;
 pub use args::{apple_event_launch_args, link_origin_from_args, links_from_args};
 pub use paths::{data_dir, router_dir};
 pub use registration::{
-    BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, PROG_ID, REGISTERED_NAME,
-    app_display_name, default_browser_status, open_default_apps_settings, register_browser,
-    set_default_browser, unregister_browser,
+    BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, LINK_HELPER_ID, LINK_HELPER_PATH,
+    PROG_ID, REGISTERED_NAME, app_display_name, default_browser_status, is_pwrroute_handler,
+    open_default_apps_settings, register_browser, set_default_browser, unregister_browser,
 };
 // Plans the platform code applies, public so they can be checked anywhere.
 pub use registration::{RegistryValue, desktop_entry, windows_registry_values};

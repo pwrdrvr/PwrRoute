@@ -363,7 +363,7 @@ fn card(
         .when(model.shows_make_default_row(), |section| {
             section.child(menu_row(
                 MAKE_DEFAULT_ID,
-                "Make default browser\u{2026}",
+                model.make_default_label(),
                 None,
                 TrayCommand::MakeDefault,
                 hovered,

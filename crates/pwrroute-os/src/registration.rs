@@ -23,6 +23,14 @@ use anyhow::Result;
 
 /// The macOS bundle identifier, from `packaging/macos/Info.plist.in`.
 pub const BUNDLE_ID: &str = "com.pwrdrvr.pwrroute";
+/// The macOS link helper's bundle identifier, from
+/// `packaging/macos/LinkHelper.Info.plist.in`: the windowless app that
+/// [`set_default_browser`] makes the `http` and `https` handler, so a link
+/// never activates the app with the windows.
+pub const LINK_HELPER_ID: &str = "com.pwrdrvr.pwrroute.links";
+/// Where the link helper sits inside `PwrRoute.app`, as `cargo xtask bundle`
+/// nests it.
+pub const LINK_HELPER_PATH: &str = "Contents/Helpers/PwrRoute.app";
 /// The Windows ProgID that `http` and `https` point at.
 pub const PROG_ID: &str = "PwrRouteURL";
 /// The Windows `StartMenuInternet` and `RegisteredApplications` name.
@@ -35,6 +43,11 @@ pub const DESKTOP_ID: &str = "pwrroute.desktop";
 pub struct DefaultStatus {
     /// PwrRoute handles both `http` and `https`.
     pub is_default: bool,
+    /// macOS: PwrRoute is the default through the app's own bundle id (what
+    /// v0.1.0-rc.1 registered), not the link helper's, so every link brings
+    /// the app forward for a moment. Asking again moves it to the helper.
+    /// Always `false` on Windows and Linux.
+    pub legacy: bool,
     /// The `http` handler as the OS names it: a bundle id, ProgID or desktop
     /// file id.
     pub http: Option<String>,
@@ -91,6 +104,37 @@ pub fn app_display_name(id: &str) -> Option<String> {
     {
         let _ = id;
         None
+    }
+}
+
+/// Whether a handler id the OS reports is PwrRoute: the link helper's or
+/// the app's bundle id on macOS, the ProgID on Windows, the desktop file id
+/// on Linux.
+pub fn is_pwrroute_handler(id: &str) -> bool {
+    [LINK_HELPER_ID, BUNDLE_ID, PROG_ID, DESKTOP_ID]
+        .iter()
+        .any(|ours| id.eq_ignore_ascii_case(ours))
+}
+
+/// macOS's answer for the `http` and `https` handlers. Either bundle id is
+/// PwrRoute: the link helper's, which "Make default browser" registers, and
+/// the app's own, which v0.1.0-rc.1 registered and which still receives
+/// links (the app keeps its `CFBundleURLTypes`). The app's id on either
+/// scheme makes the registration `legacy`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn macos_status(http: Option<String>, https: Option<String>) -> DefaultStatus {
+    let is = |handler: &Option<String>, id: &str| {
+        handler
+            .as_deref()
+            .is_some_and(|h| h.eq_ignore_ascii_case(id))
+    };
+    let ours = |h: &Option<String>| is(h, LINK_HELPER_ID) || is(h, BUNDLE_ID);
+    let is_default = ours(&http) && ours(&https);
+    DefaultStatus {
+        is_default,
+        legacy: is_default && (is(&http, BUNDLE_ID) || is(&https, BUNDLE_ID)),
+        http,
+        https,
     }
 }
 
@@ -301,6 +345,7 @@ mod imp {
         let (http, https) = (choice("http"), choice("https"));
         Ok(DefaultStatus {
             is_default: http.as_deref() == Some(PROG_ID) && https.as_deref() == Some(PROG_ID),
+            legacy: false,
             http,
             https,
         })
@@ -402,6 +447,7 @@ mod imp {
         let (http, https) = (query("http"), query("https"));
         Ok(DefaultStatus {
             is_default: http.as_deref() == Some(DESKTOP_ID) && https.as_deref() == Some(DESKTOP_ID),
+            legacy: false,
             http,
             https,
         })
@@ -480,6 +526,65 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let plist = std::fs::read_to_string(root.join("packaging/macos/Info.plist.in")).unwrap();
         assert!(plist.contains(&format!("<string>{BUNDLE_ID}</string>")));
+        let helper =
+            std::fs::read_to_string(root.join("packaging/macos/LinkHelper.Info.plist.in")).unwrap();
+        assert!(helper.contains(&format!("<string>{LINK_HELPER_ID}</string>")));
+        // xtask nests the helper where the app looks for it.
+        let xtask = std::fs::read_to_string(root.join("xtask/src/macos.rs")).unwrap();
+        assert!(xtask.contains(&format!("\"{LINK_HELPER_PATH}\"")));
         assert!(root.join("packaging/linux").join(DESKTOP_ID).exists());
+    }
+
+    fn mac(http: Option<&str>, https: Option<&str>) -> DefaultStatus {
+        macos_status(http.map(str::to_owned), https.map(str::to_owned))
+    }
+
+    #[test]
+    fn the_link_helper_is_the_default() {
+        let status = mac(Some(LINK_HELPER_ID), Some(LINK_HELPER_ID));
+        assert!(status.is_default && !status.legacy);
+        assert_eq!(status.http.as_deref(), Some(LINK_HELPER_ID));
+        // LaunchServices may report a different case.
+        let upper = LINK_HELPER_ID.to_uppercase();
+        assert!(mac(Some(&upper), Some(&upper)).is_default);
+    }
+
+    #[test]
+    fn the_apps_own_id_is_a_legacy_default() {
+        let rc1 = mac(Some(BUNDLE_ID), Some(BUNDLE_ID));
+        assert!(rc1.is_default && rc1.legacy);
+        // Half moved: still PwrRoute, still worth asking again.
+        let mixed = mac(Some(LINK_HELPER_ID), Some(BUNDLE_ID));
+        assert!(mixed.is_default && mixed.legacy);
+    }
+
+    #[test]
+    fn another_browser_on_either_scheme_is_not_the_default() {
+        for status in [
+            mac(Some("com.google.Chrome"), Some("com.google.Chrome")),
+            mac(Some(LINK_HELPER_ID), Some("com.apple.Safari")),
+            mac(Some("com.apple.Safari"), Some(BUNDLE_ID)),
+            mac(None, Some(LINK_HELPER_ID)),
+            mac(None, None),
+            mac(Some("com.pwrdrvr.pwrroute.other"), Some(LINK_HELPER_ID)),
+        ] {
+            assert!(!status.is_default && !status.legacy, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn every_id_of_ours_is_a_pwrroute_handler() {
+        for id in [
+            LINK_HELPER_ID,
+            BUNDLE_ID,
+            PROG_ID,
+            DESKTOP_ID,
+            "COM.PWRDRVR.PWRROUTE",
+        ] {
+            assert!(is_pwrroute_handler(id), "{id}");
+        }
+        for id in ["com.google.Chrome", "com.pwrdrvr.pwrfinicky", ""] {
+            assert!(!is_pwrroute_handler(id), "{id}");
+        }
     }
 }

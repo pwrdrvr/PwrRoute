@@ -16,6 +16,14 @@ use crate::theme::{self, mono};
 /// The explicit "make PwrRoute the default browser" button.
 pub const REGISTER_ID: &str = "browsers-register-default";
 
+/// The button while an earlier build's registration is the default.
+pub const LEGACY_REGISTER: &str = "Make default browser for faster links";
+
+/// What that registration costs, and what asking again changes.
+const LEGACY_HELP: &str = "PwrRoute became the default before it had its link helper, so each \
+     link brings PwrRoute forward for a moment before the browser. Make it the default again to \
+     hand links to the windowless helper; macOS asks you to confirm.";
+
 /// The OS's own default-apps page, by its name on each platform.
 const SYSTEM_SETTINGS: &str = if cfg!(target_os = "macos") {
     "Open System Settings"
@@ -104,6 +112,24 @@ fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
                     .as_deref()
                     .unwrap_or("PwrRoute is the default.")
             ),
+        ),
+        // Registered by an earlier build, through the app itself: links
+        // work, and one more request hands them to the link helper.
+        DefaultState::PwrRouteLegacy => (
+            chip("PwrRoute is default", Tone::Ok),
+            request_button(
+                REGISTER_ID,
+                LEGACY_REGISTER,
+                Kind::Primary,
+                false,
+                SettingsRequest::RegisterDefaultBrowser,
+                cx,
+            )
+            .into_any_element(),
+            default
+                .note
+                .as_deref()
+                .map_or_else(|| LEGACY_HELP.to_owned(), str::to_owned),
         ),
         DefaultState::Other(name) => (
             chip(format!("{name} is default"), Tone::Warn),

@@ -381,7 +381,11 @@ their own modules.
   step is not done it re-reads every second regardless (`follow_while`);
   the step shows the wait and "Ask again", names an uncatalogued default
   by its bundle's name (`pwrroute_os::app_display_name`), and says why
-  when the OS refuses the request with an error.
+  when the OS refuses the request with an error. On macOS the default
+  is the link helper (`crates/pwrroute-link-helper`); the app's own id is
+  `DefaultState::PwrRouteLegacy`, which still counts as the default (chip,
+  first run) but keeps Settings' button and the tray's row, worded for
+  faster links, and a request from it polls until the helper's id is in.
   It also re-reads every `RECHECK_EVERY` (a minute) for the life of the
   app and when the tray dropdown opens, so a router with no window
   notices losing the default; the tray chip and its Make default row

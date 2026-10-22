@@ -21,5 +21,13 @@ browser registration on macOS, Windows and Linux, and apps' icons (macOS).
 - **App icons (`app_bundle`, `app_icon_png`) read the disk.** Callers run
   them off the UI thread and cache the result; the app's `app_icons.rs`
   does. Windows and Linux return `None` until they have an implementation.
-- Names (`BUNDLE_ID`, `PROG_ID`, `DESKTOP_ID`) must match `packaging/`; a
-  test reads the packaging files to hold them together.
+- **macOS defaults to the link helper.** `set_default_browser` registers the
+  app and its nested helper with LaunchServices (`LSRegisterURL` on each
+  bundle) and asks for `LINK_HELPER_ID`; it refuses a bundle without the
+  helper. `default_browser_status` counts either id as PwrRoute and sets
+  `legacy` when the app's own id (what v0.1.0-rc.1 registered) is one of
+  them; `macos_status` is the pure mapping, tested everywhere. Windows and
+  Linux never set `legacy`.
+- Names (`BUNDLE_ID`, `LINK_HELPER_ID`, `LINK_HELPER_PATH`, `PROG_ID`,
+  `DESKTOP_ID`) must match `packaging/` and xtask; a test reads those files
+  to hold them together.

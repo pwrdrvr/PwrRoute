@@ -171,7 +171,9 @@ impl Status {
             match self.default {
                 DefaultState::Other(_) => State::NotDefault,
                 DefaultState::Unknown => State::Unknown,
-                DefaultState::PwrRoute => State::Routing,
+                // Links reach PwrRoute either way; Settings and the tray
+                // offer the faster registration.
+                DefaultState::PwrRoute | DefaultState::PwrRouteLegacy => State::Routing,
             }
         }
     }
@@ -2715,7 +2717,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             default_browser: SetupStep {
                 title: "Make PwrRoute the default browser",
                 // Done only when the OS says so: an unknown default is not.
-                done: status.default == DefaultState::PwrRoute,
+                done: status.default.is_default(),
                 body: Some(match &status.default {
                     DefaultState::Other(name) => format!(
                         "macOS will ask you to confirm. Until then, links keep opening in \
@@ -2724,7 +2726,9 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     DefaultState::Unknown => "macOS will ask you to confirm. PwrRoute can't \
                                               tell which browser is the default now."
                         .to_owned(),
-                    DefaultState::PwrRoute => "PwrRoute is the default browser.".to_owned(),
+                    DefaultState::PwrRoute | DefaultState::PwrRouteLegacy => {
+                        "PwrRoute is the default browser.".to_owned()
+                    }
                 }),
                 result: None,
             },

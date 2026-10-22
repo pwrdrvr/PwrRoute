@@ -171,6 +171,23 @@ fn register_calls_the_callback_and_nothing_else(cx: &mut TestAppContext) {
     assert!(!view.read_with(cx, |view, _| view.model.browsers.default.state.is_default()));
 }
 
+/// An earlier build's registration still routes links; the card says so
+/// and offers the one request that moves it to the link helper.
+#[gpui_kit::test]
+fn a_legacy_default_offers_to_register_again(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |model| {
+        model.browsers.default.state = DefaultState::PwrRouteLegacy;
+        model.browsers.default.note = None;
+    });
+    assert!(visible(cx, browsers::REGISTER_ID));
+    click(cx, browsers::REGISTER_ID);
+    assert_eq!(
+        *requests.borrow(),
+        [SettingsRequest::RegisterDefaultBrowser]
+    );
+    assert!(view.read_with(cx, |view, _| view.model.browsers.default.state.is_legacy()));
+}
+
 #[gpui_kit::test]
 fn a_producer_reports_the_os_answer_into_the_open_window(cx: &mut TestAppContext) {
     let requests = install(cx);

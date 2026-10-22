@@ -318,18 +318,20 @@ pub fn follow_default_browser(cx: &mut App) {
     else {
         return;
     };
-    fn sync(model: &Entity<TrayModel>, is_default: bool, cx: &mut App) {
+    fn sync(model: &Entity<TrayModel>, state: &default_browser::DefaultState, cx: &mut App) {
+        let (is_default, legacy) = (state.is_default(), state.is_legacy());
         model.update(cx, |model, cx| {
-            if model.is_default_browser != is_default {
+            if (model.is_default_browser, model.default_is_legacy) != (is_default, legacy) {
                 model.is_default_browser = is_default;
+                model.default_is_legacy = legacy;
                 cx.notify();
             }
         });
     }
-    sync(&model, registrar.read(cx).state.is_default(), cx);
+    sync(&model, &registrar.read(cx).state.clone(), cx);
     cx.observe(&registrar, move |registrar, cx| {
-        let is_default = registrar.read(cx).state.is_default();
-        sync(&model, is_default, cx);
+        let state = registrar.read(cx).state.clone();
+        sync(&model, &state, cx);
     })
     .detach();
 }

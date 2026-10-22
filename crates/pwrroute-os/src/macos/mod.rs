@@ -13,7 +13,9 @@ use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
 use pwrroute_router::OpenerInfo;
 
-use crate::registration::{BUNDLE_ID, DefaultRequest, DefaultStatus};
+use crate::registration::{
+    BUNDLE_ID, DefaultRequest, DefaultStatus, LINK_HELPER_ID, LINK_HELPER_PATH, macos_status,
+};
 
 /// `keySenderPIDAttr` ('spid'): the pid of the process that sent the event.
 const KEY_SENDER_PID: u32 = u32::from_be_bytes(*b"spid");
@@ -62,8 +64,26 @@ fn app_bundle() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The link helper nested in `app` (`Contents/Helpers/PwrRoute.app`), when
+/// it is there and is the helper: `None` for a bundle built before it, or
+/// one put together by hand.
+fn link_helper(app: &Path) -> Option<PathBuf> {
+    let path = app.join(LINK_HELPER_PATH);
+    let bundle = NSBundle::bundleWithPath(&NSString::from_str(&path.to_string_lossy()))?;
+    let id = bundle.bundleIdentifier()?.to_string();
+    (id == LINK_HELPER_ID).then_some(path)
+}
+
+/// Lists the app and its link helper with LaunchServices. The helper is
+/// registered by its own URL: LaunchServices need not have scanned a bundle
+/// nested in another before it can be made a handler.
 pub fn register() -> Result<()> {
-    launch_services::register(&app_bundle()?)
+    let app = app_bundle()?;
+    launch_services::register(&app)?;
+    if let Some(helper) = link_helper(&app) {
+        launch_services::register(&helper)?;
+    }
+    Ok(())
 }
 
 /// LaunchServices forgets a bundle once it is deleted, and there is no
@@ -73,10 +93,19 @@ pub fn unregister() -> Result<()> {
     Ok(())
 }
 
+/// Asks for the link helper to handle `http` and `https`. The helper, not
+/// the app, so that a link never activates the process with the windows:
+/// LaunchServices activates whichever app it hands a link to.
 pub fn set_default() -> Result<DefaultRequest> {
-    app_bundle()?;
+    let app = app_bundle()?;
+    if link_helper(&app).is_none() {
+        bail!(
+            "this PwrRoute.app has no link helper at {LINK_HELPER_PATH}; build it with `cargo \
+             xtask bundle`"
+        );
+    }
     for scheme in ["http", "https"] {
-        launch_services::set_default_handler(scheme, BUNDLE_ID)?;
+        launch_services::set_default_handler(scheme, LINK_HELPER_ID)?;
     }
     Ok(DefaultRequest::Prompted)
 }
@@ -126,15 +155,8 @@ pub fn app_display_name(bundle_id: &str) -> Option<String> {
 }
 
 pub fn status() -> Result<DefaultStatus> {
-    let http = launch_services::default_handler("http");
-    let https = launch_services::default_handler("https");
-    let ours = |h: &Option<String>| {
-        h.as_deref()
-            .is_some_and(|h| h.eq_ignore_ascii_case(BUNDLE_ID))
-    };
-    Ok(DefaultStatus {
-        is_default: ours(&http) && ours(&https),
-        http,
-        https,
-    })
+    Ok(macos_status(
+        launch_services::default_handler("http"),
+        launch_services::default_handler("https"),
+    ))
 }
