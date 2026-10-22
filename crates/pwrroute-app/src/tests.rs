@@ -1735,9 +1735,7 @@ fn a_rule_an_earlier_rule_shadows_is_flagged_before_it_is_added(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(
-    cx: &mut TestAppContext,
-) {
+fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(cx: &mut TestAppContext) {
     let dir = scratch("add-rule-config-first");
     let path = dir.join("rules.json");
     let (view, cx) = open_activity(cx, &dir, Some(fixture_home().join(".finicky.ts")));
@@ -1864,6 +1862,12 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
         ["issues.example/12345/*"]
     );
 
+    // The add left row 1's menu open, over row 2's "⋯": a click elsewhere
+    // closes it.
+    assert!(cx.debug_bounds("activity-show-rule-1").is_some());
+    click(cx, "nav-activity");
+    assert!(cx.debug_bounds("activity-menu-1").is_none());
+
     // Row 2, taken by a rules.json handler: the menu's Save names the
     // handler that takes it now (handler 1, meet.google.com/*) and the
     // example goes there; the menu stays, with the note in its footer.
@@ -1879,6 +1883,7 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
                 handler: 0,
                 pattern: Some("meet.google.com/*".into()),
             }),
+            added: None,
         })
     );
     click(cx, "activity-save-2");

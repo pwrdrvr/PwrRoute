@@ -77,6 +77,12 @@ impl Probe {
         }
     }
 
+    /// A probe over the same config and `rules` instead: what a change
+    /// would do before it is made.
+    pub fn with_rules(&self, rules: RulesFile) -> Self {
+        Self::new(self.config.clone(), rules)
+    }
+
     /// The rules changed: the next probe loads them.
     pub fn set_rules(&mut self, rules: RulesFile) {
         if self.rules != rules {
