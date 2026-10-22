@@ -1710,6 +1710,22 @@ fn a_rule_an_earlier_rule_shadows_is_flagged_before_it_is_added(cx: &mut TestApp
     let (view, cx) = open_activity(cx, &dir, None);
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
+    // At the top, a pattern that misses the link: handler 2 still takes
+    // it, but not first, so the sheet says the rule does not match.
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-pattern");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("example.com/*");
+    draw(cx);
+    click(cx, "add-rule-save");
+    let problem = sheet_problem(&view, cx).expect("a problem");
+    assert!(
+        problem.starts_with("This rule does not match the link"),
+        "{problem}"
+    );
+    click(cx, "add-rule-candidate-0");
+    click(cx, "add-rule-position-bottom");
+    assert_eq!(sheet_problem(&view, cx), None);
     // At the bottom, handler 2's github.com/pwrdrvr/* takes the link first.
     click(cx, "add-rule-save");
     assert!(

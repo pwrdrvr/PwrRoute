@@ -128,6 +128,9 @@ pub struct AddRule {
     /// else as received. Empty when `disabled`.
     pub url: String,
     pub from: Option<OpenerInfo>,
+    /// The sending app as the engine saw it (`engine_opener`), which Add
+    /// traces the link from.
+    opener: Option<Opener>,
     /// Why no rule can be written for this record: it was kept as host
     /// only or nothing.
     pub disabled: Option<String>,
@@ -206,6 +209,7 @@ impl AddRule {
             time: clock(record.received_at),
             url,
             from: record.link.opener.clone().filter(|o| !o.name.is_empty()),
+            opener: engine_opener(record),
             disabled: None,
             selected: (!candidates.is_empty()).then_some(0),
             candidates,
@@ -683,11 +687,10 @@ impl PwrRoute {
             });
         }
         rules.rules.insert(at, rule.clone());
-        let opener = sheet.from.as_ref().map(Opener::from);
         let trace = self
             .probe
             .with_rules(rules.clone())
-            .trace(&sheet.url, opener.as_ref())
+            .trace(&sheet.url, sheet.opener.as_ref())
             .ok()?;
         let winner = trace.winner()?;
         let shadowed = |text: String, advice| {
@@ -699,7 +702,8 @@ impl PwrRoute {
         };
         match (winner.source, winner.stage) {
             (Source::Rules, Stage::Handler) if winner.index == at => None,
-            (Source::Rules, Stage::Handler) => {
+            // An earlier handler; a later one means this rule missed.
+            (Source::Rules, Stage::Handler) if winner.index < at => {
                 let pattern = rules
                     .rules
                     .get(winner.index)
@@ -731,7 +735,7 @@ impl PwrRoute {
             }
             _ => shadowed(
                 "This rule does not match the link as the rules see it, so the link would \
-                 still go to the default browser."
+                 still go where it goes now."
                     .to_owned(),
                 "Check the pattern, or click Add anyway.",
             ),
