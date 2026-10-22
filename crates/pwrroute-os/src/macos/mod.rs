@@ -9,12 +9,13 @@ pub use app_icon::{bundle_path as installed_app_bundle, icon_png as app_icon_png
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use objc2_app_kit::{NSRunningApplication, NSWorkspace};
-use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
+use objc2_app_kit::{NSRunningApplication, NSWorkspace, NSWorkspaceOpenConfiguration};
+use objc2_foundation::{NSAppleEventManager, NSArray, NSBundle, NSString, NSURL};
 use pwrroute_router::OpenerInfo;
 
 use crate::registration::{
-    BUNDLE_ID, DefaultRequest, DefaultStatus, LINK_HELPER_ID, LINK_HELPER_PATH, macos_status,
+    BUNDLE_ID, DefaultRequest, DefaultStatus, LINK_HELPER_ID, LINK_HELPER_PATH,
+    LINK_HELPER_STARTED_BY_APP, macos_status,
 };
 
 /// `keySenderPIDAttr` ('spid'): the pid of the process that sent the event.
@@ -159,4 +160,31 @@ pub fn status() -> Result<DefaultStatus> {
         launch_services::default_handler("http"),
         launch_services::default_handler("https"),
     ))
+}
+
+/// [`crate::start_link_helper`] on macOS.
+pub fn start_link_helper() {
+    if app_is_running(LINK_HELPER_ID) {
+        return;
+    }
+    let bundle = NSBundle::mainBundle().bundlePath().to_string();
+    let helper = Path::new(&bundle).join(LINK_HELPER_PATH);
+    if !helper.join("Contents/Info.plist").is_file() {
+        return;
+    }
+    let url =
+        NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&helper.to_string_lossy()), true);
+    let configuration = NSWorkspaceOpenConfiguration::configuration();
+    configuration.setActivates(false);
+    configuration.setAddsToRecentItems(false);
+    configuration.setArguments(&NSArray::from_retained_slice(&[NSString::from_str(
+        LINK_HELPER_STARTED_BY_APP,
+    )]));
+    // Fire and forget: a helper that does not start is started by the
+    // first link instead, as before.
+    NSWorkspace::sharedWorkspace().openApplicationAtURL_configuration_completionHandler(
+        &url,
+        &configuration,
+        None,
+    );
 }

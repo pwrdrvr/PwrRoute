@@ -201,6 +201,9 @@ fn main() -> ExitCode {
             on_request: Rc::new(|request, _, cx| settings_live::handle_request(request, cx)),
         });
         updater::install(cx);
+        // macOS: the windowless link helper is the http/https handler; have
+        // it up before the first link instead of launching it for that link.
+        pwrroute_os::start_link_helper();
         if let Some(hook) = e2e_hook {
             e2e::attach(hook, cx);
         } else {

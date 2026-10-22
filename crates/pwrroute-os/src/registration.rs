@@ -31,6 +31,9 @@ pub const LINK_HELPER_ID: &str = "com.pwrdrvr.pwrroute.links";
 /// Where the link helper sits inside `PwrRoute.app`, as `cargo xtask bundle`
 /// nests it.
 pub const LINK_HELPER_PATH: &str = "Contents/Helpers/PwrRoute.app";
+/// The argument the app starts the link helper with ([`start_link_helper`]):
+/// a launch that is neither for a link nor a request for the window.
+pub const LINK_HELPER_STARTED_BY_APP: &str = "--started-by-app";
 /// The Windows ProgID that `http` and `https` point at.
 pub const PROG_ID: &str = "PwrRouteURL";
 /// The Windows `StartMenuInternet` and `RegisteredApplications` name.
