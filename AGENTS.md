@@ -130,7 +130,10 @@ throwaway CI runners (`e2e/AGENTS.md`).
 ## Packaging & releases
 
 `cargo xtask bundle [--universal] [--sign IDENTITY] [--notarize]` builds the
-macOS app, zip and DMG, ad hoc signed unless an identity is given.
+macOS app, zip and DMG, ad hoc signed unless an identity is given. The link
+helper is nested at `Contents/Helpers/PwrRoute.app` and signed before the app,
+never with `codesign --deep`; release.yml signs it the same way before `vpk
+pack`.
 `cargo xtask package-linux` builds the tar.gz and .deb. The app icon is
 `packaging/icon/PwrRoute.svg`, the design mark on the Pwr family's tile;
 `scripts/release/make-icns.sh` renders it into the committed Icon Composer

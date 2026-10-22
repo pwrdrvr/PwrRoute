@@ -232,11 +232,14 @@ it packs anyway, unsigned (ad hoc on macOS), and says so in a warning.
   `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`. With all of them present
   `macos-sign` imports the certificate into a throwaway keychain, picks the
   `Developer ID Application` identity for team `T44CNHC4UH` and stores the
-  API key there as the notarytool profile `pwrroute-notary`. `vpk pack` signs
-  the app with the hardened runtime, notarizes and staples it;
+  API key there as the notarytool profile `pwrroute-notary`. The job signs
+  the nested link helper (`Contents/Helpers/PwrRoute.app`) first, on its own;
+  `vpk pack` then signs the app around it with the hardened runtime,
+  notarizes and staples it;
   `macos-dmg.sh` signs, notarizes and staples the DMG. The job then checks
   `codesign --verify`, the team identifier, `xcrun stapler validate` and
-  `spctl --assess` for both.
+  `spctl --assess` for both, and the helper's own signature, team and
+  hardened runtime.
   Upload them from 1Password instead of pasting: with the `op` and `gh` CLIs
   signed in, `OP_ACCOUNT=<user id from op account list> scripts/release/upload-csc-link-from-1password.sh`
   reads the "Apple Signing - PwrDrvr" item in the "PwrDrvr LLC" vault (the

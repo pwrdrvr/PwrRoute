@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The link helper: PwrRoute.app/Contents/Helpers/PwrRoute.app, rendered by
+     `cargo xtask bundle` like Info.plist.in (@SHORT_VERSION@, and the same
+     icon files beside it). "Make default browser" makes this bundle, not the
+     app, the http and https handler: LaunchServices activates whichever app
+     it hands a link to, and this one has no windows (LSUIElement), so a link
+     never brings PwrRoute's window forward. It forwards each link to the
+     running app over the router's socket, launching the app in the
+     background when none answers (crates/pwrroute-link-helper).
+     CFBundleName and CFBundleDisplayName are the app's, and so is the bundle's
+     file name, so macOS's "change your default web browser?" dialog and
+     System Settings still say PwrRoute. CFBundleURLTypes mirrors the app's,
+     which keeps its own so a default registered before the helper existed
+     keeps working. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.pwrdrvr.pwrroute.links</string>
+	<key>CFBundleName</key>
+	<string>PwrRoute</string>
+	<key>CFBundleDisplayName</key>
+	<string>PwrRoute</string>
+	<key>CFBundleExecutable</key>
+	<string>pwrroute-links</string>
+	<key>CFBundleIconFile</key>
+	<string>Icon</string>
+	<key>CFBundleIconName</key>
+	<string>Icon</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>Web site URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@SHORT_VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@SHORT_VERSION@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 PwrDrvr LLC.</string>
+</dict>
+</plist>

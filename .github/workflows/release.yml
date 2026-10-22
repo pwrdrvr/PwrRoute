@@ -254,6 +254,27 @@ jobs:
             echo "::warning::Could not fetch the previous macOS release; packing without a delta."
           fi
 
+      # Inside out: the nested link helper (Contents/Helpers/PwrRoute.app)
+      # gets its own Developer ID signature, hardened runtime, timestamp and
+      # our (empty) entitlements before vpk signs the app around it. vpk's
+      # default `codesign --deep` would sign it the same way, but the helper
+      # must not depend on that: with --signDisableDeep, vpk would sign only
+      # UpdateMac and the app. The verify steps below check the helper's
+      # signature on its own. Unsigned builds keep bundle's ad hoc signature.
+      - name: Sign the link helper
+        if: steps.creds.outputs.signed == 'true'
+        env:
+          IDENTITY: ${{ steps.keychain.outputs.identity }}
+          KEYCHAIN: ${{ steps.keychain.outputs.path }}
+        run: |
+          set -euo pipefail
+          helper=input/PwrRoute.app/Contents/Helpers/PwrRoute.app
+          test -x "$helper/Contents/MacOS/pwrroute-links"
+          codesign --force --timestamp --options runtime \
+            --entitlements input/PwrRoute.entitlements \
+            --sign "$IDENTITY" --keychain "$KEYCHAIN" "$helper"
+          codesign --verify --strict --verbose=2 "$helper"
+
       # vpk adds UpdateMac and sq.version to the app and re-signs it with our
       # entitlements (none). Signed: Developer ID, hardened runtime,
       # notarized and stapled by vpk. Unsigned: ad hoc (`-`), because an app
@@ -319,6 +340,19 @@ jobs:
             exit 1
           fi
           test -x "$app/Contents/MacOS/UpdateMac"
+          # The nested link helper: signed on its own by the same team, with
+          # the hardened runtime, still the windowless http/https handler.
+          helper="$app/Contents/Helpers/PwrRoute.app"
+          test -x "$helper/Contents/MacOS/pwrroute-links"
+          codesign --verify --strict --all-architectures "$helper"
+          helper_details=$(codesign -dv "$helper" 2>&1)
+          if ! grep -qx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$helper_details" \
+            || ! grep -q "Identifier=com.pwrdrvr.pwrroute.links" <<< "$helper_details" \
+            || ! grep -q "flags=.*runtime" <<< "$helper_details"; then
+            echo "::error::The link helper is not signed by team $APPLE_TEAM_ID with the hardened runtime." >&2
+            exit 1
+          fi
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$helper/Contents/Info.plist")" = true
           xcrun stapler validate "$app"
           spctl --assess --type execute -vv "$app"
           dmg=$(ls dist/*.dmg)
@@ -332,6 +366,9 @@ jobs:
           app="$RUNNER_TEMP/packed/PwrRoute.app"
           codesign --verify --deep --strict --all-architectures "$app"
           test -x "$app/Contents/MacOS/UpdateMac"
+          helper="$app/Contents/Helpers/PwrRoute.app"
+          test -x "$helper/Contents/MacOS/pwrroute-links"
+          codesign --verify --strict --all-architectures "$helper"
 
       # This version's packages and the osx feed only: the previous release's
       # package fetched for the delta stays in the release that owns it.
