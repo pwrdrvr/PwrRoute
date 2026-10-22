@@ -46,8 +46,8 @@ interprocess = "2.4"
 velopack = "=1.2.161"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The Dock icon (activation policy), the screen under the menu bar item and
-# the screen under the mouse.
+# The Dock icon (activation policy), the screen under the menu bar item,
+# the screen under the mouse and the tray dropdown's frame.
 # objc2's AppKit bindings for these are safe; see `macos.rs`.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
@@ -58,6 +58,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSGraphics",
     "NSResponder",
     "NSScreen",
+    "NSView",
+    "NSWindow",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",

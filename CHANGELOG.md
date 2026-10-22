@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Popovers and menus - The tray dropdown is as tall as what it shows, with no empty band below Quit, and grows or shrinks with it while open (keeping its top under the menu bar); on a display too short for it, the middle scrolls. Its pause line, tooltip and recents name a browser `rules.json` gives by bundle id ("Microsoft Edge", not `com.microsoft.edgemac`), as does Activity's Opened in. Select lists (Activity's Add a rule browser and profile, Test a link's app, first run's browser and profile, the agents' role) are at least as wide as their field and scroll past 8½ rows; a browser with three or more profiles shows a count instead of every name, and long names, profiles and the row menu's Save hint end in an ellipsis instead of running past the edge.
+
 ## v0.1.0-rc.2 - 2026-10-22
 
 - Browser hand-off - A profile, private-window or argument link for a Chromium browser that is already running opens without focus bouncing between apps. The short-lived instance `open -n` starts for the hand-off now starts in the background (`open -g`), and the running browser brings its own window forward. A browser that is not running still comes forward as before; Firefox is unchanged.

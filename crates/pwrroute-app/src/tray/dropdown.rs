@@ -6,12 +6,18 @@
 //! frontmost app keeps its menu bar, and it closes when it loses focus: a
 //! click anywhere else, Esc, a command, or the item again.
 //!
-//! GPUI cannot move a window, and macOS keeps a window's bottom edge when it
-//! resizes, so the window opens at the tallest the dropdown can get (see
-//! [`window_height`]) with a transparent background, and the card is drawn at
-//! its top at the height of what it shows now. Pausing, or a new recent link,
-//! changes the card and never the window.
+//! The window is the card (design: Popovers and Overflow 2a). It opens at
+//! the card's height ([`fitted_height`]) and follows it whenever the model
+//! changes: pausing, a new recent link, the Make default row. GPUI cannot
+//! move a window and macOS keeps a window's bottom edge when it resizes, so
+//! the resize goes through `macos::set_dropdown_height`, which keeps the
+//! top under the menu bar. A transparent window taller than the card is not
+//! invisible: macOS draws its frame and shadow at the window's size. The
+//! window never runs past the display's visible area; on a display too
+//! short for the card, the header and Quit stay and the middle scrolls
+//! (2b).
 
+use std::rc::Rc;
 use std::time::SystemTime;
 
 use gpui_kit::prelude::FluentBuilder as _;
@@ -27,12 +33,16 @@ use gpui_kit::{
 use super::TrayCommand;
 use super::model::{HeaderChip, Recent, TrayModel};
 use crate::theme::{self, icon, mono, text, tracked};
-use crate::widgets::{badge, key_cap, switch};
+use crate::widgets::{badge, key_cap, one_line, switch};
 
 /// The element ids tests and the inspector find things by.
 pub const CARD_ID: &str = "tray-card";
 pub const PAUSE_ID: &str = "tray-pause";
 pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
+pub const QUIT_ID: &str = "tray-quit";
+/// The sections between the header and Quit, which scroll on a display too
+/// short for the card.
+pub const BODY_ID: &str = "tray-body";
 
 /// `.tray { width: 300px }`.
 pub const WIDTH: f32 = 300.0;
@@ -72,7 +82,22 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// Open the dropdown with its top-left at `origin` on `display`.
+/// Asks the OS to make the window's content this tall, keeping its top
+/// edge. Tests record the height instead.
+pub type Resize = Rc<dyn Fn(Pixels)>;
+
+/// The OS's resize: AppKit on macOS, keeping the top edge.
+fn native_resize() -> Resize {
+    Rc::new(|height| {
+        #[cfg(target_os = "macos")]
+        crate::macos::set_dropdown_height(height.as_f32());
+        #[cfg(not(target_os = "macos"))]
+        let _ = height;
+    })
+}
+
+/// Open the dropdown with its top-left at `origin` on `display`, at most
+/// `max_height` tall: the display's visible area below `origin`.
 #[cfg_attr(
     not(target_os = "macos"),
     allow(dead_code, reason = "only macOS has the dropdown")
@@ -81,9 +106,10 @@ pub fn open(
     model: Entity<TrayModel>,
     origin: Point<Pixels>,
     display: Option<DisplayId>,
+    max_height: Pixels,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<Dropdown>> {
-    let height = window_height(model.read(cx), &cx.text_system().clone());
+    let height = fitted_height(model.read(cx), &cx.text_system().clone(), max_height);
     let window = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -102,9 +128,14 @@ pub fn open(
             app_id: Some("pwrroute".to_owned()),
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| Dropdown::new(model, window, cx)),
+        |window, cx| cx.new(|cx| Dropdown::new(model, max_height, native_resize(), window, cx)),
     )?;
-    window.update(cx, |this, window, cx| window.focus(&this.focus, cx))?;
+    window.update(cx, |this, window, cx| {
+        window.focus(&this.focus, cx);
+        // GPUI opens the panel with a title bar's style mask: check the
+        // content it ended up with against the card.
+        this.fit(window, cx);
+    })?;
     Ok(window)
 }
 
@@ -114,13 +145,26 @@ pub struct Dropdown {
     /// The command row under the pointer. GPUI resolves text color before it
     /// knows what is hovered, so the `.hov` label color comes from here.
     hovered: Option<&'static str>,
+    /// The tallest the window may be: the display's visible area under it.
+    max_height: Pixels,
+    /// The height the window was last asked to be: [`fitted_height`].
+    pub height: Pixels,
+    resize: Resize,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Dropdown {
-    pub fn new(model: Entity<TrayModel>, window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
+    pub fn new(
+        model: Entity<TrayModel>,
+        max_height: Pixels,
+        resize: Resize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let height = fitted_height(model.read(cx), &cx.text_system().clone(), max_height);
         let subscriptions = vec![
-            cx.observe(&model, |_, _, cx| cx.notify()),
+            // The window follows the card.
+            cx.observe_in(&model, window, |this, _, window, cx| this.fit(window, cx)),
             // A click anywhere else takes focus away: close, as a menu does.
             cx.observe_window_activation(window, |_, window, cx| {
                 if !window.is_window_active() {
@@ -133,8 +177,30 @@ impl Dropdown {
             model,
             focus: cx.focus_handle(),
             hovered: None,
+            max_height,
+            height,
+            resize,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Size the window to the card as the model has it now. The OS call
+    /// runs on the foreground executor, outside any update, as GPUI's own
+    /// `Window::resize` does: AppKit reports the new size to GPUI at once,
+    /// and GPUI drops that report while the app is borrowed (in an update
+    /// or an effect flush), leaving the card drawn at the old height.
+    pub fn fit(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let want = fitted_height(
+            self.model.read(cx),
+            &cx.text_system().clone(),
+            self.max_height,
+        );
+        self.height = want;
+        if (want - window.viewport_size().height).abs() >= px(0.5) {
+            let resize = self.resize.clone();
+            cx.spawn(async move |_, _| resize(want)).detach();
+        }
+        cx.notify();
     }
 
     /// Close, then run `command` once this window is gone.
@@ -176,8 +242,8 @@ impl Render for Dropdown {
             .flex_col()
             .font_family(theme::SANS)
             .child(card(&model, SystemTime::now(), self.hovered, cx))
-            // The window is taller than the card; a click below it is a
-            // click outside the dropdown.
+            // Until the window catches up with a card that shrank, a click
+            // below it is a click outside the dropdown.
             .child(
                 div()
                     .flex_1()
@@ -228,11 +294,88 @@ fn card(
         ));
     }
 
+    let pause = section().child(
+        div()
+            .id(PAUSE_ID)
+            .debug_selector(|| PAUSE_ID.into())
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .px(px(6.0))
+            .py(px(7.0))
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.run(TrayCommand::TogglePause, window, cx);
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.0))
+                    .child(
+                        text("Pause routing", 12.0, 500.0, theme::text_primary())
+                            .line_height(px(PAUSE_TITLE)),
+                    )
+                    .child(
+                        div()
+                            .font_family(theme::SANS)
+                            .font_weight(theme::weight(400.0))
+                            .text_size(px(10.0))
+                            .line_height(px(PAUSE_LINE))
+                            .text_color(theme::text_muted())
+                            .child(model.pause_detail()),
+                    ),
+            )
+            .child(switch(paused)),
+    );
+    let commands = section()
+        .child(menu_row(
+            "tray-test",
+            "Test a link\u{2026}",
+            Some("\u{2318}T"),
+            TrayCommand::TestLink,
+            hovered,
+            cx,
+        ))
+        .child(menu_row(
+            "tray-rules",
+            "Rules\u{2026}",
+            Some("\u{2318}R"),
+            TrayCommand::Rules,
+            hovered,
+            cx,
+        ))
+        .child(menu_row(
+            "tray-settings",
+            "Settings\u{2026}",
+            Some("\u{2318},"),
+            TrayCommand::Settings,
+            hovered,
+            cx,
+        ))
+        .when(model.shows_make_default_row(), |section| {
+            section.child(menu_row(
+                MAKE_DEFAULT_ID,
+                "Make default browser\u{2026}",
+                None,
+                TrayCommand::MakeDefault,
+                hovered,
+                cx,
+            ))
+        });
+
     div()
         .id(CARD_ID)
         .debug_selector(|| CARD_ID.into())
-        .flex_none()
         .w(px(WIDTH))
+        // No taller than the window; when the window is capped by the
+        // display, the sections between the header and Quit scroll.
+        .max_h_full()
+        .min_h_0()
+        .flex_shrink(1.0)
         .flex()
         .flex_col()
         .overflow_hidden()
@@ -240,92 +383,35 @@ fn card(
         .border_1()
         .border_color(theme::border_default())
         .rounded(px(10.0))
-        .child(header(model.chip()))
-        .child(recents)
+        .child(header(model.chip()).flex_none())
         .child(
-            section().child(
-                div()
-                    .id(PAUSE_ID)
-                    .debug_selector(|| PAUSE_ID.into())
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .px(px(6.0))
-                    .py(px(7.0))
-                    .rounded(px(6.0))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.run(TrayCommand::TogglePause, window, cx);
-                    }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.0))
-                            .child(
-                                text("Pause routing", 12.0, 500.0, theme::text_primary())
-                                    .line_height(px(PAUSE_TITLE)),
-                            )
-                            .child(
-                                div()
-                                    .font_family(theme::SANS)
-                                    .font_weight(theme::weight(400.0))
-                                    .text_size(px(10.0))
-                                    .line_height(px(PAUSE_LINE))
-                                    .text_color(theme::text_muted())
-                                    .child(model.pause_detail()),
-                            ),
-                    )
-                    .child(switch(paused)),
-            ),
+            div()
+                .id(BODY_ID)
+                .debug_selector(|| BODY_ID.into())
+                .flex()
+                .flex_col()
+                .flex_shrink(1.0)
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(recents.flex_none())
+                .child(pause.flex_none())
+                .child(commands.flex_none()),
         )
         .child(
-            section()
+            div()
+                .flex()
+                .flex_none()
+                .flex_col()
+                .p(px(6.0))
                 .child(menu_row(
-                    "tray-test",
-                    "Test a link\u{2026}",
-                    Some("\u{2318}T"),
-                    TrayCommand::TestLink,
+                    QUIT_ID,
+                    "Quit PwrRoute",
+                    Some("\u{2318}Q"),
+                    TrayCommand::Quit,
                     hovered,
                     cx,
-                ))
-                .child(menu_row(
-                    "tray-rules",
-                    "Rules\u{2026}",
-                    Some("\u{2318}R"),
-                    TrayCommand::Rules,
-                    hovered,
-                    cx,
-                ))
-                .child(menu_row(
-                    "tray-settings",
-                    "Settings\u{2026}",
-                    Some("\u{2318},"),
-                    TrayCommand::Settings,
-                    hovered,
-                    cx,
-                ))
-                .when(model.shows_make_default_row(), |section| {
-                    section.child(menu_row(
-                        MAKE_DEFAULT_ID,
-                        "Make default browser\u{2026}",
-                        None,
-                        TrayCommand::MakeDefault,
-                        hovered,
-                        cx,
-                    ))
-                }),
+                )),
         )
-        .child(div().flex().flex_col().p(px(6.0)).child(menu_row(
-            "tray-quit",
-            "Quit PwrRoute",
-            Some("\u{2318}Q"),
-            TrayCommand::Quit,
-            hovered,
-            cx,
-        )))
 }
 
 /// `.th`: the mark, the wordmark and the state chip.
@@ -449,16 +535,29 @@ fn recent_row(
                 .child(
                     div()
                         .flex()
+                        .min_w_0()
                         .items_center()
                         .gap(px(5.0))
                         .child(badge(recent.browser.badge.clone()))
+                        // A long profile name ends in an ellipsis before
+                        // the age column.
                         .child(
-                            text(recent.detail(), 10.0, 500.0, theme::text_muted())
-                                .line_height(px(REC_DETAIL)),
+                            one_line(
+                                recent.detail(),
+                                theme::SANS,
+                                500.0,
+                                10.0,
+                                REC_DETAIL,
+                                theme::text_muted(),
+                            )
+                            .debug_selector(move || format!("tray-recent-detail-{index}")),
                         ),
                 ),
         )
-        .child(mono(recent.age(now), 10.0, 500.0, theme::text_subtle()))
+        .child(
+            mono(recent.age(now), 10.0, 500.0, theme::text_subtle())
+                .debug_selector(move || format!("tray-recent-age-{index}")),
+        )
 }
 
 /// The muted 11px row under the recents ("Open Activity").
@@ -589,7 +688,6 @@ struct Rows {
 }
 
 impl Rows {
-    #[cfg(test)]
     fn of(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>) -> Self {
         let recents = model.shown_recents().len();
         Self {
@@ -627,24 +725,16 @@ fn pause_lines(detail: &str, text_system: &std::sync::Arc<TextSystem>) -> usize 
 }
 
 /// The card's height for `model` as it is now.
-#[cfg(test)]
 pub fn card_height(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>) -> Pixels {
     Rows::of(model, text_system).height()
 }
 
-/// The tallest the card can get for this pause target: every recent row,
-/// whichever pause line wraps more, the activity row and the Make default
-/// row, which another browser can make appear while the dropdown is open.
-/// A few px spare absorb GPUI's rounding.
-pub fn window_height(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>) -> Pixels {
-    let mut other = model.clone();
-    other.set_paused(!model.is_paused());
-    let rows = Rows {
-        recents: super::model::RECENT_LIMIT,
-        small_rows: 1,
-        pause_lines: pause_lines(&model.pause_detail(), text_system)
-            .max(pause_lines(&other.pause_detail(), text_system)),
-        make_default: true,
-    };
-    rows.height() + px(4.0)
+/// The window's height: the card's, rounded up to a whole point, and no
+/// taller than `max_height`.
+pub fn fitted_height(
+    model: &TrayModel,
+    text_system: &std::sync::Arc<TextSystem>,
+    max_height: Pixels,
+) -> Pixels {
+    px(card_height(model, text_system).as_f32().ceil()).min(max_height)
 }

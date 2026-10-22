@@ -130,11 +130,28 @@ their own modules.
   keeps the target it began with until resumed. A paused record's
   `Step::Paused` is `RecentRoute::Paused` in the recents and "paused ·
   skipped h N" in Activity's Rule column.
-- **The dropdown cannot move or grow from the top.** GPUI has no window
-  move and macOS resizes from the bottom edge, so the window opens at
-  `window_height` (the tallest the card can be) with a transparent
-  background. Keep the metric constants in `dropdown.rs` matched to the
-  layout; `tray/tests.rs` holds `card_height` to the laid-out card.
+- **The dropdown's window is its card** (design: Popovers and Overflow
+  2a). A transparent window taller than the card is not invisible: macOS
+  draws its frame and shadow at the window's size. It opens at
+  `fitted_height` and follows the card on every model change through
+  `macos::set_dropdown_height`, which keeps the top edge (GPUI's
+  `Window::resize` keeps the bottom). That call runs on the foreground
+  executor, never inside an update or a `defer`: AppKit reports the resize
+  synchronously and GPUI drops the report while the app is borrowed. The
+  window stops at the display's visible area
+  (`macos::dropdown_max_height`); past it the sections between the header
+  and Quit scroll. Keep the metric constants in `dropdown.rs` matched to
+  the layout; `tray/tests.rs` holds `card_height` to the laid-out card and
+  the window to the card. Names come from the catalog or the installed
+  app, never a bundle id: `BrowserLabel::name` is what the reader sees and
+  `BrowserLabel::app` what the router is told.
+- **Menus and select lists use `widgets::menu_card` and `menu_row`**
+  (design: Popovers and Overflow 1a-1d). A select's list is as wide as its
+  field (`.absolute().left_0().right_0()`), never narrower, and scrolls
+  past `MENU_MAX_HEIGHT`; a row's hint gives way before its label and ends
+  in an ellipsis; a browser row's hint is `profiles_hint` (two names, then
+  a count). A field's value is `field_label`, never `theme::text`, which
+  does not shrink.
 - **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
   Settings or first-run window is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays

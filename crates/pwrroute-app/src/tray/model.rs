@@ -36,8 +36,13 @@ pub enum Routing {
 pub struct BrowserLabel {
     /// The two-letter `.bi` badge.
     pub badge: String,
+    /// The name the reader knows ("Microsoft Edge"), never a bundle id when
+    /// a name is known.
     pub name: String,
     pub profile: Option<String>,
+    /// The app as `rules.json` or the router names it, when that is not
+    /// `name` (a bundle id, a path). What a pause tells the router.
+    pub app: Option<String>,
 }
 
 impl BrowserLabel {
@@ -46,7 +51,19 @@ impl BrowserLabel {
             badge: badge.to_owned(),
             name: name.to_owned(),
             profile: profile.map(str::to_owned),
+            app: None,
         }
+    }
+
+    /// The label for `app`, shown as `name`.
+    pub fn for_app(mut self, app: &str) -> Self {
+        self.app = (app != self.name).then(|| app.to_owned());
+        self
+    }
+
+    /// The app as the router is told it: `app`, else the name.
+    pub fn app(&self) -> &str {
+        self.app.as_deref().unwrap_or(&self.name)
     }
 
     /// "Google Chrome · Personal", or the name alone.
@@ -144,11 +161,13 @@ impl Recent {
                 _ => {}
             }
         }
+        // A rule may name the browser by bundle id: show its name.
         let label = BrowserLabel::new(
             &badge_for(&browser.name),
-            &browser.name,
+            &crate::default_browser::browser_name(&browser.name),
             (!browser.profile.is_empty()).then_some(browser.profile.as_str()),
-        );
+        )
+        .for_app(&browser.name);
         Self::from_urls(
             &browser.url,
             received.filter(|_| rewritten),
@@ -654,6 +673,50 @@ mod tests {
         let recent = Recent::from_record(&default).unwrap();
         assert_eq!(recent.route, RecentRoute::Paused { skipped: None });
         assert_eq!(recent.detail(), "Google Chrome \u{00b7} paused");
+    }
+
+    /// A record whose browser a rule named by bundle id: the recent names
+    /// the app, and keeps the id it was opened with.
+    #[test]
+    fn a_recent_names_a_bundle_id_browser() {
+        use pwrroute_router::{AppType, Browser, DispatchId, DispatchRecord, Privacy, Timings};
+        let url = "https://example.com/";
+        let edge = Browser {
+            name: "com.microsoft.edgemac".into(),
+            app_type: AppType::BundleId,
+            url: url.into(),
+            profile: "Work".into(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy: Privacy::Full,
+        };
+        let record = DispatchRecord {
+            id: DispatchId(1),
+            received_at: now(),
+            privacy: Privacy::Full,
+            link: pwrroute_router::Link::new(url, pwrroute_router::Source::CommandLine),
+            forwarded: false,
+            final_url: Some(url.into()),
+            browser: Some(edge.clone()),
+            steps: vec![
+                Step::Received { url: url.into() },
+                Step::Matched {
+                    by: Matched::Handler { index: 0 },
+                },
+                Step::Browser { browser: edge },
+                Step::Launched { dry_run: false },
+            ],
+            outcome: Outcome::Opened,
+            timings: Timings::default(),
+        };
+        let recent = Recent::from_record(&record).expect("it opened");
+        assert_eq!(recent.browser.name, "Microsoft Edge");
+        assert_eq!(recent.browser.app(), "com.microsoft.edgemac");
+        assert_eq!(
+            recent.detail(),
+            "Microsoft Edge \u{00b7} Work \u{00b7} handler 1"
+        );
     }
 
     #[test]

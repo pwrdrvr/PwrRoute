@@ -263,18 +263,31 @@ fn config_default(path: &Path) -> Option<BrowserLabel> {
     }
 }
 
+/// `browser` as `rules.json`, a config or the router names it, labeled
+/// with the name the reader knows: the catalog's, else the installed
+/// app's, else the id as written. First run saves a bundle id.
 fn label(browser: &str, profile: &str) -> BrowserLabel {
     BrowserLabel::new(
         &badge_for(browser),
-        browser,
+        &default_browser::handler_name(browser, &installed_name),
         Some(profile).filter(|profile| !profile.is_empty()),
     )
+    .for_app(browser)
+}
+
+/// `pwrroute_os::app_display_name`; tests never ask the OS.
+fn installed_name(id: &str) -> Option<String> {
+    if cfg!(test) {
+        None
+    } else {
+        pwrroute_os::app_display_name(id)
+    }
 }
 
 /// The label's browser and profile, as the router is told to open them.
 fn target_of(label: &BrowserLabel) -> PauseTarget {
     PauseTarget {
-        browser: label.name.clone(),
+        browser: label.app().to_owned(),
         profile: label.profile.clone().unwrap_or_default(),
     }
 }
@@ -388,15 +401,24 @@ fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
     // The pause row names where links would go now, not at launch.
     refresh_pause_target(&model, cx);
     let anchor = crate::macos::status_item_anchor(position, size);
-    let (origin, display) = match &anchor {
-        Some(anchor) => (
-            crate::macos::dropdown_origin(anchor, gpui_kit::px(dropdown::WIDTH)),
-            Some(anchor.display),
+    let (origin, display, max_height) = match &anchor {
+        Some(anchor) => {
+            let origin = crate::macos::dropdown_origin(anchor, gpui_kit::px(dropdown::WIDTH));
+            (
+                origin,
+                Some(anchor.display),
+                crate::macos::dropdown_max_height(anchor, origin),
+            )
+        }
+        // Not on any screen we know: under the menu bar, top right, as tall
+        // as the card.
+        None => (
+            gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(28.0)),
+            None,
+            gpui_kit::px(f32::MAX),
         ),
-        // Not on any screen we know: under the menu bar, top right.
-        None => (gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(28.0)), None),
     };
-    match dropdown::open(model, origin, display, cx) {
+    match dropdown::open(model, origin, display, max_height, cx) {
         Ok(window) => cx.global_mut::<Tray>().dropdown = Some(window),
         Err(error) => eprintln!("pwrroute: could not open the tray dropdown: {error}"),
     }
@@ -516,10 +538,52 @@ mod target_tests {
             target,
             BrowserLabel::new("Ch", "Google Chrome", Some("Personal"))
         );
+        // A bundle id, as first run saves it: named for the reader, and
+        // the router still gets the id.
         let bundle = pause_target(Some(&rules("com.google.Chrome", "")), None, &mut cache);
-        assert_eq!(bundle, BrowserLabel::new("Ch", "com.google.Chrome", None));
+        assert_eq!(
+            bundle,
+            BrowserLabel::new("Ch", "Google Chrome", None).for_app("com.google.Chrome")
+        );
+        assert_eq!(target_of(&bundle).browser, "com.google.Chrome");
         // Named in rules.json, the config is not consulted at all.
         assert!(cache.config.is_none());
+    }
+
+    /// First run saves the default as a bundle id. The pause line and the
+    /// tooltip name the browser as the reader knows it; the router is told
+    /// the id, as before.
+    #[test]
+    fn the_pause_line_names_a_bundle_id_default_by_its_name() {
+        let mut cache = ConfigDefault::default();
+        let target = pause_target(Some(&rules("com.microsoft.edgemac", "")), None, &mut cache);
+        let mut model = TrayModel::fixture(SystemTime::now());
+        model.pause_target = target.clone();
+        assert_eq!(
+            model.pause_detail(),
+            "Send every link to Microsoft Edge until switched back."
+        );
+        model.set_paused(true);
+        assert_eq!(
+            model.pause_detail(),
+            "Everything goes to Microsoft Edge. Rewrites still run."
+        );
+        assert!(
+            !model.tooltip().contains("com.microsoft"),
+            "{}",
+            model.tooltip()
+        );
+        assert_eq!(
+            target_of(&target),
+            PauseTarget {
+                browser: "com.microsoft.edgemac".into(),
+                profile: String::new(),
+            }
+        );
+        // An id no catalog or app names is shown as written.
+        let unknown = label("com.example.unlisted", "");
+        assert_eq!(unknown.name, "com.example.unlisted");
+        assert_eq!(target_of(&unknown).browser, "com.example.unlisted");
     }
 
     #[test]

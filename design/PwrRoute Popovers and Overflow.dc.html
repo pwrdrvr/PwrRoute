@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* menus, as in Rule Editing */
+          .menu { position: absolute; z-index: 5; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-popover); padding: 4px; display: flex; flex-direction: column; }
+          .mi { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; min-width: 0; }
+          .mi.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+          .mi .nm { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+          .mi .ex { flex: 0 10000 auto; min-width: 0; margin-left: auto; padding-left: 16px; font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+          .mi .bi { flex: none; }
+          .msep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+          .mfoot { padding: 6px 8px 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); white-space: normal; }
+          /* a select's list: as wide as its field, at most 8.5 rows, then it scrolls */
+          .menu.sel-list { left: 0; right: 0; top: 34px; max-height: 280px; overflow-y: auto; }
+          .menu.sel-list.bad { right: auto; width: 300px; max-height: none; overflow: visible; }
+          .menu.sel-list.bad .mi .ex { flex: none; overflow: visible; }
+          .scrollbar { position: absolute; right: 3px; top: 6px; width: 4px; height: 92px; border-radius: 2px; background: var(--border-strong); }
+          .field-demo { position: relative; width: 366px; }
+          .field-demo .inp { width: 100%; }
+          .inp .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+          .stage { position: relative; background: var(--bg-panel); padding: 18px 20px; }
+          .mark-bad { position: absolute; right: -6px; top: 100px; font: 600 10px/1 var(--font-sans); color: var(--danger-text); }
+          /* tray, as in Tray and First Run */
+          .desk { position: relative; width: 420px; background: #0b0a09; overflow: hidden; }
+          .mbar { position: absolute; left: 0; right: 0; top: 0; height: 24px; background: rgba(20,18,16,0.9); border-bottom: 1px solid var(--border-faint); display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 12px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .dock { position: absolute; left: 60px; right: 60px; bottom: 6px; height: 34px; border-radius: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.06); }
+          .tray { position: absolute; top: 28px; right: 40px; width: 300px; background: rgba(16,16,16,0.98); border: 1px solid var(--border-default); border-radius: 10px; box-shadow: var(--shadow-popover); overflow: hidden; display: flex; flex-direction: column; }
+          .tray .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-faint); flex: none; }
+          .tray .th .wordmark { font-size: 14px; }
+          .tray .th .chip { margin-left: auto; }
+          .tray .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; position: relative; }
+          .tray .sec { padding: 6px 6px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; }
+          .tray .sec.quit { border-top: 1px solid var(--border-faint); border-bottom: none; flex: none; }
+          .tray .cap { padding: 4px 6px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .mi-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 6px; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi-row .kbd { margin-left: auto; }
+          .mi-row .sub { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); margin-left: auto; }
+          .mi-row.q { color: var(--text-secondary); }
+          .rec { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 10px; padding: 5px 6px; border-radius: 6px; }
+          .rec .h { grid-column: 1; grid-row: 1; font: 500 11.5px/1.2 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .rec .b { grid-column: 1; grid-row: 2; font: 500 10px/1.2 var(--font-sans); color: var(--text-muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; min-width: 0; }
+          .rec .b span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+          .rec .ago { grid-column: 2; grid-row: 1 / 3; align-self: center; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .pause { display: flex; align-items: center; gap: 10px; padding: 7px 6px; }
+          .pause .pt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+          .pause .pt b { font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .pause .pt span { font: 400 10px/1.4 var(--font-sans); color: var(--text-muted); }
+          .pause .pt span.bad { color: var(--danger-text); }
+          .ghost { position: absolute; left: 40px; right: 40px; border: 1px dashed var(--danger-text); border-top: none; border-radius: 0 0 10px 10px; opacity: 0.7; }
+          .tbar { position: absolute; right: 2px; width: 4px; border-radius: 2px; background: var(--border-strong); }
+          .rule-note { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); margin: 10px 0 0; max-width: 420px; }
+        </style>
+      </helmet>
+
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Select lists and menus</span></div>
+        <p class="dv-sub">A select's list is as wide as its field and never narrower. A row's name comes first; the dimmed hint on the right takes what is left and ends in an ellipsis, never past the list's edge. A browser with one or two profiles names them; with three or more the hint is a count, and the profile select beside it lists every one. A list taller than 8&frac12; rows scrolls inside its card, and the half row says there is more.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Browser select, many profiles">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The Add a rule sheet's Open in. Two profiles are named; five become &ldquo;5 profiles&rdquo;. The list matches the field's width.</span></div>
+            <div class="dv-card stage" style="width: 410px; height: 330px;">
+              <div class="field-demo">
+                <div class="inp"><span class="bi">Ed</span><span class="nm">Microsoft Edge</span><span class="caret">&#9662;</span></div>
+                <div class="menu sel-list">
+                  <div class="mi"><span class="bi">Ar</span><span class="nm">Arc</span></div>
+                  <div class="mi"><span class="bi">Ch</span><span class="nm">Google Chrome</span><span class="ex">Personal &middot; Work</span></div>
+                  <div class="mi hov"><span class="bi">Ed</span><span class="nm">Microsoft Edge</span><span class="ex">5 profiles</span></div>
+                  <div class="mi"><span class="bi">Ff</span><span class="nm">Firefox Developer Edition</span><span class="ex">default-release</span></div>
+                  <div class="mi"><span class="bi">Sf</span><span class="nm">Safari</span></div>
+                  <div class="mi"><span class="bi">Ex</span><span class="nm">Example Browser With A Very Long Product Name</span><span class="ex">3 profiles</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Profile select">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>The profile select lists them all. A long profile name ends in an ellipsis in the field and in the list.</span></div>
+            <div class="dv-card stage" style="width: 260px; height: 330px;">
+              <div class="field-demo" style="width: 220px;">
+                <div class="inp"><span class="nm">Research and Development Team</span><span class="caret">&#9662;</span></div>
+                <div class="menu sel-list">
+                  <div class="mi" style="color: var(--text-secondary);"><span class="nm">Default</span></div>
+                  <div class="mi"><span class="nm">Personal</span></div>
+                  <div class="mi"><span class="nm">Work</span></div>
+                  <div class="mi hov"><span class="nm">Research and Development Team</span></div>
+                  <div class="mi"><span class="nm">Design</span></div>
+                  <div class="mi"><span class="nm">Spanish</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Long list scrolls">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Fourteen apps: 8&frac12; rows show, the list scrolls inside its card. Same for Test a link's app picker and first run's browser select.</span></div>
+            <div class="dv-card stage" style="width: 410px; height: 340px;">
+              <div class="field-demo">
+                <div class="inp"><span class="bi">Ch</span><span class="nm">Google Chrome</span><span class="caret">&#9662;</span></div>
+                <div class="menu sel-list" style="overflow: hidden;">
+                  <span class="scrollbar"></span>
+                  <div class="mi"><span class="bi">Ar</span><span class="nm">Arc</span></div>
+                  <div class="mi"><span class="bi">Br</span><span class="nm">Brave Browser</span><span class="ex">Personal</span></div>
+                  <div class="mi hov"><span class="bi">Ch</span><span class="nm">Google Chrome</span><span class="ex">Personal &middot; Work</span></div>
+                  <div class="mi"><span class="bi">Ch</span><span class="nm">Google Chrome Canary</span></div>
+                  <div class="mi"><span class="bi">Ed</span><span class="nm">Microsoft Edge</span><span class="ex">5 profiles</span></div>
+                  <div class="mi"><span class="bi">Ff</span><span class="nm">Firefox</span><span class="ex">default-release</span></div>
+                  <div class="mi"><span class="bi">Ff</span><span class="nm">Firefox Developer Edition</span></div>
+                  <div class="mi"><span class="bi">Or</span><span class="nm">Orion</span></div>
+                  <div class="mi"><span class="bi">Sf</span><span class="nm">Safari</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1d" data-screen-label="1d Row menu hint">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>Activity's row menu (2b in Activity Privacy and Route Tests). The Save hint names the browser and profile, or a long pattern, and ends in an ellipsis at the menu's edge.</span></div>
+            <div class="dv-card stage" style="width: 360px; height: 170px;">
+              <div class="menu" style="left: 20px; top: 18px; width: 320px;">
+                <div class="mi"><span class="nm">Add a rule for this link&hellip;</span></div>
+                <div class="mi hov"><span class="nm">Save as test</span><span class="ex">expects Microsoft Edge &middot; Research and Development Team</span></div>
+                <div class="mfoot">No rule matched; it went to the default. Add a rule, or save it as a test so a future rule cannot take it unnoticed.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1e" data-screen-label="1e Before">
+            <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span>Before, for the record: a fixed 300px list under a wider field, every profile inline, the hint running out of the card.</span></div>
+            <div class="dv-card stage" style="width: 410px; height: 230px; overflow: hidden;">
+              <div class="field-demo">
+                <div class="inp"><span class="bi">Ch</span><span class="nm">Google Chrome</span><span class="caret">&#9662;</span></div>
+                <div class="menu sel-list bad">
+                  <div class="mi"><span class="bi">Ch</span><span class="nm">Google Chrome</span><span class="ex">Personal &middot; Work &middot; Design</span></div>
+                  <div class="mi"><span class="bi">Ed</span><span class="nm">Microsoft Edge</span><span class="ex">Personal &middot; Work &middot; Research &middot; Design &middot; Spanish</span></div>
+                  <div class="mi"><span class="bi">Sf</span><span class="nm">Safari</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "type to filter a long list" &middot; "group Browsers and Other apps with captions, as Rule Editing 1a does"</p>
+      </section>
+
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Tray dropdown size</span></div>
+        <p class="dv-sub">The dropdown's window is the card: as tall as what it shows, with nothing below Quit. When the card changes while open (Pause on, the Make default row appears, a new recent link), the window follows it and its top stays under the menu bar. It never runs past the display's visible area (below the menu bar, above the Dock); on a display too short for the card, the header and Quit stay put and the middle scrolls. The pause line names the browser as the reader knows it, never a bundle id.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Fits its content">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Fits. The dashed outline is where the window used to end: the tallest the card could get, drawn as a band of empty card below Quit.</span></div>
+            <div class="dv-card">
+              <div class="desk" style="height: 470px;">
+                <div class="mbar"><span>Mon 09:41</span></div>
+                <div class="ghost" style="top: 418px; height: 38px;"></div>
+                <div class="tray">
+                  <div class="th"><svg class="mark" viewBox="188 188 648 648" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip ok">default</span></div>
+                  <div class="sec">
+                    <span class="cap">Recent</span>
+                    <div class="rec"><span class="h">docs.example.com</span><span class="ago">3m</span><span class="b"><span class="bi">Ed</span><span>Microsoft Edge &middot; Work &middot; handler 2</span></span></div>
+                    <div class="rec"><span class="h">example.com</span><span class="ago">5m</span><span class="b"><span class="bi">Ed</span><span>Microsoft Edge &middot; Research and Development Team &middot; handler 1</span></span></div>
+                    <div class="rec"><span class="h">app.example.org</span><span class="ago">36m</span><span class="b"><span class="bi">Ch</span><span>Google Chrome &middot; default</span></span></div>
+                    <div class="mi-row" style="color: var(--text-muted); font-size: 11px;">Open Activity<span class="sub">80 today</span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="pause"><div class="pt"><b>Pause routing</b><span>Send every link to Microsoft Edge until switched back.</span></div><span class="sw"></span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div>
+                    <div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div>
+                    <div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div>
+                  </div>
+                  <div class="sec quit"><div class="mi-row q">Quit PwrRoute<span class="kbd">&#8984;Q</span></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Short display">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>A display too short for the card: the window stops 4pt above the visible area's bottom, the header and Quit stay, the sections between them scroll.</span></div>
+            <div class="dv-card">
+              <div class="desk" style="height: 300px;">
+                <div class="mbar"><span>Mon 09:41</span></div>
+                <div class="dock"></div>
+                <div class="tray" style="height: 222px;">
+                  <div class="th"><svg class="mark" viewBox="188 188 648 648" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip warn">paused</span></div>
+                  <div class="body">
+                    <span class="tbar" style="top: 4px; height: 52px;"></span>
+                    <div class="sec">
+                      <span class="cap">Recent</span>
+                      <div class="rec"><span class="h">example.com</span><span class="ago">now</span><span class="b"><span class="bi">Ed</span><span>Microsoft Edge &middot; paused &middot; skipped handler 4</span></span></div>
+                      <div class="rec"><span class="h">docs.example.com</span><span class="ago">1m</span><span class="b"><span class="bi">Ed</span><span>Microsoft Edge &middot; Work &middot; handler 2</span></span></div>
+                    </div>
+                    <div class="sec">
+                      <div class="pause"><div class="pt"><b>Pause routing</b><span>Everything goes to Microsoft Edge. Rewrites still run.</span></div><span class="sw on"></span></div>
+                    </div>
+                    <div class="sec">
+                      <div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div>
+                    </div>
+                  </div>
+                  <div class="sec quit"><div class="mi-row q">Quit PwrRoute<span class="kbd">&#8984;Q</span></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2c" data-screen-label="2c Pause names the browser">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>The pause line. <code>rules.json</code> may name the default by bundle id; the line shows the catalog's name, else the installed app's name, else the id.</span></div>
+            <div class="dv-card" style="width: 300px;">
+              <div class="tray" style="position: static; width: 100%; border: none; box-shadow: none; border-radius: 0;">
+                <div class="sec" style="border-bottom: 1px solid var(--border-faint);">
+                  <div class="pause"><div class="pt"><b>Pause routing</b><span class="bad">Send every link to com.microsoft.edgemac until switched back.</span></div><span class="sw"></span></div>
+                </div>
+                <div class="sec" style="border-bottom: none;">
+                  <div class="pause"><div class="pt"><b>Pause routing</b><span>Send every link to Microsoft Edge until switched back.</span></div><span class="sw"></span></div>
+                </div>
+              </div>
+            </div>
+            <p class="rule-note">Same rule for the icon's tooltip while paused, the recents' browser names and Activity's Opened in.</p>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: "a fourth recent row when the display has room" &middot; "show the pause target's badge in the pause line"</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
