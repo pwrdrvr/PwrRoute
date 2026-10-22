@@ -19,6 +19,8 @@ dirs = "6"
 # Encodes an app's icon (Windows' Shell bitmap) as the PNG the app draws.
 # Already shipped on every platform through GPUI's `image`.
 png = "0.18"
+# The opener the link helper passes on a launch's command line.
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
