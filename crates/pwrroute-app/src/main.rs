@@ -32,6 +32,7 @@ mod importer_view;
 mod macos;
 mod mcp;
 mod onboarding;
+mod placement;
 mod router;
 mod rules_model;
 mod rules_store;
@@ -404,13 +405,14 @@ fn print_console(console: &pwrroute_engine::ConsoleLog, out: &mut dyn Write) {
 }
 
 /// Brings the main window forward, opening it if it is closed, centered on
-/// the primary display.
+/// the display the user is working on ([`placement`]).
 pub(crate) fn show_main_window(cx: &mut App) {
     show_main_window_on(None, cx);
 }
 
-/// [`show_main_window`], opening a closed window centered on `display`
-/// (the primary display for `None`). An open window stays where it is.
+/// [`show_main_window`], opening a closed window centered on `display`, or
+/// for `None` on the display [`placement`] picks. An open window stays where
+/// it is.
 pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
     // Not `first()`: the Settings window, the tray dropdown or the first-run
     // window may be the only one open.
@@ -423,6 +425,7 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
         cx.activate(true);
         return;
     }
+    let display = display.or_else(|| placement::display_for_new_window(cx));
     let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let window = cx
         .open_window(

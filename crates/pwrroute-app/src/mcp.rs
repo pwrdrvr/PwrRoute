@@ -678,10 +678,12 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
 
 fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     let id = request.id.clone();
-    let bounds = Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let display = crate::placement::display_for_new_window(cx);
+    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id: display,
             titlebar: Some(TitlebarOptions {
                 title: Some("PwrRoute".into()),
                 appears_transparent: true,
