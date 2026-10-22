@@ -10,6 +10,7 @@
 //! Windows and Linux run the browser's executable directly, never "the
 //! default browser": that is PwrRoute, and the link would loop back.
 
+use std::sync::Arc;
 use std::{
     borrow::Cow,
     fmt,
@@ -22,7 +23,7 @@ use std::{
 use pwrroute_engine::{AppType, Browser};
 
 use crate::{
-    catalog::{BrowserInfo, Catalog, PrivateFlag},
+    catalog::{BrowserEngine, BrowserInfo, Catalog, PrivateFlag},
     desktop_entry, detect,
     env::{Env, Platform},
     profiles::{self, ProfileMatch},
@@ -40,11 +41,23 @@ pub struct LaunchOptions {
     pub background_by_default: bool,
 }
 
+/// Whether an app with a given macOS bundle id is running; see
+/// [`Launcher::with_running`].
+#[derive(Clone)]
+struct RunningApps(Arc<dyn Fn(&str) -> bool + Send + Sync>);
+
+impl fmt::Debug for RunningApps {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RunningApps")
+    }
+}
+
 /// Plans and runs browser launches against one [`Env`].
 #[derive(Debug, Clone)]
 pub struct Launcher {
     env: Env,
     options: LaunchOptions,
+    running: Option<RunningApps>,
 }
 
 /// The exact command a launch runs.
@@ -166,7 +179,24 @@ impl Launcher {
 
     /// A launcher that resolves against `env` (a fixture, in tests).
     pub fn with_env(env: Env, options: LaunchOptions) -> Self {
-        Self { env, options }
+        Self {
+            env,
+            options,
+            running: None,
+        }
+    }
+
+    /// The launcher, asking `running` whether the app with a bundle id is
+    /// running. On macOS a profile, private-window or argument launch of a
+    /// running Chromium browser then passes `open -g`: the instance `-n`
+    /// starts only hands the link to the running browser and quits, so it
+    /// must not take focus on its way (focus would bounce back to the app
+    /// that was active, then to the browser). The running browser brings
+    /// its own window forward. Without this, nothing counts as running and
+    /// `-g` is passed only when the browser asks for the background.
+    pub fn with_running(mut self, running: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+        self.running = Some(RunningApps(Arc::new(running)));
+        self
     }
 
     pub fn env(&self) -> &Env {
@@ -204,7 +234,10 @@ impl Launcher {
             .open_in_background
             .unwrap_or(self.options.background_by_default);
         let plan = match platform {
-            Platform::MacOs => macos_plan(browser, background, flags),
+            Platform::MacOs => {
+                let hand_off = self.hands_off(browser, entry);
+                macos_plan(browser, background, hand_off, flags)
+            }
             _ => {
                 if background {
                     notes.push(Note::BackgroundUnsupported);
@@ -235,6 +268,25 @@ impl Launcher {
         };
         spawn(&plan)?;
         Ok(Some(plan))
+    }
+
+    /// Whether a `-n` launch of `browser` only hands the link to a copy
+    /// already running: a Chromium browser that [`Launcher::with_running`]
+    /// says is running. Firefox's remote hand-off is not covered: whether
+    /// the running Firefox raises its window from a background launch is
+    /// untested.
+    fn hands_off(&self, browser: &Browser, entry: Option<&BrowserInfo>) -> bool {
+        let (Some(running), Some(entry)) = (&self.running, entry) else {
+            return false;
+        };
+        if entry.engine != BrowserEngine::Chromium {
+            return false;
+        }
+        let bundle_id = match browser.app_type {
+            AppType::BundleId => Some(browser.name.as_str()),
+            _ => entry.macos.as_ref().and_then(|m| m.bundle_id.as_deref()),
+        };
+        bundle_id.is_some_and(|id| (running.0)(id))
     }
 
     fn profile_args(
@@ -419,10 +471,13 @@ fn expand_home<'a>(browser: &'a Browser, env: &Env) -> Cow<'a, Browser> {
 /// `flags` are the profile and private-window flags, which must follow
 /// `--args`. Whenever `--args` is used, for `flags` or for the config's own
 /// `args`, `-n` goes with it: `open` drops arguments for a running app
-/// unless it starts a new instance.
+/// unless it starts a new instance. `hand_off` says that new instance only
+/// passes the link to a running copy (see [`Launcher::with_running`]), so it
+/// starts with `-g` and leaves bringing a window forward to that copy.
 fn macos_plan(
     browser: &Browser,
     background: bool,
+    hand_off: bool,
     flags: Option<Vec<String>>,
 ) -> (PathBuf, Vec<String>) {
     let mut args = vec![
@@ -434,10 +489,10 @@ fn macos_plan(
         .to_owned(),
         browser.name.clone(),
     ];
-    if background {
+    let uses_args = flags.is_some() || !browser.args.is_empty();
+    if background || (hand_off && uses_args) {
         args.push("-g".into());
     }
-    let uses_args = flags.is_some() || !browser.args.is_empty();
     if uses_args {
         args.push("-n".into());
     }
@@ -689,6 +744,79 @@ mod tests {
             ]
         );
         assert!(p.notes.is_empty());
+    }
+
+    #[test]
+    fn a_running_chromium_browser_gets_the_link_without_a_focus_bounce() {
+        let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        let env = launcher.env().clone();
+        let running = Launcher::with_env(env.clone(), LaunchOptions::default())
+            .with_running(|id| id == "com.google.Chrome" || id == "org.mozilla.firefox");
+        let chrome = browser("Google Chrome", AppType::AppName);
+        // The new instance only hands over: it starts in the background.
+        assert_eq!(
+            args(&private_plan(&running, &chrome)),
+            [
+                "-a",
+                "Google Chrome",
+                "-g",
+                "-n",
+                "--args",
+                "--incognito",
+                URL
+            ]
+        );
+        let by_id = browser("com.google.Chrome", AppType::BundleId);
+        assert_eq!(
+            args(&private_plan(&running, &by_id)),
+            [
+                "-b",
+                "com.google.Chrome",
+                "-g",
+                "-n",
+                "--args",
+                "--incognito",
+                URL
+            ]
+        );
+        // A plain link starts no instance and keeps `open`'s activation.
+        assert_eq!(
+            args(&running.plan(&chrome).unwrap().unwrap()),
+            ["-a", "Google Chrome", URL]
+        );
+        // Asked for the background as well: `-g` once.
+        let mut quiet = chrome.clone();
+        quiet.open_in_background = Some(true);
+        assert_eq!(
+            args(&private_plan(&running, &quiet)),
+            [
+                "-a",
+                "Google Chrome",
+                "-g",
+                "-n",
+                "--args",
+                "--incognito",
+                URL
+            ]
+        );
+        // Not running: the new instance is the browser and comes forward.
+        let idle =
+            Launcher::with_env(env.clone(), LaunchOptions::default()).with_running(|_| false);
+        assert_eq!(
+            args(&private_plan(&idle, &chrome)),
+            ["-a", "Google Chrome", "-n", "--args", "--incognito", URL]
+        );
+        // Firefox is not a Chromium hand-off: unchanged even while running.
+        let firefox = browser("Firefox", AppType::AppName);
+        assert_eq!(
+            args(&private_plan(&running, &firefox)),
+            ["-a", "Firefox", "-n", "--args", "--private-window", URL]
+        );
+        // Without a running check (tests, other callers): unchanged.
+        assert_eq!(
+            args(&private_plan(&launcher, &chrome)),
+            ["-a", "Google Chrome", "-n", "--args", "--incognito", URL]
+        );
     }
 
     #[test]

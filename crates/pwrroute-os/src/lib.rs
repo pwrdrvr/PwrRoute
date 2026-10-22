@@ -35,6 +35,20 @@ pub use registration::{RegistryValue, desktop_entry, windows_registry_values};
 
 use pwrroute_router::OpenerInfo;
 
+/// Whether an app with `bundle_id` is running in this login session.
+/// Always `false` off macOS, where browsers are not found by bundle id.
+pub fn app_is_running(bundle_id: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::app_is_running(bundle_id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = bundle_id;
+        false
+    }
+}
+
 /// The app that sent the link being handled right now, when the OS says.
 ///
 /// On macOS call it from GPUI's open-URLs callback: AppKit is handling the

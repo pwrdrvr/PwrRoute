@@ -86,6 +86,14 @@ pub fn open_settings() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
 }
 
+/// Whether an app with `bundle_id` is running, as AppKit's running
+/// applications list has it.
+pub fn app_is_running(bundle_id: &str) -> bool {
+    NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle_id))
+        .count()
+        > 0
+}
+
 /// The installed app with `bundle_id`, by the name Finder shows: the
 /// bundle's (localized) `CFBundleDisplayName`, else `CFBundleName`, else
 /// the bundle's file name without `.app`. `None` when LaunchServices knows

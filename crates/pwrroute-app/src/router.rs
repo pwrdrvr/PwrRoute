@@ -587,7 +587,11 @@ pub struct BrowserLauncher {
 impl BrowserLauncher {
     /// A launcher for this machine.
     pub fn new() -> Self {
-        Self::with_env(Env::system())
+        let mut launcher = Self::with_env(Env::system());
+        // A profile or private launch of a running Chromium browser then
+        // hands the link over without the new instance taking focus.
+        launcher.inner = launcher.inner.with_running(pwrroute_os::app_is_running);
+        launcher
     }
 
     /// A launcher over `env` (a fixture machine, in tests). Finicky v4 has
