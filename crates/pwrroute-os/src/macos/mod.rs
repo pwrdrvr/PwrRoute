@@ -142,6 +142,11 @@ pub fn set_default(handler: Handler) -> Result<DefaultRequest> {
                      `cargo xtask bundle`"
                 );
             };
+            // LaunchServices hands a scheme only to a bundle id it knows. A
+            // DMG install never runs the updater's register hook, and
+            // LaunchServices need not have scanned a bundle nested in
+            // another: register the helper by its URL first, or the request
+            // names an id macOS has never seen.
             launch_services::register(&helper)?;
             (helper, LINK_HELPER_ID)
         }

@@ -85,8 +85,7 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
         for triple in TARGETS {
             build(&root, Some(triple), false)?;
         }
-        let mut universal = Vec::new();
-        for name in [APP_EXE, HELPER_EXE] {
+        let lipo = |name: &str| -> Result<PathBuf> {
             let output = out.join(format!("{name}-universal"));
             let mut lipo = Command::new("lipo");
             lipo.arg("-create").arg("-output").arg(&output);
@@ -94,11 +93,13 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
                 lipo.arg(built.join(triple).join("release").join(name));
             }
             run(&mut lipo)?;
-            universal.push(output);
-        }
-        let helper = universal.pop().expect("two binaries");
-        let app = universal.pop().expect("two binaries");
-        (Binaries { app, helper }, "universal")
+            Ok(output)
+        };
+        let binaries = Binaries {
+            app: lipo(APP_EXE)?,
+            helper: lipo(HELPER_EXE)?,
+        };
+        (binaries, "universal")
     } else {
         build(&root, None, options.debug)?;
         let profile = built.join(if options.debug { "debug" } else { "release" });
