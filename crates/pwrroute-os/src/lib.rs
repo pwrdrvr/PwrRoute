@@ -2,10 +2,14 @@
 //! the OS knows about.
 //!
 //! - **Link receipt.** macOS hands links over as `kAEGetURL` Apple Events,
-//!   which GPUI turns into its open-URLs callback; [`current_opener`] reads
-//!   the sending app off the event being handled. Windows (a ProgID command
-//!   line) and Linux (a `.desktop` `Exec=pwrroute %u`) pass links in argv,
-//!   which [`links_from_args`] picks out.
+//!   to the windowless link helper (`crates/pwrroute-link-helper`) once
+//!   PwrRoute is the default, or to the app itself, whose GPUI turns them
+//!   into its open-URLs callback; [`current_opener`] reads the sending app
+//!   off the event being handled. When the helper has to launch the app, it
+//!   passes the event's links and opener on the command line
+//!   ([`apple_event_launch_args`], read back by [`link_origin_from_args`]).
+//!   Windows (a ProgID command line) and Linux (a `.desktop` `Exec=pwrroute
+//!   %u`) pass links in argv, which [`links_from_args`] picks out.
 //! - **Registration.** [`register_browser`] makes the OS list PwrRoute as a
 //!   browser and [`unregister_browser`] takes it off, for installers.
 //!   [`set_default_browser`] asks the OS to make PwrRoute the default, which
@@ -27,7 +31,7 @@ mod macos;
 mod paths;
 mod registration;
 
-pub use args::links_from_args;
+pub use args::{apple_event_launch_args, link_origin_from_args, links_from_args};
 pub use paths::{data_dir, router_dir};
 pub use registration::{
     BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, PROG_ID, REGISTERED_NAME,
@@ -88,9 +92,10 @@ pub fn app_is_running(bundle_id: &str) -> bool {
 
 /// The app that sent the link being handled right now, when the OS says.
 ///
-/// On macOS call it from GPUI's open-URLs callback: AppKit is handling the
-/// `kAEGetURL` event then, and the event carries the sender's pid. Elsewhere
-/// the OS does not say, and this is `None`.
+/// On macOS call it from GPUI's open-URLs callback, or the link helper's
+/// `application:openURLs:`: AppKit is handling the `kAEGetURL` event then,
+/// and the event carries the sender's pid. Elsewhere the OS does not say,
+/// and this is `None`.
 pub fn current_opener() -> Option<OpenerInfo> {
     #[cfg(target_os = "macos")]
     {

@@ -23,6 +23,11 @@ router resolves every link, opens it through `pwrroute-browsers`' launcher
   See its `AGENTS.md`.
 - `crates/pwrroute-os` — link receipt and default-browser registration per
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
+- `crates/pwrroute-link-helper` — `pwrroute-links`, the windowless macOS
+  app nested in `PwrRoute.app` that is the `http`/`https` handler and
+  forwards each link to the running router, so a link never activates the
+  app with the windows. Its delegate class is its only `unsafe`. See its
+  `AGENTS.md`.
 - `crates/pwrroute-mcp` — the MCP server for local agents, served by the
   running app and reached through `pwrroute mcp`. See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It hosts the

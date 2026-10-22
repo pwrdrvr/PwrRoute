@@ -26,8 +26,8 @@ use pwrroute_engine::{
     discovery::{self, Environment},
 };
 use pwrroute_router::{
-    Browser, DispatchRecord, DryRunLauncher, FallbackSource, Launcher, Link, Opener, Options,
-    Resolved, Resolver, ResolverFactory, Router, RouterHandle, Source,
+    Browser, DispatchRecord, DryRunLauncher, FallbackSource, Launcher, Link, Opener, OpenerInfo,
+    Options, Resolved, Resolver, ResolverFactory, Router, RouterHandle, Source,
     instance::{self, Claim, Endpoint, Server},
     ipc::Request,
 };
@@ -66,7 +66,8 @@ pub fn socket_path() -> Option<PathBuf> {
 /// What the command line asked for.
 #[derive(Debug, Default)]
 pub struct Args {
-    /// Links to route: a Windows ProgID or Linux `.desktop` launch, or
+    /// Links to route: a Windows ProgID or Linux `.desktop` launch, the
+    /// macOS link helper launching the app for links no router took, or
     /// `pwrroute URL…` from a shell.
     pub links: Vec<String>,
     /// Resolve and record, but open nothing.
@@ -75,9 +76,24 @@ pub struct Args {
     pub config: Option<PathBuf>,
     /// Open the first-run window (`--first-run`), whatever has run before.
     pub first_run: bool,
+    /// How `links` arrived: the command line, or, when the macOS link
+    /// helper launched this copy (`--source=apple-event`), an Apple Event.
+    pub source: Source,
+    /// The app that sent `links`, when the link helper passed it on
+    /// (`--opener=…`): the same opener the router gets when the helper
+    /// reaches it over the socket.
+    pub opener: Option<OpenerInfo>,
 }
 
 impl Args {
+    /// The command line's links, as the router gets them.
+    fn launch_links(&self) -> Vec<Link> {
+        self.links
+            .iter()
+            .map(|url| Link::new(url.as_str(), self.source).with_opener(self.opener.clone()))
+            .collect()
+    }
+
     pub fn from_env() -> Self {
         Self::parse(env::args_os().collect()).with_e2e_env(|key| env::var_os(key))
     }
@@ -99,8 +115,11 @@ impl Args {
     }
 
     fn parse(raw: Vec<OsString>) -> Self {
+        let (source, opener) = pwrroute_os::link_origin_from_args(raw.iter().cloned());
         let mut args = Self {
             links: pwrroute_os::links_from_args(raw.iter().cloned()),
+            source,
+            opener,
             ..Self::default()
         };
         let mut rest = raw.iter().skip(1).filter_map(|a| a.to_str());
@@ -154,11 +173,7 @@ impl Resident {
 
 /// Becomes the router, or hands the links to the one already running.
 pub fn start(args: &Args) -> Start {
-    let links: Vec<Link> = args
-        .links
-        .iter()
-        .map(|url| Link::new(url.as_str(), Source::CommandLine))
-        .collect();
+    let links = args.launch_links();
 
     // Under the E2E harness the router keeps to the harness's directory, so a
     // test run neither forwards to nor blocks the developer's own PwrRoute.
@@ -750,6 +765,38 @@ mod tests {
         assert!(args.links.is_empty() && !args.dry_run && !args.first_run);
 
         assert!(parse(&["pwrroute", "--first-run"]).first_run);
+    }
+
+    /// The macOS link helper launches the app with an Apple Event's links
+    /// when no router answers; they reach the router as the helper would
+    /// have forwarded them, opener and all.
+    #[test]
+    fn a_launch_by_the_link_helper_keeps_the_events_opener() {
+        let opener = OpenerInfo {
+            name: "Mail".into(),
+            bundle_id: "com.apple.mail".into(),
+            path: "/System/Applications/Mail.app".into(),
+            window_title: None,
+        };
+        let sent = vec![
+            Link::new("https://example.com/a", Source::AppleEvent)
+                .with_opener(Some(opener.clone())),
+        ];
+        let mut raw = vec![OsString::from("pwrroute")];
+        raw.extend(
+            pwrroute_os::apple_event_launch_args(&sent)
+                .into_iter()
+                .map(OsString::from),
+        );
+        let args = Args::parse(raw);
+        assert_eq!(args.links, ["https://example.com/a"]);
+        assert_eq!(args.launch_links(), sent);
+
+        let plain = parse(&["pwrroute", "https://example.com/a"]);
+        assert_eq!(
+            plain.launch_links(),
+            [Link::new("https://example.com/a", Source::CommandLine)]
+        );
     }
 
     fn browser(name: &str, app_type: AppType) -> Browser {
