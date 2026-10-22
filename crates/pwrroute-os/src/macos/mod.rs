@@ -99,12 +99,17 @@ pub fn unregister() -> Result<()> {
 /// LaunchServices activates whichever app it hands a link to.
 pub fn set_default() -> Result<DefaultRequest> {
     let app = app_bundle()?;
-    if link_helper(&app).is_none() {
+    let Some(helper) = link_helper(&app) else {
         bail!(
             "this PwrRoute.app has no link helper at {LINK_HELPER_PATH}; build it with `cargo \
              xtask bundle`"
         );
-    }
+    };
+    // LaunchServices hands a scheme only to a bundle id it knows. A DMG
+    // install never runs the updater's register hook, and LaunchServices
+    // need not have scanned a bundle nested in another: register the helper
+    // by its URL first, or the request names an id macOS has never seen.
+    launch_services::register(&helper)?;
     for scheme in ["http", "https"] {
         launch_services::set_default_handler(scheme, LINK_HELPER_ID)?;
     }

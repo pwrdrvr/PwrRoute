@@ -14,7 +14,7 @@ router.
   `NSApplication`, its delegate and NSWorkspace. The router and OS crates
   are dependencies for the socket client, the wire types, `current_opener`
   and `apple_event_launch_args`; the linker drops the rest (the release
-  binary is about 600 KB). Elsewhere `main` is a stub, so the workspace
+  binary is about 650 KB). Elsewhere `main` is a stub, so the workspace
   builds on Windows and Linux.
 - **The same hand-off as a second launch.** Each Apple Event's links go to
   the router as `Request::Open` with `Source::AppleEvent` and the sender
@@ -36,6 +36,9 @@ router.
   `SAFETY` comment. Prefer objc2's safe bindings for anything new.
 - **Opened by hand** (a default launch, or a reopen not beside a link) it
   asks the router for the window, as a launch of the app with no link does.
+  Not when the app started it (`--started-by-app`,
+  `pwrroute_os::start_link_helper`, so the first link finds it up): that
+  launch is for neither a link nor the window.
 - Packaging (`xtask/src/macos.rs`): built with the app, lipo'd for
   `--universal`, its Info.plist from `packaging/macos/LinkHelper.Info.plist.in`,
   the app's icon files, signed before the app (never `codesign --deep`).
