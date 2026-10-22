@@ -144,6 +144,24 @@ pub struct AddRule {
     pub private: bool,
     pub keep: Privacy,
     pub position: Position,
+    /// Why the rule would not take the link, found when Add was clicked.
+    pub problem: Option<Problem>,
+}
+
+/// What stops the sheet's rule from taking its link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Problem {
+    pub kind: ProblemKind,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProblemKind {
+    /// The file already has this rule: Add never adds it again.
+    Duplicate,
+    /// Another rule, or the config, takes the link first: a second click
+    /// adds the rule anyway.
+    Shadowed,
 }
 
 impl AddRule {
@@ -195,6 +213,7 @@ impl AddRule {
             private: false,
             keep: Privacy::Full,
             position: Position::Bottom,
+            problem: None,
         }
     }
 

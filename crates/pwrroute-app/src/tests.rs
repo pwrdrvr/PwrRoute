@@ -1641,6 +1641,158 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Activity with the fixture records, a window over the fixture rules in
+/// `dir`, and `config` in charge when given.
+fn open_activity<'a>(
+    cx: &'a mut TestAppContext,
+    dir: &Path,
+    config: Option<PathBuf>,
+) -> (Entity<PwrRoute>, &'a mut VisualTestContext) {
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let (view, cx) = open_store(cx, config, fixture_store(dir));
+    click(cx, "nav-activity");
+    (view, cx)
+}
+
+/// What the open sheet says stops its rule from taking the link.
+fn sheet_problem(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> Option<String> {
+    view.read_with(cx, |app, _| {
+        app.actions
+            .sheet
+            .as_ref()
+            .expect("the sheet is open")
+            .problem
+            .as_ref()
+            .map(|problem| problem.text.clone())
+    })
+}
+
+fn action_note(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> String {
+    view.read_with(cx, |app, _| app.actions.note.clone())
+        .expect("a note")
+        .1
+}
+
+#[gpui_kit::test]
+fn a_rule_added_beside_a_config_shows_under_its_visual_rules(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-config");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_activity(cx, &dir, Some(fixture_home().join(".finicky.ts")));
+    // Row 4, the GitHub pull request from PwrAgnt: no config handler takes
+    // it, so a visual rule at the top does.
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    assert_eq!(saved(cx, &path).rules.len(), 8);
+    let note = action_note(&view, cx);
+    assert!(note.starts_with("Added handler 1 "), "{note}");
+    assert!(note.contains("after ~/.finicky.ts"), "{note}");
+    // The visual rules open, so the Rules screen shows the new rule rather
+    // than the config's handlers alone.
+    assert!(view.read_with(cx, |app, _| app.visual_rules_expanded));
+    click(cx, "activity-show-rule-4");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Rules);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(0))
+    );
+    assert!(view.read_with(cx, |app, _| app.editing()));
+    assert!(cx.debug_bounds("editor-rail").is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_rule_an_earlier_rule_shadows_is_flagged_before_it_is_added(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-shadowed");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    // At the bottom, handler 2's github.com/pwrdrvr/* takes the link first.
+    click(cx, "add-rule-save");
+    assert!(
+        cx.debug_bounds("add-rule-sheet").is_some(),
+        "the sheet stays open"
+    );
+    assert!(cx.debug_bounds("add-rule-problem").is_some());
+    let problem = sheet_problem(&view, cx).expect("a problem");
+    assert!(
+        problem.starts_with("Handler 2 (github.com/pwrdrvr/*) takes this link first"),
+        "{problem}"
+    );
+    assert_eq!(saved(cx, &path).rules.len(), 7, "nothing was added");
+    // At the top it takes the link: added.
+    click(cx, "add-rule-position-top");
+    assert_eq!(sheet_problem(&view, cx), None);
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    let file = saved(cx, &path);
+    assert_eq!(file.rules.len(), 8);
+    assert_eq!(file.rules[0].patterns, ["github.com/pwrdrvr/*"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(
+    cx: &mut TestAppContext,
+) {
+    let dir = scratch("add-rule-config-first");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_activity(cx, &dir, Some(fixture_home().join(".finicky.ts")));
+    // Row 0 came from Slack: the config's second handler takes every link
+    // from Slack, before any visual rule.
+    click(cx, "activity-row-0");
+    click(cx, "activity-add-rule-0");
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_some());
+    let problem = sheet_problem(&view, cx).expect("a problem");
+    assert!(
+        problem.starts_with("~/.finicky.ts handler 2 takes this link first"),
+        "{problem}"
+    );
+    assert_eq!(saved(cx, &path).rules.len(), 7);
+    // Add anyway: the rule goes in, and the note keeps the warning.
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    assert_eq!(saved(cx, &path).rules.len(), 8);
+    let note = action_note(&view, cx);
+    assert!(
+        note.contains("~/.finicky.ts handler 2 takes this link first"),
+        "{note}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn the_same_rule_is_never_added_twice(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-twice");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-save");
+    assert_eq!(saved(cx, &path).rules.len(), 8);
+    // The same rule again, from the row's menu.
+    click(cx, "activity-add-rule-menu-4");
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_some());
+    let problem = sheet_problem(&view, cx).expect("a problem");
+    assert!(
+        problem.starts_with("Handler 1 is already this rule"),
+        "{problem}"
+    );
+    // A second click does not add it either.
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_some());
+    assert_eq!(saved(cx, &path).rules.len(), 8);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[gpui_kit::test]
 fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut TestAppContext) {
     let dir = scratch("row-actions");
