@@ -1018,6 +1018,49 @@ fn the_add_rule_browser_list_stays_inside_its_field(cx: &mut TestAppContext) {
     }
 }
 
+/// A list longer than `MENU_MAX_HEIGHT` stops there and scrolls, and its
+/// rows keep their height instead of being squeezed to fit.
+#[gpui_kit::test]
+fn a_long_browser_list_scrolls_with_whole_rows(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-long-list");
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    view.update(cx, |app, _| {
+        app.browsers = (0..14)
+            .map(|n| BrowserChoice {
+                name: format!("Example Browser {n}"),
+                profiles: vec!["Personal".into(), "Work".into()],
+            })
+            .collect();
+    });
+    click(cx, "nav-activity");
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    click(cx, "add-rule-browser");
+    let menu = cx.debug_bounds("add-rule-browser-menu").expect("the list");
+    assert!(
+        menu.size.height <= px(crate::widgets::MENU_MAX_HEIGHT),
+        "{menu:?}"
+    );
+    let first = cx
+        .debug_bounds("add-rule-browser-choice-0")
+        .expect("a row")
+        .size
+        .height;
+    assert!(first > px(20.0), "{first:?}");
+    for index in 1..14 {
+        let row = cx
+            .debug_bounds(format!("add-rule-browser-choice-{index}").leak())
+            .expect("a row");
+        assert_eq!(row.size.height, first, "row {index} keeps its height");
+    }
+    // The last rows lie past the card: the list scrolls to them.
+    let last = cx
+        .debug_bounds("add-rule-browser-choice-13")
+        .expect("the last row");
+    assert!(last.bottom() > menu.bottom(), "{last:?} past {menu:?}");
+}
+
 /// The row menu's Save hint names the browser and a long profile, and ends
 /// at the menu's edge instead of running past it.
 #[gpui_kit::test]

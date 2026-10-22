@@ -89,8 +89,12 @@ pub type Resize = Rc<dyn Fn(Pixels)>;
 /// The OS's resize: AppKit on macOS, keeping the top edge.
 fn native_resize() -> Resize {
     Rc::new(|height| {
+        // No visible panel: the card keeps the old window and its middle
+        // scrolls until the next change.
         #[cfg(target_os = "macos")]
-        crate::macos::set_dropdown_height(height.as_f32());
+        if !crate::macos::set_dropdown_height(height.as_f32()) {
+            eprintln!("pwrroute: the tray dropdown was not resized: no open panel");
+        }
         #[cfg(not(target_os = "macos"))]
         let _ = height;
     })

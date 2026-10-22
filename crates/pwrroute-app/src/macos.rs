@@ -163,13 +163,12 @@ const DROPDOWN_MARGIN: f32 = 4.0;
 /// Where a `width` × `height` dropdown opens under the item: centered on it,
 /// 4pt below the menu bar, kept 4pt inside the display.
 pub fn dropdown_origin(anchor: &StatusItemAnchor, width: Pixels) -> Point<Pixels> {
-    const MARGIN: f32 = DROPDOWN_MARGIN;
     let item = anchor.item;
     let centered = item.origin.x + item.size.width / 2.0 - width / 2.0;
-    let max_x = anchor.display_size.width - width - px(MARGIN);
+    let max_x = anchor.display_size.width - width - px(DROPDOWN_MARGIN);
     point(
-        centered.clamp(px(MARGIN), max_x.max(px(MARGIN))),
-        item.origin.y + item.size.height + px(MARGIN),
+        centered.clamp(px(DROPDOWN_MARGIN), max_x.max(px(DROPDOWN_MARGIN))),
+        item.origin.y + item.size.height + px(DROPDOWN_MARGIN),
     )
 }
 

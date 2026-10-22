@@ -269,19 +269,10 @@ fn config_default(path: &Path) -> Option<BrowserLabel> {
 fn label(browser: &str, profile: &str) -> BrowserLabel {
     BrowserLabel::new(
         &badge_for(browser),
-        &default_browser::handler_name(browser, &installed_name),
+        &default_browser::browser_name(browser),
         Some(profile).filter(|profile| !profile.is_empty()),
     )
     .for_app(browser)
-}
-
-/// `pwrroute_os::app_display_name`; tests never ask the OS.
-fn installed_name(id: &str) -> Option<String> {
-    if cfg!(test) {
-        None
-    } else {
-        pwrroute_os::app_display_name(id)
-    }
 }
 
 /// The label's browser and profile, as the router is told to open them.

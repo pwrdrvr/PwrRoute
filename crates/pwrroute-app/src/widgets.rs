@@ -418,16 +418,7 @@ pub fn menu_row(
     hint: Option<SharedString>,
 ) -> Stateful<Div> {
     let id = id.into();
-    let hint_selector = format!("{id}-hint");
-    let hint_box = div()
-        .debug_selector(move || hint_selector)
-        .ml_auto()
-        .pl(px(16.0))
-        // Its padding, so the row counts it when the label takes the rest.
-        .min_w(px(16.0))
-        .overflow_hidden()
-        // The hint shrinks long before the label does.
-        .flex_shrink(10_000.0);
+    let hint_id = id.clone();
     div()
         .id(id)
         .flex()
@@ -450,14 +441,26 @@ pub fn menu_row(
             theme::text_primary(),
         ))
         .when_some(hint, |row, hint| {
-            row.child(hint_box.child(one_line(
-                hint,
-                theme::mono_family(500.0),
-                500.0,
-                10.5,
-                10.5,
-                theme::text_muted(),
-            )))
+            row.child(
+                div()
+                    .debug_selector(move || format!("{hint_id}-hint"))
+                    .ml_auto()
+                    .pl(px(16.0))
+                    // Its padding, so the row counts it when the label
+                    // takes the rest.
+                    .min_w(px(16.0))
+                    .overflow_hidden()
+                    // The hint shrinks long before the label does.
+                    .flex_shrink(10_000.0)
+                    .child(one_line(
+                        hint,
+                        theme::mono_family(500.0),
+                        500.0,
+                        10.5,
+                        10.5,
+                        theme::text_muted(),
+                    )),
+            )
         })
 }
 
