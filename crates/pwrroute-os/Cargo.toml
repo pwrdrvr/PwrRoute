@@ -33,6 +33,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSArray",
     "NSAppleEventDescriptor",
     "NSAppleEventManager",
+    # The link helper's start argument (start_link_helper).
+    "NSArray",
     "NSBundle",
     "NSData",
     "NSDictionary",
@@ -51,8 +53,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSApplication",
     "NSResponder",
     "NSRunningApplication",
-    # URLForApplicationWithBundleIdentifier, for a handler's display name,
-    # and iconForFile:, for an app's icon.
+    # URLForApplicationWithBundleIdentifier, for a handler's display name;
+    # iconForFile:, for an app's icon; openApplicationAtURL (whose completion
+    # handler needs block2), to start the link helper.
     "NSWorkspace",
     "NSAccessibility",
     # Path-specific default-browser requests (distinguishes worktree bundles).

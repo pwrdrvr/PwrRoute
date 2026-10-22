@@ -50,9 +50,9 @@ pub use args::{apple_event_launch_args, link_origin_from_args, links_from_args};
 pub use paths::{data_dir, log_dir, router_dir};
 pub use registration::{
     BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, Handler, LINK_HELPER_ID,
-    LINK_HELPER_PATH, PROG_ID, REGISTERED_NAME, app_display_name, default_browser_status,
-    is_pwrroute_handler, link_helper_bundled, open_default_apps_settings, register_browser,
-    set_default_browser, set_default_handler, unregister_browser,
+    LINK_HELPER_PATH, LINK_HELPER_STARTED_BY_APP, PROG_ID, REGISTERED_NAME, app_display_name,
+    default_browser_status, is_pwrroute_handler, link_helper_bundled, open_default_apps_settings,
+    register_browser, set_default_browser, set_default_handler, unregister_browser,
 };
 // Plans the platform code applies, public so they can be checked anywhere.
 pub use registration::{RegistryValue, desktop_entry, windows_registry_values};
@@ -213,6 +213,16 @@ pub fn app_is_running(bundle_id: &str) -> bool {
         let _ = bundle_id;
         false
     }
+}
+
+/// Starts the link helper nested in this app's bundle, in the background and
+/// with [`LINK_HELPER_STARTED_BY_APP`], unless it is running already: the
+/// first link after PwrRoute starts then reaches a helper that is up,
+/// instead of waiting for it to launch. Nothing happens off macOS, outside
+/// a bundle (`cargo run`) or in a bundle without the helper.
+pub fn start_link_helper() {
+    #[cfg(target_os = "macos")]
+    macos::start_link_helper();
 }
 
 /// The app that sent the link being handled right now, when the OS says.

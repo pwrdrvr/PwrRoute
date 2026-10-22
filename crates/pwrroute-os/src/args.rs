@@ -21,10 +21,16 @@ const OPENER_FLAG: &str = "--opener=";
 pub fn apple_event_launch_args(links: &[Link]) -> Vec<String> {
     let mut args: Vec<String> = links.iter().map(|link| link.url.clone()).collect();
     args.push(format!("{SOURCE_FLAG}{APPLE_EVENT}"));
+    // Never the window title (an email subject, a document name): the
+    // command line is visible to every process on the machine.
     if let Some(json) = links
         .first()
         .and_then(|link| link.opener.as_ref())
-        .and_then(|opener| serde_json::to_string(opener).ok())
+        .map(|opener| OpenerInfo {
+            window_title: None,
+            ..opener.clone()
+        })
+        .and_then(|opener| serde_json::to_string(&opener).ok())
     {
         args.push(format!("{OPENER_FLAG}{json}"));
     }
@@ -128,6 +134,28 @@ mod tests {
         assert_eq!(
             link_origin_from_args(argv),
             (Source::AppleEvent, Some(opener))
+        );
+    }
+
+    #[test]
+    fn the_window_title_stays_off_the_command_line() {
+        let opener = OpenerInfo {
+            name: "Mail".into(),
+            bundle_id: "com.apple.mail".into(),
+            path: "/System/Applications/Mail.app".into(),
+            window_title: Some("A private subject".into()),
+        };
+        let links =
+            [Link::new("https://example.com/", Source::AppleEvent).with_opener(Some(opener))];
+        let args = apple_event_launch_args(&links);
+        assert!(
+            args.iter().all(|a| !a.contains("private subject")),
+            "{args:?}"
+        );
+        let (_, read) = link_origin_from_args(os(&args));
+        assert_eq!(
+            read.map(|o| (o.bundle_id, o.window_title)),
+            Some(("com.apple.mail".into(), None))
         );
     }
 

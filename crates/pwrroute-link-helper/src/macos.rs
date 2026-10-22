@@ -92,7 +92,9 @@ define_class!(
             // Opened by hand (Finder, Spotlight): show PwrRoute, as the app
             // does when launched with no link. A launch for a link is not a
             // "default launch", and its link arrives right after this.
-            if is_default_launch(notification) {
+            // Started by the app to be ready for the first link: not a
+            // request for the window either.
+            if is_default_launch(notification) && !started_by_app() {
                 self.activate_unless_a_link_comes(Instant::now(), LINK_GRACE);
             }
         }
@@ -144,6 +146,11 @@ impl Delegate {
                 }
             });
     }
+}
+
+/// Whether the app started this helper ([`pwrroute_os::start_link_helper`]).
+fn started_by_app() -> bool {
+    std::env::args().any(|arg| arg == pwrroute_os::LINK_HELPER_STARTED_BY_APP)
 }
 
 /// `NSApplicationLaunchIsDefaultLaunchKey` in the launch notification:

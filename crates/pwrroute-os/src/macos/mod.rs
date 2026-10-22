@@ -17,15 +17,17 @@ use std::{
 use anyhow::{Result, bail};
 use dispatch2::DispatchQueue;
 use objc2::{MainThreadMarker, rc::autoreleasepool, runtime::NSObjectProtocol, sel};
-use objc2_app_kit::{NSApplication, NSRunningApplication, NSWorkspace};
-use objc2_foundation::{NSAppleEventManager, NSBundle, NSProcessInfo, NSString, NSURL};
+use objc2_app_kit::{
+    NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceOpenConfiguration,
+};
+use objc2_foundation::{NSAppleEventManager, NSArray, NSBundle, NSProcessInfo, NSString, NSURL};
 use pwrroute_router::OpenerInfo;
 
 use crate::{
     Yield,
     registration::{
         BUNDLE_ID, DefaultRequest, DefaultStatus, Handler, LINK_HELPER_ID, LINK_HELPER_PATH,
-        SchemeHandler, macos_status,
+        LINK_HELPER_STARTED_BY_APP, SchemeHandler, macos_status,
     },
 };
 
@@ -393,6 +395,33 @@ fn same_bundle(handler: Option<&Path>, current: &Path) -> bool {
             _ => handler == current,
         },
     )
+}
+
+/// [`crate::start_link_helper`] on macOS.
+pub fn start_link_helper() {
+    if app_is_running(LINK_HELPER_ID) {
+        return;
+    }
+    let bundle = NSBundle::mainBundle().bundlePath().to_string();
+    let helper = Path::new(&bundle).join(LINK_HELPER_PATH);
+    if !helper.join("Contents/Info.plist").is_file() {
+        return;
+    }
+    let url =
+        NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&helper.to_string_lossy()), true);
+    let configuration = NSWorkspaceOpenConfiguration::configuration();
+    configuration.setActivates(false);
+    configuration.setAddsToRecentItems(false);
+    configuration.setArguments(&NSArray::from_retained_slice(&[NSString::from_str(
+        LINK_HELPER_STARTED_BY_APP,
+    )]));
+    // Fire and forget: a helper that does not start is started by the
+    // first link instead, as before.
+    NSWorkspace::sharedWorkspace().openApplicationAtURL_configuration_completionHandler(
+        &url,
+        &configuration,
+        None,
+    );
 }
 
 #[cfg(test)]
