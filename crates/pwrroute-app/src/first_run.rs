@@ -421,6 +421,16 @@ impl FirstRunModel {
         }
         let sources = match &self.finicky {
             Some(config) if self.config_runs() => format!("{} and your rules", config.path),
+            // Kept but broken: the router runs neither it nor the rules
+            // and sends every link to the Everything else browser.
+            Some(config) if self.config_in_charge() => {
+                return format!(
+                    "Every link opens in {} until {} loads. {}",
+                    self.fallback_name(),
+                    config.path,
+                    tray_line()
+                );
+            }
             _ => "your rules".to_owned(),
         };
         format!("Every link now goes where {sources} say. {}", tray_line())
@@ -512,10 +522,24 @@ impl FirstRunModel {
                     )
                 }
             },
+            Some(config) if self.config_in_charge() => format!(
+                "Until {} loads, every link opens here: neither it nor your rules run. It also \
+                 takes links whose browser can't open, and every link while routing is paused.",
+                config.path
+            ),
             _ => "Links no rule claims open here. It also takes links whose browser can't open, \
                   and every link while routing is paused."
                 .to_owned(),
         }
+    }
+
+    /// The Everything else browser by name, or a description of it while
+    /// none is picked.
+    fn fallback_name(&self) -> String {
+        self.fallback.as_ref().map_or_else(
+            || "the Everything else browser".to_owned(),
+            BrowserLabel::display,
+        )
     }
 
     /// The line under the select while the window's own pick stands.
@@ -676,14 +700,30 @@ impl FirstRunModel {
                 everything_else,
             ];
         };
-        let config_line = if config.error.is_some() {
-            WhereLine {
-                done: false,
-                subject: config.path.clone(),
-                rest: " runs once it loads".to_owned(),
-                browser: None,
-            }
-        } else {
+        if config.error.is_some() {
+            // Nothing has loaded, so the router runs neither the config nor
+            // the rules: every link goes to the Everything else browser.
+            return vec![
+                WhereLine {
+                    done: false,
+                    subject: config.path.clone(),
+                    rest: " runs once it loads".to_owned(),
+                    browser: None,
+                },
+                WhereLine {
+                    done: false,
+                    subject: "Your rules".to_owned(),
+                    rest: format!(" wait for it \u{00b7} {rules}"),
+                    browser: None,
+                },
+                WhereLine {
+                    subject: "Every link".to_owned(),
+                    rest: " \u{2192}".to_owned(),
+                    ..everything_else
+                },
+            ];
+        }
+        let config_line = {
             let claim = if config.handlers == 1 {
                 "claims"
             } else {
@@ -2538,17 +2578,37 @@ mod tests {
             ))
         );
 
-        // Kept while it does not load: the Everything else browser takes
-        // its links until it does.
+        // Kept while it does not load: the router runs neither it nor the
+        // rules, so the Everything else browser takes every link until it
+        // does, under either order.
+        for precedence in [Precedence::Config, Precedence::PwrRoute] {
+            let mut broken = model.clone();
+            broken.precedence = precedence;
+            broken.finicky.as_mut().unwrap().error = Some("SyntaxError: x".to_owned());
+            let lines = broken.where_links_go();
+            assert_eq!(
+                (lines[0].done, lines[0].rest.as_str()),
+                (false, " runs once it loads")
+            );
+            assert_eq!(
+                (lines[1].done, lines[1].rest.as_str()),
+                (false, " wait for it \u{00b7} none yet")
+            );
+            assert_eq!(
+                (lines[2].subject.as_str(), lines[2].rest.as_str()),
+                ("Every link", " \u{2192}")
+            );
+            assert_eq!(
+                lines[2].browser,
+                Some((
+                    "Ch".to_owned(),
+                    "Google Chrome \u{00b7} Personal".to_owned()
+                ))
+            );
+        }
         let mut broken = model.clone();
         broken.precedence = Precedence::Config;
         broken.finicky.as_mut().unwrap().error = Some("SyntaxError: x".to_owned());
-        let lines = broken.where_links_go();
-        assert_eq!(
-            (lines[0].done, lines[0].rest.as_str()),
-            (false, " runs once it loads")
-        );
-        assert_eq!(lines[2].rest, " \u{2192}");
         assert_eq!(
             broken.everything_else_result(),
             "Google Chrome \u{00b7} Personal"
@@ -3110,7 +3170,7 @@ mod tests {
         assert!(
             model
                 .everything_else_detail()
-                .starts_with("Links no rule claims")
+                .starts_with("Until ~/.finicky.ts loads, every link opens here")
         );
         assert_eq!(model.everything_else_result(), "Safari");
         model.is_default = true;
@@ -3118,7 +3178,9 @@ mod tests {
         assert!(
             model
                 .help()
-                .starts_with("Every link now goes where your rules say.")
+                .starts_with("Every link opens in Safari until ~/.finicky.ts loads."),
+            "{}",
+            model.help()
         );
         // The done panel still names it, as running once it loads.
         assert!(

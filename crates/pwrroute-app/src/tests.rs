@@ -239,7 +239,7 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
     assert!(cx.debug_bounds("test-trace").is_none());
 
-    // The design's example: two rewrites apply, handler 3 wins on Slack.
+    // The design's example: two rewrites apply, rule 3 wins on Slack.
     type_sample(cx);
     let first = trace(&view, cx);
     assert_eq!(
@@ -249,8 +249,8 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
             "Rewrite 1",
             "Rewrite 2",
             "Rewrite 3",
-            "Handlers 1 and 2",
-            "Handler 3",
+            "Rules 1 and 2",
+            "Rule 3",
             "Opens in",
         ]
     );
@@ -262,7 +262,7 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
 
     // Unfold the missed handlers.
     click(cx, "trace-show-each");
-    assert!(titles(&trace(&view, cx)).contains(&"Handler 2"));
+    assert!(titles(&trace(&view, cx)).contains(&"Rule 2"));
 
     // Type a new link and press Return.
     click(cx, "test-url");
@@ -276,7 +276,7 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
     );
     let meet = trace(&view, cx);
     assert_eq!(meet.result.title, "Google Chrome \u{00b7} Work");
-    assert!(titles(&meet).contains(&"Handler 1"));
+    assert!(titles(&meet).contains(&"Rule 1"));
 }
 
 #[gpui_kit::test]
@@ -538,9 +538,9 @@ fn switching_a_rule_off_changes_test_a_link(cx: &mut TestAppContext) {
 
     // Show each is for one trace: the next test folds again.
     click(cx, "trace-show-each");
-    assert!(titles(&trace(&view, cx)).contains(&"Handler 2"));
+    assert!(titles(&trace(&view, cx)).contains(&"Rule 2"));
     click(cx, "test-run");
-    assert!(titles(&trace(&view, cx)).contains(&"Handlers 1 and 2"));
+    assert!(titles(&trace(&view, cx)).contains(&"Rules 1 and 2"));
 }
 
 #[gpui_kit::test]
@@ -1782,7 +1782,7 @@ fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(cx: &mu
     assert!(cx.debug_bounds("add-rule-sheet").is_some());
     let problem = sheet_problem(&view, cx).expect("a problem");
     assert!(
-        problem.starts_with("~/.finicky.ts handler 2 takes this link first"),
+        problem.starts_with("Config handler 2 of ~/.finicky.ts takes this link first"),
         "{problem}"
     );
     assert_eq!(saved(cx, &path).rules.len(), 7);
@@ -1792,7 +1792,7 @@ fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(cx: &mu
     assert_eq!(saved(cx, &path).rules.len(), 8);
     let note = action_note(&view, cx);
     assert!(
-        note.contains("~/.finicky.ts handler 2 takes this link first"),
+        note.contains("Config handler 2 of ~/.finicky.ts takes this link first"),
         "{note}"
     );
     let _ = std::fs::remove_dir_all(dir);
@@ -3169,7 +3169,7 @@ mod rules_and_config_views {
         // Off, the function still runs: nothing to warn about.
         assert!(config.override_warnings(off).is_empty());
         assert_eq!(
-            config.owner_sentence("Safari"),
+            config.owner_sentence(off, "Safari"),
             format!(
                 "{}'s defaultBrowser function picks where everything else goes.",
                 config.path
@@ -3243,23 +3243,41 @@ mod rules_and_config_views {
         let order = view.read_with(cx, |app, _| Order::of(&app.store, &shown));
         assert!(order.pwrroute_default);
         assert!(shown.override_warnings(order).is_empty());
-        // The banner agrees with the pane, whichever way the switch is.
+        // The banner agrees with the router, whichever way the switch is:
+        // a config that never loaded leaves every link to the fallback
+        // (`rules.json`'s default), with no rules running.
         for rules_first in [false, true] {
             let order = Order::with(rules_first, true, false);
             let sentence = shown.banner_sentence(order, "Google Chrome", SystemTime::now());
             assert!(
                 sentence.starts_with(
-                    "Until it loads, your visual rules run on their own and PwrRoute's \
-                     default, Google Chrome, takes everything else. It did not load:"
+                    "Until it loads, every link opens in PwrRoute's default, Google Chrome. \
+                     It did not load:"
                 ),
                 "{sentence}"
             );
+            assert_eq!(
+                shown
+                    .visual_copy(order, "Google Chrome \u{00b7} Personal")
+                    .1,
+                "They wait for it: every link opens in PwrRoute's default, Google Chrome \
+                 \u{00b7} Personal, until ~/missing.finicky.ts loads."
+            );
+            // A failed reload: the last load still routes.
+            let stale = order.stale(true);
+            let sentence = shown.banner_sentence(stale, "Google Chrome", SystemTime::now());
+            assert!(
+                sentence.starts_with(
+                    "It didn't reload, so links still route with the version that last \
+                     loaded. It did not load:"
+                ),
+                "{sentence}"
+            );
+            assert_eq!(
+                shown.owner_sentence(stale, "Google Chrome"),
+                "They route with the version of ~/missing.finicky.ts that last loaded."
+            );
         }
-        assert_eq!(
-            shown.owner_sentence("Google Chrome \u{00b7} Personal"),
-            "PwrRoute's default, Google Chrome \u{00b7} Personal, takes everything else \
-             until ~/missing.finicky.ts loads."
-        );
         // No handlers to strike; the row PwrRoute's default takes is shown.
         assert!(cx.debug_bounds("config-everything-else").is_some());
         let _ = std::fs::remove_dir_all(&dir);

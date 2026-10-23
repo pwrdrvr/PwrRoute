@@ -889,11 +889,11 @@ impl PwrRoute {
                 let config = self
                     .config
                     .as_ref()
-                    .map_or("The config", |config| config.path.as_str());
+                    .map_or("the config", |config| config.path.as_str());
                 shadowed(
                     format!(
-                        "{config} handler {} takes this link first, and visual rules run after \
-                         the config, so this rule would never see it.",
+                        "Config handler {} of {config} takes this link first, and visual rules \
+                         run after the config, so this rule would never see it.",
                         winner.index + 1
                     ),
                     "Route this link in the config instead, or click Add anyway.",
@@ -1506,6 +1506,22 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
         ))
 }
 
+/// The sheet's line about the config in charge, in the order
+/// `rules.json`'s `precedence` sets, as the router runs it.
+fn config_hint(path: &str, rules_first: bool) -> String {
+    if rules_first {
+        format!(
+            "{path} is in charge, and your rules run before its handlers: a rule here takes \
+             the link ahead of the config."
+        )
+    } else {
+        format!(
+            "{path} is in charge, and visual rules run after it: a rule here only wins when \
+             the config does not take the link."
+        )
+    }
+}
+
 /// `.needjs`: why a precise rule needs a JS config, when it does.
 fn needs_js(app: &PwrRoute, sheet: &AddRule) -> Option<Div> {
     if sheet.needs_js.is_empty() && app.config.is_none() {
@@ -1520,11 +1536,7 @@ fn needs_js(app: &PwrRoute, sheet: &AddRule) -> Option<Div> {
         ));
     }
     if let Some(config) = &app.config {
-        lines.push(format!(
-            "{} is in charge, and visual rules run after it: a rule here only wins when the \
-             config does not take the link.",
-            config.path
-        ));
+        lines.push(config_hint(&config.path, sheet.rules_first));
     }
     Some(
         div()
@@ -2246,6 +2258,22 @@ mod tests {
                 owner: Some(Owner::Config)
             }),
             Took::Unrouted
+        );
+    }
+
+    /// The sheet's line about the config follows `precedence`: the visual
+    /// rules run after the config only in the config's order.
+    #[test]
+    fn the_config_hint_follows_the_precedence() {
+        assert_eq!(
+            config_hint("~/.finicky.ts", false),
+            "~/.finicky.ts is in charge, and visual rules run after it: a rule here only wins \
+             when the config does not take the link."
+        );
+        assert_eq!(
+            config_hint("~/.finicky.ts", true),
+            "~/.finicky.ts is in charge, and your rules run before its handlers: a rule here \
+             takes the link ahead of the config."
         );
     }
 }

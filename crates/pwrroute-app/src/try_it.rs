@@ -416,7 +416,8 @@ fn step_before(step: &Step, h: usize, rules_first: bool) -> bool {
     }
 }
 
-/// How a step is named in the result: "Handler 2", "Config handler 1", and
+/// How a step is named in the result, in Activity's words: "Rule 2"
+/// (`rules.json`'s), "Config handler 1", and
 /// the default by its owner when a config is in charge: "PwrRoute's
 /// default", "~/.finicky.ts's default".
 fn step_name(step: &Step, config: Option<&str>) -> String {
@@ -426,7 +427,7 @@ fn step_name(step: &Step, config: Option<&str>) -> String {
             (Some(_), Source::Rules) => "PwrRoute's default".into(),
             (Some(config), Source::Config) => format!("{config}'s default"),
         },
-        (Stage::Handler, Source::Rules) => format!("Handler {}", step.index + 1),
+        (Stage::Handler, Source::Rules) => format!("Rule {}", step.index + 1),
         (Stage::Handler, Source::Config) => format!("Config handler {}", step.index + 1),
         (Stage::Rewrite, Source::Rules) => format!("Rewrite {}", step.index + 1),
         (Stage::Rewrite, Source::Config) => format!("Config rewrite {}", step.index + 1),
@@ -473,7 +474,7 @@ mod tests {
     #[test]
     fn a_handler_says_who_takes_the_link() {
         let mut probe = probe();
-        // Handler 2 takes Atlassian links.
+        // Rule 2 takes Atlassian links.
         let taken = probe.run(
             "https://example.atlassian.net/browse/PG-12",
             None,
@@ -486,7 +487,7 @@ mod tests {
                 "This handler opens that link in Google Chrome \u{00b7} Work."
             )
         );
-        // Handler 4 (Social) loses to handler 2 on that link.
+        // Rule 4 (Social) loses to rule 2 on that link.
         let beaten = probe.run(
             "https://example.atlassian.net/browse/PG-12",
             None,
@@ -496,13 +497,13 @@ mod tests {
             beaten,
             TryResult::Text {
                 verdict: Verdict::Beaten,
-                message: "Handler 2 wins first: Google Chrome \u{00b7} Work. Move this rule \
+                message: "Rule 2 wins first: Google Chrome \u{00b7} Work. Move this rule \
                           above it to change that."
                     .into(),
                 bold: Some("Google Chrome \u{00b7} Work".into()),
             }
         );
-        // Handler 1 does not match it: a later handler does.
+        // Rule 1 does not match it: a later rule does.
         let passes = probe.run(
             "https://example.atlassian.net/browse/PG-12",
             None,
@@ -512,10 +513,10 @@ mod tests {
             passes,
             TryResult::text(
                 Verdict::Passes,
-                "No match. Handler 2 opens that link in Google Chrome \u{00b7} Work."
+                "No match. Rule 2 opens that link in Google Chrome \u{00b7} Work."
             )
         );
-        // Handler 3 needs Slack as the opener: the probe passes its app.
+        // Rule 3 needs Slack as the opener: the probe passes its app.
         let slack = probe.run(
             "https://example.com/",
             Some("com.tinyspeck.slackmacgap"),
@@ -531,7 +532,7 @@ mod tests {
             ),
             "{slack:?}"
         );
-        // Handler 7 is off.
+        // Rule 7 is off.
         let off = probe.run("https://figma.com/file/1", None, Selection::Handler(6));
         assert_eq!(
             off,
@@ -844,8 +845,7 @@ mod tests {
             beaten.run("https://both.example.com/x", None, Selection::Handler(1)),
             TryResult::Text {
                 verdict: Verdict::Beaten,
-                message: "Handler 1 wins first: Arc. Move this rule above it to change that."
-                    .into(),
+                message: "Rule 1 wins first: Arc. Move this rule above it to change that.".into(),
                 bold: Some("Arc".into()),
             }
         );

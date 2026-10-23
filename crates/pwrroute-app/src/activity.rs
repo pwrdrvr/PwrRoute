@@ -629,17 +629,28 @@ fn is_rewritten(record: &DispatchRecord) -> bool {
 }
 
 impl ActivityRow {
-    /// One record as the screen draws it.
+    /// One record as the screen draws it, with no config to name.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "tests build rows from single records")
+    )]
     pub fn from_record(record: &DispatchRecord) -> Self {
-        Self::build(record, false)
+        Self::build(record, false, None)
     }
 
     /// One journaled record, as [`from_record`](Self::from_record) draws it.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "tests build rows from single records")
+    )]
     pub fn from_journal(record: &DispatchRecord) -> Self {
-        Self::build(record, true)
+        Self::build(record, true, None)
     }
 
-    fn build(record: &DispatchRecord, journaled: bool) -> Self {
+    /// `config` is the config in charge as the window shows it
+    /// ("~/.finicky.ts"): its default is named after it, as Test a link
+    /// and the Overview name it.
+    fn build(record: &DispatchRecord, journaled: bool, config: Option<&str>) -> Self {
         let received = received_url(record);
         let from = record
             .link
@@ -665,7 +676,7 @@ impl ActivityRow {
                 .steps
                 .iter()
                 .any(|step| matches!(step, Step::Launched { dry_run: true })),
-            steps: trace_lines(record),
+            steps: trace_lines(record, config),
             matched_url: matched_url(record).into(),
             final_url: record.final_url.as_deref().unwrap_or(received).into(),
             privacy: record.privacy,
@@ -821,17 +832,23 @@ fn default_label(owner: Option<Owner>) -> &'static str {
     }
 }
 
-/// The expanded row's line for what chose the browser.
-fn matched_line(by: Matched) -> String {
+/// The expanded row's line for what chose the browser. A default is named
+/// by its owner as Test a link and the Overview name it: "PwrRoute's
+/// default", or the config's by its shown path ("~/.finicky.ts's
+/// default"; "the config's default" when none is in charge now).
+fn matched_line(by: Matched, config: Option<&str>) -> String {
     match by {
         Matched::Rule { index } => format!("rule {}", index + 1),
         Matched::Handler { index } => format!("config handler {}", index + 1),
         Matched::Default {
             owner: Some(Owner::PwrRoute),
-        } => "PwrRoute default \u{00b7} no rule or config handler matched".to_owned(),
+        } => "PwrRoute's default \u{00b7} no rule or config handler matched".to_owned(),
         Matched::Default {
             owner: Some(Owner::Config),
-        } => "config default \u{00b7} no config handler or rule matched".to_owned(),
+        } => format!(
+            "{}'s default \u{00b7} no config handler or rule matched",
+            config.unwrap_or("the config")
+        ),
         Matched::Default { owner: None } => "default \u{00b7} no handler matched".to_owned(),
         Matched::Unreported => "a rule or handler matched".to_owned(),
     }
@@ -948,7 +965,7 @@ fn browser_label(record: &DispatchRecord) -> String {
 }
 
 /// The expanded row's lines: one per step that did something.
-fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
+fn trace_lines(record: &DispatchRecord, config: Option<&str>) -> Vec<ActivityStep> {
     let mut lines: Vec<ActivityStep> = Vec::new();
     let mut url = received_url(record);
     for step in &record.steps {
@@ -973,7 +990,7 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
                 url = after;
                 (StepMark::Hit(number), line)
             }
-            Step::Matched { by } => (StepMark::Hit(number), matched_line(*by)),
+            Step::Matched { by } => (StepMark::Hit(number), matched_line(*by, config)),
             Step::ConfigError { message } => {
                 (StepMark::Fail, format!("config error \u{00b7} {message}"))
             }
@@ -1086,6 +1103,9 @@ pub struct Activity {
     pub kept_nothing: u64,
     /// Where the router keeps dispatches, in its words.
     pub retention: RetentionInfo,
+    /// The config in charge as the window shows it ("~/.finicky.ts"), to
+    /// name its default in the expanded rows ([`Activity::set_config`]).
+    config: Option<String>,
     _feed: Option<Subscription>,
 }
 
@@ -1102,6 +1122,7 @@ impl Activity {
             counts: Counts::default(),
             kept_nothing: 0,
             retention: Feed::new(None).retention(),
+            config: None,
             _feed: None,
         };
         if let Some(feed) = feed(cx) {
@@ -1133,7 +1154,7 @@ impl Activity {
         self.rows = records
             .iter()
             .filter(|record| record.privacy != Privacy::None)
-            .map(ActivityRow::from_record)
+            .map(|record| ActivityRow::build(record, false, self.config.as_deref()))
             .collect();
         self.retention = feed.retention();
         // The journal holds the same dispatches as memory, and more: only
@@ -1154,7 +1175,7 @@ impl Activity {
             .journal(JOURNAL_ROWS)
             .iter()
             .filter(|record| record.privacy != Privacy::None && !in_memory.contains(&stamp(record)))
-            .map(ActivityRow::from_journal)
+            .map(|record| ActivityRow::build(record, true, self.config.as_deref()))
             .collect();
         self.today = feed.today(SystemTime::now());
         if self.expanded.is_some_and(|key| {
@@ -1196,6 +1217,17 @@ impl Activity {
             });
         }
         cards
+    }
+
+    /// Names the config in charge (its shown path) in the rows, and
+    /// redraws them from the feed when it changed.
+    pub fn set_config(&mut self, config: Option<String>, cx: &App) {
+        if self.config != config {
+            self.config = config;
+            if let Some(feed) = feed(cx) {
+                self.sync(feed.read(cx));
+            }
+        }
     }
 
     /// Rows from records outside any feed: tests and screenshots.
@@ -2822,7 +2854,7 @@ mod tests {
         assert_eq!(ours.rule, "default");
         assert_eq!(
             texts(&ours)[0],
-            "PwrRoute default \u{00b7} no rule or config handler matched"
+            "PwrRoute's default \u{00b7} no rule or config handler matched"
         );
         assert!(ours.default);
 
@@ -2832,9 +2864,28 @@ mod tests {
         assert_eq!(config.rule, "config default");
         assert_eq!(
             texts(&config)[0],
-            "config default \u{00b7} no config handler or rule matched"
+            "the config's default \u{00b7} no config handler or rule matched"
         );
         assert!(config.default);
+        // With a config in charge, its default goes by its shown path, as
+        // Test a link and the Overview name it.
+        let shown = ActivityRow::build(
+            &routed(
+                1,
+                Vec::new(),
+                Matched::Default {
+                    owner: Some(Owner::Config),
+                },
+                Vec::new(),
+            ),
+            false,
+            Some("~/.finicky.ts"),
+        );
+        assert_eq!(shown.rule, "config default");
+        assert_eq!(
+            texts(&shown)[0],
+            "~/.finicky.ts's default \u{00b7} no config handler or rule matched"
+        );
 
         // A record journaled before owners were recorded.
         let old = row(Matched::Default { owner: None });

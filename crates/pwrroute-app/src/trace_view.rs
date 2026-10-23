@@ -269,8 +269,9 @@ fn matcher_label(matcher: &Matcher) -> String {
     }
 }
 
-/// What a step's source calls its rule: "Rewrite 1", "Handler 3", or with
-/// the config's own lists first, "Config handler 2".
+/// What a step's source calls its rule, in Activity's words: "Rewrite 1",
+/// "Rule 3" (`rules.json`'s), or from the config's own lists, "Config
+/// handler 2".
 fn rule_name(step: &Step, plural: bool) -> String {
     let kind = match (step.stage, plural) {
         (Stage::Rewrite, false) => "Rewrite",
@@ -279,9 +280,11 @@ fn rule_name(step: &Step, plural: bool) -> String {
         (Stage::Handler, true) => "Handlers",
         (Stage::Default, _) => "Default",
     };
-    match step.source {
-        Source::Rules => kind.to_owned(),
-        Source::Config => format!("Config {}", kind.to_lowercase()),
+    match (step.source, step.stage) {
+        (Source::Rules, Stage::Handler) if plural => "Rules".to_owned(),
+        (Source::Rules, Stage::Handler) => "Rule".to_owned(),
+        (Source::Rules, _) => kind.to_owned(),
+        (Source::Config, _) => format!("Config {}", kind.to_lowercase()),
     }
 }
 
@@ -515,7 +518,7 @@ fn query_keys(url: &str) -> Vec<String> {
         .collect()
 }
 
-/// Folds a run of missed handlers into one step: "Handlers 1 and 2".
+/// Folds a run of missed handlers into one step: "Rules 1 and 2", "Config handlers 1 and 2".
 fn flush_misses(steps: &mut Vec<TraceStep>, misses: &mut Vec<&Step>) {
     let Some(first) = misses.first() else {
         return;
@@ -744,7 +747,7 @@ mod tests {
             [
                 "Received",
                 "Config handlers 1 and 2",
-                "Handlers 1 and 2",
+                "Rules 1 and 2",
                 "Opens in"
             ]
         );

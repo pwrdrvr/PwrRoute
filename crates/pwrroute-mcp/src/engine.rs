@@ -11,7 +11,7 @@
 //! and cannot disagree with the destination.
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, mpsc},
     thread,
@@ -173,11 +173,14 @@ impl Resolver for EngineResolver {
         let url = url.to_owned();
         let opener = opener.cloned();
         let network = Arc::clone(&self.network);
-        let trace = self.thread.run(move |engine| {
+        let (trace, config) = self.thread.run(move |engine| {
             let link = engine.short_links().expand(&url, network.as_ref());
-            engine.trace(&link, opener.as_ref())
+            let config = engine.config_path().map(shown_path);
+            engine
+                .trace(&link, opener.as_ref())
+                .map(|trace| (trace, config))
         })?;
-        Ok(trace_of(trace))
+        Ok(trace_of(trace, config.as_deref()))
     }
 }
 
@@ -280,16 +283,33 @@ impl RulesTester for EngineTester {
 /// no config in charge, or `"precedence": "pwrroute"`. The router's
 /// records say it the same way (`live.rs`).
 pub(crate) const DEFAULT_PWRROUTE: &str =
-    "no rule or handler matched: PwrRoute's default browser (rules.json's defaultBrowser)";
+    "no rule or handler matched: PwrRoute's default (rules.json's defaultBrowser)";
 /// A default step's summary when the Finicky config's own `defaultBrowser`
-/// took the link.
-pub(crate) const DEFAULT_CONFIG: &str =
-    "no handler or rule matched: the config's default browser (its defaultBrowser)";
+/// took the link: named after the config as the app shows it
+/// ("~/.finicky.ts's default"), or "the config's default" when the caller
+/// cannot say which config.
+pub(crate) fn default_config(config: Option<&str>) -> String {
+    format!(
+        "no handler or rule matched: {}'s default (its defaultBrowser)",
+        config.unwrap_or("the config")
+    )
+}
+
+/// A config's path as the app shows it: `~/…` under the home directory.
+fn shown_path(path: &Path) -> String {
+    std::env::home_dir()
+        .and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf))
+        .map_or_else(
+            || path.display().to_string(),
+            |rest| format!("~/{}", rest.display()),
+        )
+}
 
 /// The engine's trace as the tools show it: the rewrites that matched, in
 /// order, then the handler or default that chose the browser. Rules that
 /// were evaluated but did not match are left out.
-pub(crate) fn trace_of(trace: engine::Trace) -> Trace {
+/// `config` names the config in charge, for its default's summary.
+pub(crate) fn trace_of(trace: engine::Trace, config: Option<&str>) -> Trace {
     let error = trace
         .resolution
         .error
@@ -305,7 +325,7 @@ pub(crate) fn trace_of(trace: engine::Trace) -> Trace {
                 Stage::Default => StepKind::Default,
             },
             index: (s.stage != Stage::Default).then_some(s.index),
-            summary: summary(s),
+            summary: summary(s, config),
             url: s.rewritten_to.clone(),
             source: Some(StepSource::from(s.source)),
         })
@@ -323,10 +343,10 @@ pub(crate) fn trace_of(trace: engine::Trace) -> Trace {
 
 /// How the Rules view words a step: which list, which entry, and the
 /// pattern that matched; or whose default browser took the link.
-fn summary(step: &engine::Step) -> String {
+fn summary(step: &engine::Step, config: Option<&str>) -> String {
     let list = match (step.source, step.stage) {
         (Source::Rules, Stage::Default) => return DEFAULT_PWRROUTE.to_owned(),
-        (Source::Config, Stage::Default) => return DEFAULT_CONFIG.to_owned(),
+        (Source::Config, Stage::Default) => return default_config(config),
         (Source::Config, Stage::Rewrite) => "config rewrite",
         (Source::Config, Stage::Handler) => "config handler",
         (Source::Rules, Stage::Rewrite) => "rules.json rewrite",
@@ -447,6 +467,7 @@ mod tests {
             };"#,
         )
         .unwrap();
+        let shown = shown_path(&config.canonicalize().unwrap_or_else(|_| config.clone()));
         let resolver = EngineResolver::spawn(config, Limits::default()).unwrap();
 
         let trace = resolver.resolve("https://x.com/a", None).unwrap();
@@ -464,8 +485,9 @@ mod tests {
         );
         assert_eq!(trace.steps[0].summary, "config rewrite 2 matched x.com/*");
         assert_eq!(trace.steps[0].source, Some(StepSource::Config));
-        // The config's own defaultBrowser took it, and the trace says whose.
-        assert_eq!(trace.steps[1].summary, DEFAULT_CONFIG);
+        // The config's own defaultBrowser took it, and the trace names the
+        // config, as the app's views do.
+        assert_eq!(trace.steps[1].summary, default_config(Some(&shown)));
         assert_eq!(trace.steps[1].source, Some(StepSource::Config));
         assert_eq!(trace.steps[0].url.as_deref(), Some("https://xcancel.com/a"));
         assert!(trace.error.is_some(), "the throwing matcher is reported");
@@ -623,20 +645,31 @@ mod tests {
         };
         let wildcard = || vec![Matcher::Wildcard("docs.example.com/*".to_owned())];
         assert_eq!(
-            summary(&step(Stage::Handler, Source::Rules, 2, wildcard())),
+            summary(&step(Stage::Handler, Source::Rules, 2, wildcard()), None),
             "rules.json rule 3 matched docs.example.com/*"
         );
         assert_eq!(
-            summary(&step(Stage::Handler, Source::Config, 1, wildcard())),
+            summary(&step(Stage::Handler, Source::Config, 1, wildcard()), None),
             "config handler 2 matched docs.example.com/*"
         );
         assert_eq!(
-            summary(&step(Stage::Default, Source::Rules, 0, Vec::new())),
-            "no rule or handler matched: PwrRoute's default browser (rules.json's defaultBrowser)"
+            summary(&step(Stage::Default, Source::Rules, 0, Vec::new()), None),
+            "no rule or handler matched: PwrRoute's default (rules.json's defaultBrowser)"
         );
         assert_eq!(
-            summary(&step(Stage::Default, Source::Config, 0, Vec::new())),
-            "no handler or rule matched: the config's default browser (its defaultBrowser)"
+            summary(&step(Stage::Default, Source::Config, 0, Vec::new()), None),
+            "no handler or rule matched: the config's default (its defaultBrowser)"
+        );
+        assert_eq!(
+            summary(
+                &step(Stage::Default, Source::Config, 0, Vec::new()),
+                Some("~/.finicky.ts")
+            ),
+            "no handler or rule matched: ~/.finicky.ts's default (its defaultBrowser)"
+        );
+        assert_eq!(
+            shown_path(&std::env::home_dir().unwrap().join(".finicky.ts")),
+            "~/.finicky.ts"
         );
         assert_eq!(
             serde_json::to_value(StepSource::from(Source::Rules)).unwrap(),

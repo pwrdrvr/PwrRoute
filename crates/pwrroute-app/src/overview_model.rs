@@ -325,7 +325,8 @@ pub struct Row {
     pub enabled: bool,
     /// Today's links, when there are any and counts are shown.
     pub count: Option<u64>,
-    /// Names the row's own list: "rule 1", "handler 2 of ~/.finicky.ts".
+    /// Names the row's own list in Activity's words: "rule 1", "config
+    /// handler 2 of ~/.finicky.ts".
     pub tooltip: String,
 }
 
@@ -953,7 +954,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 target,
                 enabled: true,
                 count: (!ghost).then(|| count_of(HitKey::Handler(index))).flatten(),
-                tooltip: format!("handler {} of {}", index + 1, config.shown),
+                tooltip: format!("config handler {} of {}", index + 1, config.shown),
             });
         }
     };
@@ -1605,6 +1606,39 @@ mod tests {
         assert_eq!(work, Some(302));
     }
 
+    /// Records name the list that routed each link (`Matched::Rule` for
+    /// `rules.json`, `Matched::Handler` for the config, the default by its
+    /// owner), so each row counts its own links under either order, and
+    /// the tooltip names it as Activity does.
+    #[test]
+    fn rows_count_rules_json_rules_and_config_handlers_apart() {
+        for precedence in [Precedence::Config, Precedence::PwrRoute] {
+            let mut world = World::config();
+            world.rules.precedence = precedence;
+            let feed = Feed::from_records(world.day.clone());
+            let tally = feed.tally(SystemTime::now());
+            assert_eq!(tally.rule(HitKey::Handler(0)), 57);
+            assert_eq!(tally.rule(HitKey::Rule(0)), 402);
+            assert_eq!(tally.rule(HitKey::Default(Some(Owner::Config))), 627);
+            assert_eq!(tally.rule(HitKey::Default(Some(Owner::PwrRoute))), 0);
+            let overview = world.build();
+            let count = |tooltip: &str| {
+                overview
+                    .map
+                    .rows
+                    .iter()
+                    .find(|row| row.tooltip == tooltip)
+                    .unwrap_or_else(|| panic!("no row {tooltip}"))
+                    .count
+            };
+            assert_eq!(count("config handler 1 of ~/.finicky.ts"), Some(57));
+            assert_eq!(count("config handler 3 of ~/.finicky.ts"), Some(214));
+            assert_eq!(count("rule 1"), Some(402));
+            assert_eq!(count("rule 2"), Some(12));
+            assert_eq!(count("rule 3"), Some(3));
+        }
+    }
+
     #[test]
     fn routing_1a_says_links_are_routing_with_todays_counts() {
         let overview = World::rules().build();
@@ -1773,7 +1807,7 @@ mod tests {
         );
         assert_eq!(map.rows.len(), 8);
         assert_eq!(map.rows[0].source, RowSource::Handler(0));
-        assert_eq!(map.rows[0].tooltip, "handler 1 of ~/.finicky.ts");
+        assert_eq!(map.rows[0].tooltip, "config handler 1 of ~/.finicky.ts");
         assert_eq!(
             map.rows[0].matcher,
             RowMatch::Function {

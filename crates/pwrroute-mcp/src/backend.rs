@@ -75,8 +75,8 @@ pub struct TraceStep {
     pub index: Option<usize>,
     /// What the rule matched or did, as the Rules view words it, naming
     /// who decided: "rules.json rule 3 matched …", "config handler 2
-    /// matched …", "… PwrRoute's default browser", "… the config's default
-    /// browser".
+    /// matched …", "… PwrRoute's default", "… ~/.finicky.ts's default" (the
+    /// config in charge by its path, or "the config's default").
     pub summary: String,
     /// The URL after this step, for a rewrite.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -57,7 +57,10 @@ their own modules.
   "cfg h 2" (the config's handler), "default" (PwrRoute's) or "config
   default" (`Matched::Default`'s owner; a record from before owners is
   plain "default"), "fallback"; the expanded row and the tray's recents
-  ("config handler 2") say the same in full. Add a rule's collision
+  ("config handler 2") say the same in full, and the expanded row names a
+  default by its owner as Test a link and the Overview do ("PwrRoute's
+  default", "~/.finicky.ts's default": the window passes the config's
+  shown path through `Activity::set_config`). Add a rule's collision
   caption counts which caught links would change hands by that and the
   order rules run in (`RulesStore::precedence`, the config in charge, Top
   or Bottom); a `Matched::Unreported` record is `Took::Unknown`, never
@@ -129,10 +132,11 @@ their own modules.
   top-level `tests[]` with the rest of `rules.json`; every control that adds
   one (the editor's Add example, Test a link's Save as test, Activity's Add a
   rule / Save as example / Save as test in the row's "⋯" menu,
-  `activity_actions.rs`) says so in its copy. `try_it::TestRuns` runs them through an engine built from the
-  config in charge and the edited rules (the same sources as the router's
-  resolver, so indexes match the rows) at window open, after every debounced
-  save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
+  `activity_actions.rs`) says so in its copy. `try_it::TestRuns` runs them
+  through an engine built from the config in charge and the edited rules
+  (the same sources as the router's resolver, so indexes match the rows)
+  at window open, after every debounced save and on Run tests; `pwrroute
+  rules test` in `main.rs` is the CLI form.
   Activity records carry `Matched::Rule { index }` for a `rules.json`
   rule (older records `Matched::Unreported`).
   Save as example takes the rule from the record (`Matched::Rule`) only
@@ -158,7 +162,15 @@ their own modules.
   handler that matched but whose browser failed "matched but its browser
   failed", never "threw". Add a rule's check (`activity_actions.rs`)
   blames the config's order only under the Go order; under `"pwrroute"` a
-  config handler winning means the new rule's pattern missed.
+  config handler winning means the new rule's pattern missed, and the
+  sheet's line about the config (`config_hint`) and the Added note say
+  which runs first. One rule has one name on every surface: `rules.json`'s
+  `rules[i]` is "rule N" (Rules' strip, failures and editor button, Try
+  it, Test a link's steps, the Overview's tooltips, Activity, the tray,
+  the importer, Settings › Privacy, `pwrroute rules test`, MCP), the
+  config's `handlers[i]` "config handler N" ("Config handler 2 of
+  ~/.finicky.ts" in the Add rule sheet; "cfg h N" only in Activity's
+  narrow column).
 - **The Finicky importer (`importer.rs`, `importer_view.rs`).** The model
   is plain data over `Engine::review_import` (verdicts, source lines,
   probed suggestions; recent links come from the feed's `Full` records, in
@@ -174,11 +186,12 @@ their own modules.
   `dismissed`). The change goes through `router::choose_source`, which the
   dispatch thread applies on its next refresh; `spawn_router` reads the
   same setting. Window tests open the importer with `open_with`, naming
-  the config in charge, since the router's source is process-wide. Entry points: the 1b banner, the 1a notice,
-  Settings' Review import…, File › Import Finicky Config… and first run's
-  Import N rules. First run opens it with `open_from_first_run`: Import
-  writes `rules.json` without opening the main window (through its store
-  only when it is already open), and the importer answers through its
+  the config in charge, since the router's source is process-wide. Entry
+  points: the 1b banner, the 1a notice, Settings' Review import…, File ›
+  Import Finicky Config… and first run's Import N rules. First run opens
+  it with `open_from_first_run`: Import writes `rules.json` without
+  opening the main window (through its store only when it is already
+  open), and the importer answers through its
   `OnDone`, imported with the count or cancelled however it closed (its
   release counts as a cancel, and so does a window that fails to open).
   Choose another file keeps the first-run context: the file picked opens
@@ -198,7 +211,12 @@ their own modules.
   config's description (`ConfigInCharge::override_warnings`: a function
   or `null` default only while it is overridden, a handler matching every
   link), never from running it. Default browsers are named through
-  `default_browser::browser_name`, never as bundle ids. Stop using is `importer_view::set_source` with `visualOnly`
+  `default_browser::browser_name`, never as bundle ids. A config this
+  window cannot read is described as the router runs it (`Order::stale`,
+  from `overview::status`): one that never loaded runs nothing, not even
+  the visual rules, and every link opens in PwrRoute's default until it
+  loads; after a failed reload the version that last loaded still routes.
+  Stop using is `importer_view::set_source` with `visualOnly`
   (and the file dismissed); Open in editor is `open_with_system`, which the
   test platform does not implement, so tests never click it. The blank
   state's Choose browser… writes `defaultBrowser` from `PwrRoute::browsers`
@@ -224,8 +242,9 @@ their own modules.
   `Step::Paused` is `RecentRoute::Paused` in the recents ("paused ·
   skipped rule 2") and "skipped rule 2" (or "skipped cfg h 4"; plain
   "paused" when the record names neither) in Activity's amber Rule chip,
-  with "paused · skipped rule 2" in the expanded row; which list comes from the record's `Matched` step, else
-  the `Paused` step's `skipped` (the config's handlers).
+  with "paused · skipped rule 2" in the expanded row; which list comes
+  from the record's `Matched` step, else the `Paused` step's `skipped`
+  (the config's handlers).
 - **The dropdown's window is its card** (design: Popovers and Overflow
   2a). A transparent window taller than the card is not invisible: macOS
   draws its frame and shadow at the window's size. It opens at
@@ -265,8 +284,9 @@ their own modules.
   `rules.json`'s `defaultBrowser` and `defaultProfile` ("" for the
   browser's own default); for a config kept in charge, its "who owns
   everything else" control writes `rules.json`'s `precedence` (shown only
-  while that config loads; a broken one kept speaks of the browser alone
-  until it does). Both are
+  while that config loads; a broken one kept says every link opens in the
+  Everything else browser until it loads, since the router then runs
+  neither it nor the rules). Both are
   direct `RulesFile` writes; the main window's store follows the file.
   Import N rules shows "Importing…" until the importer answers; Don't use
   it turns the config off through `importer_view::set_source_and_show`

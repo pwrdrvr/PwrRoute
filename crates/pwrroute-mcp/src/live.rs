@@ -32,14 +32,43 @@ use crate::backend::{
 /// The router behind `pwrroute_resolve`, `pwrroute_open` and
 /// `pwrroute_activity`: resolving is the router's Test a link, opening is a
 /// dispatch, and activity is its buffer and journal.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LiveRouter {
     handle: RouterHandle,
+    config: Option<ConfigName>,
+}
+
+/// The config in charge as the app shows it ("~/.finicky.ts"), asked at
+/// each call: a trace names the config's default after it.
+pub type ConfigName = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
+impl std::fmt::Debug for LiveRouter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveRouter")
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LiveRouter {
     pub fn new(handle: RouterHandle) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            config: None,
+        }
+    }
+
+    /// Names the config in charge in traces: its default is "~/.finicky.ts's
+    /// default", as the app's views say it, not "the config's default".
+    pub fn with_config(self, config: ConfigName) -> Self {
+        Self {
+            config: Some(config),
+            ..self
+        }
+    }
+
+    fn config(&self) -> Option<String> {
+        self.config.as_ref().and_then(|config| config())
     }
 }
 
@@ -47,7 +76,7 @@ impl Resolver for LiveRouter {
     fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Trace> {
         let link = Link::new(url, Source::Api).with_opener(opener.map(opener_info));
         let record = self.handle.test(link)?;
-        Ok(trace_of(&record))
+        Ok(trace_of(&record, self.config().as_deref()))
     }
 }
 
@@ -61,28 +90,30 @@ impl Router for LiveRouter {
         });
         let link = Link::new(url, Source::Api).with_opener(Some(opener));
         let record = self.handle.dispatch_and_wait(link)?;
-        Ok(trace_of(&record))
+        Ok(trace_of(&record, self.config().as_deref()))
     }
 }
 
 impl ActivityLog for LiveRouter {
     fn recent(&self, limit: usize) -> Result<Vec<ActivityEntry>> {
+        let config = self.config();
         Ok(self
             .handle
             .recent()
             .iter()
             .take(limit)
-            .map(|r| entry_of(r, ActivitySource::Memory))
+            .map(|r| entry_of(r, ActivitySource::Memory, config.as_deref()))
             .collect())
     }
 
     fn journal(&self, limit: usize) -> Result<Vec<ActivityEntry>> {
+        let config = self.config();
         Ok(self
             .handle
             .journal(limit)
             .context("reading the activity journal")?
             .iter()
-            .map(|r| entry_of(r, ActivitySource::Journal))
+            .map(|r| entry_of(r, ActivitySource::Journal, config.as_deref()))
             .collect())
     }
 
@@ -102,8 +133,12 @@ fn opener_info(opener: &Opener) -> OpenerInfo {
 
 /// A record as an entry. The record is already at its level: a `none`
 /// record has no link, opener, browser or steps, so the entry has no trace
-/// and no `via`.
-pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntry {
+/// and no `via`. `config` names the config in charge, as in [`trace_of`].
+pub fn entry_of(
+    record: &DispatchRecord,
+    source: ActivitySource,
+    config: Option<&str>,
+) -> ActivityEntry {
     let unrouted = record.steps.iter().any(|s| {
         matches!(
             s,
@@ -118,7 +153,7 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
         .iter()
         .any(|s| matches!(s, Step::Rewrite { .. }));
     let private = record.browser.as_ref().is_some_and(|b| b.private);
-    let trace = (record.privacy != Privacy::None).then(|| trace_of(record));
+    let trace = (record.privacy != Privacy::None).then(|| trace_of(record, config));
     ActivityEntry {
         id: record.id.0,
         at_ms: record
@@ -151,7 +186,9 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
 /// config's handler N, or whose default (PwrRoute's or the config's). A
 /// record that does not say is not passed off as a rule. Error text comes
 /// along as the record has it (withheld already for a `host` record).
-pub fn trace_of(record: &DispatchRecord) -> Trace {
+/// `config` is the config in charge as the app shows it ("~/.finicky.ts"),
+/// which names its default; without one it is "the config's default".
+pub fn trace_of(record: &DispatchRecord, config: Option<&str>) -> Trace {
     let mut steps = Vec::new();
     let mut error = None;
     // A fallback after a launch failure is the chosen browser missing, not
@@ -217,7 +254,7 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
                     } => step(
                         StepKind::Default,
                         None,
-                        crate::engine::DEFAULT_CONFIG.to_owned(),
+                        crate::engine::default_config(config),
                         Some(StepSource::Config),
                     ),
                     Matched::Default { owner: None } => step(
@@ -554,7 +591,7 @@ mod tests {
     #[test]
     fn the_trace_tells_a_missing_browser_from_a_config_out_of_charge() {
         let summaries = |record: &DispatchRecord| -> Vec<String> {
-            trace_of(record)
+            trace_of(record, None)
                 .steps
                 .into_iter()
                 .map(|step| step.summary)
@@ -575,7 +612,7 @@ mod tests {
         .unwrap();
         let record = router.handle().dispatch_and_wait(link()).unwrap();
         assert_eq!(record.outcome, Outcome::Opened);
-        let trace = trace_of(&record);
+        let trace = trace_of(&record, None);
         assert_eq!(
             trace.error.as_deref(),
             Some("browser \"Firefox\" is not installed")
@@ -885,7 +922,7 @@ mod tests {
             timings: Timings::default(),
         };
         let last = |steps: Vec<Step>| {
-            let trace = trace_of(&record(steps));
+            let trace = trace_of(&record(steps), None);
             let step = trace.steps.last().expect("a step").clone();
             (step.kind, step.index, step.source, step.summary)
         };
@@ -917,8 +954,7 @@ mod tests {
                 StepKind::Default,
                 None,
                 Some(StepSource::Rules),
-                "no rule or handler matched: PwrRoute's default browser (rules.json's \
-                 defaultBrowser)"
+                "no rule or handler matched: PwrRoute's default (rules.json's defaultBrowser)"
                     .to_owned()
             )
         );
@@ -930,7 +966,21 @@ mod tests {
                 StepKind::Default,
                 None,
                 Some(StepSource::Config),
-                "no handler or rule matched: the config's default browser (its defaultBrowser)"
+                "no handler or rule matched: the config's default (its defaultBrowser)".to_owned()
+            )
+        );
+        // With the config in charge named, its default goes by its path,
+        // as the app's views say it.
+        let config_default = record(vec![matched(Matched::Default {
+            owner: Some(Owner::Config),
+        })]);
+        assert_eq!(
+            trace_of(&config_default, Some("~/.finicky.ts"))
+                .steps
+                .last()
+                .map(|step| step.summary.clone()),
+            Some(
+                "no handler or rule matched: ~/.finicky.ts's default (its defaultBrowser)"
                     .to_owned()
             )
         );
@@ -981,13 +1031,16 @@ mod tests {
         );
 
         // On the wire: `source` says whose list `index` counts.
-        let json =
-            serde_json::to_value(trace_of(&record(vec![matched(Matched::Rule { index: 4 })])))
-                .unwrap();
+        let json = serde_json::to_value(trace_of(
+            &record(vec![matched(Matched::Rule { index: 4 })]),
+            None,
+        ))
+        .unwrap();
         assert_eq!(json["steps"][0]["source"], "rules");
         assert_eq!(json["steps"][0]["index"], 4);
         let json =
-            serde_json::to_value(trace_of(&record(vec![matched(Matched::Unreported)]))).unwrap();
+            serde_json::to_value(trace_of(&record(vec![matched(Matched::Unreported)]), None))
+                .unwrap();
         assert!(json["steps"][0].get("source").is_none(), "{json}");
     }
 }

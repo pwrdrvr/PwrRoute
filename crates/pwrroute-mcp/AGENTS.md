@@ -106,10 +106,14 @@ and the audit holds no content.
 - **A trace says who decided.** Each `TraceStep` names its list and
   number in `summary` ("rules.json rule 3 matched", "config handler 2
   matched") and in `source` (`rules` or `config`, absent when the record
-  does not say), and a default names its owner: PwrRoute's (`rules.json`'s
-  `defaultBrowser`) or the config's. A record that did not number its rule
-  (`Matched::Unreported`) is never called a `rules.json` rule. `engine.rs`
-  (`summary`) and `live.rs` (`trace_of`) share the default wording.
+  does not say), and a default names its owner as the app's views do:
+  "PwrRoute's default" (`rules.json`'s `defaultBrowser`) or the config's by
+  its shown path ("~/.finicky.ts's default"; "the config's default" when
+  the caller cannot say which). `LiveRouter::with_config` asks the app for
+  that path at each call; `EngineResolver` reads its engine's. A record
+  that did not number its rule (`Matched::Unreported`) is never called a
+  `rules.json` rule. `engine.rs` (`summary`, `default_config`) and
+  `live.rs` (`trace_of`) share the default wording.
 - **Activity is already reduced.** Entries come from the router at their
   rule's level (`privacy`); a `none` entry has no trace and no `via`. The
   tool adds only the role's cut (`hosts_only`) and the filters. The journal

@@ -1621,7 +1621,7 @@ fn place(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
                 .child(arrow())
                 .child(paragraph(
                     format!(
-                        "{} is already your handler {}.",
+                        "{} is already your rule {}.",
                         match &row.destination {
                             crate::rules_model::Destination::Browser { name, .. } =>
                                 name.to_string(),

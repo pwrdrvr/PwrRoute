@@ -9456,7 +9456,7 @@ MIT License (194)
 - xim-parser@0.2.2 | https://github.com/Riey/xim-rs
 - objc@0.2.7 | http://github.com/SSheldon/rust-objc
 - tokio-util@0.7.20 | https://github.com/tokio-rs/tokio
-- tokio@1.53.2 | https://github.com/tokio-rs/tokio
+- tokio@1.53.3 | https://github.com/tokio-rs/tokio
 - simd-adler32@0.3.10 | https://github.com/mcountryman/simd-adler32
 - x11-clipboard@0.9.3 | https://github.com/quininer/x11-clipboard
 - imagesize@0.14.0 | https://github.com/Roughsketch/imagesize
@@ -23848,7 +23848,7 @@ MIT License (MIT)
 
 Applies to:
 - tokio-util@0.7.20
-- tokio@1.53.2
+- tokio@1.53.3
 
 MIT License
 

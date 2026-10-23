@@ -72,12 +72,12 @@ pub(crate) fn example_mark(passed: Option<bool>) -> Div {
         .child(mono(label, 8.0, 700.0, color))
 }
 
-/// A winning step as the strip and the chips name it: "handler 2",
-/// "config handler 1", "the default".
+/// A winning step as the strip and the chips name it, in Activity's words:
+/// "rule 2" (`rules.json`'s), "config handler 1", "the default".
 pub(crate) fn winner_label(step: &Step) -> String {
     match (step.stage, step.source) {
         (Stage::Default, _) => "the default".into(),
-        (Stage::Handler, Source::Rules) => format!("handler {}", step.index + 1),
+        (Stage::Handler, Source::Rules) => format!("rule {}", step.index + 1),
         (Stage::Handler, Source::Config) => format!("config handler {}", step.index + 1),
         (Stage::Rewrite, Source::Rules) => format!("rewrite {}", step.index + 1),
         (Stage::Rewrite, Source::Config) => format!("config rewrite {}", step.index + 1),
@@ -763,7 +763,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                 .iter()
                 .enumerate()
                 .filter(|(_, h)| h.rule.badge == RowBadge::NotSaved)
-                .map(|(i, _)| format!("Handler {}", i + 1)),
+                .map(|(i, _)| format!("Rule {}", i + 1)),
         )
         .collect();
     let handlers = handlers.when(!not_saved.is_empty(), |card| {
@@ -797,11 +797,11 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
         .child(handlers)
 }
 
-/// What a failure's input is an example or test of: "example of handler 3",
+/// What a failure's input is an example or test of: "example of rule 3",
 /// "test 2", "example of rewrite 1".
 fn source_label(source: TestSource) -> String {
     match source {
-        TestSource::RuleExample { rule, .. } => format!("example of handler {}", rule + 1),
+        TestSource::RuleExample { rule, .. } => format!("example of rule {}", rule + 1),
         TestSource::RewriteExample { rewrite, .. } => format!("example of rewrite {}", rewrite + 1),
         TestSource::Test { test } => format!("test {}", test + 1),
     }
@@ -868,7 +868,7 @@ fn failure_row(index: usize, failure: &TestFailure, cx: &mut Context<'_, PwrRout
         .map(|step| {
             let handler = step.index;
             button(
-                format!("Edit handler {}", handler + 1),
+                format!("Edit rule {}", handler + 1),
                 ButtonKind::Default,
                 true,
             )

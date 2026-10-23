@@ -372,7 +372,15 @@ fn backends(wiring: &Wiring) -> Backends {
         None => ConfigChoice::Discover(discovery::config_candidates(&environment)),
     };
     let rules_path = discovery::rules_path(&environment);
-    let router = Arc::new(LiveRouter::new(wiring.handle.clone()));
+    // Traces name the config in charge by its shown path, as the window
+    // does: "~/.finicky.ts's default".
+    let router = Arc::new(
+        LiveRouter::new(wiring.handle.clone()).with_config(Arc::new(|| {
+            crate::router::config_in_charge().map(|path| {
+                crate::config_view::display_path(&path, std::env::home_dir().as_deref())
+            })
+        })),
+    );
     Backends {
         resolver: router.clone(),
         router: router.clone(),

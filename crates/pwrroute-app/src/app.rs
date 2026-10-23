@@ -201,6 +201,8 @@ impl PwrRoute {
         if this.config.is_none() {
             this.found_config = crate::importer_view::found_config(this.home.as_deref(), cx);
         }
+        let shown = this.config.as_ref().map(|config| config.path.clone());
+        this.activity.set_config(shown, cx);
         this.rebuild_rail(cx);
         // The file's examples and tests, as it was opened.
         if this.tests.counts() != (0, 0) {
@@ -437,6 +439,8 @@ impl PwrRoute {
         if self.tests.counts() != (0, 0) {
             self.tests.run();
         }
+        let shown = self.config.as_ref().map(|config| config.path.clone());
+        self.activity.set_config(shown, cx);
         self.try_it();
         cx.notify();
     }
