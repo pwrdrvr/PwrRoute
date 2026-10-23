@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* ---- overview: hero ---- */
+          .hero { position: relative; display: flex; align-items: center; gap: 16px; min-height: 96px; padding: 18px 20px; border: 1px solid var(--accent-border); border-radius: var(--radius-xl); background: linear-gradient(90deg, rgba(255,138,31,0.11) 0%, rgba(255,138,31,0.03) 42%, var(--bg-panel) 72%); flex: 0 0 auto; }
+          .hero.warn { border-color: rgba(217,154,61,0.4); background: linear-gradient(90deg, rgba(217,154,61,0.12) 0%, rgba(217,154,61,0.03) 42%, var(--bg-panel) 72%); }
+          .hero.off { border-color: var(--border-default); background: var(--bg-panel); }
+          .hero.bad { border-color: rgba(196,90,58,0.5); background: linear-gradient(90deg, rgba(185,66,50,0.16) 0%, rgba(185,66,50,0.04) 42%, var(--bg-panel) 72%); }
+          .ht { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+          .ht b { font: 700 24px/1.15 var(--font-sans); letter-spacing: -0.015em; color: var(--text-primary); }
+          .ht span { font: 500 11.5px/1.5 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .ht span em { font-style: normal; color: var(--text-subtle); }
+          .orb { width: 56px; height: 56px; flex: 0 0 auto; border-radius: 14px; display: flex; align-items: center; justify-content: center; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-border); box-shadow: 0 0 0 4px rgba(255,138,31,0.06), 0 0 28px rgba(255,138,31,0.2); }
+          .orb svg { display: block; }
+          .orb.warn { color: var(--status-warning); background: var(--warn-soft); border-color: rgba(217,154,61,0.4); box-shadow: none; }
+          .orb.off { color: var(--text-muted); background: var(--bg-panel-elevated); border-color: var(--border-default); box-shadow: none; }
+          .orb.bad { color: var(--danger-text); background: var(--danger-soft); border-color: transparent; box-shadow: none; }
+          .strip-chip.acc .dot { background: var(--accent); }
+          .strip-chip.bad .dot { background: var(--status-error); }
+          .cap { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+          .cap small { margin-left: 8px; font: 500 10.5px/1 var(--font-sans); letter-spacing: 0; text-transform: none; color: var(--text-subtle); }
+          .wcap { color: var(--warn-text); }
+          /* ---- today strip ---- */
+          .blk { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+          .blk-hd { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+          .today { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+          .tile { display: flex; flex-direction: column; gap: 9px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-panel); }
+          .tile .tl { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+          .tile .tl em { font: 500 13px/1 var(--font-sans); font-style: normal; color: var(--text-subtle); letter-spacing: 0; }
+          .tile .tn { font: 700 22px/1 var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--text-primary); }
+          .tile .tn.zero { color: var(--text-subtle); }
+          .tile .tn.bad { color: var(--danger-text); }
+          /* ---- route map ---- */
+          .map { flex: 0 0 auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); background: var(--bg-panel); overflow: hidden; }
+          .map-hd { display: flex; align-items: center; height: 40px; padding: 0 16px; border-bottom: 1px solid var(--border-faint); }
+          .map-hd .c1 { width: 360px; flex: none; display: flex; align-items: center; justify-content: space-between; padding-right: 12px; }
+          .map-hd .c2 { margin-left: 96px; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+          .map-hd .c2 .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .map-bd { position: relative; display: flex; gap: 96px; padding: 16px; background-image: radial-gradient(circle, rgba(247,243,235,0.05) 1px, transparent 1.3px); background-size: 16px 16px; background-position: 8px 8px; }
+          .map.paused .map-bd { opacity: 0.4; }
+          .curves { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+          .curves path { fill: none; stroke: var(--accent); stroke-linecap: round; }
+          .curves .glow { stroke-width: 6; opacity: 0.16; }
+          .curves .ln { stroke-width: 1.5; }
+          .col-r { position: relative; width: 360px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+          .col-d { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+          .rwb { height: 32px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px dashed var(--border-default); border-radius: 8px; font: 500 11px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .rwb svg { color: var(--accent); flex: none; }
+          .rwb span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+          .sh { height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px; }
+          .sh .shl { font: 600 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .rw + .sh { margin-top: 8px; }
+          .rw { position: relative; height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 10px; border: 1px solid var(--border-faint); border-radius: 8px; background: var(--bg-panel-elevated); }
+          .rw .rk { width: 18px; flex: none; font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rw .pt { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; }
+          .rw .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rw .more { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rw .fnn { font: 500 11px/1 var(--font-mono); color: var(--text-secondary); }
+          .rw .chip { padding: 3px 7px; }
+          .to { flex: none; display: flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .to.gh { color: var(--text-subtle); }
+          .rw .n { width: 36px; flex: none; text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .port { position: absolute; top: calc(50% - 4.5px); width: 9px; height: 9px; border-radius: 50%; background: var(--bg-panel); border: 1.5px solid var(--border-strong); z-index: 1; }
+          .rw .port { right: -5px; }
+          .dc .port { left: -5px; }
+          .rw.off { opacity: 0.4; }
+          .rw.ee { height: 44px; margin-top: 8px; border-color: var(--accent-border); background: linear-gradient(90deg, rgba(255,138,31,0.1), var(--bg-panel-elevated) 70%); }
+          .rw.ee .rk { color: var(--accent-bright); font-size: 13px; }
+          .rw .eep { flex-direction: column; align-items: flex-start; gap: 4px; }
+          .eep b { font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .eep small { font: 500 10px/1 var(--font-mono); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+          .rw.err { height: 44px; border-color: rgba(196,90,58,0.5); background: var(--danger-soft); }
+          .rw.err .rk { color: var(--danger-text); font-size: 13px; }
+          .rw.err b { color: var(--danger-text); }
+          .rw.on { border-color: var(--accent-border); background: var(--bg-row-active); box-shadow: 0 0 0 3px rgba(255,138,31,0.08); }
+          .rw.on .rk { color: var(--accent-bright); }
+          .rw.on .port, .dc.on .port { background: var(--accent); border-color: var(--accent); }
+          .dim { opacity: 0.45; }
+          .dc { position: relative; height: 96px; flex: none; display: flex; gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-panel-elevated); }
+          .dc .big { width: 40px; height: 40px; flex: none; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-app); display: flex; align-items: center; justify-content: center; font: 700 13px/1 var(--font-mono); color: var(--text-secondary); }
+          .dc .di { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+          .dc .dn { display: flex; align-items: center; gap: 8px; font: 600 13.5px/16px var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .dc .dm { font: 500 10.5px/12px var(--font-mono); color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .pills { display: flex; gap: 6px; overflow: hidden; }
+          .pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-panel); font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); white-space: nowrap; }
+          .pill.mute { color: var(--text-subtle); }
+          .pill .inf { color: var(--accent-bright); font-family: var(--font-sans); }
+          .pill.on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+          .dc.ring { border-color: var(--accent-border); box-shadow: 0 0 0 3px rgba(255,138,31,0.1); }
+          .ribbon { position: absolute; top: -9px; right: 14px; height: 18px; padding: 0 8px; border-radius: 999px; background: var(--accent); color: var(--accent-on); font: 650 10px/18px var(--font-sans); white-space: nowrap; }
+          .dc.on { border-color: var(--accent); background: linear-gradient(90deg, var(--bg-row-active), var(--bg-panel-elevated) 75%); box-shadow: 0 0 0 3px rgba(255,138,31,0.14), 0 10px 30px rgba(255,138,31,0.12); }
+          .dc.on .big { border-color: var(--accent-border); background: var(--bg-active-strong); color: var(--accent-bright); }
+          .dc.sm { height: 60px; align-items: center; }
+          .dc.sm .di { gap: 6px; }
+          .dc.sm .big { width: 32px; height: 32px; border-radius: 8px; font-size: 11px; }
+          .dc.js .big { color: var(--accent-bright); background: var(--accent-soft); border-color: transparent; }
+          .fnb { font: 700 15px/1 var(--font-sans); }
+          .dc.ghost { border-style: dashed; border-color: var(--border-default); background: transparent; }
+          .dc.ghost .dn { color: var(--text-muted); }
+          .dc.ghost .big { border-style: dashed; color: var(--text-subtle); background: transparent; }
+          .gtag { font: 500 10px/1 var(--font-mono); color: var(--warn-text); }
+          .dc.tall { height: auto; min-height: 96px; }
+          .dc.tall .dm { white-space: normal; }
+          .share { flex: none; width: 112px; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 7px; }
+          .share b { font: 700 18px/1 var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--text-primary); }
+          .share .bar { width: 100%; height: 4px; border-radius: 2px; background: var(--border-subtle); overflow: hidden; display: flex; }
+          .share .bar i { display: block; height: 100%; min-width: 2px; border-radius: 2px; background: var(--text-muted); }
+          .dc.ring .share .bar i, .dc.on .share .bar i { background: var(--accent); }
+          .share .sl { font: 500 9.5px/1 var(--font-sans); color: var(--text-subtle); white-space: nowrap; }
+          .emp { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; border: 1px dashed var(--border-default); border-radius: 10px; background: var(--bg-panel-elevated); }
+          .emp b { font: 600 13.5px/1.2 var(--font-sans); color: var(--text-primary); }
+          .emp p { margin: 0 0 4px; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          /* callout under the map */
+          .callout { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--accent-border); border-radius: var(--radius-lg); background: var(--bg-row-active); }
+          .callout.plain { border-color: var(--border-subtle); background: var(--bg-panel); }
+          .co-ic { width: 28px; height: 28px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-bright); font: 600 16px/1 var(--font-sans); }
+          .co-ic.mute { background: var(--bg-panel-elevated); color: var(--text-muted); }
+          .co-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+          .co-t b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .co-t span { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          /* setup card, built from first-run step cards */
+          .setup { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; }
+          .prog { display: flex; align-items: center; gap: 4px; }
+          .prog i { width: 22px; height: 4px; border-radius: 2px; background: var(--border-default); }
+          .prog i.on { background: var(--accent); }
+          .prog .note { margin-left: 6px; }
+          /* first run, as in Tray and First Run */
+          .fr { padding: 26px 28px 22px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+          .steps { display: flex; flex-direction: column; gap: 10px; }
+          .step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); }
+          .step.cur { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .step.todo { opacity: 0.6; }
+          .step .sn { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--font-mono); border: 1px solid var(--border-default); color: var(--text-muted); background: var(--bg-panel-elevated); }
+          .step.done .sn { background: var(--success-soft); border-color: transparent; color: var(--success-text); }
+          .step.cur .sn { background: var(--accent); border-color: transparent; color: var(--accent-on); }
+          .step .sb { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+          .step .sb b { font: 600 13px/1.3 var(--font-sans); color: var(--text-primary); }
+          .step .sb p { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .step .sb .inp { width: 300px; }
+          .step .sb .inp.pfl { width: 180px; }
+          .step.side { grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; }
+          .step.side .sb { gap: 5px; }
+          .step .res { display: flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .step.warnc { border-color: rgba(196,90,58,0.5); background: rgba(185,66,50,0.08); }
+          .step.warnc .sn { background: var(--danger-soft); color: var(--danger-text); }
+          .step .det { font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); }
+          .step .seg { align-self: flex-start; }
+          .step.mini { grid-template-columns: 20px minmax(0, 1fr); gap: 12px; padding: 10px 14px; align-items: center; }
+          .step.mini .sn { width: 20px; height: 20px; font-size: 10px; }
+          .step.mini .sb { flex-direction: row; align-items: baseline; gap: 10px; }
+          .step.mini .sb b { font-size: 12px; white-space: nowrap; }
+          .step.mini .sb p { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .selrow { display: flex; align-items: center; gap: 8px; }
+          .errl { align-self: flex-start; padding: 6px 8px; border-radius: 5px; background: var(--danger-soft); font: 500 10.5px/1.4 var(--font-mono); color: var(--danger-text); }
+          .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(22,10,0,0.3); border-top-color: var(--accent-on); display: block; }
+          .frfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; }
+          .frhero { display: flex; align-items: center; gap: 16px; }
+          .card.wl { border-color: var(--accent-border); box-shadow: 0 0 0 3px rgba(255,138,31,0.06); }
+          .wl .card-hd { align-items: center; padding: 11px 16px; }
+          .wl-row { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border-faint); font: 500 12px/1.4 var(--font-sans); color: var(--text-secondary); }
+          .wl-row:last-child { border-bottom: none; }
+          .wl-row b { font-weight: 600; color: var(--text-primary); }
+          .wl-row .bi { display: inline-flex; vertical-align: -1px; }
+          .tick { width: 18px; height: 18px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--success-soft); color: var(--success-text); font: 700 10px/1 var(--font-sans); }
+          .stage { background: var(--bg-panel); padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+          .stage .steps { gap: 8px; }
+          .slab { margin-top: 4px; font: 600 11px/1 var(--font-sans); color: var(--text-subtle); }
+          .slab:first-child { margin-top: 0; }
+          /* rules, as in App Baseline */
+          .rules { display: flex; flex-direction: column; }
+          .rr { position: relative; display: grid; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.ro { grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 200px) 20px; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr.nw .m { flex-wrap: nowrap; }
+          .rr .m .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .rr .strike { text-decoration: line-through; color: var(--text-subtle); display: inline-flex; align-items: center; gap: 7px; }
+          .rr .m .lbl.strike { color: var(--text-subtle); }
+          .rr .ovn { font: 500 10.5px/1.3 var(--font-sans); color: var(--text-muted); }
+          .rr.ovr { background: var(--bg-panel-elevated); }
+          .rr.ee .idx { color: var(--accent-bright); font-size: 13px; }
+          .srcline { flex: 1; font: 400 10.5px/1.3 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .banner { flex: 0 0 auto; display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; border: 1px solid var(--accent-border); border-radius: var(--radius-lg); background: var(--bg-row-active); }
+          .banner > svg { flex: none; margin-top: 1px; }
+          .banner .bt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+          .banner .bt b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .banner .bt > span { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .swrow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+          .swl { font: 600 11.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .banner .bt > .warnl { display: flex; align-items: center; gap: 6px; margin-top: 2px; font: 500 10.5px/1.5 var(--font-sans); color: var(--warn-text); }
+          .wi { width: 14px; height: 14px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--warn-soft); font: 700 9px/1 var(--font-sans); }
+          /* settings, as in Settings */
+          .snav { flex: 0 0 208px; }
+          .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+          .spane > .card { flex: 0 0 auto; }
+          .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+          .slot { display: flex; flex-direction: column; gap: 6px; padding: 11px 12px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 8px; }
+          .slot.sel { background: var(--bg-row-active); border-color: var(--accent-border); }
+          .slot .sv { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .slot.sel .sv { color: var(--accent-bright); }
+          .slot .sp { font: 500 10.5px/1.3 var(--font-mono); color: var(--text-muted); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          /* revision 2 */
+          .bi.gh { border-style: dashed; color: var(--text-subtle); }
+          .rw.ghost { border-style: dashed; border-color: var(--border-default); background: transparent; }
+          .rw .gtag { margin-left: 2px; }
+          .rw.pulse { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .rw.pulse .rk, .rw.pulse .n { color: var(--accent-bright); }
+          .rw.pulse .port, .dc.pulse .port { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,138,31,0.2); }
+          .dc.pulse { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,138,31,0.14), 0 10px 30px rgba(255,138,31,0.12); }
+          .dc.pulse .dm { color: var(--accent-bright); }
+          .dc.pulse .share .bar i { background: var(--accent); }
+          .orb.ping { box-shadow: 0 0 0 4px rgba(255,138,31,0.06), 0 0 0 9px rgba(255,138,31,0.16), 0 0 28px rgba(255,138,31,0.3); }
+          .tile .tn.up { color: var(--accent-bright); }
+          .tick.mute { background: transparent; border: 1px solid var(--border-strong); }
+          .tick.mute::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-subtle); }
+          .wnote { display: flex; align-items: flex-start; gap: 6px; font: 500 11px/1.5 var(--font-sans); color: var(--warn-text); }
+          .wnote .wi { margin-top: 2px; }
+          .chiprow { display: flex; align-items: center; gap: 18px; }
+          .chiprow .rail-foot { margin: 0; padding: 0; }
+          .stage > .hero { min-height: 96px; }
+          .rw .pt > .tag:not(.app):not(.fn) { display: block; flex: 0 1 auto; min-width: 24px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .rw .pt > .more, .rw .pt > .chip, .rw .pt > .lbl { flex: none; }
+        </style>
+      </helmet>
+
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Main window &rsaquo; Overview</span></div>
+        <p class="dv-sub">The window now opens on <b>Overview</b> instead of an editor. It answers what people open it to learn: is it working, what happened today, where do my links go. Then it offers to edit. The <b>route map</b> keeps evaluation order on the left, with rank numerals and first match wins. Destinations sit on the right as cards, one per browser in use, with profile pills. Hover teaches the model: one curve shows where a rule sends links, and a card lights the rules that feed it. Every input exists today: <code>routing_source()</code>, <code>store.handlers()</code>, <code>everything_else()</code>, <code>browser_scan::apps</code>, <code>tray::model</code>, <code>activity.today</code>.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Overview routing">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Visual rules in charge: 6 rules across 3 browsers, with rule 06 switched off. Google Chrome &middot; Personal takes Everything else, so Chrome's card carries the accent ring and the ribbon. Nothing is hovered, so no curve is drawn.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 3 rewrites &middot; 6 rules</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>rules.json &middot; saved 09:41</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>Links are routing.</b><span>PwrRoute is your default browser<em> &middot; </em>rules.json<em> &middot; </em>6 rules</span></div><span class="btn">Test a link&hellip;</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">1,412</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">642</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">1,108</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations<small>where links open</small></span><span class="note">Not used: Safari, Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="rw"><span class="rk">01</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">214</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">02</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">88</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">03</span><span class="pt"><span class="lbl">from</span><span class="tag app"><span class="bi">Sl</span>Slack</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">57</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">04</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">402</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">05</span><span class="pt"><span class="tag">news.example.org/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">9</span><span class="port"></span></div>
+              <div class="rw off"><span class="rk">06</span><span class="pt"><span class="tag">billing.example.com/*</span><span class="chip">off</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">642</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Work</span><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">2 rules &middot; 944 links today</span></div><div class="share"><b>67%</b><span class="bar"><i style="width: 67%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">2 rules &middot; 66 links today</span></div><div class="share"><b>5%</b><span class="bar"><i style="width: 5%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 402 links today</span></div><div class="share"><b>28%</b><span class="bar"><i style="width: 28%;"></i></span><span class="sl">of today's links</span></div></div></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Hovering a rule">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Hovering rule 02. One curve runs from the row's port to Chrome's card, the Work pill turns accent, and everything else drops to 45%. Clicking the row opens Rules with that row selected and the editor open.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 3 rewrites &middot; 6 rules</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>rules.json &middot; saved 09:41</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>Links are routing.</b><span>PwrRoute is your default browser<em> &middot; </em>rules.json<em> &middot; </em>6 rules</span></div><span class="btn">Test a link&hellip;</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">1,412</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">642</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">1,108</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map hovering">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations<small>where links open</small></span><span class="note">Not used: Safari, Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"><path class="glow" d="M376 122 C432 122 416 64 472 64"/><path class="ln" d="M376 122 C432 122 416 64 472 64"/></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="rw dim"><span class="rk">01</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">214</span><span class="port"></span></div>
+              <div class="rw on"><span class="rk">02</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">88</span><span class="port"></span></div>
+              <div class="rw dim"><span class="rk">03</span><span class="pt"><span class="lbl">from</span><span class="tag app"><span class="bi">Sl</span>Slack</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">57</span><span class="port"></span></div>
+              <div class="rw dim"><span class="rk">04</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">402</span><span class="port"></span></div>
+              <div class="rw dim"><span class="rk">05</span><span class="pt"><span class="tag">news.example.org/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">9</span><span class="port"></span></div>
+              <div class="rw off dim"><span class="rk">06</span><span class="pt"><span class="tag">billing.example.com/*</span><span class="chip">off</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw ee dim"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">642</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring on"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill on">Work</span><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">2 rules &middot; 944 links today</span></div><div class="share"><b>67%</b><span class="bar"><i style="width: 67%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc dim"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">2 rules &middot; 66 links today</span></div><div class="share"><b>5%</b><span class="bar"><i style="width: 5%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc dim"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 402 links today</span></div><div class="share"><b>28%</b><span class="bar"><i style="width: 28%;"></i></span><span class="sl">of today's links</span></div></div></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Hovering a destination">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Hovering the Firefox card. Rules 03 and 05 light up, one curve each. Curves are drawn when 6 or fewer rules feed the card, otherwise none. Hovering a profile pill narrows the light to rules naming that profile; clicking a card pins it until Esc.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 3 rewrites &middot; 6 rules</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>rules.json &middot; saved 09:41</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>Links are routing.</b><span>PwrRoute is your default browser<em> &middot; </em>rules.json<em> &middot; </em>6 rules</span></div><span class="btn">Test a link&hellip;</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">1,412</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">642</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">1,108</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map hovering">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations<small>where links open</small></span><span class="note">Not used: Safari, Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"><path class="glow" d="M376 166 C432 166 416 172 472 172"/><path class="ln" d="M376 166 C432 166 416 172 472 172"/><path class="glow" d="M376 254 C432 254 416 172 472 172"/><path class="ln" d="M376 254 C432 254 416 172 472 172"/></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="rw dim"><span class="rk">01</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">214</span><span class="port"></span></div>
+              <div class="rw dim"><span class="rk">02</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">88</span><span class="port"></span></div>
+              <div class="rw on"><span class="rk">03</span><span class="pt"><span class="lbl">from</span><span class="tag app"><span class="bi">Sl</span>Slack</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">57</span><span class="port"></span></div>
+              <div class="rw dim"><span class="rk">04</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">402</span><span class="port"></span></div>
+              <div class="rw on"><span class="rk">05</span><span class="pt"><span class="tag">news.example.org/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">9</span><span class="port"></span></div>
+              <div class="rw off dim"><span class="rk">06</span><span class="pt"><span class="tag">billing.example.com/*</span><span class="chip">off</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw ee dim"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">642</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring dim"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Work</span><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">2 rules &middot; 944 links today</span></div><div class="share"><b>67%</b><span class="bar"><i style="width: 67%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc on"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute on">default profile</span></div><span class="dm">2 rules &middot; 66 links today</span></div><div class="share"><b>5%</b><span class="bar"><i style="width: 5%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc dim"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 402 links today</span></div><div class="share"><b>28%</b><span class="bar"><i style="width: 28%;"></i></span><span class="sl">of today's links</span></div></div></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="1d" data-screen-label="1d A link routes">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>A link just matched rule 04. For 600ms its port, one curve and Arc's card light up, the orb pings, and Links today and the row and card counts tick up by one. Nothing dims, so it never looks like a hover.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 3 rewrites &middot; 6 rules</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>rules.json &middot; saved 09:41</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb ping"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>Links are routing.</b><span>PwrRoute is your default browser<em> &middot; </em>rules.json<em> &middot; </em>6 rules</span></div><span class="btn">Test a link&hellip;</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn up">1,413</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">642</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">1,108</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations<small>where links open</small></span><span class="note">Not used: Safari, Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"><path class="glow" d="M376 210 C432 210 416 280 472 280"/><path class="ln" d="M376 210 C432 210 416 280 472 280"/></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="rw"><span class="rk">01</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">214</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">02</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">88</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">03</span><span class="pt"><span class="lbl">from</span><span class="tag app"><span class="bi">Sl</span>Slack</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">57</span><span class="port"></span></div>
+              <div class="rw pulse"><span class="rk">04</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">403</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">05</span><span class="pt"><span class="tag">news.example.org/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">9</span><span class="port"></span></div>
+              <div class="rw off"><span class="rk">06</span><span class="pt"><span class="tag">billing.example.com/*</span><span class="chip">off</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">642</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Work</span><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">2 rules &middot; 944 links today</span></div><div class="share"><b>67%</b><span class="bar"><i style="width: 67%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">2 rules &middot; 66 links today</span></div><div class="share"><b>5%</b><span class="bar"><i style="width: 5%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc pulse"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 403 links today</span></div><div class="share"><b>29%</b><span class="bar"><i style="width: 29%;"></i></span><span class="sl">of today's links</span></div></div></div></div></section></div></div></div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Measurements</b> at 1240&times;820: pane 1044, padding 22/24, gap 18. <b>Hero:</b> min height 96, padding 18/20, radius 14, accent border, a linear accent wash fading out by 72%. Orb 56 (radius 14) with the 30px mark. Sentence 24/700 at &minus;0.015em; detail 11.5/500 with secondary-tone separators; quiet button on the right. <b>Today:</b> caption row (9.5/600 caps plus a 10.5 note), then 4 equal tiles, gap 10, padding 12/14, radius 10. Label 9.5/600 caps with a &rsaquo;; number 22/700 tabular; a zero is subtle and Failed &gt; 0 is danger-toned. Hover gives an accent border and the active-row fill. <b>Map:</b> radius 14 with a 40px header. Body padding 16 over a dot grid (1px every 16px, 5%). Rule column 360, curve gutter 96, destination column flex. <b>Rows:</b> 40 high, gap 4, radius 8, padding 0 12 0 10. Rank 18 wide (10.5 mono); count 36 wide, right-aligned; 9px port on the right edge. The rewrites band is 32 high, dashed, 10 above row 01. Everything else is 44 high, 12 below the last rule, on an accent wash. <b>Cards:</b> 96 high, gap 12, radius 12, padding 14/16. Badge 40 (radius 10, 13/700 mono); name 13.5/600; pills 22 high (mono 10.5, radius 999); meta 10.5 mono; 9px port on the left edge. The ribbon is 18 high and sits on the top edge 14 from the right. A share column on the right (112 wide) shows the card's part of today's links: 18/700 percent, a 4px bar (accent on the Everything else card), and a 9.5 caption. It drops when a card is under 360 wide, as at the 1000px minimum. Special cards are 60 high. <b>Lit:</b> rows and cards take <code>--accent</code> borders and a 3px ring at 8% (rows) or 14% (cards); the card adds a 0 10px 30px shadow at 12%. Everything not lit drops to 45%. The row names the profile when the rule names one, otherwise the browser; the badge carries the browser. Per-rule and per-card counts arrive with WP-B. Until then the count column and &ldquo;links today&rdquo; are left out, never shown as &mdash;. Card meta counts <b>enabled</b> rules only and always says &ldquo;rule&rdquo; or &ldquo;rules&rdquo;, whichever list a rule comes from (a config handler is a rule here). The &infin; on a pill, a row or the callout always means Everything else; its tooltip reads &ldquo;Everything else goes here&rdquo;. The hero's detail names the source, never a count the Today strip already shows. The rail Rules count is rewrites plus rules plus config handlers, across both sources, as App Baseline 1a counts it (9 here, 11 in 2a).<br><b>Motion.</b> The curve fades in over 120ms ease-out on hover and out over 120ms on leave. Moving from row to row cross-fades; the path never tweens. Dim is 1 &rarr; 0.45 over 120ms. The card lift is 120ms. Today's numbers tick up from 0 over 400ms ease-out the first time the window shows them, then step by one over 150ms as links arrive; share bars grow from 0 over the same 400ms. The strip chip's dot fades its colour over 200ms when the state changes. <b>Live pulse (1d):</b> when a link routes, the hero orb pings (a ring grows 0 &rarr; 8px and fades over 600ms) and the route that took it lights for 600ms: the row's port and border, one curve, and the card's border and glow, all ease-out. Nothing else dims, so a pulse never reads as a hover. The changed numbers flash <code>--accent-bright</code> for the same 600ms. Pulses share the orb's throttle, at most one a second; links in between only tick the numbers. A hover or pinned card suppresses pulses. Nothing runs as an idle loop. The first time Overview opens after first run, one curve runs from the Everything else row to its card over 900ms (the same hand-off as 2b), so the map introduces itself once.<br><b>GPUI.</b> Both columns are flex. The map body is <code>relative</code>; an absolutely positioned <code>canvas</code> sits under the columns and paints the dot grid and the curves with <code>PathBuilder::stroke</code>. GPUI has no background-image pattern, so the dot grid must be painted in that canvas: 1px dots every 16px at 5% of <code>--text-primary</code>, offset 8px. The bezier is drawn twice: 6px at 16% alpha, then 1.5px <code>--accent</code> on top. It runs from the row's port to the card's port, with control points 56px in from each end. The 6px stroke stands in for a glow, since a canvas path has no blur; the card's glow is a <code>BoxShadow</code>, which GPUI blurs natively. Port positions come from <code>on_children_prepainted</code> on both columns, stored in an <code>Rc&lt;RefCell&lt;MapBounds&gt;&gt;</code> that the canvas reads during paint. The hero wash is a <code>linear_gradient</code>; no radial gradient is needed.</p>
+        <p class="dv-next">Try next: "a rule whose card is scrolled out of view: the curve ends at the column edge with &darr; Firefox" &middot; "real app icons in the 40px badge (deferred)" &middot; "light the route for a pasted link"</p>
+      </section>
+
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Overview &rsaquo; A Finicky config in charge</span></div>
+        <p class="dv-sub">With a Finicky config in charge, the map shows two sections in evaluation order, and the Everything else row names its owner. The new <b>precedence</b> setting is opt-in: <code>"precedence": "pwrroute"</code> in <code>rules.json</code>. It flips the handler order and hands Everything else to PwrRoute's default. A Finicky handler counts only when it actually matched, which is <code>(Handler, Config)</code> in the trace; browsers are never compared. Rewrites run config first either way. A config in charge is drawn in accent or neutral tones, never warning.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Finicky config in charge">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Default mode. ~/.finicky.ts runs first and its defaultBrowser, Safari, takes everything else, so the ring and ribbon sit on Safari. Orion isn't installed, so its row is a ghost like its card. The callout's button turns the override on right here.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip acc"><span class="dot"></span>~/.finicky.ts &middot; runs first</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">11</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>reloaded 09:38</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>Links are routing.</b><span>PwrRoute is your default browser<em> &middot; </em>~/.finicky.ts + 3 rules</span></div><span class="btn">Test a link&hellip;</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">1,412</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">627</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">1,108</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations<small>where links open</small></span><span class="note">Not used: Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="sh"><span class="shl">~/.finicky.ts &middot; runs first</span><span class="note">5 handlers &middot; read-only</span></div>
+              <div class="rw"><span class="rk">01</span><span class="pt"><span class="tag fn">&fnof;</span><span class="fnn">isWorkplace</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">57</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">02</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">88</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">03</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">214</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">04</span><span class="pt"><span class="tag">meet.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="tag fn">&fnof;</span>JavaScript</span><span class="n">9</span><span class="port"></span></div>
+              <div class="rw ghost"><span class="rk">05</span><span class="pt"><span class="tag">beta.example.net/*</span></span><span class="to gh"><span class="arrow">&rarr;</span><span class="bi gh">Or</span>Orion<span class="gtag">not installed</span></span><span class="n"></span><span class="port"></span></div>
+              <div class="sh"><span class="shl">Your rules &middot; run after</span><span class="note">3 rules</span></div>
+              <div class="rw"><span class="rk">06</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">402</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">07</span><span class="pt"><span class="tag">billing.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">12</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">08</span><span class="pt"><span class="tag">status.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Sf</span>Safari</span><span class="n">3</span><span class="port"></span></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>~/.finicky.ts's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Sf</span>Safari</span><span class="n">627</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring"><span class="ribbon">Everything else &middot; ~/.finicky.ts</span><span class="port"></span><span class="big">Sf</span><div class="di"><span class="dn">Safari</span><div class="pills"><span class="pill mute">default profile<span class="inf">&infin;</span></span></div><span class="dm">1 rule &middot; 630 links today</span></div><div class="share"><b>45%</b><span class="bar"><i style="width: 45%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Work</span><span class="pill">Personal</span></div><span class="dm">3 rules &middot; 314 links today</span></div><div class="share"><b>22%</b><span class="bar"><i style="width: 22%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 402 links today</span></div><div class="share"><b>28%</b><span class="bar"><i style="width: 28%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 57 links today</span></div><div class="share"><b>4%</b><span class="bar"><i style="width: 4%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc sm js"><span class="port"></span><span class="big"><span class="fnb">&fnof;</span></span><div class="di"><span class="dn">Decided by JavaScript</span><span class="dm">1 rule &middot; picks a browser per link &middot; 9 links today</span></div></div>
+              <div class="dc sm ghost"><span class="port"></span><span class="big">Or</span><div class="di"><span class="dn">Orion<span class="gtag">not installed</span></span><span class="dm">1 rule &middot; its links fall through to Everything else</span></div></div></div></div></section>
+              <div class="callout"><span class="co-ic">&infin;</span><div class="co-t"><b>Want your own Everything else?</b><span>Your rules would run first, then ~/.finicky.ts's handlers, and Google Chrome &middot; Personal would take what is left instead of Safari.</span></div><span class="btn sm">Let PwrRoute's default take everything else</span></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Override on">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>Just after the click. Your rules run first, then the config's handlers, and PwrRoute's default, Google Chrome &middot; Personal, takes what is left. The ring moves to Chrome and the 900ms hand-off curve runs from Everything else to it; the callout offers Undo.</span></div>
+            <div class="dv-card win" style="width: 1240px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip acc"><span class="dot"></span>~/.finicky.ts &middot; after your rules</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">11</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>reloaded 09:38</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>Links are routing.</b><span>PwrRoute is your default browser<em> &middot; </em>3 rules + ~/.finicky.ts</span></div><span class="btn">Test a link&hellip;</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">1,412</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">627</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">1,108</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations<small>where links open</small></span><span class="note">Not used: Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"><path class="glow" d="M376 504 C432 504 416 64 472 64"/><path class="ln" d="M376 504 C432 504 416 64 472 64"/></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="sh"><span class="shl">Your rules &middot; run first</span><span class="note">3 rules</span></div>
+              <div class="rw"><span class="rk">01</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">402</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">02</span><span class="pt"><span class="tag">billing.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">12</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">03</span><span class="pt"><span class="tag">status.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Sf</span>Safari</span><span class="n">3</span><span class="port"></span></div>
+              <div class="sh"><span class="shl">~/.finicky.ts handlers &middot; run after</span><span class="note">5 handlers &middot; read-only</span></div>
+              <div class="rw"><span class="rk">04</span><span class="pt"><span class="tag fn">&fnof;</span><span class="fnn">isWorkplace</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">57</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">05</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">88</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">06</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">214</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">07</span><span class="pt"><span class="tag">meet.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="tag fn">&fnof;</span>JavaScript</span><span class="n">9</span><span class="port"></span></div>
+              <div class="rw ghost"><span class="rk">08</span><span class="pt"><span class="tag">beta.example.net/*</span></span><span class="to gh"><span class="arrow">&rarr;</span><span class="bi gh">Or</span>Orion<span class="gtag">not installed</span></span><span class="n"></span><span class="port"></span></div>
+              <div class="rw ee pulse"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">627</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring pulse"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Work</span><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">3 rules &middot; 941 links today</span></div><div class="share"><b>67%</b><span class="bar"><i style="width: 67%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Sf</span><div class="di"><span class="dn">Safari</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 3 links today</span></div><div class="share"><b>&lt;1%</b><span class="bar"><i style="width: 1%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 402 links today</span></div><div class="share"><b>28%</b><span class="bar"><i style="width: 28%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 57 links today</span></div><div class="share"><b>4%</b><span class="bar"><i style="width: 4%;"></i></span><span class="sl">of today's links</span></div></div>
+              <div class="dc sm js"><span class="port"></span><span class="big"><span class="fnb">&fnof;</span></span><div class="di"><span class="dn">Decided by JavaScript</span><span class="dm">1 rule &middot; picks a browser per link &middot; 9 links today</span></div></div>
+              <div class="dc sm ghost"><span class="port"></span><span class="big">Or</span><div class="di"><span class="dn">Orion<span class="gtag">not installed</span></span><span class="dm">1 rule &middot; its links fall through to Everything else</span></div></div></div></div></section>
+              <div class="callout"><span class="co-ic">&#10003;</span><div class="co-t"><b>PwrRoute's default now takes everything else.</b><span>~/.finicky.ts's defaultBrowser, Safari, isn't used while this is on.</span></div><span class="btn sm">Undo</span><span class="btn sm quiet">Change in Rules&nbsp;&rsaquo;</span></div></div></div></div>
+          </div>
+
+        </div>
+        <p class="dv-note">Ranks count in evaluation order across both sections (01&ndash;08), so first match wins reads straight down. A row's tooltip names its own list, such as &ldquo;handler 2 of ~/.finicky.ts&rdquo; or &ldquo;rule 1&rdquo;. &fnof; rows show the function's name (<code>FunctionSpec.name</code>), never its source; Rules shows the source on hover. When the name is empty (an arrow function), the row reads &ldquo;&fnof; unnamed function&rdquo; in muted text and its tooltip still names the handler. <b>Decided by JavaScript</b> collects handlers whose browser is a function. A target the scan did not find is a dashed ghost card, and its rows get a dashed border, the same dashed badge, subtle name and &ldquo;not installed&rdquo; tag, and no count, because their links fall through to Everything else and are counted there. Section headers are 24 high, 11/600 in sentence case (a file name must keep its case), with a 10.5 note on the right. The callout is radius 10 with padding 12/14 and a 28px icon tile.<br><b>The callout acts in place.</b> Its button writes <code>"precedence": "pwrroute"</code> directly; it does not navigate. If <code>describe()</code> reports a toggle warning (Rules 5c), the warning shows as a line under the callout's detail before the click, with the same words. After the click the callout turns into the confirmation in 2b, with <b>Undo</b> where the button was (the in-place undo Rule Editing 4b chose over a toast). Undo stays until the user leaves Overview or edits something else; after that the callout settles to the plain one-line note &ldquo;~/.finicky.ts's defaultBrowser, Safari, isn't used while PwrRoute's default takes everything else.&rdquo; with <b>Change in Rules &rsaquo;</b>.<br><b>Motion on toggle:</b> the sections swap instantly. The ring fades out on Safari over 120ms and in on Chrome over 200ms. One curve from the Everything else row to the new owner's card draws for 900ms, then fades, with both ports lit. Undo plays the same hand-off back to Safari.</p>
+        <p class="dv-next">Try next: "observed destinations for the &fnof; card once WP-B tallies them" &middot; "the config with 40 handlers: collapse its section to the top 10 by hits"</p>
+      </section>
+
+      <section class="dv-turn" id="t3">
+        <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Overview &rsaquo; Hero states</span></div>
+        <p class="dv-sub">The hero sentence follows the highest-priority state: the config didn't load, then paused, then not the default browser, then can't tell, then routing. These are drawn at the 1000px minimum width: pane 804, rule column still 360, cards 266 wide. While a setup card is showing it carries the action and the hero has no button, so there is one primary per screen.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="3a" data-screen-label="3a Paused">
+            <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>Paused. The hero, strip chip and rail foot take the warning tone. The map dims to 40% under &ldquo;When routing resumes&rdquo;.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 3 rewrites &middot; 4 rules</span><span class="strip-chip warn"><span class="dot"></span>paused</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">7</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st warn"><i></i>paused &middot; Google Chrome</span></div></nav>
+              <div class="pane">
+              <div class="hero warn"><span class="orb warn"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></span><div class="ht"><b>Routing is paused.</b><span>Every link opens in Google Chrome &middot; Personal until you resume. Rewrites still run.</span></div><span class="btn primary">Resume routing</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">1,403</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">642</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">1,108</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map paused">
+              <div class="map-hd"><div class="c1"><span class="cap"><span class="wcap">When routing resumes</span></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations</span><span class="note">Not used: Safari, Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="rw"><span class="rk">01</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">214</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">02</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n">88</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">03</span><span class="pt"><span class="lbl">from</span><span class="tag app"><span class="bi">Sl</span>Slack</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n">57</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">04</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">402</span><span class="port"></span></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">642</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Work</span><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">2 rules &middot; 944 links today</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 57 links today</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 402 links today</span></div></div></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="3b" data-screen-label="3b Not the default browser">
+            <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a><span>PwrRoute isn't the default browser, so nothing reaches it. Today is all zeros and the map shows only what will happen, with no counts. The strip chip and rail foot warn; the setup card shows what is left and holds the button.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 3 rewrites &middot; 4 rules</span><span class="strip-chip warn"><span class="dot"></span>not default</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">7</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity</div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st warn"><i></i>not the default browser</span></div></nav>
+              <div class="pane">
+              <div class="hero off"><span class="orb off"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>Links aren't reaching PwrRoute yet.</b><span>Safari is your default browser, so links open there and skip your rules.</span></div></div>
+              <section class="setup"><div class="blk-hd"><span class="cap">Finish setting up</span><span class="prog"><i class="on"></i><i></i><span class="note">1 of 2 done</span></span></div>
+              <div class="steps">
+              <div class="step done side"><span class="sn">&#10003;</span><div class="sb"><b>Choose where everything else goes</b><span class="res"><span class="bi">Ch</span>Google Chrome &middot; Personal</span></div><span class="btn sm quiet">Change&hellip;</span></div>
+              <div class="step cur side"><span class="sn">2</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Safari and skip your rules.</p></div><span class="btn primary">Make PwrRoute the default browser</span></div></div></section>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn zero">0</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn zero">0</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn zero">0</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">What will happen<small>first match wins</small></span><span class="note"></span></div><div class="c2"><span class="cap">Destinations</span><span class="note">Not used: Safari, Microsoft Edge</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="rwb"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 16 8"/><path d="m14 6 4 4"/><path d="M19 3v3M17.5 4.5h3"/></svg><span>3 rewrites run on every link first</span><span class="arrow">&rsaquo;</span></div>
+              <div class="rw"><span class="rk">01</span><span class="pt"><span class="tag">*.docs.example.com/*</span><span class="more">+1</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw"><span class="rk">02</span><span class="pt"><span class="tag">chat.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Work</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw"><span class="rk">03</span><span class="pt"><span class="lbl">from</span><span class="tag app"><span class="bi">Sl</span>Slack</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ff</span>Firefox</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw"><span class="rk">04</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n"></span><span class="port"></span></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n"></span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Work</span><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">2 rules</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ff</span><div class="di"><span class="dn">Firefox</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule</span></div></div></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="3c" data-screen-label="3c Config didn't load">
+            <div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a><span>~/.finicky.ts didn't load. Its section collapses to one error row; your rules still run, then Everything else. Failed &gt; 0 turns its number danger.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip bad"><span class="dot"></span>~/.finicky.ts &middot; didn't load</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="wdot"></span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">212</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st bad"><i></i>routing &middot; config didn't load</span></div></nav>
+              <div class="pane">
+              <div class="hero bad"><span class="orb bad"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><path d="M12 17h.01"/></svg></span><div class="ht"><b>~/.finicky.ts didn't load.</b><span>Your rules still run. Everything else goes to Google Chrome &middot; Personal until it loads.</span></div><span class="btn">Show the error</span></div>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">212</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">131</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn">164</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn bad">2</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations</span><span class="note">Not used: Firefox</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="sh"><span class="shl">~/.finicky.ts &middot; runs first</span><span class="note"></span></div>
+              <div class="rw err"><span class="rk">!</span><span class="pt eep"><b>~/.finicky.ts didn't load: links skip it</b><small>SyntaxError: Unexpected token '}' &middot; line 42</small></span></div>
+              <div class="sh"><span class="shl">Your rules &middot; run after</span><span class="note">3 rules</span></div>
+              <div class="rw"><span class="rk">01</span><span class="pt"><span class="tag">localhost:*</span><span class="more">+2</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ar</span>Arc</span><span class="n">66</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">02</span><span class="pt"><span class="tag">billing.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">12</span><span class="port"></span></div>
+              <div class="rw"><span class="rk">03</span><span class="pt"><span class="tag">status.example.com/*</span></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Sf</span>Safari</span><span class="n">3</span><span class="port"></span></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">131</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">1 rule &middot; 143 links today</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Ar</span><div class="di"><span class="dn">Arc</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 66 links today</span></div></div>
+              <div class="dc"><span class="port"></span><span class="big">Sf</span><div class="di"><span class="dn">Safari</span><div class="pills"><span class="pill mute">default profile</span></div><span class="dm">1 rule &middot; 3 links today</span></div></div></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="3d" data-screen-label="3d Nothing set up yet">
+            <div class="dv-olabel"><a class="dv-oid" href="#3d">3d</a><span>No rules and no rules.json yet. Safari takes everything until the user chooses, the only card is ringed, and the left column becomes the first-rule prompt. The hero says PwrRoute is catching links, not routing them.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>no rules.json yet</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">23</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>no rules.json yet</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>PwrRoute is catching links.</b><span>No rules yet, so every link opens in Safari.</span></div></div>
+              <section class="setup"><div class="blk-hd"><span class="cap">Finish setting up</span><span class="prog"><i class="on"></i><i></i><span class="note">1 of 2 done</span></span></div>
+              <div class="steps">
+              <div class="step cur side"><span class="sn">1</span><div class="sb"><b>Choose where everything else goes</b><p>Links no rule claims open here. Until you choose, that's Safari.</p></div><div class="inp" style="width: 220px;"><span class="ph">Choose a browser</span><span class="caret">&#9662;</span></div></div>
+              <div class="step done side"><span class="sn">&#10003;</span><div class="sb"><b>Make PwrRoute the default browser</b><p>PwrRoute is the default browser.</p></div></div></div></section>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">23</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">23</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn zero">0</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations</span><span class="note">Not used: Google Chrome, Firefox, Arc</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="emp"><b>Every link opens in Safari.</b><p>Rules send matching links somewhere else: work docs to a work profile, local servers to a dev browser. First match wins.</p><div class="row-actions"><span class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add your first rule</span></div></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>Safari until you choose</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Sf</span>Safari</span><span class="n">23</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring tall"><span class="ribbon">Everything else</span><span class="port"></span><span class="big">Sf</span><div class="di"><span class="dn">Safari</span><div class="pills"><span class="pill mute">default profile<span class="inf">&infin;</span></span></div><span class="dm">Everything opens in Safari</span><span class="dm">23 links today</span></div></div></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="3e" data-screen-label="3e Default unknown">
+            <div class="dv-olabel"><a class="dv-oid" href="#3e">3e</a><span>PwrRoute can't read which browser is the default. The hero has no detail line and one button; the chip and rail foot use the suspended grey.</span></div>
+            <div class="dv-card stage" style="width: 844px;">
+              <span class="slab">Hero</span>
+              <div class="hero off"><span class="orb off"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>PwrRoute can't tell which browser is the default.</b></div><span class="btn primary">Open Settings &rsaquo; Browsers</span></div>
+              <span class="slab">Strip chip and rail foot</span><div class="chiprow"><span class="strip-chip off"><span class="dot"></span>default unknown</span><span class="rail-foot"><span class="st off"><i></i>can't tell the default browser</span></span></div></div>
+          </div>
+
+          <div class="dv-opt" id="3f" data-screen-label="3f Default only, config not in charge">
+            <div class="dv-olabel"><a class="dv-oid" href="#3f">3f</a><span>The map alone, at 1000px: a rules.json default and no rules, with ~/.finicky.ts found but not in use. The empty column adds Import from ~/.finicky.ts&hellip; beside Add your first rule.</span></div>
+            <div class="dv-card stage" style="width: 796px;">
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations</span><span class="note">Not used: Safari, Firefox, Arc</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="emp"><b>Every link opens in Google Chrome &middot; Personal.</b><p>Rules send matching links somewhere else: work docs to a work profile, local servers to a dev browser. First match wins.</p><div class="row-actions"><span class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add your first rule</span><span class="btn">Import from ~/.finicky.ts&hellip;</span></div></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>PwrRoute's default</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ch</span>Personal</span><span class="n">23</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring tall"><span class="ribbon">Everything else &middot; PwrRoute</span><span class="port"></span><span class="big">Ch</span><div class="di"><span class="dn">Google Chrome</span><div class="pills"><span class="pill">Personal<span class="inf">&infin;</span></span></div><span class="dm">Everything opens in Google Chrome &middot; Personal</span><span class="dm">23 links today</span></div></div></div></div></section></div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Hero copy, highest priority first.</b> Config didn't load: &ldquo;~/.finicky.ts didn't load.&rdquo; / &ldquo;Your rules still run. Everything else goes to {fallback} until it loads.&rdquo; / <b>Show the error</b> &rarr; Rules. Paused: &ldquo;Routing is paused.&rdquo; / &ldquo;Every link opens in {pause target} until you resume. Rewrites still run.&rdquo; / <b>Resume routing</b>. Not the default: &ldquo;Links aren't reaching PwrRoute yet.&rdquo; / &ldquo;{OS default} is your default browser, so links open there and skip your rules.&rdquo; / <b>Make PwrRoute the default browser</b>, or the setup card's row when it shows. Unknown default: &ldquo;PwrRoute can't tell which browser is the default.&rdquo; / no detail / <b>Open Settings &rsaquo; Browsers</b>. Routing: &ldquo;Links are routing.&rdquo; / &ldquo;PwrRoute is your default browser &middot; {source}&rdquo; / <b>Test a link&hellip;</b>. {source} is &ldquo;rules.json &middot; 6 rules&rdquo;, &ldquo;~/.finicky.ts + 3 rules&rdquo;, or &ldquo;3 rules + ~/.finicky.ts&rdquo; under the override. Routing with no rules and no rules.json yet (3d): &ldquo;PwrRoute is catching links.&rdquo; / &ldquo;No rules yet, so every link opens in {fallback}.&rdquo;, with no button while the setup card shows.<br><b>Tones:</b> the hero is warning for paused, neutral for not default and unknown, danger for a load error, accent for routing. The strip state chip and the rail foot are warning for paused and for not default (the &ldquo;default browser&rdquo; chip turns to a warning when another app takes the default, as in Updates and Default Browser), suspended grey for unknown, danger for a load error. They use the same words as <code>TrayModel::chip()</code> (paused / default browser / not default), so the tray and the window agree; unknown adds &ldquo;default unknown&rdquo; and the foot &ldquo;can't tell the default browser&rdquo;. While links aren't reaching PwrRoute (3b) the map shows structure only: no row counts, no &ldquo;today&rdquo; header and no &ldquo;links today&rdquo; on cards. At 1000px the cards say &ldquo;links today&rdquo; in full; it fits in the 180px text column. The setup card reuses the first-run step card. Its header has a progress bar (22&times;4 segments, gap 4) and &ldquo;N of M done&rdquo;. Its rows put the control on the right, and the select opens as a popover with <code>widgets::menu_card</code>. Paused dims the map body to 40% and swaps the column caption for &ldquo;When routing resumes&rdquo; in warning text; hover still works. When only one browser is in use, its card grows to fill the column: &ldquo;Everything opens in {name}&rdquo; with the count on its own line. With a <code>rules.json</code> default but no rules, and a config found that isn't in charge (3f), the empty column adds the secondary <b>Import from ~/.finicky.ts&hellip;</b> (<code>importer_view::open</code>).</p>
+        <p class="dv-next">Try next: "lost the default while open: the hero swaps with a 150ms cross-fade" &middot; "Windows wording for the not-default hero"</p>
+      </section>
+
+      <section class="dv-turn" id="t4">
+        <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">First run, revised</span></div>
+        <p class="dv-sub">The wizard hands off only when four things hold. The router's source is decided and applied. <code>rules.json</code> has an Everything else browser. Finicky users have decided who owns Everything else. PwrRoute is the default browser, or the user chose Later. When a config is found it comes first (three steps); otherwise the wizard goes straight to Everything else (two steps). The OS step stays last, so it stays safe. The body scrolls and both selects open as popovers.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="4a" data-screen-label="4a Config found">
+            <div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a><span>A config is found and 3 of its 5 handlers import exactly; the other 2 need JavaScript. Step 1 offers three answers: Import, Keep, or Don't use it, which replaces Start empty and actually stops the router from using the file.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>not routing yet</span></div>
+              <div class="fr"><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 21px;">Three steps, then links start routing</h1><p class="help">Links keep opening the way they do now until the last step. Close this any time; PwrRoute's Overview shows what's left.</p></div>
+              <div class="steps">
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Bring your Finicky config</b><p>Found <span class="tag">~/.finicky.ts</span>: 2 rewrites and 5 handlers. Keep it running exactly as Finicky did, or copy the 3 rules PwrRoute can show as visual rules. The file is never changed.</p><div class="row-actions"><span class="btn primary">Import 3 rules</span><span class="btn">Keep using ~/.finicky.ts</span><span class="btn quiet">Don't use it</span></div></div></div>
+              <div class="step todo"><span class="sn">2</span><div class="sb"><b>Where should everything else go?</b><p>Links no rule claims open here. It also takes links whose browser can't open, and every link while routing is paused.</p></div></div>
+              <div class="step todo"><span class="sn">3</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Safari as they do now.</p><div class="row-actions"><span class="btn">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4b" data-screen-label="4b Config step variants">
+            <div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a><span>The other states of step 1: nothing importable, the importer open (it no longer counts as done), a finished import with the real count, and after Don't use it.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <span class="slab">Nothing importable</span>
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Bring your Finicky config</b><p>Found <span class="tag">~/.finicky.ts</span>: 2 rewrites and 5 handlers. They use JavaScript that visual rules can't hold, so PwrRoute runs the file as Finicky did. The file is never changed.</p><div class="row-actions"><span class="btn primary">Keep using ~/.finicky.ts</span><span class="btn quiet">Don't use it</span></div></div></div>
+              <span class="slab">While the importer is open</span>
+              <div class="step cur"><span class="sn"><i class="spin"></i></span><div class="sb"><b>Bring your Finicky config</b><p>Importing&hellip; Finish or cancel in the importer window. Cancel brings this step back unchanged.</p></div></div>
+              <span class="slab">After a finished import</span>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>Imported 3 rules. ~/.finicky.ts is unchanged.</p></div></div>
+              <span class="slab">After Don't use it</span>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>PwrRoute won't read ~/.finicky.ts. Turn it back on in Settings &rsaquo; Configuration.</p></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4c" data-screen-label="4c Config broken">
+            <div class="dv-olabel"><a class="dv-oid" href="#4c">4c</a><span>The config doesn't load. The step says so and shows the first line of the error, instead of &ldquo;0 rewrites and 0 handlers&rdquo;.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step cur warnc"><span class="sn">1</span><div class="sb"><b>Bring your Finicky config</b><p>Found <span class="tag">~/.finicky.ts</span>, but it doesn't load. Keep it and PwrRoute uses it once it loads; until then links go to the browser you pick in the next step.</p><span class="errl">SyntaxError: Unexpected token '}' &middot; ~/.finicky.ts line 42</span><div class="row-actions"><span class="btn">Keep using ~/.finicky.ts</span><span class="btn quiet">Don't use it</span></div></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4d" data-screen-label="4d No config two steps">
+            <div class="dv-olabel"><a class="dv-oid" href="#4d">4d</a><span>No config, so two steps. Everything else starts &#10003; with the current default browser preselected and written, and the OS step is current.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>not routing yet</span></div>
+              <div class="fr"><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 21px;">Two steps, then links start routing</h1><p class="help">Links keep opening the way they do now until the last step. Close this any time; PwrRoute's Overview shows what's left.</p></div>
+              <div class="steps">
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Where should everything else go?</b><p>Links no rule claims open here. It also takes links whose browser can't open, and every link while routing is paused.</p><div class="selrow"><div class="inp"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp pfl">Personal<span class="caret">&#9662;</span></div></div><span class="det">Picked from your current default browser. Change it any time.</span></div></div>
+              <div class="step cur"><span class="sn">2</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Google Chrome as they do now.</p><div class="row-actions"><span class="btn primary">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4e" data-screen-label="4e Everything else for Finicky users">
+            <div class="dv-olabel"><a class="dv-oid" href="#4e">4e</a><span>Config kept. Step 2 asks who owns everything else and starts answered with the config's own default, written at once, so it shows &#10003; and step 3 is current. The select stays the pause and error target.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>not routing yet</span></div>
+              <div class="fr"><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 21px;">Three steps, then links start routing</h1><p class="help">Links keep opening the way they do now until the last step. Close this any time; PwrRoute's Overview shows what's left.</p></div>
+              <div class="steps">
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>~/.finicky.ts stays in charge. Edit it as you do now; PwrRoute reloads it.</p></div></div>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Where should everything else go?</b><div class="seg"><span class="on">~/.finicky.ts's default &middot; Safari</span><span>PwrRoute's default</span></div><p>~/.finicky.ts's defaultBrowser handles links its handlers don't claim. The browser below still catches config errors, browsers that can't open, and every link while paused.</p><div class="selrow"><div class="inp"><span class="bi">Sf</span>Safari<span class="caret">&#9662;</span></div></div><span class="det">Picked from ~/.finicky.ts's defaultBrowser. Change it any time.</span></div></div>
+              <div class="step cur"><span class="sn">3</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Safari as they do now.</p><div class="row-actions"><span class="btn primary">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4f" data-screen-label="4f PwrRoute's default">
+            <div class="dv-olabel"><a class="dv-oid" href="#4f">4f</a><span>Choosing PwrRoute's default: the same select now takes everything else. The step stays &#10003;; the choice is written as it changes.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Where should everything else go?</b><div class="seg"><span>~/.finicky.ts's default &middot; Safari</span><span class="on">PwrRoute's default</span></div><p>Your rules run first, then ~/.finicky.ts's handlers. Links nothing claims go here instead of Safari.</p><div class="selrow"><div class="inp"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp pfl">Personal<span class="caret">&#9662;</span></div></div></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4g" data-screen-label="4g Done">
+            <div class="dv-olabel"><a class="dv-oid" href="#4g">4g</a><span>Done. The heading becomes the outcome, Where links go says it in three lines, and finished steps fold to one line. A line with nothing in it yet gets a neutral dot, not a tick. Open PwrRoute lands on Overview.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>routing</span></div>
+              <div class="fr">
+              <div class="frhero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 24px;">Links are routing.</h1><p class="help">Every link now goes where ~/.finicky.ts and your rules say. The menu bar icon shows recent links and can pause routing.</p></div></div>
+              <section class="card wl">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Where links go</p></div></div>
+              <div class="wl-row"><span class="tick">&#10003;</span><span><b>~/.finicky.ts</b> handles links its 5 handlers claim</span></div>
+              <div class="wl-row"><span class="tick mute"></span><span><b>Your rules</b> run after it &middot; none yet</span></div>
+              <div class="wl-row"><span class="tick">&#10003;</span><span><b>Everything else</b> &rarr; ~/.finicky.ts's default &middot; <span class="bi">Sf</span> Safari</span></div></section>
+              <div class="steps">
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>~/.finicky.ts stays in charge.</p></div></div>
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Everything else</b><p>~/.finicky.ts's default &middot; Safari</p></div></div>
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Default browser</b><p>PwrRoute is the default browser.</p></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn primary">Open PwrRoute</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4h" data-screen-label="4h No browsers found">
+            <div class="dv-olabel"><a class="dv-oid" href="#4h">4h</a><span>The no-config path when the scan finds nothing. The step names the problem and offers one way out, Look again; Later stays in the footer.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Where should everything else go?</b><p>No browsers found on this Mac. PwrRoute needs at least one to send links to.</p><div class="row-actions"><span class="btn primary">Look again</span></div></div></div>
+              <div class="step todo"><span class="sn">2</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening the way they do now.</p><div class="row-actions"><span class="btn">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div>
+          </div>
+
+          <div class="dv-opt" id="4i" data-screen-label="4i Default request failed">
+            <div class="dv-olabel"><a class="dv-oid" href="#4i">4i</a><span>The OS step when macOS refuses the request with an error. A warning line names it and points to Settings; the button stays so the user can retry.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step cur"><span class="sn">2</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Google Chrome as they do now.</p><span class="wnote"><span class="wi">!</span>macOS didn't take the request: Launch Services returned error -54. Try Settings &rsaquo; Browsers.</span><div class="row-actions"><span class="btn primary">Set as default browser</span></div></div></div></div></div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Measurements:</b> window 680 wide, at least 600 high. The body scrolls (<code>overflow_y_scroll</code>) and the footer stays in the flow at the end. Body padding is 26/28/22 with gap 16. Eyebrow &ldquo;Set up&rdquo;. The heading is 21/700, or 24/700 once routing. Steps: gap 10, padding 14/16, radius 10, a 26px number, title 13/600, body 11.5/1.55, and 8 between lines. Selects are 300 (browser) and 180 (profile) with 8 between. The segmented control is the shared <code>.seg</code> (11/550, radius 7), and its detail line is 11.5 muted under it. The error line is 10.5 mono on <code>--danger-soft</code>. Done steps fold to one line: padding 10/14, a 20px tick, title 12/600, result 11 muted. Where links go is a card with 10/16 rows, an 18px tick and 12/500 text. A row with nothing in it yet (&ldquo;none yet&rdquo;) gets a neutral 18px dot instead of a tick. The segmented control's two answers are named exactly as Overview and Rules name the owners: <b>{config}'s default &middot; {browser}</b> and <b>PwrRoute's default</b>. A fixed defaultBrowser names its browser; a function or null default shows the first part alone.<br><b>Copy rules.</b> Pluralise every count: 1 rewrite, 2 rewrites, Import 1 rule. A failed OS request adds a warning line under the step body (4i): &ldquo;macOS didn't take the request: {error}. Try Settings &rsaquo; Browsers.&rdquo; The step stays current and its button stays. A refused consent prompt is not an error and adds nothing. Windows replaces &ldquo;Waiting for Windows&hellip;&rdquo; with &ldquo;Finish in Windows Settings: select Set default on PwrRoute's page.&rdquo; With no browsers found (4h), the Everything else step's body becomes &ldquo;No browsers found on this Mac. PwrRoute needs at least one to send links to.&rdquo; and its only control is <b>Look again</b>, which rescans. Later stays. The Everything else select is preselected from, in order, the config's fixed defaultBrowser, the current OS default (unless it is PwrRoute), then the first scanned browser. The choice is written at once, so the step starts &#10003; and the next step is current (4d, 4e).<br><b>Motion.</b> The strip chip's dot fades from grey to green over 200ms. When the last step completes, finished steps fold to one line over 160ms. The heading cross-fades to &ldquo;Links are routing.&rdquo; over 150ms. The orb arrives with a single 600ms ping. Each &#10003; in Where links go scales 0.6 &rarr; 1 and fades in over 180ms, staggered 60ms, once.</p>
+        <p class="dv-next">Try next: "Windows and Linux help-line wording" &middot; "done panel for the no-config path: &lsquo;Your rules: none yet / Everything else &rarr; Google Chrome &middot; Personal&rsquo;"</p>
+      </section>
+
+      <section class="dv-turn" id="t5">
+        <div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">Rules and Settings &rsaquo; Everything else override</span></div>
+        <p class="dv-sub">One switch with one name: <b>Let PwrRoute's default take everything else</b>. It lives on the Rules banner, where the config is explained, and as the Everything else row in Settings &rsaquo; Configuration. Overview's callout and first run's step 2 write the same <code>precedence</code> field. The banner is accent, not warning, because nothing is wrong. Stop using now calls <code>set_source(visual_only)</code>, and Open in editor calls <code>cx.open_with_system(path)</code>.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="5a" data-screen-label="5a Banner off">
+            <div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a><span>Off: the default, and what every upgrade sees. The config's defaultBrowser is tagged as Everything else.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip acc"><span class="dot"></span>~/.finicky.ts &middot; runs first</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">11</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>reloaded 09:38</span></div></nav>
+              <div class="pane">
+              <div class="banner"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13 4-2 16"/></svg><div class="bt"><b>~/.finicky.ts is in charge</b><span>Its rewrites and handlers run first and its defaultBrowser takes everything else. Your visual rules run after it. Edited 4 min ago.</span><div class="swrow"><span class="sw"></span><span class="swl">Let PwrRoute's default take everything else</span></div></div><div class="row-actions"><span class="btn sm">Open in editor</span><span class="btn sm">Import to visual rules&hellip;</span><span class="btn sm quiet">Stop using</span></div></div>
+              <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">From ~/.finicky.ts &middot; read-only</p><h2 class="card-title">Handlers</h2></div><span class="chip">2 need JS</span></div>
+              <div class="rules">
+              <div class="rr ro nw"><span class="idx">01</span><div class="m"><span class="tag fn">fn</span><span class="srcline">function isWorkplace(url) { return url.host.endsWith("workplace.example.com") }</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">02</span><div class="m"><span class="tag">chat.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">03</span><div class="m"><span class="tag">*.docs.example.com/*</span><span class="tag">*.wiki.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">04</span><div class="m"><span class="tag">meet.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="tag fn">fn</span><span class="pf">browser function</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">05</span><div class="m"><span class="tag">beta.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Or</span>Orion<span class="pf">not installed</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx"></span><div class="m"><span class="lbl" style="font-weight: 600; color: var(--text-primary);">defaultBrowser</span><span class="tag fn">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Sf</span>Safari</div><span class="more"></span></div></div></section>
+              <section class="card"><div class="card-hd" style="border-bottom: none;"><div class="card-hd-main"><p class="card-eyebrow">Run after the config</p><h2 class="card-title">Visual rules</h2><p class="card-desc">1 rewrite, 3 rules. ~/.finicky.ts's defaultBrowser, Safari, takes everything else.</p></div><span class="btn sm quiet">Expand</span></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="5b" data-screen-label="5b Banner on">
+            <div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a><span>On. Your rules move above the config's handlers. defaultBrowser is struck through and says why, and the Everything else row appears under the handlers.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip acc"><span class="dot"></span>~/.finicky.ts &middot; after your rules</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">11</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>reloaded 09:38</span></div></nav>
+              <div class="pane">
+              <div class="banner"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13 4-2 16"/></svg><div class="bt"><b>~/.finicky.ts is in charge</b><span>Your rules run first, then its handlers. PwrRoute's default, Google Chrome &middot; Personal, takes everything else. Edited 4 min ago.</span><div class="swrow"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div></div><div class="row-actions"><span class="btn sm">Open in editor</span><span class="btn sm">Import to visual rules&hellip;</span><span class="btn sm quiet">Stop using</span></div></div>
+              <section class="card"><div class="card-hd" style="border-bottom: none;"><div class="card-hd-main"><p class="card-eyebrow">Run before the config's handlers</p><h2 class="card-title">Visual rules</h2><p class="card-desc">1 rewrite, 3 rules. They run before the config's handlers.</p></div><span class="btn sm quiet">Expand</span></div></section>
+              <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">From ~/.finicky.ts &middot; read-only &middot; runs after your rules</p><h2 class="card-title">Handlers</h2></div><span class="chip">2 need JS</span></div>
+              <div class="rules">
+              <div class="rr ro nw"><span class="idx">01</span><div class="m"><span class="tag fn">fn</span><span class="srcline">function isWorkplace(url) { return url.host.endsWith("workplace.example.com") }</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">02</span><div class="m"><span class="tag">chat.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">03</span><div class="m"><span class="tag">*.docs.example.com/*</span><span class="tag">*.wiki.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">04</span><div class="m"><span class="tag">meet.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="tag fn">fn</span><span class="pf">browser function</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">05</span><div class="m"><span class="tag">beta.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Or</span>Orion<span class="pf">not installed</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro ovr"><span class="idx"></span><div class="m"><span class="lbl strike">defaultBrowser</span><span class="ovn">not used: PwrRoute's default takes everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="strike"><span class="bi">Sf</span>Safari</span></div><span class="more"></span></div></div></section>
+              <section class="card">
+              <div class="rules">
+              <div class="rr ro ee"><span class="idx">&infin;</span><div class="m"><span class="lbl" style="color: var(--text-primary); font-weight: 600;">Everything else</span><span class="tag fn">PwrRoute's default</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="more">&#8943;</span></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="5c" data-screen-label="5c Toggle warnings">
+            <div class="dv-olabel"><a class="dv-oid" href="#5c">5c</a><span>Warnings under the switch, shown only when they apply.</span></div>
+            <div class="dv-card stage" style="width: 560px;">
+              <span class="slab">defaultBrowser is a function</span>
+              <div class="banner"><div class="bt"><div class="swrow" style="margin-top: 0;"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div><span class="warnl"><span class="wi">!</span>Its defaultBrowser function will no longer run.</span></div></div>
+              <span class="slab">defaultBrowser is null</span>
+              <div class="banner"><div class="bt"><div class="swrow" style="margin-top: 0;"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div><span class="warnl"><span class="wi">!</span>Unmatched links will now open instead of being dropped.</span></div></div>
+              <span class="slab">A config handler matches &ldquo;*&rdquo;</span>
+              <div class="banner"><div class="bt"><div class="swrow" style="margin-top: 0;"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div><span class="warnl"><span class="wi">!</span>Handler 5 matches every link, so PwrRoute's default never applies.</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="5d" data-screen-label="5d Settings Everything else row">
+            <div class="dv-olabel"><a class="dv-oid" href="#5d">5d</a><span>Settings &rsaquo; Configuration while a config is in charge: the same segmented control and detail lines as first run. The rail matches the shipped Settings, Privacy included.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span></div>
+              <div class="body">
+              <nav class="rail snav">
+              <div class="rail-item">General</div>
+              <div class="rail-item">Browsers</div>
+              <div class="rail-item on">Configuration</div>
+              <div class="rail-item">Privacy</div>
+              <div class="rail-item">Local agents<span class="cnt">2</span></div>
+              <div class="rail-item">Updates</div>
+              <div class="rail-item">Diagnostics</div>
+              <div class="rail-item">About</div></nav>
+              <div class="spane"><div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Rules source</div><h1 class="ttl">Configuration</h1><p class="help">Where the router reads its rules from. Visual rules are the default. A Finicky config, when selected, runs its rewrites first.</p></div></div>
+              <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Where rules come from</p><h2 class="card-title">Source</h2></div><span class="chip acc">Finicky config</span></div>
+              <div class="field"><div class="field-l"><span>Active source</span><span class="field-sub">Switching takes effect on the next link. Nothing is deleted either way.</span></div><div class="field-c"><div class="slots"><div class="slot"><div class="sv">Visual rules<span class="radio"></span></div><span class="sp">rules.json &middot; 1 rewrite &middot; 3 rules</span></div><div class="slot sel"><div class="sv">Finicky config<span class="radio on"></span></div><span class="sp">~/.finicky.ts &middot; 5 handlers</span></div></div></div></div>
+              <div class="field"><div class="field-l"><span>Everything else</span><span class="field-sub">Links no handler or rule claims.</span></div><div class="field-c"><div class="seg"><span>~/.finicky.ts's default &middot; Safari</span><span class="on">PwrRoute's default</span></div><span class="field-help">Your rules run first, then ~/.finicky.ts's handlers. Links nothing claims go here instead of Safari.</span><div class="selrow"><div class="inp" style="width: 260px;"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp" style="width: 150px;">Personal<span class="caret">&#9662;</span></div></div></div></div></section></div></div></div>
+          </div>
+
+        </div>
+        <p class="dv-note">When the switch is on, Rules draws the Visual rules card <b>above</b> the config's Handlers card, so the page reads in evaluation order as Overview does. Only the eyebrow and description change otherwise. The Everything else row appears only while the switch is on; while it is off, the config's own defaultBrowser row is that row and carries an Everything else tag. Warnings come from <code>describe()</code>. Each is 10.5/500 in warning text under the switch, appears only when it applies, and stacks when several do. The switch row is 18 high with an 8px gap and 11.5/600 label, 6 below the banner text. The struck row uses subtle text with a strikethrough on the key and the browser, followed by the reason in 10.5 muted; the browser is named once, in the struck destination. Settings shows the Everything else row only while a config is in charge; that is a rule for the code, not copy. The fixture config is the same one throughout the canvas: 2 rewrites and 5 handlers, 2 of which need JavaScript (handler 1 matches with the named function <code>isWorkplace</code>; handler 4 picks its browser with a function).<br><b>Motion:</b> the switch thumb slides over 120ms. The two cards swap order with no animation, and the banner sentence cross-fades over 150ms.</p>
+        <p class="dv-next">Try next: "Test a link's last step: Everything else &middot; PwrRoute's default" &middot; "Activity's rule column: rule 3 / cfg h 2 / default / config default"</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

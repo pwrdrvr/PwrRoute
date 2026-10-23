@@ -43,6 +43,18 @@ the project and re-export here.
   area, and the pause line naming the browser). Written to the project,
   then read back and compared by size with the file here. The ten earlier
   canvases, `pwrroute.css` and `support.js` are unchanged.
+- Updated **2026-10-23**: one canvas added for the Overview home and setup
+  (Overview with the route map, its hover states and the live pulse when a
+  link routes, a Finicky config in charge with the Everything else callout
+  and the override on with Undo in place, the hero states with the setup
+  card including an unknown default and a default with no rules, the
+  revised first run with no browsers found and a failed default request,
+  the Rules banner switch with the overridden defaultBrowser row and its
+  warnings, and the Settings › Configuration Everything else row). Revised
+  the same day after review. Written to the project,
+  then downloaded from its preview and compared byte for byte with the
+  file here. The eleven earlier canvases, `pwrroute.css` and `support.js`
+  are unchanged.
 
 ## Files
 
@@ -59,7 +71,8 @@ the project and re-export here.
 | `PwrRoute Finicky Importer.dc.html` | The importer end to end: discovery and entry points, Review with verdicts and suggestions, Place, Choose source, result with Undo import, a config that does not load |
 | `PwrRoute Activity Privacy and Route Tests.dc.html` | Settings › Privacy (retention count and hours, the journal switch Off / Hosts only / Full URLs with its disclosure sentence, file, Reveal, Clear now, Export, the per-rule Keep explainer); Activity with Unrouted and Private filters, the row menu, the Add a rule sheet with pattern suggestions and collisions, and the needs-a-JS-handler state; per-rule example chips, the Run tests strip with a failure row, Add example, Save as test; the MCP storyboard (activity, rules_test, rules_apply refused) |
 | `PwrRoute Popovers and Overflow.dc.html` | Select lists and menus: width follows the field, hints and long names end in an ellipsis, a browser's profiles named up to two and counted past that, lists that scroll past 8½ rows, the row menu's Save hint; the tray dropdown sized to its card, on a short display, and its pause line naming the browser |
-| `pwrroute.css` | Shared tokens and chrome for all eleven canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute Overview and Setup.dc.html` | Overview, the window's new home: hero sentence and state, Today tiles, the route map (rules in evaluation order on the left, destination cards with profile pills and share of today's links on the right, one curve on hover, the live pulse when a link routes); a Finicky config in charge with the Everything else callout and the override on with Undo in place; paused, not the default browser with the setup card, config didn't load, nothing set up yet, default unknown, and a default with no rules while a config is found; the revised first run (config found and its variants, broken config, no config in two steps, the Everything else segmented control, done, no browsers found, a failed default request); the Rules banner switch with the overridden defaultBrowser row and its warnings; Settings › Configuration's Everything else row |
+| `pwrroute.css` | Shared tokens and chrome for all twelve canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.
