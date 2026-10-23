@@ -27,7 +27,24 @@ the family's panes in the same controls. General is a placeholder.
   read-only summary of `Engine::review_import` whose Review import… opens
   the importer (`importer_view::open`),
   Short links lists the engine's built-in hosts, and Reveal, Open data
-  folder and Reload now act. `updates_host`: `updater::installation` and
+  folder and Reload now act. While a config is in charge (never with
+  visual rules alone) the Source card adds Everything else (design:
+  Overview and Setup 5d): a segmented control, "{config}'s default ·
+  {browser}" | "PwrRoute's default", that is `rules.json`'s `precedence`,
+  the browser and profile selects that are its `defaultBrowser` /
+  `defaultProfile`, and, only while PwrRoute's default is chosen, the
+  Rules banner's warnings from the config's `describe()` (a function or
+  `null` default, a handler that matches every link: `catch_all`).
+  `configuration_host::edit_rules` writes them through the main window's
+  `RulesStore` when it is open (sync, refuse as the store would, edit,
+  save now), else through a store over the file; never around a store.
+  A request runs inside the Settings window's own update, so the read
+  back after a change (`settle`) is deferred; a change that was not
+  saved comes back as the `.errl` line "Not saved: {reason}." and the
+  control shows what the file still says.
+  `follow` reads the pane again when the window comes to the front and
+  the router's source or either file's time changed. `updates_host`:
+  `updater::installation` and
   `updater::state`; a dev build reads "not updatable", no check reads
   "never checked", and Check now is the menu's check (`updater::install`
   redraws the pane when it finishes). `system_host`: Diagnostics (version,

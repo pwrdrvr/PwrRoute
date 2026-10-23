@@ -296,6 +296,7 @@ pub struct SettingsWindow {
     copied: Option<usize>,
     pub(crate) agents: local_agents::State,
     pub(crate) privacy: privacy::State,
+    pub(crate) configuration: configuration::State,
     scroll: ScrollHandle,
     on_request: RequestHandler,
 }
@@ -308,6 +309,7 @@ impl SettingsWindow {
     ) -> Self {
         let agents = local_agents::State::new(cx);
         let privacy = privacy::State::new(&model.privacy, cx);
+        let configuration = configuration::State::new(cx);
         Self {
             focus: cx.focus_handle(),
             // General is not drawn yet; Browsers is the first pane that is.
@@ -317,6 +319,7 @@ impl SettingsWindow {
             copied: None,
             agents,
             privacy,
+            configuration,
             scroll: ScrollHandle::new(),
             on_request,
         }
@@ -329,6 +332,7 @@ impl SettingsWindow {
             self.copied = None;
             self.agents.close_menu();
             self.privacy.close_sheet();
+            self.configuration.close_menu();
             self.scroll.set_offset(point(px(0.0), px(0.0)));
             cx.notify();
         }

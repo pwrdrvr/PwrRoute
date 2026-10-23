@@ -374,11 +374,12 @@ impl RulesStore {
 
     /// Sets `defaultBrowser` and `defaultProfile` ("" for the browser's
     /// own default), as an edit written on the next save: the Overview's
-    /// setup card. The same values change nothing.
+    /// setup card and Settings' Everything else. The same values change
+    /// nothing.
     pub fn set_default_browser(&mut self, browser: &str, profile: &str) {
         if self.base.default_browser != browser || self.base.default_profile != profile {
-            self.base.default_browser = browser.to_owned();
-            self.base.default_profile = profile.to_owned();
+            browser.clone_into(&mut self.base.default_browser);
+            profile.clone_into(&mut self.base.default_profile);
             self.touch();
         }
     }

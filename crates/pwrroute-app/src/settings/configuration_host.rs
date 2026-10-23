@@ -4,6 +4,13 @@
 //! config (discovered even while visual rules are in charge), and the files
 //! on disk. Review import… opens the importer (`importer_view`); the source
 //! tiles only show the choice, which the importer's Choose source makes.
+//!
+//! While a config is in charge, Everything else says whose default takes
+//! the links nothing claims: `rules.json`'s `precedence`, with the config's
+//! default as `describe()` gives it and what PwrRoute's default would
+//! change. Its answers are written through the main window's `RulesStore`
+//! when one is open (so the Rules screen follows at once), else through a
+//! store over the file; never around a store.
 
 use std::{
     fs,
@@ -12,19 +19,24 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use gpui_kit::{App, SharedString};
+use gpui_kit::{App, AppContext as _, Entity, Global, SharedString, Window, WindowHandle};
 use pwrroute_engine::{
-    DEFAULT_SHORTENERS, DefaultHost, Description, Engine, Limits, Review, RulesFile, Verdict,
-    discovery,
+    AppType, BrowserSpec, DEFAULT_SHORTENERS, DefaultHost, Description, Engine, HandlerRule,
+    Limits, MatcherSpec, Precedence, Review, RulesFile, Verdict, discovery,
 };
 
 use super::model::{
-    Configuration, FinickyConfig, ImportCandidate, ImportPlan, Piece, RulesSource, SettingsRequest,
+    Configuration, DefaultChoice, DefaultOwner, EverythingElse, FinickyConfig, ImportCandidate,
+    ImportPlan, Piece, RulesSource, SettingsRequest,
 };
+use crate::app::PwrRoute;
+use crate::browser_scan::{self, DetectedApp};
 use crate::config_view::{self, display_path};
 use crate::router::{self, RoutingSource};
 use crate::rules_model::{Destination, Matcher};
-use crate::{settings, settings_store};
+use crate::rules_store::{RulesStore, Status};
+use crate::widgets::badge_for;
+use crate::{default_browser, settings, settings_store};
 
 /// How long after Reload now the window reads the router's status again:
 /// the reload runs on the dispatch thread.
@@ -43,6 +55,9 @@ pub struct Facts {
     /// The config the router names, with its counts when it loads.
     pub config: Option<ConfigFacts>,
     pub home: Option<PathBuf>,
+    /// The browser scan less the apps hidden in Settings: what the
+    /// Everything else select offers.
+    pub browsers: Vec<DetectedApp>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,15 +72,32 @@ pub struct ConfigFacts {
     pub modified: Option<SystemTime>,
     /// The importer's verdict on each rule, when it loaded.
     pub import: Option<ImportPlan>,
+    /// Its `defaultBrowser`, when it loaded.
+    pub default: Option<BrowserSpec>,
+    /// The first handler (from 1) that matches every link, when one does:
+    /// [`catch_all`].
+    pub catch_all: Option<usize>,
 }
 
 /// The pane's model as things stand.
-pub fn model(cx: &App) -> Configuration {
-    let _ = cx;
-    build(&facts(), SystemTime::now())
+pub fn model(cx: &mut App) -> Configuration {
+    let facts = facts(cx);
+    remember(stamp(&facts), cx);
+    build(&facts, SystemTime::now())
 }
 
-fn facts() -> Facts {
+/// The scan less the apps hidden in Settings › Browsers.
+fn browsers(cx: &mut App) -> Vec<DetectedApp> {
+    let apps = browser_scan::apps(cx);
+    let hidden = settings_store::store(cx)
+        .map(|store| store.read(cx).settings().browsers.clone())
+        .unwrap_or_default();
+    apps.into_iter()
+        .filter(|app| !hidden.is_hidden(app.id()))
+        .collect()
+}
+
+fn facts(cx: &mut App) -> Facts {
     let source = router::routing_source();
     let environment = discovery::Environment::current();
     let rules_path = discovery::rules_path(&environment);
@@ -96,6 +128,12 @@ fn facts() -> Facts {
             counts: description
                 .as_ref()
                 .map(|description| (description.rewrites.len(), description.handlers.len())),
+            default: description
+                .as_ref()
+                .map(|description| description.default_browser.clone()),
+            catch_all: description
+                .as_ref()
+                .and_then(|description| catch_all(&description.handlers)),
             shorteners: engine
                 .filter(|_| in_charge.is_some())
                 .map(|engine| engine.short_links().domains.clone()),
@@ -111,6 +149,7 @@ fn facts() -> Facts {
         rules_modified,
         config,
         home: std::env::home_dir(),
+        browsers: browsers(cx),
     }
 }
 
@@ -126,7 +165,7 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             format!(
                 "rules.json \u{00b7} {} \u{00b7} {}",
                 plural(file.rewrites.len(), "rewrite"),
-                plural(file.rules.len(), "handler")
+                plural(file.rules.len(), "rule")
             ),
             format!("Loaded \u{00b7} {}", edited(facts.rules_modified, now)),
         ),
@@ -139,15 +178,16 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             "No rules.json yet: the Rules view writes it with the first rule.".to_owned(),
         ),
     };
+    let precedence = rules_file(facts).map_or(Precedence::Config, |file| file.precedence);
     let finicky = facts.config.as_ref().map(|config| {
         let path = display_path(&config.path, home);
         let summary = match config.counts {
-            Some((rewrites, handlers)) => format!(
-                "{path} \u{00b7} {} \u{00b7} {}",
-                plural(rewrites, "rewrite"),
-                plural(handlers, "handler")
-            ),
+            Some((_, handlers)) => format!("{path} \u{00b7} {}", plural(handlers, "handler")),
             None => format!("{path} \u{00b7} did not load"),
+        };
+        let order = match precedence {
+            Precedence::Config => "runs first and takes everything else",
+            Precedence::PwrRoute => "its rewrites run first, then your rules, then its handlers",
         };
         let found = match &facts.source.error {
             Some(error) => format!(
@@ -158,8 +198,8 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
                 "Found at {path}, but it did not load: every link goes to the fallback browser."
             ),
             None => format!(
-                "Found at {path}; runs first and owns the default browser. {}",
-                edited(config.modified, now)
+                "Found at {path}; {order}. {}",
+                sentence(&edited(config.modified, now))
             ),
         };
         FinickyConfig {
@@ -189,7 +229,196 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             |path| display_path(path, home).into(),
         ),
         rules_status: rules_status.into(),
+        everything_else: facts
+            .source
+            .config
+            .as_deref()
+            .map(|config| everything_else(facts, config)),
     }
+}
+
+/// `rules.json` as loaded, when it did.
+fn rules_file(facts: &Facts) -> Option<&RulesFile> {
+    facts.rules.as_ref().and_then(|rules| rules.as_ref().ok())
+}
+
+/// The config's `defaultBrowser`, as Everything else names it.
+enum ConfigDefault {
+    /// A fixed browser, by the name the reader knows.
+    Browser(String),
+    /// `null`: links its handlers don't claim are not opened.
+    Null,
+    /// A function, or a config that did not load: no one browser to name.
+    Unnamed,
+}
+
+pub const FUNCTION_WARNING: &str = "Its defaultBrowser function will no longer run.";
+pub const NULL_WARNING: &str = "Unmatched links will now open instead of being dropped.";
+
+/// The Everything else field while the config at `config` is in charge:
+/// `rules.json`'s `precedence` and default against the config's own.
+fn everything_else(facts: &Facts, config: &Path) -> EverythingElse {
+    let path = display_path(config, facts.home.as_deref());
+    let rules = rules_file(facts);
+    let spec = facts
+        .config
+        .as_ref()
+        .and_then(|config| config.default.as_ref());
+    let config_default = match spec {
+        Some(BrowserSpec::Browser(fixed)) if fixed.app_type == AppType::None => ConfigDefault::Null,
+        Some(BrowserSpec::Browser(fixed)) => {
+            ConfigDefault::Browser(app_name(&fixed.name, &facts.browsers))
+        }
+        Some(BrowserSpec::Function(_)) | None => ConfigDefault::Unnamed,
+    };
+    let fallback_line = "The browser below still catches config errors, browsers that can't \
+                         open, and every link while paused.";
+    let (config_label, config_detail, pwrroute_detail) = match &config_default {
+        ConfigDefault::Browser(name) => (
+            format!("{path}'s default \u{00b7} {name}"),
+            format!(
+                "{path}'s defaultBrowser handles links its handlers don't claim. {fallback_line}"
+            ),
+            format!(
+                "Your rules run first, then {path}'s handlers. Links nothing claims go here \
+                 instead of {name}."
+            ),
+        ),
+        ConfigDefault::Null => (
+            format!("{path}'s default"),
+            format!(
+                "{path}'s defaultBrowser is null, so links its handlers don't claim are not \
+                 opened. {fallback_line}"
+            ),
+            format!("Your rules run first, then {path}'s handlers. Links nothing claims go here."),
+        ),
+        ConfigDefault::Unnamed => (
+            format!("{path}'s default"),
+            format!(
+                "{path}'s defaultBrowser handles links its handlers don't claim. {fallback_line}"
+            ),
+            format!("Your rules run first, then {path}'s handlers. Links nothing claims go here."),
+        ),
+    };
+    let default_browser = rules.map_or("", |file| file.default_browser.trim());
+    let mut warnings: Vec<SharedString> = Vec::new();
+    match (&config_default, spec) {
+        (ConfigDefault::Null, _) => warnings.push(NULL_WARNING.into()),
+        (_, Some(BrowserSpec::Function(_))) => warnings.push(FUNCTION_WARNING.into()),
+        _ => {}
+    }
+    if let Some(handler) = facts.config.as_ref().and_then(|config| config.catch_all) {
+        warnings.push(
+            format!("Handler {handler} matches every link, so PwrRoute's default never applies.")
+                .into(),
+        );
+    }
+    let mut browsers: Vec<DefaultChoice> = facts
+        .browsers
+        .iter()
+        .map(|app| DefaultChoice {
+            value: app.id().to_owned().into(),
+            badge: badge_for(&app.name),
+            name: app.name.clone().into(),
+            profiles: app.profiles.iter().cloned().map(Into::into).collect(),
+        })
+        .collect();
+    let browser = (!default_browser.is_empty()).then(|| {
+        facts
+            .browsers
+            .iter()
+            .position(|app| app.is_named(default_browser))
+            .unwrap_or_else(|| {
+                // Named in rules.json but not found (or hidden): still the
+                // choice, by the name the reader knows.
+                let name = app_name(default_browser, &[]);
+                browsers.push(DefaultChoice {
+                    value: default_browser.to_owned().into(),
+                    badge: badge_for(default_browser),
+                    name: name.into(),
+                    profiles: Vec::new(),
+                });
+                browsers.len() - 1
+            })
+    });
+    let profile = rules
+        .map(|file| file.default_profile.trim())
+        .filter(|profile| !profile.is_empty())
+        .map(|profile| SharedString::from(profile.to_owned()));
+    let problem = matches!(facts.rules, Some(Err(_)))
+        .then(|| SharedString::from("rules.json did not load, so nothing here can be saved."));
+    EverythingElse {
+        owner: match rules.map_or(Precedence::Config, |file| file.precedence) {
+            Precedence::Config => DefaultOwner::Config,
+            Precedence::PwrRoute => DefaultOwner::PwrRoute,
+        },
+        config_label: config_label.into(),
+        config_detail: config_detail.into(),
+        pwrroute_detail: pwrroute_detail.into(),
+        warnings,
+        browsers,
+        browser,
+        profile,
+        problem,
+    }
+}
+
+/// `browser` as `rules.json` or a config names it (bundle id, name or
+/// path), by the name the reader knows: the scanned app's, else the
+/// catalog's or the installed app's, never a bundle id when one is known.
+fn app_name(browser: &str, apps: &[DetectedApp]) -> String {
+    apps.iter().find(|app| app.is_named(browser)).map_or_else(
+        || default_browser::browser_name(browser),
+        |app| app.name.clone(),
+    )
+}
+
+/// The first of `handlers` (counting from 1, as the Rules screen numbers
+/// them) that matches every link, so nothing after it ever runs: a `*`
+/// pattern, a regex that matches anything, or a function that returns
+/// `true` whatever it is given. Read from the description, not by running
+/// the config.
+pub fn catch_all(handlers: &[HandlerRule]) -> Option<usize> {
+    handlers
+        .iter()
+        .position(|handler| handler.matchers.iter().any(matches_everything))
+        .map(|index| index + 1)
+}
+
+fn matches_everything(matcher: &MatcherSpec) -> bool {
+    match matcher {
+        MatcherSpec::Wildcard(pattern) => matches!(pattern.trim(), "*" | "*://*" | "*://*/*"),
+        MatcherSpec::Regex(regex) => {
+            // `/source/flags`: the source between the outer slashes.
+            let source = regex
+                .strip_prefix('/')
+                .and_then(|rest| rest.rsplit_once('/'))
+                .map_or("", |(source, _)| source);
+            matches!(
+                source,
+                ".*" | "^.*" | "^.*$" | ".+" | "^.+" | "^.+$" | "." | "^" | "(?:)"
+            )
+        }
+        MatcherSpec::Function(function) => function.source.as_deref().is_some_and(returns_true),
+        MatcherSpec::Other(_) => false,
+    }
+}
+
+/// A function whose body only returns `true`: `() => true`,
+/// `url => { return true; }`, `function always() { return true }`.
+fn returns_true(source: &str) -> bool {
+    let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    let body = if let Some((_, body)) = compact.split_once("=>") {
+        body
+    } else if compact.starts_with("function") {
+        compact.split_once(')').map_or("", |(_, body)| body)
+    } else {
+        return false;
+    };
+    matches!(
+        body.trim_end_matches(';'),
+        "true" | "!0" | "{returntrue}" | "{returntrue;}" | "(true)"
+    )
 }
 
 /// The importer card's rows: each rewrite, handler and the default with its
@@ -289,6 +518,14 @@ fn plural(count: usize, noun: &str) -> String {
     }
 }
 
+/// `words` starting a sentence: "Edited 5 min ago."
+fn sentence(words: &str) -> String {
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
 /// "edited 5 min ago", the Rules banner's wording, from a file's mtime.
 fn edited(modified: Option<SystemTime>, now: SystemTime) -> String {
     let Some(age) = modified.and_then(|at| now.duration_since(at).ok()) else {
@@ -327,11 +564,15 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
                 None => eprintln!("pwrroute: settings: no Finicky config to import"),
             }
         }
+        SettingsRequest::SetDefaultOwner(_) | SettingsRequest::SetDefaultBrowser { .. } => {
+            set_everything_else(request, live_rules_path(), model, cx);
+        }
         SettingsRequest::ReloadRules => {
             if let Some(router) = settings_store::router(cx) {
                 let _ = router.refresh();
             }
-            refresh(cx);
+            // Requests run inside the Settings window's own update.
+            cx.defer(refresh);
             // The reload lands on the dispatch thread; read it back once
             // it has.
             cx.spawn(async move |cx| {
@@ -343,6 +584,192 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
         _ => return false,
     }
     true
+}
+
+fn live_rules_path() -> Option<PathBuf> {
+    discovery::rules_path(&discovery::Environment::current())
+}
+
+/// The main window, when one is open.
+fn main_window(cx: &App) -> Option<WindowHandle<PwrRoute>> {
+    cx.windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<PwrRoute>())
+}
+
+/// Makes `edit` to `rules.json` and saves it now. With the main window
+/// open, through its store, so the Rules screen, Test a link and the test
+/// runs follow at once and nothing it holds unsaved is lost; otherwise
+/// through a store over the file at `path`. A store that would refuse the
+/// save (the file did not load, or changed on disk under unsaved edits)
+/// is left as it was, and the reason comes back.
+pub(crate) fn edit_rules(
+    path: Option<PathBuf>,
+    cx: &mut App,
+    edit: impl FnOnce(&mut RulesStore),
+) -> Result<(), String> {
+    if let Some(main) = main_window(cx) {
+        return main
+            .update(cx, |app, _, cx| {
+                app.sync_with_disk(cx);
+                if let Some(reason) = app.store.save_refused() {
+                    return Err(reason);
+                }
+                edit(&mut app.store);
+                app.refresh(cx);
+                // Only a save made now can fail this change; an earlier
+                // failure is the Rules screen's to show.
+                let saving = app.store.needs_save();
+                app.save_now(cx);
+                match app.store.status() {
+                    Status::Failed(reason) if saving => Err(reason.clone()),
+                    _ => Ok(()),
+                }
+            })
+            .map_err(|error| format!("{error:#}"))?;
+    }
+    let mut store = RulesStore::load(path);
+    if let Some(reason) = store.save_refused() {
+        return Err(reason);
+    }
+    edit(&mut store);
+    if store.needs_save() {
+        store.save()?;
+    }
+    Ok(())
+}
+
+/// Writes an Everything else answer to `rules.json` at `path` (through
+/// the main window's store when one is open), then reads the pane back
+/// with `read`: the live producer is [`model`].
+pub(crate) fn set_everything_else(
+    request: &SettingsRequest,
+    path: Option<PathBuf>,
+    read: impl FnOnce(&mut App) -> Configuration + 'static,
+    cx: &mut App,
+) {
+    let saved = match request {
+        SettingsRequest::SetDefaultOwner(owner) => {
+            let precedence = match owner {
+                DefaultOwner::Config => Precedence::Config,
+                DefaultOwner::PwrRoute => Precedence::PwrRoute,
+            };
+            edit_rules(path, cx, |store| store.set_precedence(precedence))
+        }
+        SettingsRequest::SetDefaultBrowser { browser, profile } => edit_rules(path, cx, |store| {
+            store.set_default_browser(browser, profile);
+        }),
+        _ => return,
+    };
+    settle(saved, read, cx);
+}
+
+/// After an Everything else change: the router catches up now rather than
+/// at the next link, and the window reads the file back, with the reason
+/// when the change was not saved. The request runs inside the Settings
+/// window's own update, where the window cannot be updated, so the read
+/// back waits until that is done.
+fn settle(
+    saved: Result<(), String>,
+    read: impl FnOnce(&mut App) -> Configuration + 'static,
+    cx: &mut App,
+) {
+    if let Some(router) = settings_store::router(cx) {
+        let _ = router.refresh();
+    }
+    if let Err(reason) = &saved {
+        eprintln!("pwrroute: settings: cannot save rules.json: {reason}");
+    }
+    cx.defer(move |cx| {
+        if !settings::is_open(cx) {
+            return;
+        }
+        let mut configuration = read(cx);
+        if let (Err(reason), Some(field)) = (saved, configuration.everything_else.as_mut()) {
+            field.problem = Some(not_saved(&reason).into());
+        }
+        settings::update(cx, move |model| model.configuration = configuration);
+        super::system_host::refresh_diagnostics(cx);
+    });
+}
+
+/// The error line for a change that was not saved: "Not saved: " and the
+/// store's reason, as one sentence.
+pub fn not_saved(reason: &str) -> String {
+    format!("Not saved: {}.", reason.trim().trim_end_matches('.'))
+}
+
+/// What the pane was last built from, cheaply: the router's word on the
+/// source and the two files' times. Another writer (the Rules banner's
+/// switch, an editor, an agent) changes one of them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Stamp {
+    source: RoutingSource,
+    rules: Option<SystemTime>,
+    config: Option<SystemTime>,
+}
+
+fn stamp(facts: &Facts) -> Stamp {
+    Stamp {
+        source: facts.source.clone(),
+        rules: facts.rules_modified,
+        config: facts.source.config.as_deref().and_then(modified),
+    }
+}
+
+/// The stamp now, without evaluating the config.
+fn current_stamp() -> Stamp {
+    let source = router::routing_source();
+    let rules = live_rules_path().as_deref().and_then(modified);
+    let config = source.config.as_deref().and_then(modified);
+    Stamp {
+        source,
+        rules,
+        config,
+    }
+}
+
+/// Keeps the pane current: the stamp it was built from, and the entity
+/// that observes the window coming to the front.
+struct Follower {
+    seen: Option<Stamp>,
+}
+
+struct FollowerGlobal(Entity<Follower>);
+
+impl Global for FollowerGlobal {}
+
+fn follower(cx: &mut App) -> Entity<Follower> {
+    if let Some(global) = cx.try_global::<FollowerGlobal>() {
+        return global.0.clone();
+    }
+    let follower = cx.new(|_| Follower { seen: None });
+    cx.set_global(FollowerGlobal(follower.clone()));
+    follower
+}
+
+fn remember(stamp: Stamp, cx: &mut App) {
+    follower(cx).update(cx, |follower, _| follower.seen = Some(stamp));
+}
+
+/// Reads the pane again whenever the Settings `window` comes to the front
+/// and something it was built from changed since: the Rules banner's
+/// switch, an editor or an agent may have written `rules.json`, or the
+/// router may have reloaded the config.
+pub fn follow(window: &mut Window, cx: &mut App) {
+    follower(cx).update(cx, |_, cx| {
+        cx.observe_window_activation(window, |follower, window, cx| {
+            if !window.is_window_active() {
+                return;
+            }
+            let now = current_stamp();
+            if follower.seen.as_ref() != Some(&now) {
+                follower.seen = Some(now);
+                cx.defer(refresh);
+            }
+        })
+        .detach();
+    });
 }
 
 /// Shows the data directory in the file manager, creating it (owner only)
@@ -408,7 +835,7 @@ mod tests {
         assert!(!model.can_switch);
         assert_eq!(
             model.visual_summary,
-            "rules.json \u{00b7} 1 rewrite \u{00b7} 2 handlers"
+            "rules.json \u{00b7} 1 rewrite \u{00b7} 2 rules"
         );
         assert_eq!(model.rules_status, "Loaded \u{00b7} edited 5 min ago.");
         assert_eq!(model.rules_path, "~/rules.json");
@@ -434,22 +861,21 @@ mod tests {
             shorteners: None,
             modified: Some(SystemTime::now() - Duration::from_secs(3 * 3600)),
             import: None,
+            default: None,
+            catch_all: None,
         });
         let model = build(&facts, SystemTime::now());
         assert_eq!(model.active, RulesSource::Finicky);
         let finicky = model.finicky.unwrap();
         assert_eq!(finicky.path, "~/.finicky.ts");
-        assert_eq!(
-            finicky.summary,
-            "~/.finicky.ts \u{00b7} 2 rewrites \u{00b7} 6 handlers"
-        );
+        assert_eq!(finicky.summary, "~/.finicky.ts \u{00b7} 6 handlers");
         assert_eq!(
             finicky.found,
-            "Found at ~/.finicky.ts; runs first and owns the default browser. edited 3 hr ago."
+            "Found at ~/.finicky.ts; runs first and takes everything else. Edited 3 hr ago."
         );
         assert_eq!(
             model.visual_summary,
-            "rules.json \u{00b7} 0 rewrites \u{00b7} 0 handlers"
+            "rules.json \u{00b7} 0 rewrites \u{00b7} 0 rules"
         );
 
         // A reload that failed keeps the last load and says so.
@@ -483,6 +909,8 @@ mod tests {
             shorteners: None,
             modified: None,
             import: None,
+            default: None,
+            catch_all: None,
         });
         assert!(
             build(&facts, SystemTime::now())
@@ -519,5 +947,265 @@ mod tests {
                 .rules_status
                 .ends_with("The last good snapshot stays in charge.")
         );
+    }
+
+    // ---- Everything else ---------------------------------------------------
+
+    fn fixed(name: &str, app_type: AppType) -> BrowserSpec {
+        BrowserSpec::Browser(pwrroute_engine::FixedBrowser {
+            name: name.into(),
+            app_type,
+            profile: String::new(),
+            args: Vec::new(),
+            open_in_background: None,
+        })
+    }
+
+    fn function(source: &str) -> pwrroute_engine::FunctionSpec {
+        pwrroute_engine::FunctionSpec {
+            name: String::new(),
+            source: Some(source.into()),
+        }
+    }
+
+    fn handler(matchers: Vec<MatcherSpec>) -> HandlerRule {
+        HandlerRule {
+            matchers,
+            browser: fixed("Firefox", AppType::AppName),
+        }
+    }
+
+    fn app(name: &str, bundle_id: &str, profiles: &[&str]) -> DetectedApp {
+        DetectedApp {
+            name: name.into(),
+            bundle_id: Some(bundle_id.into()),
+            location: PathBuf::from(format!("/Applications/{name}.app")),
+            profiles: profiles.iter().map(|p| (*p).to_owned()).collect(),
+        }
+    }
+
+    /// `~/.finicky.ts` in charge with `default`, over `rules`.
+    fn in_charge(rules_text: &str, default: Option<BrowserSpec>) -> Facts {
+        let mut facts = rules(rules_text);
+        let config = facts.home.clone().unwrap().join(".finicky.ts");
+        facts.source = RoutingSource {
+            config: Some(config.clone()),
+            ..RoutingSource::default()
+        };
+        facts.config = Some(ConfigFacts {
+            path: config,
+            counts: Some((2, 5)),
+            shorteners: None,
+            modified: Some(SystemTime::now() - Duration::from_secs(4 * 60)),
+            import: None,
+            default,
+            catch_all: None,
+        });
+        facts.browsers = vec![
+            app("Google Chrome", "com.google.Chrome", &["Personal", "Work"]),
+            app("Safari", "com.apple.Safari", &[]),
+        ];
+        facts
+    }
+
+    fn field_of(facts: &Facts) -> EverythingElse {
+        build(facts, SystemTime::now())
+            .everything_else
+            .expect("the Everything else field")
+    }
+
+    #[test]
+    fn everything_else_is_only_there_while_a_config_is_in_charge() {
+        let facts = rules(r#"{ "defaultBrowser": "com.apple.Safari", "precedence": "pwrroute" }"#);
+        assert!(build(&facts, SystemTime::now()).everything_else.is_none());
+
+        let facts = in_charge(
+            r#"{ "defaultBrowser": "com.apple.Safari" }"#,
+            Some(fixed("Safari", AppType::AppName)),
+        );
+        assert!(build(&facts, SystemTime::now()).everything_else.is_some());
+    }
+
+    #[test]
+    fn the_config_owns_everything_else_until_precedence_says_pwrroute() {
+        let facts = in_charge(
+            r#"{ "defaultBrowser": "com.google.Chrome", "defaultProfile": "Personal" }"#,
+            Some(fixed("com.apple.Safari", AppType::BundleId)),
+        );
+        let model = build(&facts, SystemTime::now());
+        let field = model.everything_else.clone().unwrap();
+        assert_eq!(field.owner, DefaultOwner::Config);
+        // The config's bundle id, by the name the reader knows.
+        assert_eq!(
+            field.config_label,
+            "~/.finicky.ts's default \u{00b7} Safari"
+        );
+        assert_eq!(
+            field.config_detail,
+            "~/.finicky.ts's defaultBrowser handles links its handlers don't claim. The browser \
+             below still catches config errors, browsers that can't open, and every link while \
+             paused."
+        );
+        assert_eq!(
+            field.pwrroute_detail,
+            "Your rules run first, then ~/.finicky.ts's handlers. Links nothing claims go here \
+             instead of Safari."
+        );
+        assert!(field.warnings.is_empty());
+        assert_eq!(
+            field.chosen().map(|c| c.name.as_ref()),
+            Some("Google Chrome")
+        );
+        assert_eq!(field.profile.as_deref(), Some("Personal"));
+        assert_eq!(
+            model.finicky.unwrap().found,
+            "Found at ~/.finicky.ts; runs first and takes everything else. Edited 4 min ago."
+        );
+
+        let facts = in_charge(
+            r#"{ "defaultBrowser": "com.google.Chrome", "precedence": "pwrroute" }"#,
+            Some(fixed("com.apple.Safari", AppType::BundleId)),
+        );
+        let model = build(&facts, SystemTime::now());
+        assert_eq!(model.everything_else.unwrap().owner, DefaultOwner::PwrRoute);
+        assert_eq!(
+            model.finicky.unwrap().found,
+            "Found at ~/.finicky.ts; its rewrites run first, then your rules, then its \
+             handlers. Edited 4 min ago."
+        );
+    }
+
+    #[test]
+    fn what_pwrroutes_default_changes_comes_from_the_description() {
+        let rules_json = r#"{ "defaultBrowser": "com.google.Chrome", "precedence": "pwrroute" }"#;
+
+        // A function default: no one browser to name, and it stops running.
+        let facts = in_charge(
+            rules_json,
+            Some(BrowserSpec::Function(function("(url) => \"Safari\""))),
+        );
+        let field = field_of(&facts);
+        assert_eq!(field.config_label, "~/.finicky.ts's default");
+        assert_eq!(
+            field.pwrroute_detail,
+            "Your rules run first, then ~/.finicky.ts's handlers. Links nothing claims go here."
+        );
+        assert_eq!(field.warnings, [FUNCTION_WARNING]);
+
+        // `null`: unmatched links were dropped and will now open.
+        let facts = in_charge(rules_json, Some(fixed("", AppType::None)));
+        let field = field_of(&facts);
+        assert_eq!(field.config_label, "~/.finicky.ts's default");
+        assert!(field.config_detail.starts_with(
+            "~/.finicky.ts's defaultBrowser is null, so links its handlers don't claim are not \
+             opened."
+        ));
+        assert_eq!(field.warnings, [NULL_WARNING]);
+
+        // A handler that takes every link.
+        let mut facts = in_charge(rules_json, Some(fixed("Safari", AppType::AppName)));
+        facts.config.as_mut().unwrap().catch_all = Some(5);
+        assert_eq!(
+            field_of(&facts).warnings,
+            ["Handler 5 matches every link, so PwrRoute's default never applies."]
+        );
+
+        // rules.json names no default: the select asks for one, with no
+        // warning beyond the three the design names.
+        let facts = in_charge(
+            r#"{ "precedence": "pwrroute" }"#,
+            Some(fixed("Safari", AppType::AppName)),
+        );
+        let field = field_of(&facts);
+        assert!(field.warnings.is_empty());
+        assert_eq!(field.browser, None);
+    }
+
+    #[test]
+    fn a_default_the_scan_did_not_find_is_still_the_choice() {
+        let facts = in_charge(
+            r#"{ "defaultBrowser": "org.mozilla.firefox" }"#,
+            Some(fixed("Safari", AppType::AppName)),
+        );
+        let field = field_of(&facts);
+        assert_eq!(field.browsers.len(), 3);
+        let chosen = field.chosen().unwrap();
+        assert_eq!(chosen.value, "org.mozilla.firefox");
+        assert_eq!(chosen.name, "Firefox");
+        // The scan's apps keep their order, by bundle id.
+        assert_eq!(field.browsers[0].value, "com.google.Chrome");
+        assert_eq!(field.browsers[0].profiles, ["Personal", "Work"]);
+    }
+
+    #[test]
+    fn a_rules_file_that_did_not_load_says_nothing_can_be_saved() {
+        let mut facts = in_charge("{}", Some(fixed("Safari", AppType::AppName)));
+        facts.rules = Some(Err("expected value at line 1".into()));
+        let field = field_of(&facts);
+        assert_eq!(field.owner, DefaultOwner::Config);
+        assert_eq!(
+            field.problem.as_deref(),
+            Some("rules.json did not load, so nothing here can be saved.")
+        );
+    }
+
+    #[test]
+    fn a_change_not_saved_is_one_sentence() {
+        assert_eq!(
+            not_saved("rules.json did not load, so it is not overwritten."),
+            "Not saved: rules.json did not load, so it is not overwritten."
+        );
+        assert_eq!(
+            not_saved("No configuration directory: edits last for this session."),
+            "Not saved: No configuration directory: edits last for this session."
+        );
+        assert_eq!(
+            not_saved("permission denied (os error 13)"),
+            "Not saved: permission denied (os error 13)."
+        );
+    }
+
+    #[test]
+    fn a_catch_all_handler_is_found_by_its_matchers() {
+        let wildcard = |pattern: &str| MatcherSpec::Wildcard(pattern.into());
+        let regex = |source: &str| MatcherSpec::Regex(source.into());
+        let func = |source: &str| MatcherSpec::Function(function(source));
+        assert_eq!(catch_all(&[]), None);
+        assert_eq!(
+            catch_all(&[
+                handler(vec![wildcard("*.example.com/*")]),
+                handler(vec![regex("/^https:\\/\\/a\\.example\\//")]),
+                handler(vec![func("(url) => url.host === \"a.example.com\"")]),
+                handler(vec![wildcard("b.example.com/*"), wildcard("*")]),
+            ]),
+            Some(4)
+        );
+        for everything in [
+            wildcard("*"),
+            wildcard(" *://* "),
+            regex("/.*/"),
+            regex("/^.*$/i"),
+            func("() => true"),
+            func("url => { return true; }"),
+            func("function always(url, options) {\n  return true\n}"),
+        ] {
+            assert_eq!(
+                catch_all(&[handler(vec![everything.clone()])]),
+                Some(1),
+                "{everything:?}"
+            );
+        }
+        for some in [
+            wildcard("*.example.com"),
+            regex("/example/"),
+            func("() => false"),
+            func("(url) => url.host.endsWith(\"example.com\") || true"),
+            MatcherSpec::Function(pwrroute_engine::FunctionSpec {
+                name: "native".into(),
+                source: None,
+            }),
+        ] {
+            assert_eq!(catch_all(&[handler(vec![some.clone()])]), None, "{some:?}");
+        }
     }
 }

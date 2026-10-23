@@ -12,9 +12,12 @@ use crate::settings::{browsers_host, configuration_host, privacy_host, system_ho
 use crate::{default_browser, mcp};
 
 /// Every pane, read fresh. The default-browser chip follows the window from
-/// here on, as the main window's does.
+/// here on, as the main window's does, and Configuration reads its files
+/// again when the window comes to the front after another writer changed
+/// them.
 pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
     default_browser::watch(window, cx);
+    configuration_host::follow(window, cx);
     let local_agents = mcp::local_agents(cx);
     SettingsModel {
         browsers: browsers_host::model(cx),
