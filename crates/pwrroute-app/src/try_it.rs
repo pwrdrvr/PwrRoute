@@ -189,7 +189,9 @@ fn load(config: Option<&std::path::Path>, rules: &RulesFile) -> Result<Engine, S
     };
     // The OS answers the config's finicky.* calls, as it does for the
     // router, so an example that depends on them is tested as it routes.
-    Engine::from_sources(&sources, Rc::new(NativeHost::new()), Limits::default())
+    // A config the router left out (it has not loaded) is left out here
+    // too, so the runs match the links.
+    crate::router::engine_as_routed(&sources, Rc::new(NativeHost::new()), Limits::default())
         .map_err(|error| format!("The rules did not load: {error:#}"))
 }
 

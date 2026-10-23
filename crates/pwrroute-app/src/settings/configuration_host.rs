@@ -190,7 +190,7 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             Precedence::PwrRoute => "its rewrites run first, then your rules, then its handlers",
         };
         let found = match &facts.source.error {
-            Some(_) if facts.source.fallback.is_some() => format!(
+            _ if facts.source.fallback.is_some() => format!(
                 "Found at {path}, but it did not load: every link goes to the fallback browser."
             ),
             Some(error) if facts.source.config_not_loaded => format!(
@@ -200,9 +200,6 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             Some(error) => format!(
                 "Found at {path}. The last reload failed: {error}. The previous load stays in \
                  charge."
-            ),
-            None if facts.source.fallback.is_some() => format!(
-                "Found at {path}, but it did not load: every link goes to the fallback browser."
             ),
             None => format!(
                 "Found at {path}; {order}. {}",

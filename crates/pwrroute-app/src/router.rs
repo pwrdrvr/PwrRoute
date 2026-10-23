@@ -21,7 +21,8 @@ use std::{
 
 use pwrroute_browsers::{Env, LaunchError, LaunchOptions, Note};
 use pwrroute_engine::{
-    ConfigChoice, Host, Limits, NativeHost, Reloader, RulesFile, ShortLinks, Status, Watcher,
+    ConfigChoice, Engine, Host, Limits, NativeHost, Reloader, RulesFile, ShortLinks, Sources,
+    Status, Watcher,
     discovery::{self, Environment},
 };
 use pwrroute_router::{
@@ -321,6 +322,53 @@ pub fn choose_source(choice: ConfigChoice, router: Option<&RouterHandle>) {
     if let Some(router) = router {
         let _ = router.refresh();
     }
+}
+
+/// An engine over `sources` as the router routes with them, for Test a link
+/// and the Rules screen's runs: a config the router has left out because it
+/// has not loaded is left out here too, so `rules.json` runs alone, as it
+/// does for links. Any other failure is the error.
+pub fn engine_as_routed(
+    sources: &Sources,
+    host: Rc<dyn Host>,
+    limits: Limits,
+) -> anyhow::Result<Engine> {
+    build_as_routed(sources, host, limits, |config| {
+        let source = routing_source();
+        source.config_not_loaded
+            && source
+                .config
+                .as_deref()
+                .is_some_and(|left_out| same_file(left_out, config))
+    })
+}
+
+/// [`engine_as_routed`] with the router's answer to "is this config left
+/// out?" passed in.
+fn build_as_routed(
+    sources: &Sources,
+    host: Rc<dyn Host>,
+    limits: Limits,
+    left_out: impl Fn(&Path) -> bool,
+) -> anyhow::Result<Engine> {
+    let loaded = Engine::from_sources(sources, Rc::clone(&host), limits);
+    if loaded.is_ok() || !sources.config.as_deref().is_some_and(left_out) {
+        return loaded;
+    }
+    let alone = Sources {
+        config: None,
+        rules: sources.rules.clone(),
+    };
+    Engine::from_sources(&alone, host, limits).or(loaded)
+}
+
+/// The same file, whether or not either path is canonical.
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b
+        || a.canonicalize()
+            .ok()
+            .zip(b.canonicalize().ok())
+            .is_some_and(|(a, b)| a == b)
 }
 
 /// The Finicky config in charge of routing, if the router found one. The
@@ -1166,6 +1214,34 @@ mod tests {
 
     /// A failed reload of a config that did load is not left out: its last
     /// load goes on routing, rules.json with it.
+    /// Test a link and the test runs build as the router routes: a config
+    /// it has left out runs rules.json alone; one it has not is the error.
+    #[test]
+    fn engines_for_the_window_leave_out_the_config_the_router_left_out() {
+        let home = Home::new();
+        let config = home.write(".finicky.js", "export default {\n");
+        let sources = Sources {
+            config: Some(config.clone()),
+            rules: serde_json::from_str(RULES).unwrap(),
+        };
+        let build = |left_out: bool| {
+            build_as_routed(&sources, Rc::new(DefaultHost), Limits::default(), |path| {
+                assert!(same_file(path, &config));
+                left_out
+            })
+        };
+        let engine = build(true).expect("rules.json alone");
+        assert_eq!(engine.config_path(), None);
+        let resolved = engine
+            .resolve("https://docs.example.com/x", None)
+            .unwrap()
+            .browser
+            .name;
+        assert_eq!(resolved, "Arc");
+        let error = build(false).expect_err("the config's error");
+        assert!(format!("{error:#}").contains(".finicky.js"), "{error:#}");
+    }
+
     #[test]
     fn a_config_that_loaded_once_keeps_routing_when_a_reload_fails() {
         let home = Home::new();

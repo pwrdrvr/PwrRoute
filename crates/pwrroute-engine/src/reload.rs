@@ -389,21 +389,32 @@ fn attempt(
     let before = fingerprint_of(&known);
 
     let imports = Rc::default();
-    let load = |config: Option<PathBuf>, imports: &Rc<_>| {
-        let rules = match rules_path {
-            Some(path) => RulesFile::load(path)?,
-            None => RulesFile::default(),
+    // Read once: the engine with the config and, if that fails, the one
+    // without it are built from the same rules.json.
+    let rules = match rules_path {
+        Some(path) => RulesFile::load(path),
+        None => Ok(RulesFile::default()),
+    };
+    let load = |config: Option<PathBuf>, rules: &RulesFile, imports: &Rc<_>| {
+        let sources = Sources {
+            config,
+            rules: rules.clone(),
         };
-        let sources = Sources { config, rules };
         Engine::from_sources_reading(&sources, Rc::clone(host), limits, imports)
     };
-    let result = load(config.clone(), &imports);
-    // A config no engine holds yet that fails is left out rather than
-    // taking rules.json down with it. One that was in charge is not: its
-    // last load keeps routing, rules.json with it.
-    let rules_alone = (result.is_err() && config.is_some() && in_charge.is_none())
-        .then(|| load(None, &Rc::default()).ok())
-        .flatten();
+    let (result, rules_alone) = match &rules {
+        Err(e) => (Err(anyhow!("{e:#}")), None),
+        Ok(rules) => {
+            let result = load(config.clone(), rules, &imports);
+            // A config no engine holds yet that fails is left out rather
+            // than taking rules.json down with it. One that was in charge
+            // is not: its last load keeps routing, rules.json with it.
+            let rules_alone = (result.is_err() && config.is_some() && in_charge.is_none())
+                .then(|| load(None, rules, &Rc::default()).ok())
+                .flatten();
+            (result, rules_alone)
+        }
+    };
     let mut read: Vec<PathBuf> = config.into_iter().collect();
     read.extend(imports.borrow().iter().cloned());
     Attempt {

@@ -175,6 +175,23 @@ fn a_broken_start_leaves_rules_json_in_charge_until_the_config_loads() {
     assert_eq!(docs(&r), "Orion");
     assert_eq!(r.status().config, None);
 
+    // A broken rules.json keeps the rules-only engine that last loaded.
+    fs::write(&rules, r#"{ "rules": [ "#).unwrap();
+    let err = settle(&mut r).unwrap().unwrap_err().to_string();
+    assert!(err.contains("rules.json"), "{err}");
+    assert_eq!(r.status().config, None);
+    assert_eq!(docs(&r), "Orion");
+    fs::write(
+        &rules,
+        r#"{ "defaultBrowser": "Vivaldi", "rules": [ { "match": "docs.example.com/*", "browser": "Orion" } ] }"#,
+    )
+    .unwrap();
+    assert!(
+        settle(&mut r).unwrap().is_err(),
+        "the config is still broken"
+    );
+    assert_eq!(docs(&r), "Orion");
+
     // Once it loads, the config takes charge, rules.json with it.
     fs::write(&path, config("Firefox")).unwrap();
     settle(&mut r).unwrap().unwrap();
