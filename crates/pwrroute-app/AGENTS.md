@@ -184,6 +184,25 @@ their own modules.
   Choose another file keeps the first-run context: the file picked opens
   for first run the same way, and no file picked is a cancel. The config
   file is only ever read.
+- **Rules under a Finicky config (`config_view.rs`).** The banner's switch
+  "Let PwrRoute's default take everything else" is `rules.json`'s
+  `precedence` (`RulesStore::set_precedence`), written at once like any
+  edit through the store, never `settings.json`; a store that refuses
+  the save leaves the switch where the router has it and says why. The
+  cards follow `config_view::Order` in evaluation order: the visual rules
+  after the config's handlers, or before them with the config's
+  `defaultBrowser` struck through and PwrRoute's Everything else row last.
+  With no usable `rules.json` default (empty, or PwrRoute) the override is
+  inert, as in the router: the config's default stays unstruck and the
+  banner asks for one. The warnings under the switch come from the
+  config's description (`ConfigInCharge::override_warnings`: a function
+  or `null` default only while it is overridden, a handler matching every
+  link), never from running it. Default browsers are named through
+  `default_browser::browser_name`, never as bundle ids. Stop using is `importer_view::set_source` with `visualOnly`
+  (and the file dismissed); Open in editor is `open_with_system`, which the
+  test platform does not implement, so tests never click it. The blank
+  state's Choose browser… writes `defaultBrowser` from `PwrRoute::browsers`
+  and its config row opens Settings › Configuration.
 - **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
   `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
   handle and an engine that follows the same files; `pwrroute mcp` in

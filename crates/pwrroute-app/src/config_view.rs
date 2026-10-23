@@ -1,30 +1,37 @@
 //! The Rules screen while a Finicky JS or TS config is in charge (design
-//! option 1b): a banner with the ways out, the config's handlers read-only,
-//! and the visual rules folded below, since they run after it.
+//! option 1b, and Overview and Setup 5a-5c): a banner with the ways out and
+//! the switch "Let PwrRoute's default take everything else", the config's
+//! handlers read-only, and the visual rules folded. The cards read in
+//! evaluation order: the visual rules after the config's handlers, or
+//! before them once the switch puts `rules.json`'s `precedence` at
+//! `"pwrroute"`, with PwrRoute's default as the last row.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Context as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Context, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
+    Animation, AnimationExt as _, AnyElement, Context, Div, ElementId, InteractiveElement as _,
+    IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
+    div, ease_out_quint, px,
 };
 use pwrroute_engine::{
-    AppType, BrowserSpec, Description, Engine, FunctionSpec, HandlerRule, MatcherSpec, RewriteRule,
-    UrlSpec,
+    AppType, BrowserSpec, Description, Engine, FunctionSpec, HandlerRule, MatcherSpec, Precedence,
+    RewriteRule, UrlSpec,
 };
 
 use crate::app::PwrRoute;
 use crate::rules_model::{Change, Destination, Matcher, Rule};
+use crate::rules_store::{RulesStore, Status};
 use crate::rules_view::{
-    RowState, card, card_header_with, card_title, pane_frame, rule_row, visual_cards,
+    RowState, card, card_header_with, card_title, everything_else_name, pane_frame, rule_row,
+    visual_cards,
 };
-use crate::theme::{self, icon, text};
+use crate::theme::{self, icon, mono, text};
 use crate::widgets::{
-    ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge_for, button, fn_tag, paragraph,
-    toned_chip,
+    ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge_for, button, fn_tag, paragraph, switch,
+    tag_frame, toned_chip,
 };
 
 /// How much of a function's source or a load error a row or the banner
@@ -46,6 +53,104 @@ pub struct ConfigInCharge {
     pub handlers: Vec<Rule>,
     /// `None` when the config did not load.
     pub default_browser: Option<Destination>,
+    /// What kind of `defaultBrowser` the config has, for the switch's
+    /// warnings.
+    pub default_kind: DefaultKind,
+    /// The first handler whose match takes every link (`"*"`), by
+    /// position: PwrRoute's default can never apply after it.
+    pub catch_all: Option<usize>,
+    /// How many times the switch flipped since this view of the config was
+    /// made. Zero draws the switch and the banner still; each flip plays
+    /// the thumb's slide and the sentence's cross-fade once.
+    pub flips: usize,
+    /// Why the last flip of the switch was not made: `rules.json` would
+    /// not be written. Shown under the switch while the store still
+    /// refuses.
+    pub refused: Option<String>,
+}
+
+/// The order the screen draws, from the switch and `rules.json`
+/// (finicky-default.md §3-5): who runs first and who takes everything
+/// else.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Order {
+    /// `rules.json`'s `precedence` is `"pwrroute"`: the visual rules run
+    /// before the config's handlers.
+    pub rules_first: bool,
+    /// PwrRoute's default takes everything else: under the switch when
+    /// `rules.json` names a default browser, or while the config does not
+    /// load.
+    pub pwrroute_default: bool,
+    /// The switch is on but `rules.json` names no default browser
+    /// PwrRoute can open (none, or PwrRoute itself): the config's default
+    /// stays, as the router keeps it.
+    pub needs_default: bool,
+}
+
+impl Order {
+    /// The order for the config in charge over `store`'s file.
+    pub fn of(store: &RulesStore, config: &ConfigInCharge) -> Self {
+        Self::with(
+            !store.precedence().is_config(),
+            has_own_default(&store.written().default_browser),
+            config.problem.is_none(),
+        )
+    }
+
+    /// The order with the switch on or off (`rules_first`), whether
+    /// `rules.json` names a default browser PwrRoute can open (`own`), and
+    /// whether the config loaded.
+    pub fn with(rules_first: bool, own: bool, loaded: bool) -> Self {
+        Self {
+            rules_first,
+            pwrroute_default: !loaded || (rules_first && own),
+            needs_default: loaded && rules_first && !own,
+        }
+    }
+}
+
+/// Whether `rules.json`'s `defaultBrowser` can take everything else from a
+/// config: it names a browser, and not PwrRoute (which the engine flags
+/// and the router refuses as a loop).
+fn has_own_default(browser: &str) -> bool {
+    let name = browser.split(':').next().unwrap_or(browser).trim();
+    !name.is_empty()
+        && !name.eq_ignore_ascii_case("PwrRoute")
+        && !name.eq_ignore_ascii_case(pwrroute_os::BUNDLE_ID)
+}
+
+/// The warning under the switch when `rules.json` has no default browser
+/// to take everything else.
+pub const NEEDS_DEFAULT: &str = "Pick a default browser for PwrRoute to take everything else.";
+/// The struck `defaultBrowser` row's note (design 5b).
+pub const STRUCK_NOTE: &str = "not used: PwrRoute's default takes everything else";
+/// The tag on the config's `defaultBrowser` row while it takes everything
+/// else (design 5a).
+pub const EVERYTHING_ELSE_TAG: &str = "Everything else";
+/// The tag on PwrRoute's Everything else row (design 5b).
+pub const PWRROUTE_DEFAULT_TAG: &str = "PwrRoute's default";
+
+/// A config's `defaultBrowser`, as the switch's warnings need it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DefaultKind {
+    /// A fixed browser, app or path.
+    #[default]
+    Browser,
+    /// A function that picks the browser per link: it stops running under
+    /// PwrRoute's default.
+    Function,
+    /// `null`: links nothing claims are not opened.
+    NotOpened,
+}
+
+impl DefaultKind {
+    fn of(browser: &BrowserSpec) -> Self {
+        match browser {
+            BrowserSpec::Browser(fixed) if fixed.app_type == AppType::None => Self::NotOpened,
+            BrowserSpec::Browser(_) => Self::Browser,
+            BrowserSpec::Function(_) => Self::Function,
+        }
+    }
 }
 
 impl ConfigInCharge {
@@ -70,6 +175,10 @@ impl ConfigInCharge {
                 rewrites: Vec::new(),
                 handlers: Vec::new(),
                 default_browser: None,
+                default_kind: DefaultKind::Browser,
+                catch_all: None,
+                flips: 0,
+                refused: None,
             },
         }
     }
@@ -89,6 +198,13 @@ impl ConfigInCharge {
             rewrites: description.rewrites.iter().map(rewrite_row).collect(),
             handlers: description.handlers.iter().map(handler_row).collect(),
             default_browser: Some(destination(&description.default_browser)),
+            default_kind: DefaultKind::of(&description.default_browser),
+            catch_all: description
+                .handlers
+                .iter()
+                .position(|handler| handler.matchers.iter().any(matches_every_link)),
+            flips: 0,
+            refused: None,
         }
     }
 
@@ -102,6 +218,113 @@ impl ConfigInCharge {
             .and_then(|modified| now.duration_since(modified).ok())
             .map(edited)
             .unwrap_or_default()
+    }
+
+    /// What changes hands when PwrRoute's default takes everything else
+    /// (design 5c), in the banner's words, only where it applies: the
+    /// config's function or `null` default only once PwrRoute's default
+    /// replaces it, a missing `rules.json` default under the switch, and a
+    /// handler that matches every link either way. Empty for a config that
+    /// did not load.
+    pub fn override_warnings(&self, order: Order) -> Vec<String> {
+        if self.problem.is_some() {
+            return Vec::new();
+        }
+        let mut warnings = Vec::new();
+        if order.needs_default {
+            warnings.push(NEEDS_DEFAULT.to_owned());
+        }
+        if order.pwrroute_default {
+            match self.default_kind {
+                DefaultKind::Browser => {}
+                DefaultKind::Function => {
+                    warnings.push("Its defaultBrowser function will no longer run.".to_owned());
+                }
+                DefaultKind::NotOpened => warnings
+                    .push("Unmatched links will now open instead of being dropped.".to_owned()),
+            }
+        }
+        if let Some(index) = self.catch_all {
+            warnings.push(format!(
+                "Handler {} matches every link, so PwrRoute's default never applies.",
+                index + 1
+            ));
+        }
+        warnings
+    }
+
+    /// The banner's sentence (design 5a/5b): who runs first and who takes
+    /// everything else, then the load error or how long ago the file
+    /// changed. `everything_else` names PwrRoute's default.
+    pub fn banner_sentence(&self, order: Order, everything_else: &str, now: SystemTime) -> String {
+        let order = if self.problem.is_some() {
+            // The router runs `rules.json` alone, whichever way the switch
+            // is set.
+            format!(
+                "Until it loads, your visual rules run on their own and PwrRoute's default, \
+                 {everything_else}, takes everything else."
+            )
+        } else if order.rules_first && order.pwrroute_default {
+            format!(
+                "Your rules run first, then its handlers. PwrRoute's default, \
+                 {everything_else}, takes everything else."
+            )
+        } else if order.rules_first {
+            "Your rules run first, then its handlers. Its defaultBrowser still takes \
+             everything else."
+                .to_owned()
+        } else {
+            "Its rewrites and handlers run first and its defaultBrowser takes everything \
+             else. Your visual rules run after it."
+                .to_owned()
+        };
+        match self.status(now) {
+            status if status.is_empty() => order,
+            status => format!("{order} {status}"),
+        }
+    }
+
+    /// The visual rules card's eyebrow and the sentence after its counts
+    /// (design 5a/5b).
+    pub fn visual_copy(&self, order: Order, everything_else: &str) -> (&'static str, String) {
+        if order.rules_first {
+            (
+                "Run before the config's handlers",
+                "They run before the config's handlers.".to_owned(),
+            )
+        } else {
+            ("Run after the config", self.owner_sentence(everything_else))
+        }
+    }
+
+    /// Who takes everything else while the visual rules run after the
+    /// config: the visual card's second sentence.
+    pub fn owner_sentence(&self, everything_else: &str) -> String {
+        let path = &self.path;
+        if self.problem.is_some() {
+            return format!(
+                "PwrRoute's default, {everything_else}, takes everything else until {path} \
+                 loads."
+            );
+        }
+        match (self.default_kind, &self.default_browser) {
+            (DefaultKind::Function, _) => {
+                format!("{path}'s defaultBrowser function picks where everything else goes.")
+            }
+            (DefaultKind::NotOpened, _) => {
+                format!("{path}'s defaultBrowser is null, so links nothing claims are dropped.")
+            }
+            (DefaultKind::Browser, Some(Destination::Browser { name, profile, .. })) => {
+                let browser = match profile {
+                    Some(profile) => format!("{name} \u{00b7} {profile}"),
+                    None => name.to_string(),
+                };
+                format!("{path}'s defaultBrowser, {browser}, takes everything else.")
+            }
+            (DefaultKind::Browser, _) => {
+                format!("{path}'s defaultBrowser takes everything else.")
+            }
+        }
     }
 
     /// How many handlers only JS can express: a function matches, or picks
@@ -139,6 +362,26 @@ pub(crate) fn handler_row(handler: &HandlerRule) -> Rule {
 
 fn row(matchers: &[MatcherSpec], destination: Destination) -> Rule {
     Rule::plain(matchers.iter().map(matcher).collect(), destination)
+}
+
+/// A match that takes every link: Finicky's `"*"` (or `"*://*"`-like
+/// patterns of nothing but wildcards and separators), or a regex that
+/// matches anything.
+fn matches_every_link(spec: &MatcherSpec) -> bool {
+    match spec {
+        MatcherSpec::Wildcard(pattern) => {
+            let pattern = pattern.trim();
+            pattern.contains('*') && pattern.chars().all(|c| matches!(c, '*' | ':' | '/'))
+        }
+        MatcherSpec::Regex(pattern) => {
+            let body = pattern
+                .strip_prefix('/')
+                .and_then(|rest| rest.rsplit_once('/'))
+                .map_or(pattern.as_str(), |(body, _flags)| body);
+            matches!(body, ".*" | "^.*" | ".*$" | "^.*$" | ".+" | "^.+$")
+        }
+        MatcherSpec::Function(_) | MatcherSpec::Other(_) => false,
+    }
 }
 
 fn matcher(spec: &MatcherSpec) -> Matcher {
@@ -226,14 +469,252 @@ pub fn display_path(path: &Path, home: Option<&Path>) -> String {
 
 /// The banner's "Import to visual rules…".
 pub const IMPORT_ID: &str = "config-import";
+/// The banner's "Open in editor".
+pub const OPEN_ID: &str = "config-open";
+/// The banner's "Stop using".
+pub const STOP_ID: &str = "config-stop-using";
+/// The banner's switch row, "Let PwrRoute's default take everything else".
+pub const SWITCH_ID: &str = "config-precedence";
 
-/// `.banner`
-fn banner(config: &ConfigInCharge, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let file = config.file.clone();
+/// The switch thumb's slide (design: Motion, Rules).
+const SWITCH_SLIDE: Duration = Duration::from_millis(120);
+/// The banner sentence's fade when the switch flips.
+const SENTENCE_FADE: Duration = Duration::from_millis(150);
+
+/// The switch's one name, on the banner and in Settings.
+const SWITCH_LABEL: &str = "Let PwrRoute's default take everything else";
+
+impl PwrRoute {
+    /// The banner's switch: `rules.json`'s `precedence` flips between the
+    /// config's order (absent) and `"pwrroute"`, and is written at once,
+    /// so the router takes it on the next link.
+    pub fn toggle_precedence(&mut self, cx: &mut Context<'_, Self>) {
+        // Another writer's change is read first, so the flip lands on the
+        // file as it now is.
+        self.sync_with_disk(cx);
+        // A file that would not be written (changed under unsaved edits,
+        // unreadable, or no directory for it) keeps the switch where the
+        // router has it; the banner says why.
+        if let Some(reason) = self.store.save_refused() {
+            if let Some(config) = &mut self.config {
+                config.refused = Some(reason);
+            }
+            cx.notify();
+            return;
+        }
+        let previous = self.store.precedence();
+        let next = if previous.is_config() {
+            Precedence::PwrRoute
+        } else {
+            Precedence::Config
+        };
+        self.store.set_precedence(next);
+        // The switch edits no rule: the selection stays as it was, and an
+        // empty one does not open the editor on the last row.
+        let selection = self.selection;
+        self.refresh(cx);
+        self.selection = selection;
+        self.save_now(cx);
+        let failed = match self.store.status() {
+            Status::Failed(reason) => Some(reason.clone()),
+            _ => None,
+        };
+        if let Some(reason) = failed {
+            // The write failed: the screen goes back to the file's order.
+            self.store.set_precedence(previous);
+            self.refresh(cx);
+            self.selection = selection;
+            if let Some(config) = &mut self.config {
+                config.refused = Some(reason);
+            }
+            return;
+        }
+        if let Some(config) = &mut self.config {
+            config.flips += 1;
+            config.refused = None;
+        }
+    }
+
+    /// "Stop using": the router reads no config from now on (`settings.json`
+    /// `source.visualOnly`, as Settings › Configuration's Visual rules), and
+    /// the "Found …" notice does not come back for this file. The window
+    /// turns to the visual rules. Settings › Configuration turns it back on.
+    pub fn stop_using_config(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(file) = self.config.as_ref().map(|config| config.file.clone()) else {
+            return;
+        };
+        let Some(store) = crate::settings_store::store(cx) else {
+            return;
+        };
+        let mut source = store.read(cx).settings().source.clone();
+        source.visual_only = true;
+        if !source
+            .dismissed
+            .iter()
+            .any(|dismissed| crate::importer::same_file(dismissed, &file))
+        {
+            source.dismissed.push(file);
+        }
+        if let Some(config) = crate::importer_view::set_source(source, cx) {
+            self.set_config(config, cx);
+        }
+    }
+}
+
+/// `.tag.fn` with words: "Everything else", "PwrRoute's default".
+fn accent_tag(label: &'static str) -> Div {
+    tag_frame()
+        .bg(theme::accent_soft())
+        .border_color(theme::transparent())
+        .child(mono(label, 10.5, 500.0, theme::accent_bright()))
+}
+
+/// `.sw`, whose thumb slides once each time the switch flips. A switch
+/// that has not flipped is drawn still, as `widgets::switch` draws it.
+fn precedence_switch(on: bool, flips: usize) -> AnyElement {
+    if flips == 0 {
+        return switch(on).into_any_element();
+    }
+    let (track, border, thumb) = if on {
+        (theme::accent(), theme::transparent(), theme::accent_on())
+    } else {
+        (
+            theme::bg_hover_strong(),
+            theme::border_default(),
+            theme::text_muted(),
+        )
+    };
+    let (from, to) = if on { (2.0, 14.0) } else { (14.0, 2.0) };
     div()
+        .relative()
+        .flex_none()
+        .w(px(30.0))
+        .h(px(18.0))
+        .rounded_full()
+        .border_1()
+        .bg(track)
+        .border_color(border)
+        .child(
+            div()
+                .absolute()
+                .top(px(2.0))
+                .left(px(to))
+                .size(px(12.0))
+                .rounded_full()
+                .bg(thumb)
+                .with_animation(
+                    ElementId::named_usize("config-precedence-thumb", flips),
+                    Animation::new(SWITCH_SLIDE).with_easing(ease_out_quint()),
+                    move |thumb, delta| thumb.left(px(from + (to - from) * delta)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// `.warnl`: one line of what the switch changes, under it.
+fn warning_line(index: usize, warning: String) -> Div {
+    div()
+        .debug_selector(move || format!("config-warning-{index}"))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .mt(px(2.0))
+        .child(
+            // `.wi`
+            div()
+                .flex_none()
+                .size(px(14.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::warn_soft())
+                .child(text("!", 9.0, 700.0, theme::warn_text())),
+        )
+        .child(
+            paragraph(warning, 10.5, 15.75, theme::warn_text()).font_weight(theme::weight(500.0)),
+        )
+}
+
+/// `.banner`: who is in charge and in what order, the switch and its
+/// warnings, and the ways out.
+fn banner(
+    app: &PwrRoute,
+    config: &ConfigInCharge,
+    order: Order,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let rules_first = order.rules_first;
+    let everything_else = everything_else_name(&app.store);
+    let now = SystemTime::now();
+    let sentence = |order| {
+        paragraph(
+            config.banner_sentence(order, &everything_else, now),
+            11.0,
+            16.5,
+            theme::text_muted(),
+        )
+    };
+    // The sentences cross-fade when the switch flips: the one before the
+    // flip fades out over the new one as it fades in. A window that just
+    // opened shows it still.
+    let sentence = if config.flips == 0 {
+        sentence(order).into_any_element()
+    } else {
+        let before = Order::with(
+            !order.rules_first,
+            has_own_default(&app.store.written().default_browser),
+            config.problem.is_none(),
+        );
+        div()
+            .relative()
+            .child(sentence(order).with_animation(
+                ElementId::named_usize("config-banner-sentence", config.flips),
+                Animation::new(SENTENCE_FADE).with_easing(ease_out_quint()),
+                |sentence, delta| sentence.opacity(delta),
+            ))
+            .child(div().absolute().top_0().left_0().w_full().child(
+                sentence(before).with_animation(
+                    ElementId::named_usize("config-banner-sentence-before", config.flips),
+                    Animation::new(SENTENCE_FADE).with_easing(ease_out_quint()),
+                    |sentence, delta| sentence.opacity(1.0 - delta),
+                ),
+            ))
+            .into_any_element()
+    };
+    let toggle = div()
+        .id(SWITCH_ID)
+        .debug_selector(|| SWITCH_ID.into())
         .flex()
         .flex_none()
         .items_center()
+        .gap(px(8.0))
+        .h(px(18.0))
+        .mt(px(6.0))
+        .cursor_pointer()
+        .child(precedence_switch(rules_first, config.flips))
+        .child(text(SWITCH_LABEL, 11.5, 600.0, theme::text_primary()).line_height(px(14.95)))
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_precedence(cx)));
+    // Why the last flip did not happen, while the store still would not
+    // write the file.
+    let refused = config
+        .refused
+        .as_ref()
+        .filter(|_| {
+            app.store.save_refused().is_some() || matches!(app.store.status(), Status::Failed(_))
+        })
+        .map(|reason| format!("The switch was not saved. {reason}"));
+    let warnings = refused
+        .into_iter()
+        .chain(config.override_warnings(order))
+        .enumerate()
+        .map(|(index, warning)| warning_line(index, warning));
+    let import = config.file.clone();
+    let open = config.file.clone();
+    div()
+        .flex()
+        .flex_none()
+        .items_start()
         .gap(px(14.0))
         .py(px(12.0))
         .px(px(14.0))
@@ -241,7 +722,11 @@ fn banner(config: &ConfigInCharge, cx: &mut Context<'_, PwrRoute>) -> Div {
         .border_color(theme::accent_border())
         .rounded(px(10.0))
         .bg(theme::bg_row_active())
-        .child(icon("pwrroute/code.svg", 18.0, theme::accent()))
+        .child(
+            div()
+                .mt(px(1.0))
+                .child(icon("pwrroute/code.svg", 18.0, theme::accent())),
+        )
         .child(
             div()
                 .flex_1()
@@ -258,16 +743,9 @@ fn banner(config: &ConfigInCharge, cx: &mut Context<'_, PwrRoute>) -> Div {
                     )
                     .line_height(px(16.25)),
                 )
-                .child(paragraph(
-                    format!(
-                        "Its rewrites and handlers run first and it owns the default browser. \
-                         Visual rules run after it. {}",
-                        config.status(SystemTime::now())
-                    ),
-                    11.0,
-                    16.5,
-                    theme::text_muted(),
-                )),
+                .child(sentence)
+                .child(toggle)
+                .children(warnings),
         )
         .child(
             div()
@@ -275,18 +753,37 @@ fn banner(config: &ConfigInCharge, cx: &mut Context<'_, PwrRoute>) -> Div {
                 .flex_none()
                 .items_center()
                 .gap(px(8.0))
-                .child(button("Open in editor", ButtonKind::Default, true))
+                .child(
+                    button("Open in editor", ButtonKind::Default, true)
+                        .id(OPEN_ID)
+                        .debug_selector(|| OPEN_ID.into())
+                        .on_click(move |_, _, cx| cx.open_with_system(&open)),
+                )
                 .child(
                     button("Import to visual rules\u{2026}", ButtonKind::Default, true)
                         .id(IMPORT_ID)
                         .debug_selector(|| IMPORT_ID.into())
                         .on_click(cx.listener(move |_, _, _, cx| {
-                            let file = file.clone();
+                            let file = import.clone();
                             cx.defer(move |cx| crate::importer_view::open(file, false, cx));
                         })),
                 )
-                .child(button("Stop using", ButtonKind::Quiet, true)),
+                .child(
+                    button("Stop using", ButtonKind::Quiet, true)
+                        .id(STOP_ID)
+                        .debug_selector(|| STOP_ID.into())
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_using_config(cx))),
+                ),
         )
+}
+
+/// "1 rewrite", "3 rules".
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
 }
 
 pub fn pane(
@@ -294,6 +791,8 @@ pub fn pane(
     config: &ConfigInCharge,
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl IntoElement + use<> {
+    let order = Order::of(&app.store, config);
+    let rules_first = order.rules_first;
     let read_only = |last| RowState {
         last,
         read_only: true,
@@ -312,7 +811,7 @@ pub fn pane(
         })
     };
     // The design's config has no rewrites; one that has them shows them
-    // first, as they run first.
+    // first, as they run first in either order.
     let rewrites = (!config.rewrites.is_empty()).then(|| {
         rows(
             card().child(card_header_with(
@@ -325,11 +824,16 @@ pub fn pane(
         )
     });
     let need_js = config.need_js();
+    let handlers_from = if rules_first {
+        format!("{from} \u{00b7} runs after your rules")
+    } else {
+        from.clone()
+    };
     let handlers = rows(
         card()
             .debug_selector(|| "config-handlers".into())
             .child(card_header_with(
-                &from,
+                &handlers_from,
                 "Handlers",
                 toned_chip(format!("{need_js} need JS"), Tone::Warn),
             )),
@@ -337,19 +841,62 @@ pub fn pane(
         &config.handlers,
     );
     let default_row = config.default_browser.as_ref().map(|browser| {
-        rule_row(
-            "config-default",
-            "",
-            &Rule::plain(Vec::new(), browser.clone()),
-            read_only(true),
-            Some(div().flex_1().min_w_0().child(text(
-                "defaultBrowser",
-                11.0,
-                600.0,
-                theme::text_primary(),
-            ))),
-        )
-        .py(px(9.0))
+        let rule = Rule::plain(Vec::new(), browser.clone());
+        if order.pwrroute_default {
+            // `.rr.ovr`: the config's default, not used, and why.
+            rule_row(
+                "config-default",
+                "",
+                &rule,
+                RowState {
+                    struck: true,
+                    ..read_only(true)
+                },
+                Some(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.0))
+                        .child(
+                            text("defaultBrowser", 11.0, 500.0, theme::text_subtle())
+                                .line_through(),
+                        )
+                        .child(
+                            crate::widgets::one_line(
+                                STRUCK_NOTE,
+                                theme::SANS,
+                                500.0,
+                                10.5,
+                                13.65,
+                                theme::text_muted(),
+                            )
+                            .flex_1(),
+                        ),
+                ),
+            )
+            .debug_selector(|| "config-default-struck".into())
+            .bg(theme::bg_elevated())
+        } else {
+            rule_row(
+                "config-default",
+                "",
+                &rule,
+                read_only(true),
+                Some(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .child(text("defaultBrowser", 11.0, 600.0, theme::text_primary()))
+                        .child(accent_tag(EVERYTHING_ELSE_TAG)),
+                ),
+            )
+            .debug_selector(|| "config-default".into())
+        }
     });
     // A config that did not load has no rows to show: the banner says why.
     let handlers = config.problem.is_none().then(|| {
@@ -373,9 +920,36 @@ pub fn pane(
                 )),
         )
     });
+    // `.rr.ee`: PwrRoute's default, last, while it takes everything else:
+    // under the switch with a default in `rules.json`, or while the config
+    // does not load.
+    let everything_else = order.pwrroute_default.then(|| {
+        card()
+            .debug_selector(|| "config-everything-else".into())
+            .child(rule_row(
+                "config-everything-else-row",
+                "\u{221e}",
+                &app.store.everything_else(),
+                RowState {
+                    everything_else: true,
+                    ..read_only(true)
+                },
+                Some(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .child(text("Everything else", 11.0, 600.0, theme::text_primary()))
+                        .child(accent_tag(PWRROUTE_DEFAULT_TAG)),
+                ),
+            ))
+    });
 
     let expanded = app.visual_rules_expanded;
-    let visual = card().child(
+    let (eyebrow, owner) = config.visual_copy(order, &everything_else_name(&app.store));
+    let visual = card().debug_selector(|| "config-visual".into()).child(
         div()
             .flex()
             .items_start()
@@ -383,13 +957,12 @@ pub fn pane(
             .py(px(13.0))
             .px(px(16.0))
             .child(
-                card_title("Run after the config", "Visual rules").child(
+                card_title(eyebrow, "Visual rules").child(
                     paragraph(
                         format!(
-                            "{} rewrites, {} handlers. The default browser is set by the \
-                             config while it is selected.",
-                            app.rewrites.len(),
-                            app.handlers.len()
+                            "{}, {}. {owner}",
+                            plural(app.rewrites.len(), "rewrite"),
+                            plural(app.handlers.len(), "rule"),
                         ),
                         11.5,
                         18.4,
@@ -413,12 +986,26 @@ pub fn pane(
                 })),
             ),
     );
+    let visual = div()
+        .flex()
+        .flex_col()
+        .gap(px(18.0))
+        .child(visual)
+        .when(expanded, |visual| visual.child(visual_cards(app, cx)));
 
+    // In evaluation order (design 5b): the cards swap at once when the
+    // switch flips.
+    let (first, second) = if rules_first {
+        (Some(visual), None)
+    } else {
+        (None, Some(visual))
+    };
     pane_frame("config-pane")
         .children(crate::importer_view::rules_banners(app, cx))
-        .child(banner(config, cx))
+        .child(banner(app, config, order, cx))
         .children(rewrites)
+        .children(first)
         .children(handlers)
-        .child(visual)
-        .when(expanded, |pane| pane.child(visual_cards(app, cx)))
+        .children(second)
+        .children(everything_else)
 }

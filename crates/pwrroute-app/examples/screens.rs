@@ -1248,6 +1248,95 @@ fn main() {
             println!("{}", path.display());
         }
     }
+
+    // Rules and config views (WP-E): the Rules banner's switch, on (design
+    // Overview and Setup 5b), and with the warnings it stacks (5c), over the
+    // canvas's config: five handlers, two needing JS, on example.com hosts.
+    // The files go to a scratch directory, so a save never reaches a
+    // fixture.
+    {
+        let scratch = std::env::temp_dir().join("pwrroute-screens-override");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let handlers = r#"[
+    {
+      match: function isWorkplace(url) { return url.host.endsWith("workplace.example.com") },
+      browser: "Firefox",
+    },
+    { match: "chat.example.com/*", browser: { name: "Google Chrome", profile: "Work" } },
+    {
+      match: ["*.docs.example.com/*", "*.wiki.example.com/*"],
+      browser: { name: "Google Chrome", profile: "Work" },
+    },
+    {
+      match: "meet.example.com/*",
+      browser: (url) => (url.pathname.startsWith("/j/") ? "Firefox" : "Safari"),
+    },
+    { match: LAST, browser: "Orion" },
+  ]"#;
+        let write = |name: &str, default: &str, last: &str| {
+            let path = scratch.join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "export default {{\n  defaultBrowser: {default},\n  handlers: {},\n}};\n",
+                    handlers.replace("LAST", last)
+                ),
+            )
+            .expect("write the config");
+            path
+        };
+        let plain = write(
+            "override.finicky.ts",
+            "\"Safari\"",
+            "\"beta.example.net/*\"",
+        );
+        let warned = write("warnings.finicky.ts", "(url) => \"Safari\"", "\"*\"");
+        let rules = scratch.join("rules.json");
+        std::fs::write(
+            &rules,
+            r#"{
+  "defaultBrowser": "Google Chrome",
+  "defaultProfile": "Personal",
+  "precedence": "pwrroute",
+  "rewrites": [{ "match": "http://*.example.com/*", "actions": [{ "setScheme": "https" }] }],
+  "rules": [
+    { "match": ["localhost:*", "127.0.0.1:*", "*.test/*"], "browser": "Arc" },
+    { "match": "billing.example.com/*", "browser": "Google Chrome", "profile": "Personal" },
+    { "match": "status.example.com/*", "browser": "Safari" }
+  ]
+}
+"#,
+        )
+        .expect("write the rules");
+        let canvas = move |app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>| {
+            let file = pwrroute_engine::RulesFile::load(&rules).expect("read the rules");
+            app.store = rules_store::RulesStore::from_file(
+                Some(rules.clone()),
+                file,
+                true,
+                Some(std::time::SystemTime::now()),
+            );
+            if let Some(config) = &mut app.config {
+                // Named and dated as the design shows it.
+                config.path = "~/.finicky.ts".into();
+                config.modified =
+                    std::time::SystemTime::now().checked_sub(Duration::from_secs(4 * 60));
+            }
+            app.refresh(cx);
+        };
+        let canvas = std::rc::Rc::new(canvas);
+        let on = canvas.clone();
+        shoot("app-1b-override", Some(plain), &move |app, _, cx| {
+            on(app, cx)
+        });
+        shoot(
+            "app-1b-override-warnings",
+            Some(warned),
+            &move |app, _, cx| {
+                canvas(app, cx);
+            },
+        );
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
