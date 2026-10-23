@@ -64,6 +64,12 @@ the project and re-export here.
   (pinned) added. Written to the project, then downloaded from its preview
   and compared byte for byte with the file here. The other canvases,
   `pwrroute.css` and `support.js` are unchanged.
+- Updated **2026-10-23**: Overview and Setup's artboard 3c (config didn't
+  load) again shows the visual rules running without the config, with their
+  counts, as the router now does; faded "not running" rows are only for
+  nothing loading at all, and the hero copy note says so. Changed here
+  first, on top of the route-map revision above; the project takes it with
+  the next upload of this canvas. Nothing else changed.
 
 ## Files
 
