@@ -1286,7 +1286,7 @@ fn rules_router(rules: RulesFile) -> (Router, DryRunLauncher) {
 }
 
 #[test]
-fn the_default_names_its_owner_and_a_rules_json_handler_stays_unnumbered() {
+fn the_default_names_its_owner_and_a_rules_json_handler_its_place() {
     // A JS config's default is the config's (the tests above); with
     // rules.json alone, its default is PwrRoute's.
     let (router, _launcher) = rules_router(leveled_rules());
@@ -1299,12 +1299,12 @@ fn the_default_names_its_owner_and_a_rules_json_handler_stays_unnumbered() {
             owner: Some(Owner::PwrRoute)
         }
     }));
-    // rules.json handlers are not numbered yet: still Unreported.
+    // A rules.json handler is numbered by its place in the file.
     let record = handle
         .dispatch_and_wait(link("https://full.example.com/"))
         .unwrap();
     assert!(record.steps.contains(&Step::Matched {
-        by: Matched::Unreported
+        by: Matched::Rule { index: 4 }
     }));
 }
 
@@ -1866,7 +1866,7 @@ fn a_short_link_is_routed_by_where_it_lands_and_the_record_keeps_both() {
                 url: "https://github.com/pwrdrvr/x".into()
             },
             Step::Matched {
-                by: Matched::Unreported
+                by: Matched::Rule { index: 0 }
             },
             Step::Browser { browser },
             Step::Launched { dry_run: true },
@@ -2026,4 +2026,175 @@ fn nothing_is_requested_when_no_config_is_in_charge_or_expansion_is_off() {
     assert_eq!(record.browser.unwrap().name, "Safari");
     assert_eq!(launcher.launched()[0].url, "https://bit.ly/gh");
     assert!(net.asked().is_empty());
+}
+
+// Precedence (WP-A): the record says who decided, whichever order
+// rules.json's `precedence` runs the two lists in.
+
+/// [`CONFIG`] with `rules`, as the router's `Reloader` loads them together.
+fn config_and_rules_router(rules: RulesFile) -> (tempfile::TempDir, Router, DryRunLauncher) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("finicky.js");
+    std::fs::write(&path, CONFIG).unwrap();
+    let factory: ResolverFactory = Box::new(move || {
+        let sources = Sources {
+            config: Some(path),
+            rules,
+        };
+        let engine = Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())?;
+        Ok(Box::new(engine) as Box<dyn Resolver>)
+    });
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(Options::default(), Some(factory), launcher.clone()).unwrap();
+    (dir, router, launcher)
+}
+
+/// rules.json beside [`CONFIG`]: a switched-off rule, a rule for the
+/// config's Slack links and one for its own host, and Vivaldi · Work for
+/// everything else.
+fn beside_the_config(precedence: pwrroute_engine::Precedence) -> RulesFile {
+    let handler = |pattern: &str, browser: &str| Rule {
+        patterns: vec![pattern.to_owned()],
+        browser: browser.into(),
+        ..Rule::default()
+    };
+    RulesFile {
+        default_browser: "Vivaldi".into(),
+        default_profile: "Work".into(),
+        precedence,
+        rules: vec![
+            Rule {
+                enabled: false,
+                ..handler("*", "Safari")
+            },
+            handler("https://*.slack.com/*", "Arc"),
+            handler("https://rules.example.com/*", "Arc"),
+        ],
+        ..RulesFile::default()
+    }
+}
+
+fn matched(record: &DispatchRecord) -> Option<Matched> {
+    record.steps.iter().find_map(|step| match step {
+        Step::Matched { by } => Some(*by),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_go_order_names_config_handlers_rules_and_the_configs_default() {
+    let (_dir, router, launcher) =
+        config_and_rules_router(beside_the_config(pwrroute_engine::Precedence::Config));
+    let handle = router.handle();
+    let decided = |url: &str| matched(&handle.dispatch_and_wait(link(url)).unwrap());
+    // The config's Slack handler runs first and takes it.
+    assert_eq!(
+        decided("https://team.slack.com/a"),
+        Some(Matched::Handler { index: 0 })
+    );
+    assert_eq!(
+        decided("https://rules.example.com/a"),
+        Some(Matched::Rule { index: 2 })
+    );
+    assert_eq!(
+        decided("https://unmatched.example.com/"),
+        Some(Matched::Default {
+            owner: Some(Owner::Config)
+        })
+    );
+    let names: Vec<String> = launcher.launched().iter().map(|b| b.name.clone()).collect();
+    assert_eq!(names, ["Firefox", "Arc", "Safari"]);
+}
+
+#[test]
+fn pwrroute_precedence_names_its_rules_first_and_its_own_default() {
+    let (_dir, router, launcher) =
+        config_and_rules_router(beside_the_config(pwrroute_engine::Precedence::PwrRoute));
+    let handle = router.handle();
+    let decided = |url: &str| matched(&handle.dispatch_and_wait(link(url)).unwrap());
+    // rules.json's Slack rule now runs before the config's handler.
+    assert_eq!(
+        decided("https://team.slack.com/a"),
+        Some(Matched::Rule { index: 1 })
+    );
+    // A config handler that matches still decides, `browser: null` too.
+    assert_eq!(
+        decided("https://blocked.example.com/a"),
+        Some(Matched::Handler { index: 2 })
+    );
+    // Everything else is PwrRoute's: so is a config matcher that throws.
+    let pwrroute = Some(Matched::Default {
+        owner: Some(Owner::PwrRoute),
+    });
+    assert_eq!(decided("https://unmatched.example.com/"), pwrroute);
+    let threw = handle
+        .dispatch_and_wait(link("https://throws.example.com/"))
+        .unwrap();
+    assert_eq!(matched(&threw), pwrroute);
+    let launched: Vec<(String, String)> = launcher
+        .launched()
+        .iter()
+        .map(|b| (b.name.clone(), b.profile.clone()))
+        .collect();
+    assert_eq!(
+        launched,
+        [
+            ("Arc".to_owned(), String::new()),
+            ("Vivaldi".to_owned(), "Work".to_owned()),
+            ("Vivaldi".to_owned(), "Work".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn paused_a_skipped_rules_json_rule_is_the_records_own_rule() {
+    let (_dir, router, launcher) =
+        config_and_rules_router(beside_the_config(pwrroute_engine::Precedence::PwrRoute));
+    let handle = router.handle();
+    handle.set_paused(Some(pause_target()));
+    let record = handle
+        .dispatch_and_wait(link("https://team.slack.com/a"))
+        .unwrap();
+    // The rule that would have taken it, then the pause: `skipped` numbers
+    // config handlers only, so it is None and the rule says which.
+    assert_eq!(
+        record.steps[1..3],
+        [
+            Step::Matched {
+                by: Matched::Rule { index: 1 }
+            },
+            Step::Paused { skipped: None },
+        ]
+    );
+    // A config handler passed over is still numbered.
+    let record = handle
+        .dispatch_and_wait(link("https://blocked.example.com/a"))
+        .unwrap();
+    assert!(record.steps.contains(&Step::Paused { skipped: Some(2) }));
+    assert!(
+        launcher
+            .launched()
+            .iter()
+            .all(|b| b.name == "Google Chrome")
+    );
+}
+
+#[test]
+fn skipped_handler_numbers_only_the_configs_handlers() {
+    let with = |by| vec![Step::Matched { by }];
+    assert_eq!(
+        skipped_handler(&with(Matched::Handler { index: 3 })),
+        Some(3)
+    );
+    for by in [
+        Matched::Rule { index: 3 },
+        Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        },
+        Matched::Default { owner: None },
+        Matched::Unreported,
+    ] {
+        assert_eq!(skipped_handler(&with(by)), None, "{by:?}");
+    }
+    assert_eq!(skipped_handler(&[]), None);
 }

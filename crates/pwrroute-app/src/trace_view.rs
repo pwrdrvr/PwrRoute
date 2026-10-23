@@ -102,12 +102,15 @@ pub struct TraceResult {
 impl TraceView {
     /// The view of an engine trace. `rules` is the `rules.json` the engine
     /// loaded, for what the trace does not carry (rewrite actions and
-    /// openers); `opener` is the app the link was tested as coming from.
-    /// Runs of handlers that did not match fold into one step unless
-    /// `unfold` is set.
+    /// openers); `config` is the Finicky config in charge as the user knows
+    /// it (`~/.finicky.ts`), `None` when `rules.json` is the whole config;
+    /// `opener` is the app the link was tested as coming from. Runs of
+    /// handlers that did not match fold into one step unless `unfold` is
+    /// set.
     pub fn from_engine(
         trace: &Trace,
         rules: &RulesFile,
+        config: Option<&str>,
         opener: Option<&OpenerChoice>,
         took: Duration,
         unfold: bool,
@@ -139,7 +142,7 @@ impl TraceView {
                 continue;
             }
             flush_misses(&mut steps, &mut misses);
-            steps.push(engine_step(step, rules, opener, threw, steps.len()));
+            steps.push(engine_step(step, rules, config, opener, threw, steps.len()));
         }
         flush_misses(&mut steps, &mut misses);
         if !trace.console.is_empty() {
@@ -285,6 +288,7 @@ fn rule_name(step: &Step, plural: bool) -> String {
 fn engine_step(
     step: &Step,
     rules: &RulesFile,
+    config: Option<&str>,
     opener: Option<&OpenerChoice>,
     threw: bool,
     number: usize,
@@ -303,7 +307,7 @@ fn engine_step(
             .map(matcher_label)
     };
     let title = match step.stage {
-        Stage::Default => "Everything else".to_owned(),
+        Stage::Default => DefaultOwner::of(step, config).title(),
         _ => format!("{} {}", rule_name(step, false), step.index + 1),
     };
     if let Some(error) = &step.error {
@@ -401,24 +405,76 @@ fn engine_step(
                 body: vec![body],
             }
         }
-        Stage::Default => TraceStep {
-            number: Some(number),
-            state: StepState::Hit,
-            title,
-            detail: if threw {
-                "a rule threw".into()
-            } else {
-                "no handler matched".into()
-            },
-            body: vec![StepBody::Text(
-                if threw {
-                    "Finicky stops at the error and the default browser opens it."
+        Stage::Default => {
+            let owner = DefaultOwner::of(step, config);
+            TraceStep {
+                number: Some(number),
+                state: StepState::Hit,
+                title,
+                detail: if threw {
+                    "a rule threw".into()
+                } else if matches!(owner, DefaultOwner::PwrRoute { .. }) {
+                    "no rule or config handler matched".into()
                 } else {
-                    "The default browser opens it."
-                }
-                .into(),
-            )],
-        },
+                    "no handler matched".into()
+                },
+                body: vec![StepBody::Text(owner.opens_it(threw))],
+            }
+        }
+    }
+}
+
+/// Whose default took the link: the trace step's source says, never the
+/// browser. Only beside a config is there an owner to name: `rules.json`'s
+/// default is PwrRoute's under `"precedence": "pwrroute"`, otherwise the
+/// config's. With `rules.json` alone the step is plain "Everything else",
+/// as Try it says, since an empty default there means Safari until the
+/// user picks one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DefaultOwner<'a> {
+    /// No config in charge: the default browser, unnamed.
+    Alone,
+    /// PwrRoute's default, beside the config in charge (whose own
+    /// `defaultBrowser` is then not used).
+    PwrRoute { beside: &'a str },
+    /// The config's `defaultBrowser`, by the config's shown name.
+    Config(&'a str),
+}
+
+impl<'a> DefaultOwner<'a> {
+    fn of(step: &Step, config: Option<&'a str>) -> Self {
+        match (step.source, config) {
+            (_, None) => Self::Alone,
+            (Source::Rules, Some(config)) => Self::PwrRoute { beside: config },
+            (Source::Config, Some(config)) => Self::Config(config),
+        }
+    }
+
+    /// "Everything else", "Everything else · PwrRoute's default",
+    /// "Everything else · ~/.finicky.ts's default".
+    fn title(self) -> String {
+        match self {
+            Self::Alone => "Everything else".into(),
+            Self::PwrRoute { .. } => "Everything else \u{00b7} PwrRoute's default".into(),
+            Self::Config(config) => format!("Everything else \u{00b7} {config}'s default"),
+        }
+    }
+
+    /// The step's sentence: who opens the link, and after an error, why.
+    fn opens_it(self, threw: bool) -> String {
+        let who = match self {
+            Self::Alone => "the default browser".to_owned(),
+            Self::PwrRoute { .. } => "PwrRoute's default".to_owned(),
+            Self::Config(config) => format!("{config}'s defaultBrowser"),
+        };
+        match self {
+            _ if threw => format!("Finicky stops at the error and {who} opens it."),
+            Self::Alone => "The default browser opens it.".into(),
+            Self::PwrRoute { beside } => {
+                format!("{who} opens it; {beside}'s defaultBrowser is not used.")
+            }
+            Self::Config(_) => format!("{who} opens it."),
+        }
     }
 }
 
@@ -641,8 +697,14 @@ mod tests {
             steps: vec![thrown, default],
             ..trace
         };
-        let view =
-            TraceView::from_engine(&trace, &RulesFile::default(), None, Duration::ZERO, false);
+        let view = TraceView::from_engine(
+            &trace,
+            &RulesFile::default(),
+            None,
+            None,
+            Duration::ZERO,
+            false,
+        );
         let fallback = &view.steps[2];
         assert_eq!(fallback.title, "Everything else");
         assert_eq!(fallback.detail, "a rule threw");
@@ -668,8 +730,14 @@ mod tests {
             ],
             ..trace
         };
-        let view =
-            TraceView::from_engine(&trace, &RulesFile::default(), None, Duration::ZERO, false);
+        let view = TraceView::from_engine(
+            &trace,
+            &RulesFile::default(),
+            None,
+            None,
+            Duration::ZERO,
+            false,
+        );
         let titles: Vec<&str> = view.steps.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(
             titles,
@@ -697,8 +765,14 @@ mod tests {
             ],
         }))
         .expect("a trace");
-        let view =
-            TraceView::from_engine(&trace, &RulesFile::default(), None, Duration::ZERO, false);
+        let view = TraceView::from_engine(
+            &trace,
+            &RulesFile::default(),
+            None,
+            None,
+            Duration::ZERO,
+            false,
+        );
         let titles: Vec<&str> = view.steps.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(titles, ["Received", "Config output", "Opens in"]);
         let output = &view.steps[1];
@@ -725,9 +799,93 @@ mod tests {
             console: Vec::new(),
             ..trace
         };
-        let view =
-            TraceView::from_engine(&quiet, &RulesFile::default(), None, Duration::ZERO, false);
+        let view = TraceView::from_engine(
+            &quiet,
+            &RulesFile::default(),
+            None,
+            None,
+            Duration::ZERO,
+            false,
+        );
         assert_eq!(view.steps.len(), 2);
+    }
+
+    #[test]
+    fn everything_else_names_whose_default_took_the_link() {
+        let trace: Trace = serde_json::from_value(serde_json::json!({
+            "url": "https://a.example.com/",
+            "originalUrl": "https://a.example.com/",
+            "steps": [],
+            "resolution": {"browser": {
+                "name": "Vivaldi", "appType": "appName", "url": "https://a.example.com/"
+            }},
+        }))
+        .expect("a trace");
+        let default = |source| Step {
+            stage: Stage::Default,
+            matchers: Vec::new(),
+            matched: true,
+            won: true,
+            ..miss(source, 0)
+        };
+        let last = |steps: Vec<Step>, config: Option<&str>| {
+            let trace = Trace {
+                steps,
+                ..trace.clone()
+            };
+            let view = TraceView::from_engine(
+                &trace,
+                &RulesFile::default(),
+                config,
+                None,
+                Duration::ZERO,
+                false,
+            );
+            let step = view.steps[view.steps.len() - 2].clone();
+            (step.title, step.detail, step.body)
+        };
+        let text = |s: &str| vec![StepBody::Text(s.into())];
+        let config = Some("~/.finicky.ts");
+        // `"precedence": "pwrroute"` beside a config.
+        assert_eq!(
+            last(vec![default(Source::Rules)], config),
+            (
+                "Everything else \u{00b7} PwrRoute's default".into(),
+                "no rule or config handler matched".into(),
+                text("PwrRoute's default opens it; ~/.finicky.ts's defaultBrowser is not used.")
+            )
+        );
+        // The Go order: the config's own default.
+        assert_eq!(
+            last(vec![default(Source::Config)], config),
+            (
+                "Everything else \u{00b7} ~/.finicky.ts's default".into(),
+                "no handler matched".into(),
+                text("~/.finicky.ts's defaultBrowser opens it.")
+            )
+        );
+        // rules.json alone: no owner to name, as Try it says.
+        assert_eq!(
+            last(vec![default(Source::Rules)], None),
+            (
+                "Everything else".into(),
+                "no handler matched".into(),
+                text("The default browser opens it.")
+            )
+        );
+        // A config matcher threw: Finicky falls to whoever owns the default.
+        let thrown = Step {
+            error: Some("handler matcher threw".into()),
+            ..miss(Source::Config, 0)
+        };
+        assert_eq!(
+            last(vec![thrown, default(Source::Rules)], config),
+            (
+                "Everything else \u{00b7} PwrRoute's default".into(),
+                "a rule threw".into(),
+                text("Finicky stops at the error and PwrRoute's default opens it.")
+            )
+        );
     }
 
     #[test]

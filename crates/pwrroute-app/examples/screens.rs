@@ -726,6 +726,39 @@ fn main() {
         image.save(&path).expect("write the PNG");
         println!("{}", path.display());
     }
+
+    // Engine precedence (WP-A): with the fixture config in charge, Test a
+    // link names who takes everything else under each order.
+    fn with_precedence(
+        app: &mut PwrRoute,
+        precedence: pwrroute_engine::Precedence,
+        cx: &mut Context<'_, PwrRoute>,
+    ) {
+        let file = pwrroute_engine::RulesFile {
+            precedence,
+            ..fixtures::rules_file()
+        };
+        app.store = rules_store::RulesStore::from_file(
+            Some(std::env::temp_dir().join("pwrroute-screens-precedence.json")),
+            file,
+            true,
+            Some(std::time::SystemTime::now()),
+        );
+        app.refresh(cx);
+    }
+    for (name, precedence) in [
+        ("app-2a-config-default", pwrroute_engine::Precedence::Config),
+        (
+            "app-2a-pwrroute-default",
+            pwrroute_engine::Precedence::PwrRoute,
+        ),
+    ] {
+        shoot(name, Some(config.clone()), &move |app, window, cx| {
+            with_precedence(app, precedence, cx);
+            app.test.url.set("https://unmatched.example.com/");
+            app.navigate(Screen::TestLink, window, cx);
+        });
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

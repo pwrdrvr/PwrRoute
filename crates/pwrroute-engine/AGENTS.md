@@ -17,10 +17,19 @@ crate docs map the modules.
   `NativeHost`; `DefaultHost` (all keys up, no apps running, no output) is
   only for loads that count or describe a config's rules.
 - **`src/js/host.js` is PwrRoute's glue, not Finicky's.** It turns
-  `rules.json` into Finicky objects, appends them after a config's own (as the
-  Go resolver appended JSON handlers), and traces by wrapping matchers around
-  the API's exported `isMatch`, `rewriteUrl` and browser handling while
-  `openUrl` still decides. It also describes a config's own rules for the
+  `rules.json` into Finicky objects, merges them with a config's own, and
+  traces by wrapping matchers around the API's exported `isMatch`,
+  `rewriteUrl` and browser handling while `openUrl` still decides. The
+  merge follows `rules.json`'s `precedence`, which `RulesFile::plan` hands
+  over as `rulesFirst` and an owned `defaultBrowser`: absent, the JSON
+  handlers follow the config's (as the Go resolver appended them) and the
+  config's `defaultBrowser` stays; `"pwrroute"`, they lead and the JSON
+  default replaces the config's (unless it is empty or PwrRoute). Rewrites
+  run the config's first either way. A trace says who decided by each
+  step's `source`, the default step's included (`rules` when the JSON
+  default took the link); never infer it by comparing browsers. With the
+  field absent nothing may change: `finicky_compat` and `features.rs`
+  hold the Go order. It also describes a config's own rules for the
   window (`Engine::describe`), spelling fixed browsers out with the API's
   `createBrowserConfig`. Keep it to the API's exports; if a feature needs
   the bundle changed, stop and say so.

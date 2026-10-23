@@ -441,8 +441,9 @@ fn test_for(record: &DispatchRecord) -> Option<RouteTest> {
 
 impl PwrRoute {
     /// Opens or closes the row's "⋯" menu. The Save entry is resolved
-    /// here: a `rules.json` handler's record says only that one took it
-    /// (`Matched::Unreported`), so the probe names which.
+    /// here: records carry `Matched::Rule` for a `rules.json` handler (and
+    /// older ones `Matched::Unreported`), but Save as example still probes
+    /// the link again to name the handler until it uses the index.
     pub fn toggle_row_menu(&mut self, key: RowKey, cx: &mut Context<'_, Self>) {
         if self.actions.menu_was == Some(key) {
             self.actions.menu = None;
@@ -720,7 +721,9 @@ impl PwrRoute {
                     "Put it at the top, or click Add anyway.",
                 )
             }
-            (Source::Config, Stage::Handler) => {
+            // Under "pwrroute" the rules run first, so a config handler
+            // winning means this rule's pattern missed: the catch-all says so.
+            (Source::Config, Stage::Handler) if !rules.rules_first() => {
                 let config = self
                     .config
                     .as_ref()

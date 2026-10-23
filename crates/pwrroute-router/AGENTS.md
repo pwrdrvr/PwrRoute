@@ -51,8 +51,10 @@ runs on every platform.
   `RouterHandle::set_paused(Some(PauseTarget))` is read once per link in
   `Worker::process`, after `resolve`: the rules have run, so the rewrites,
   the rule steps and the record's privacy level stand; `Step::Paused {
-  skipped }` names the numbered handler that matched, and the target
-  replaces the browser, a `browser: null` or `private` handler included.
+  skipped }` names the config handler that matched (a `rules.json` rule
+  passed over is the record's `Matched::Rule`, with `skipped: None`), and
+  the target replaces the browser, a `browser: null` or `private` handler
+  included.
   Test a link ignores the pause. Keep it out of `launch` and `fallback()`.
 - **Short links expand on the dispatch thread, before the resolver.**
   `Worker::expand` reads `Resolver::short_links()` (the engine's list, as
@@ -69,7 +71,11 @@ runs on every platform.
 - **The trace is the product.** Activity, Test a link and the MCP tool all
   read `DispatchRecord`. The engine names the rules that fired through
   `Engine::trace`, which becomes `Resolved::rule_steps`; report more that way
-  rather than by changing `Step`.
+  rather than by changing `Step`. Who decided comes from the trace step's
+  source, never from comparing browsers: `Matched::Handler` is a config
+  handler, `Matched::Rule` a `rules.json` rule (file position), and
+  `Matched::Default`'s owner is `Config` or `PwrRoute`, whichever order
+  `rules.json`'s `precedence` ran them in (`dispatch::rule_steps`).
 - **IPC:** one JSON line each way per connection (`ipc.rs`). Bump
   `PROTOCOL_VERSION` on any incompatible change; a mismatched launch routes
   its own links rather than lose them.

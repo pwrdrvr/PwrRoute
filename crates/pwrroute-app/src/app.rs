@@ -147,9 +147,15 @@ impl PwrRoute {
             handlers: store.handlers(),
             selection,
             rail: None,
-            probe: Probe::new(config.clone(), store.edited()),
+            probe: Probe::at_home(config.clone(), home.as_deref(), store.edited()),
             tests: TestRuns::new(config.clone(), store.edited()),
-            test: TestLink::new(config, engine.and_then(Result::ok), store.written(), cx),
+            test: TestLink::new(
+                config,
+                home.as_deref(),
+                engine.and_then(Result::ok),
+                store.written(),
+                cx,
+            ),
             store,
             home,
             config: in_charge,
@@ -381,10 +387,11 @@ impl PwrRoute {
             .zip(engine.as_ref())
             .map(|(path, engine)| ConfigInCharge::new(path, self.home.as_deref(), engine.as_ref()));
         self.visual_rules_expanded = false;
-        self.probe = Probe::new(config.clone(), self.store.edited());
+        self.probe = Probe::at_home(config.clone(), self.home.as_deref(), self.store.edited());
         self.tests = TestRuns::new(config.clone(), self.store.edited());
         self.test = TestLink::new(
             config,
+            self.home.as_deref(),
             engine.and_then(Result::ok),
             self.store.written(),
             cx,

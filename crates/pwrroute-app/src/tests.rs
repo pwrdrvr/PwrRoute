@@ -546,7 +546,12 @@ fn test_a_link_reloads_a_changed_config(cx: &mut TestAppContext) {
     write("Firefox");
     let (view, cx) = open_with(cx, Some(config.clone()));
     click(cx, "nav-test");
-    type_sample(cx);
+    // A link no visual rule takes: rules.json routes beside the config.
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("https://unmatched.example.com/");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
     assert_eq!(trace(&view, cx).result.title, "Firefox");
 
     // A later modification time, as an edit gives it.
@@ -2369,4 +2374,148 @@ fn a_refused_import_opens_the_importer_again_with_the_reason(cx: &mut TestAppCon
     );
     assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Engine precedence (WP-A): with the fixture config in charge, Test a link
+// and Try it say who decides, in the order rules.json's `precedence` sets.
+
+/// The fixture rules under `precedence`, written to a scratch directory.
+fn precedence_store(precedence: pwrroute_engine::Precedence) -> RulesStore {
+    let path = scratch("precedence").join("rules.json");
+    RulesFile {
+        precedence,
+        ..crate::fixtures::rules_file()
+    }
+    .save(&path)
+    .expect("write the rules");
+    RulesStore::load(Some(path))
+}
+
+/// Test a link on `url` from no app; the trace's last step before
+/// "Opens in", and the result.
+fn test_unmatched(
+    view: &Entity<PwrRoute>,
+    cx: &mut VisualTestContext,
+    url: &str,
+) -> (String, String, String) {
+    click(cx, "nav-test");
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input(url);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let view = trace(view, cx);
+    let last = &view.steps[view.steps.len() - 2];
+    (last.title.clone(), last.detail.clone(), view.result.title)
+}
+
+#[gpui_kit::test]
+fn test_a_link_names_the_configs_default_in_the_go_order(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::Config);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        test_unmatched(&view, cx, "https://unmatched.example.com/"),
+        (
+            "Everything else \u{00b7} ~/.finicky.ts's default".into(),
+            "no handler matched".into(),
+            "Google Chrome".into()
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn test_a_link_names_pwrroutes_default_when_it_takes_everything_else(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::PwrRoute);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        test_unmatched(&view, cx, "https://unmatched.example.com/"),
+        (
+            "Everything else \u{00b7} PwrRoute's default".into(),
+            "no rule or config handler matched".into(),
+            "Google Chrome \u{00b7} Personal".into()
+        )
+    );
+}
+
+/// Try it on the first handler, whose sample the config's handler 4 also
+/// matches.
+fn try_first_handler(
+    view: &Entity<PwrRoute>,
+    cx: &mut VisualTestContext,
+) -> crate::try_it::TryResult {
+    click(cx, "visual-rules-toggle");
+    view.update(cx, |app, cx| {
+        app.select(Selection::Handler(1), cx);
+        app.select(Selection::Handler(0), cx);
+    });
+    draw(cx);
+    view.read_with(cx, |app, _| {
+        app.rail.as_ref().and_then(|r| r.try_result.clone())
+    })
+    .expect("Try it ran")
+}
+
+#[gpui_kit::test]
+fn try_it_never_says_to_move_a_rule_above_a_config_handler(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::Config);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        try_first_handler(&view, cx),
+        crate::try_it::TryResult::Text {
+            verdict: crate::try_it::Verdict::Beaten,
+            message: "Config handler 4 wins first: Google Chrome. ~/.finicky.ts's handlers \
+                      run before your rules; let PwrRoute's default take everything else to \
+                      run yours first."
+                .into(),
+            bold: Some("Google Chrome".into()),
+        }
+    );
+}
+
+#[gpui_kit::test]
+fn try_it_under_pwrroute_runs_the_rule_before_the_config(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::PwrRoute);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        try_first_handler(&view, cx),
+        crate::try_it::TryResult::Text {
+            verdict: crate::try_it::Verdict::Takes,
+            message: "This handler opens that link in Google Chrome \u{00b7} Work.".into(),
+            bold: None,
+        }
+    );
+}
+
+#[gpui_kit::test]
+fn add_rule_under_pwrroute_blames_the_pattern_not_the_configs_order(cx: &mut TestAppContext) {
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::PwrRoute);
+    let (view, cx) = open_store(cx, Some(config), store);
+    click(cx, "nav-activity");
+    // Row 0 came from Slack, which the config's handler 2 takes. Under
+    // "pwrroute" the rules run first, so a rule that misses the link is
+    // what the sheet says, not the config's order.
+    click(cx, "activity-row-0");
+    click(cx, "activity-add-rule-0");
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-pattern");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("example.com/*");
+    draw(cx);
+    click(cx, "add-rule-save");
+    let problem = sheet_problem(&view, cx).expect("a problem");
+    assert!(
+        problem.starts_with("This rule does not match the link"),
+        "{problem}"
+    );
+    // The suggested pattern takes the link ahead of the config: added.
+    click(cx, "add-rule-candidate-0");
+    assert_eq!(sheet_problem(&view, cx), None);
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
 }

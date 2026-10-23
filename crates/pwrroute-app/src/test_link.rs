@@ -11,14 +11,15 @@
 //! that came out. That is a URL the user chose to write to `rules.json`, by
 //! that click alone, and the card says so.
 //!
-//! The window runs its own [`Engine`]: over the Finicky config when one is
-//! in charge, exactly as the router loads it, and otherwise over the
-//! `rules.json` the Rules screen edits, as the file stands once every
-//! saveable edit is written (`RulesStore::written`). It is built on the
-//! first test and lives on the UI thread; QuickJS runtimes are not `Send`.
+//! The window runs its own [`Engine`], exactly as the router loads it: over
+//! the Finicky config in charge (if any) and the `rules.json` the Rules
+//! screen edits, as the file stands once every saveable edit is written
+//! (`RulesStore::written`), so `precedence` orders them as it routes. It is
+//! built on the first test and lives on the UI thread; QuickJS runtimes are
+//! not `Send`.
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant, SystemTime},
 };
@@ -107,6 +108,9 @@ pub struct TestLink {
     /// last run.
     pub saved_as: Option<usize>,
     config: Option<PathBuf>,
+    /// The config as the user knows it (`~/.finicky.ts`), for the trace's
+    /// last step: whose default took the link.
+    config_name: Option<String>,
     rules: RulesFile,
     /// Handed in by the window, or built on the first test. A load error is
     /// not kept, so the next test tries again (after the config is fixed,
@@ -121,22 +125,21 @@ pub struct TestLink {
 }
 
 impl TestLink {
-    /// `config` is the Finicky config in charge, if any, and `engine` the
-    /// engine the window already loaded it in (config alone, as here).
-    /// `rules` is the visual rules file as the router reads it.
+    /// `config` is the Finicky config in charge, if any (`home` shortens
+    /// its path to `~/…`), and `engine` the engine the window already loaded
+    /// it in (config alone). `rules` is the visual rules file as the router
+    /// reads it: with a config in charge the two route together, in the
+    /// order `rules.json`'s `precedence` says, and so does this.
     pub fn new(
         config: Option<PathBuf>,
+        home: Option<&Path>,
         engine: Option<Engine>,
         rules: RulesFile,
         cx: &mut App,
     ) -> Self {
-        // The router does not read `rules.json` yet; with a config in charge
-        // it routes by the config alone, and so does this.
-        let rules = if config.is_some() {
-            RulesFile::default()
-        } else {
-            rules
-        };
+        // The window's engine has the config alone: it resolves as the
+        // router does only while rules.json adds nothing.
+        let engine = engine.filter(|_| rules.is_empty());
         Self {
             url: TextField::new("", cx),
             opener: 0,
@@ -145,6 +148,9 @@ impl TestLink {
             unfold: false,
             copied: false,
             saved_as: None,
+            config_name: config
+                .as_deref()
+                .map(|path| crate::config_view::display_path(path, home)),
             config,
             rules,
             loaded: engine.as_ref().map(stamps).unwrap_or_default(),
@@ -278,6 +284,7 @@ impl TestLink {
             self.outcome = Some(Ok(TraceView::from_engine(
                 &run.trace,
                 &self.rules,
+                self.config_name.as_deref(),
                 run.opener.as_ref(),
                 run.took,
                 self.unfold,
@@ -312,12 +319,11 @@ impl TestLink {
         })
     }
 
-    /// The visual rules changed: test against the change. With a config in
-    /// charge the visual rules are not loaded, so nothing changes. A change
-    /// to the saved tests alone routes nothing differently, so the run on
-    /// screen stays.
+    /// The visual rules changed: test against the change, beside the config
+    /// in charge when there is one. A change to the saved tests alone
+    /// routes nothing differently, so the run on screen stays.
     pub fn set_rules(&mut self, rules: RulesFile) {
-        if self.config.is_some() || self.rules == rules {
+        if self.rules == rules {
             return;
         }
         let routing_unchanged = RulesFile {
@@ -581,7 +587,23 @@ fn step_row(
             .flex()
             .flex_col()
             .gap(px(3.0))
-            .child(text(step.title.clone(), 11.5, 600.0, theme::text_secondary()).line_height(px(16.1)))
+            // "Everything else · ~/.finicky.ts's default" is wider than the
+            // column: the owner goes on its own muted line, without the
+            // separator, each wrapping only if it must.
+            .child(step.title.split(" \u{00b7} ").enumerate().fold(
+                div().flex().flex_col(),
+                |title, (i, part)| {
+                    let (color, weight) = if i == 0 {
+                        (theme::text_secondary(), 600.0)
+                    } else {
+                        (theme::text_muted(), 500.0)
+                    };
+                    title.child(
+                        paragraph(part.to_owned(), 11.5, 16.1, color)
+                            .font_weight(theme::weight(weight)),
+                    )
+                },
+            ))
             .child(
                 div()
                     .font_family(theme::mono_family(500.0))
