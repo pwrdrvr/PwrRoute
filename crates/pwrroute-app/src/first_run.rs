@@ -259,12 +259,17 @@ impl FirstRunModel {
         }
     }
 
-    /// The Everything else browser, as this machine lists it.
-    pub fn fallback_choice(&self) -> Option<&BrowserChoice> {
+    /// Where the Everything else browser sits in the browser select.
+    pub fn fallback_index(&self) -> Option<usize> {
         let chosen = self.fallback.as_ref()?;
         self.browsers
             .iter()
-            .find(|choice| choice.label.name == chosen.name)
+            .position(|choice| choice.label.name == chosen.name)
+    }
+
+    /// The Everything else browser, as this machine lists it.
+    pub fn fallback_choice(&self) -> Option<&BrowserChoice> {
+        self.browsers.get(self.fallback_index()?)
     }
 
     /// The profiles the profile select offers after its "Default profile":
@@ -384,6 +389,18 @@ impl FirstRunModel {
             }
     }
 
+    /// The config is kept in charge and loads. A broken config kept in
+    /// charge runs only once it loads, so until then the window speaks of
+    /// the Everything else browser alone: no owner choice, no config in
+    /// the done help.
+    pub fn config_runs(&self) -> bool {
+        self.config_in_charge()
+            && self
+                .finicky
+                .as_ref()
+                .is_some_and(|config| config.error.is_none())
+    }
+
     /// The header's title.
     pub fn heading(&self) -> &'static str {
         if self.complete() {
@@ -403,7 +420,7 @@ impl FirstRunModel {
                 .to_owned();
         }
         let sources = match &self.finicky {
-            Some(config) if self.config_in_charge() => format!("{} and your rules", config.path),
+            Some(config) if self.config_runs() => format!("{} and your rules", config.path),
             _ => "your rules".to_owned(),
         };
         format!("Every link now goes where {sources} say. {}", tray_line())
@@ -476,7 +493,7 @@ impl FirstRunModel {
             );
         }
         match &self.finicky {
-            Some(config) if self.config_in_charge() => match self.precedence {
+            Some(config) if self.config_runs() => match self.precedence {
                 Precedence::Config => format!(
                     "{}'s defaultBrowser handles links its handlers don't claim. The browser \
                      below still catches config errors, browsers that can't open, and every \
@@ -573,7 +590,7 @@ impl FirstRunModel {
             .map_or_else(String::new, BrowserLabel::display);
         if self.config_owns_everything_else() {
             self.config_owner_label()
-        } else if self.config_in_charge() && self.precedence == Precedence::PwrRoute {
+        } else if self.config_runs() && self.precedence == Precedence::PwrRoute {
             format!("PwrRoute's default \u{00b7} {browser}")
         } else {
             browser
@@ -584,12 +601,7 @@ impl FirstRunModel {
     /// in charge, owns the default, and loads. While it does not load, the
     /// Everything else browser takes its links.
     fn config_owns_everything_else(&self) -> bool {
-        self.config_in_charge()
-            && self.precedence == Precedence::Config
-            && self
-                .finicky
-                .as_ref()
-                .is_some_and(|config| config.error.is_none())
+        self.config_runs() && self.precedence == Precedence::Config
     }
 
     /// A finished step folded to one line (4g): its short title and result.
@@ -1416,10 +1428,20 @@ fn header(model: &FirstRunModel) -> impl IntoElement {
     )
 }
 
+/// The orb's ring and glow `t` of the way through its ping: from rest
+/// (a 4px ring at 6%, a 28px glow at 20%) out to a 9px ring at 16% and the
+/// glow at 30%, then back to rest.
+fn ping(t: f32) -> [BoxShadow; 2] {
+    let peak = 1.0 - (2.0 * t - 1.0).abs();
+    [
+        accent_shadow(0.0, 4.0 + 5.0 * peak, 0.06 + 0.10 * peak),
+        accent_shadow(28.0, 0.0, 0.2 + 0.1 * peak),
+    ]
+}
+
 /// `.frhero` (4g): the orb, which pings once as it arrives, and the outcome
 /// as the title.
 fn done_header(model: &FirstRunModel) -> impl IntoElement {
-    let rest = [accent_shadow(0.0, 4.0, 0.06), accent_shadow(28.0, 0.0, 0.2)];
     let orb = div()
         .size(px(56.0))
         .flex_none()
@@ -1430,16 +1452,12 @@ fn done_header(model: &FirstRunModel) -> impl IntoElement {
         .bg(theme::accent_soft())
         .border_1()
         .border_color(theme::accent_border())
-        .shadow(rest.to_vec())
+        .shadow(ping(0.0).to_vec())
         .child(icon("pwrroute/mark.svg", 30.0, theme::accent()))
         .with_animation(
             "first-run-orb-ping",
             Animation::new(Duration::from_millis(600)).with_easing(ease_out),
-            move |orb, t| {
-                let mut shadows = rest.to_vec();
-                shadows.push(accent_shadow(0.0, 4.0 + 10.0 * t, 0.3 * (1.0 - t)));
-                orb.shadow(shadows)
-            },
+            move |orb, t| orb.shadow(ping(t).to_vec()),
         );
     div()
         .flex()
@@ -1572,15 +1590,24 @@ fn folded_step(model: &FirstRunModel, step: Step, index: usize) -> impl IntoElem
                     .bg(theme::success_soft())
                     .child(mono("\u{2713}", 10.0, 600.0, theme::success_text())),
             )
-            .child(text(title, 12.0, 600.0, theme::text_primary()))
-            .child(crate::widgets::one_line(
-                result,
-                theme::SANS,
-                400.0,
-                11.0,
-                14.0,
-                theme::text_muted(),
-            )),
+            .child(
+                // `.step.mini .sb`: 10px between the title and its result.
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(10.0))
+                    .child(text(title, 12.0, 600.0, theme::text_primary()).flex_none())
+                    .child(crate::widgets::one_line(
+                        result,
+                        theme::SANS,
+                        400.0,
+                        11.0,
+                        14.0,
+                        theme::text_muted(),
+                    )),
+            ),
         ("first-run-folded", index),
         160,
     )
@@ -1870,7 +1897,7 @@ fn everything_else_body(
     if state == StepState::Todo {
         return body.child(paragraph(model.everything_else_detail()));
     }
-    let owner = model.config_in_charge().then(|| {
+    let owner = model.config_runs().then(|| {
         let option = |id: &'static str, label: String, precedence: Precedence| {
             segment(label, model.precedence == precedence)
                 .id(id)
@@ -2025,11 +2052,13 @@ fn browser_picker(
     if !open {
         return column;
     }
+    let chosen = model.fallback_index();
     let rows = model
         .browsers
         .iter()
         .enumerate()
         .map(|(index, choice)| {
+            let selected = chosen == Some(index);
             menu_row(
                 ("first-run-browser", index),
                 Some(choice.label.badge.clone().into()),
@@ -2037,6 +2066,7 @@ fn browser_picker(
                 profiles_hint(&choice.profiles).map(Into::into),
             )
             .debug_selector(move || format!("first-run-browser-{index}"))
+            .when(selected, |row| row.bg(theme::bg_row_active()))
             .hover(|row| row.bg(theme::bg_hover()))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.choose_fallback(index, cx);
@@ -2058,7 +2088,7 @@ fn profile_picker(
         .fallback
         .as_ref()
         .and_then(|fallback| fallback.profile.clone());
-    let label = match chosen {
+    let label = match chosen.clone() {
         Some(profile) => field_label(profile, theme::text_primary()),
         None => text(DEFAULT_PROFILE, 12.5, 400.0, theme::text_subtle()),
     };
@@ -2069,12 +2099,20 @@ fn profile_picker(
     if !open {
         return column;
     }
+    // 0 is "Default profile"; the chosen one, else it, reads as selected.
+    let selected = chosen.as_ref().map_or(0, |profile| {
+        profiles
+            .iter()
+            .position(|name| name == profile)
+            .map_or(usize::MAX, |at| at + 1)
+    });
     let names = std::iter::once(DEFAULT_PROFILE.to_owned()).chain(profiles.iter().cloned());
     let rows = names
         .enumerate()
         .map(|(index, name)| {
             menu_row(("first-run-profile", index), None, name, None)
                 .debug_selector(move || format!("first-run-profile-{index}"))
+                .when(index == selected, |row| row.bg(theme::bg_row_active()))
                 .hover(|row| row.bg(theme::bg_hover()))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.choose_profile(index, cx);
@@ -3052,6 +3090,76 @@ mod tests {
         assert!(cx.debug_bounds("first-run-import").is_none());
         assert!(cx.debug_bounds("first-run-keep").is_some());
         assert!(cx.debug_bounds("first-run-dont-use").is_some());
+    }
+
+    /// 4c kept: until the config loads, Everything else speaks of its
+    /// browser alone (no owner choice, no defaultBrowser), and the done
+    /// help leaves the config out.
+    #[gpui_kit::test]
+    fn a_broken_config_kept_in_charge_claims_nothing(cx: &mut TestAppContext) {
+        let mut model = FirstRunModel::fixture();
+        let config = model.finicky.as_mut().unwrap();
+        config.error = Some("SyntaxError: x \u{00b7} ~/.finicky.ts line 4".to_owned());
+        config.importable = 0;
+        let (view, _calls, cx) = open_with(cx, model);
+        click("first-run-keep", cx);
+        let mut model = view.read_with(cx, |this, _| this.model.clone());
+        assert!(model.config_in_charge() && !model.config_runs());
+        assert!(cx.debug_bounds("first-run-owner-config").is_none());
+        assert!(cx.debug_bounds("first-run-owner-pwrroute").is_none());
+        assert!(
+            model
+                .everything_else_detail()
+                .starts_with("Links no rule claims")
+        );
+        assert_eq!(model.everything_else_result(), "Safari");
+        model.is_default = true;
+        assert!(model.complete());
+        assert!(
+            model
+                .help()
+                .starts_with("Every link now goes where your rules say.")
+        );
+        // The done panel still names it, as running once it loads.
+        assert!(
+            model
+                .where_links_go()
+                .iter()
+                .any(|line| line.subject == "~/.finicky.ts" && line.rest == " runs once it loads")
+        );
+    }
+
+    /// The selects mark what is chosen.
+    #[test]
+    fn the_chosen_browser_is_found_in_the_select() {
+        let model = plain();
+        let at = model.fallback_index().unwrap();
+        assert_eq!(model.browsers[at].label.name, "Google Chrome");
+        assert_eq!(
+            model.fallback_choice().map(|choice| &choice.label.name),
+            Some(&"Google Chrome".to_owned())
+        );
+        let none = FirstRunModel {
+            fallback: None,
+            ..plain()
+        };
+        assert_eq!(none.fallback_index(), None);
+    }
+
+    /// The orb's ping peaks halfway (a 9px ring at 16%, the glow at 30%)
+    /// and ends at rest.
+    #[test]
+    fn the_orb_pings_out_and_back() {
+        let rest = ping(0.0);
+        assert_eq!(rest[0].spread_radius, px(4.0));
+        assert!((rest[0].color.a - 0.06).abs() < 1e-6);
+        assert!((rest[1].color.a - 0.2).abs() < 1e-6);
+        let peak = ping(0.5);
+        assert_eq!(peak[0].spread_radius, px(9.0));
+        assert!((peak[0].color.a - 0.16).abs() < 1e-6);
+        assert_eq!(peak[1].blur_radius, px(28.0));
+        assert!((peak[1].color.a - 0.3).abs() < 1e-6);
+        assert_eq!(ping(1.0), rest);
     }
 
     /// 4h: no browsers, then Look again finds one, picks it and saves it.

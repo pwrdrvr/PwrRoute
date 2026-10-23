@@ -270,7 +270,7 @@ impl Facts {
             .unwrap_or_default();
         Self {
             handler: default_browser::state(cx),
-            browsers: choices(crate::browser_scan::apps(cx)),
+            browsers: choices(crate::browser_scan::apps(cx), &hidden(cx)),
             finicky: crate::router::config_in_charge().map(FinickyFound::read),
             rules_default: rules.default_browser,
             rules_profile: rules.default_profile,
@@ -281,10 +281,22 @@ impl Facts {
     }
 }
 
-/// The Everything else select's browsers from a scan: names, ids and
-/// profile names, as Settings › Browsers reads them.
-fn choices(apps: Vec<crate::browser_scan::DetectedApp>) -> Vec<BrowserChoice> {
+/// The apps Settings › Browsers hides from the pickers.
+fn hidden(cx: &App) -> crate::settings_store::BrowserSettings {
+    crate::settings_store::store(cx)
+        .map(|store| store.read(cx).settings().browsers.clone())
+        .unwrap_or_default()
+}
+
+/// The Everything else select's browsers from a scan, less the apps
+/// `hidden` keeps out of the pickers: names, ids and profile names, as
+/// Settings › Browsers reads them.
+fn choices(
+    apps: Vec<crate::browser_scan::DetectedApp>,
+    hidden: &crate::settings_store::BrowserSettings,
+) -> Vec<BrowserChoice> {
     apps.into_iter()
+        .filter(|app| !hidden.is_hidden(app.id()))
         .map(|app| BrowserChoice {
             label: BrowserLabel::new(&badge_for(&app.name), &app.name, None),
             value: app.id().to_owned(),
@@ -407,9 +419,7 @@ pub fn hooks() -> FirstRunHooks {
         pwrroute_os::data_dir(),
         discovery::rules_path(&discovery::Environment::current()),
         crate::router::config_in_charge(),
-        Rc::new(|source, cx| {
-            crate::importer_view::set_source(source, cx);
-        }),
+        Rc::new(crate::importer_view::set_source_and_show),
         Rc::new(|first_run, cx| {
             let connected: Vec<DisplayId> =
                 cx.displays().iter().map(|display| display.id()).collect();
@@ -443,7 +453,9 @@ pub fn main_window_display(
 pub type OpenMain = Rc<dyn Fn(Option<DisplayId>, &mut App)>;
 
 /// Saves `settings.json`'s source and switches the router to it
-/// (`importer_view::set_source`, which calls `router::choose_source`).
+/// (`importer_view::set_source`, which calls `router::choose_source`), and
+/// shows an open main window the config now in charge
+/// (`importer_view::set_source_and_show`).
 pub type SetSource = Rc<dyn Fn(crate::settings_store::SourceSettings, &mut App)>;
 
 /// `rules.json` after an import, for the window: its rules and default.
@@ -518,8 +530,9 @@ pub fn hooks_with(
             // The importer on Choose source, every proven rule checked; it
             // writes rules.json and answers when it closes.
             ImportChoice::Import => {
+                // Answered on the next turn: the window is still mid-update.
                 let Some(path) = config.clone() else {
-                    reply(ImportOutcome::Cancelled, cx);
+                    cx.defer(move |cx| reply(ImportOutcome::Cancelled, cx));
                     return;
                 };
                 let dir = import_dir.clone();
@@ -545,7 +558,10 @@ pub fn hooks_with(
                 });
             }
         }),
-        on_rescan: Rc::new(|cx| choices(crate::browser_scan::rescan(cx))),
+        on_rescan: Rc::new(|cx| {
+            let hidden = hidden(cx);
+            choices(crate::browser_scan::rescan(cx), &hidden)
+        }),
         on_set_default_browser: Rc::new(|cx| match default_browser::request(cx) {
             Ok(outcome) => {
                 eprintln!("pwrroute: first run asked the OS for the default browser: {outcome:?}");
@@ -1170,6 +1186,59 @@ mod tests {
             State::load(&data_dir).unwrap().import,
             Some(ImportChoice::Import)
         );
+    }
+
+    /// Import with no config to import: cancelled, answered on the next
+    /// turn, since the window that asked is still mid-update.
+    #[gpui_kit::test]
+    fn an_import_without_a_config_is_cancelled_on_the_next_turn(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().join("PwrRoute")),
+            None,
+            None,
+            no_source(),
+            Rc::new(|_, _| panic!("no main window")),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let heard = replies.clone();
+        cx.update(|cx| {
+            (hooks.on_import)(
+                ImportChoice::Import,
+                Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                cx,
+            );
+            assert!(replies.borrow().is_empty(), "not answered mid-update");
+        });
+        assert_eq!(*replies.borrow(), [ImportOutcome::Cancelled]);
+    }
+
+    /// Apps hidden in Settings › Browsers stay out of the Everything else
+    /// select, so the preselection never lands on one.
+    #[test]
+    fn hidden_browsers_are_not_offered() {
+        let app = |name: &str, id: &str| crate::browser_scan::DetectedApp {
+            name: name.to_owned(),
+            bundle_id: Some(id.to_owned()),
+            location: PathBuf::from(format!("/Applications/{name}.app")),
+            profiles: Vec::new(),
+        };
+        let apps = vec![
+            app("Firefox", "org.mozilla.firefox"),
+            app("Safari", "com.apple.Safari"),
+        ];
+        let hidden = crate::settings_store::BrowserSettings {
+            hidden: vec!["ORG.mozilla.firefox".to_owned()],
+        };
+        let offered = choices(apps.clone(), &hidden);
+        assert_eq!(
+            offered
+                .iter()
+                .map(|choice| choice.label.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Safari"]
+        );
+        assert_eq!(choices(apps, &Default::default()).len(), 2);
     }
 
     /// After first run the main window opens where the first-run window

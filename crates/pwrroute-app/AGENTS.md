@@ -122,7 +122,10 @@ their own modules.
   writes `rules.json` without opening the main window (through its store
   only when it is already open), and the importer answers through its
   `OnDone`, imported with the count or cancelled however it closed (its
-  release counts as a cancel). The config file is only ever read.
+  release counts as a cancel, and so does a window that fails to open).
+  Choose another file keeps the first-run context: the file picked opens
+  for first run the same way, and no file picked is a cancel. The config
+  file is only ever read.
 - **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
   `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
   handle and an engine that follows the same files; `pwrroute mcp` in
@@ -177,14 +180,18 @@ their own modules.
   else, the OS default), else two; the body scrolls, and finished steps
   fold under "Where links go" once routing starts. Everything else is
   preselected (the config's fixed `defaultBrowser`, the OS default unless
-  it is PwrRoute, the first browser found) and written at once to
+  it is PwrRoute, the first browser found, all less the apps
+  `browsers.hidden` hides) and written at once to
   `rules.json`'s `defaultBrowser` and `defaultProfile` ("" for the
   browser's own default); for a config kept in charge, its "who owns
-  everything else" control writes `rules.json`'s `precedence`. Both are
+  everything else" control writes `rules.json`'s `precedence` (shown only
+  while that config loads; a broken one kept speaks of the browser alone
+  until it does). Both are
   direct `RulesFile` writes; the main window's store follows the file.
   Import N rules shows "Importing…" until the importer answers; Don't use
-  it turns the config off through `importer_view::set_source`
-  (`visualOnly`, `router::choose_source`), which `onboarding::hooks_with`
+  it turns the config off through `importer_view::set_source_and_show`
+  (`visualOnly`, `router::choose_source`, and an open main window shown
+  the change), which `onboarding::hooks_with`
   takes as a parameter so tests never switch the process-wide source.
   "Open PwrRoute" (every step done) and "Later" mark it done and
   open the main window on Rules, on the first-run window's display

@@ -105,7 +105,8 @@ pub struct FoundConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportOutcome {
     /// It closed without importing: Cancel, its close button, Choose
-    /// another file, or another caller taking the window over.
+    /// another file with no file chosen, the window failing to open, or
+    /// another caller taking the window over.
     Cancelled,
     /// `count` rules written. `keeps_config`: Choose source kept the config
     /// in charge; otherwise the router stopped reading it.
@@ -234,6 +235,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
         cx.activate(true);
         return;
     }
+    let failed = from_first_run.as_ref().map(|from| from.on_done.clone());
     let display = crate::placement::display_for_new_window(cx);
     let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let opened = cx.open_window(
@@ -262,7 +264,13 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
             let _ = window.update(cx, |this, window, cx| window.focus(&this.focus, cx));
             cx.activate(true);
         }
-        Err(error) => eprintln!("pwrroute: could not open the importer: {error}"),
+        // First run would otherwise wait on Importing… for good.
+        Err(error) => {
+            eprintln!("pwrroute: could not open the importer: {error}");
+            if let Some(on_done) = failed {
+                cx.defer(move |cx| on_done(ImportOutcome::Cancelled, cx));
+            }
+        }
     }
 }
 
@@ -354,15 +362,26 @@ impl Importer {
         });
     }
 
+    /// Choose another file. An importer first run opened stays first
+    /// run's: the file chosen opens with it, so Import still writes without
+    /// opening the main window and first run hears the outcome; no file
+    /// chosen is a cancel.
     fn choose_another(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let from_first_run = self.from_first_run.take();
         window.remove_window();
-        cx.defer(prompt_for_config);
+        cx.defer(move |cx| prompt_for(from_first_run, cx));
     }
 }
 
 /// File › Import Finicky config…: any `.js` or `.ts`, not only the one
 /// discovery found.
 pub fn prompt_for_config(cx: &mut App) {
+    prompt_for(None, cx);
+}
+
+/// [`prompt_for_config`], for the importer `from_first_run` belongs to
+/// when it has one.
+fn prompt_for(from_first_run: Option<FromFirstRun>, cx: &mut App) {
     let paths = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
         files: true,
         directories: false,
@@ -370,11 +389,17 @@ pub fn prompt_for_config(cx: &mut App) {
         prompt: Some("Import".into()),
     });
     cx.spawn(async move |cx| {
-        if let Ok(Ok(Some(paths))) = paths.await
-            && let Some(path) = paths.into_iter().next()
-        {
-            cx.update(|cx| open(path, false, cx));
-        }
+        let chosen = match paths.await {
+            Ok(Ok(Some(paths))) => paths.into_iter().next(),
+            _ => None,
+        };
+        cx.update(|cx| match (chosen, from_first_run) {
+            (Some(path), from) => {
+                open_inner(path, false, crate::router::config_in_charge(), from, cx);
+            }
+            (None, Some(from)) => (from.on_done)(ImportOutcome::Cancelled, cx),
+            (None, None) => {}
+        });
     })
     .detach();
 }
@@ -477,6 +502,16 @@ pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> Option<Option<
     };
     crate::router::choose_source(choice, settings_store::router(cx).as_ref());
     Some(config)
+}
+
+/// [`set_source`], then the open main window shown the config now in
+/// charge, as the importer's own switch does. First run's Don't use it.
+pub(crate) fn set_source_and_show(source: SourceSettings, cx: &mut App) {
+    if let Some(config) = set_source(source, cx)
+        && let Some(main) = main_window(cx)
+    {
+        let _ = main.update(cx, |app, _, cx| app.set_config(config, cx));
+    }
 }
 
 /// Undo import's source half: the source before the import, when it
