@@ -680,6 +680,21 @@ async fn rules_apply(b: Backends, input: RulesApplyInput) -> Reply {
     let dry_run = input.dry_run;
     type Noted<T> = Result<T, (RulesError, Option<&'static str>)>;
     let result = tokio::task::spawn_blocking(move || -> Noted<(Value, Option<&'static str>)> {
+        // The file's loader reads any other precedence as the config's
+        // order; from an agent, a misspelling is refused rather than
+        // written as a change that changes nothing.
+        match input.patch.get("precedence") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(word)) if word == "config" || word == "pwrroute" => {}
+            Some(_) => {
+                return Err((
+                    RulesError::Invalid(
+                        "precedence must be \"pwrroute\" or \"config\"".to_owned(),
+                    ),
+                    None,
+                ));
+            }
+        }
         let current = b.rules.read().map_err(|e| (RulesError::Other(e), None))?;
         let mut rules = current.rules;
         merge_patch(&mut rules, &Value::Object(input.patch));

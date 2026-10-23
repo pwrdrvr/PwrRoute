@@ -98,7 +98,9 @@ and the audit holds no content.
   `EngineTester` runs the saved examples and tests on an engine of its own
   that follows the same config choice and `rules.json` as the router's
   resolver. The app wires them in `crates/pwrroute-app/src/mcp.rs`.
-- **Apply refuses, it does not warn.** `pwrroute_rules_apply` runs the
+- **Apply refuses, it does not warn.** A `precedence` other than
+  `"pwrroute"`, `"config"` or `null` is `invalid_rules` (the file loader
+  reads anything else as the config's order). `pwrroute_rules_apply` runs the
   saved examples and tests before and after the patch; a case that passed
   and now fails is a regression, and the write is refused with the list
   unless `force` is true. The audit's `note` says `refused` or `forced` in
