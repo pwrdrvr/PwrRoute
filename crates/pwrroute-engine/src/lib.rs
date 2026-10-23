@@ -72,8 +72,8 @@ pub use import::{Review, Reviewed, SourceLines, Suggested, Verdict, Visual};
 pub use native::NativeHost;
 pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
 pub use rules::{
-    Expectation, FALLBACK_BROWSER, Place, PrivacySetting, Problem, Rewrite, RewriteAction,
-    RewriteExample, RouteTest, Rule, RulesFile, RulesOptions,
+    Expectation, FALLBACK_BROWSER, Place, Precedence, PrivacySetting, Problem, Rewrite,
+    RewriteAction, RewriteExample, RouteTest, Rule, RulesFile, RulesOptions,
 };
 pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
 pub use suggest::{Suggestion, suggest_rule};

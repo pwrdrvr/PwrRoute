@@ -439,7 +439,7 @@ mod tests {
     use super::*;
     use crate::{
         link::{Link, OpenerInfo, Source},
-        trace::{DispatchId, Matched, Outcome, Timings},
+        trace::{DispatchId, Matched, Outcome, Owner, Timings},
     };
 
     const URL: &str = "https://bank.example.com/account?token=hunter2";
@@ -499,6 +499,62 @@ mod tests {
             .lines()
             .map(str::to_owned)
             .collect()
+    }
+
+    fn with_matched(mut record: DispatchRecord, by: Matched) -> DispatchRecord {
+        for step in &mut record.steps {
+            if let Step::Matched { by: matched } = step {
+                *matched = by;
+            }
+        }
+        record
+    }
+
+    #[test]
+    fn records_journaled_before_rule_numbers_and_default_owners_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut journal = Journal::new(JournalConfig::new(dir.path(), JournalMode::Full));
+        let old_default = Matched::Default { owner: None };
+        let owned_default = Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        };
+        let rule = Matched::Rule { index: 4 };
+        for (id, by) in [(1, old_default), (2, owned_default), (3, rule)] {
+            journal.append(&with_matched(record(id, at(NOON), Privacy::Full), by));
+        }
+        assert_eq!(journal.error(), None);
+
+        let path = dir.path().join("activity-2026-10-20.jsonl");
+        let lines = lines_of(&path);
+        // A default with no owner is written byte for byte as older builds
+        // wrote every default, so their lines and these read the same way.
+        assert!(
+            lines[0].contains(r#"{"kind":"matched","by":{"kind":"default"}}"#),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains(r#"{"kind":"matched","by":{"kind":"default","owner":"pwrroute"}}"#),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains(r#"{"kind":"matched","by":{"kind":"rule","index":4}}"#),
+            "{}",
+            lines[2]
+        );
+
+        let read = read_recent(dir.path(), 10).unwrap();
+        let matched: Vec<Matched> = read
+            .iter()
+            .flat_map(|r| &r.steps)
+            .filter_map(|s| match s {
+                Step::Matched { by } => Some(*by),
+                _ => None,
+            })
+            .collect();
+        // Newest first.
+        assert_eq!(matched, [rule, owned_default, old_default]);
     }
 
     #[test]

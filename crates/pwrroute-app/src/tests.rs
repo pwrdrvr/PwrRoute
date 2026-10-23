@@ -1830,7 +1830,7 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
             &base,
             31,
             "https://issues.example/12345/comments",
-            Matched::Default,
+            Matched::Default { owner: None },
         ),
     );
     let mut host = record_like(&base, 32, "https://bank.example/login", Matched::Unreported);

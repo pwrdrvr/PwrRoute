@@ -108,7 +108,7 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
         matches!(
             s,
             Step::Matched {
-                by: Matched::Default
+                by: Matched::Default { .. }
             } | Step::Fallback { .. }
                 | Step::Paused { .. }
         )
@@ -177,7 +177,13 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
                     summary: format!("config handler {} matched", index + 1),
                     url: None,
                 },
-                Matched::Default => TraceStep {
+                Matched::Rule { index } => TraceStep {
+                    kind: StepKind::Handler,
+                    index: Some(*index),
+                    summary: format!("rules.json rule {} matched", index + 1),
+                    url: None,
+                },
+                Matched::Default { .. } => TraceStep {
                     kind: StepKind::Default,
                     index: None,
                     summary: "no handler matched: the default browser".to_owned(),
@@ -463,7 +469,7 @@ mod tests {
                 },
                 error: None,
                 rule_steps: vec![Step::Matched {
-                    by: Matched::Default,
+                    by: Matched::Default { owner: None },
                 }],
                 privacy,
             })

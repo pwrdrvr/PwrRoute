@@ -29,7 +29,7 @@ use std::{
     time::SystemTime,
 };
 
-use pwrroute_engine::{self as engine, Place, Privacy, Problem, RouteTest, RulesFile};
+use pwrroute_engine::{self as engine, Place, Precedence, Privacy, Problem, RouteTest, RulesFile};
 
 use crate::app::Selection;
 use crate::config_view::display_path;
@@ -351,6 +351,39 @@ impl RulesStore {
     /// The default browser's badge and name.
     pub fn default_browser(&self) -> (gpui_kit::SharedString, gpui_kit::SharedString) {
         rules_model::default_browser(&self.base)
+    }
+
+    /// `rules.json`'s `precedence`: whether these rules and the default
+    /// browser go before a JS config's handlers and default.
+    /// [`Precedence::Config`] (the file's absent field) is the Go host's
+    /// order.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "for the precedence toggle; only tests call it so far"
+        )
+    )]
+    pub fn precedence(&self) -> Precedence {
+        self.base.precedence
+    }
+
+    /// Sets `precedence`, as an edit written on the next save like any
+    /// other. Setting the value the store already has changes nothing and
+    /// leaves the store clean. [`Precedence::Config`] is written by leaving
+    /// the field out.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "for the precedence toggle; only tests call it so far"
+        )
+    )]
+    pub fn set_precedence(&mut self, precedence: Precedence) {
+        if self.base.precedence != precedence {
+            self.base.precedence = precedence;
+            self.touch();
+        }
     }
 
     // --- edits -----------------------------------------------------------
@@ -942,6 +975,58 @@ mod tests {
                 "rules": [{ "match": "github.com/*", "browser": "Firefox", "profile": "Work" }]
             })
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn precedence_is_an_edit_that_saves_and_survives_other_edits() {
+        let dir = scratch("precedence");
+        let path = dir.join("rules.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"{ "defaultBrowser": "Firefox", "defaultProfile": "Work",
+                 "rules": [{ "match": "a.example/*", "browser": "Safari" }] }"#,
+        )
+        .unwrap();
+        let read = |path: &Path| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        let mut store = RulesStore::load(Some(path.clone()));
+        assert_eq!(store.precedence(), Precedence::Config);
+
+        // The value it has already: nothing to save.
+        store.set_precedence(Precedence::Config);
+        assert!(!store.needs_save());
+
+        store.set_precedence(Precedence::PwrRoute);
+        assert!(store.needs_save());
+        assert_eq!(store.status(), &Status::Unsaved);
+        assert_eq!(store.edited().precedence, Precedence::PwrRoute);
+        assert_eq!(store.written().precedence, Precedence::PwrRoute);
+        store.save().unwrap();
+        assert!(!store.needs_save());
+        assert_eq!(read(&path)["precedence"], "pwrroute");
+
+        // A later edit keeps it, and so does reading the file again.
+        store.set_browser(0, "Arc");
+        store.save().unwrap();
+        assert_eq!(
+            read(&path),
+            json!({
+                "defaultBrowser": "Firefox",
+                "defaultProfile": "Work",
+                "precedence": "pwrroute",
+                "rules": [{ "match": "a.example/*", "browser": "Arc" }]
+            })
+        );
+        let mut store = RulesStore::load(Some(path.clone()));
+        assert_eq!(store.precedence(), Precedence::PwrRoute);
+
+        // Back to the Go order: the field goes.
+        store.set_precedence(Precedence::Config);
+        store.save().unwrap();
+        assert!(read(&path).get("precedence").is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

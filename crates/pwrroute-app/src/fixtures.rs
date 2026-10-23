@@ -144,7 +144,9 @@ pub fn activity() -> Vec<DispatchRecord> {
         steps: vec![
             Step::Received { url: url.into() },
             Step::Matched {
-                by: handler.map_or(Matched::Default, |index| Matched::Handler { index }),
+                by: handler.map_or(Matched::Default { owner: None }, |index| Matched::Handler {
+                    index,
+                }),
             },
             Step::Browser { browser },
             Step::Launched { dry_run: false },

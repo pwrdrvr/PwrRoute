@@ -22,7 +22,7 @@ use crate::{
     launcher::Launcher,
     link::{Link, normalize_url},
     recent::{RecentDispatches, Retention},
-    trace::{DispatchId, DispatchRecord, Matched, Outcome, Privacy, Step, Timings},
+    trace::{DispatchId, DispatchRecord, Matched, Outcome, Owner, Privacy, Step, Timings},
 };
 
 /// Where links go when no config is loaded, the config sends a link back
@@ -103,7 +103,11 @@ impl Resolver for Engine {
 /// The router's rule steps from the engine's trace: each rewrite that ran,
 /// then what chose the browser. Rule numbers index the config's own lists;
 /// `rules.json` entries, which follow them, are traced without a number
-/// (`Step` cannot say which list a number belongs to).
+/// (`Step` cannot say which list a number belongs to), so a `rules.json`
+/// handler is still [`Matched::Unreported`] here, not [`Matched::Rule`].
+/// The default's owner is the trace step's source: `rules.json`'s default
+/// (no config in charge) is [`Owner::PwrRoute`], the config's is
+/// [`Owner::Config`].
 fn rule_steps(trace: &Trace) -> Vec<Step> {
     let numbered = |s: &TraceStep| (s.source == Source::Config).then_some(s.index);
     let mut steps: Vec<Step> = trace
@@ -116,7 +120,9 @@ fn rule_steps(trace: &Trace) -> Vec<Step> {
         })
         .collect();
     let by = match trace.winner() {
-        Some(s) if s.stage == Stage::Default => Matched::Default,
+        Some(s) if s.stage == Stage::Default => Matched::Default {
+            owner: Some(Owner::from(s.source)),
+        },
         Some(s) => numbered(s).map_or(Matched::Unreported, |index| Matched::Handler { index }),
         None => Matched::Unreported,
     };

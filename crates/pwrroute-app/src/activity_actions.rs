@@ -455,7 +455,8 @@ impl PwrRoute {
         let save = match matched(&record) {
             _ if record.privacy != Privacy::Full || record.browser.is_none() => None,
             // A rules.json handler took it: the link becomes its example.
-            Some(Matched::Unreported) => {
+            // A numbered `Rule` is probed too for now, like `Unreported`.
+            Some(Matched::Unreported | Matched::Rule { .. }) => {
                 let url = matched_url(&record).to_owned();
                 let opener = engine_opener(&record);
                 match self.probe.winning_handler(&url, opener.as_ref()) {
@@ -472,7 +473,7 @@ impl PwrRoute {
                 }
             }
             // The default, or a config handler: pin the whole resolution.
-            Some(Matched::Default | Matched::Handler { .. }) => Some(Save::Test {
+            Some(Matched::Default { .. } | Matched::Handler { .. }) => Some(Save::Test {
                 expects: opened_label(&record),
             }),
             None => None,
@@ -543,7 +544,7 @@ impl PwrRoute {
                         time: clock(r.received_at),
                         url: matched_url(r).to_owned(),
                         opened: opened_label(r),
-                        routed: !matches!(matched(r), Some(Matched::Default) | None),
+                        routed: !matches!(matched(r), Some(Matched::Default { .. }) | None),
                     })
                     .collect();
             }
@@ -897,7 +898,7 @@ pub fn row_menu(
                 .into_any_element()
         });
     let why = note.is_none().then(|| match record.privacy {
-        Privacy::Full if matches!(matched(&record), Some(Matched::Default)) => Some(
+        Privacy::Full if matches!(matched(&record), Some(Matched::Default { .. })) => Some(
             "No rule matched; it went to the default. Add a rule, or save it as a test so a \
              future rule cannot take it unnoticed."
                 .to_owned(),
@@ -1764,7 +1765,7 @@ mod tests {
         let record = record(
             "https://app.metrics.example/dashboard/abc-123?from_ts=1&to_ts=2",
             Privacy::Full,
-            Matched::Default,
+            Matched::Default { owner: None },
             Some("Slack"),
         );
         let browsers = vec![BrowserChoice {
@@ -1844,7 +1845,7 @@ mod tests {
         let with_id = record(
             "https://issues.example/12345/comments",
             Privacy::Full,
-            Matched::Default,
+            Matched::Default { owner: None },
             None,
         );
         let sheet = cx.update(|cx| AddRule::new(&with_id, &[], cx));
@@ -1883,7 +1884,7 @@ mod tests {
         let record = record(
             "https://www.apple.com/macos/",
             Privacy::Full,
-            Matched::Default,
+            Matched::Default { owner: None },
             Some("Safari"),
         );
         let test = test_for(&record).expect("a test");

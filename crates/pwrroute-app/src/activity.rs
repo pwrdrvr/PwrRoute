@@ -528,7 +528,7 @@ fn is_unrouted(record: &DispatchRecord) -> bool {
         matches!(
             step,
             Step::Matched {
-                by: Matched::Default
+                by: Matched::Default { .. }
             } | Step::Fallback { .. }
                 | Step::Paused { .. }
         )
@@ -692,14 +692,15 @@ fn rule_label(steps: &[Step]) -> String {
             } else {
                 format!("h {}", index + 1)
             }),
-            // A rules.json handler: the router does not number those.
+            // A rules.json handler: the router does not number those yet
+            // (`Rule` is labelled like `Unreported` until it does).
             Step::Matched {
-                by: Matched::Unreported,
+                by: Matched::Unreported | Matched::Rule { .. },
             } => parts.push(if paused { "skipped h" } else { "handler" }.into()),
             // Paused, the pause target took what these would have sent to
             // the default or the fallback: "paused" says it all.
             Step::Matched {
-                by: Matched::Default,
+                by: Matched::Default { .. },
             } if !paused => parts.push("default".into()),
             Step::Fallback { .. } | Step::RefusedLoop { .. } if !paused => {
                 parts.push("fallback".into());
@@ -815,8 +816,8 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
                 StepMark::Hit(number),
                 match by {
                     Matched::Handler { index } => format!("handler {}", index + 1),
-                    Matched::Default => "default \u{00b7} no handler matched".to_owned(),
-                    Matched::Unreported => "a handler matched".to_owned(),
+                    Matched::Default { .. } => "default \u{00b7} no handler matched".to_owned(),
+                    Matched::Unreported | Matched::Rule { .. } => "a handler matched".to_owned(),
                 },
             ),
             Step::ConfigError { message } => {
@@ -2112,7 +2113,7 @@ mod tests {
             vec![
                 Step::Received { url: url.into() },
                 Step::Matched {
-                    by: Matched::Default,
+                    by: Matched::Default { owner: None },
                 },
                 Step::Browser {
                     browser: browser("Google Chrome", "Personal", url),
@@ -2183,7 +2184,7 @@ mod tests {
                     url: rewritten.into(),
                 },
                 Step::Matched {
-                    by: Matched::Default,
+                    by: Matched::Default { owner: None },
                 },
                 Step::Paused { skipped: None },
                 Step::Browser {
@@ -2402,7 +2403,7 @@ mod tests {
             let mut steps = vec![
                 Step::Received { url: url.into() },
                 Step::Matched {
-                    by: Matched::Default,
+                    by: Matched::Default { owner: None },
                 },
                 Step::Browser {
                     browser: browser("Safari", "", url),
@@ -2468,7 +2469,7 @@ mod tests {
                     url: unrouted.into(),
                 },
                 Step::Matched {
-                    by: Matched::Default,
+                    by: Matched::Default { owner: None },
                 },
                 Step::Browser {
                     browser: browser("Google Chrome", "Personal", unrouted),

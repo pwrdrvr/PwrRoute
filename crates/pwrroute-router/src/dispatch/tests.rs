@@ -107,7 +107,9 @@ fn a_rewrite_shows_in_the_trace_and_reaches_the_launcher() {
                 url: "https://example.com/new".into()
             },
             Step::Matched {
-                by: Matched::Default
+                by: Matched::Default {
+                    owner: Some(Owner::Config)
+                }
             },
         ]
     );
@@ -125,7 +127,9 @@ fn a_rule_that_throws_is_traced_to_the_default() {
     assert_eq!(
         record.steps[1],
         Step::Matched {
-            by: Matched::Default
+            by: Matched::Default {
+                owner: Some(Owner::Config)
+            }
         }
     );
     assert!(
@@ -272,7 +276,9 @@ fn paused_rewrites_still_run_and_the_default_skips_no_handler() {
                 url: "https://example.com/new".into()
             },
             Step::Matched {
-                by: Matched::Default
+                by: Matched::Default {
+                    owner: Some(Owner::Config)
+                }
             },
             Step::Paused { skipped: None },
         ]
@@ -1277,6 +1283,29 @@ fn rules_router(rules: RulesFile) -> (Router, DryRunLauncher) {
     )
     .unwrap();
     (router, launcher)
+}
+
+#[test]
+fn the_default_names_its_owner_and_a_rules_json_handler_stays_unnumbered() {
+    // A JS config's default is the config's (the tests above); with
+    // rules.json alone, its default is PwrRoute's.
+    let (router, _launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://unmatched.example.com/"))
+        .unwrap();
+    assert!(record.steps.contains(&Step::Matched {
+        by: Matched::Default {
+            owner: Some(Owner::PwrRoute)
+        }
+    }));
+    // rules.json handlers are not numbered yet: still Unreported.
+    let record = handle
+        .dispatch_and_wait(link("https://full.example.com/"))
+        .unwrap();
+    assert!(record.steps.contains(&Step::Matched {
+        by: Matched::Unreported
+    }));
 }
 
 #[test]

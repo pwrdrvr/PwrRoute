@@ -147,8 +147,9 @@ impl Recent {
                 Step::Matched { by } => {
                     route = match by {
                         Matched::Handler { index } => RecentRoute::Handler(index + 1),
-                        Matched::Default => RecentRoute::Default,
-                        Matched::Unreported => RecentRoute::Unnumbered,
+                        Matched::Default { .. } => RecentRoute::Default,
+                        // Not numbered here yet.
+                        Matched::Unreported | Matched::Rule { .. } => RecentRoute::Unnumbered,
                     };
                 }
                 Step::Fallback { .. } | Step::RefusedLoop { .. } => route = RecentRoute::Fallback,
@@ -662,7 +663,7 @@ mod tests {
         let default = record(vec![
             Step::Received { url: url.into() },
             Step::Matched {
-                by: Matched::Default,
+                by: Matched::Default { owner: None },
             },
             Step::Paused { skipped: None },
             Step::Browser {

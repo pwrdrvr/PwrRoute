@@ -174,16 +174,65 @@ pub enum Step {
 }
 
 /// The rule that chose the browser.
+///
+/// Serialized inside [`Step::Matched`] as an object tagged by `kind`:
+/// `{"kind":"handler","index":2}`, `{"kind":"rule","index":0}`,
+/// `{"kind":"default","owner":"pwrroute"}` (`owner` left out when `None`)
+/// and `{"kind":"unreported"}`. A record journaled before `rule` and
+/// `owner` existed reads back unchanged: its `{"kind":"default"}` is
+/// `Default { owner: None }`. An older build reading a newer journal reads
+/// `default` with an owner too (it ignores the field), but not `rule`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Matched {
-    /// `handlers[index]` matched first.
+    /// The JS config's `handlers[index]` matched first (0-based).
     Handler { index: usize },
-    /// No handler matched; `defaultBrowser` applied.
-    Default,
+    /// `rules.json`'s `rules[index]` matched first: its position in the
+    /// file, 0-based, counting disabled rules (the engine's trace index for
+    /// a `rules.json` step). Not yet produced by `Resolver for Engine`,
+    /// which still reports these as [`Matched::Unreported`].
+    Rule { index: usize },
+    /// No handler matched; a default browser applied. `owner` says whose:
+    /// the config's `defaultBrowser` or PwrRoute's (`rules.json`'s). `None`
+    /// when the resolver did not say, and in records written before owners
+    /// were recorded.
+    Default {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<Owner>,
+    },
     /// The resolver did not say: a resolver that returns no rule steps, or
-    /// a `rules.json` handler, which has no number in the config's list.
+    /// (until the router numbers them as [`Matched::Rule`]) a `rules.json`
+    /// handler.
     Unreported,
+}
+
+impl Matched {
+    /// A default browser applied, whoever owned it.
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::Default { .. })
+    }
+}
+
+/// Whose default browser took a link no handler matched
+/// ([`Matched::Default`]). Serialized `config` or `pwrroute`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Owner {
+    /// The JS config's `defaultBrowser`.
+    Config,
+    /// `rules.json`'s `defaultBrowser` and `defaultProfile`: with no JS
+    /// config in charge, or under `"precedence": "pwrroute"`.
+    PwrRoute,
+}
+
+impl From<pwrroute_engine::Source> for Owner {
+    /// The owner of a default step, from the engine trace step's source.
+    fn from(source: pwrroute_engine::Source) -> Self {
+        match source {
+            pwrroute_engine::Source::Config => Self::Config,
+            pwrroute_engine::Source::Rules => Self::PwrRoute,
+        }
+    }
 }
 
 /// How a dispatch ended.
@@ -423,6 +472,73 @@ mod tests {
                 total_us: 6,
             },
         }
+    }
+
+    #[test]
+    fn matched_reads_what_older_builds_wrote_and_they_read_its_defaults() {
+        // Lines from builds before `rule` and `owner`.
+        for (text, by) in [
+            (
+                r#"{"kind":"matched","by":{"kind":"default"}}"#,
+                Matched::Default { owner: None },
+            ),
+            (
+                r#"{"kind":"matched","by":{"kind":"handler","index":2}}"#,
+                Matched::Handler { index: 2 },
+            ),
+            (
+                r#"{"kind":"matched","by":{"kind":"unreported"}}"#,
+                Matched::Unreported,
+            ),
+        ] {
+            let step: Step = serde_json::from_str(text).unwrap();
+            assert_eq!(step, Step::Matched { by });
+            // And written back the same way.
+            assert_eq!(serde_json::to_string(&step).unwrap(), text);
+        }
+
+        // The new forms round-trip.
+        for (by, text) in [
+            (Matched::Rule { index: 0 }, r#"{"kind":"rule","index":0}"#),
+            (
+                Matched::Default {
+                    owner: Some(Owner::Config),
+                },
+                r#"{"kind":"default","owner":"config"}"#,
+            ),
+            (
+                Matched::Default {
+                    owner: Some(Owner::PwrRoute),
+                },
+                r#"{"kind":"default","owner":"pwrroute"}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&by).unwrap(), text);
+            assert_eq!(serde_json::from_str::<Matched>(text).unwrap(), by);
+        }
+        assert!(Matched::Default { owner: None }.is_default());
+        assert!(!Matched::Rule { index: 0 }.is_default());
+        assert_eq!(Owner::from(pwrroute_engine::Source::Rules), Owner::PwrRoute);
+        assert_eq!(Owner::from(pwrroute_engine::Source::Config), Owner::Config);
+
+        // The enum as older builds had it: a default with an owner still
+        // reads there (the field is ignored); a `rule` does not, and their
+        // journal reader skips a line that does not parse.
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "kind", rename_all = "camelCase")]
+        enum Old {
+            Handler {
+                #[allow(dead_code, reason = "only the shape is read")]
+                index: usize,
+            },
+            Default,
+            Unreported,
+        }
+        assert_eq!(
+            serde_json::from_str::<Old>(r#"{"kind":"default","owner":"pwrroute"}"#).unwrap(),
+            Old::Default
+        );
+        assert!(serde_json::from_str::<Old>(r#"{"kind":"rule","index":0}"#).is_err());
     }
 
     #[test]

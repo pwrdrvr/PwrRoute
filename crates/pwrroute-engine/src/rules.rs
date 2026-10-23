@@ -9,7 +9,8 @@
 //!
 //! | Field | Go host | Meaning |
 //! | --- | --- | --- |
-//! | `defaultBrowser`, `defaultProfile` | yes | Where everything else goes. Used only when no JS config is in charge. |
+//! | `defaultBrowser`, `defaultProfile` | yes | Where everything else goes. Used only when no JS config is in charge, or when `precedence` is `pwrroute`. |
+//! | `precedence` | no | Who goes first while a JS config is in charge ([`Precedence`]). Absent (or `config`, or any word but `pwrroute`): the Go host's order, the config's handlers, then these rules, then the config's `defaultBrowser`. `pwrroute`: these rules, then the config's handlers, then `defaultBrowser`/`defaultProfile` above instead of the config's. Rewrites run config first either way. Without a config it changes nothing. |
 //! | `options` | yes | Finicky's `options`, used only when no JS config is in charge. |
 //! | `rules[].match`, `.browser`, `.profile` | yes | Handlers: the first match wins. `match` is a string or a list. `browser` is an app name (`Google Chrome`), a bundle id (`com.google.Chrome`) or a `.app` path (`/Applications/Google Chrome.app`, `~/Applications/…`), told apart as Finicky tells them apart (`app_type`); `defaultBrowser` takes the same. |
 //! | `rules[].opener` | no | Also require the link to come from one of these apps (name or bundle id). |
@@ -23,8 +24,10 @@
 //!
 //! With a JS config, the config's rewrites and handlers run first and it owns
 //! the default browser and options; these rules are appended after its own,
-//! as the Go host appended JSON handlers. Without one, these rules are the
-//! whole config.
+//! as the Go host appended JSON handlers. `"precedence": "pwrroute"` (opt-in,
+//! [`Precedence::PwrRoute`]) moves these handlers ahead of the config's and
+//! gives this file's default browser everything else. Without a config,
+//! these rules are the whole config.
 //!
 //! Match patterns are Finicky's: wildcard strings (`*.example.com/*`), matched
 //! by Finicky's own `isMatch`. A regex or function matcher is JS-only.
@@ -53,6 +56,12 @@ pub struct RulesFile {
     pub default_browser: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_profile: String,
+    /// PwrRoute extension: whether these rules and this default browser go
+    /// before a JS config's handlers and default. Absent is
+    /// [`Precedence::Config`], the Go host's order, and is never written, so
+    /// a Go file round-trips unchanged.
+    #[serde(default, skip_serializing_if = "Precedence::is_config")]
+    pub precedence: Precedence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<RulesOptions>,
     /// PwrRoute extension: rewrites, applied in order before any handler.
@@ -65,6 +74,63 @@ pub struct RulesFile {
     /// the whole config must send them to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<RouteTest>,
+}
+
+/// Who decides a link while a JS config is in charge: `rules.json`'s
+/// `precedence`. Opt-in: only the exact word `"pwrroute"` changes anything.
+///
+/// | Value | Handlers | Everything else |
+/// | --- | --- | --- |
+/// | absent, `"config"`, anything else | the config's, then `rules.json`'s | the config's `defaultBrowser` |
+/// | `"pwrroute"` | `rules.json`'s, then the config's | `rules.json`'s `defaultBrowser`/`defaultProfile` |
+///
+/// Rewrites run the config's first, then `rules.json`'s, under both: they
+/// compose rather than compete. With no config in charge `rules.json` is the
+/// whole config and the value changes nothing. Under `PwrRoute`, an empty
+/// `defaultBrowser`, or one naming PwrRoute, leaves the config's default in
+/// place: the override needs a browser to give the links to.
+///
+/// A value the engine does not know (a typo, another case, a word from a
+/// newer PwrRoute, a non-string) reads as [`Precedence::Config`] rather than
+/// failing the whole file: the rules keep routing as the Go host routed
+/// them. It is not kept, so the next save leaves the field out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Precedence {
+    /// The Go host's order: the config's handlers run first and its
+    /// `defaultBrowser` takes everything else. Written as `"config"`, but
+    /// [`RulesFile`] leaves it out.
+    #[default]
+    Config,
+    /// `"pwrroute"`: `rules.json`'s handlers run before the config's, and
+    /// `rules.json`'s default browser takes everything else.
+    PwrRoute,
+}
+
+impl Precedence {
+    /// The Go host's order, the default; `RulesFile` does not write it.
+    pub fn is_config(&self) -> bool {
+        *self == Self::Config
+    }
+
+    /// The word `rules.json` uses: `"config"` or `"pwrroute"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::PwrRoute => "pwrroute",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Precedence {
+    /// `"pwrroute"` exactly is [`Precedence::PwrRoute`]; any other value,
+    /// of any type, is [`Precedence::Config`] (see the type's docs).
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(d)? {
+            Value::String(word) if word == "pwrroute" => Self::PwrRoute,
+            _ => Self::Config,
+        })
+    }
 }
 
 /// Finicky's `options`, as the Go host's `rules.json` carried them. Each is
@@ -998,6 +1064,98 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn an_absent_precedence_stays_absent() {
+        let text = r#"{ "defaultBrowser": "Safari", "rules": [{ "match": "a.example/*", "browser": "Firefox" }] }"#;
+        let file: RulesFile = serde_json::from_str(text).unwrap();
+        assert_eq!(file.precedence, Precedence::Config);
+        assert!(file.precedence.is_config());
+        let written = serde_json::to_value(&file).unwrap();
+        assert!(written.get("precedence").is_none(), "{written}");
+        assert_eq!(
+            written,
+            serde_json::from_str::<serde_json::Value>(text).unwrap()
+        );
+
+        // "config" says the same as absent, so it is not written back.
+        let file: RulesFile =
+            serde_json::from_str(r#"{ "defaultBrowser": "Safari", "precedence": "config" }"#)
+                .unwrap();
+        assert_eq!(file.precedence, Precedence::Config);
+        assert_eq!(
+            serde_json::to_value(&file).unwrap(),
+            json!({ "defaultBrowser": "Safari", "rules": [] })
+        );
+    }
+
+    #[test]
+    fn pwrroute_precedence_round_trips() {
+        let text = r#"{
+          "defaultBrowser": "Firefox",
+          "defaultProfile": "Work",
+          "precedence": "pwrroute",
+          "rules": [{ "match": "a.example/*", "browser": "Safari" }]
+        }"#;
+        let file: RulesFile = serde_json::from_str(text).unwrap();
+        assert_eq!(file.precedence, Precedence::PwrRoute);
+        assert!(!file.precedence.is_config());
+        assert_eq!(file.precedence.as_str(), "pwrroute");
+        let written = serde_json::to_value(&file).unwrap();
+        assert_eq!(written["precedence"], "pwrroute");
+        assert_eq!(
+            written,
+            serde_json::from_str::<serde_json::Value>(text).unwrap()
+        );
+        // Written next to the default browser it is about.
+        let keys: Vec<&str> = written
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            ["defaultBrowser", "defaultProfile", "precedence", "rules"]
+        );
+        assert_eq!(serde_json::from_value::<RulesFile>(written).unwrap(), file);
+
+        let dir = std::env::temp_dir().join(format!("pwrroute-precedence-{}", std::process::id()));
+        let path = dir.join("rules.json");
+        file.save(&path).unwrap();
+        assert_eq!(RulesFile::load(&path).unwrap(), file);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_unknown_precedence_keeps_the_go_order_and_the_file_loads() {
+        for value in [
+            json!("PwrRoute"),
+            json!("rules-first"),
+            json!(""),
+            json!(true),
+            json!(1),
+            json!(null),
+            json!({ "mode": "pwrroute" }),
+        ] {
+            let file: RulesFile = serde_json::from_value(json!({
+                "defaultBrowser": "Firefox",
+                "precedence": value,
+                "rules": [{ "match": "a.example/*", "browser": "Safari" }]
+            }))
+            .unwrap_or_else(|e| panic!("{value}: {e}"));
+            assert_eq!(file.precedence, Precedence::Config, "{value}");
+            assert_eq!(file.rules.len(), 1, "{value}");
+            // Not kept: the next save leaves the field out.
+            assert!(
+                serde_json::to_value(&file)
+                    .unwrap()
+                    .get("precedence")
+                    .is_none(),
+                "{value}"
+            );
+        }
     }
 
     #[test]
