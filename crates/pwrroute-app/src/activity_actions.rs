@@ -29,7 +29,9 @@ use gpui_kit::{
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
     Window, deferred, div, px,
 };
-use pwrroute_engine::{self as engine, Expectation, Opener, Privacy, RouteTest, suggest_rule};
+use pwrroute_engine::{
+    self as engine, Expectation, Opener, Privacy, RouteTest, Source, Stage, suggest_rule,
+};
 use pwrroute_router::{DispatchRecord, Matched, OpenerInfo, Outcome, Step};
 
 use crate::activity::{self, RowKey, matched_url};
@@ -68,6 +70,9 @@ pub struct RowMenu {
     pub key: RowKey,
     /// The Save entry, when the record has somewhere it went.
     pub save: Option<Save>,
+    /// The handler Add rule just added from this row, which the menu
+    /// offers to show in Rules.
+    pub added: Option<usize>,
 }
 
 /// What Save does for a record: joins the examples of the `rules.json`
@@ -123,6 +128,9 @@ pub struct AddRule {
     /// else as received. Empty when `disabled`.
     pub url: String,
     pub from: Option<OpenerInfo>,
+    /// The sending app as the engine saw it (`engine_opener`), which Add
+    /// traces the link from.
+    opener: Option<Opener>,
     /// Why no rule can be written for this record: it was kept as host
     /// only or nothing.
     pub disabled: Option<String>,
@@ -144,6 +152,27 @@ pub struct AddRule {
     pub private: bool,
     pub keep: Privacy,
     pub position: Position,
+    /// Why the rule would not take the link, found when Add was clicked.
+    pub problem: Option<Problem>,
+}
+
+/// What stops the sheet's rule from taking its link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Problem {
+    pub kind: ProblemKind,
+    /// What takes the link instead, or that the rule is already there.
+    pub text: String,
+    /// What to do about it, shown under `text` in the sheet.
+    pub advice: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProblemKind {
+    /// The file already has this rule: Add never adds it again.
+    Duplicate,
+    /// Another rule, or the config, takes the link first: a second click
+    /// adds the rule anyway.
+    Shadowed,
 }
 
 impl AddRule {
@@ -180,6 +209,7 @@ impl AddRule {
             time: clock(record.received_at),
             url,
             from: record.link.opener.clone().filter(|o| !o.name.is_empty()),
+            opener: engine_opener(record),
             disabled: None,
             selected: (!candidates.is_empty()).then_some(0),
             candidates,
@@ -195,6 +225,7 @@ impl AddRule {
             private: false,
             keep: Privacy::Full,
             position: Position::Bottom,
+            problem: None,
         }
     }
 
@@ -379,6 +410,17 @@ fn record(key: RowKey, cx: &App) -> Option<DispatchRecord> {
     activity::feed(cx)?.read(cx).record(key)
 }
 
+/// The same rule, whatever examples each keeps.
+fn same_rule(a: &engine::Rule, b: &engine::Rule) -> bool {
+    engine::Rule {
+        examples: Vec::new(),
+        ..a.clone()
+    } == engine::Rule {
+        examples: Vec::new(),
+        ..b.clone()
+    }
+}
+
 /// A test that pins where this record went, from the URL the rules saw:
 /// a saved test does not expand short links.
 fn test_for(record: &DispatchRecord) -> Option<RouteTest> {
@@ -435,7 +477,11 @@ impl PwrRoute {
             }),
             None => None,
         };
-        self.actions.menu = Some(RowMenu { key, save });
+        self.actions.menu = Some(RowMenu {
+            key,
+            save,
+            added: None,
+        });
         cx.notify();
     }
 
@@ -513,6 +559,7 @@ impl PwrRoute {
         if let Some((pattern, _)) = sheet.candidates.get(index) {
             sheet.pattern.set(pattern.clone());
             sheet.selected = Some(index);
+            sheet.problem = None;
             self.find_collisions(&mut sheet, cx);
         }
         self.actions.sheet = Some(sheet);
@@ -528,22 +575,32 @@ impl PwrRoute {
         if edit == Edit::Changed {
             let typed = sheet.pattern.text.trim().to_owned();
             sheet.selected = sheet.candidates.iter().position(|(p, _)| *p == typed);
+            sheet.problem = None;
             self.find_collisions(&mut sheet, cx);
         }
         self.actions.sheet = Some(sheet);
         edit != Edit::Ignored
     }
 
-    /// Changes one of the sheet's controls.
+    /// Changes one of the sheet's controls. A change makes a new rule, so
+    /// the next Add checks it again.
     pub fn set_add_rule(&mut self, change: impl FnOnce(&mut AddRule), cx: &mut Context<'_, Self>) {
         if let Some(sheet) = &mut self.actions.sheet {
             change(sheet);
+            sheet.problem = None;
             cx.notify();
         }
     }
 
     /// Add rule: the sheet's rule goes into the file with the link as its
-    /// example, the tests run, and the row's menu says where it went.
+    /// example (or, when it requires the sending app, as a test), at the
+    /// top or the bottom, and the tests run.
+    ///
+    /// The first click checks the rule against the file first. A rule the
+    /// file already has is never added again. One that would not take its
+    /// link (an earlier rule or the config in charge takes it first, or
+    /// its pattern misses) keeps the sheet open and says why; a second
+    /// click adds it anyway.
     pub fn add_rule_from_sheet(&mut self, cx: &mut Context<'_, Self>) {
         let Some(sheet) = &self.actions.sheet else {
             return;
@@ -551,12 +608,29 @@ impl PwrRoute {
         let Some(rule) = sheet.rule() else {
             return;
         };
-        let key = sheet.key;
-        let test = sheet.test();
         let at = match sheet.position {
             Position::Top => 0,
             Position::Bottom => self.store.handler_count(),
         };
+        let warning = match &sheet.problem {
+            Some(problem) if problem.kind == ProblemKind::Duplicate => return,
+            Some(problem) => Some(problem.text.clone()),
+            None => {
+                if let Some(problem) = self.check_new_rule(&rule, at) {
+                    if let Some(sheet) = &mut self.actions.sheet {
+                        sheet.problem = Some(problem);
+                    }
+                    cx.notify();
+                    return;
+                }
+                None
+            }
+        };
+        let Some(sheet) = self.actions.sheet.take() else {
+            return;
+        };
+        let key = sheet.key;
+        let test = sheet.test();
         let index = self.store.insert_rule(at, rule);
         let kept = match test {
             Some(test) => {
@@ -565,21 +639,121 @@ impl PwrRoute {
             }
             None => "this link as its example".to_owned(),
         };
-        self.actions.sheet = None;
-        self.actions.note = Some((
+        let after = self
+            .config
+            .as_ref()
+            .map(|config| format!("; visual rules run after {}", config.path))
+            .unwrap_or_default();
+        let mut note = format!(
+            "Added handler {} with {kept}{after}. Saved to rules.json; Run tests fails if \
+             another rule ever takes it.",
+            index + 1
+        );
+        if let Some(warning) = warning {
+            note = format!("{note} {warning}");
+        }
+        self.actions.note = Some((key, note));
+        // The note shows in the row's menu, so it opens again with it, and
+        // with a way to the new rule.
+        self.actions.menu = Some(RowMenu {
             key,
-            format!(
-                "Added handler {} with {kept}. Saved to rules.json; Run tests fails if another \
-                 rule ever takes it.",
-                index + 1
-            ),
-        ));
-        // The note shows in the row's menu, so it opens again with it.
-        self.actions.menu = Some(RowMenu { key, save: None });
+            save: None,
+            added: Some(index),
+        });
         self.selection = Some(Selection::Handler(index));
+        // Beside a config the visual rules start collapsed: open them, or
+        // the Rules screen shows the config's handlers without this one.
+        self.visual_rules_expanded = true;
         self.refresh(cx);
         self.rebuild_rail(cx);
         self.run_tests(cx);
+    }
+
+    /// Why `rule`, added at `at`, would not take the sheet's link: the
+    /// file already has it, or the engine over the file with it added
+    /// (and the config in charge) sends the link elsewhere. `None` when it
+    /// would take the link, or the probe fails (the tests report that).
+    fn check_new_rule(&mut self, rule: &engine::Rule, at: usize) -> Option<Problem> {
+        let sheet = self.actions.sheet.as_ref()?;
+        let mut rules = self.store.edited();
+        if let Some(same) = rules.rules.iter().position(|r| same_rule(r, rule)) {
+            return Some(Problem {
+                kind: ProblemKind::Duplicate,
+                text: format!(
+                    "Handler {} is already this rule. Nothing was added.",
+                    same + 1
+                ),
+                advice: "Change the pattern, browser or position to add a different rule.",
+            });
+        }
+        rules.rules.insert(at, rule.clone());
+        let trace = self
+            .probe
+            .with_rules(rules.clone())
+            .trace(&sheet.url, sheet.opener.as_ref())
+            .ok()?;
+        let winner = trace.winner()?;
+        let shadowed = |text: String, advice| {
+            Some(Problem {
+                kind: ProblemKind::Shadowed,
+                text,
+                advice,
+            })
+        };
+        match (winner.source, winner.stage) {
+            (Source::Rules, Stage::Handler) if winner.index == at => None,
+            // An earlier handler; a later one means this rule missed.
+            (Source::Rules, Stage::Handler) if winner.index < at => {
+                let pattern = rules
+                    .rules
+                    .get(winner.index)
+                    .and_then(|r| r.patterns.get(winner.pattern.unwrap_or(0)))
+                    .map(|p| format!(" ({p})"))
+                    .unwrap_or_default();
+                shadowed(
+                    format!(
+                        "Handler {}{pattern} takes this link first, so this rule would never \
+                         see it.",
+                        winner.index + 1
+                    ),
+                    "Put it at the top, or click Add anyway.",
+                )
+            }
+            (Source::Config, Stage::Handler) => {
+                let config = self
+                    .config
+                    .as_ref()
+                    .map_or("The config", |config| config.path.as_str());
+                shadowed(
+                    format!(
+                        "{config} handler {} takes this link first, and visual rules run after \
+                         the config, so this rule would never see it.",
+                        winner.index + 1
+                    ),
+                    "Route this link in the config instead, or click Add anyway.",
+                )
+            }
+            _ => shadowed(
+                "This rule does not match the link as the rules see it, so the link would \
+                 still go where it goes now."
+                    .to_owned(),
+                "Check the pattern, or click Add anyway.",
+            ),
+        }
+    }
+
+    /// Show in Rules: the handler Add rule just added, selected, with the
+    /// visual rules open beside a config.
+    pub fn show_added_rule(
+        &mut self,
+        handler: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.actions.menu = None;
+        self.visual_rules_expanded = true;
+        self.selection = Some(Selection::Handler(handler));
+        self.navigate(crate::app::Screen::Rules, window, cx);
     }
 
     /// Save as example: the link joins the examples of the `rules.json`
@@ -692,6 +866,17 @@ pub fn row_menu(
             }
         }))
     });
+    let show = menu.added.map(|handler| {
+        item(
+            "activity-show-rule",
+            format!("Show handler {} in Rules", handler + 1),
+            None,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            cx.stop_propagation();
+            this.show_added_rule(handler, window, cx);
+        }))
+    });
     let foot = |content: String| {
         div().px(px(8.0)).pt(px(6.0)).pb(px(4.0)).child(paragraph(
             content,
@@ -734,6 +919,7 @@ pub fn row_menu(
             cx.notify();
         }))
         .child(add)
+        .children(show)
         .children(save)
         .children(note)
         .children(why.flatten().map(foot));
@@ -1345,6 +1531,34 @@ fn sheet_body(
     body
 }
 
+/// Why the rule would not take the link, found by the first Add. It
+/// takes the footer's place, beside the button, so it is on screen
+/// however far the body has scrolled.
+fn problem_note(problem: &Problem) -> Stateful<Div> {
+    div()
+        .id("add-rule-problem")
+        .debug_selector(|| "add-rule-problem".into())
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .py(px(10.0))
+        .px(px(12.0))
+        .rounded(px(7.0))
+        .bg(theme::warn_soft())
+        .child(paragraph(
+            problem.text.clone(),
+            11.5,
+            17.8,
+            theme::warn_text(),
+        ))
+        .child(paragraph(
+            problem.advice,
+            11.5,
+            17.8,
+            theme::text_secondary(),
+        ))
+}
+
 /// The Add a rule sheet over the window, when it is open.
 pub fn sheet(
     app: &PwrRoute,
@@ -1410,8 +1624,12 @@ pub fn sheet(
                 Position::Top => 1,
                 Position::Bottom => app.store.handler_count() + 1,
             };
-            let ready = sheet.rule().is_some();
-            let label = if sheet.needs_js.is_empty() {
+            let duplicate = sheet
+                .problem
+                .as_ref()
+                .is_some_and(|problem| problem.kind == ProblemKind::Duplicate);
+            let ready = sheet.rule().is_some() && !duplicate;
+            let label = if sheet.needs_js.is_empty() && sheet.problem.is_none() {
                 "Add rule"
             } else {
                 "Add anyway"
@@ -1424,11 +1642,15 @@ pub fn sheet(
             (
                 sheet_body(app, sheet, window, cx),
                 div()
-                    .child(
-                        paragraph(sheet.footer(handler), 10.5, 15.75, theme::text_subtle())
+                    .child(match &sheet.problem {
+                        Some(problem) => {
+                            problem_note(problem).flex_1().min_w_0().into_any_element()
+                        }
+                        None => paragraph(sheet.footer(handler), 10.5, 15.75, theme::text_subtle())
                             .flex_1()
-                            .min_w_0(),
-                    )
+                            .min_w_0()
+                            .into_any_element(),
+                    })
                     .child(
                         button("Cancel", ButtonKind::Quiet, false)
                             .id("add-rule-cancel")

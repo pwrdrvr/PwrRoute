@@ -236,7 +236,7 @@ fn main() {
     shoot("app-1a-rewrite", None, &|app, _, cx| {
         app.select(Selection::Rewrite(0), cx);
     });
-    shoot("app-1b", Some(config), &|_, _, _| {});
+    shoot("app-1b", Some(config.clone()), &|_, _, _| {});
     shoot("app-2a", None, &|app, window, cx| {
         // The design's example; the window itself starts empty.
         app.test.url.set(fixtures::TEST_URL);
@@ -395,6 +395,7 @@ fn main() {
             save: Some(activity_actions::Save::Test {
                 expects: "Microsoft Edge \u{00b7} Research and Development Team".into(),
             }),
+            added: None,
         });
     });
 
@@ -460,6 +461,53 @@ fn main() {
         image.save(&path).expect("write the PNG");
         println!("{}", path.display());
     }
+    // The same sheet with the Finicky config in charge, for the Slack
+    // record: Add found the config's Slack handler takes the link first,
+    // and the sheet says so before anything is added.
+    shoot(
+        "app-2b-add-rule-config-first",
+        Some(config.clone()),
+        &|app, window, cx| {
+            let records = fixtures::activity();
+            activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+            app.activity.load(records);
+            app.navigate(Screen::Activity, window, cx);
+            app.add_rule(
+                activity::RowKey {
+                    id: pwrroute_router::DispatchId(8),
+                    journaled: false,
+                },
+                window,
+                cx,
+            );
+            app.set_add_rule(|sheet| sheet.position = activity_actions::Position::Top, cx);
+            app.add_rule_from_sheet(cx);
+        },
+    );
+
+    // A rule added beside the config, shown in Rules: the visual rules
+    // open with the new handler selected.
+    shoot(
+        "app-2b-add-rule-shown",
+        Some(config.clone()),
+        &|app, window, cx| {
+            let records = fixtures::activity();
+            activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+            app.activity.load(records);
+            app.navigate(Screen::Activity, window, cx);
+            app.add_rule(
+                activity::RowKey {
+                    id: pwrroute_router::DispatchId(4),
+                    journaled: false,
+                },
+                window,
+                cx,
+            );
+            app.set_add_rule(|sheet| sheet.position = activity_actions::Position::Top, cx);
+            app.add_rule_from_sheet(cx);
+            app.show_added_rule(0, window, cx);
+        },
+    );
 
     // First run (design 2a) over contrived browsers: step 1 with a profiled
     // browser chosen and its profile menu open, then step 3 before and
