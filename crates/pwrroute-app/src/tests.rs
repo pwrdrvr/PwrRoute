@@ -2370,3 +2370,284 @@ fn a_refused_import_opens_the_importer_again_with_the_reason(cx: &mut TestAppCon
     assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Rules and config views (WP-E): the Rules banner's switch "Let PwrRoute's
+// default take everything else", its warnings, Stop using, the overridden
+// defaultBrowser row, and the blank state's ways out.
+mod rules_and_config_views {
+    use std::time::SystemTime;
+
+    use gpui_kit::{TestAppContext, VisualTestContext};
+    use pwrroute_engine::{DefaultHost, Engine, Limits, Precedence, RulesFile};
+
+    use super::{click, draw, fixture_home, fixture_store, open_store, scratch};
+    use crate::activity_actions::BrowserChoice;
+    use crate::config_view::{self, ConfigInCharge, DefaultKind};
+    use crate::rules_store::RulesStore;
+    use crate::rules_view::{self, everything_else_name};
+
+    /// A Finicky config written to `dir` from `body`, an object literal.
+    fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let path = dir.join(".finicky.ts");
+        std::fs::write(&path, format!("export default {body};\n")).expect("write the config");
+        path
+    }
+
+    /// What the Rules screen reads in the config at `path`.
+    fn described(path: &std::path::Path) -> ConfigInCharge {
+        let engine = Engine::load(path, std::rc::Rc::new(DefaultHost), Limits::default());
+        ConfigInCharge::new(path, path.parent(), engine.as_ref())
+    }
+
+    fn top(cx: &mut VisualTestContext, selector: &'static str) -> gpui_kit::Pixels {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("no element {selector} on screen"))
+            .top()
+    }
+
+    #[gpui_kit::test]
+    fn the_switch_writes_precedence_and_reorders_the_cards(cx: &mut TestAppContext) {
+        let dir = scratch("precedence");
+        let path = dir.join("rules.json");
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+
+        // Off, what every upgrade sees (5a): the config's handlers, its
+        // defaultBrowser tagged Everything else, then the visual rules.
+        assert_eq!(
+            view.read_with(cx, |app, _| app.store.precedence()),
+            Precedence::Config
+        );
+        assert!(top(cx, "config-handlers") < top(cx, "config-visual"));
+        assert!(cx.debug_bounds("config-default").is_some());
+        assert!(cx.debug_bounds("config-default-struck").is_none());
+        assert!(cx.debug_bounds("config-everything-else").is_none());
+        let (shown, everything_else) = view.read_with(cx, |app, _| {
+            (
+                app.config.clone().expect("the config is in charge"),
+                everything_else_name(&app.store),
+            )
+        });
+        let still = ConfigInCharge {
+            modified: None,
+            ..shown.clone()
+        };
+        assert_eq!(everything_else, "Google Chrome \u{00b7} Personal");
+        assert_eq!(
+            still.banner_sentence(false, &everything_else, SystemTime::now()),
+            "Its rewrites and handlers run first and its defaultBrowser takes everything \
+             else. Your visual rules run after it."
+        );
+        assert_eq!(
+            still.owner_sentence(&everything_else),
+            "~/.finicky.ts's defaultBrowser, Google Chrome, takes everything else."
+        );
+        assert!(shown.override_warnings().is_empty());
+
+        // On (5b): written at once, without the edit debounce, and the
+        // page reads in the new order.
+        click(cx, config_view::SWITCH_ID);
+        assert_eq!(
+            RulesFile::load(&path).unwrap().precedence,
+            Precedence::PwrRoute
+        );
+        assert!(top(cx, "config-visual") < top(cx, "config-handlers"));
+        assert!(top(cx, "config-handlers") < top(cx, "config-everything-else"));
+        assert!(cx.debug_bounds("config-default").is_none());
+        assert!(cx.debug_bounds("config-default-struck").is_some());
+        let flips = view.read_with(cx, |app, _| app.config.as_ref().map(|c| c.flips));
+        assert_eq!(flips, Some(1));
+        assert_eq!(
+            still.banner_sentence(true, &everything_else, SystemTime::now()),
+            "Your rules run first, then its handlers. PwrRoute's default, Google Chrome \
+             \u{00b7} Personal, takes everything else."
+        );
+        // The engines over the rules follow the store: Test a link and the
+        // test runs see the new order.
+        assert_eq!(
+            view.read_with(cx, |app, _| app.store.written().precedence),
+            Precedence::PwrRoute
+        );
+
+        // Off again: the field leaves the file, as the Go host wrote it.
+        click(cx, config_view::SWITCH_ID);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("precedence"), "{text}");
+        assert!(top(cx, "config-handlers") < top(cx, "config-visual"));
+        assert!(cx.debug_bounds("config-default").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn the_switch_warns_about_a_function_a_null_and_a_catch_all(cx: &mut TestAppContext) {
+        let dir = scratch("override-warnings");
+        let function = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: (url) => url.host.endsWith("example.org") ? "Firefox" : "Safari",
+                handlers: [{ match: "chat.example.com/*", browser: "Firefox" }],
+            }"#,
+        );
+        let config = described(&function);
+        assert_eq!(config.default_kind, DefaultKind::Function);
+        assert_eq!(
+            config.override_warnings(),
+            ["Its defaultBrowser function will no longer run."]
+        );
+        assert_eq!(
+            config.owner_sentence("Safari"),
+            format!(
+                "{}'s defaultBrowser function picks where everything else goes.",
+                config.path
+            )
+        );
+
+        let null = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: null,
+                handlers: [{ match: "chat.example.com/*", browser: "Firefox" }],
+            }"#,
+        );
+        let config = described(&null);
+        assert_eq!(config.default_kind, DefaultKind::NotOpened);
+        assert_eq!(
+            config.override_warnings(),
+            ["Unmatched links will now open instead of being dropped."]
+        );
+
+        let catch_all = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: "Safari",
+                handlers: [
+                    { match: "chat.example.com/*", browser: "Firefox" },
+                    { match: ["docs.example.com/*", "*"], browser: "Firefox" },
+                    { match: "*", browser: "Safari" },
+                ],
+            }"#,
+        );
+        let config = described(&catch_all);
+        assert_eq!(config.catch_all, Some(1));
+        assert_eq!(
+            config.override_warnings(),
+            ["Handler 2 matches every link, so PwrRoute's default never applies."]
+        );
+
+        // They stack under the switch, on or off.
+        let both = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: () => "Safari",
+                handlers: [{ match: /.*/, browser: "Firefox" }],
+            }"#,
+        );
+        let (_view, cx) = open_store(cx, Some(both), fixture_store(&dir));
+        assert!(cx.debug_bounds("config-warning-0").is_some());
+        assert!(cx.debug_bounds("config-warning-1").is_some());
+        click(cx, config_view::SWITCH_ID);
+        assert!(cx.debug_bounds("config-warning-1").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn a_config_that_does_not_load_has_no_warnings_and_pwrroute_takes_the_rest(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = scratch("override-broken");
+        let config = fixture_home().join("missing.finicky.ts");
+        let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+        let shown = view
+            .read_with(cx, |app, _| app.config.clone())
+            .expect("the config is in charge");
+        assert!(shown.override_warnings().is_empty());
+        assert_eq!(
+            shown.owner_sentence("Google Chrome \u{00b7} Personal"),
+            "PwrRoute's default, Google Chrome \u{00b7} Personal, takes everything else \
+             until ~/missing.finicky.ts loads."
+        );
+        // No handlers to strike; the row PwrRoute's default takes is shown.
+        assert!(cx.debug_bounds("config-everything-else").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn stop_using_turns_the_config_off_and_shows_the_visual_rules(cx: &mut TestAppContext) {
+        let dir = scratch("stop-using");
+        let settings = crate::settings_store::SettingsStore::load(Some(dir.clone()));
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(&dir));
+        assert!(cx.debug_bounds("config-handlers").is_some());
+
+        click(cx, config_view::STOP_ID);
+        let saved = crate::settings_store::Settings::load(&dir).unwrap();
+        assert!(saved.source.visual_only);
+        // Its "Found …" notice does not come back.
+        assert_eq!(saved.source.dismissed, [config]);
+        assert!(view.read_with(cx, |app, _| app.config.is_none()));
+        draw(cx);
+        assert!(cx.debug_bounds("config-handlers").is_none());
+        assert!(cx.debug_bounds("handler-0").is_some());
+        assert!(cx.debug_bounds("import-found").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn the_blank_state_chooses_a_browser_from_a_list(cx: &mut TestAppContext) {
+        let dir = scratch("blank-browser");
+        let path = dir.join("rules.json");
+        let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+        view.update(cx, |app, _| {
+            app.browsers = vec![
+                BrowserChoice {
+                    name: "Firefox".into(),
+                    profiles: Vec::new(),
+                },
+                BrowserChoice {
+                    name: "Google Chrome".into(),
+                    profiles: vec!["Personal".into(), "Work".into()],
+                },
+            ];
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("blank-browser-0").is_none());
+        click(cx, rules_view::BLANK_BROWSER_ID);
+        assert!(cx.debug_bounds("blank-browser-0").is_some());
+        // The button closes what it opened.
+        click(cx, rules_view::BLANK_BROWSER_ID);
+        assert!(cx.debug_bounds("blank-browser-0").is_none());
+
+        click(cx, rules_view::BLANK_BROWSER_ID);
+        click(cx, "blank-browser-1");
+        // Written at once: the blank gives way to the empty cards.
+        let file = RulesFile::load(&path).unwrap();
+        assert_eq!(file.default_browser, "Google Chrome");
+        assert_eq!(file.default_profile, "");
+        assert!(cx.debug_bounds("rules-blank").is_none());
+        assert!(cx.debug_bounds("empty-add-handler").is_some());
+        assert_eq!(
+            view.read_with(cx, |app, _| everything_else_name(&app.store)),
+            "Google Chrome"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn the_blank_state_opens_settings_on_configuration(cx: &mut TestAppContext) {
+        cx.update(crate::settings::install);
+        let dir = scratch("blank-settings");
+        let (_view, cx) = open_store(cx, None, RulesStore::load(Some(dir.join("rules.json"))));
+        click(cx, rules_view::BLANK_SETTINGS_ID);
+        cx.run_until_parked();
+        let panes: Vec<crate::settings::Pane> = cx.update(|_, cx| {
+            cx.windows()
+                .into_iter()
+                .filter_map(|window| window.downcast::<crate::settings::SettingsWindow>())
+                .filter_map(|window| window.read(cx).ok().map(|view| view.pane))
+                .collect()
+        });
+        assert_eq!(panes, [crate::settings::Pane::Configuration]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

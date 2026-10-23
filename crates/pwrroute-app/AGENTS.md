@@ -118,6 +118,20 @@ their own modules.
   the config in charge, since the router's source is process-wide. Entry points: the 1b banner, the 1a notice,
   Settings' Review import…, File › Import Finicky Config… and first run's
   Import N rules. The config file is only ever read.
+- **Rules under a Finicky config (`config_view.rs`).** The banner's switch
+  "Let PwrRoute's default take everything else" is `rules.json`'s
+  `precedence` (`RulesStore::set_precedence`), written at once like any
+  edit through the store, never `settings.json`. The cards follow it in
+  evaluation order: the visual rules after the config's handlers, or
+  before them with the config's `defaultBrowser` struck through and
+  PwrRoute's Everything else row last. The warnings under the switch come
+  from the config's description (`ConfigInCharge::override_warnings`: a
+  function or `null` default, a handler matching every link), never from
+  running it. Stop using is `importer_view::set_source` with `visualOnly`
+  (and the file dismissed); Open in editor is `open_with_system`, which the
+  test platform does not implement, so tests never click it. The blank
+  state's Choose browser… writes `defaultBrowser` from `PwrRoute::browsers`
+  and its config row opens Settings › Configuration.
 - **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
   `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
   handle and an engine that follows the same files; `pwrroute mcp` in

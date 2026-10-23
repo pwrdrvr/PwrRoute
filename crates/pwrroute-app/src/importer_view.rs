@@ -329,7 +329,7 @@ fn switch_source(model: &ImportModel, cx: &mut App) -> Option<Option<PathBuf>> {
 
 /// Saves `source` to `settings.json` and switches the router to it.
 /// Returns the config it puts in charge.
-fn set_source(source: SourceSettings, cx: &mut App) -> Option<Option<PathBuf>> {
+pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> Option<Option<PathBuf>> {
     let store = settings_store::store(cx)?;
     let choice = source.choice(discovery::config_candidates(
         &discovery::Environment::current(),
