@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.0-rc.3 - 2026-10-22
+
 - Window placement - New windows open on the display you are working on instead of the primary one: the main window from the tray (Open, Test a link, Rules, Activity), the Dock or the app menu, Settings, the importer, first run and an agent's approval window open on the display of PwrRoute's focused window, else the one under the pointer. A window that is already open stays where it is.
 - Popovers and menus - The tray dropdown is as tall as what it shows, with no empty band below Quit, and grows or shrinks with it while open (keeping its top under the menu bar); on a display too short for it, the middle scrolls. Its pause line, tooltip and recents name a browser `rules.json` gives by bundle id ("Microsoft Edge", not `com.microsoft.edgemac`), as does Activity's Opened in. Select lists (Activity's Add a rule browser and profile, Test a link's app, first run's browser and profile, the agents' role) are at least as wide as their field and scroll past 8½ rows; a browser with three or more profiles shows a count instead of every name, and long names, profiles and the row menu's Save hint end in an ellipsis instead of running past the edge.
 - Add a rule - With a Finicky config in charge, a rule added from Activity now shows on the Rules screen: the visual rules open with the new handler selected, and the row's menu offers Show handler N in Rules. Add checks the rule before writing it: a rule `rules.json` already has is not added again, and one that would never take its link (an earlier rule, or a config handler, takes it first, or the pattern misses) keeps the sheet open and says which; a second click adds it anyway.
