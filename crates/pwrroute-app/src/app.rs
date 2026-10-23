@@ -138,6 +138,7 @@ impl PwrRoute {
                 name: app.name,
                 bundle_id: app.bundle_id,
                 profiles: app.profiles,
+                directories: app.directories,
             })
             .collect();
         this
@@ -458,6 +459,16 @@ impl PwrRoute {
         self.tests.set_rules(self.store.edited());
         if self.tests.counts() != (0, 0) {
             self.tests.run();
+        }
+        // The Overview's rows are by number, and the file's may now be
+        // other rules: what the pointer or the keyboard was on lets go.
+        self.overview.forget_pointer();
+        self.overview.key(None);
+        if matches!(
+            self.overview.pinned,
+            Some(crate::overview_model::FocusKey::Row(_))
+        ) {
+            self.overview.pin(None);
         }
         cx.notify();
     }

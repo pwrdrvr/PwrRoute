@@ -14,11 +14,12 @@
 //! Nothing here holds a URL: rows show patterns (the rules' own text),
 //! counts and browser names.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use pwrroute_browsers::Catalog;
 use pwrroute_engine::{
-    AppType, BrowserSpec, Description, FALLBACK_BROWSER, MatcherSpec, Precedence, Rule, RulesFile,
+    AppType, BrowserSpec, Description, FALLBACK_BROWSER, HostnameSpec, MatcherSpec, Precedence,
+    Rule, RulesFile,
 };
 
 use crate::activity::{Counts, Filter, HitKey, Tally, thousands};
@@ -41,6 +42,9 @@ pub struct Installed {
     pub name: String,
     pub bundle_id: Option<String>,
     pub profiles: Vec<String>,
+    /// Each profile's directory, by `profiles`' index (Chromium's
+    /// "Profile 1"); empty where the browser has none.
+    pub directories: Vec<String>,
     /// Hidden in Settings › Browsers: never drawn unless a rule names it.
     pub hidden: bool,
 }
@@ -58,6 +62,40 @@ impl Installed {
                     .as_deref()
                     .is_some_and(|id| id.eq_ignore_ascii_case(value)))
     }
+
+    /// The profile a rule's `profile` value names, by its name: as the
+    /// launcher looks it up, by name, else by directory (a config's
+    /// `profile: "Profile 1"` is the profile the scan calls "Work").
+    fn profile_named(&self, wanted: &str) -> Option<&str> {
+        let wanted = wanted.trim();
+        self.profiles
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(wanted))
+            .or_else(|| {
+                self.directories
+                    .iter()
+                    .position(|dir| !dir.is_empty() && dir.eq_ignore_ascii_case(wanted))
+                    .and_then(|i| self.profiles.get(i))
+            })
+            .map(String::as_str)
+    }
+}
+
+/// A profile as the map names it: the scan's name for it when the browser
+/// (by its card key) has a profile by that name or directory, else as
+/// written.
+fn canonical_profile(
+    installed: &[Installed],
+    key: &str,
+    profile: Option<String>,
+) -> Option<String> {
+    let profile = profile?;
+    let named = installed
+        .iter()
+        .find(|app| app.name.to_lowercase() == key)
+        .and_then(|app| app.profile_named(&profile))
+        .map(str::to_owned);
+    Some(named.unwrap_or(profile))
 }
 
 /// Routing is paused: where every link goes until it resumes.
@@ -533,6 +571,20 @@ pub enum Focus {
     EverythingElse,
 }
 
+/// What is traced, by what it is rather than where it is drawn: the
+/// cards re-sort as today's links come in, and a pin stays on its profile.
+/// The window keeps these and [`Map::resolve`]s them each frame.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FocusKey {
+    Row(RowSource),
+    /// A card's header, by its key.
+    Card(String),
+    /// A card by its key, and one of its profiles (`None`: the default
+    /// one, or a special card's one node).
+    Node(String, Option<String>),
+    EverythingElse,
+}
+
 /// The left end of a route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum End {
@@ -560,8 +612,12 @@ pub struct Route {
     /// Links take it now. Not: the config never loaded, the browser is not
     /// installed, routing is paused, or the rule is off. Drawn dashed.
     pub running: bool,
-    /// Its place among the routes into its node, top to bottom by the row
-    /// it comes from, and how many there are: they fan into the port.
+    /// Drawn while nothing traces it. Not: a rule that is off, whose
+    /// would-be route shows only while it is traced, outside the fan.
+    pub at_rest: bool,
+    /// Its place among the routes into its node that are drawn at rest,
+    /// top to bottom by the row it comes from, and how many there are:
+    /// they fan into the port.
     pub slot: usize,
     pub fan: usize,
 }
@@ -581,6 +637,8 @@ pub struct Lit {
     pub nodes: BTreeSet<NodeRef>,
     /// Every route: rows in order, then Everything else.
     pub routes: Vec<Route>,
+    /// The routes drawn at rest into each node: how wide its port fans.
+    fans: HashMap<NodeRef, usize>,
 }
 
 impl Lit {
@@ -600,17 +658,30 @@ impl Lit {
         self.nodes.contains(&(card, node))
     }
 
-    /// The routes into a node: how wide its port fans.
+    /// The routes drawn at rest into a node: how wide its port fans.
     pub fn fan(&self, card: usize, node: usize) -> usize {
-        self.routes
-            .iter()
-            .filter(|route| route.to == (card, node))
-            .count()
+        self.fans.get(&(card, node)).copied().unwrap_or(0)
     }
 
-    /// Some route is drawn dashed: the legend says what that means.
+    /// Some route drawn at rest is dashed: the legend says what that
+    /// means. A rule that is off, traced, does not add the swatch.
     pub fn any_not_running(&self) -> bool {
-        self.routes.iter().any(|route| !route.running)
+        self.routes
+            .iter()
+            .any(|route| route.at_rest && !route.running)
+    }
+
+    /// The route from a row, or Everything else.
+    pub fn route(&self, from: End) -> Option<&Route> {
+        self.routes.iter().find(|route| route.from == from)
+    }
+
+    /// Some highlighted route into the node runs: its port fills accent.
+    /// Lit with only routes that are not running, it rings instead.
+    pub fn node_runs(&self, card: usize, node: usize) -> bool {
+        self.routes
+            .iter()
+            .any(|route| route.to == (card, node) && route.trace == Trace::Lit && route.running)
     }
 }
 
@@ -667,8 +738,15 @@ impl Map {
                     lit.warm.insert(node.0);
                 }
             }
+            // A node with no rules yet traces nothing: it offers "+ Add a
+            // rule…".
             Some(Focus::Node(card, node)) => {
-                if self.cards.get(card).is_some_and(|c| node < c.nodes.len()) {
+                if self
+                    .cards
+                    .get(card)
+                    .and_then(|c| c.nodes.get(node))
+                    .is_some_and(|n| !n.unused)
+                {
                     light_node(&mut lit, (card, node));
                 }
             }
@@ -713,6 +791,7 @@ impl Map {
                 to,
                 trace: trace(lit.rows.contains(&i)),
                 running: row.enabled && !row.idle && !self.dimmed && !row.target.ghost(),
+                at_rest: row.enabled,
                 slot: 0,
                 fan: 0,
             });
@@ -723,21 +802,70 @@ impl Map {
                 to,
                 trace: trace(lit.everything_else),
                 running: !self.dimmed && !self.everything_else.target.ghost(),
+                at_rest: true,
                 slot: 0,
                 fan: 0,
             });
         }
         // Each node's routes fan into its port in the order of their rows,
-        // so they never cross there.
-        for i in 0..routes.len() {
-            let to = routes[i].to;
-            let slot = routes[..i].iter().filter(|r| r.to == to).count();
-            let fan = routes.iter().filter(|r| r.to == to).count();
-            routes[i].slot = slot;
-            routes[i].fan = fan;
+        // so they never cross there. Only routes drawn at rest take a
+        // place: tracing a rule that is off moves nothing; its route ends
+        // where it would sit, within the fan.
+        let mut fans: HashMap<NodeRef, usize> = HashMap::new();
+        for route in &mut routes {
+            let seen = fans.entry(route.to).or_insert(0);
+            route.slot = *seen;
+            if route.at_rest {
+                *seen += 1;
+            }
+        }
+        for route in &mut routes {
+            let fan = fans.get(&route.to).copied().unwrap_or(0);
+            route.fan = fan.max(1);
+            route.slot = route.slot.min(route.fan - 1);
         }
         lit.routes = routes;
+        lit.fans = fans;
         lit
+    }
+
+    /// What is at `focus`, by what it is.
+    pub fn key_of(&self, focus: Focus) -> Option<FocusKey> {
+        match focus {
+            Focus::Row(row) => self.rows.get(row).map(|row| FocusKey::Row(row.source)),
+            Focus::EverythingElse => Some(FocusKey::EverythingElse),
+            Focus::Card(card) => self
+                .cards
+                .get(card)
+                .map(|card| FocusKey::Card(card.key.clone())),
+            Focus::Node(card, node) => {
+                let card = self.cards.get(card)?;
+                let node = card.nodes.get(node)?;
+                Some(FocusKey::Node(card.key.clone(), node.profile.clone()))
+            }
+        }
+    }
+
+    /// Where `key` is on this map, if it still is.
+    pub fn resolve(&self, key: &FocusKey) -> Option<Focus> {
+        let card_at = |key: &str| self.cards.iter().position(|card| card.key == key);
+        match key {
+            FocusKey::Row(source) => self
+                .rows
+                .iter()
+                .position(|row| row.source == *source)
+                .map(Focus::Row),
+            FocusKey::EverythingElse => Some(Focus::EverythingElse),
+            FocusKey::Card(key) => card_at(key).map(Focus::Card),
+            FocusKey::Node(key, profile) => {
+                let card = card_at(key)?;
+                let node = self.cards[card]
+                    .nodes
+                    .iter()
+                    .position(|node| same_profile(node.profile.as_deref(), profile.as_deref()))?;
+                Some(Focus::Node(card, node))
+            }
+        }
     }
 
     /// What the legend calls a pin: "Google Chrome · Work", "rule 3".
@@ -866,37 +994,113 @@ pub fn telling_name(name: &str) -> Option<String> {
     .then(|| name.to_owned())
 }
 
-/// The source without its comments, strings kept whole.
+/// Where a lexer is between tokens: the last character that was not
+/// whitespace, and the word it ended, so a `/` can be told apart as a
+/// regex literal's start or a division.
+#[derive(Default)]
+struct Before {
+    prev: Option<char>,
+    word: String,
+    spaced: bool,
+}
+
+impl Before {
+    fn ident(c: char) -> bool {
+        c.is_alphanumeric() || c == '_' || c == '$'
+    }
+
+    fn push(&mut self, c: char) {
+        if c.is_whitespace() {
+            self.spaced = true;
+            return;
+        }
+        if Self::ident(c) {
+            if self.spaced || !self.prev.is_some_and(Self::ident) {
+                self.word.clear();
+            }
+            self.word.push(c);
+        } else {
+            self.word.clear();
+        }
+        self.prev = Some(c);
+        self.spaced = false;
+    }
+
+    /// A `/` here starts a regex literal: at the start, after an operator
+    /// or an opening bracket, or after a keyword such as `return`.
+    fn regex_next(&self) -> bool {
+        match self.prev {
+            None => true,
+            Some(c) if "(,=:[!&|?{};+-*%<>~^".contains(c) => true,
+            Some(c) if Self::ident(c) => matches!(
+                self.word.as_str(),
+                "return" | "typeof" | "case" | "in" | "of" | "delete" | "void" | "throw" | "new"
+            ),
+            Some(_) => false,
+        }
+    }
+}
+
+/// The rest of a regex literal after its opening `/`: through the `/` that
+/// closes it (not one inside a `[…]` class), or the end of the line.
+fn regex_body(chars: &mut std::iter::Peekable<impl Iterator<Item = (usize, char)>>) -> String {
+    let mut body = String::new();
+    let mut class = false;
+    while let Some(&(_, c)) = chars.peek() {
+        if c == '\n' {
+            break;
+        }
+        chars.next();
+        body.push(c);
+        match c {
+            '\\' => {
+                if let Some((_, next)) = chars.next() {
+                    body.push(next);
+                }
+            }
+            '[' => class = true,
+            ']' => class = false,
+            '/' if !class => break,
+            _ => {}
+        }
+    }
+    body
+}
+
+/// The source without its comments, strings and regex literals kept whole.
 fn strip_comments(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
-    let mut chars = source.chars().peekable();
+    let mut chars = source.char_indices().peekable();
     let mut quote: Option<char> = None;
-    while let Some(c) = chars.next() {
+    let mut before = Before::default();
+    while let Some((_, c)) = chars.next() {
         if let Some(q) = quote {
             out.push(c);
             if c == '\\' {
-                if let Some(next) = chars.next() {
+                if let Some((_, next)) = chars.next() {
                     out.push(next);
                 }
             } else if c == q {
                 quote = None;
+                before.push(')');
             }
             continue;
         }
+        let next = chars.peek().map(|&(_, next)| next);
         match c {
             '"' | '\'' | '`' => {
                 quote = Some(c);
                 out.push(c);
             }
-            '/' if chars.peek() == Some(&'/') => {
-                while chars.peek().is_some_and(|&next| next != '\n') {
+            '/' if next == Some('/') => {
+                while chars.peek().is_some_and(|&(_, next)| next != '\n') {
                     chars.next();
                 }
             }
-            '/' if chars.peek() == Some(&'*') => {
+            '/' if next == Some('*') => {
                 chars.next();
                 let mut previous = ' ';
-                for next in chars.by_ref() {
+                for (_, next) in chars.by_ref() {
                     if previous == '*' && next == '/' {
                         break;
                     }
@@ -904,52 +1108,69 @@ fn strip_comments(source: &str) -> String {
                 }
                 out.push(' ');
             }
+            '/' if before.regex_next() => {
+                out.push(c);
+                out.push_str(&regex_body(&mut chars));
+                // What follows a regex divides, as after a value.
+                before.push(')');
+            }
             '\\' => {
                 out.push(c);
-                if let Some(next) = chars.next() {
+                if let Some((_, next)) = chars.next() {
                     out.push(next);
                 }
             }
-            _ => out.push(c),
+            _ => {
+                out.push(c);
+                before.push(c);
+            }
         }
     }
     out
 }
 
-/// Each character outside strings, by byte offset, with the bracket depth
-/// it sits at (a bracket at the depth of the pair it opens or closes).
+/// Each character outside strings and regex literals, by byte offset, with
+/// the bracket depth it sits at (a bracket at the depth of the pair it
+/// opens or closes).
 fn top_level(text: &str) -> Vec<(usize, char, usize)> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for (i, c) in text.char_indices() {
+    let mut before = Before::default();
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
         if let Some(q) = quote {
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
+            if c == '\\' {
+                chars.next();
             } else if c == q {
                 quote = None;
+                before.push(')');
             }
             continue;
         }
-        if escaped {
-            escaped = false;
-            continue;
-        }
         match c {
-            '\\' => escaped = true,
+            '\\' => {
+                chars.next();
+            }
             '"' | '\'' | '`' => quote = Some(c),
+            '/' if before.regex_next() && !matches!(chars.peek(), Some((_, '/' | '*'))) => {
+                regex_body(&mut chars);
+                before.push(')');
+            }
             '(' | '[' | '{' => {
                 out.push((i, c, depth));
                 depth += 1;
+                before.push(c);
             }
             ')' | ']' | '}' => {
                 depth = depth.saturating_sub(1);
                 out.push((i, c, depth));
+                before.push(c);
             }
-            _ => out.push((i, c, depth)),
+            _ => {
+                out.push((i, c, depth));
+                before.push(c);
+            }
         }
     }
     out
@@ -969,30 +1190,114 @@ fn wrapped(text: &str, open: char, close: char) -> Option<&str> {
     (end + close.len_utf8() == text.len()).then(|| &text[open.len_utf8()..end])
 }
 
-/// A block's body (`{ … }`, braces included) as one expression: its first
-/// `return`'s, else its first statement and " …".
-fn block_expression(block: &str) -> String {
-    let inner = &block[1..block.len() - 1];
-    let chars = top_level(inner);
-    let word = |i: usize| inner[i..].starts_with("return");
-    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
-    let statement_end = |from: usize| {
+/// A value that says nothing of what is tested: `true`, `false`, `null`,
+/// `undefined`, a number.
+fn is_literal(expression: &str) -> bool {
+    let e = expression.trim();
+    matches!(e, "true" | "false" | "null" | "undefined" | "!0" | "!1") || e.parse::<f64>().is_ok()
+}
+
+/// A literal that is false to JavaScript.
+fn is_falsy(expression: &str) -> bool {
+    matches!(
+        expression.trim(),
+        "false" | "null" | "undefined" | "0" | "!1" | "\"\"" | "''"
+    )
+}
+
+/// Each `return` in `text` at `depth` (`chars` is the [`top_level`] of
+/// `text`), in order, that is the keyword, not part of a name or a
+/// property (`x.return`): the expression it returns, to the `;` that ends
+/// its statement or the `}` that closes its block.
+fn returns(text: &str, chars: &[(usize, char, usize)], at_depth: Option<usize>) -> Vec<String> {
+    // A line break ends the statement too (as JavaScript inserts a `;`)
+    // unless the line ends, or the next begins, mid-expression.
+    let line_ends = |at: usize| {
+        let last = text[..at].trim_end().chars().last();
+        let next = text[at..].trim_start().chars().next();
+        !last.is_some_and(|c| "&|+-*/%=<>?:,(.[!~^".contains(c))
+            && !next.is_some_and(|c| ".?:&|+-*/%=<>,)]".contains(c))
+    };
+    let statement_end = |from: usize, depth: usize| {
         chars
             .iter()
-            .find(|&&(i, c, depth)| i >= from && depth == 0 && c == ';')
-            .map_or(inner.len(), |&(i, _, _)| i)
+            .find(|&&(i, c, d)| {
+                i >= from
+                    && ((d == depth && c == ';')
+                        || (d + 1 == depth && c == '}')
+                        || (d == depth && c == '\n' && i > from && line_ends(i)))
+            })
+            .map_or(text.len(), |&(i, _, _)| i)
     };
+    let mut found = Vec::new();
     for (n, &(i, _, depth)) in chars.iter().enumerate() {
-        if depth != 0 || !word(i) {
+        if at_depth.is_some_and(|want| want != depth) || !text[i..].starts_with("return") {
             continue;
         }
         let before = n.checked_sub(1).map(|p| chars[p].1);
-        let after = inner[i + 6..].chars().next();
-        if before.is_some_and(ident) || after.is_some_and(ident) {
+        let after = text[i + 6..].chars().next();
+        if before.is_some_and(|c| Before::ident(c) || c == '.') || after.is_some_and(Before::ident)
+        {
             continue;
         }
         let start = i + 6;
-        return inner[start..statement_end(start)].trim().to_owned();
+        found.push(text[start..statement_end(start, depth)].trim().to_owned());
+    }
+    found
+}
+
+/// A leading `if (condition) …` whose branch returns a literal: the
+/// condition, negated when the branch returns false (`if (x) return false`
+/// tests `!(x)`).
+fn guard_condition(inner: &str, chars: &[(usize, char, usize)]) -> Option<String> {
+    let first = inner.trim_start();
+    let start = inner.len() - first.len();
+    let rest = first.strip_prefix("if")?;
+    if !rest.trim_start().starts_with('(') {
+        return None;
+    }
+    let open = chars
+        .iter()
+        .find(|&&(i, c, depth)| i >= start + 2 && depth == 0 && c == '(')?
+        .0;
+    let close = chars
+        .iter()
+        .find(|&&(i, c, depth)| i > open && depth == 0 && c == ')')?
+        .0;
+    let condition = inner[open + 1..close].trim();
+    // The branch: a block, or one statement.
+    let after = &inner[close + 1..];
+    let branch_chars = top_level(after);
+    let returned = returns(after, &branch_chars, None).into_iter().next()?;
+    // `if (x) return true` with no `;` ends at the line.
+    let returned = returned.lines().next().unwrap_or_default().to_owned();
+    if !is_literal(&returned) || condition.is_empty() {
+        return None;
+    }
+    Some(if is_falsy(&returned) {
+        format!("!({condition})")
+    } else {
+        condition.to_owned()
+    })
+}
+
+/// A block's body (`{ … }`, braces included) as one expression: its first
+/// top-level `return` that says something (not a literal); else, when it
+/// opens with an `if` guard that returns a literal, the guard's
+/// condition; else its first `return`'s literal, or its first statement
+/// and " …".
+fn block_expression(block: &str) -> String {
+    let inner = &block[1..block.len() - 1];
+    let chars = top_level(inner);
+    let found = returns(inner, &chars, Some(0));
+    if let Some(expression) = found.iter().find(|expression| !is_literal(expression)) {
+        return expression.clone();
+    }
+    if let Some(condition) = guard_condition(inner, &chars) {
+        return condition;
+    }
+    if let Some(expression) = found.into_iter().next() {
+        return expression;
     }
     let first = inner.trim_start();
     let start = inner.len() - first.len();
@@ -1228,16 +1533,26 @@ fn spec_dest(spec: &BrowserSpec, installed: &[Installed]) -> (Dest, Option<Strin
 }
 
 /// The cards, in order of first use, and the targets that point at them.
-#[derive(Default)]
-struct Cards {
+struct Cards<'a> {
+    /// The scan, which names a profile written by its directory.
+    installed: &'a [Installed],
     dests: Vec<Dest>,
     /// Per browser card: the profiles rows and Everything else name, in
     /// order of use (`None`: the default one).
     profiles: Vec<Vec<Option<String>>>,
 }
 
-impl Cards {
+impl<'a> Cards<'a> {
+    fn new(installed: &'a [Installed]) -> Self {
+        Self {
+            installed,
+            dests: Vec::new(),
+            profiles: Vec::new(),
+        }
+    }
+
     fn add(&mut self, dest: Dest, profile: Option<String>) -> Target {
+        let profile = canonical_profile(self.installed, &dest.key, profile);
         let card = match self.dests.iter().position(|d| d.key == dest.key) {
             Some(card) => card,
             None => {
@@ -1325,43 +1640,101 @@ fn rule_match(rule: &Rule) -> RowMatch {
     }
 }
 
-/// A config handler's match column.
+/// A matcher as pattern tags: a wildcard or regex as itself, and a
+/// function from `finicky.matchHostnames` as the hostnames it was made
+/// with (a regex tested on the hostname as a regex tag).
+fn as_tags(matcher: &MatcherSpec) -> Option<Vec<Pattern>> {
+    match matcher {
+        MatcherSpec::Wildcard(text) => Some(vec![Pattern {
+            text: text.clone(),
+            regex: false,
+        }]),
+        MatcherSpec::Regex(text) => Some(vec![Pattern {
+            text: text.clone(),
+            regex: true,
+        }]),
+        MatcherSpec::Function(function) => function
+            .hostnames
+            .as_ref()
+            .filter(|list| !list.is_empty())
+            .map(|list| {
+                list.iter()
+                    .map(|entry| match entry {
+                        HostnameSpec::Hostname(text) => Pattern {
+                            text: text.clone(),
+                            regex: false,
+                        },
+                        HostnameSpec::Regex(text) => Pattern {
+                            text: text.clone(),
+                            regex: true,
+                        },
+                    })
+                    .collect()
+            }),
+        MatcherSpec::Other(_) => None,
+    }
+}
+
+/// A config handler's match column: tags when its first matcher reads as
+/// them ([`as_tags`]), else by its first matcher's kind.
 fn handler_match(matchers: &[MatcherSpec]) -> RowMatch {
     let more = matchers.len().saturating_sub(1);
-    match matchers.first() {
-        None => RowMatch::Any,
-        Some(MatcherSpec::Wildcard(_) | MatcherSpec::Regex(_)) => {
-            let patterns: Vec<Pattern> = matchers
-                .iter()
-                .filter_map(|matcher| match matcher {
-                    MatcherSpec::Wildcard(text) => Some(Pattern {
-                        text: text.clone(),
-                        regex: false,
-                    }),
-                    MatcherSpec::Regex(text) => Some(Pattern {
-                        text: text.clone(),
-                        regex: true,
-                    }),
-                    _ => None,
-                })
-                .collect();
-            RowMatch::Patterns {
-                more: matchers.len() - patterns.len(),
-                patterns,
-                opener: None,
+    let Some(first) = matchers.first() else {
+        return RowMatch::Any;
+    };
+    if as_tags(first).is_some() {
+        let mut patterns = Vec::new();
+        let mut rest = 0;
+        for matcher in matchers {
+            match as_tags(matcher) {
+                Some(tags) => patterns.extend(tags),
+                None => rest += 1,
             }
         }
-        Some(MatcherSpec::Function(function)) => RowMatch::Function {
+        return RowMatch::Patterns {
+            patterns,
+            more: rest,
+            opener: None,
+        };
+    }
+    match first {
+        MatcherSpec::Function(function) => RowMatch::Function {
             name: telling_name(&function.name),
-            excerpt: function.source.as_deref().and_then(function_excerpt),
+            excerpt: function.source.as_deref().and_then(cached_excerpt),
             source: function.source.clone(),
             more,
         },
-        Some(MatcherSpec::Other(kind)) => RowMatch::Other {
+        MatcherSpec::Other(kind) => RowMatch::Other {
             text: kind.clone(),
             more,
         },
+        // Read as tags above.
+        MatcherSpec::Wildcard(_) | MatcherSpec::Regex(_) => RowMatch::Any,
     }
+}
+
+/// [`function_excerpt`], once per source: the map is built on every frame
+/// of a fade, and a config's function can be long.
+fn cached_excerpt(source: &str) -> Option<String> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static EXCERPTS: RefCell<HashMap<String, Option<String>>> =
+            RefCell::new(HashMap::new());
+    }
+    EXCERPTS.with(|cache| {
+        if let Some(found) = cache.borrow().get(source) {
+            return found.clone();
+        }
+        let excerpt = function_excerpt(source);
+        let mut cache = cache.borrow_mut();
+        // A config edited over a long session: start over now and then.
+        if cache.len() >= 256 {
+            cache.clear();
+        }
+        cache.insert(source.to_owned(), excerpt.clone());
+        excerpt
+    })
 }
 
 /// `describe()`'s reasons to think twice before PwrRoute's default takes
@@ -1431,7 +1804,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     // As the engine decides: the config keeps its default unless the rules
     // run first with a default of their own.
     let config_owns_default = description.is_some() && !rules.owns_default();
-    let mut cards = Cards::default();
+    let mut cards = Cards::new(installed);
     let mut rows: Vec<Row> = Vec::new();
     let mut items: Vec<Item> = Vec::new();
     let count_of = |key: HitKey| {
@@ -1448,6 +1821,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         let dest = resolve(&rules_json_name, installed);
         let profile = (has_default && !rules.default_profile.is_empty())
             .then(|| rules.default_profile.clone());
+        let profile = canonical_profile(installed, &dest.key, profile);
         (dest, profile)
     };
     let pwrroute_display = {
@@ -1456,7 +1830,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     };
 
     // The config's handlers and the visual rules, in evaluation order.
-    let config_section = |rows: &mut Vec<Row>, items: &mut Vec<Item>, cards: &mut Cards| {
+    let config_section = |rows: &mut Vec<Row>, items: &mut Vec<Item>, cards: &mut Cards<'_>| {
         let Some(config) = config else {
             return;
         };
@@ -1517,7 +1891,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             });
         }
     };
-    let rules_section = |rows: &mut Vec<Row>, items: &mut Vec<Item>, cards: &mut Cards| {
+    let rules_section = |rows: &mut Vec<Row>, items: &mut Vec<Item>, cards: &mut Cards<'_>| {
         if rules.rules.is_empty() {
             return;
         }
@@ -1600,7 +1974,11 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         let dest = resolve(name, installed);
         if let Some(card) = cards.dests.iter().position(|d| d.key == dest.key) {
             links[card] += n;
-            let profile = (!profile.is_empty()).then(|| profile.to_owned());
+            let profile = canonical_profile(
+                installed,
+                &dest.key,
+                (!profile.is_empty()).then(|| profile.to_owned()),
+            );
             match profile_links[card]
                 .iter_mut()
                 .find(|(p, _)| same_profile(p.as_deref(), profile.as_deref()))
@@ -1654,15 +2032,24 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     .unwrap_or(usize::MAX),
             );
 
-            // The routed profiles by their first row, then the rest the
-            // scan found, in its order.
+            // Something runs into it: an enabled row, or Everything else. A
+            // profile only rules that are off name is idle, kept so their
+            // would-be route has an end.
+            let live = |profile: Option<&str>| {
+                ee_feeds(profile) || rows.iter().any(|row| row.enabled && feeds(row, profile))
+            };
+            // The routed profiles by their first row, then those only rules
+            // that are off name, then the rest the scan found, in its order.
             let mut profiles: Vec<Option<String>> = if single {
                 vec![None]
             } else {
                 cards.profiles[card].clone()
             };
-            profiles.sort_by_key(|profile| first(profile.as_deref()));
-            let routed = profiles.len();
+            profiles.sort_by_key(|profile| {
+                let p = profile.as_deref();
+                (!live(p), first(p))
+            });
+            let routed = profiles.iter().filter(|p| live(p.as_deref())).count();
             if !single
                 && let Some(app) = installed
                     .iter()
@@ -1691,7 +2078,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                         .filter(|row| row.enabled && feeds(row, p))
                         .count();
                     let everything_else = ee_feeds(p);
-                    let unused = !everything_else && !rows.iter().any(|row| feeds(row, p));
+                    let unused = !live(p);
                     let n = if single {
                         card_n
                     } else {
@@ -1754,7 +2141,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     .iter()
                     .filter(|row| row.enabled && row.target.card() == Some(card))
                     .all(|row| row.idle);
-            let card_links = (counts && card_n > 0).then_some(card_n);
+            // A browser only rules that are off send links to: with the
+            // browsers that have no rules yet.
+            let unused_card = dest.kind == CardKind::Browser && feeding == 0 && !is_ee;
+            let card_links = (counts && card_n > 0 && !unused_card).then_some(card_n);
             let today = card_links.map(|n| format!("{} links today", thousands(n)));
             let rules_part = if feeding == 0 && is_ee {
                 "Everything else".to_owned()
@@ -1762,6 +2152,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 plural(feeding, "rule")
             };
             let meta = match dest.kind {
+                CardKind::Browser if unused_card => vec![idle_meta(&nodes)],
                 CardKind::Browser => std::iter::once(rules_part)
                     .chain(today.clone())
                     .collect::<Vec<_>>(),
@@ -1778,20 +2169,23 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     .collect(),
             }
             .join(" \u{00b7} ");
-            let share = (dest.kind == CardKind::Browser && counts && total > 0).then(|| {
-                let fraction = (card_n as f32 / total as f32).clamp(0.0, 1.0);
-                let percent = fraction * 100.0;
-                Share {
-                    label: if card_n > 0 && percent < 1.0 {
-                        "<1%".to_owned()
-                    } else {
-                        format!("{}%", percent.round() as u64)
-                    },
-                    fraction,
-                }
-            });
+            let share = (dest.kind == CardKind::Browser && !unused_card && counts && total > 0)
+                .then(|| {
+                    let fraction = (card_n as f32 / total as f32).clamp(0.0, 1.0);
+                    let percent = fraction * 100.0;
+                    Share {
+                        label: if card_n > 0 && percent < 1.0 {
+                            "<1%".to_owned()
+                        } else {
+                            format!("{}%", percent.round() as u64)
+                        },
+                        fraction,
+                    }
+                });
             let shown = if single {
                 1
+            } else if unused_card {
+                folded_to(nodes.len(), routed.max(IDLE_NODES))
             } else {
                 folded_to(nodes.len(), routed.max(ROUTED_NODES))
             };
@@ -1807,34 +2201,16 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 links: card_links,
                 share,
                 ribbon: is_ee.then(|| ribbon.clone()),
-                unused: false,
+                unused: unused_card,
                 idle: idle && !is_ee,
             }
         })
         .collect();
 
-    // Each route's node, then the cards in order: routed browsers by
-    // today's share, the special cards, then ghosts.
-    let mut everything_else = everything_else;
-    for row in &mut rows {
-        row.node = node_ref(&built, &row.target);
-    }
-    everything_else.node = node_ref(&built, &everything_else.target);
-    let (mut built, remap) = order_cards(built, &first_ranks);
-    for row in &mut rows {
-        remap_target(&mut row.target, &remap);
-        row.node = row.node.map(|(card, node)| (remap[card], node));
-    }
-    remap_target(&mut everything_else.target, &remap);
-    everything_else.node = everything_else.node.map(|(card, node)| (remap[card], node));
-
-    // Every other browser the Settings don't hide, A-Z, as a place links
-    // could go.
-    let in_use = built
-        .iter()
-        .filter(|card| card.kind == CardKind::Browser)
-        .count();
-    let mut spare: Vec<&Installed> = installed
+    // Every other browser the Settings don't hide, as a place links could
+    // go, with no rules yet.
+    let mut built = built;
+    let spare: Vec<&Installed> = installed
         .iter()
         .filter(|app| {
             !app.hidden
@@ -1842,8 +2218,6 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 && !built.iter().any(|card| card.key == app.name.to_lowercase())
         })
         .collect();
-    spare.sort_by_key(|app| app.name.to_lowercase());
-    let spare_count = spare.len();
     for app in spare {
         let profiles: Vec<Option<String>> = if app.profiles.is_empty() {
             vec![None]
@@ -1862,23 +2236,16 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 tooltip: "No rules send links here yet".to_owned(),
             })
             .collect();
-        let meta = if app.profiles.is_empty() {
-            "default profile \u{00b7} no rules yet".to_owned()
-        } else {
-            format!(
-                "{} \u{00b7} no rules yet",
-                plural(app.profiles.len(), "profile")
-            )
-        };
+        first_ranks.push(usize::MAX);
         built.push(Card {
             kind: CardKind::Browser,
             badge: badge_for(&app.name).to_string(),
             name: app.name.clone(),
             key: app.name.to_lowercase(),
             shown: folded_to(nodes.len(), IDLE_NODES),
+            meta: idle_meta(&nodes),
             nodes,
             rules: 0,
-            meta,
             links: None,
             share: None,
             ribbon: None,
@@ -1886,6 +2253,28 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             idle: false,
         });
     }
+
+    // Each route's node, then the cards in order: routed browsers by
+    // today's share, the special cards, ghosts, then the browsers with no
+    // rules yet, A-Z.
+    let mut everything_else = everything_else;
+    for row in &mut rows {
+        row.node = node_ref(&built, &row.target);
+    }
+    everything_else.node = node_ref(&built, &everything_else.target);
+    let (built, remap) = order_cards(built, &first_ranks);
+    for row in &mut rows {
+        remap_target(&mut row.target, &remap);
+        row.node = row.node.map(|(card, node)| (remap[card], node));
+    }
+    remap_target(&mut everything_else.target, &remap);
+    everything_else.node = everything_else.node.map(|(card, node)| (remap[card], node));
+
+    let in_use = built
+        .iter()
+        .filter(|card| card.kind == CardKind::Browser && !card.unused)
+        .count();
+    let spare_count = built.iter().filter(|card| card.unused).count();
     let in_use_line = if spare_count > 0 {
         format!("{in_use} in use \u{00b7} {spare_count} more installed")
     } else {
@@ -2144,6 +2533,15 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     }
 }
 
+/// A card with no rules yet: "4 profiles · no rules yet", "default
+/// profile · no rules yet".
+fn idle_meta(nodes: &[Node]) -> String {
+    match nodes {
+        [only] if only.profile.is_none() => "default profile \u{00b7} no rules yet".to_owned(),
+        _ => format!("{} \u{00b7} no rules yet", plural(nodes.len(), "profile")),
+    }
+}
+
 /// The node a target's route ends at.
 fn node_ref(cards: &[Card], target: &Target) -> Option<NodeRef> {
     let card = target.card()?;
@@ -2160,11 +2558,13 @@ fn node_ref(cards: &[Card], target: &Target) -> Option<NodeRef> {
 
 /// The browser cards by today's links (by their first row while counts
 /// are not shown), then Decided by JavaScript, Not opened, and the
-/// browsers that are not installed, each by its first row; and where each
-/// old index went. `first` is each card's first feeding rank.
+/// browsers that are not installed, each by its first row, then the
+/// browsers with no rules yet A-Z; and where each old index went. `first`
+/// is each card's first feeding rank.
 fn order_cards(cards: Vec<Card>, first: &[usize]) -> (Vec<Card>, Vec<usize>) {
     use std::cmp::Reverse;
-    let rank = |kind: CardKind| match kind {
+    let rank = |card: &Card| match card.kind {
+        CardKind::Browser if card.unused => 4,
         CardKind::Browser => 0,
         CardKind::Function => 1,
         CardKind::NotOpened => 2,
@@ -2173,12 +2573,16 @@ fn order_cards(cards: Vec<Card>, first: &[usize]) -> (Vec<Card>, Vec<usize>) {
     let mut order: Vec<usize> = (0..cards.len()).collect();
     order.sort_by_key(|&i| {
         let card = &cards[i];
+        if card.unused {
+            // With no rules yet: A-Z.
+            return (rank(card), Reverse(0), 0, card.key.clone(), i);
+        }
         let links = if card.kind == CardKind::Browser {
             card.links.unwrap_or(0)
         } else {
             0
         };
-        (rank(card.kind), Reverse(links), first[i], i)
+        (rank(card), Reverse(links), first[i], String::new(), i)
     });
     let mut remap = vec![0; cards.len()];
     for (new, &old) in order.iter().enumerate() {
@@ -2321,6 +2725,7 @@ mod tests {
         FunctionSpec {
             name: name.into(),
             source: None,
+            hostnames: None,
         }
     }
 
@@ -3560,6 +3965,7 @@ mod tests {
         let arrow = FunctionSpec {
             name: "match".into(),
             source: Some("({ url }) => url.host === \"tickets.example.com\"".into()),
+            hostnames: None,
         };
         assert_eq!(
             handler_match(&[
@@ -3673,5 +4079,274 @@ mod tests {
         assert!(cut.ends_with('\u{2026}'));
         assert_eq!(excerpt(""), None);
         assert_eq!(excerpt("() => {}"), None);
+    }
+
+    #[test]
+    fn guards_read_by_their_condition_and_regex_literals_stay_whole() {
+        let excerpt = |source: &str| function_excerpt(source);
+        // A guard that returns true, then false: what the guard tests.
+        assert_eq!(
+            excerpt(
+                "(url) => { if (url.host === \"a.example.com\") { return true; } return false; }"
+            )
+            .as_deref(),
+            Some("url.host === \"a.example.com\"")
+        );
+        assert_eq!(
+            excerpt(
+                "(url) => {\n  if (url.host === \"a.example.com\") return true\n  return false\n}"
+            )
+            .as_deref(),
+            Some("url.host === \"a.example.com\"")
+        );
+        // A guard that returns false tests the opposite.
+        assert_eq!(
+            excerpt("function (url) { if (url.port) return false; return true; }").as_deref(),
+            Some("!(url.port)")
+        );
+        // A guard before a return that says something: the return.
+        assert_eq!(
+            excerpt(
+                "(url) => { if (!url.host) return false; return url.host === \"b.example.com\"; }"
+            )
+            .as_deref(),
+            Some("url.host === \"b.example.com\"")
+        );
+        // A method named return is not the keyword.
+        assert_eq!(
+            excerpt("() => { x.return(1) }").as_deref(),
+            Some("x.return(1) \u{2026}")
+        );
+        // A regex literal holding "/*" or "//" is not a comment.
+        assert_eq!(
+            excerpt("u => /[/*]/.test(u.href) && u.host === \"c.example.com\"").as_deref(),
+            Some("/[/*]/.test(u.href) && u.host === \"c.example.com\"")
+        );
+        assert_eq!(
+            excerpt("(u) => /^https:\\/\\/d\\.example\\.com\\//.test(u.href) // its docs")
+                .as_deref(),
+            Some("/^https:\\/\\/d\\.example\\.com\\//.test(u.href)")
+        );
+        // A regex with a bracket in its class leaves the depth alone.
+        assert_eq!(
+            excerpt("function (u) { return /[(]/.test(u.pathname); }").as_deref(),
+            Some("/[(]/.test(u.pathname)")
+        );
+        // Division is not a regex.
+        assert_eq!(
+            excerpt("(u) => u.port / 2 > 4000 // half").as_deref(),
+            Some("u.port / 2 > 4000")
+        );
+    }
+
+    /// The user's kind of config: inline arrows Finicky names "match", and
+    /// a `finicky.matchHostnames` list, all into one profile.
+    #[test]
+    fn inline_handlers_read_their_source_and_hostname_lists_their_hosts() {
+        let description = Engine::load(
+            &fixtures::overview_handlers_config(),
+            Rc::new(DefaultHost),
+            Limits::default(),
+        )
+        .expect("the handlers config loads")
+        .describe()
+        .expect("it describes")
+        .expect("it has a description");
+        let map = World {
+            config: Some(Some(description)),
+            ..World::new(RulesFile::default(), Vec::new())
+        }
+        .build()
+        .map;
+        assert_eq!(map.rows.len(), 8);
+        let read = |row: &Row| match &row.matcher {
+            RowMatch::Function { name, excerpt, .. } => {
+                assert_eq!(*name, None, "a generic name says nothing");
+                excerpt.clone().expect("an excerpt")
+            }
+            other => panic!("a function row: {other:?}"),
+        };
+        let excerpts: Vec<String> = map.rows[..7].iter().map(read).collect();
+        assert_eq!(
+            excerpts,
+            [
+                "url.host === \"tickets.example.com\"",
+                "url.host.endsWith(\".build.example.net\") && url.pathname.startsWith(\"/runs/\")",
+                "url.host === \"wiki.example.org\"",
+                "/^(docs|api)\\.example\\.com$/.test(url.host)",
+                "url.searchParams.get(\"team\") === \"research\"",
+                "url.host === \"review.example.com\" && url.pathname.includes(\"/pull/\")",
+                "[\"chat.example.com\", \"meet.example.com\"].includes(url.host)",
+            ]
+        );
+        let RowMatch::Patterns { patterns, more, .. } = &map.rows[7].matcher else {
+            panic!("hostname tags: {:?}", map.rows[7].matcher);
+        };
+        assert_eq!(
+            patterns
+                .iter()
+                .map(|p| (p.text.as_str(), p.regex))
+                .collect::<Vec<_>>(),
+            [
+                ("status.example.com", false),
+                ("metrics.example.net", false),
+                ("/^dash\\d+\\.example\\.org$/", true),
+            ]
+        );
+        assert_eq!(*more, 0);
+        // All eight into one node, every route lit when it is traced.
+        let node = map.rows[0].node.expect("a node");
+        assert!(map.rows.iter().all(|row| row.node == Some(node)));
+        let card = &map.cards[node.0];
+        assert_eq!(
+            (card.name.as_str(), card.nodes[node.1].label()),
+            ("Microsoft Edge", "Research and Development Team")
+        );
+        let lit = map.lit(Some(Focus::Node(node.0, node.1)));
+        assert_eq!(
+            lit.routes.iter().filter(|r| r.trace == Trace::Lit).count(),
+            8
+        );
+        assert_eq!(lit.fan(node.0, node.1), 8);
+    }
+
+    /// A pin is kept by what it is: when the cards re-sort, it finds its
+    /// profile again.
+    #[test]
+    fn a_focus_key_finds_its_profile_after_the_cards_re_sort() {
+        let before = World::rules().build().map;
+        let after = World::new(fixtures::overview_rules(), Vec::new())
+            .build()
+            .map;
+        let mut moved = false;
+        for (c, card) in before.cards.iter().enumerate() {
+            for (n, node) in card.nodes.iter().enumerate() {
+                let key = before.key_of(Focus::Node(c, n)).expect("a key");
+                let Some(Focus::Node(c2, n2)) = after.resolve(&key) else {
+                    panic!("{key:?} is still on the map");
+                };
+                assert_eq!(after.cards[c2].name, card.name);
+                assert_eq!(after.cards[c2].nodes[n2].profile, node.profile);
+                moved |= (c2, n2) != (c, n);
+            }
+            let key = before.key_of(Focus::Card(c)).expect("a key");
+            let Some(Focus::Card(c2)) = after.resolve(&key) else {
+                panic!("{key:?} is still on the map");
+            };
+            assert_eq!(after.cards[c2].name, card.name);
+        }
+        assert!(moved, "the cards re-sort without today's links");
+        let row = before.key_of(Focus::Row(2)).expect("a key");
+        assert_eq!(row, FocusKey::Row(RowSource::Rule(2)));
+        assert_eq!(after.resolve(&row), Some(Focus::Row(2)));
+        assert_eq!(after.resolve(&FocusKey::Card("not a browser".into())), None);
+    }
+
+    /// A config names a Chromium profile by its directory ("Profile 1"):
+    /// it is the profile the scan calls "Work", one node.
+    #[test]
+    fn a_profile_named_by_its_directory_is_the_scans_profile() {
+        let rules = RulesFile {
+            rules: vec![
+                rule("a.example.com/*", "Google Chrome", "Profile 1"),
+                rule("b.example.com/*", "Google Chrome", "Work"),
+            ],
+            ..RulesFile::default()
+        };
+        let map = World::new(rules, Vec::new()).build().map;
+        let chrome = map
+            .cards
+            .iter()
+            .find(|card| card.name == "Google Chrome")
+            .expect("Chrome's card");
+        let labels: Vec<&str> = chrome.nodes.iter().map(Node::label).collect();
+        assert_eq!(labels, ["Work", "Personal", "Design"]);
+        assert_eq!(chrome.nodes[0].rules, 2);
+        assert_eq!(map.rows[0].node, map.rows[1].node);
+        assert!(matches!(
+            &map.rows[0].target,
+            Target::Browser { label, .. } if label == "Work"
+        ));
+    }
+
+    /// A browser only rules that are off send links to has no rules yet:
+    /// not in use, with the idle browsers, its node idle but still the end
+    /// of the off rule's would-be route.
+    #[test]
+    fn a_browser_only_rules_that_are_off_name_has_no_rules_yet() {
+        let rules = RulesFile {
+            default_browser: "Google Chrome".into(),
+            rules: vec![
+                rule("a.example.com/*", "Google Chrome", "Work"),
+                Rule {
+                    enabled: false,
+                    ..rule("b.example.com/*", "Firefox", "")
+                },
+            ],
+            ..RulesFile::default()
+        };
+        let map = World::new(rules, Vec::new()).build().map;
+        assert_eq!(map.in_use, "1 in use \u{b7} 4 more installed");
+        let firefox = map
+            .cards
+            .iter()
+            .position(|card| card.name == "Firefox")
+            .expect("Firefox's card");
+        let card = &map.cards[firefox];
+        assert!(card.unused);
+        assert_eq!(card.meta, "default profile \u{b7} no rules yet");
+        assert!(card.nodes[0].unused);
+        assert_eq!(card.share, None);
+        // With the browsers that have no rules yet, A-Z.
+        let idle: Vec<&str> = map
+            .cards
+            .iter()
+            .filter(|card| card.unused)
+            .map(|card| card.name.as_str())
+            .collect();
+        assert_eq!(idle, ["Arc", "Firefox", "Microsoft Edge", "Safari"]);
+        // Traced, the off rule draws its route there, not running.
+        assert_eq!(map.rows[1].node, Some((firefox, 0)));
+        let lit = map.lit(Some(Focus::Row(1)));
+        let route = lit.route(End::Row(1)).expect("its would-be route");
+        assert!(!route.running && !route.at_rest);
+        // A node with no rules yet traces nothing.
+        assert!(!map.lit(Some(Focus::Node(firefox, 0))).traced);
+    }
+
+    /// Tracing a rule that is off moves no other route at its node, and
+    /// the legend's "not running" swatch is for what is drawn at rest.
+    #[test]
+    fn tracing_a_rule_that_is_off_moves_nothing_in_the_fan() {
+        let rules = RulesFile {
+            default_browser: "Safari".into(),
+            rules: vec![
+                rule("a.example.com/*", "Google Chrome", "Work"),
+                Rule {
+                    enabled: false,
+                    ..rule("b.example.com/*", "Google Chrome", "Work")
+                },
+                rule("c.example.com/*", "Google Chrome", "Work"),
+            ],
+            ..RulesFile::default()
+        };
+        let map = World::new(rules, Vec::new()).build().map;
+        let node = map.rows[0].node.expect("Chrome · Work");
+        let rest = map.lit(None);
+        let traced = map.lit(Some(Focus::Row(1)));
+        assert_eq!(rest.fan(node.0, node.1), 2);
+        assert_eq!(traced.fan(node.0, node.1), 2);
+        let slots = |lit: &Lit| {
+            [End::Row(0), End::Row(2)].map(|end| {
+                let route = lit.route(end).expect("a route");
+                (route.slot, route.fan)
+            })
+        };
+        assert_eq!(slots(&rest), [(0, 2), (1, 2)]);
+        assert_eq!(slots(&traced), slots(&rest));
+        let off = traced.route(End::Row(1)).expect("the would-be route");
+        assert_eq!((off.slot, off.fan), (1, 2));
+        assert!(!rest.any_not_running());
+        assert!(!traced.any_not_running());
     }
 }

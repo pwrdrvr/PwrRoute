@@ -1020,14 +1020,14 @@ fn main() {
     // 1a-3f) over its example.com fixtures, with the routing state set by
     // hand and motion off so each shot is the settled frame.
     {
-        use overview_model::{ConfigTrouble, Focus, Pause, Status};
+        use overview_model::{ConfigTrouble, FocusKey, Pause, RowSource, Status};
         use pwrroute_engine::{Precedence, RulesFile};
 
         type Day = fn() -> Vec<pwrroute_router::DispatchRecord>;
         struct Shot {
             name: &'static str,
             width: f32,
-            config: bool,
+            config: Option<fn() -> std::path::PathBuf>,
             rules: fn() -> RulesFile,
             exists: bool,
             day: Option<Day>,
@@ -1039,7 +1039,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-routing",
                 width: 1240.0,
-                config: false,
+                config: None,
                 rules: fixtures::overview_rules,
                 exists: true,
                 day: Some(fixtures::overview_rules_day),
@@ -1049,25 +1049,26 @@ fn main() {
             Shot {
                 name: "app-0-overview-hover-rule",
                 width: 1240.0,
-                config: false,
+                config: None,
                 rules: fixtures::overview_rules,
                 exists: true,
                 day: Some(fixtures::overview_rules_day),
                 status: routing(),
                 prepare: |app| {
-                    app.overview.hover(Some(Focus::Row(1)));
+                    app.overview.hover(Some(FocusKey::Row(RowSource::Rule(1))));
                 },
             },
             Shot {
                 name: "app-0-overview-hover-card",
                 width: 1240.0,
-                config: false,
+                config: None,
                 rules: fixtures::overview_rules,
                 exists: true,
                 day: Some(fixtures::overview_rules_day),
                 status: routing(),
                 prepare: |app| {
-                    app.overview.hover(Some(Focus::Card(0)));
+                    app.overview
+                        .hover(Some(FocusKey::Card("google chrome".into())));
                 },
             },
             // 1e: seven rules and Everything else into one profile, every
@@ -1075,13 +1076,16 @@ fn main() {
             Shot {
                 name: "app-0-overview-hover-profile",
                 width: 1880.0,
-                config: false,
+                config: None,
                 rules: fixtures::overview_fanin_rules,
                 exists: true,
                 day: Some(fixtures::overview_fanin_day),
                 status: routing(),
                 prepare: |app| {
-                    app.overview.hover(Some(Focus::Node(0, 0)));
+                    app.overview.hover(Some(FocusKey::Node(
+                        "microsoft edge".into(),
+                        Some("Research and Development Team".into()),
+                    )));
                 },
             },
             // 1f: Chrome · Work pinned, and Safari's idle node under the
@@ -1089,20 +1093,41 @@ fn main() {
             Shot {
                 name: "app-0-overview-pinned",
                 width: 1240.0,
-                config: false,
+                config: None,
                 rules: fixtures::overview_rules,
                 exists: true,
                 day: Some(fixtures::overview_rules_day),
                 status: routing(),
                 prepare: |app| {
-                    app.overview.pin(Some(Focus::Node(0, 0)));
-                    app.overview.idle_hover = Some((4, 0));
+                    app.overview.pin(Some(FocusKey::Node(
+                        "google chrome".into(),
+                        Some("Work".into()),
+                    )));
+                    app.overview.idle_hover = Some(FocusKey::Node("safari".into(), None));
+                },
+            },
+            // 1e with the user's kind of config: inline handlers Finicky
+            // names "match", each read by its source, and a matchHostnames
+            // list read as its hostnames, all into one Edge profile, traced.
+            Shot {
+                name: "app-0-overview-hover-handlers",
+                width: 1880.0,
+                config: Some(fixtures::overview_handlers_config),
+                rules: RulesFile::default,
+                exists: false,
+                day: None,
+                status: routing(),
+                prepare: |app| {
+                    app.overview.hover(Some(FocusKey::Node(
+                        "microsoft edge".into(),
+                        Some("Research and Development Team".into()),
+                    )));
                 },
             },
             Shot {
                 name: "app-0-overview-config",
                 width: 1240.0,
-                config: true,
+                config: Some(fixtures::overview_config),
                 rules: fixtures::overview_config_rules,
                 exists: true,
                 day: Some(fixtures::overview_config_day),
@@ -1112,7 +1137,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-override",
                 width: 1240.0,
-                config: true,
+                config: Some(fixtures::overview_config),
                 rules: || RulesFile {
                     precedence: Precedence::PwrRoute,
                     ..fixtures::overview_config_rules()
@@ -1125,7 +1150,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-paused",
                 width: 1000.0,
-                config: false,
+                config: None,
                 rules: fixtures::overview_paused_rules,
                 exists: true,
                 day: Some(fixtures::overview_paused_day),
@@ -1141,7 +1166,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-not-default",
                 width: 1000.0,
-                config: false,
+                config: None,
                 rules: fixtures::overview_paused_rules,
                 exists: true,
                 day: None,
@@ -1154,7 +1179,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-config-error",
                 width: 1000.0,
-                config: true,
+                config: Some(fixtures::overview_config),
                 rules: fixtures::overview_config_rules,
                 exists: true,
                 day: Some(fixtures::overview_config_error_day),
@@ -1171,7 +1196,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-config-stale",
                 width: 1000.0,
-                config: true,
+                config: Some(fixtures::overview_config),
                 rules: fixtures::overview_config_rules,
                 exists: true,
                 day: Some(fixtures::overview_config_day),
@@ -1186,7 +1211,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-nothing",
                 width: 1000.0,
-                config: false,
+                config: None,
                 rules: RulesFile::default,
                 exists: false,
                 day: Some(fixtures::overview_nothing_day),
@@ -1196,7 +1221,7 @@ fn main() {
             Shot {
                 name: "app-0-overview-default-only",
                 width: 1000.0,
-                config: false,
+                config: None,
                 rules: || RulesFile {
                     default_browser: "Google Chrome".into(),
                     default_profile: "Personal".into(),
@@ -1233,10 +1258,10 @@ fn main() {
                 shot.exists,
                 shot.exists.then(std::time::SystemTime::now),
             );
-            let config = shot.config.then(fixtures::overview_config);
+            let config = shot.config.map(|config| config());
             // Tall enough for the whole map; the config's runs longer, with
             // the callout under it.
-            let height = if shot.config { 1300.0 } else { 1100.0 };
+            let height = if config.is_some() { 1300.0 } else { 1100.0 };
             let home = home.clone();
             let handle = cx
                 .open_window(size(px(shot.width), px(height)), |_, cx| {

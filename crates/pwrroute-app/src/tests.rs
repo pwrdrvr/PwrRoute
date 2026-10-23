@@ -2806,6 +2806,19 @@ fn painted(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> Vec<crate::ov
     view.read_with(cx, |app, _| app.overview.bounds.borrow().painted.clone())
 }
 
+/// Where a focus the Overview keeps (by key) is on the map drawn now.
+fn placed(
+    view: &Entity<PwrRoute>,
+    cx: &mut VisualTestContext,
+    which: fn(&crate::overview::OverviewState) -> Option<crate::overview_model::FocusKey>,
+) -> Option<crate::overview_model::Focus> {
+    view.update(cx, |app, cx| {
+        let key = which(&app.overview)?;
+        let status = crate::overview::status(app, cx);
+        crate::overview::build(app, &status, cx).map.resolve(&key)
+    })
+}
+
 fn lit_count(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> usize {
     painted(view, cx).iter().filter(|route| route.lit).count()
 }
@@ -2838,7 +2851,7 @@ fn every_route_is_drawn_and_a_hovered_row_lights_its_own(cx: &mut TestAppContext
     scroll_to(cx, "overview-row-1");
     hover(cx, "overview-row-1");
     assert_eq!(
-        view.read_with(cx, |app, _| app.overview.hovered),
+        placed(&view, cx, |state| state.hovered.clone()),
         Some(crate::overview_model::Focus::Row(1))
     );
     let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
@@ -2880,7 +2893,7 @@ fn hovering_a_node_with_seven_rows_lights_every_route(cx: &mut TestAppContext) {
     scroll_to(cx, "overview-node-0-0");
     hover(cx, "overview-node-0-0");
     assert_eq!(
-        view.read_with(cx, |app, _| app.overview.hovered),
+        placed(&view, cx, |state| state.hovered.clone()),
         Some(crate::overview_model::Focus::Node(0, 0))
     );
     // Seven rules and Everything else.
@@ -2907,7 +2920,7 @@ fn a_pin_survives_the_pointer_leaving_and_escape_clears_it(cx: &mut TestAppConte
     );
     scroll_to(cx, "overview-node-0-0");
     click(cx, "overview-node-0-0");
-    let pinned = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.overview.pinned);
+    let pinned = |cx: &mut VisualTestContext| placed(&view, cx, |state| state.pinned.clone());
     assert_eq!(pinned(cx), Some(Focus::Node(0, 0)));
     assert!(
         cx.debug_bounds("overview-pinned").is_some(),
@@ -2946,7 +2959,7 @@ fn a_card_header_click_pins_it_until_escape(cx: &mut TestAppContext) {
     );
     scroll_to(cx, "overview-card-1");
     click(cx, "overview-card-1");
-    let pinned = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.overview.pinned);
+    let pinned = |cx: &mut VisualTestContext| placed(&view, cx, |state| state.pinned.clone());
     assert_eq!(pinned(cx), Some(crate::overview_model::Focus::Card(1)));
     cx.simulate_keystrokes("escape");
     draw(cx);
@@ -2989,8 +3002,8 @@ fn an_idle_node_adds_a_rule_for_its_profile(cx: &mut TestAppContext) {
     scroll_to(cx, "overview-node-0-2");
     hover(cx, "overview-node-0-2");
     assert_eq!(
-        view.read_with(cx, |app, _| app.overview.idle_hover),
-        Some((0, 2))
+        placed(&view, cx, |state| state.idle_hover.clone()),
+        Some(crate::overview_model::Focus::Node(0, 2))
     );
     click(cx, "overview-node-0-2");
     let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
@@ -3015,7 +3028,7 @@ fn the_keyboard_traces_and_return_opens_the_rule(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("down down");
     draw(cx);
     assert_eq!(
-        view.read_with(cx, |app, _| app.overview.keyed),
+        placed(&view, cx, |state| state.keyed.clone()),
         Some(Focus::Row(1))
     );
     assert_eq!(
@@ -3030,6 +3043,65 @@ fn the_keyboard_traces_and_return_opens_the_rule(cx: &mut TestAppContext) {
         (screen, selection),
         (Screen::Rules, Some(Selection::Handler(1)))
     );
+}
+
+/// Return on a node with no rules yet does what its click does: adds a
+/// rule for that profile, rather than pinning a node that traces nothing.
+#[gpui_kit::test]
+fn return_on_an_idle_node_adds_a_rule(cx: &mut TestAppContext) {
+    use crate::overview_model::FocusKey;
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    view.update(cx, |app, cx| {
+        app.overview.key(Some(FocusKey::Node(
+            "google chrome".into(),
+            Some("Design".into()),
+        )));
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(lit_count(&view, cx), 0, "it traces nothing");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let (screen, pinned) = view.read_with(cx, |app, _| (app.screen, app.overview.pinned.clone()));
+    assert_eq!((screen, pinned), (Screen::Rules, None));
+    let rule = view.read_with(cx, |app, _| app.store.edited().rules[6].clone());
+    assert_eq!(
+        (rule.browser.as_str(), rule.profile.as_str()),
+        ("Google Chrome", "Design")
+    );
+}
+
+/// A scroll moves the map under a pointer that did not move: the hover
+/// lets go rather than tracing a row that is no longer under it.
+#[gpui_kit::test]
+fn a_scroll_lets_go_of_the_hover(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    scroll_to(cx, "overview-row-1");
+    hover(cx, "overview-row-1");
+    assert!(view.read_with(cx, |app, _| app.overview.hovered.is_some()));
+    let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
+    let event = ScrollWheelEvent {
+        position: row.center(),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-40.0))),
+        ..Default::default()
+    };
+    cx.update(|window, cx| window.dispatch_event(event.to_platform_input(), cx));
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.hovered.clone()),
+        None
+    );
+    assert_eq!(lit_count(&view, cx), 0);
 }
 
 #[gpui_kit::test]
@@ -3050,7 +3122,7 @@ fn a_tile_opens_activity_filtered_and_edit_opens_a_rule(cx: &mut TestAppContext)
     click(cx, "overview-row-3");
     assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
     assert_eq!(
-        view.read_with(cx, |app, _| app.overview.pinned),
+        placed(&view, cx, |state| state.pinned.clone()),
         Some(crate::overview_model::Focus::Row(3))
     );
     click(cx, "overview-row-edit-3");
@@ -3167,7 +3239,9 @@ fn leaving_overview_forgets_its_fades_and_the_hand_off(cx: &mut TestAppContext) 
     assert!(handoff(cx).is_some());
     view.update(cx, |app, _| {
         app.overview
-            .hover(Some(crate::overview_model::Focus::Card(1)));
+            .hover(Some(crate::overview_model::FocusKey::Card(
+                "firefox".into(),
+            )));
     });
     click(cx, "nav-rules");
     assert_eq!(handoff(cx), None);

@@ -31,8 +31,12 @@ crate docs map the modules.
   field absent nothing may change: `finicky_compat` and `features.rs`
   hold the Go order. It also describes a config's own rules for the
   window (`Engine::describe`), spelling fixed browsers out with the API's
-  `createBrowserConfig`. Keep it to the API's exports; if a feature needs
-  the bundle changed, stop and say so.
+  `createBrowserConfig`. A function from `finicky.matchHostnames` (or
+  `matchDomains`) is described by the list it was made with
+  (`FunctionSpec::hostnames`): `rememberHostnames` wraps those two
+  utilities on the `finicky` global to note each list by the function the
+  API returned, which still does the matching. Keep it to the API's
+  exports; if a feature needs the bundle changed, stop and say so.
 - **`rules.json` is Go's schema plus optional fields.** Every extension
   (`rewrites`, `opener`, `enabled`) defaults to what the Go host did, so a Go
   file loads unchanged. A file using an extension behaves differently under

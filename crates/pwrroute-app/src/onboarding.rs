@@ -1334,6 +1334,7 @@ mod tests {
             bundle_id: Some(id.to_owned()),
             location: PathBuf::from(format!("/Applications/{name}.app")),
             profiles: Vec::new(),
+            directories: Vec::new(),
         };
         let apps = vec![
             app("Firefox", "org.mozilla.firefox"),

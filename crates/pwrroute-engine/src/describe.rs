@@ -99,4 +99,19 @@ pub struct FunctionSpec {
     /// the file. `None` for a native or bound function.
     #[serde(default)]
     pub source: Option<String>,
+    /// What a function from `finicky.matchHostnames` (or the deprecated
+    /// `matchDomains`) was made with, in order: the list its source hides.
+    /// `None` for every other function.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostnames: Option<Vec<HostnameSpec>>,
+}
+
+/// One entry of a `finicky.matchHostnames` list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostnameSpec {
+    /// A hostname the link's must equal.
+    Hostname(String),
+    /// A regular expression tested on the hostname, as `/source/flags`.
+    Regex(String),
 }

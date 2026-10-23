@@ -478,6 +478,17 @@ pub fn overview_config() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/overview/finicky.ts")
 }
 
+/// The wide map's config: eight inline handlers into one Edge profile,
+/// seven of them arrows Finicky names "match" and one a
+/// `finicky.matchHostnames` list.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_handlers_config() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/overview/handlers.ts")
+}
+
 /// The browsers the Overview's scan finds: Orion, which the config names,
 /// is not among them. Chrome and Edge have profiles the rules never name,
 /// so the map shows idle nodes and Edge folds two of its four.
@@ -486,10 +497,20 @@ pub fn overview_config() -> std::path::PathBuf {
     allow(dead_code, reason = "the window harness and the screens example")
 )]
 pub fn overview_browsers() -> Vec<crate::overview_model::Installed> {
+    // Chromium names each profile's directory "Default", "Profile 1", …
     let app = |name: &str, bundle_id: &str, profiles: &[&str]| crate::overview_model::Installed {
         name: name.into(),
         bundle_id: Some(bundle_id.into()),
         profiles: profiles.iter().map(|p| (*p).to_owned()).collect(),
+        directories: (0..profiles.len())
+            .map(|i| {
+                if i == 0 {
+                    "Default".to_owned()
+                } else {
+                    format!("Profile {i}")
+                }
+            })
+            .collect(),
         hidden: false,
     };
     vec![

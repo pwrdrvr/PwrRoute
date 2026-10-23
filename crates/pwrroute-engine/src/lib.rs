@@ -60,8 +60,8 @@ use rquickjs::{
 use serde::{Deserialize, Serialize};
 
 pub use describe::{
-    BrowserSpec, Description, FixedBrowser, FunctionSpec, HandlerRule, MatcherSpec, RewriteRule,
-    UrlSpec,
+    BrowserSpec, Description, FixedBrowser, FunctionSpec, HandlerRule, HostnameSpec, MatcherSpec,
+    RewriteRule, UrlSpec,
 };
 pub use host::{
     ConsoleLine, ConsoleLog, DefaultHost, Host, LogLevel, ModifierKeys, PowerInfo, SystemInfo,
@@ -609,6 +609,10 @@ fn install_globals(ctx: &Ctx<'_>, host: &Rc<dyn Host>, console: &ConsoleLog) -> 
     }
     install_host_functions(ctx, &finicky, host)?;
     globals.set("finicky", finicky)?;
+    // So `describe()` can show what a `matchHostnames` function matches.
+    ctx.eval::<(), _>("__pwrroute.rememberHostnames(finicky)")
+        .catch(ctx)
+        .map_err(|e| js_error("wrapping finicky.matchHostnames", &e))?;
     Ok(())
 }
 

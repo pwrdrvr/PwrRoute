@@ -31,9 +31,9 @@ use gpui_kit::{
 use crate::app::{PwrRoute, Screen, Selection};
 use crate::overview_model::{
     self, Action, CHANGE_IN_RULES, Callout, Caption, Card, CardKind, ConfigInputs, ConfigTrouble,
-    DONE_TITLE, End, EverythingElse, Focus, Inputs, Installed, Item, Lit, Map, MapWidths, Node,
-    NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener, Overview, Pattern, Pause, Route, Row, RowMatch,
-    RowSource, Setup, SetupStep, Share, State, Status, Target, Tone, fit_tags,
+    DONE_TITLE, End, EverythingElse, Focus, FocusKey, Inputs, Installed, Item, Lit, Map, MapWidths,
+    Node, NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener, Overview, Pattern, Pause, Route, Row,
+    RowMatch, RowSource, Setup, SetupStep, Share, State, Status, Target, Tone, fit_tags,
 };
 use crate::rules_view::pane_frame;
 use crate::theme::{self, icon, mono, text, tracked};
@@ -99,16 +99,17 @@ pub struct MapBounds {
 /// The screen's own state, on the window.
 #[derive(Debug, Default)]
 pub struct OverviewState {
-    /// Under the pointer.
-    pub hovered: Option<Focus>,
+    /// Under the pointer. Each is kept by what it is ([`FocusKey`]), not
+    /// where it is drawn: the cards re-sort as links come in.
+    pub hovered: Option<FocusKey>,
     /// Clicked: traced until it is clicked again, Esc, Clear, or a click on
     /// the map's empty ground. It wins over the pointer and the keyboard.
-    pub pinned: Option<Focus>,
+    pub pinned: Option<FocusKey>,
     /// Where the arrow keys (and Tab) put the keyboard on the map.
-    pub keyed: Option<Focus>,
+    pub keyed: Option<FocusKey>,
     /// The node with no rules yet under the pointer: it offers "+ Add a
     /// rule…".
-    pub idle_hover: Option<NodeRef>,
+    pub idle_hover: Option<FocusKey>,
     /// Cards whose "+N more profiles" is open, by key, for the session.
     pub expanded: HashSet<String>,
     /// The card that just opened: its new nodes fade in.
@@ -117,7 +118,7 @@ pub struct OverviewState {
     /// they were drawn, keyed by it.
     generation: usize,
     /// What was traced before the last change, for the fade.
-    previous: Option<Focus>,
+    previous: Option<FocusKey>,
     /// The callout's switch was just used: Undo stays until the reader
     /// leaves Overview.
     pub just_overridden: bool,
@@ -144,8 +145,19 @@ pub struct OverviewState {
 
 impl OverviewState {
     /// What is traced: the pin, else the keyboard, else the pointer.
-    pub fn focus(&self) -> Option<Focus> {
-        self.pinned.or(self.keyed).or(self.hovered)
+    pub fn focus(&self) -> Option<FocusKey> {
+        self.pinned
+            .clone()
+            .or_else(|| self.keyed.clone())
+            .or_else(|| self.hovered.clone())
+    }
+
+    /// What is traced on `map`: the first of the pin, the keyboard and
+    /// the pointer that is still on it.
+    pub fn focus_on(&self, map: &Map) -> Option<Focus> {
+        [&self.pinned, &self.keyed, &self.hovered]
+            .into_iter()
+            .find_map(|key| key.as_ref().and_then(|key| map.resolve(key)))
     }
 
     /// Changes what is traced, keeping the previous for the fade.
@@ -162,33 +174,40 @@ impl OverviewState {
 
     /// The pointer moved onto `focus` (or off everything): the keyboard
     /// lets go.
-    pub fn hover(&mut self, focus: Option<Focus>) -> bool {
+    pub fn hover(&mut self, focus: Option<FocusKey>) -> bool {
         let moved = self.hovered != focus;
         self.lit_change(|this| {
-            this.hovered = focus;
             if focus.is_some() {
                 this.keyed = None;
             }
+            this.hovered = focus;
         }) || moved
     }
 
     /// Leaves `focus` if it is what is hovered.
-    fn unhover(&mut self, focus: Focus, to: Option<Focus>) -> bool {
-        if self.hovered == Some(focus) {
-            self.hover(to)
+    fn unhover(&mut self, focus: &FocusKey) -> bool {
+        if self.hovered.as_ref() == Some(focus) {
+            self.hover(None)
         } else {
             false
         }
     }
 
-    pub fn pin(&mut self, focus: Option<Focus>) -> bool {
+    pub fn pin(&mut self, focus: Option<FocusKey>) -> bool {
         self.lit_change(|this| this.pinned = focus)
     }
 
     /// Puts the keyboard on `focus`.
-    pub fn key(&mut self, focus: Option<Focus>) -> bool {
+    pub fn key(&mut self, focus: Option<FocusKey>) -> bool {
         let moved = self.keyed != focus;
         self.lit_change(|this| this.keyed = focus) || moved
+    }
+
+    /// The pointer is no longer where it was (a scroll, or the rows changed
+    /// under it): nothing stays hovered until it moves again.
+    pub fn forget_pointer(&mut self) -> bool {
+        let idle = self.idle_hover.take().is_some();
+        self.hover(None) || idle
     }
 
     /// Opens or closes a card's "+N more profiles".
@@ -209,8 +228,8 @@ impl OverviewState {
 
     /// What is fading out.
     #[cfg(test)]
-    pub fn fading(&self) -> Option<Focus> {
-        self.previous
+    pub fn fading(&self) -> Option<FocusKey> {
+        self.previous.clone()
     }
 
     /// The reader leaves Overview: its numbers have counted up, the
@@ -389,6 +408,8 @@ impl PwrRoute {
                 let at = self
                     .overview
                     .keyed
+                    .as_ref()
+                    .and_then(|keyed| map.resolve(keyed))
                     .and_then(|keyed| order.iter().position(|focus| *focus == keyed));
                 let next = match (at, back) {
                     (None, false) => 0,
@@ -396,25 +417,35 @@ impl PwrRoute {
                     (Some(i), false) => (i + 1).min(order.len() - 1),
                     (Some(i), true) => i.saturating_sub(1),
                 };
-                if self.overview.key(Some(order[next])) {
+                if self.overview.key(map.key_of(order[next])) {
                     cx.notify();
                 }
             }
-            "enter" => match self.overview.keyed {
-                Some(Focus::Row(row)) => {
-                    let status = status(self, cx);
-                    let source = build(self, &status, cx)
-                        .map
-                        .rows
-                        .get(row)
-                        .map(|row| row.source);
-                    if let Some(source) = source {
+            // Return opens the row the keyboard is on, adds a rule for a
+            // node with no rules yet (as its click does), or pins.
+            "enter" => {
+                let Some(keyed) = self.overview.keyed.clone() else {
+                    return;
+                };
+                let status = status(self, cx);
+                let map = build(self, &status, cx).map;
+                match map.resolve(&keyed) {
+                    Some(Focus::Row(row)) => {
+                        let source = map.rows[row].source;
                         self.open_rule(source, window, cx);
                     }
+                    Some(Focus::Node(card, node)) if map.cards[card].nodes[node].unused => {
+                        let browser = map.cards[card].name.clone();
+                        let profile = map.cards[card].nodes[node]
+                            .profile
+                            .clone()
+                            .unwrap_or_default();
+                        self.add_rule_for(&browser, &profile, window, cx);
+                    }
+                    Some(_) => toggle_pin(self, keyed, cx),
+                    None => {}
                 }
-                Some(focus) => toggle_pin(self, focus, cx),
-                None => {}
-            },
+            }
             _ => {}
         }
     }
@@ -686,6 +717,13 @@ pub fn pane(
     let widths = MapWidths::of_content(width - RAIL - PANE_X - MAP_X);
     pane_frame(PANE_ID)
         .debug_selector(|| PANE_ID.into())
+        // A scroll moves the map under a pointer that did not move: GPUI
+        // reports hover only on a move, so nothing stays traced.
+        .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+            if this.overview.forget_pointer() {
+                cx.notify();
+            }
+        }))
         .child(hero(&overview, cx))
         .children(
             overview
@@ -1331,8 +1369,8 @@ fn clear_pin(this: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
 }
 
 /// Pins `focus`, or lets go of it when it is the pin.
-fn toggle_pin(this: &mut PwrRoute, focus: Focus, cx: &mut Context<'_, PwrRoute>) {
-    let pin = (this.overview.pinned != Some(focus)).then_some(focus);
+fn toggle_pin(this: &mut PwrRoute, focus: FocusKey, cx: &mut Context<'_, PwrRoute>) {
+    let pin = (this.overview.pinned.as_ref() != Some(&focus)).then_some(focus);
     if this.overview.pin(pin) {
         cx.notify();
     }
@@ -1340,14 +1378,14 @@ fn toggle_pin(this: &mut PwrRoute, focus: Focus, cx: &mut Context<'_, PwrRoute>)
 
 /// A hover handler for a traced element.
 fn hover_listener(
-    focus: Focus,
+    focus: FocusKey,
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     cx.listener(move |this, over: &bool, _, cx| {
         let changed = if *over {
-            this.overview.hover(Some(focus))
+            this.overview.hover(Some(focus.clone()))
         } else {
-            this.overview.unhover(focus, None)
+            this.overview.unhover(&focus)
         };
         if changed {
             cx.notify();
@@ -1363,17 +1401,37 @@ fn map(
     cx: &mut Context<'_, PwrRoute>,
 ) -> Stateful<Div> {
     let state = &app.overview;
-    let focus = state.focus();
+    let on_map = |key: &Option<FocusKey>| key.as_ref().and_then(|key| map.resolve(key));
+    let focus = state.focus_on(map);
     let lit = map.lit(focus);
-    let before = map.lit(state.previous);
+    let before = map.lit(on_map(&state.previous));
+    let pinned = on_map(&state.pinned);
+    let keyed = on_map(&state.keyed);
+    // The keyboard on a node with no rules yet offers "+ Add a rule…" as
+    // the pointer does.
+    let idle_hover = [on_map(&state.idle_hover), keyed]
+        .into_iter()
+        .flatten()
+        .find_map(|focus| match focus {
+            Focus::Node(card, node)
+                if map
+                    .cards
+                    .get(card)
+                    .and_then(|c| c.nodes.get(node))
+                    .is_some_and(|n| n.unused) =>
+            {
+                Some((card, node))
+            }
+            _ => None,
+        });
     let trace = Look {
         lit: &lit,
         before: &before,
         generation: state.generation,
-        hovered: state.hovered,
-        pinned: state.pinned,
-        keyed: state.keyed,
-        idle_hover: state.idle_hover,
+        hovered: on_map(&state.hovered),
+        pinned,
+        keyed,
+        idle_hover,
     };
     let measure = Measure(window.text_system().clone());
     let wide = widths.dest >= SHARE_MIN;
@@ -1436,7 +1494,7 @@ fn map(
                         )),
                 ),
         );
-    let legend = legend(map, &lit, state.pinned, cx);
+    let legend = legend(map, &lit, pinned, cx);
 
     // The rule column, and which child is which row for the routes.
     let mut ends: Vec<Option<End>> = Vec::new();
@@ -1774,21 +1832,23 @@ impl Stroke {
 /// that was not there starts unseen, and one that is gone fades out.
 fn strokes(now: &[Route], before: &[Route], t: f32) -> Vec<Stroke> {
     let mix = |a: f32, b: f32| a + (b - a) * t;
+    let was: HashMap<(End, NodeRef), &Route> = before
+        .iter()
+        .map(|route| ((route.from, route.to), route))
+        .collect();
+    let is: HashSet<(End, NodeRef)> = now.iter().map(|route| (route.from, route.to)).collect();
     let mut out: Vec<Stroke> = now
         .iter()
         .map(|route| {
             let to = Stroke::of(route);
-            let from = before
-                .iter()
-                .find(|old| old.from == route.from && old.to == route.to)
-                .map_or(
-                    Stroke {
-                        base: 0.0,
-                        glow: 0.0,
-                        ..to
-                    },
-                    Stroke::of,
-                );
+            let from = was.get(&(route.from, route.to)).copied().map_or(
+                Stroke {
+                    base: 0.0,
+                    glow: 0.0,
+                    ..to
+                },
+                Stroke::of,
+            );
             Stroke {
                 base: mix(from.base, to.base),
                 glow: mix(from.glow, to.glow),
@@ -1799,10 +1859,7 @@ fn strokes(now: &[Route], before: &[Route], t: f32) -> Vec<Stroke> {
     out.extend(
         before
             .iter()
-            .filter(|old| {
-                !now.iter()
-                    .any(|route| route.from == old.from && route.to == old.to)
-            })
+            .filter(|old| !is.contains(&(old.from, old.to)))
             .map(|old| {
                 let from = Stroke::of(old);
                 Stroke {
@@ -1885,12 +1942,20 @@ fn paint_routes(
                 }
             }
         }
+        // Many lit routes into one node: their halos stack into a blob by
+        // the port, so each is fainter.
+        let mut lit_into: HashMap<NodeRef, usize> = HashMap::new();
+        for stroke in strokes.iter().filter(|stroke| stroke.glow > 0.003) {
+            *lit_into.entry(stroke.to).or_insert(0) += 1;
+        }
         for (stroke, ends) in strokes.iter().zip(&ends) {
             let Some((from, to)) = *ends else { continue };
             if stroke.glow > 0.003 {
                 if stroke.running {
+                    let stacked = lit_into.get(&stroke.to).copied().unwrap_or(1).max(1);
+                    let halo = 0.16 / (stacked as f32).sqrt();
                     if let Some(path) = curve(from, to, 6.0, false) {
-                        window.paint_path(path, alpha(theme::accent(), 0.16 * stroke.glow));
+                        window.paint_path(path, alpha(theme::accent(), halo * stroke.glow));
                     }
                     if let Some(path) = curve(from, to, 2.0, false) {
                         window.paint_path(path, alpha(theme::accent(), stroke.glow));
@@ -1937,6 +2002,10 @@ fn port(right: bool, fan: usize, style: PortStyle) -> Div {
                 .border(px(1.5))
                 .bg(theme::bg_panel())
                 .border_color(theme::border_strong()),
+            PortStyle::StoppedLit => dot
+                .border(px(1.5))
+                .bg(theme::bg_panel())
+                .border_color(theme::text_secondary()),
             PortStyle::Empty => dot
                 .border_1()
                 .bg(theme::bg_panel())
@@ -1964,6 +2033,9 @@ enum PortStyle {
     Route,
     /// A browser that is not installed.
     Stopped,
+    /// Traced, but its routes are not running (paused, the config never
+    /// loaded, not installed, a rule that is off): ringed, not filled.
+    StoppedLit,
     /// A node nothing routes to yet.
     Empty,
 }
@@ -2368,6 +2440,7 @@ fn rule_row(
     cx: &mut Context<'_, PwrRoute>,
 ) -> AnyElement {
     let focus = Focus::Row(index);
+    let key = FocusKey::Row(row.source);
     let light = trace.light(|lit| lit.row(index));
     let lit = light.lit();
     let pinned = trace.pinned == Some(focus);
@@ -2399,14 +2472,14 @@ fn rule_row(
     let element = row_frame(("overview-row", index).into(), lit, pinned, ghost)
         .debug_selector(move || format!("overview-row-{index}"))
         .tooltip(tip(row.tooltip.clone(), tip_source))
-        .on_hover(hover_listener(focus, cx))
+        .on_hover(hover_listener(key.clone(), cx))
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             cx.stop_propagation();
             // A double-click opens the rule; a click pins it.
             if event.click_count() >= 2 {
                 this.open_rule(source, window, cx);
             } else {
-                toggle_pin(this, focus, cx);
+                toggle_pin(this, key.clone(), cx);
             }
         }))
         .child(rank(
@@ -2448,8 +2521,14 @@ fn rule_row(
         .child(count_column(row.count, lit));
     // The port sits over the row's border: a sibling, painted after it. A
     // rule that is off has none.
-    let port_style = if lit {
+    let running = trace
+        .lit
+        .route(End::Row(index))
+        .is_some_and(|route| route.running);
+    let port_style = if lit && running {
         PortStyle::Lit
+    } else if lit {
+        PortStyle::StoppedLit
     } else if ghost {
         PortStyle::Stopped
     } else {
@@ -2494,10 +2573,10 @@ fn everything_else_row(
                 linear_color_stop(theme::bg_elevated(), 0.7),
             ))
         })
-        .on_hover(hover_listener(focus, cx))
+        .on_hover(hover_listener(FocusKey::EverythingElse, cx))
         .on_click(cx.listener(move |this, _, _, cx| {
             cx.stop_propagation();
-            toggle_pin(this, focus, cx);
+            toggle_pin(this, FocusKey::EverythingElse, cx);
         }))
         .child(rank("\u{221e}".into(), true, 13.0, theme::accent_bright()))
         .child(
@@ -2519,8 +2598,14 @@ fn everything_else_row(
         )
         .child(target_column(&row.target))
         .child(count_column(row.count, lit));
-    let port_style = if lit {
+    let running = trace
+        .lit
+        .route(End::EverythingElse)
+        .is_some_and(|route| route.running);
+    let port_style = if lit && running {
         PortStyle::Lit
+    } else if lit {
+        PortStyle::StoppedLit
     } else if row.target.ghost() {
         PortStyle::Stopped
     } else {
@@ -2782,7 +2867,15 @@ fn browser_card(
     let lit = trace.lit.card(index);
     let warm = trace.lit.warm(index);
     let ring = card.ribbon.is_some();
-    let focus = Focus::Card(index);
+    // While something else is traced, the node with no rules yet under the
+    // pointer stays at full strength with its "+ Add a rule…"; the rest of
+    // its card dims around it.
+    let spot = trace.lit.traced
+        && !warm
+        && trace
+            .idle_hover
+            .is_some_and(|(card_index, _)| card_index == index);
+    let key = FocusKey::Card(card.key().to_owned());
     let header = div()
         .id(("overview-card", index))
         .debug_selector(move || format!("overview-card-{index}"))
@@ -2832,12 +2925,13 @@ fn browser_card(
         .when(!card.unused, |header| {
             header
                 .cursor_pointer()
-                .on_hover(hover_listener(focus, cx))
+                .on_hover(hover_listener(key.clone(), cx))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    toggle_pin(this, focus, cx);
+                    toggle_pin(this, key.clone(), cx);
                 }))
-        });
+        })
+        .when(spot, |header| header.opacity(DIM));
 
     let shown = if expanded {
         card.nodes.len()
@@ -2859,7 +2953,7 @@ fn browser_card(
         .border_t_1()
         .border_color(theme::border_faint())
         .children(card.nodes.iter().take(shown).enumerate().map(|(n, node)| {
-            let drawn = node_row(index, n, card, node, trace, cx);
+            let drawn = node_row(index, n, card, node, trace, spot, cx);
             if n >= card.shown && app.overview.expanding == Some(index) {
                 // "+N more profiles" just opened: the new nodes fade in.
                 div()
@@ -2891,6 +2985,7 @@ fn browser_card(
                     .items_center()
                     .cursor_pointer()
                     .hover(|more| more.bg(theme::bg_hover()))
+                    .when(spot, |more| more.opacity(DIM))
                     .child(text(label, 10.5, 500.0, theme::text_subtle()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -2919,6 +3014,7 @@ fn browser_card(
             element.child(ribbon(label))
         });
     let (from, to) = trace.light(|lit| lit.warm(index)).opacities();
+    let (from, to) = if spot { (1.0, 1.0) } else { (from, to) };
     faded(
         element,
         ("overview-card-dim", index * 1_000_000 + trace.generation).into(),
@@ -2928,23 +3024,30 @@ fn browser_card(
 }
 
 /// One profile: its port, its name (and ∞), its rules and today's links.
+/// `spot`: its card holds the node with no rules yet under the pointer
+/// while something else is traced, and every other node dims.
+#[allow(clippy::too_many_arguments, reason = "one node's parts, drawn once")]
 fn node_row(
     card_index: usize,
     index: usize,
     card: &Card,
     node: &Node,
     trace: &Look<'_>,
+    spot: bool,
     cx: &mut Context<'_, PwrRoute>,
 ) -> AnyElement {
     let focus = Focus::Node(card_index, index);
+    let key = FocusKey::Node(card.key().to_owned(), node.profile.clone());
     let lit = trace.lit.node(card_index, index);
     let pinned = trace.pinned == Some(focus);
     let adding = node.unused && trace.idle_hover == Some((card_index, index));
     let fan = trace.lit.fan(card_index, index);
     let port_style = if node.unused {
         PortStyle::Empty
-    } else if lit {
+    } else if lit && trace.lit.node_runs(card_index, index) {
         PortStyle::Lit
+    } else if lit {
+        PortStyle::StoppedLit
     } else {
         PortStyle::Route
     };
@@ -2974,6 +3077,9 @@ fn node_row(
                         .shadow(vec![inset(theme::accent())])
                 } else if lit {
                     row.bg(theme::bg_row_active())
+                } else if adding {
+                    // Its own hover fill, whatever is pinned.
+                    row.bg(theme::bg_hover())
                 } else {
                     row.hover(|row| row.bg(theme::bg_hover()))
                 }
@@ -3039,12 +3145,11 @@ fn node_row(
     let element = if node.unused {
         let browser = card.name.clone();
         let profile = node.profile.clone().unwrap_or_default();
-        let at = (card_index, index);
         element
             .on_hover(cx.listener(move |this, over: &bool, _, cx| {
                 let next = if *over {
-                    Some(at)
-                } else if this.overview.idle_hover == Some(at) {
+                    Some(key.clone())
+                } else if this.overview.idle_hover.as_ref() == Some(&key) {
                     None
                 } else {
                     return;
@@ -3060,10 +3165,10 @@ fn node_row(
             }))
     } else {
         element
-            .on_hover(hover_listener(focus, cx))
+            .on_hover(hover_listener(key.clone(), cx))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
-                toggle_pin(this, focus, cx);
+                toggle_pin(this, key.clone(), cx);
             }))
     };
     // In a card that holds a lit node, only its other nodes dim; a card
@@ -3071,6 +3176,12 @@ fn node_row(
     let (from, to) = trace
         .light(|lit| lit.node(card_index, index) || !lit.warm(card_index))
         .opacities();
+    let (from, to) = if spot {
+        let at = if adding { 1.0 } else { DIM };
+        (at, at)
+    } else {
+        (from, to)
+    };
     faded(
         element,
         (
@@ -3093,13 +3204,16 @@ fn single_card(
     cx: &mut Context<'_, PwrRoute>,
 ) -> AnyElement {
     let focus = Focus::Node(index, 0);
+    let key = FocusKey::Node(card.key().to_owned(), None);
     let lit = trace.lit.node(index, 0);
     let pinned = trace.pinned == Some(focus);
     let ghost = card.kind == CardKind::Ghost;
     let node = card.nodes.first();
     let fan = trace.lit.fan(index, 0);
-    let port_style = if lit {
+    let port_style = if lit && trace.lit.node_runs(index, 0) {
         PortStyle::Lit
+    } else if lit {
+        PortStyle::StoppedLit
     } else if ghost {
         PortStyle::Stopped
     } else {
@@ -3129,10 +3243,10 @@ fn single_card(
     .when_some(node.map(|node| node.tooltip.clone()), |frame, tooltip| {
         frame.tooltip(tip(tooltip, None))
     })
-    .on_hover(hover_listener(focus, cx))
+    .on_hover(hover_listener(key.clone(), cx))
     .on_click(cx.listener(move |this, _, _, cx| {
         cx.stop_propagation();
-        toggle_pin(this, focus, cx);
+        toggle_pin(this, key.clone(), cx);
     }))
     .child(card_badge(card, lit))
     .child(
@@ -3161,20 +3275,30 @@ fn single_card(
             }),
     )
     .child(div().flex_1())
-    .children(
-        node.and_then(|node| node.meta.clone())
-            .map(|meta| mono(meta, 10.0, 500.0, theme::text_subtle())),
-    )
-    .child(div().w(px(40.0)).flex_none().flex().justify_end().children(
-        node.and_then(|node| node.links).map(|n| {
-            mono(
-                crate::activity::thousands(n),
-                10.5,
+    // The meta gives way on a narrow card ("1 rule · falls through" beside
+    // "Orion not installed" at 266 wide), cut with "…".
+    .children(node.and_then(|node| node.meta.clone()).map(|meta| {
+        div()
+            .min_w_0()
+            .flex_shrink(1.0)
+            .overflow_hidden()
+            .child(one_line(
+                meta,
+                theme::mono_family(500.0),
                 500.0,
-                theme::text_secondary(),
-            )
-        }),
-    ));
+                10.0,
+                12.0,
+                theme::text_subtle(),
+            ))
+    }))
+    .children(node.and_then(|node| node.links).map(|n| {
+        div().w(px(40.0)).flex_none().flex().justify_end().child(mono(
+            crate::activity::thousands(n),
+            10.5,
+            500.0,
+            theme::text_secondary(),
+        ))
+    }));
     let node_bounds = bounds.clone();
     let element = div()
         .on_children_prepainted(move |children, _, _| {

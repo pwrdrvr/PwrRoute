@@ -909,6 +909,7 @@ mod everything_else {
             bundle_id: Some(bundle_id.into()),
             location: PathBuf::from(format!("/Applications/{name}.app")),
             profiles: profiles.iter().map(|p| (*p).to_owned()).collect(),
+            directories: Vec::new(),
         }
     }
 

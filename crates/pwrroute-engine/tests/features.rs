@@ -13,9 +13,9 @@ use std::{
 use anyhow::{Result, bail};
 use pwrroute_engine::{
     AppType, BrowserSpec, ConsoleLine, ConsoleLog, DefaultHost, Engine, Expectation, FixedBrowser,
-    Limits, Link, LogLevel, Matcher, MatcherSpec, Method, NativeHost, Network, Opener, Precedence,
-    Privacy, Reply, Rewrite, RewriteAction, RouteTest, Rule, RulesFile, Source, Sources, Stage,
-    TestSource, UrlSpec,
+    HostnameSpec, Limits, Link, LogLevel, Matcher, MatcherSpec, Method, NativeHost, Network,
+    Opener, Precedence, Privacy, Reply, Rewrite, RewriteAction, RouteTest, Rule, RulesFile, Source,
+    Sources, Stage, TestSource, UrlSpec,
 };
 
 fn configs() -> PathBuf {
@@ -1047,6 +1047,51 @@ fn pwrroute_default_takes_everything_else() {
         described.default_browser,
         fixed("Safari", AppType::AppName, "")
     );
+}
+
+#[test]
+fn a_match_hostnames_function_is_described_by_its_list() {
+    let path = std::env::temp_dir().join(format!(
+        "pwrroute-features-hostnames-{}.js",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        r#"export default {
+  defaultBrowser: "Safari",
+  handlers: [
+    { match: finicky.matchHostnames(["tickets.example.com", /^docs\.example\.org$/]), browser: "Firefox" },
+    { match: finicky.matchDomains("old.example.net"), browser: "Firefox" },
+    { match: (url) => url.host === "plain.example.com", browser: "Firefox" },
+  ],
+};"#,
+    )
+    .unwrap();
+    let e = load_with(&path, RulesFile::default());
+    std::fs::remove_file(&path).unwrap();
+    let d = e.describe().unwrap().unwrap();
+    let hostnames = |i: usize| match &d.handlers[i].matchers[0] {
+        MatcherSpec::Function(function) => function.hostnames.clone(),
+        other => panic!("a function matcher: {other:?}"),
+    };
+    assert_eq!(
+        hostnames(0),
+        Some(vec![
+            HostnameSpec::Hostname("tickets.example.com".into()),
+            HostnameSpec::Regex("/^docs\\.example\\.org$/".into()),
+        ])
+    );
+    assert_eq!(
+        hostnames(1),
+        Some(vec![HostnameSpec::Hostname("old.example.net".into())])
+    );
+    assert_eq!(hostnames(2), None);
+    // Matching is the API's own: the wrapper hands back its function.
+    let browser = |url: &str| e.resolve(url, None).unwrap().browser.name;
+    assert_eq!(browser("https://tickets.example.com/a"), "Firefox");
+    assert_eq!(browser("https://docs.example.org/b"), "Firefox");
+    assert_eq!(browser("https://old.example.net/"), "Firefox");
+    assert_eq!(browser("https://sub.tickets.example.com/"), "Safari");
 }
 
 #[test]

@@ -25,6 +25,9 @@ pub struct DetectedApp {
     /// The `.app` bundle, the `.exe`, or the `.desktop` file.
     pub location: PathBuf,
     pub profiles: Vec<String>,
+    /// Each profile's directory, by `profiles`' index: Chromium's
+    /// `Profile 1`, Firefox's profile path. A rule may name a profile by it.
+    pub directories: Vec<String>,
 }
 
 impl DetectedApp {
@@ -57,16 +60,17 @@ impl DetectedApp {
 pub fn scan(env: &Env) -> Vec<DetectedApp> {
     detect_installed(env)
         .into_iter()
-        .map(|installed| DetectedApp {
-            profiles: installed.browser.map_or_else(Vec::new, |info| {
-                list_profiles(info, env)
-                    .into_iter()
-                    .map(|profile| profile.name)
-                    .collect()
-            }),
-            name: installed.name,
-            bundle_id: installed.bundle_id,
-            location: installed.location,
+        .map(|installed| {
+            let profiles = installed
+                .browser
+                .map_or_else(Vec::new, |info| list_profiles(info, env));
+            DetectedApp {
+                directories: profiles.iter().map(|p| p.directory.clone()).collect(),
+                profiles: profiles.into_iter().map(|p| p.name).collect(),
+                name: installed.name,
+                bundle_id: installed.bundle_id,
+                location: installed.location,
+            }
         })
         .collect()
 }
@@ -230,18 +234,21 @@ mod tests {
                 bundle_id: Some("com.apple.Safari".into()),
                 location: "/Applications/Safari.app".into(),
                 profiles: vec![],
+                directories: Vec::new(),
             },
             DetectedApp {
                 name: "Firefox".into(),
                 bundle_id: Some("org.mozilla.firefox".into()),
                 location: "/Applications/Firefox.app".into(),
                 profiles: vec!["default-release".into()],
+                directories: Vec::new(),
             },
             DetectedApp {
                 name: "Nameless".into(),
                 bundle_id: None,
                 location: "/Applications/Nameless.app".into(),
                 profiles: vec![],
+                directories: Vec::new(),
             },
         ];
         let mut hidden = settings_store::BrowserSettings::default();

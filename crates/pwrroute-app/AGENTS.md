@@ -89,22 +89,31 @@ their own modules.
   (`PwrRoute::installed`; a target is drawn missing only once the scan ran)
   and the feed's counts and `Tally`. The map is a graph from rows to
   profile nodes: one card per browser with a node per profile (routed
-  ones by their first row, then the scan's others), every installed
-  browser `browsers.hidden` does not hide (never PwrRoute) under "Also
-  installed" when nothing routes there yet, idle profiles folded into
-  "+N more profiles" (`OverviewState::expanded`, by card key, for the
-  session). `Map::lit` is the pure trace model: for the focus (pin, else
+  ones by their first row, then the scan's others; a profile a rule names
+  by its directory, Chromium's "Profile 1", is the scan's profile of that
+  directory, `Installed::directories`), every installed browser
+  `browsers.hidden` does not hide (never PwrRoute) under "Also installed"
+  when no enabled rule or Everything else routes there, idle profiles
+  folded into "+N more profiles" (`OverviewState::expanded`, by card key,
+  for the session). What is hovered, pinned or keyed is kept as a
+  `FocusKey` (a row's `RowSource`, a card's key and profile), never an
+  index: the cards re-sort as links come in, so each frame
+  `Map::resolve`s it, and a scroll or a reload of `rules.json` lets go of
+  the pointer's. `Map::lit` is the pure trace model: for the focus (pin, else
   keyboard, else pointer) which rows, cards and nodes light, and every
   route with its `Trace` and whether it is running (dashed: config never
   loaded, not installed, paused, or a rule that is off, drawn only while
-  traced), fanned into its node's port in row order; there is no cap on
-  routes. `overview.rs` draws it: rows and each card's nodes record their
+  traced, outside the fan), fanned into its node's port in row order;
+  there is no cap on routes. `overview.rs` draws it: rows and each card's nodes record their
   bounds into `MapBounds` while they prepaint, and one canvas paints the
   dot grid and every route (rest first, lit on top) from those bounds, so
   a hover only notifies. A row click pins (Edit ›, a double-click or
   Return opens Rules); Esc, Clear or the empty ground lets go. A ƒ row
-  reads `function_excerpt` of the function's source. An idle node's "+ Add
-  a rule…" is `PwrRoute::add_rule_for`. The setup card writes
+  reads `function_excerpt` of the function's source, a guard's condition
+  when it returns a literal; a `finicky.matchHostnames` function reads as
+  its hostnames (`FunctionSpec::hostnames`, from the engine). An idle
+  node's "+ Add a rule…" (its click, or Return) is
+  `PwrRoute::add_rule_for`. The setup card writes
   `defaultBrowser`/`defaultProfile`, and the callout writes `precedence`
   (`"pwrroute"`, with Undo), both through `PwrRoute::write_now` (as the
   Rules banner's switch does: sync, refuse as the store would, save now,

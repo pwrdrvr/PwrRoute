@@ -97,7 +97,38 @@ var __pwrroute = (function (api) {
       text = null;
     }
     if (text !== null && /\{\s*\[native code\]\s*\}\s*$/.test(text)) text = null;
-    return { name: fn.name || "", source: text };
+    var described = { name: fn.name || "", source: text };
+    var hostnames = describeHostnames(fn);
+    if (hostnames) described.hostnames = hostnames;
+    return described;
+  }
+
+  // finicky.matchHostnames (and the deprecated matchDomains, which calls
+  // it) returns a function whose source is the API's, not the list it was
+  // given. The wrappers remember each list by the function the API
+  // returned, unchanged, so describe() can show the hostnames.
+  var hostnameLists = typeof WeakMap === "function" ? new WeakMap() : null;
+
+  function rememberHostnames(finicky) {
+    if (!hostnameLists || !finicky) return;
+    ["matchHostnames", "matchDomains"].forEach(function (key) {
+      var original = finicky[key];
+      if (typeof original !== "function") return;
+      finicky[key] = function (matchers) {
+        var fn = original.apply(this, arguments);
+        if (typeof fn === "function") hostnameLists.set(fn, [].concat(matchers));
+        return fn;
+      };
+    });
+  }
+
+  function describeHostnames(fn) {
+    var list = hostnameLists && hostnameLists.get(fn);
+    if (!list) return null;
+    return list.map(function (entry) {
+      if (entry instanceof RegExp) return { regex: String(entry) };
+      return { hostname: String(entry) };
+    });
   }
 
   function describeMatcher(match) {
@@ -388,6 +419,7 @@ var __pwrroute = (function (api) {
     config: config,
     trace: trace,
     describe: description,
+    rememberHostnames: rememberHostnames,
     matches: matches,
     probe: probe,
     // `options.urlShorteners` as the config set it: null when it did not,

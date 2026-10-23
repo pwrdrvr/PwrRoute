@@ -980,6 +980,7 @@ mod tests {
         pwrroute_engine::FunctionSpec {
             name: String::new(),
             source: Some(source.into()),
+            hostnames: None,
         }
     }
 
@@ -996,6 +997,7 @@ mod tests {
             bundle_id: Some(bundle_id.into()),
             location: PathBuf::from(format!("/Applications/{name}.app")),
             profiles: profiles.iter().map(|p| (*p).to_owned()).collect(),
+            directories: Vec::new(),
         }
     }
 
@@ -1260,6 +1262,7 @@ mod tests {
             MatcherSpec::Function(pwrroute_engine::FunctionSpec {
                 name: "native".into(),
                 source: None,
+                hostnames: None,
             }),
         ] {
             assert_eq!(catch_all(&[handler(vec![some.clone()])]), None, "{some:?}");
