@@ -100,6 +100,17 @@ their own modules.
   save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
   Activity records report a `rules.json` handler as `Matched::Unreported`,
   so Save as example resolves the link again through `Probe` at click time.
+- **Who decides is the trace's to say (`try_it.rs`, `trace_view.rs`).**
+  Test a link, Try it and the test runs resolve over the config in charge
+  and `rules.json` together, in the order `rules.json`'s `precedence` sets
+  (the window's config-only engine is reused only while `rules.json` is
+  empty). Test a link's last step names the default's owner from the
+  default step's source: "Everything else · PwrRoute's default" or
+  "Everything else · ~/.finicky.ts's default", with the config's shown
+  path, never a literal. Try it reads the trace, not the browsers: under
+  the Go order a config handler that wins took the link before the rule
+  ran, so it never says "Move this rule above it" then; it offers letting
+  PwrRoute's default take everything else, which runs the rules first.
 - **The Finicky importer (`importer.rs`, `importer_view.rs`).** The model
   is plain data over `Engine::review_import` (verdicts, source lines,
   probed suggestions; recent links come from the feed's `Full` records, in
