@@ -1153,6 +1153,19 @@ fn main() {
                     app.overview.idle_hover = Some(FocusKey::Private("google chrome".into()));
                 },
             },
+            // The two private row targets in the narrowest rule column:
+            // "Incognito · Work" beside a long pattern pair, and Safari's
+            // warn-coloured "not private".
+            Shot {
+                name: "app-0-overview-private-targets",
+                width: 1000.0,
+                config: None,
+                rules: fixtures::overview_private_rules,
+                exists: true,
+                day: Some(fixtures::overview_rules_day),
+                status: routing(),
+                prepare: |_| {},
+            },
             // 1e at 2560: both columns at their caps, the rest to the
             // routes.
             Shot {

@@ -79,6 +79,9 @@ the project and re-export here.
   from an idle private node) and a note with the three callout copy
   variants added. Artboard 3c is unchanged here. The other canvases,
   `pwrroute.css` and `support.js` are unchanged.
+- Updated **2026-10-23**: the private-window mask glyph's eye slits are
+  now filled almond eye-holes, so at 11-13px it no longer reads as a
+  chain link; the Private windows note says so. Nothing else changed.
 
 ## Files
 

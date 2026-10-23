@@ -97,13 +97,16 @@ their own modules.
   folded into "+N more profiles" (`OverviewState::expanded`, by card key,
   for the session). A browser whose catalog entry can open a private
   window (`BrowserInfo::private_label`: "Incognito", "InPrivate", "Private
-  window") ends its card with one private-window node, after the fold,
+  window"; looked up by the name as written, as the launcher does, never
+  by the scan's bundle id) ends its card with one private-window node, after the fold,
   never folded or counted in it (`Card::visible`, `FocusKey::Private`):
   a `"private": true` rule, a handler or `defaultBrowser` whose `args`
   carry a private flag (`pwrroute_engine::is_private_flag`) routes there
   whatever profile it names, and today's private links (`Tally` keys on
   `Browser::private`) count there; a browser without one keeps the route
-  on its profile and the row says "not private". The columns stop at
+  on its profile and the row says "not private", except that a config's
+  private flag to a browser the catalog does not know goes to it as
+  written, so that card gets a private node by the flag's word. The columns stop at
   their caps (`MapWidths::of_content`: destinations 266-420, rules up to
   720) and every pixel past them is the routes' gutter. What is hovered, pinned or keyed is kept as a
   `FocusKey` (a row's `RowSource`, a card's key and profile), never an

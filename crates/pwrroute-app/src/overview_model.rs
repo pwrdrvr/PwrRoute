@@ -1634,39 +1634,103 @@ fn not_opened_dest() -> Dest {
 /// A config browser spec as a destination, a profile, and whether its
 /// `args` ask for a private window (the Finicky API has no field of its
 /// own for it).
-fn spec_dest(spec: &BrowserSpec, installed: &[Installed]) -> (Dest, Option<String>, bool) {
+fn spec_dest(spec: &BrowserSpec, installed: &[Installed]) -> (Dest, Option<String>, Ask) {
     match spec {
-        BrowserSpec::Function(_) => (function_dest(), None, false),
+        BrowserSpec::Function(_) => (function_dest(), None, Ask::No),
         BrowserSpec::Browser(fixed) if fixed.app_type == AppType::None => {
-            (not_opened_dest(), None, false)
+            (not_opened_dest(), None, Ask::No)
         }
         BrowserSpec::Browser(fixed) => (
             resolve(&fixed.name, installed),
             (!fixed.profile.is_empty()).then(|| fixed.profile.clone()),
-            fixed
-                .args
-                .iter()
-                .any(|arg| pwrroute_engine::is_private_flag(arg)),
+            match args_term(&fixed.args) {
+                Some(term) => Ask::Args {
+                    written: fixed.name.clone(),
+                    term,
+                },
+                None => Ask::No,
+            },
         ),
     }
 }
 
-/// What a browser calls its private window ("Incognito", "InPrivate",
-/// "Private window"), from the catalog, by its name or the scan's bundle
-/// id; `None` when it cannot open one from a link (Safari, Arc) or the
-/// catalog does not know it.
-fn private_term(name: &str, installed: &[Installed]) -> Option<String> {
+/// A request for a private window, and where it came from: the launcher
+/// treats the two apart.
+#[derive(Clone, Debug)]
+enum Ask {
+    No,
+    /// `rules[].private`: the launcher adds the browser's own flag, found
+    /// in the catalog by the browser as written, or notes it has none.
+    Rule(String),
+    /// A known private flag in a config's `args`, which go to the browser
+    /// as written; `term` is the flag's word for the window.
+    Args {
+        written: String,
+        term: String,
+    },
+}
+
+impl Ask {
+    /// How the window opens on a browser card.
+    fn private(&self) -> Private {
+        match self {
+            Self::No => Private::No,
+            Self::Rule(written) => match private_term(written) {
+                Some(term) => Private::Window(term),
+                None => Private::Unsupported,
+            },
+            // The catalog's word when it knows the browser (Safari ignores
+            // the flag); one it does not know gets the args as written.
+            Self::Args { written, term } => match catalog_entry(written) {
+                Some(entry) => match entry.private_label() {
+                    Some(own) => Private::Window(own.to_owned()),
+                    None => Private::Unsupported,
+                },
+                None => Private::Window(term.clone()),
+            },
+        }
+    }
+}
+
+/// The word a config's private flag uses for the window ("--incognito":
+/// "Incognito"), if its `args` carry one the engine reads as private.
+fn args_term(args: &[String]) -> Option<String> {
+    let arg = args
+        .iter()
+        .find(|arg| pwrroute_engine::is_private_flag(arg))?;
+    let flag = arg.trim().trim_start_matches('-');
+    let flag = flag.split_once('=').map_or(flag, |(name, _)| name);
+    Some(
+        match flag.to_lowercase().as_str() {
+            "incognito" => "Incognito",
+            "inprivate" => "InPrivate",
+            _ => "Private window",
+        }
+        .to_owned(),
+    )
+}
+
+/// The catalog entry the launcher finds for a browser as written: a
+/// `.app` path by its file, anything else by name, alias or bundle id.
+fn catalog_entry(written: &str) -> Option<&'static pwrroute_browsers::BrowserInfo> {
+    let written = written.trim();
     let catalog = Catalog::builtin();
-    let key = name.to_lowercase();
-    catalog
-        .find(name)
-        .or_else(|| {
-            installed
-                .iter()
-                .find(|app| app.name.to_lowercase() == key)
-                .and_then(|app| app.bundle_id.as_deref())
-                .and_then(|id| catalog.find(id))
-        })
+    if written.ends_with(".app") && written.contains('/') {
+        catalog.find_by_path(
+            pwrroute_browsers::Platform::current(),
+            std::path::Path::new(written),
+        )
+    } else {
+        catalog.find(written)
+    }
+}
+
+/// What a browser, as written, calls its private window ("Incognito",
+/// "InPrivate", "Private window"), found in the catalog as the launcher
+/// finds it; `None` when it cannot open one from a link (Safari, Arc) or
+/// the catalog does not know it, so the launcher could not add the flag.
+fn private_term(written: &str) -> Option<String> {
+    catalog_entry(written)
         .and_then(|browser| browser.private_label())
         .map(str::to_owned)
 }
@@ -1705,13 +1769,10 @@ impl<'a> Cards<'a> {
     /// The target for `dest` and `profile`, in a private window when
     /// `private` asks for one: its route then ends at the card's
     /// private-window node, or at the profile when the browser has none.
-    fn add(&mut self, dest: Dest, profile: Option<String>, private: bool) -> Target {
+    fn add(&mut self, dest: Dest, profile: Option<String>, ask: &Ask) -> Target {
         let profile = canonical_profile(self.installed, &dest.key, profile);
-        let private = match (private, dest.kind) {
-            (true, CardKind::Browser) => match private_term(&dest.name, self.installed) {
-                Some(term) => Private::Window(term),
-                None => Private::Unsupported,
-            },
+        let private = match dest.kind {
+            CardKind::Browser => ask.private(),
             _ => Private::No,
         };
         let card = match self.dests.iter().position(|d| d.key == dest.key) {
@@ -2071,7 +2132,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         });
         for (index, handler) in description.handlers.iter().enumerate() {
             let (dest, profile, private) = spec_dest(&handler.browser, installed);
-            let target = cards.add(dest, profile, private);
+            let target = cards.add(dest, profile, &private);
             let ghost = matches!(target, Target::Ghost { .. });
             items.push(Item::Row(rows.len()));
             rows.push(Row {
@@ -2119,7 +2180,12 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 Target::Unset
             } else {
                 let profile = (!rule.profile.is_empty()).then(|| rule.profile.clone());
-                cards.add(resolve(&rule.browser, installed), profile, rule.private)
+                let ask = if rule.private {
+                    Ask::Rule(rule.browser.clone())
+                } else {
+                    Ask::No
+                };
+                cards.add(resolve(&rule.browser, installed), profile, &ask)
             };
             let ghost = matches!(target, Target::Ghost { .. });
             items.push(Item::Row(rows.len()));
@@ -2146,10 +2212,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         }
         _ => {
             let (dest, profile) = pwrroute_dest();
-            (dest, profile, false)
+            (dest, profile, Ask::No)
         }
     };
-    let ee_target = cards.add(ee_dest, ee_profile, ee_private);
+    let ee_target = cards.add(ee_dest, ee_profile, &ee_private);
     if rules_first {
         rules_section(&mut rows, &mut items, &mut cards);
         config_section(&mut rows, &mut items, &mut cards);
@@ -2220,9 +2286,26 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         .map(|(card, dest)| {
             let single = dest.kind != CardKind::Browser;
             let is_ee = ee_card == Some(card);
-            // The browser's private-window node, by its word for it.
+            // The browser's private-window node, by its word for it: the
+            // catalog's for the card's name (which "+ Add a rule…" writes),
+            // else the word a route into a private window uses (a browser
+            // as written in another way, or a config's flag).
             let term = (!single)
-                .then(|| private_term(&dest.name, installed))
+                .then(|| {
+                    private_term(&dest.name).or_else(|| {
+                        rows.iter()
+                            .map(|row| &row.target)
+                            .chain(is_ee.then_some(&ee_target))
+                            .find_map(|target| match target {
+                                Target::Browser {
+                                    card: at,
+                                    private: Private::Window(term),
+                                    ..
+                                } if *at == card => Some(term.clone()),
+                                _ => None,
+                            })
+                    })
+                })
                 .flatten();
             // Whether a target's route ends at a profile of this card (or
             // at its private-window node).
@@ -2503,7 +2586,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             app.profiles.iter().cloned().map(Some).collect()
         };
         let shown = folded_to(profiles.len(), IDLE_NODES);
-        let term = private_term(&app.name, installed);
+        let term = private_term(&app.name);
         let nodes: Vec<Node> = profiles
             .into_iter()
             .map(|profile| (profile, None))
@@ -2780,23 +2863,25 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     let callout = description.filter(|_| has_default).map(|description| {
         // Each side as the map names a node. When both are one browser, a
         // side with no profile is its "default profile", so the two read
-        // apart.
+        // apart; a config default whose `args` ask for a private window is
+        // named by it ("Microsoft Edge · InPrivate"), as its ∞ sits on the
+        // private-window node. PwrRoute's own default is never private.
         let (ours_dest, ours_profile) = pwrroute_dest();
         let config_default = match &description.default_browser {
-            BrowserSpec::Browser(fixed) if fixed.app_type != AppType::None => {
-                let dest = resolve(&fixed.name, installed);
-                let profile = canonical_profile(
-                    installed,
-                    &dest.key,
-                    (!fixed.profile.is_empty()).then(|| fixed.profile.clone()),
-                );
-                Some((dest, profile))
+            spec @ BrowserSpec::Browser(fixed) if fixed.app_type != AppType::None => {
+                let (dest, profile, ask) = spec_dest(spec, installed);
+                let profile = canonical_profile(installed, &dest.key, profile);
+                let private = match (dest.kind, ask.private()) {
+                    (CardKind::Browser, Private::Window(term)) => Some(term),
+                    _ => None,
+                };
+                Some((dest, profile, private))
             }
             _ => None,
         };
         let same_browser = config_default
             .as_ref()
-            .is_some_and(|(dest, _)| dest.key == ours_dest.key);
+            .is_some_and(|(dest, ..)| dest.key == ours_dest.key);
         let side = |name: &str, profile: Option<&str>| {
             if same_browser {
                 display(name, Some(profile.unwrap_or("default profile")))
@@ -2805,14 +2890,20 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             }
         };
         let ours = side(&ours_dest.name, ours_profile.as_deref());
-        // The same browser and profile: what is left opens where it did.
+        // The same browser and profile, and not private: what is left
+        // opens where it did.
         let unchanged = same_browser
-            && config_default.as_ref().is_some_and(|(_, profile)| {
-                same_profile(profile.as_deref(), ours_profile.as_deref())
-            });
+            && config_default
+                .as_ref()
+                .is_some_and(|(_, profile, private)| {
+                    private.is_none() && same_profile(profile.as_deref(), ours_profile.as_deref())
+                });
         let theirs_name = config_default
             .as_ref()
-            .map(|(dest, profile)| side(&dest.name, profile.as_deref()));
+            .map(|(dest, profile, private)| match private {
+                Some(term) => display(&dest.name, Some(&display(term, profile.as_deref()))),
+                None => side(&dest.name, profile.as_deref()),
+            });
         let theirs = match &theirs_name {
             Some(name) => format!("{shown}'s defaultBrowser, {name},"),
             None => format!("{shown}'s defaultBrowser"),
@@ -3218,8 +3309,9 @@ mod tests {
         );
     }
 
-    /// A private window is named as the browser names it, and a browser
-    /// the catalog knows by its bundle id still gets one.
+    /// A private window is named as the browser names it. The catalog is
+    /// read by the browser's name, as the launcher reads it, so an app it
+    /// knows only by the scan's bundle id gets no idle private node.
     #[test]
     fn private_windows_take_the_browsers_own_word() {
         let mut world = World::new(RulesFile::default(), Vec::new());
@@ -3251,7 +3343,7 @@ mod tests {
         assert_eq!(term("Microsoft Edge").as_deref(), Some("InPrivate"));
         assert_eq!(term("Firefox").as_deref(), Some("Private window"));
         assert_eq!(term("Brave Browser").as_deref(), Some("Private window"));
-        assert_eq!(term("Chromium Nightly").as_deref(), Some("Incognito"));
+        assert_eq!(term("Chromium Nightly"), None);
         assert_eq!(term("Safari"), None);
         assert_eq!(term("Arc"), None);
         let brave = map
@@ -3291,6 +3383,101 @@ mod tests {
         assert_eq!(map.cards[card].name, "Firefox");
         assert_eq!(Some(node), map.cards[card].private_node());
         assert!(map.cards[card].nodes[node].everything_else);
+    }
+
+    /// The screens' private row targets: a profile named in a private
+    /// window, and a browser without one.
+    #[test]
+    fn the_private_targets_fixture_draws_both_forms() {
+        let map = World::new(fixtures::overview_private_rules(), Vec::new())
+            .build()
+            .map;
+        let chrome = &map.rows[6].target;
+        assert!(chrome.private_window());
+        assert!(
+            matches!(chrome, Target::Browser { label, .. } if label == "Incognito \u{b7} Work")
+        );
+        let safari = &map.rows[7].target;
+        assert!(safari.not_private());
+    }
+
+    /// A private rule is looked up as the launcher looks it up: by the
+    /// browser as written. Written by the app's name, which the catalog
+    /// does not know, the launcher adds no flag; written by the bundle id
+    /// the catalog knows, it does.
+    #[test]
+    fn a_private_rule_reads_the_catalog_as_the_launcher_does() {
+        let rules = RulesFile {
+            default_browser: "Safari".into(),
+            rules: vec![
+                private(rule("a.example.com/*", "Chromium Nightly", "")),
+                private(rule("b.example.com/*", "org.chromium.Chromium", "")),
+            ],
+            ..RulesFile::default()
+        };
+        let mut world = World::new(rules, Vec::new());
+        world.installed.push(Installed {
+            name: "Chromium Nightly".into(),
+            bundle_id: Some("org.chromium.Chromium".into()),
+            profiles: Vec::new(),
+            directories: Vec::new(),
+            hidden: false,
+        });
+        let map = world.build().map;
+        let by_name = &map.rows[0].target;
+        assert!(by_name.not_private(), "{by_name:?}");
+        let by_id = &map.rows[1].target;
+        assert!(by_id.private_window(), "{by_id:?}");
+        // One card: the bundle id's route gives it its Incognito node.
+        let card = by_id.card().expect("a card");
+        assert_eq!(by_name.card(), Some(card));
+        let node = map.cards[card].private_node().expect("an Incognito node");
+        assert_eq!(map.cards[card].nodes[node].label(), "Incognito");
+        assert_eq!(map.rows[1].node, Some((card, node)));
+        assert_eq!(map.rows[0].node, Some((card, 0)));
+    }
+
+    /// A config's private flag goes to the browser as written, so a
+    /// browser the catalog does not know still opens a private window: it
+    /// gets a private node by the flag's word, not "not private".
+    #[test]
+    fn a_configs_private_flag_to_an_unknown_browser_is_private() {
+        let mut description = description();
+        description.handlers[0].browser = fixed("Nightly Build", "", &["--incognito"]);
+        let mut world = World {
+            config: Some(Some(description)),
+            ..World::new(RulesFile::default(), Vec::new())
+        };
+        world.installed.push(Installed {
+            name: "Nightly Build".into(),
+            bundle_id: Some("com.example.nightly".into()),
+            profiles: Vec::new(),
+            directories: Vec::new(),
+            hidden: false,
+        });
+        let map = world.build().map;
+        let row = &map.rows[0];
+        assert!(row.target.private_window(), "{:?}", row.target);
+        assert!(!row.target.not_private());
+        let card = row.target.card().expect("a card");
+        assert_eq!(map.cards[card].name, "Nightly Build");
+        let node = map.cards[card].private_node().expect("a private node");
+        assert_eq!(map.cards[card].nodes[node].label(), "Incognito");
+        assert_eq!(row.node, Some((card, node)));
+        assert_eq!(
+            row.tooltip,
+            "config handler 1 of ~/.finicky.ts \u{b7} opens an Incognito window"
+        );
+        // The flag's word, from each form the engine reads as private.
+        assert_eq!(
+            args_term(&["-private".into()]).as_deref(),
+            Some("Private window")
+        );
+        assert_eq!(
+            args_term(&["--inprivate".into()]).as_deref(),
+            Some("InPrivate")
+        );
+        assert_eq!(args_term(&["https://example.com".into()]), None);
     }
 
     /// The callout names both defaults as the map names a node: by browser
@@ -3390,6 +3577,37 @@ mod tests {
         assert_eq!(
             bodies(("Safari", ""), fixed("Safari", "", &[]))[0],
             format!("{lead} what is left would still open in Safari.")
+        );
+
+        // 4. The same browser and profile, but the config's opens an
+        // InPrivate window: what is left would move, so it is named.
+        assert_eq!(
+            bodies(
+                ("Microsoft Edge", ""),
+                fixed("Microsoft Edge", "", &["--inprivate"])
+            ),
+            [
+                format!(
+                    "{lead} Microsoft Edge \u{b7} default profile would take what is left \
+                     instead of Microsoft Edge \u{b7} InPrivate."
+                ),
+                "~/.finicky.ts's defaultBrowser, Microsoft Edge \u{b7} InPrivate, isn't used \
+                 while this is on."
+                    .into(),
+                "~/.finicky.ts's defaultBrowser, Microsoft Edge \u{b7} InPrivate, isn't used \
+                 while PwrRoute's default takes everything else."
+                    .into(),
+            ]
+        );
+        assert_eq!(
+            bodies(
+                ("Google Chrome", "Work"),
+                fixed("Firefox", "", &["--private-window"])
+            )[0],
+            format!(
+                "{lead} Google Chrome \u{b7} Work would take what is left instead of \
+                 Firefox \u{b7} Private window."
+            )
         );
     }
 

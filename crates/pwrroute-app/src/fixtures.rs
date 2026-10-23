@@ -458,6 +458,36 @@ pub fn overview_rules() -> RulesFile {
         .expect("fixtures/overview/rules.json is a valid rules.json")
 }
 
+/// [`overview_rules`] with the two private row targets the map draws
+/// apart: a private rule to Google Chrome that names a profile
+/// ("Incognito · Work") with a long pattern pair, and one to Safari, which
+/// has no private window ("not private").
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_private_rules() -> RulesFile {
+    let mut rules = overview_rules();
+    let extra: Vec<pwrroute_engine::Rule> = serde_json::from_str(
+        r#"[
+            {
+                "match": ["accounts.staging.example.com/*", "signin.preview.example.net/*"],
+                "browser": "Google Chrome",
+                "profile": "Work",
+                "private": true
+            },
+            {
+                "match": "bank.example.com/*",
+                "browser": "Safari",
+                "private": true
+            }
+        ]"#,
+    )
+    .expect("private rules parse");
+    rules.rules.extend(extra);
+    rules
+}
+
 /// The visual rules beside the Overview's Finicky config (2a): one rewrite
 /// and three rules.
 #[cfg_attr(
