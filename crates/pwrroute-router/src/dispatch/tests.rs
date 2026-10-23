@@ -24,7 +24,7 @@ export default {
     { match: "https://example.com/old*", url: "https://example.com/new" },
   ],
   handlers: [
-    { match: "https://*.slack.com/*", browser: "Firefox" },
+    { match: "https://*.chat.example.com/*", browser: "Firefox" },
     {
       match: (url, { opener }) => opener && opener.bundleId === "com.apple.mail",
       browser: { name: "Google Chrome", profile: "Work" },
@@ -68,17 +68,17 @@ fn a_handler_routes_the_link_and_the_launcher_opens_it() {
     let (_dir, router, launcher) = engine_router(Options::default());
     let record = router
         .handle()
-        .dispatch_and_wait(link("https://team.slack.com/archives/1"))
+        .dispatch_and_wait(link("https://team.chat.example.com/archives/1"))
         .unwrap();
     assert_eq!(record.outcome, Outcome::DryRun);
     let browser = record.browser.clone().unwrap();
     assert_eq!(browser.name, "Firefox");
-    assert_eq!(browser.url, "https://team.slack.com/archives/1");
+    assert_eq!(browser.url, "https://team.chat.example.com/archives/1");
     assert_eq!(
         record.steps,
         vec![
             Step::Received {
-                url: "https://team.slack.com/archives/1".into()
+                url: "https://team.chat.example.com/archives/1".into()
             },
             Step::Matched {
                 by: Matched::Handler { index: 0 }
@@ -162,7 +162,7 @@ fn test_a_link_resolves_without_opening_or_recording() {
     let (_dir, router, launcher) = engine_router(Options::default());
     let record = router
         .handle()
-        .test(link("https://team.slack.com/x"))
+        .test(link("https://team.chat.example.com/x"))
         .unwrap();
     assert_eq!(record.outcome, Outcome::Tested);
     assert_eq!(record.browser.unwrap().name, "Firefox");
@@ -219,18 +219,18 @@ fn paused_every_link_opens_in_the_pause_target_and_the_skipped_handler_is_traced
     assert_eq!(handle.paused(), Some(pause_target()));
 
     let record = handle
-        .dispatch_and_wait(link("https://team.slack.com/archives/1"))
+        .dispatch_and_wait(link("https://team.chat.example.com/archives/1"))
         .unwrap();
     assert_eq!(record.outcome, Outcome::DryRun);
     let browser = record.browser.clone().unwrap();
     assert_eq!(browser.name, "Google Chrome");
     assert_eq!(browser.profile, "Personal");
-    assert_eq!(browser.url, "https://team.slack.com/archives/1");
+    assert_eq!(browser.url, "https://team.chat.example.com/archives/1");
     assert_eq!(
         record.steps,
         vec![
             Step::Received {
-                url: "https://team.slack.com/archives/1".into()
+                url: "https://team.chat.example.com/archives/1".into()
             },
             Step::Matched {
                 by: Matched::Handler { index: 0 }
@@ -247,7 +247,7 @@ fn paused_every_link_opens_in_the_pause_target_and_the_skipped_handler_is_traced
     handle.set_paused(None);
     assert_eq!(handle.paused(), None);
     let record = handle
-        .dispatch_and_wait(link("https://team.slack.com/archives/2"))
+        .dispatch_and_wait(link("https://team.chat.example.com/archives/2"))
         .unwrap();
     assert_eq!(record.browser.unwrap().name, "Firefox");
     assert!(
@@ -336,7 +336,9 @@ fn paused_test_a_link_still_answers_by_the_rules() {
     let (_dir, router, launcher) = engine_router(Options::default());
     let handle = router.handle();
     handle.set_paused(Some(pause_target()));
-    let record = handle.test(link("https://team.slack.com/x")).unwrap();
+    let record = handle
+        .test(link("https://team.chat.example.com/x"))
+        .unwrap();
     assert_eq!(record.outcome, Outcome::Tested);
     assert_eq!(record.browser.unwrap().name, "Firefox");
     assert!(
@@ -520,7 +522,7 @@ fn a_browser_that_cannot_open_hands_the_link_to_the_fallback() {
     .unwrap();
     let record = router
         .handle()
-        .dispatch_and_wait(link("https://team.slack.com/x"))
+        .dispatch_and_wait(link("https://team.chat.example.com/x"))
         .unwrap();
     assert_eq!(record.outcome, Outcome::Opened);
     // The handler chose Firefox; the record names what opened the link.
@@ -529,7 +531,7 @@ fn a_browser_that_cannot_open_hands_the_link_to_the_fallback() {
         (opened.name.as_str(), opened.app_type),
         ("Safari", AppType::AppName)
     );
-    assert_eq!(opened.url, "https://team.slack.com/x");
+    assert_eq!(opened.url, "https://team.chat.example.com/x");
     assert_eq!(
         record.steps[3..],
         [
@@ -564,7 +566,7 @@ fn when_the_fallback_fails_too_the_dispatch_fails_without_a_loop() {
     .unwrap();
     let record = router
         .handle()
-        .dispatch_and_wait(link("https://team.slack.com/x"))
+        .dispatch_and_wait(link("https://team.chat.example.com/x"))
         .unwrap();
     assert_eq!(record.outcome, Outcome::Failed);
     assert_eq!(record.browser.unwrap().name, "Firefox");
@@ -644,7 +646,7 @@ fn the_fallback_is_asked_for_each_time_a_link_needs_it() {
     let handle = router.handle();
     let opened = |handle: &RouterHandle| {
         let record = handle
-            .dispatch_and_wait(link("https://team.slack.com/x"))
+            .dispatch_and_wait(link("https://team.chat.example.com/x"))
             .unwrap();
         assert_eq!(record.outcome, Outcome::Opened, "{:?}", record.steps);
         let browser = record.browser.unwrap();
@@ -856,7 +858,7 @@ fn replacing_the_resolver_keeps_the_old_one_when_the_new_one_fails() {
         .unwrap_err();
     assert_eq!(err, "bad config");
     handle
-        .dispatch_and_wait(link("https://team.slack.com/x"))
+        .dispatch_and_wait(link("https://team.chat.example.com/x"))
         .unwrap();
     assert_eq!(launcher.launched()[0].name, "Firefox");
 
@@ -2050,7 +2052,7 @@ fn config_and_rules_router(rules: RulesFile) -> (tempfile::TempDir, Router, DryR
 }
 
 /// rules.json beside [`CONFIG`]: a switched-off rule, a rule for the
-/// config's Slack links and one for its own host, and Vivaldi · Work for
+/// config's chat links and one for its own host, and Vivaldi · Work for
 /// everything else.
 fn beside_the_config(precedence: pwrroute_engine::Precedence) -> RulesFile {
     let handler = |pattern: &str, browser: &str| Rule {
@@ -2067,7 +2069,7 @@ fn beside_the_config(precedence: pwrroute_engine::Precedence) -> RulesFile {
                 enabled: false,
                 ..handler("*", "Safari")
             },
-            handler("https://*.slack.com/*", "Arc"),
+            handler("https://*.chat.example.com/*", "Arc"),
             handler("https://rules.example.com/*", "Arc"),
         ],
         ..RulesFile::default()
@@ -2087,9 +2089,9 @@ fn the_go_order_names_config_handlers_rules_and_the_configs_default() {
         config_and_rules_router(beside_the_config(pwrroute_engine::Precedence::Config));
     let handle = router.handle();
     let decided = |url: &str| matched(&handle.dispatch_and_wait(link(url)).unwrap());
-    // The config's Slack handler runs first and takes it.
+    // The config's chat handler runs first and takes it.
     assert_eq!(
-        decided("https://team.slack.com/a"),
+        decided("https://team.chat.example.com/a"),
         Some(Matched::Handler { index: 0 })
     );
     assert_eq!(
@@ -2112,9 +2114,9 @@ fn pwrroute_precedence_names_its_rules_first_and_its_own_default() {
         config_and_rules_router(beside_the_config(pwrroute_engine::Precedence::PwrRoute));
     let handle = router.handle();
     let decided = |url: &str| matched(&handle.dispatch_and_wait(link(url)).unwrap());
-    // rules.json's Slack rule now runs before the config's handler.
+    // rules.json's chat rule now runs before the config's handler.
     assert_eq!(
-        decided("https://team.slack.com/a"),
+        decided("https://team.chat.example.com/a"),
         Some(Matched::Rule { index: 1 })
     );
     // A config handler that matches still decides, `browser: null` too.
@@ -2153,7 +2155,7 @@ fn paused_a_skipped_rules_json_rule_is_the_records_own_rule() {
     let handle = router.handle();
     handle.set_paused(Some(pause_target()));
     let record = handle
-        .dispatch_and_wait(link("https://team.slack.com/a"))
+        .dispatch_and_wait(link("https://team.chat.example.com/a"))
         .unwrap();
     // The rule that would have taken it, then the pause: `skipped` numbers
     // config handlers only, so it is None and the rule says which.
