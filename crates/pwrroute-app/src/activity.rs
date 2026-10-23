@@ -38,8 +38,8 @@ use gpui_kit::{
     Styled as _, Subscription, Window, div, px,
 };
 use pwrroute_router::{
-    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, Options, Outcome, Privacy,
-    RetentionInfo, RouterHandle, Step,
+    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, Options, Outcome, Owner,
+    Privacy, RetentionInfo, RouterHandle, Step,
 };
 
 use crate::app::{PwrRoute, Screen};
@@ -427,7 +427,8 @@ pub struct ActivityRow {
     pub url: SharedString,
     /// The app it came from.
     pub from: SharedString,
-    /// The rules that fired, short: "rw 1, 2 · h 3".
+    /// Who routed it, short: "rw 1, 2 · rule 3", "cfg h 2", "config
+    /// default" (`rule_label`).
     pub rule: SharedString,
     pub opened: Opened,
     pub took: SharedString,
@@ -501,8 +502,9 @@ pub enum StepMark {
 pub enum Filter {
     #[default]
     All,
-    /// No handler matched: the default or the fallback browser took it.
-    /// The list of links to add a rule for.
+    /// No rule or handler matched: a default (PwrRoute's or the config's)
+    /// or the fallback browser took it. The list of links to add a rule
+    /// for.
     Unrouted,
     Failed,
     Rewritten,
@@ -520,9 +522,9 @@ impl Filter {
     ];
 }
 
-/// No rule routed it: `defaultBrowser` applied, nothing was in charge and
-/// the fallback browser took it, or routing was paused and the pause target
-/// did.
+/// No rule or handler routed it: a default applied (PwrRoute's or the
+/// config's, whoever owns it), nothing was in charge and the fallback
+/// browser took it, or routing was paused and the pause target did.
 fn is_unrouted(record: &DispatchRecord) -> bool {
     record.steps.iter().any(|step| {
         matches!(
@@ -623,9 +625,15 @@ impl ActivityRow {
             } => format!("{why} {name} {}", profile.as_deref().unwrap_or_default()),
             Opened::Failed(why) => why.to_string(),
         };
-        [self.url.as_ref(), self.from.as_ref(), opened.as_str()]
-            .iter()
-            .any(|field| field.to_lowercase().contains(&needle))
+        // Who routed it too, so "rule 3" or "config default" finds its rows.
+        [
+            self.url.as_ref(),
+            self.from.as_ref(),
+            opened.as_str(),
+            self.rule.as_ref(),
+        ]
+        .iter()
+        .any(|field| field.to_lowercase().contains(&needle))
     }
 }
 
@@ -657,8 +665,15 @@ pub(crate) fn matched_url(record: &DispatchRecord) -> &str {
         .unwrap_or_else(|| received_url(record))
 }
 
-/// The Rule column: "rw 1, 2 · h 3", "handler 2", "default", "fallback",
-/// and while paused "paused · skipped h 3" (what would have routed it).
+/// The Rule column says who routed the link, in the words the Overview
+/// and Test a link use: "rule 3" (`rules.json`'s third rule), "cfg h 2"
+/// (the JS config's second handler), "default" (PwrRoute's default),
+/// "config default" (the config's `defaultBrowser`), "fallback". Rewrites
+/// come first ("rw 1, 2 · rule 3"); while paused it names what would have
+/// routed the link ("paused · rule 3"; the trace line says "skipped").
+/// "matched" is a resolver
+/// that did not say which rule, as builds before rule numbers recorded a
+/// `rules.json` rule.
 fn rule_label(steps: &[Step]) -> String {
     let mut numbered = Vec::new();
     let mut unnumbered = false;
@@ -683,25 +698,20 @@ fn rule_label(steps: &[Step]) -> String {
     }
     for step in steps {
         match step {
-            Step::Matched {
-                by: Matched::Handler { index },
-            } => parts.push(if paused {
-                format!("skipped h {}", index + 1)
-            } else if parts.is_empty() {
-                format!("handler {}", index + 1)
-            } else {
-                format!("h {}", index + 1)
-            }),
-            // A rules.json handler: the router does not number those yet
-            // (`Rule` is labelled like `Unreported` until it does).
-            Step::Matched {
-                by: Matched::Unreported | Matched::Rule { .. },
-            } => parts.push(if paused { "skipped h" } else { "handler" }.into()),
-            // Paused, the pause target took what these would have sent to
-            // the default or the fallback: "paused" says it all.
-            Step::Matched {
-                by: Matched::Default { .. },
-            } if !paused => parts.push("default".into()),
+            Step::Matched { by } => {
+                let who = match by {
+                    Matched::Rule { index } => format!("rule {}", index + 1),
+                    Matched::Handler { index } => format!("cfg h {}", index + 1),
+                    Matched::Unreported => "matched".to_owned(),
+                    // Paused, the pause target took what would have gone
+                    // to a default: "paused" says it all.
+                    Matched::Default { .. } if paused => continue,
+                    Matched::Default { owner } => default_label(*owner).to_owned(),
+                };
+                // Paused, `who` is what the pause passed over; the column
+                // is too narrow for "skipped", which the trace line says.
+                parts.push(who);
+            }
             Step::Fallback { .. } | Step::RefusedLoop { .. } if !paused => {
                 parts.push("fallback".into());
             }
@@ -713,6 +723,50 @@ fn rule_label(steps: &[Step]) -> String {
         NO_APP.into()
     } else {
         parts.join(" \u{00b7} ")
+    }
+}
+
+/// Whose default took a link nothing else claimed, as the Rule column
+/// says it. A record from before owners were recorded is "default".
+fn default_label(owner: Option<Owner>) -> &'static str {
+    match owner {
+        Some(Owner::Config) => "config default",
+        Some(Owner::PwrRoute) | None => "default",
+    }
+}
+
+/// The expanded row's line for what chose the browser.
+fn matched_line(by: Matched) -> String {
+    match by {
+        Matched::Rule { index } => format!("rule {}", index + 1),
+        Matched::Handler { index } => format!("config handler {}", index + 1),
+        Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        } => "PwrRoute default \u{00b7} no rule or config handler matched".to_owned(),
+        Matched::Default {
+            owner: Some(Owner::Config),
+        } => "config default \u{00b7} no config handler or rule matched".to_owned(),
+        Matched::Default { owner: None } => "default \u{00b7} no handler matched".to_owned(),
+        Matched::Unreported => "a rule or handler matched".to_owned(),
+    }
+}
+
+/// The expanded row's line for a paused dispatch: what would have routed
+/// the link, from the record's own `Matched` step (which says which list),
+/// else the step's `skipped` (the config's handlers).
+fn paused_line(steps: &[Step], skipped: Option<usize>) -> String {
+    let matched = steps.iter().find_map(|step| match step {
+        Step::Matched { by } => Some(*by),
+        _ => None,
+    });
+    match (matched, skipped) {
+        (Some(Matched::Rule { index }), _) => {
+            format!("paused \u{00b7} skipped rule {}", index + 1)
+        }
+        (Some(Matched::Handler { index }), _) | (_, Some(index)) => {
+            format!("paused \u{00b7} skipped config handler {}", index + 1)
+        }
+        (_, None) => "paused \u{00b7} every rule and handler skipped".to_owned(),
     }
 }
 
@@ -812,14 +866,7 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
                 url = after;
                 (StepMark::Hit(number), line)
             }
-            Step::Matched { by } => (
-                StepMark::Hit(number),
-                match by {
-                    Matched::Handler { index } => format!("handler {}", index + 1),
-                    Matched::Default { .. } => "default \u{00b7} no handler matched".to_owned(),
-                    Matched::Unreported | Matched::Rule { .. } => "a handler matched".to_owned(),
-                },
-            ),
+            Step::Matched { by } => (StepMark::Hit(number), matched_line(*by)),
             Step::ConfigError { message } => {
                 (StepMark::Fail, format!("config error \u{00b7} {message}"))
             }
@@ -831,13 +878,9 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
                 StepMark::Miss(number),
                 format!("{browser} is PwrRoute \u{00b7} fallback instead"),
             ),
-            Step::Paused { skipped } => (
-                StepMark::Miss(number),
-                match skipped {
-                    Some(index) => format!("paused \u{00b7} skipped handler {}", index + 1),
-                    None => "paused \u{00b7} every handler skipped".to_owned(),
-                },
-            ),
+            Step::Paused { skipped } => {
+                (StepMark::Miss(number), paused_line(&record.steps, *skipped))
+            }
             Step::NotOpened => (
                 StepMark::Miss(number),
                 "not opened \u{00b7} the rule says browser: null".to_owned(),
@@ -912,7 +955,7 @@ fn describe_rewrite(before: &str, after: &str) -> String {
 /// took: one `.cnt-card` under the Private filter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateCount {
-    /// "handler 8", or "kept nothing" for the records that say nothing.
+    /// "rule 8", or "kept nothing" for the records that say nothing.
     pub rule: SharedString,
     pub count: u64,
     /// "Safari, private window. Keeps host only."
@@ -1294,8 +1337,22 @@ fn row(
             cell.child(chip("host only").flex_none())
         });
     // `.ar.unr .tag`: an unrouted row's rule chip is amber.
+    // It stays inside the column: a long one ("rw 1, 2 · paused · rule 12")
+    // ends in an ellipsis, and the expanded row says it in full.
     let rule = if row.default {
-        toned_chip(row.rule.clone(), Tone::Warn)
+        toned_chip("", Tone::Warn)
+            .flex_shrink(1.0)
+            .max_w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .child(one_line(
+                row.rule.clone(),
+                theme::SANS,
+                600.0,
+                10.0,
+                12.0,
+                theme::warn_text(),
+            ))
     } else {
         tag(row.rule.clone())
     };
@@ -2017,13 +2074,13 @@ mod tests {
         assert_eq!(row.url, received, "the row is the link as clicked");
         assert_eq!(row.matched_url, landed, "Re-test tries what the rules saw");
         assert_eq!(row.final_url, landed);
-        assert_eq!(row.rule, "handler");
+        assert_eq!(row.rule, "matched");
         assert!(!row.rewritten, "an expansion is not a rewrite");
         assert_eq!(
             texts(&row)[..2],
             [
                 "short link \u{00b7} expanded \u{00b7} host \u{2192} github.com \u{00b7} path \u{2192} /pwrdrvr/x",
-                "a handler matched",
+                "a rule or handler matched",
             ]
         );
         assert_eq!(row.steps[0].mark, StepMark::Hit(1));
@@ -2067,7 +2124,7 @@ mod tests {
         assert_eq!(row.time.len(), "09:41:08".len());
         assert_eq!(row.url, received);
         assert_eq!(row.from, "Slack");
-        assert_eq!(row.rule, "rw 1, 2 \u{00b7} h 3");
+        assert_eq!(row.rule, "rw 1, 2 \u{00b7} cfg h 3");
         assert_eq!(row.took, "6 ms");
         assert!(row.rewritten && !row.default && !row.dry_run && !row.failed());
         assert_eq!(row.final_url, opened);
@@ -2088,7 +2145,7 @@ mod tests {
             [
                 "rewrite 1 \u{00b7} host \u{2192} xcancel.com",
                 "rewrite 2 \u{00b7} dropped utm_source",
-                "handler 3",
+                "config handler 3",
                 "Firefox \u{00b7} default-release \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
             ]
         );
@@ -2155,14 +2212,14 @@ mod tests {
             ],
         );
         let row = ActivityRow::from_record(&paused);
-        assert_eq!(row.rule, "paused \u{00b7} skipped h 4");
+        assert_eq!(row.rule, "paused \u{00b7} cfg h 4");
         assert!(row.default, "a paused link is unrouted");
         assert!(row.passes(Filter::Unrouted, ""));
         assert_eq!(
             texts(&row),
             [
-                "handler 4",
-                "paused \u{00b7} skipped handler 4",
+                "config handler 4",
+                "paused \u{00b7} skipped config handler 4",
                 "Google Chrome \u{00b7} Personal \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
             ]
         );
@@ -2196,7 +2253,10 @@ mod tests {
         let row = ActivityRow::from_record(&unskipped);
         assert_eq!(row.rule, "rw 1 \u{00b7} paused");
         assert!(row.rewritten && row.default);
-        assert_eq!(texts(&row)[2], "paused \u{00b7} every handler skipped");
+        assert_eq!(
+            texts(&row)[2],
+            "paused \u{00b7} every rule and handler skipped"
+        );
     }
 
     #[test]
@@ -2222,10 +2282,13 @@ mod tests {
         let row = ActivityRow::from_record(&failed);
         assert!(row.failed());
         assert!(matches!(&row.opened, Opened::Failed(why) if why == "zoom.us not found"));
-        assert_eq!(row.rule, "handler 6");
+        assert_eq!(row.rule, "cfg h 6");
         assert_eq!(
             texts(&row),
-            ["handler 6", "launch failed \u{00b7} zoom.us not found"]
+            [
+                "config handler 6",
+                "launch failed \u{00b7} zoom.us not found"
+            ]
         );
         assert_eq!(row.steps[1].mark, StepMark::Fail);
         assert!(row.passes(Filter::Failed, "not found"));
@@ -2276,7 +2339,7 @@ mod tests {
         );
         let row = ActivityRow::from_record(&not_opened);
         assert!(matches!(row.opened, Opened::Nowhere));
-        assert_eq!(row.rule, "handler");
+        assert_eq!(row.rule, "matched");
         assert!(!row.failed());
     }
 
@@ -2321,7 +2384,7 @@ mod tests {
         assert_eq!(why.as_ref(), "zoom.us could not be opened");
         assert_eq!((badge.as_ref(), name.as_ref()), ("Ch", "Google Chrome"));
         assert_eq!(profile.as_deref(), Some("Personal"));
-        assert_eq!(row.rule, "handler 6 \u{00b7} fallback");
+        assert_eq!(row.rule, "cfg h 6 \u{00b7} fallback");
         assert!(
             row.default,
             "the fallback took it: a link to add a rule for"
@@ -2329,7 +2392,7 @@ mod tests {
         assert_eq!(
             texts(&row),
             [
-                "handler 6",
+                "config handler 6",
                 "launch failed \u{00b7} browser \"zoom.us\" is not installed",
                 "fallback \u{00b7} zoom.us could not be opened",
                 "Google Chrome \u{00b7} Personal \u{00b7} resolved 0.6 ms \u{00b7} launched 5.1 ms",
@@ -2530,7 +2593,7 @@ mod tests {
         assert_eq!(host.url, "https://mybank.example");
         assert!(!host.url.contains("session"));
         assert_eq!(host.final_url, "https://mybank.example");
-        assert_eq!(host.rule, "handler 8");
+        assert_eq!(host.rule, "cfg h 8");
         assert!(matches!(
             &host.opened,
             Opened::Browser {
@@ -2616,6 +2679,226 @@ mod tests {
             }
             .label(),
             "1,412 today \u{00b7} 2 failed \u{00b7} 14 private"
+        );
+    }
+
+    // --- Attribution (WP-B) -------------------------------------------------
+
+    /// A record that matched `by`, after `before` (rewrites, a pause),
+    /// opened in Firefox.
+    fn routed(id: u64, before: Vec<Step>, by: Matched, after: Vec<Step>) -> DispatchRecord {
+        let url = "https://docs.example.com/a";
+        let mut steps = vec![Step::Received { url: url.into() }];
+        steps.extend(before);
+        steps.push(Step::Matched { by });
+        steps.extend(after);
+        steps.push(Step::Browser {
+            browser: browser("Firefox", "", url),
+        });
+        steps.push(Step::Launched { dry_run: false });
+        record(id, url, None, steps)
+    }
+
+    #[test]
+    fn the_rule_column_says_who_routed_the_link() {
+        let row = |by| ActivityRow::from_record(&routed(1, Vec::new(), by, Vec::new()));
+        let rule = row(Matched::Rule { index: 2 });
+        assert_eq!(rule.rule, "rule 3");
+        assert_eq!(texts(&rule)[0], "rule 3");
+        assert!(!rule.default, "a rule routed it");
+
+        let handler = row(Matched::Handler { index: 1 });
+        assert_eq!(handler.rule, "cfg h 2");
+        assert_eq!(texts(&handler)[0], "config handler 2");
+
+        let ours = row(Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        });
+        assert_eq!(ours.rule, "default");
+        assert_eq!(
+            texts(&ours)[0],
+            "PwrRoute default \u{00b7} no rule or config handler matched"
+        );
+        assert!(ours.default);
+
+        let config = row(Matched::Default {
+            owner: Some(Owner::Config),
+        });
+        assert_eq!(config.rule, "config default");
+        assert_eq!(
+            texts(&config)[0],
+            "config default \u{00b7} no config handler or rule matched"
+        );
+        assert!(config.default);
+
+        // A record journaled before owners were recorded.
+        let old = row(Matched::Default { owner: None });
+        assert_eq!(old.rule, "default");
+        assert_eq!(texts(&old)[0], "default \u{00b7} no handler matched");
+
+        // A resolver that did not say which: never passed off as a rule.
+        let unsaid = row(Matched::Unreported);
+        assert_eq!(unsaid.rule, "matched");
+        assert_eq!(texts(&unsaid)[0], "a rule or handler matched");
+    }
+
+    #[test]
+    fn rewrites_and_a_pause_keep_the_rule_named() {
+        let rewritten = ActivityRow::from_record(&routed(
+            1,
+            vec![
+                Step::Rewrite {
+                    rule: Some(0),
+                    url: "https://docs.example.com/a".into(),
+                },
+                Step::Rewrite {
+                    rule: None,
+                    url: "https://docs.example.com/a".into(),
+                },
+            ],
+            Matched::Rule { index: 0 },
+            Vec::new(),
+        ));
+        assert_eq!(rewritten.rule, "rw 1 \u{00b7} rule 1");
+
+        // Paused over a rules.json rule: the pause names it from its own
+        // list, whatever number the pause step carries.
+        for skipped in [None, Some(4)] {
+            let paused = ActivityRow::from_record(&routed(
+                2,
+                Vec::new(),
+                Matched::Rule { index: 4 },
+                vec![Step::Paused { skipped }],
+            ));
+            assert_eq!(paused.rule, "paused \u{00b7} rule 5");
+            assert_eq!(texts(&paused)[1], "paused \u{00b7} skipped rule 5");
+            assert!(paused.default, "a paused link is unrouted");
+        }
+
+        // Paused where a default would have taken it: "paused" says it all.
+        let paused = ActivityRow::from_record(&routed(
+            3,
+            Vec::new(),
+            Matched::Default {
+                owner: Some(Owner::Config),
+            },
+            vec![Step::Paused { skipped: None }],
+        ));
+        assert_eq!(paused.rule, "paused");
+        assert_eq!(
+            texts(&paused)[1],
+            "paused \u{00b7} every rule and handler skipped"
+        );
+    }
+
+    #[test]
+    fn unrouted_is_either_default_or_the_fallback_and_never_a_rule() {
+        let records = vec![
+            routed(1, Vec::new(), Matched::Rule { index: 0 }, Vec::new()),
+            routed(2, Vec::new(), Matched::Handler { index: 0 }, Vec::new()),
+            routed(
+                3,
+                Vec::new(),
+                Matched::Default {
+                    owner: Some(Owner::PwrRoute),
+                },
+                Vec::new(),
+            ),
+            routed(
+                4,
+                Vec::new(),
+                Matched::Default {
+                    owner: Some(Owner::Config),
+                },
+                Vec::new(),
+            ),
+            record(
+                5,
+                "https://docs.example.com/b",
+                None,
+                vec![
+                    Step::Received {
+                        url: "https://docs.example.com/b".into(),
+                    },
+                    Step::Fallback {
+                        reason: "no config is selected".into(),
+                    },
+                    Step::Browser {
+                        browser: browser("Safari", "", "https://docs.example.com/b"),
+                    },
+                    Step::Launched { dry_run: false },
+                ],
+            ),
+        ];
+        let mut counts = Counts::default();
+        for record in &records {
+            counts.count(record);
+        }
+        assert_eq!(counts.of(Filter::Unrouted), 3);
+        let unrouted: Vec<String> = records
+            .iter()
+            .map(ActivityRow::from_record)
+            .filter(|row| row.passes(Filter::Unrouted, ""))
+            .map(|row| row.rule.to_string())
+            .collect();
+        assert_eq!(unrouted, ["default", "config default", "fallback"]);
+    }
+
+    #[test]
+    fn the_search_finds_rows_by_who_routed_them() {
+        let rows: Vec<ActivityRow> = [
+            routed(1, Vec::new(), Matched::Rule { index: 2 }, Vec::new()),
+            routed(2, Vec::new(), Matched::Rule { index: 0 }, Vec::new()),
+            routed(
+                3,
+                Vec::new(),
+                Matched::Default {
+                    owner: Some(Owner::Config),
+                },
+                Vec::new(),
+            ),
+        ]
+        .iter()
+        .map(ActivityRow::from_record)
+        .collect();
+        let found = |search: &str| -> Vec<u64> {
+            rows.iter()
+                .filter(|row| row.passes(Filter::All, search))
+                .map(|row| row.key.id.0)
+                .collect()
+        };
+        assert_eq!(found("rule 3"), [1]);
+        assert_eq!(found("config default"), [3]);
+    }
+
+    /// The screens example's attribution rows read as the canvas words
+    /// them, and only the defaults, the pause and the fallback are
+    /// unrouted.
+    #[test]
+    fn the_attribution_fixture_names_every_kind_of_router() {
+        let rows: Vec<ActivityRow> = crate::fixtures::attribution_activity()
+            .iter()
+            .map(ActivityRow::from_record)
+            .collect();
+        let labels: Vec<(&str, bool)> = rows
+            .iter()
+            .map(|row| (row.rule.as_ref(), row.default))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("rule 3", false),
+                ("rw \u{00b7} rule 1", false),
+                ("cfg h 2", false),
+                ("default", true),
+                ("config default", true),
+                ("paused \u{00b7} rule 2", true),
+                ("fallback", true),
+            ]
+        );
+        assert!(
+            rows.iter().all(|row| row.url.contains(".example.com/")),
+            "example.com hosts only"
         );
     }
 }

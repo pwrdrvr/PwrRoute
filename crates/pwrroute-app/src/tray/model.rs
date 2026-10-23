@@ -14,7 +14,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use pwrroute_router::{DispatchRecord, Matched, Outcome, Step};
+use pwrroute_router::{DispatchRecord, Matched, Outcome, Owner, Step};
 
 use crate::activity::{Feed, thousands};
 use crate::widgets::badge_for;
@@ -75,22 +75,37 @@ impl BrowserLabel {
     }
 }
 
-/// Which rule sent a recent link where it went.
+/// Which rule sent a recent link where it went, in Activity's words:
+/// "rule 3" is `rules.json`'s, "handler 2" the JS config's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecentRoute {
-    /// A handler matched; its 1-based number in the rules list.
+    /// The JS config's handler matched; its 1-based number in the
+    /// config's `handlers`.
     Handler(usize),
-    /// A handler matched that the router does not number (a `rules.json`
-    /// entry).
+    /// `rules.json`'s rule matched; its 1-based number in the file.
+    Rule(usize),
+    /// A rule matched that the record does not number (a router that did
+    /// not say which).
     Unnumbered,
-    /// No handler matched: the default browser.
+    /// Nothing matched: PwrRoute's default browser (`rules.json`'s), or a
+    /// record that did not say whose default it was.
     Default,
+    /// Nothing matched: the JS config's own `defaultBrowser`.
+    ConfigDefault,
     /// No config, or the config pointed back at PwrRoute: the router's
     /// fallback browser.
     Fallback,
-    /// Routing was paused. `skipped` is the 1-based number of the handler
-    /// that matched and was passed over, when the router numbers it.
-    Paused { skipped: Option<usize> },
+    /// Routing was paused. `skipped` is what matched and was passed over,
+    /// when the record numbers it.
+    Paused { skipped: Option<Skipped> },
+}
+
+/// What a paused link would have gone to: a rule or handler, numbered
+/// from 1 as [`RecentRoute`] numbers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Skipped {
+    Handler(usize),
+    Rule(usize),
 }
 
 /// One recent link.
@@ -147,17 +162,25 @@ impl Recent {
                 Step::Matched { by } => {
                     route = match by {
                         Matched::Handler { index } => RecentRoute::Handler(index + 1),
+                        Matched::Rule { index } => RecentRoute::Rule(index + 1),
+                        Matched::Default {
+                            owner: Some(Owner::Config),
+                        } => RecentRoute::ConfigDefault,
                         Matched::Default { .. } => RecentRoute::Default,
-                        // Not numbered here yet.
-                        Matched::Unreported | Matched::Rule { .. } => RecentRoute::Unnumbered,
+                        Matched::Unreported => RecentRoute::Unnumbered,
                     };
                 }
                 Step::Fallback { .. } | Step::RefusedLoop { .. } => route = RecentRoute::Fallback,
-                // After the step that chose the browser: the pause took it.
+                // After the step that chose the browser: the pause took
+                // it. That step says which list the skipped rule is in;
+                // the pause's own number is the config's.
                 Step::Paused { skipped } => {
-                    route = RecentRoute::Paused {
-                        skipped: skipped.map(|index| index + 1),
+                    let skipped = match route {
+                        RecentRoute::Rule(n) => Some(Skipped::Rule(n)),
+                        RecentRoute::Handler(n) => Some(Skipped::Handler(n)),
+                        _ => skipped.map(|index| Skipped::Handler(index + 1)),
                     };
+                    route = RecentRoute::Paused { skipped };
                 }
                 _ => {}
             }
@@ -178,7 +201,7 @@ impl Recent {
         )
     }
 
-    /// The second line: "Firefox · rewritten · handler 3".
+    /// The second line: "Firefox · rewritten · rule 3".
     pub fn detail(&self) -> String {
         let mut parts = vec![self.browser.name.clone()];
         if let Some(profile) = &self.browser.profile {
@@ -189,13 +212,17 @@ impl Recent {
         }
         match self.route {
             RecentRoute::Handler(n) => parts.push(format!("handler {n}")),
+            RecentRoute::Rule(n) => parts.push(format!("rule {n}")),
             RecentRoute::Unnumbered => {}
             RecentRoute::Default => parts.push("default".to_owned()),
+            RecentRoute::ConfigDefault => parts.push("config default".to_owned()),
             RecentRoute::Fallback => parts.push("fallback".to_owned()),
             RecentRoute::Paused { skipped } => {
                 parts.push("paused".to_owned());
-                if let Some(n) = skipped {
-                    parts.push(format!("skipped handler {n}"));
+                match skipped {
+                    Some(Skipped::Handler(n)) => parts.push(format!("skipped handler {n}")),
+                    Some(Skipped::Rule(n)) => parts.push(format!("skipped rule {n}")),
+                    None => {}
                 }
             }
         }
@@ -356,7 +383,9 @@ impl TrayModel {
                 "https://bsky.app/profile/example",
                 None,
                 BrowserLabel::new("Ch", "Google Chrome", None),
-                RecentRoute::Paused { skipped: Some(4) },
+                RecentRoute::Paused {
+                    skipped: Some(Skipped::Handler(4)),
+                },
                 now,
             )
             .expect("a fixture URL with a host"),
@@ -647,7 +676,12 @@ mod tests {
             Step::Launched { dry_run: false },
         ]);
         let recent = Recent::from_record(&skipped).expect("it opened");
-        assert_eq!(recent.route, RecentRoute::Paused { skipped: Some(4) });
+        assert_eq!(
+            recent.route,
+            RecentRoute::Paused {
+                skipped: Some(Skipped::Handler(4))
+            }
+        );
         assert_eq!(recent.host, "bsky.app");
         assert_eq!(
             recent.detail(),
@@ -749,6 +783,88 @@ mod tests {
         assert_eq!(
             default.detail(),
             "Google Chrome \u{00b7} Personal \u{00b7} default"
+        );
+    }
+
+    /// Attribution (WP-B): a recent names who routed it, `rules.json`'s
+    /// rules as "rule N", the config's handlers as "handler N", and whose
+    /// default took an unclaimed link.
+    #[test]
+    fn a_recent_names_the_rule_or_default_that_routed_it() {
+        use pwrroute_router::{AppType, Browser, DispatchId, DispatchRecord, Privacy, Timings};
+        let url = "https://docs.example.com/a";
+        let firefox = Browser {
+            name: "Firefox".into(),
+            app_type: AppType::AppName,
+            url: url.into(),
+            profile: String::new(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy: Privacy::Full,
+        };
+        let detail = |steps: Vec<Step>| {
+            let mut all = vec![Step::Received { url: url.into() }];
+            all.extend(steps);
+            all.push(Step::Browser {
+                browser: firefox.clone(),
+            });
+            all.push(Step::Launched { dry_run: false });
+            let record = DispatchRecord {
+                id: DispatchId(1),
+                received_at: now(),
+                privacy: Privacy::Full,
+                link: pwrroute_router::Link::new(url, pwrroute_router::Source::CommandLine),
+                forwarded: false,
+                final_url: Some(url.into()),
+                browser: Some(firefox.clone()),
+                steps: all,
+                outcome: Outcome::Opened,
+                timings: Timings::default(),
+            };
+            Recent::from_record(&record).expect("it opened").detail()
+        };
+        let matched = |by| Step::Matched { by };
+        assert_eq!(
+            detail(vec![matched(Matched::Rule { index: 2 })]),
+            "Firefox \u{00b7} rule 3"
+        );
+        assert_eq!(
+            detail(vec![matched(Matched::Handler { index: 1 })]),
+            "Firefox \u{00b7} handler 2"
+        );
+        assert_eq!(
+            detail(vec![matched(Matched::Default {
+                owner: Some(Owner::PwrRoute)
+            })]),
+            "Firefox \u{00b7} default"
+        );
+        assert_eq!(
+            detail(vec![matched(Matched::Default {
+                owner: Some(Owner::Config)
+            })]),
+            "Firefox \u{00b7} config default"
+        );
+        assert_eq!(
+            detail(vec![matched(Matched::Unreported)]),
+            "Firefox",
+            "a rule the record does not number is not named"
+        );
+        // Paused over a rules.json rule: the record's Matched step says
+        // which list, whatever the pause step numbers.
+        assert_eq!(
+            detail(vec![
+                matched(Matched::Rule { index: 1 }),
+                Step::Paused { skipped: None },
+            ]),
+            "Firefox \u{00b7} paused \u{00b7} skipped rule 2"
+        );
+        assert_eq!(
+            detail(vec![
+                matched(Matched::Rule { index: 1 }),
+                Step::Paused { skipped: Some(1) },
+            ]),
+            "Firefox \u{00b7} paused \u{00b7} skipped rule 2"
         );
     }
 }

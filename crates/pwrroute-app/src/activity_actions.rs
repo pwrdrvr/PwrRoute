@@ -1,7 +1,7 @@
 //! Activity's row actions (design Activity Privacy 2b, 2c): the row's "⋯"
-//! menu with Add a rule for this link, Save as example for the handler
-//! that took it, and Save as test for a link that went to the default;
-//! and the Add a rule sheet, which the expanded row's "Add a rule…" opens
+//! menu with Add a rule for this link, Save as example for the
+//! `rules.json` rule that took it, and Save as test for a link that went
+//! to a default; and the Add a rule sheet, which the expanded row's "Add a rule…" opens
 //! too. A row is named by its [`RowKey`]: the record comes from the feed,
 //! or from the journal for a journaled row.
 //!
@@ -30,9 +30,10 @@ use gpui_kit::{
     Window, deferred, div, px,
 };
 use pwrroute_engine::{
-    self as engine, Expectation, Opener, Privacy, RouteTest, Source, Stage, suggest_rule,
+    self as engine, Expectation, Opener, Precedence, Privacy, RouteTest, Source, Stage,
+    suggest_rule,
 };
-use pwrroute_router::{DispatchRecord, Matched, OpenerInfo, Outcome, Step};
+use pwrroute_router::{DispatchRecord, Matched, OpenerInfo, Outcome, Owner, Step};
 
 use crate::activity::{self, RowKey, matched_url};
 use crate::app::{PwrRoute, Selection};
@@ -115,9 +116,36 @@ pub struct Collision {
     pub url: String,
     /// Where it went: "Google Chrome · Personal".
     pub opened: String,
-    /// A rule took it (so the new rule would change hands), rather than
-    /// the default.
-    pub routed: bool,
+    /// Who routed it, from its record.
+    pub took: Took,
+}
+
+/// Who routed a recent link, which decides whether the new rule would
+/// take it from them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Took {
+    /// A default (PwrRoute's or the config's) or the fallback browser:
+    /// nothing changes hands.
+    Unrouted,
+    /// One of `rules.json`'s rules; `None` for a record that did not
+    /// number it. A new rule at the top runs before it, at the bottom
+    /// after it.
+    Rule(Option<usize>),
+    /// The JS config's handler: it runs before every `rules.json` rule
+    /// unless `rules.json` comes first (`"precedence": "pwrroute"`, or no
+    /// config in charge).
+    ConfigHandler(usize),
+}
+
+impl Took {
+    fn of(record: &DispatchRecord) -> Self {
+        match matched(record) {
+            Some(Matched::Rule { index }) => Self::Rule(Some(index)),
+            Some(Matched::Unreported) => Self::Rule(None),
+            Some(Matched::Handler { index }) => Self::ConfigHandler(index),
+            Some(Matched::Default { .. }) | None => Self::Unrouted,
+        }
+    }
 }
 
 /// The Add a rule sheet's state, for one record.
@@ -143,6 +171,13 @@ pub struct AddRule {
     pub pattern: TextField,
     pub collisions: Vec<Collision>,
     pub collision_error: Option<String>,
+    /// `rules.json`'s rules run before the config's handlers: no config is
+    /// in charge, or `"precedence": "pwrroute"`. Decides which collisions
+    /// change hands.
+    pub rules_first: bool,
+    /// The config in charge as the user knows it ("~/.finicky.ts"), for
+    /// the collision caption.
+    pub config: Option<String>,
     /// The rule also requires the link to come from `from`.
     pub only_from: bool,
     pub browser: String,
@@ -217,6 +252,8 @@ impl AddRule {
             pattern: TextField::new(first, cx),
             collisions: Vec::new(),
             collision_error: None,
+            rules_first: true,
+            config: None,
             only_from: false,
             browser,
             profile: String::new(),
@@ -330,35 +367,76 @@ impl AddRule {
                 .map(|f| f.name.as_str())
                 .unwrap_or_default();
             format!(
-                "Becomes handler {handler}, with this link from {app} as a saved test. Saved to \
+                "Becomes rule {handler}, with this link from {app} as a saved test. Saved to \
                  rules.json."
             )
         } else {
-            format!(
-                "Becomes handler {handler}, with this link as its example. Saved to rules.json."
-            )
+            format!("Becomes rule {handler}, with this link as its example. Saved to rules.json.")
         }
     }
 
-    /// The caption over the collision list.
+    /// The caption over the collision list: how many recent links the
+    /// pattern matches, and which of them would change hands. A link a
+    /// default or the fallback took moves to the new rule; one a
+    /// `rules.json` rule took moves only when the new rule goes on top;
+    /// one a config handler took moves only when `rules.json` runs first.
     pub fn collision_caption(&self) -> String {
         let n = self.collisions.len();
         if n == 0 {
             return "No other recent link matches this pattern.".into();
         }
-        let routed = self.collisions.iter().filter(|c| c.routed).count();
-        let links = if n == 1 { "link" } else { "links" };
-        if routed == 0 {
-            format!(
-                "Would also catch these {n} recent {links} \u{00b7} all unrouted, nothing changes hands"
-            )
+        let head = format!(
+            "Would also catch these {n} recent {}",
+            plural(n, "link", "links")
+        );
+        let (mut moved_rules, mut moved_config, mut kept_rules, mut kept_config) = (0, 0, 0, 0);
+        for collision in &self.collisions {
+            match collision.took {
+                Took::Unrouted => {}
+                Took::Rule(_) if self.position == Position::Top => moved_rules += 1,
+                Took::Rule(_) => kept_rules += 1,
+                Took::ConfigHandler(_) if self.rules_first => moved_config += 1,
+                Took::ConfigHandler(_) => kept_config += 1,
+            }
+        }
+        let mut parts = Vec::new();
+        let moved = moved_rules + moved_config;
+        if moved > 0 {
+            let by = match (moved_rules > 0, moved_config > 0) {
+                (true, false) => "a rule",
+                (false, true) => "a config handler",
+                _ => "a rule or config handler",
+            };
+            parts.push(format!(
+                "{moved} routed by {by} now, which this rule would take first"
+            ));
+        }
+        if kept_rules > 0 {
+            parts.push(format!(
+                "{kept_rules} {} with {}, which {} first",
+                plural(kept_rules, "stays", "stay"),
+                plural(kept_rules, "an earlier rule", "earlier rules"),
+                plural(kept_rules, "runs", "run"),
+            ));
+        }
+        if kept_config > 0 {
+            let config = self.config.as_deref().unwrap_or("the config");
+            parts.push(format!(
+                "{kept_config} {} with {config}'s handlers, which run first",
+                plural(kept_config, "stays", "stay"),
+            ));
+        }
+        if parts.is_empty() {
+            format!("{head} \u{00b7} all unrouted, nothing changes hands")
         } else {
-            format!(
-                "Would also catch these {n} recent {links} \u{00b7} {routed} routed by a rule now, \
-                 which this rule would take first"
-            )
+            format!("{head} \u{00b7} {}", parts.join("; "))
         }
     }
+}
+
+/// `one` for 1, else `many`.
+fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 { one } else { many }
 }
 
 /// What chose the record's browser.
@@ -440,9 +518,15 @@ fn test_for(record: &DispatchRecord) -> Option<RouteTest> {
 }
 
 impl PwrRoute {
+    /// `rules.json`'s rules run before the config's handlers: no config
+    /// is in charge, or the file says `"precedence": "pwrroute"`.
+    fn rules_first(&self) -> bool {
+        self.config.is_none() || self.store.precedence() == Precedence::PwrRoute
+    }
+
     /// Opens or closes the row's "⋯" menu. The Save entry is resolved
-    /// here: a `rules.json` handler's record says only that one took it
-    /// (`Matched::Unreported`), so the probe names which.
+    /// here: a link a `rules.json` rule took joins that rule's examples
+    /// ([`PwrRoute::example_rule`]); anything else is pinned as a test.
     pub fn toggle_row_menu(&mut self, key: RowKey, cx: &mut Context<'_, Self>) {
         if self.actions.menu_was == Some(key) {
             self.actions.menu = None;
@@ -454,25 +538,22 @@ impl PwrRoute {
         };
         let save = match matched(&record) {
             _ if record.privacy != Privacy::Full || record.browser.is_none() => None,
-            // A rules.json handler took it: the link becomes its example.
-            // A numbered `Rule` is probed too for now, like `Unreported`.
-            Some(Matched::Unreported | Matched::Rule { .. }) => {
-                let url = matched_url(&record).to_owned();
-                let opener = engine_opener(&record);
-                match self.probe.winning_handler(&url, opener.as_ref()) {
-                    Some(handler) => Some(Save::Example {
+            // A rules.json rule took it: the link becomes its example.
+            Some(Matched::Rule { .. } | Matched::Unreported) => {
+                Some(match self.example_rule(&record) {
+                    Some(handler) => Save::Example {
                         handler,
                         pattern: self
                             .handlers
                             .get(handler)
                             .and_then(|h| h.patterns.first().cloned()),
-                    }),
-                    None => Some(Save::Test {
+                    },
+                    None => Save::Test {
                         expects: opened_label(&record),
-                    }),
-                }
+                    },
+                })
             }
-            // The default, or a config handler: pin the whole resolution.
+            // A default, or a config handler: pin the whole resolution.
             Some(Matched::Default { .. } | Matched::Handler { .. }) => Some(Save::Test {
                 expects: opened_label(&record),
             }),
@@ -486,6 +567,34 @@ impl PwrRoute {
         cx.notify();
     }
 
+    /// The `rules.json` rule a record's link joins as an example: the one
+    /// the record names (`Matched::Rule`), read from the record with no
+    /// probe, while the file still has it there, on and sending links
+    /// where this one went. Otherwise (a record that did not number its
+    /// rule, or a file changed since) the rule that takes the link now, by
+    /// probe. `None` when no rule takes it.
+    fn example_rule(&mut self, record: &DispatchRecord) -> Option<usize> {
+        match matched(record) {
+            Some(Matched::Rule { index }) if self.still_routes(index, record) => Some(index),
+            Some(Matched::Rule { .. } | Matched::Unreported) => {
+                let url = matched_url(record).to_owned();
+                let opener = engine_opener(record);
+                self.probe.winning_handler(&url, opener.as_ref())
+            }
+            Some(Matched::Default { .. } | Matched::Handler { .. }) | None => None,
+        }
+    }
+
+    /// The file's rule at `index` is on and opens what the record opened.
+    fn still_routes(&self, index: usize, record: &DispatchRecord) -> bool {
+        let (Some(rule), Some(browser)) = (self.handlers.get(index), &record.browser) else {
+            return false;
+        };
+        rule.rule.enabled
+            && rule.browser.trim() == browser.name
+            && rule.profile.trim() == browser.profile
+    }
+
     /// Add a rule for this link (design 2c): opens the sheet for the row's
     /// record, from the expanded row's "Add a rule…" or the "⋯" menu. A
     /// record kept as host only or nothing gets the sheet's disabled state.
@@ -493,7 +602,7 @@ impl PwrRoute {
         let Some(record) = record(key, cx) else {
             return;
         };
-        // "Becomes handler N" counts the file as it is.
+        // "Becomes rule N" counts the file as it is.
         self.sync_with_disk(cx);
         let mut sheet = if record.privacy == Privacy::Full {
             AddRule::new(&record, &self.browsers, cx)
@@ -502,6 +611,8 @@ impl PwrRoute {
         };
         sheet.key = key;
         self.find_collisions(&mut sheet, cx);
+        sheet.rules_first = self.rules_first();
+        sheet.config = self.config.as_ref().map(|config| config.path.clone());
         self.actions.sheet = Some(sheet);
         self.actions.menu = None;
         self.actions.note = None;
@@ -544,7 +655,7 @@ impl PwrRoute {
                         time: clock(r.received_at),
                         url: matched_url(r).to_owned(),
                         opened: opened_label(r),
-                        routed: !matches!(matched(r), Some(Matched::Default { .. }) | None),
+                        took: Took::of(r),
                     })
                     .collect();
             }
@@ -640,13 +751,15 @@ impl PwrRoute {
             }
             None => "this link as its example".to_owned(),
         };
-        let after = self
-            .config
-            .as_ref()
-            .map(|config| format!("; visual rules run after {}", config.path))
-            .unwrap_or_default();
+        let after = match &self.config {
+            Some(config) if self.rules_first() => {
+                format!("; your rules run before {}'s handlers", config.path)
+            }
+            Some(config) => format!("; visual rules run after {}", config.path),
+            None => String::new(),
+        };
         let mut note = format!(
-            "Added handler {} with {kept}{after}. Saved to rules.json; Run tests fails if \
+            "Added rule {} with {kept}{after}. Saved to rules.json; Run tests fails if \
              another rule ever takes it.",
             index + 1
         );
@@ -680,10 +793,7 @@ impl PwrRoute {
         if let Some(same) = rules.rules.iter().position(|r| same_rule(r, rule)) {
             return Some(Problem {
                 kind: ProblemKind::Duplicate,
-                text: format!(
-                    "Handler {} is already this rule. Nothing was added.",
-                    same + 1
-                ),
+                text: format!("Rule {} is already this rule. Nothing was added.", same + 1),
                 advice: "Change the pattern, browser or position to add a different rule.",
             });
         }
@@ -703,7 +813,7 @@ impl PwrRoute {
         };
         match (winner.source, winner.stage) {
             (Source::Rules, Stage::Handler) if winner.index == at => None,
-            // An earlier handler; a later one means this rule missed.
+            // An earlier rule; a later one means this rule missed.
             (Source::Rules, Stage::Handler) if winner.index < at => {
                 let pattern = rules
                     .rules
@@ -713,14 +823,16 @@ impl PwrRoute {
                     .unwrap_or_default();
                 shadowed(
                     format!(
-                        "Handler {}{pattern} takes this link first, so this rule would never \
-                         see it.",
+                        "Rule {}{pattern} takes this link first, so this rule would never see \
+                         it.",
                         winner.index + 1
                     ),
                     "Put it at the top, or click Add anyway.",
                 )
             }
-            (Source::Config, Stage::Handler) => {
+            // Config handlers run first only under the config's order;
+            // under PwrRoute's, one winning means this rule missed.
+            (Source::Config, Stage::Handler) if !self.rules_first() => {
                 let config = self
                     .config
                     .as_ref()
@@ -758,7 +870,8 @@ impl PwrRoute {
     }
 
     /// Save as example: the link joins the examples of the `rules.json`
-    /// handler that takes it now. A link no handler takes becomes a test.
+    /// rule that took it ([`PwrRoute::example_rule`]). A link no rule
+    /// takes becomes a test.
     pub fn save_record_as_example(&mut self, key: RowKey, cx: &mut Context<'_, Self>) {
         let Some(record) = record(key, cx) else {
             return;
@@ -767,14 +880,13 @@ impl PwrRoute {
             return;
         }
         let url = matched_url(&record).to_owned();
-        let opener = engine_opener(&record);
-        match self.probe.winning_handler(&url, opener.as_ref()) {
+        match self.example_rule(&record) {
             Some(handler) => {
                 self.store.add_example(handler, &url);
                 self.actions.note = Some((
                     key,
                     format!(
-                        "Saved to rules.json under handler {}. Run tests fails if another rule \
+                        "Saved to rules.json under rule {}. Run tests fails if another rule \
                          ever takes it.",
                         handler + 1
                     ),
@@ -814,7 +926,7 @@ impl PwrRoute {
 
 /// `.menu`: the row's "⋯" menu (design 2b), under the button while
 /// `Actions::menu` names this row: Add a rule for this link, then Save as
-/// example for the `rules.json` handler that takes the link now or Save
+/// example for the `rules.json` rule that took the link or Save
 /// as test for where it went, and a footer with what the last action here
 /// did, or why there is no Save. The menu closes on a mouse down outside
 /// it. Nothing for a record the feed no longer has.
@@ -848,7 +960,7 @@ pub fn row_menu(
     let save = menu.save.as_ref().map(|save| {
         let (label, hint, example) = match save {
             Save::Example { handler, pattern } => (
-                format!("Save as example for handler {}", handler + 1),
+                format!("Save as example for rule {}", handler + 1),
                 pattern.clone(),
                 true,
             ),
@@ -870,7 +982,7 @@ pub fn row_menu(
     let show = menu.added.map(|handler| {
         item(
             "activity-show-rule",
-            format!("Show handler {} in Rules", handler + 1),
+            format!("Show rule {} in Rules", handler + 1),
             None,
         )
         .on_click(cx.listener(move |this, _, window, cx| {
@@ -898,12 +1010,19 @@ pub fn row_menu(
                 .into_any_element()
         });
     let why = note.is_none().then(|| match record.privacy {
-        Privacy::Full if matches!(matched(&record), Some(Matched::Default { .. })) => Some(
-            "No rule matched; it went to the default. Add a rule, or save it as a test so a \
-             future rule cannot take it unnoticed."
-                .to_owned(),
-        ),
-        Privacy::Full | Privacy::None => None,
+        Privacy::Full => match matched(&record) {
+            Some(Matched::Default { owner }) => Some(format!(
+                "No rule matched; it went to {}. Add a rule, or save it as a test so a future \
+                 rule cannot take it unnoticed.",
+                match owner {
+                    Some(Owner::PwrRoute) => "PwrRoute's default",
+                    Some(Owner::Config) => "the config's default",
+                    None => "the default",
+                }
+            )),
+            _ => None,
+        },
+        Privacy::None => None,
         Privacy::Host => Some(
             "Kept as host only: there is no full URL to write a rule or a test from.".to_owned(),
         ),
@@ -1832,7 +1951,7 @@ mod tests {
             time: "09:33:05".into(),
             url: "https://app.metrics.example/dashboard/9f2e".into(),
             opened: "Google Chrome \u{00b7} Personal".into(),
-            routed: false,
+            took: Took::Unrouted,
         }];
         assert_eq!(
             sheet.collision_caption(),
@@ -1960,5 +2079,88 @@ mod tests {
             sheet.candidates
         );
         assert_eq!(sheet.rule().expect("a rule").examples, [landed]);
+    }
+
+    /// Attribution (WP-B): the caption says which caught links would
+    /// change hands, by who routed them and the order rules run in.
+    #[gpui_kit::test]
+    fn the_collision_caption_follows_the_precedence(cx: &mut gpui_kit::TestAppContext) {
+        let record = record(
+            "https://docs.example.com/a",
+            Privacy::Full,
+            Matched::Default { owner: None },
+            None,
+        );
+        let mut sheet = cx.update(|cx| AddRule::new(&record, &[], cx));
+        let hit = |took| Collision {
+            time: "09:33:05".into(),
+            url: "https://docs.example.com/b".into(),
+            opened: "Firefox".into(),
+            took,
+        };
+        sheet.config = Some("~/.finicky.ts".into());
+        sheet.collisions = vec![
+            hit(Took::Unrouted),
+            hit(Took::Rule(Some(0))),
+            hit(Took::ConfigHandler(1)),
+            hit(Took::ConfigHandler(2)),
+        ];
+
+        // The config's order, at the bottom: rule 1 runs first, and the
+        // config's handlers run before every rules.json rule.
+        sheet.rules_first = false;
+        sheet.position = Position::Bottom;
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 4 recent links \u{00b7} 1 stays with an earlier rule, \
+             which runs first; 2 stay with ~/.finicky.ts's handlers, which run first"
+        );
+        // On top it takes rule 1's link; the config's handlers still win.
+        sheet.position = Position::Top;
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 4 recent links \u{00b7} 1 routed by a rule now, which \
+             this rule would take first; 2 stay with ~/.finicky.ts's handlers, which run first"
+        );
+        // PwrRoute's order: rules.json runs before the config's handlers.
+        sheet.rules_first = true;
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 4 recent links \u{00b7} 3 routed by a rule or config \
+             handler now, which this rule would take first"
+        );
+        sheet.position = Position::Bottom;
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 4 recent links \u{00b7} 2 routed by a config handler now, \
+             which this rule would take first; 1 stays with an earlier rule, which runs first"
+        );
+        // Only defaults and the fallback: nobody loses a link.
+        sheet.collisions = vec![hit(Took::Unrouted), hit(Took::Unrouted)];
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 2 recent links \u{00b7} all unrouted, nothing changes hands"
+        );
+    }
+
+    #[test]
+    fn a_collision_is_attributed_from_its_record() {
+        let took = |by| {
+            Took::of(&record(
+                "https://docs.example.com/a",
+                Privacy::Full,
+                by,
+                None,
+            ))
+        };
+        assert_eq!(took(Matched::Rule { index: 3 }), Took::Rule(Some(3)));
+        assert_eq!(took(Matched::Unreported), Took::Rule(None));
+        assert_eq!(took(Matched::Handler { index: 1 }), Took::ConfigHandler(1));
+        assert_eq!(
+            took(Matched::Default {
+                owner: Some(Owner::Config)
+            }),
+            Took::Unrouted
+        );
     }
 }

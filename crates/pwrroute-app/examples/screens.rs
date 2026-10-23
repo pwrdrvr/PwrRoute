@@ -726,6 +726,39 @@ fn main() {
         image.save(&path).expect("write the PNG");
         println!("{}", path.display());
     }
+
+    // Attribution (WP-B): Activity names who routed each link, "rule 3"
+    // for rules.json's rules, "cfg h 2" for the config's handlers, and
+    // whose default took the rest; the expanded rows say it in full.
+    shoot("app-2b-attribution", None, &|app, window, cx| {
+        let records = fixtures::attribution_activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.activity.expanded = Some(app.activity.rows[0].key);
+        app.navigate(Screen::Activity, window, cx);
+    });
+    shoot("app-2b-attribution-unrouted", None, &|app, window, cx| {
+        let records = fixtures::attribution_activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.activity.filter = activity::Filter::Unrouted;
+        app.activity.expanded = Some(app.activity.rows[4].key);
+        app.navigate(Screen::Activity, window, cx);
+    });
+    shoot("app-2b-attribution-menu", None, &|app, window, cx| {
+        let records = fixtures::attribution_activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.navigate(Screen::Activity, window, cx);
+        app.actions.menu = Some(activity_actions::RowMenu {
+            key: app.activity.rows[0].key,
+            save: Some(activity_actions::Save::Example {
+                handler: 2,
+                pattern: Some("docs.example.com/*".into()),
+            }),
+            added: None,
+        });
+    });
 }
 
 #[cfg(not(target_os = "macos"))]

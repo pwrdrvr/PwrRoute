@@ -1571,8 +1571,9 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     assert!(collisions.contains(&"https://www.apple.com/macos/".to_owned()));
     assert!(!collisions.iter().any(|url| url.contains("zoom.us")));
     assert!(
-        caption
-            .starts_with("Would also catch these 6 recent links \u{00b7} 5 routed by a rule now"),
+        caption.starts_with(
+            "Would also catch these 6 recent links \u{00b7} 5 routed by a config handler now"
+        ),
         "{caption}"
     );
     assert!(cx.debug_bounds("add-rule-collision-5").is_some());
@@ -1687,7 +1688,7 @@ fn a_rule_added_beside_a_config_shows_under_its_visual_rules(cx: &mut TestAppCon
     assert!(cx.debug_bounds("add-rule-sheet").is_none());
     assert_eq!(saved(cx, &path).rules.len(), 8);
     let note = action_note(&view, cx);
-    assert!(note.starts_with("Added handler 1 "), "{note}");
+    assert!(note.starts_with("Added rule 1 "), "{note}");
     assert!(note.contains("after ~/.finicky.ts"), "{note}");
     // The visual rules open, so the Rules screen shows the new rule rather
     // than the config's handlers alone.
@@ -1735,7 +1736,7 @@ fn a_rule_an_earlier_rule_shadows_is_flagged_before_it_is_added(cx: &mut TestApp
     assert!(cx.debug_bounds("add-rule-problem").is_some());
     let problem = sheet_problem(&view, cx).expect("a problem");
     assert!(
-        problem.starts_with("Handler 2 (github.com/pwrdrvr/*) takes this link first"),
+        problem.starts_with("Rule 2 (github.com/pwrdrvr/*) takes this link first"),
         "{problem}"
     );
     assert_eq!(saved(cx, &path).rules.len(), 7, "nothing was added");
@@ -1797,7 +1798,7 @@ fn the_same_rule_is_never_added_twice(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("add-rule-sheet").is_some());
     let problem = sheet_problem(&view, cx).expect("a problem");
     assert!(
-        problem.starts_with("Handler 1 is already this rule"),
+        problem.starts_with("Rule 1 is already this rule"),
         "{problem}"
     );
     // A second click does not add it either.
@@ -1910,7 +1911,7 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
     assert!(cx.debug_bounds("activity-action-note").is_some());
     let note = view.read_with(cx, |app, _| app.actions.note.clone().unwrap().1);
     assert!(
-        note.starts_with("Saved to rules.json under handler 1."),
+        note.starts_with("Saved to rules.json under rule 1."),
         "{note}"
     );
 
@@ -2369,4 +2370,143 @@ fn a_refused_import_opens_the_importer_again_with_the_reason(cx: &mut TestAppCon
     );
     assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- Attribution (WP-B) -----------------------------------------------------
+
+/// `base` as if `rules.json`'s rule `index` routed `url`, from no app, to
+/// `browser` · `profile`.
+fn routed_by_rule(
+    base: &DispatchRecord,
+    id: u64,
+    url: &str,
+    index: usize,
+    browser: &str,
+    profile: &str,
+) -> DispatchRecord {
+    let mut record = record_like(base, id, url, Matched::Rule { index });
+    record.link.opener = None;
+    let set = |b: &mut pwrroute_router::Browser| {
+        b.name = browser.into();
+        b.profile = profile.into();
+    };
+    if let Some(b) = &mut record.browser {
+        set(b);
+    }
+    for step in &mut record.steps {
+        if let Step::Browser { browser: b } = step {
+            set(b);
+        }
+    }
+    record
+}
+
+/// A record that names its `rules.json` rule shows it as "rule N", and
+/// Save as example puts the link under that rule straight from the record:
+/// no rule matches these links today, so a probe would offer a test. A
+/// record whose rule now opens somewhere else is probed as before.
+#[gpui_kit::test]
+fn activity_names_the_rule_and_saves_its_example_from_the_record(cx: &mut TestAppContext) {
+    let dir = scratch("wp-b-attribution");
+    let path = dir.join("rules.json");
+    let base = fixtures::activity()[0].clone();
+    let records = vec![
+        routed_by_rule(
+            &base,
+            41,
+            "https://docs.example.com/wp-b",
+            1,
+            "Google Chrome",
+            "Work",
+        ),
+        routed_by_rule(
+            &base,
+            42,
+            "https://docs.example.com/moved",
+            1,
+            "Firefox",
+            "",
+        ),
+    ];
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    let labels: Vec<String> = view.read_with(cx, |app, _| {
+        app.activity
+            .rows
+            .iter()
+            .map(|row| row.rule.to_string())
+            .collect()
+    });
+    assert_eq!(labels, ["rule 2", "rule 2"]);
+
+    click(cx, "activity-more-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.actions.menu.clone().and_then(|m| m.save)),
+        Some(Save::Example {
+            handler: 1,
+            pattern: Some("*.atlassian.net/*".into()),
+        })
+    );
+    click(cx, "activity-save-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[1].examples.clone()),
+        ["https://docs.example.com/wp-b"]
+    );
+    let note = view.read_with(cx, |app, _| app.actions.note.clone().unwrap().1);
+    assert!(
+        note.starts_with("Saved to rules.json under rule 2."),
+        "{note}"
+    );
+    assert_eq!(
+        saved(cx, &path).rules[1].examples,
+        ["https://docs.example.com/wp-b"]
+    );
+
+    // Rule 2 opens Google Chrome · Work, not Firefox: the record is stale,
+    // so the probe decides, and no rule takes the link now.
+    click(cx, "nav-activity");
+    click(cx, "activity-more-1");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.actions.menu.clone().and_then(|m| m.save)),
+        Some(Save::Test {
+            expects: "Firefox".into()
+        })
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Beside a config, the sheet knows whose rules run first: the config's
+/// handlers, until `rules.json` says `"precedence": "pwrroute"`; the note
+/// after Add says which.
+#[gpui_kit::test]
+fn the_add_rule_sheet_follows_the_precedence(cx: &mut TestAppContext) {
+    let dir = scratch("wp-b-precedence");
+    let (view, cx) = open_activity(cx, &dir, Some(fixture_home().join(".finicky.ts")));
+    let sheet = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let sheet = app.actions.sheet.as_ref().expect("the sheet is open");
+            (sheet.rules_first, sheet.config.clone())
+        })
+    };
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    assert_eq!(sheet(cx), (false, Some("~/.finicky.ts".to_owned())));
+    click(cx, "add-rule-cancel");
+
+    view.update(cx, |app, _| {
+        app.store
+            .set_precedence(pwrroute_engine::Precedence::PwrRoute);
+    });
+    click(cx, "activity-add-rule-4");
+    assert_eq!(sheet(cx), (true, Some("~/.finicky.ts".to_owned())));
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-save");
+    let note = action_note(&view, cx);
+    assert!(note.starts_with("Added rule 1 "), "{note}");
+    assert!(
+        note.contains("your rules run before ~/.finicky.ts's handlers"),
+        "{note}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
