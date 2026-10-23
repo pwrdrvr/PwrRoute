@@ -16,7 +16,7 @@ use crate::{
     backend::{
         ActivityEntry, ActivityLog, ActivityOutcome, ActivitySource, AgentRef, Backends,
         BrowserCatalog, BrowserList, DetectedBrowser, Resolver, Router, RulesError, RulesSnapshot,
-        RulesSource, RulesStore, StepKind, Trace, TraceStep,
+        RulesSource, RulesStore, StepKind, StepSource, Trace, TraceStep,
     },
     engine::EngineTester,
     roles::Role,
@@ -39,6 +39,7 @@ impl Resolver for FakeResolver {
                 index: Some(0),
                 summary: "x.com/* → host xcancel.com".to_owned(),
                 url: Some(parsed.to_string()),
+                source: Some(StepSource::Rules),
             });
         }
         let host = parsed.host_str().unwrap_or_default();
@@ -48,6 +49,7 @@ impl Resolver for FakeResolver {
                 index: Some(0),
                 summary: "*.example.org/* → Firefox".to_owned(),
                 url: None,
+                source: Some(StepSource::Rules),
             });
             "Firefox"
         } else {
@@ -56,6 +58,7 @@ impl Resolver for FakeResolver {
                 index: None,
                 summary: "default → Safari".to_owned(),
                 url: None,
+                source: Some(StepSource::Rules),
             });
             "Safari"
         };
