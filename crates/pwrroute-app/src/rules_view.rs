@@ -533,9 +533,11 @@ fn pane_heading_with(eyebrow: &str, title: &'static str, help: Option<String>) -
 }
 
 /// Where Everything else goes as the screens say it: "Google Chrome ·
-/// Personal", or the browser alone when the file names no profile.
+/// Personal", or the browser alone when the file names no profile. A
+/// bundle id (first run writes one on macOS) is shown by its app's name.
 pub(crate) fn everything_else_name(store: &RulesStore) -> String {
     let (_, name) = store.default_browser();
+    let name = crate::default_browser::browser_name(&name);
     match store.everything_else().destination {
         Destination::Browser {
             profile: Some(profile),
@@ -1312,6 +1314,7 @@ fn browser_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
 /// was looked for.
 fn nothing_to_route_by(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
     let (_, fallback) = app.store.default_browser();
+    let fallback = crate::default_browser::browser_name(&fallback);
     let stays = format!("The default stays {fallback} until you change it.");
     let choice = |primary: bool, title: &'static str, what: &str, action: Div| {
         div()
