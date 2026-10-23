@@ -23,7 +23,7 @@ use pwrroute_engine::{
     Opener, Reloader, RulesFile, Source, Sources, Stage, TestReport,
 };
 
-use crate::backend::{Resolver, RulesTester, StepKind, Trace, TraceStep};
+use crate::backend::{Resolver, RulesTester, StepKind, StepSource, Trace, TraceStep};
 
 /// What the thread owns and keeps current. Built on the thread, so it may
 /// hold an [`Engine`].
@@ -276,6 +276,16 @@ impl RulesTester for EngineTester {
     }
 }
 
+/// A default step's summary when `rules.json`'s default took the link:
+/// no config in charge, or `"precedence": "pwrroute"`. The router's
+/// records say it the same way (`live.rs`).
+pub(crate) const DEFAULT_PWRROUTE: &str =
+    "no rule or handler matched: PwrRoute's default browser (rules.json's defaultBrowser)";
+/// A default step's summary when the Finicky config's own `defaultBrowser`
+/// took the link.
+pub(crate) const DEFAULT_CONFIG: &str =
+    "no handler or rule matched: the config's default browser (its defaultBrowser)";
+
 /// The engine's trace as the tools show it: the rewrites that matched, in
 /// order, then the handler or default that chose the browser. Rules that
 /// were evaluated but did not match are left out.
@@ -297,6 +307,7 @@ pub(crate) fn trace_of(trace: engine::Trace) -> Trace {
             index: (s.stage != Stage::Default).then_some(s.index),
             summary: summary(s),
             url: s.rewritten_to.clone(),
+            source: Some(StepSource::from(s.source)),
         })
         .collect();
     let original_url = (trace.original_url != trace.url).then_some(trace.original_url);
@@ -311,10 +322,11 @@ pub(crate) fn trace_of(trace: engine::Trace) -> Trace {
 }
 
 /// How the Rules view words a step: which list, which entry, and the
-/// pattern that matched.
+/// pattern that matched; or whose default browser took the link.
 fn summary(step: &engine::Step) -> String {
     let list = match (step.source, step.stage) {
-        (_, Stage::Default) => return "no handler matched: the default browser".to_owned(),
+        (Source::Rules, Stage::Default) => return DEFAULT_PWRROUTE.to_owned(),
+        (Source::Config, Stage::Default) => return DEFAULT_CONFIG.to_owned(),
         (Source::Config, Stage::Rewrite) => "config rewrite",
         (Source::Config, Stage::Handler) => "config handler",
         (Source::Rules, Stage::Rewrite) => "rules.json rewrite",
@@ -451,6 +463,10 @@ mod tests {
             "{trace:?}"
         );
         assert_eq!(trace.steps[0].summary, "config rewrite 2 matched x.com/*");
+        assert_eq!(trace.steps[0].source, Some(StepSource::Config));
+        // The config's own defaultBrowser took it, and the trace says whose.
+        assert_eq!(trace.steps[1].summary, DEFAULT_CONFIG);
+        assert_eq!(trace.steps[1].source, Some(StepSource::Config));
         assert_eq!(trace.steps[0].url.as_deref(), Some("https://xcancel.com/a"));
         assert!(trace.error.is_some(), "the throwing matcher is reported");
         assert_eq!(
@@ -587,5 +603,48 @@ mod tests {
             ["https://a.example.org/x"]
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Attribution (WP-B): a step names its list and entry, and a default
+    /// names whose it is, PwrRoute's (`rules.json`) or the config's.
+    #[test]
+    fn a_summary_names_who_decided() {
+        let step = |stage, source, index, matchers: Vec<Matcher>| engine::Step {
+            stage,
+            source,
+            index,
+            matchers,
+            url: "https://docs.example.com/a".to_owned(),
+            matched: true,
+            pattern: None,
+            rewritten_to: None,
+            won: true,
+            error: None,
+        };
+        let wildcard = || vec![Matcher::Wildcard("docs.example.com/*".to_owned())];
+        assert_eq!(
+            summary(&step(Stage::Handler, Source::Rules, 2, wildcard())),
+            "rules.json rule 3 matched docs.example.com/*"
+        );
+        assert_eq!(
+            summary(&step(Stage::Handler, Source::Config, 1, wildcard())),
+            "config handler 2 matched docs.example.com/*"
+        );
+        assert_eq!(
+            summary(&step(Stage::Default, Source::Rules, 0, Vec::new())),
+            "no rule or handler matched: PwrRoute's default browser (rules.json's defaultBrowser)"
+        );
+        assert_eq!(
+            summary(&step(Stage::Default, Source::Config, 0, Vec::new())),
+            "no handler or rule matched: the config's default browser (its defaultBrowser)"
+        );
+        assert_eq!(
+            serde_json::to_value(StepSource::from(Source::Rules)).unwrap(),
+            "rules"
+        );
+        assert_eq!(
+            serde_json::to_value(StepSource::from(Source::Config)).unwrap(),
+            "config"
+        );
     }
 }

@@ -275,6 +275,171 @@ pub fn activity() -> Vec<DispatchRecord> {
     ]
 }
 
+// --- Attribution (WP-B) -----------------------------------------------------
+
+/// Contrived records, newest first, that show who routed each link: a
+/// `rules.json` rule, a rewrite then a rule, the config's handler,
+/// PwrRoute's default, the config's default, a pause over a rule and the
+/// fallback. Every host is example.com's. For the `screens` example and
+/// tests; nothing here reaches the window.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn attribution_activity() -> Vec<DispatchRecord> {
+    use pwrroute_router::Owner;
+
+    let now = SystemTime::now();
+    let browser = |name: &str, profile: &str, url: &str| Browser {
+        name: name.into(),
+        app_type: AppType::AppName,
+        url: url.into(),
+        profile: profile.into(),
+        args: Vec::new(),
+        open_in_background: None,
+        private: false,
+        privacy: pwrroute_engine::Privacy::Full,
+    };
+    // `before` runs between receipt and the match (rewrites); `after`
+    // between the match and the browser (a pause, a fallback).
+    let record = |id: u64,
+                  secs_ago: u64,
+                  url: &str,
+                  from: &str,
+                  before: Vec<Step>,
+                  by: Option<Matched>,
+                  after: Vec<Step>,
+                  opened: Browser,
+                  total_ms: u64| {
+        let mut steps = vec![Step::Received { url: url.into() }];
+        steps.extend(before);
+        steps.extend(by.map(|by| Step::Matched { by }));
+        steps.extend(after);
+        steps.push(Step::Browser {
+            browser: opened.clone(),
+        });
+        steps.push(Step::Launched { dry_run: false });
+        DispatchRecord {
+            id: DispatchId(id),
+            received_at: ago(now, secs_ago),
+            privacy: Privacy::Full,
+            link: Link::new(url, Source::AppleEvent).with_opener((!from.is_empty()).then(|| {
+                OpenerInfo {
+                    name: from.into(),
+                    ..OpenerInfo::default()
+                }
+            })),
+            forwarded: false,
+            final_url: Some(opened.url.clone()),
+            browser: Some(opened),
+            steps,
+            outcome: Outcome::Opened,
+            timings: Timings {
+                queue_us: 40,
+                resolve_us: 600,
+                launch_us: total_ms * 1_000 - 700,
+                total_us: total_ms * 1_000,
+            },
+        }
+    };
+    let docs = "https://docs.example.com/design/overview";
+    let tracked = "https://go.example.com/launch?utm_source=mail";
+    let clean = "https://go.example.com/launch";
+    let tickets = "https://tickets.example.com/browse/PR-12";
+    let news = "https://news.example.com/today";
+    let shop = "https://shop.example.com/cart";
+    let chat = "https://chat.example.com/room/7";
+    let wiki = "https://wiki.example.com/start";
+    vec![
+        record(
+            71,
+            8,
+            docs,
+            "Slack",
+            Vec::new(),
+            Some(Matched::Rule { index: 2 }),
+            Vec::new(),
+            browser("Google Chrome", "Work", docs),
+            4,
+        ),
+        record(
+            72,
+            40,
+            tracked,
+            "Mail",
+            vec![Step::Rewrite {
+                rule: None,
+                url: clean.into(),
+            }],
+            Some(Matched::Rule { index: 0 }),
+            Vec::new(),
+            browser("Firefox", "", clean),
+            5,
+        ),
+        record(
+            73,
+            95,
+            tickets,
+            "Slack",
+            Vec::new(),
+            Some(Matched::Handler { index: 1 }),
+            Vec::new(),
+            browser("Firefox", "default-release", tickets),
+            6,
+        ),
+        record(
+            74,
+            160,
+            news,
+            "Messages",
+            Vec::new(),
+            Some(Matched::Default {
+                owner: Some(Owner::PwrRoute),
+            }),
+            Vec::new(),
+            browser("Google Chrome", "Personal", news),
+            4,
+        ),
+        record(
+            75,
+            230,
+            shop,
+            "Mail",
+            Vec::new(),
+            Some(Matched::Default {
+                owner: Some(Owner::Config),
+            }),
+            Vec::new(),
+            browser("Safari", "", shop),
+            3,
+        ),
+        record(
+            76,
+            410,
+            chat,
+            "",
+            Vec::new(),
+            Some(Matched::Rule { index: 1 }),
+            vec![Step::Paused { skipped: None }],
+            browser("Google Chrome", "Personal", chat),
+            4,
+        ),
+        record(
+            77,
+            620,
+            wiki,
+            "Notes",
+            Vec::new(),
+            None,
+            vec![Step::Fallback {
+                reason: "no config is selected".into(),
+            }],
+            browser("Safari", "", wiki),
+            3,
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

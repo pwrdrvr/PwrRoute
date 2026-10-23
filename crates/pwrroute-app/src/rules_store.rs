@@ -357,13 +357,6 @@ impl RulesStore {
     /// browser go before a JS config's handlers and default.
     /// [`Precedence::Config`] (the file's absent field) is the Go host's
     /// order.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "for the precedence toggle; only tests call it so far"
-        )
-    )]
     pub fn precedence(&self) -> Precedence {
         self.base.precedence
     }
