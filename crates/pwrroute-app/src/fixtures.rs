@@ -772,20 +772,27 @@ pub fn overview_paused_day() -> Vec<DispatchRecord> {
     )
 }
 
-/// 3c's day, the config never loading: the router's fallback took all 212
-/// links, in Google Chrome · Personal, and two failed. Nothing ran a rule
-/// or a rewrite.
+/// 3c's day, the config never loading: the router left it out, so
+/// rules.json's rules ran alone and PwrRoute's default, Google Chrome ·
+/// Personal, took the rest; two failed. rules.json's rewrite ran, the
+/// config's never did.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the window harness and the screens example")
 )]
 pub fn overview_config_error_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
     let pwrroute = Matched::Default {
         owner: Some(pwrroute_router::Owner::PwrRoute),
     };
     overview_day(
-        &[(pwrroute, Some(("Google Chrome", "Personal")), 212)],
-        0,
+        &[
+            (rule(0), Some(("Arc", "")), 66),
+            (rule(1), Some(("Google Chrome", "Personal")), 12),
+            (rule(2), Some(("Safari", "")), 3),
+            (pwrroute, Some(("Google Chrome", "Personal")), 131),
+        ],
+        164,
         2,
     )
 }

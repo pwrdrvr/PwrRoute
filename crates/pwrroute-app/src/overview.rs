@@ -282,19 +282,22 @@ pub fn status(app: &PwrRoute, cx: &App) -> Status {
 }
 
 /// What the router says of the config in charge. `fallback` set: nothing
-/// has loaded and every link goes to the fallback browser. `error` alone: a
-/// reload failed and the last load still routes. Neither, while this window
-/// could not read the file (`problem`): the router's copy routes, so it is
-/// the stale case, not the broken one.
+/// has loaded and every link goes to the fallback browser.
+/// `config_not_loaded`: the config never loaded and `rules.json` routes
+/// without it. `error` alone: a reload failed and the last load still
+/// routes. Neither, while this window could not read the file (`problem`):
+/// the router's copy routes, so it is the stale case, not the broken one.
 pub fn config_trouble(
     source: crate::router::RoutingSource,
     problem: Option<&str>,
 ) -> Option<ConfigTrouble> {
     if let Some(fallback) = source.fallback {
         let why = source.error.or_else(|| problem.map(str::to_owned));
-        Some(ConfigTrouble::NotLoaded(first_line(
+        Some(ConfigTrouble::NothingLoaded(first_line(
             why.as_deref().unwrap_or(&fallback),
         )))
+    } else if let Some(error) = source.error.as_deref().filter(|_| source.config_not_loaded) {
+        Some(ConfigTrouble::NotLoaded(first_line(error)))
     } else if let Some(error) = source.error {
         Some(ConfigTrouble::ReloadFailed(first_line(&error)))
     } else {

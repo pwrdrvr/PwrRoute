@@ -123,10 +123,14 @@ their own modules.
   `overview::status` reads the router, the tray's pause and the OS; a test
   or screenshot sets `OverviewState::status` instead. The strip chips and
   the rail foot use the same reading. A config the router never loaded
-  (`RoutingSource::fallback`) is `ConfigTrouble::NotLoaded`: nothing in it
-  or `rules.json` runs and every link goes to the fallback browser, so
-  the map marks both sections "not running" and fades their rows and the
-  cards only they feed (`Row::idle`). A failed reload (`error` alone)
+  (`RoutingSource::config_not_loaded`) is `ConfigTrouble::NotLoaded`: the
+  router leaves it out and routes with `rules.json` alone, so its section
+  says "not running" with one error row, the rules say "run without it"
+  with their counts, and PwrRoute's default takes everything else. Only
+  when nothing loaded at all (`RoutingSource::fallback` too) is it
+  `NothingLoaded`: every link goes to the fallback browser, so the map
+  marks both sections "not running" and fades their rows and the cards
+  only they feed (`Row::idle`). A failed reload (`error` alone)
   is `ReloadFailed`, the warning tone: the last load still routes, config
   and `rules.json` together, so the headers say "as last loaded", no row
   or Rules list count is shown by number, the switches say a change
@@ -246,10 +250,12 @@ their own modules.
   or `null` default only while it is overridden, a handler matching every
   link), never from running it. Default browsers are named through
   `default_browser::browser_name`, never as bundle ids. A config this
-  window cannot read is described as the router runs it (`Order::stale`,
-  from `overview::status`): one that never loaded runs nothing, not even
-  the visual rules, and every link opens in PwrRoute's default until it
-  loads; after a failed reload the version that last loaded still routes.
+  window cannot read is described as the router runs it (`Order::trouble`,
+  from `overview::status`): one that never loaded is left out, so the
+  visual rules run without it and PwrRoute's default takes everything else
+  until it loads (`nothing_runs`, when `rules.json` did not load either:
+  every link opens there); after a failed reload (`stale`) the version that
+  last loaded still routes.
   Stop using is `importer_view::set_source` with `visualOnly`
   (and the file dismissed); Open in editor is `open_with_system`, which the
   test platform does not implement, so tests never click it. The blank
@@ -318,9 +324,9 @@ their own modules.
   `rules.json`'s `defaultBrowser` and `defaultProfile` ("" for the
   browser's own default); for a config kept in charge, its "who owns
   everything else" control writes `rules.json`'s `precedence` (shown only
-  while that config loads; a broken one kept says every link opens in the
-  Everything else browser until it loads, since the router then runs
-  neither it nor the rules). Both are
+  while that config loads; a broken one kept says your rules run without
+  it and the Everything else browser takes the rest until it loads, since
+  the router leaves it out and routes with `rules.json` alone). Both are
   direct `RulesFile` writes; the main window's store follows the file.
   Import N rules shows "Importing…" until the importer answers; Don't use
   it turns the config off through `importer_view::set_source_and_show`

@@ -3343,9 +3343,24 @@ fn the_overview_reads_the_routers_config_trouble() {
     use crate::overview_model::ConfigTrouble;
     use crate::router::RoutingSource;
     let trouble = crate::overview::config_trouble;
-    // Never loaded: the router's fallback, with its load error.
+    // Never loaded, and nothing else either: the router's fallback, with
+    // its load error.
     let source = RoutingSource {
+        config_not_loaded: true,
         fallback: Some("no config has loaded".into()),
+        error: Some("SyntaxError: Unexpected token\nat line 42".into()),
+        ..RoutingSource::default()
+    };
+    assert_eq!(
+        trouble(source, None),
+        Some(ConfigTrouble::NothingLoaded(
+            "SyntaxError: Unexpected token".into()
+        ))
+    );
+    // Never loaded, with rules.json routing without it.
+    let source = RoutingSource {
+        config_not_loaded: true,
+        rules: Some("rules.json".into()),
         error: Some("SyntaxError: Unexpected token\nat line 42".into()),
         ..RoutingSource::default()
     };
@@ -3596,11 +3611,31 @@ mod rules_and_config_views {
         assert!(order.pwrroute_default);
         assert!(shown.override_warnings(order).is_empty());
         // The banner agrees with the router, whichever way the switch is:
-        // a config that never loaded leaves every link to the fallback
-        // (`rules.json`'s default), with no rules running.
+        // a config that never loaded is left out, so the rules run without
+        // it and PwrRoute's default (`rules.json`'s) takes the rest.
         for rules_first in [false, true] {
             let order = Order::with(rules_first, true, false);
             let sentence = shown.banner_sentence(order, "Google Chrome", SystemTime::now());
+            assert!(
+                sentence.starts_with(
+                    "Until it loads, your rules run without it and PwrRoute's default, \
+                     Google Chrome, takes everything else. It did not load:"
+                ),
+                "{sentence}"
+            );
+            assert_eq!(
+                shown.visual_copy(order, "Google Chrome \u{00b7} Personal"),
+                (
+                    "Run without the config",
+                    "They run without it until ~/missing.finicky.ts loads, and PwrRoute's \
+                     default, Google Chrome \u{00b7} Personal, takes everything else."
+                        .to_owned()
+                )
+            );
+            // Nothing loaded at all, rules.json included: every link goes
+            // to the fallback and the rules wait.
+            let nothing = order.nothing_runs(true);
+            let sentence = shown.banner_sentence(nothing, "Google Chrome", SystemTime::now());
             assert!(
                 sentence.starts_with(
                     "Until it loads, every link opens in PwrRoute's default, Google Chrome. \
@@ -3610,7 +3645,7 @@ mod rules_and_config_views {
             );
             assert_eq!(
                 shown
-                    .visual_copy(order, "Google Chrome \u{00b7} Personal")
+                    .visual_copy(nothing, "Google Chrome \u{00b7} Personal")
                     .1,
                 "They wait for it: every link opens in PwrRoute's default, Google Chrome \
                  \u{00b7} Personal, until ~/missing.finicky.ts loads."

@@ -190,6 +190,13 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             Precedence::PwrRoute => "its rewrites run first, then your rules, then its handlers",
         };
         let found = match &facts.source.error {
+            Some(_) if facts.source.fallback.is_some() => format!(
+                "Found at {path}, but it did not load: every link goes to the fallback browser."
+            ),
+            Some(error) if facts.source.config_not_loaded => format!(
+                "Found at {path}, but it did not load: {error}. Your rules run without it until \
+                 it does."
+            ),
             Some(error) => format!(
                 "Found at {path}. The last reload failed: {error}. The previous load stays in \
                  charge."
@@ -867,6 +874,7 @@ mod tests {
         facts.source = RoutingSource {
             config: Some(config.clone()),
             rules: None,
+            config_not_loaded: false,
             fallback: None,
             error: None,
         };
@@ -902,6 +910,24 @@ mod tests {
                 .unwrap()
                 .found
                 .contains("The last reload failed: SyntaxError: unexpected token.")
+        );
+
+        // One that never loaded is left out, and the rules run without it.
+        facts.source.config_not_loaded = true;
+        facts.source.rules = Some(home.join("rules.json"));
+        let found = build(&facts, SystemTime::now()).finicky.unwrap().found;
+        assert_eq!(
+            found,
+            "Found at ~/.finicky.ts, but it did not load: SyntaxError: unexpected token. Your \
+             rules run without it until it does."
+        );
+        // With nothing to route with, every link falls back.
+        facts.source.rules = None;
+        facts.source.fallback = facts.source.error.clone();
+        let found = build(&facts, SystemTime::now()).finicky.unwrap().found;
+        assert!(
+            found.ends_with("every link goes to the fallback browser."),
+            "{found}"
         );
     }
 

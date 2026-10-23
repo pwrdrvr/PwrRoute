@@ -143,6 +143,55 @@ fn a_broken_start_falls_back_then_recovers() {
 }
 
 #[test]
+fn a_broken_start_leaves_rules_json_in_charge_until_the_config_loads() {
+    let home = Home::new("broken-start-rules");
+    let path = home.write(".finicky.ts", "export default {");
+    let rules = home.write(
+        "rules.json",
+        r#"{ "defaultBrowser": "Vivaldi", "rules": [ { "match": "docs.example.com/*", "browser": "Arc" } ] }"#,
+    );
+    let docs = |r: &Reloader| {
+        r.engine()
+            .resolve("https://docs.example.com/a", None)
+            .unwrap()
+            .browser
+            .name
+    };
+    let mut r = reloader(home.candidates(), Some(rules.clone()));
+    // The config is left out; rules.json routes alone.
+    assert!(r.status().error.is_some());
+    assert_eq!(r.status().config, None);
+    assert_eq!(r.status().generation, 1);
+    assert_eq!(docs(&r), "Arc");
+    assert_eq!(browser(&r), "Vivaldi");
+
+    // An edit to rules.json applies while the config is still broken.
+    fs::write(
+        &rules,
+        r#"{ "defaultBrowser": "Vivaldi", "rules": [ { "match": "docs.example.com/*", "browser": "Orion" } ] }"#,
+    )
+    .unwrap();
+    assert!(settle(&mut r).unwrap().is_err());
+    assert_eq!(docs(&r), "Orion");
+    assert_eq!(r.status().config, None);
+
+    // Once it loads, the config takes charge, rules.json with it.
+    fs::write(&path, config("Firefox")).unwrap();
+    settle(&mut r).unwrap().unwrap();
+    assert_eq!(r.status().config.as_deref(), Some(path.as_path()));
+    assert_eq!(r.status().error, None);
+    assert_eq!(browser(&r), "Firefox");
+    assert_eq!(docs(&r), "Orion");
+
+    // Broken again after loading: the last load keeps routing, config and
+    // all, rather than rules.json alone.
+    fs::write(&path, "export default {").unwrap();
+    assert!(settle(&mut r).unwrap().is_err());
+    assert_eq!(r.status().config.as_deref(), Some(path.as_path()));
+    assert_eq!(browser(&r), "Firefox");
+}
+
+#[test]
 fn a_removed_config_is_kept_until_it_returns() {
     let home = Home::new("removed");
     let path = home.write(".finicky.js", &config("Firefox"));
