@@ -38,8 +38,8 @@ use crate::rules_model::KEEP_LEVELS;
 use crate::text_field::{Edit, TextField};
 use crate::theme::{self, mono, text, tracked};
 use crate::widgets::{
-    ButtonKind, badge, badge_for, button, caret, input_box, one_line, paragraph, segment,
-    segmented, switch,
+    ButtonKind, badge, badge_for, button, caret, field_label, input_box, menu_card, menu_row,
+    one_line, paragraph, profiles_hint, segment, segmented, switch,
 };
 
 /// A browser the sheet offers, with the profiles it has on this machine.
@@ -652,26 +652,14 @@ pub fn row_menu(
     let menu = app.actions.menu.as_ref().filter(|menu| menu.key == key)?;
     let record = record(key, cx)?;
     let item = |id: &'static str, label: String, hint: Option<String>| {
-        div()
-            .id(ElementId::NamedInteger(id.into(), index as u64))
-            .debug_selector(move || format!("{id}-{index}"))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(5.0))
-            .cursor_pointer()
-            .hover(|row| row.bg(theme::bg_row_active()))
-            .child(text(label, 12.0, 500.0, theme::text_primary()))
-            .when_some(hint, |row, hint| {
-                row.child(div().ml_auto().pl(px(16.0)).child(mono(
-                    hint,
-                    10.5,
-                    500.0,
-                    theme::text_muted(),
-                )))
-            })
+        menu_row(
+            ElementId::NamedInteger(id.into(), index as u64),
+            None,
+            label,
+            hint.map(Into::into),
+        )
+        .debug_selector(move || format!("{id}-{index}"))
+        .hover(|row| row.bg(theme::bg_row_active()))
     };
     let add = item(
         "activity-add-rule-menu",
@@ -734,22 +722,13 @@ pub fn row_menu(
             "Kept as host only: there is no full URL to write a rule or a test from.".to_owned(),
         ),
     });
-    let menu = div()
-        .id(("activity-menu", index))
+    let menu = menu_card(("activity-menu", index))
         .debug_selector(move || format!("activity-menu-{index}"))
-        .occlude()
         .absolute()
         .top(px(30.0))
         .right_0()
         .w(px(320.0))
-        .flex()
-        .flex_col()
-        .p(px(4.0))
-        .bg(theme::bg_elevated())
-        .border_1()
-        .border_color(theme::border_default())
         .rounded(px(8.0))
-        .shadow_lg()
         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
             this.actions.menu = None;
             cx.notify();
@@ -1024,73 +1003,53 @@ fn picker(
     cx: &mut Context<'_, PwrRoute>,
 ) -> Div {
     let menu = choices.into_iter().enumerate().fold(
-        div()
-            .id(ElementId::Name(format!("{id}-menu").into()))
-            .occlude()
+        menu_card(ElementId::Name(format!("{id}-menu").into()))
+            .debug_selector(move || format!("{id}-menu"))
+            // As wide as the field, never narrower.
             .absolute()
             .top(px(34.0))
             .left_0()
-            .w(px(300.0))
-            .flex()
-            .flex_col()
-            .p(px(4.0))
-            .bg(theme::bg_elevated())
-            .border_1()
-            .border_color(theme::border_default())
-            .rounded(px(7.0))
-            .shadow_lg()
+            .right_0()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.set_add_rule(|sheet| sheet.picking = Picking::None, cx);
             })),
         |menu, (index, (name, extra))| {
             let chosen = name.clone();
+            let badge_label = (which == Picking::Browser).then(|| badge_for(&name));
             menu.child(
-                div()
-                    .id(ElementId::Name(format!("{id}-choice-{index}").into()))
-                    .debug_selector(move || format!("{id}-choice-{index}"))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .px(px(8.0))
-                    .py(px(6.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .hover(|row| row.bg(theme::bg_hover()))
-                    .child(badge(badge_for(&name)))
-                    .child(text(name.clone(), 12.0, 500.0, theme::text_primary()))
-                    .when_some(extra, |row, extra| {
-                        row.child(div().ml_auto().pl(px(16.0)).child(mono(
-                            extra,
-                            10.5,
-                            500.0,
-                            theme::text_muted(),
-                        )))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let chosen = chosen.clone();
-                        this.set_add_rule(
-                            move |sheet| {
-                                match which {
-                                    Picking::Browser => {
-                                        if sheet.browser != chosen {
-                                            sheet.profile.clear();
-                                        }
-                                        sheet.browser = chosen;
+                menu_row(
+                    ElementId::Name(format!("{id}-choice-{index}").into()),
+                    badge_label,
+                    name.clone(),
+                    extra.map(Into::into),
+                )
+                .debug_selector(move || format!("{id}-choice-{index}"))
+                .hover(|row| row.bg(theme::bg_hover()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let chosen = chosen.clone();
+                    this.set_add_rule(
+                        move |sheet| {
+                            match which {
+                                Picking::Browser => {
+                                    if sheet.browser != chosen {
+                                        sheet.profile.clear();
                                     }
-                                    Picking::Profile => {
-                                        sheet.profile = if chosen == "Default" {
-                                            String::new()
-                                        } else {
-                                            chosen
-                                        };
-                                    }
-                                    Picking::None => {}
+                                    sheet.browser = chosen;
                                 }
-                                sheet.picking = Picking::None;
-                            },
-                            cx,
-                        );
-                    })),
+                                Picking::Profile => {
+                                    sheet.profile = if chosen == "Default" {
+                                        String::new()
+                                    } else {
+                                        chosen
+                                    };
+                                }
+                                Picking::None => {}
+                            }
+                            sheet.picking = Picking::None;
+                        },
+                        cx,
+                    );
+                })),
             )
         },
     );
@@ -1132,12 +1091,7 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
     let mut browsers: Vec<(String, Option<String>)> = app
         .browsers
         .iter()
-        .map(|b| {
-            (
-                b.name.clone(),
-                (!b.profiles.is_empty()).then(|| b.profiles.join(" \u{00b7} ")),
-            )
-        })
+        .map(|b| (b.name.clone(), profiles_hint(&b.profiles)))
         .collect();
     if !sheet.browser.is_empty() && !browsers.iter().any(|(name, _)| *name == sheet.browser) {
         browsers.push((sheet.browser.clone(), None));
@@ -1160,25 +1114,18 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
     } else {
         div()
             .flex()
+            .min_w_0()
             .items_center()
             .gap(px(8.0))
             .child(badge(badge_for(&sheet.browser)))
-            .child(text(
-                sheet.browser.clone(),
-                12.5,
-                400.0,
-                theme::text_primary(),
-            ))
+            .child(field_label(sheet.browser.clone(), theme::text_primary()))
     };
     let profile_label = if sheet.profile.is_empty() {
         div().child(text("Default", 12.5, 400.0, theme::text_subtle()))
     } else {
-        div().child(text(
-            sheet.profile.clone(),
-            12.5,
-            400.0,
-            theme::text_primary(),
-        ))
+        div()
+            .min_w_0()
+            .child(field_label(sheet.profile.clone(), theme::text_primary()))
     };
     div()
         .child(picker(

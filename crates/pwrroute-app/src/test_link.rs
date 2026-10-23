@@ -594,6 +594,9 @@ fn step_row(
         .child(dim(body))
 }
 
+/// The opener menu's width: wider than its field, never narrower.
+const OPENER_MENU_WIDTH: f32 = 240.0;
+
 /// The opener picker and its menu: no app, the apps the rules name, and
 /// the design's examples under their own heading.
 fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
@@ -601,26 +604,38 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
         match opener {
             Some(app) => div()
                 .flex()
+                .min_w_0()
                 .items_center()
                 .gap(px(8.0))
                 .child(badge(app.badge.clone()))
-                .child(text(app.name.clone(), 12.5, 400.0, theme::text_primary())),
+                .child(crate::widgets::field_label(
+                    app.name.clone(),
+                    theme::text_primary(),
+                )),
             None => div().child(text("no app", 12.5, 400.0, theme::text_subtle())),
         }
     };
     let choices = app.test.openers();
     let row = |index: usize, choice: Option<&OpenerChoice>| {
         let selected = index == app.test.opener;
-        div()
-            .id(("test-opener-choice", index))
-            .debug_selector(move || format!("test-opener-choice-{index}"))
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(5.0))
-            .cursor_pointer()
+        let row = match choice {
+            Some(app) => crate::widgets::menu_row(
+                ("test-opener-choice", index),
+                Some(app.badge.clone()),
+                app.name.clone(),
+                None,
+            ),
+            None => div()
+                .id(("test-opener-choice", index))
+                .px(px(8.0))
+                .py(px(6.0))
+                .rounded(px(5.0))
+                .cursor_pointer()
+                .child(label(None)),
+        };
+        row.debug_selector(move || format!("test-opener-choice-{index}"))
             .when(selected, |row| row.bg(theme::bg_row_active()))
             .hover(|row| row.bg(theme::bg_hover()))
-            .child(label(choice))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.test.opener = index;
                 this.test.picking = false;
@@ -641,21 +656,13 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
         .enumerate()
         .filter_map(|(index, choice)| choice.as_ref().map(|choice| (index, choice)))
         .partition(|(_, choice)| app.test.named_by_rules(choice));
-    let menu = div()
-        .id("test-opener-menu")
-        .occlude()
+    // Wider than the 170px field, so an app's name has room; a longer one
+    // ends in an ellipsis.
+    let menu = crate::widgets::menu_card("test-opener-menu")
         .absolute()
         .top(px(34.0))
         .left_0()
-        .w(px(170.0))
-        .flex()
-        .flex_col()
-        .p(px(4.0))
-        .bg(theme::bg_elevated())
-        .border_1()
-        .border_color(theme::border_default())
-        .rounded(px(7.0))
-        .shadow_lg()
+        .w(px(OPENER_MENU_WIDTH))
         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
             this.test.picking = false;
             cx.notify();

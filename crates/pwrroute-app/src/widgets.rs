@@ -2,13 +2,24 @@
 //! switches. Each mirrors one class in `design/pwrroute.css`.
 
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{Div, Hsla, ParentElement as _, SharedString, Styled as _, div, px};
+use gpui_kit::{
+    Div, ElementId, Hsla, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, div, px,
+};
 
 use crate::theme::{self, icon, mono, text};
 
-/// `.tag`: a mono chip for a pattern or identifier.
+/// `.tag`: a mono chip for a pattern or identifier. Never wider than its
+/// container: a long pattern or profile name ends in an ellipsis.
 pub fn tag(label: impl Into<SharedString>) -> Div {
-    tag_frame().child(mono(label, 10.5, 500.0, theme::text_secondary()))
+    tag_frame().max_w_full().overflow_hidden().child(one_line(
+        label,
+        theme::mono_family(500.0),
+        500.0,
+        10.5,
+        10.5,
+        theme::text_secondary(),
+    ))
 }
 
 /// `.tag.re`: a regex pattern.
@@ -366,6 +377,105 @@ pub fn one_line(
         .child(content.into())
 }
 
+/// A select field's value: one line of 12.5px text that ends in an
+/// ellipsis rather than pushing the caret out of the `.inp`.
+pub fn field_label(content: impl Into<SharedString>, color: Hsla) -> Div {
+    one_line(content, theme::SANS, 400.0, 12.5, 12.5, color)
+}
+
+/// The tallest a `.menu` gets before it scrolls: 8½ rows of `.mi`, so the
+/// half row says there is more (design: Popovers and Overflow 1c).
+pub const MENU_MAX_HEIGHT: f32 = 280.0;
+
+/// `.menu`: the popover card a select or a "⋯" button opens. Rows go in as
+/// children; past [`MENU_MAX_HEIGHT`] the card scrolls. The caller places
+/// it and gives it a width: a select's list is as wide as its field
+/// (`.absolute().left_0().right_0()`), never narrower.
+pub fn menu_card(id: impl Into<ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .occlude()
+        .flex()
+        .flex_col()
+        .max_h(px(MENU_MAX_HEIGHT))
+        .overflow_y_scroll()
+        .p(px(4.0))
+        .bg(theme::bg_elevated())
+        .border_1()
+        .border_color(theme::border_default())
+        .rounded(px(7.0))
+        .shadow_lg()
+}
+
+/// `.mi`: one menu row. The badge and the label come first; the dimmed mono
+/// `.ex` hint on the right takes what is left and gives way first, ending
+/// in an ellipsis at the card's edge, and the label ends in one only when
+/// it alone does not fit (design: Popovers and Overflow 1a, 1d).
+pub fn menu_row(
+    id: impl Into<ElementId>,
+    badge_label: Option<SharedString>,
+    label: impl Into<SharedString>,
+    hint: Option<SharedString>,
+) -> Stateful<Div> {
+    let id = id.into();
+    let hint_id = id.clone();
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(8.0))
+        .min_w_0()
+        .overflow_hidden()
+        .px(px(8.0))
+        .py(px(6.0))
+        .rounded(px(5.0))
+        .cursor_pointer()
+        .when_some(badge_label, |row, label| row.child(badge(label)))
+        .child(one_line(
+            label,
+            theme::SANS,
+            500.0,
+            12.0,
+            14.4,
+            theme::text_primary(),
+        ))
+        .when_some(hint, |row, hint| {
+            row.child(
+                div()
+                    .debug_selector(move || format!("{hint_id}-hint"))
+                    .ml_auto()
+                    .pl(px(16.0))
+                    // Its padding, so the row counts it when the label
+                    // takes the rest.
+                    .min_w(px(16.0))
+                    .overflow_hidden()
+                    // The hint shrinks long before the label does.
+                    .flex_shrink(10_000.0)
+                    .child(one_line(
+                        hint,
+                        theme::mono_family(500.0),
+                        500.0,
+                        10.5,
+                        10.5,
+                        theme::text_muted(),
+                    )),
+            )
+        })
+}
+
+/// A browser row's hint in a select: one or two profiles by name, three or
+/// more as a count; the profile select lists every one (design: Popovers
+/// and Overflow 1a).
+pub fn profiles_hint(profiles: &[String]) -> Option<String> {
+    match profiles {
+        [] => None,
+        [one] => Some(one.clone()),
+        [one, two] => Some(format!("{one} \u{00b7} {two}")),
+        many => Some(format!("{} profiles", many.len())),
+    }
+}
+
 /// The badge letters for a browser or app, as the design draws them.
 pub fn badge_for(name: &str) -> SharedString {
     const KNOWN: &[(&str, &str)] = &[
@@ -409,7 +519,25 @@ pub fn badge_for(name: &str) -> SharedString {
 
 #[cfg(test)]
 mod tests {
-    use super::badge_for;
+    use super::{badge_for, profiles_hint};
+
+    #[test]
+    fn a_browser_row_names_two_profiles_and_counts_more() {
+        let names = |n: usize| -> Vec<String> {
+            ["Personal", "Work", "Research", "Design", "Spanish"][..n]
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect()
+        };
+        assert_eq!(profiles_hint(&names(0)), None);
+        assert_eq!(profiles_hint(&names(1)).as_deref(), Some("Personal"));
+        assert_eq!(
+            profiles_hint(&names(2)).as_deref(),
+            Some("Personal \u{00b7} Work")
+        );
+        assert_eq!(profiles_hint(&names(3)).as_deref(), Some("3 profiles"));
+        assert_eq!(profiles_hint(&names(5)).as_deref(), Some("5 profiles"));
+    }
 
     #[test]
     fn badges_match_whole_words() {

@@ -751,9 +751,10 @@ fn opened(record: &DispatchRecord) -> Opened {
         return Opened::Failed(message.to_owned().into());
     }
     match &record.browser {
+        // A rule may name the browser by bundle id: show the app's name.
         Some(browser) => Opened::Browser {
             badge: badge_for(&browser.name),
-            name: browser.name.clone().into(),
+            name: browser_name(&browser.name).into(),
             profile: (!browser.profile.is_empty()).then(|| browser.profile.clone().into()),
             private: browser.private,
         },
@@ -1964,6 +1965,29 @@ mod tests {
 
     fn texts(row: &ActivityRow) -> Vec<&str> {
         row.steps.iter().map(|step| step.text.as_ref()).collect()
+    }
+
+    /// A rule that names its browser by bundle id opens in it; Opened in
+    /// names the app.
+    #[test]
+    fn opened_in_names_a_bundle_id_browser() {
+        let url = "https://example.com/";
+        let record = record(
+            11,
+            url,
+            None,
+            vec![
+                Step::Received { url: url.into() },
+                Step::Browser {
+                    browser: browser("com.microsoft.edgemac", "Work", url),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let Opened::Browser { badge, name, .. } = opened(&record) else {
+            panic!("opened in a browser");
+        };
+        assert_eq!((badge.as_ref(), name.as_ref()), ("Ed", "Microsoft Edge"));
     }
 
     #[test]

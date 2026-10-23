@@ -104,13 +104,32 @@ impl DefaultState {
     }
 }
 
-/// A handler id (bundle id, ProgID or desktop file id) as the reader knows
-/// it: the catalog's display name, or the id itself for an app the catalog
-/// does not list.
+/// A browser or app as `rules.json`, a config or the router names it
+/// (bundle id, ProgID, desktop file id or name), as the reader knows it:
+/// [`handler_name`] with the installed app's name, looked up once per id.
+/// The tray, its recents and Activity's Opened in all name apps this way.
 pub fn browser_name(id: &str) -> String {
-    Catalog::builtin()
-        .find(id)
-        .map_or_else(|| id.to_owned(), |browser| browser.name.clone())
+    handler_name(id, &installed_name)
+}
+
+/// `pwrroute_os::app_display_name`, remembered per id for the life of the
+/// process: the tray asks on every open and Activity on every row. Tests
+/// never ask the OS.
+fn installed_name(id: &str) -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    thread_local! {
+        static NAMES: RefCell<std::collections::HashMap<String, Option<String>>> =
+            RefCell::new(std::collections::HashMap::new());
+    }
+    NAMES.with(|names| {
+        names
+            .borrow_mut()
+            .entry(id.to_owned())
+            .or_insert_with(|| pwrroute_os::app_display_name(id))
+            .clone()
+    })
 }
 
 /// The name of the installed app with a handler id, when the OS knows one:

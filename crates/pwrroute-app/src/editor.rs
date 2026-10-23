@@ -1114,21 +1114,11 @@ fn kind_picker(
     cx: &mut Context<'_, PwrRoute>,
 ) -> Div {
     let menu = KINDS.iter().enumerate().fold(
-        div()
-            .id(("change-kind-menu", index))
-            .occlude()
+        crate::widgets::menu_card(("change-kind-menu", index))
             .absolute()
             .top(px(32.0))
             .left_0()
             .w(px(300.0))
-            .flex()
-            .flex_col()
-            .p(px(4.0))
-            .bg(theme::bg_elevated())
-            .border_1()
-            .border_color(theme::border_default())
-            .rounded(px(7.0))
-            .shadow_lg()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 if let Some(rail) = &mut this.rail {
                     rail.picking_kind = None;
@@ -1138,28 +1128,18 @@ fn kind_picker(
         |menu, (kind, item)| {
             let selected = item.label == label;
             menu.child(
-                div()
-                    .id(("change-kind-choice", kind))
-                    .debug_selector(move || format!("change-{index}-kind-{kind}"))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .px(px(8.0))
-                    .py(px(6.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .when(selected, |row| row.bg(theme::bg_row_active()))
-                    .hover(|row| row.bg(theme::bg_hover()))
-                    .child(text(item.label, 12.0, 500.0, theme::text_primary()))
-                    .child(div().ml_auto().pl(px(16.0)).child(mono(
-                        item.example,
-                        10.5,
-                        500.0,
-                        theme::text_muted(),
-                    )))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_action_kind(index, kind, cx);
-                    })),
+                crate::widgets::menu_row(
+                    ("change-kind-choice", kind),
+                    None,
+                    item.label,
+                    Some(item.example.into()),
+                )
+                .debug_selector(move || format!("change-{index}-kind-{kind}"))
+                .when(selected, |row| row.bg(theme::bg_row_active()))
+                .hover(|row| row.bg(theme::bg_hover()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_action_kind(index, kind, cx);
+                })),
             )
         },
     );

@@ -74,6 +74,9 @@ mod importer;
 #[path = "../src/importer_view.rs"]
 mod importer_view;
 #[cfg(target_os = "macos")]
+#[path = "../src/macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
 #[path = "../src/router.rs"]
 mod router;
 #[cfg(target_os = "macos")]
@@ -106,14 +109,44 @@ mod trace_view;
 #[cfg(target_os = "macos")]
 #[path = "../src/try_it.rs"]
 mod try_it;
-// The first-run window's browser labels, where it looks for them.
+// The first-run window's browser labels and the tray dropdown, where they
+// look for them. The dropdown reaches its siblings through `super`, here the
+// crate root: its commands do nothing, since it is only drawn.
+#[cfg(target_os = "macos")]
+#[path = "../src/tray/dropdown.rs"]
+mod tray_dropdown;
 #[cfg(target_os = "macos")]
 #[path = "../src/tray/model.rs"]
 mod tray_model;
 #[cfg(target_os = "macos")]
 mod tray {
+    pub(crate) use crate::tray_dropdown as dropdown;
     pub(crate) use crate::tray_model as model;
 }
+#[cfg(target_os = "macos")]
+use tray_model as model;
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrayCommand {
+    TestLink,
+    Rules,
+    Activity,
+    Settings,
+    TogglePause,
+    MakeDefault,
+    Quit,
+}
+
+#[cfg(target_os = "macos")]
+fn toggle_pause(_: &gpui_kit::Entity<tray_model::TrayModel>, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn dropdown_closed(_: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn run(_: TrayCommand, _: &mut gpui_kit::App) {}
+
 #[cfg(target_os = "macos")]
 #[path = "../src/updater.rs"]
 mod updater;
@@ -292,6 +325,131 @@ fn main() {
             cx,
         );
     });
+
+    // The same sheet with the browser list open, over a browser with many
+    // profiles and one with a long name (Popovers and Overflow 1a).
+    shoot("app-2b-add-rule-browsers", None, &|app, window, cx| {
+        let records = fixtures::activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.browsers = vec![
+            activity_actions::BrowserChoice {
+                name: "Google Chrome".into(),
+                profiles: vec!["Personal".into(), "Work".into(), "Design".into()],
+            },
+            activity_actions::BrowserChoice {
+                name: "Microsoft Edge".into(),
+                profiles: [
+                    "Research and Development Team",
+                    "Personal",
+                    "Work",
+                    "Design",
+                    "Spanish",
+                ]
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+            },
+            activity_actions::BrowserChoice {
+                name: "Example Browser With A Very Long Product Name".into(),
+                profiles: vec!["Default".into(), "Work".into(), "Travel".into()],
+            },
+            activity_actions::BrowserChoice {
+                name: "Safari".into(),
+                profiles: Vec::new(),
+            },
+        ];
+        app.navigate(Screen::Activity, window, cx);
+        app.add_rule(
+            activity::RowKey {
+                id: pwrroute_router::DispatchId(2),
+                journaled: false,
+            },
+            window,
+            cx,
+        );
+        if let Some(sheet) = app.actions.sheet.as_mut() {
+            sheet.picking = activity_actions::Picking::Browser;
+        }
+    });
+
+    // Activity's row menu with a Save hint that names a long profile
+    // (Popovers and Overflow 1d).
+    shoot("app-2b-row-menu", None, &|app, window, cx| {
+        let records = fixtures::activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.navigate(Screen::Activity, window, cx);
+        app.actions.menu = Some(activity_actions::RowMenu {
+            key: app.activity.rows[2].key,
+            save: Some(activity_actions::Save::Test {
+                expects: "Microsoft Edge \u{00b7} Research and Development Team".into(),
+            }),
+        });
+    });
+
+    // The tray dropdown (Tray and First Run 1a; Popovers and Overflow 2a)
+    // with the window sized as `dropdown::open` sizes it, over the design's
+    // fixture with a rules.json default saved as a bundle id and a recent
+    // link to a profile with a long name.
+    {
+        use tray::model::{BrowserLabel, Recent, RecentRoute, TrayModel};
+
+        let mut model = TrayModel::fixture(std::time::SystemTime::now());
+        model.pause_target =
+            BrowserLabel::new("Ed", "Microsoft Edge", None).for_app("com.microsoft.edgemac");
+        model.recents[0] = Recent::from_urls(
+            "https://docs.example.com/a",
+            None,
+            BrowserLabel::new(
+                "Ed",
+                "Microsoft Edge",
+                Some("Research and Development Team"),
+            ),
+            RecentRoute::Handler(2),
+            std::time::SystemTime::now() - Duration::from_secs(180),
+        )
+        .expect("a host");
+        let mut cx = HeadlessAppContext::with_platform(
+            gpui_kit::platform::current_platform(true).text_system(),
+            Arc::new(assets::Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(|cx| assets::load_fonts(cx));
+        let height = cx.update(|cx| {
+            tray::dropdown::fitted_height(&model, &cx.text_system().clone(), px(f32::MAX))
+        });
+        let handle = cx
+            .open_window(size(px(tray::dropdown::WIDTH), height), |window, cx| {
+                let model = cx.new(|_| model);
+                cx.new(|cx| {
+                    tray::dropdown::Dropdown::new(
+                        model,
+                        px(f32::MAX),
+                        std::rc::Rc::new(|_| {}),
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("open a headless window");
+        cx.allow_parking();
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .expect("draw");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let image = cx
+            .capture_screenshot(handle.into())
+            .expect("render with Metal");
+        let path = dir.join("tray-1a.png");
+        image.save(&path).expect("write the PNG");
+        println!("{}", path.display());
+    }
 
     // First run (design 2a) over contrived browsers: step 1 with a profiled
     // browser chosen and its profile menu open, then step 3 before and

@@ -810,7 +810,7 @@ fn browser_picker(
             };
             input
                 .child(badge(browser.badge.clone()))
-                .child(text(shown, 12.5, 400.0, theme::text_primary()))
+                .child(crate::widgets::field_label(shown, theme::text_primary()))
                 .child(caret())
         }
         (None, false) => input
@@ -829,14 +829,12 @@ fn browser_picker(
                 this.choose_fallback(index, cx);
             }))
             .child(badge(choice.label.badge.clone()))
-            .child(text(
+            .child(crate::widgets::field_label(
                 choice.label.name.clone(),
-                12.5,
-                400.0,
                 theme::text_primary(),
             ))
     });
-    column.child(menu(300.0).children(rows))
+    column.child(menu("first-run-browser-menu", 300.0).children(rows))
 }
 
 /// Step 1's profile select: "Default profile", then the chosen browser's
@@ -852,7 +850,7 @@ fn profile_picker(
         .as_ref()
         .and_then(|fallback| fallback.profile.clone());
     let label = match chosen {
-        Some(profile) => text(profile, 12.5, 400.0, theme::text_primary()),
+        Some(profile) => crate::widgets::field_label(profile, theme::text_primary()),
         None => text(DEFAULT_PROFILE, 12.5, 400.0, theme::text_subtle()),
     };
     let input = input_box()
@@ -881,19 +879,23 @@ fn profile_picker(
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.choose_profile(index, cx);
             }))
-            .child(text(name, 12.5, 400.0, color))
+            .child(crate::widgets::field_label(name, color))
     });
-    column.child(menu(PROFILE_WIDTH).children(rows))
+    column.child(menu("first-run-profile-menu", PROFILE_WIDTH).children(rows))
 }
 
 /// The profile select's width: room for "Default profile" and a
 /// Firefox profile name beside the 300px browser select.
 const PROFILE_WIDTH: f32 = 180.0;
 
-/// The list a select opens: the popover card under it.
-fn menu(width: f32) -> Div {
+/// The list a select opens: the popover card under it. A long list scrolls
+/// past `widgets::MENU_MAX_HEIGHT`.
+fn menu(id: &'static str, width: f32) -> gpui_kit::Stateful<Div> {
     div()
+        .id(id)
         .w(px(width))
+        .max_h(px(crate::widgets::MENU_MAX_HEIGHT))
+        .overflow_y_scroll()
         .flex()
         .flex_col()
         .p(px(4.0))
@@ -908,6 +910,9 @@ fn menu_row(id: impl Into<gpui_kit::ElementId>) -> gpui_kit::Stateful<Div> {
     div()
         .id(id)
         .flex()
+        .flex_none()
+        .min_w_0()
+        .overflow_hidden()
         .items_center()
         .gap(px(8.0))
         .py(px(6.0))

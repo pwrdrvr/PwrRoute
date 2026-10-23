@@ -36,6 +36,14 @@ the project and re-export here.
   the file here. The nine earlier canvases, `pwrroute.css` and `support.js`
   are unchanged.
 
+- Updated **2026-10-22**: one canvas added for popovers and overflow (select
+  lists as wide as their field, hints that end in an ellipsis, a browser's
+  profiles as a count past two, lists that scroll past 8½ rows; the tray
+  dropdown's window sized to its card, capped at the display's visible
+  area, and the pause line naming the browser). Written to the project,
+  then read back and compared by size with the file here. The ten earlier
+  canvases, `pwrroute.css` and `support.js` are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -50,7 +58,8 @@ the project and re-export here.
 | `PwrRoute Updates and Default Browser.dc.html` | Velopack update states and Restart to update; becoming the default browser on macOS, Windows 11 and Linux |
 | `PwrRoute Finicky Importer.dc.html` | The importer end to end: discovery and entry points, Review with verdicts and suggestions, Place, Choose source, result with Undo import, a config that does not load |
 | `PwrRoute Activity Privacy and Route Tests.dc.html` | Settings › Privacy (retention count and hours, the journal switch Off / Hosts only / Full URLs with its disclosure sentence, file, Reveal, Clear now, Export, the per-rule Keep explainer); Activity with Unrouted and Private filters, the row menu, the Add a rule sheet with pattern suggestions and collisions, and the needs-a-JS-handler state; per-rule example chips, the Run tests strip with a failure row, Add example, Save as test; the MCP storyboard (activity, rules_test, rules_apply refused) |
-| `pwrroute.css` | Shared tokens and chrome for all ten canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute Popovers and Overflow.dc.html` | Select lists and menus: width follows the field, hints and long names end in an ellipsis, a browser's profiles named up to two and counted past that, lists that scroll past 8½ rows, the row menu's Save hint; the tray dropdown sized to its card, on a short display, and its pause line naming the browser |
+| `pwrroute.css` | Shared tokens and chrome for all eleven canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.

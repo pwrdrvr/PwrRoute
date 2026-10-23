@@ -591,7 +591,14 @@ fn role_select(
         })
         .rounded(px(7.0))
         .overflow_hidden()
-        .child(text(current.clone(), 11.5, 400.0, theme::text_primary()))
+        .child(crate::widgets::one_line(
+            current.clone(),
+            theme::SANS,
+            400.0,
+            11.5,
+            11.5,
+            theme::text_primary(),
+        ))
         .child(
             div()
                 .ml_auto()
@@ -647,6 +654,8 @@ fn role_menu(
             .id("agents-role-menu")
             .track_focus(focus)
             .w(px(160.0))
+            .max_h(px(crate::widgets::MENU_MAX_HEIGHT))
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .p(px(4.0))
@@ -691,7 +700,14 @@ fn role_menu(
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.set_role(&session, index, window, cx);
                     }))
-                    .child(text(role.name.clone(), 11.5, 500.0, theme::text_primary()))
+                    .child(crate::widgets::one_line(
+                        role.name.clone(),
+                        theme::SANS,
+                        500.0,
+                        11.5,
+                        11.5,
+                        theme::text_primary(),
+                    ))
                     .when(!role.built_in, |option| {
                         option.child(mono("custom", 9.5, 500.0, theme::text_subtle()))
                     }),

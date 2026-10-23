@@ -1,6 +1,6 @@
 //! The AppKit calls GPUI does not make for us: the Dock icon (the
-//! activation policy), the screen under the menu bar item, and the screen
-//! under the mouse.
+//! activation policy), the screen under the menu bar item, the screen
+//! under the mouse, and resizing the tray dropdown from its bottom edge.
 //!
 //! GPUI sets `NSApplicationActivationPolicyRegular` when the app finishes
 //! launching and never changes it, so a resident router would keep a Dock
@@ -11,6 +11,7 @@
 use gpui_kit::{Bounds, DisplayId, Pixels, Point, Size, point, px, size};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen};
+use objc2_foundation::NSRect;
 use objc2_foundation::{NSNumber, NSString};
 
 /// Show or hide the Dock icon (and the app's menu bar while it is active).
@@ -37,6 +38,9 @@ pub struct StatusItemAnchor {
     pub item: Bounds<Pixels>,
     /// The display's size in points.
     pub display_size: Size<Pixels>,
+    /// The bottom of the display's visible area (above the Dock), from the
+    /// display's top, in points.
+    pub visible_bottom: Pixels,
 }
 
 /// The display a tray-icon rect is on, and the rect relative to it.
@@ -76,6 +80,7 @@ pub fn status_item_anchor(position: (f64, f64), item_size: (f64, f64)) -> Option
                 ),
             },
             display_size: size(px(frame.size.width as f32), px(frame.size.height as f32)),
+            visible_bottom: px(visible_bottom(frame, screen.visibleFrame()) as f32),
         });
     }
     None
@@ -103,16 +108,67 @@ pub fn display_under_mouse() -> Option<DisplayId> {
     })
 }
 
+/// The visible frame's bottom edge, measured down from the screen's top.
+/// Both rects in AppKit's bottom-left-origin space.
+fn visible_bottom(frame: NSRect, visible: NSRect) -> f64 {
+    frame.origin.y + frame.size.height - visible.origin.y
+}
+
+/// The tallest a dropdown opening at `origin` may be: down to the visible
+/// area's bottom (the Dock's top), less the same 4pt margin.
+pub fn dropdown_max_height(anchor: &StatusItemAnchor, origin: Point<Pixels>) -> Pixels {
+    (anchor.visible_bottom - origin.y - px(DROPDOWN_MARGIN)).max(px(0.0))
+}
+
+/// The dropdown's `NSPanel` level, `NSPopUpMenuWindowLevel`. No other
+/// PwrRoute window opens at it.
+const POPUP_LEVEL: isize = 101;
+
+/// Make the open dropdown's content `height` points tall and keep its top
+/// edge where it is. GPUI's `Window::resize` keeps the bottom edge, which
+/// would push the card up under the menu bar. The frame changes by the
+/// difference from the content view's height now, so a repeated call is a
+/// no-op whatever the frame adds around the content. `false` when no
+/// dropdown is open.
+pub fn set_dropdown_height(height: f32) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let windows = NSApplication::sharedApplication(mtm).windows();
+    let Some(panel) = windows
+        .iter()
+        .find(|window| window.level() == POPUP_LEVEL && window.isVisible())
+    else {
+        return false;
+    };
+    let Some(content) = panel.contentView() else {
+        return false;
+    };
+    let delta = f64::from(height) - content.frame().size.height;
+    if delta.abs() < 0.5 {
+        return true;
+    }
+    let mut frame = panel.frame();
+    // Bottom-left origin: the top stays at origin.y + height.
+    frame.origin.y -= delta;
+    frame.size.height += delta;
+    panel.setFrame_display(frame, true);
+    panel.invalidateShadow();
+    true
+}
+
+/// How far a dropdown keeps from the menu bar and the display's edges.
+const DROPDOWN_MARGIN: f32 = 4.0;
+
 /// Where a `width` × `height` dropdown opens under the item: centered on it,
 /// 4pt below the menu bar, kept 4pt inside the display.
 pub fn dropdown_origin(anchor: &StatusItemAnchor, width: Pixels) -> Point<Pixels> {
-    const MARGIN: f32 = 4.0;
     let item = anchor.item;
     let centered = item.origin.x + item.size.width / 2.0 - width / 2.0;
-    let max_x = anchor.display_size.width - width - px(MARGIN);
+    let max_x = anchor.display_size.width - width - px(DROPDOWN_MARGIN);
     point(
-        centered.clamp(px(MARGIN), max_x.max(px(MARGIN))),
-        item.origin.y + item.size.height + px(MARGIN),
+        centered.clamp(px(DROPDOWN_MARGIN), max_x.max(px(DROPDOWN_MARGIN))),
+        item.origin.y + item.size.height + px(DROPDOWN_MARGIN),
     )
 }
 
@@ -128,7 +184,30 @@ mod tests {
                 size: size(px(22.0), px(24.0)),
             },
             display_size: size(px(display_width), px(900.0)),
+            visible_bottom: px(830.0),
         }
+    }
+
+    #[test]
+    fn the_dropdown_stops_above_the_dock() {
+        let anchor = anchor(1000.0, 1440.0);
+        let origin = dropdown_origin(&anchor, px(300.0));
+        // 28pt down, 830pt visible, 4pt margin.
+        assert_eq!(dropdown_max_height(&anchor, origin), px(798.0));
+    }
+
+    #[test]
+    fn the_visible_bottom_is_measured_from_the_top() {
+        // A 900pt display at the origin with a 70pt Dock.
+        let frame = NSRect::new(
+            objc2_foundation::NSPoint::new(0.0, 0.0),
+            objc2_foundation::NSSize::new(1440.0, 900.0),
+        );
+        let visible = NSRect::new(
+            objc2_foundation::NSPoint::new(0.0, 70.0),
+            objc2_foundation::NSSize::new(1440.0, 806.0),
+        );
+        assert_eq!(visible_bottom(frame, visible), 830.0);
     }
 
     #[test]

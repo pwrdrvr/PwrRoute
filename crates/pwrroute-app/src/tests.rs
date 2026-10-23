@@ -947,6 +947,144 @@ fn activity_filters_by_privacy_level_and_says_what_is_kept(cx: &mut TestAppConte
     assert!(view.read_with(cx, |app, _| app.activity.expanded.is_some()));
 }
 
+/// The Add a rule sheet's browser list is as wide as its field, and a
+/// browser with many profiles or a long name stays inside it: the hint is
+/// a count and ends before the list's edge. The profile list names every
+/// profile, each inside the list.
+#[gpui_kit::test]
+fn the_add_rule_browser_list_stays_inside_its_field(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-lists");
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let many: Vec<String> = [
+        "Research and Development Team",
+        "Personal",
+        "Work",
+        "Design",
+        "Spanish",
+    ]
+    .iter()
+    .map(|name| (*name).to_owned())
+    .collect();
+    view.update(cx, |app, _| {
+        app.browsers = vec![
+            BrowserChoice {
+                name: "Google Chrome".into(),
+                profiles: vec!["Personal".into(), "Work".into()],
+            },
+            BrowserChoice {
+                name: "Microsoft Edge".into(),
+                profiles: many.clone(),
+            },
+            BrowserChoice {
+                name: "Example Browser With A Very Long Product Name For Testing".into(),
+                profiles: vec!["A profile with a long name".into(); 3],
+            },
+        ];
+    });
+    click(cx, "nav-activity");
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    click(cx, "add-rule-browser");
+    let field = cx.debug_bounds("add-rule-browser").expect("the field");
+    let menu = cx.debug_bounds("add-rule-browser-menu").expect("the list");
+    assert_eq!(menu.left(), field.left(), "{menu:?} under {field:?}");
+    assert_eq!(menu.right(), field.right(), "{menu:?} as wide as {field:?}");
+    for index in 0..3 {
+        let row = cx
+            .debug_bounds(format!("add-rule-browser-choice-{index}").leak())
+            .expect("a row");
+        assert!(row.right() <= menu.right(), "row {index}: {row:?}");
+        let hint = cx
+            .debug_bounds(format!("add-rule-browser-choice-{index}-hint").leak())
+            .expect("a hint");
+        assert!(
+            hint.right() <= row.right(),
+            "hint {index}: {hint:?} in {row:?}"
+        );
+    }
+
+    // Edge's five profiles, each in its own row of the profile list.
+    click(cx, "add-rule-browser-choice-1");
+    click(cx, "add-rule-profile");
+    let field = cx.debug_bounds("add-rule-profile").expect("the field");
+    let menu = cx.debug_bounds("add-rule-profile-menu").expect("the list");
+    assert_eq!((menu.left(), menu.right()), (field.left(), field.right()));
+    for index in 0..=many.len() {
+        let row = cx
+            .debug_bounds(format!("add-rule-profile-choice-{index}").leak())
+            .expect("a profile row");
+        assert!(row.right() <= menu.right(), "profile {index}: {row:?}");
+    }
+}
+
+/// A list longer than `MENU_MAX_HEIGHT` stops there and scrolls, and its
+/// rows keep their height instead of being squeezed to fit.
+#[gpui_kit::test]
+fn a_long_browser_list_scrolls_with_whole_rows(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-long-list");
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    view.update(cx, |app, _| {
+        app.browsers = (0..14)
+            .map(|n| BrowserChoice {
+                name: format!("Example Browser {n}"),
+                profiles: vec!["Personal".into(), "Work".into()],
+            })
+            .collect();
+    });
+    click(cx, "nav-activity");
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    click(cx, "add-rule-browser");
+    let menu = cx.debug_bounds("add-rule-browser-menu").expect("the list");
+    assert!(
+        menu.size.height <= px(crate::widgets::MENU_MAX_HEIGHT),
+        "{menu:?}"
+    );
+    let first = cx
+        .debug_bounds("add-rule-browser-choice-0")
+        .expect("a row")
+        .size
+        .height;
+    assert!(first > px(20.0), "{first:?}");
+    for index in 1..14 {
+        let row = cx
+            .debug_bounds(format!("add-rule-browser-choice-{index}").leak())
+            .expect("a row");
+        assert_eq!(row.size.height, first, "row {index} keeps its height");
+    }
+    // The last rows lie past the card: the list scrolls to them.
+    let last = cx
+        .debug_bounds("add-rule-browser-choice-13")
+        .expect("the last row");
+    assert!(last.bottom() > menu.bottom(), "{last:?} past {menu:?}");
+}
+
+/// The row menu's Save hint names the browser and a long profile, and ends
+/// at the menu's edge instead of running past it.
+#[gpui_kit::test]
+fn the_row_menus_save_hint_ends_inside_the_menu(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-hint");
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    click(cx, "activity-more-1");
+    view.update(cx, |app, cx| {
+        let menu = app.actions.menu.as_mut().expect("the row menu");
+        menu.save = Some(Save::Test {
+            expects: "Microsoft Edge \u{00b7} Research and Development Team Profile".into(),
+        });
+        cx.notify();
+    });
+    draw(cx);
+    let menu = cx.debug_bounds("activity-menu-1").expect("the menu");
+    let row = cx.debug_bounds("activity-save-1").expect("Save as test");
+    let hint = cx.debug_bounds("activity-save-1-hint").expect("its hint");
+    assert!(row.right() <= menu.right(), "{row:?} in {menu:?}");
+    assert!(hint.right() <= row.right(), "{hint:?} in {row:?}");
+}
+
 /// With the journal on, records that fell out of memory are listed below
 /// the in-memory ones, read from the journal at the level it kept.
 #[gpui_kit::test]
