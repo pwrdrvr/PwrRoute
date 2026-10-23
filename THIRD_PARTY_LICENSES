@@ -38,6 +38,9 @@ them. Edit licenses/bundled.txt when one changes.
     NuGet package (BSD-3-Clause) | https://aka.ms/webview2
   vpk's build-time tools (signtool, zstd, the WiX fork, mksquashfs) do not
   ship.
+- Line icons in pwrroute-app (crates/pwrroute-app/assets/icons) drawn from
+  Lucide's, by way of the design canvas: map, activity (Lucide's history),
+  rules (route), wand and alert among them. ISC | https://lucide.dev
 
 core-js@3.49.0 (MIT)
 -----------------------------------------------------------
@@ -231,6 +234,28 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+Lucide (ISC)
+-----------------------------------------------------------
+
+ISC License
+
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part
+of Feather (MIT). All other copyright (c) for Lucide are held by Lucide
+Contributors 2022.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Velopack's Native Binaries
 --------------------------
