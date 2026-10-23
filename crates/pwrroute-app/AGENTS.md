@@ -73,7 +73,31 @@ their own modules.
   writes one to disk or a log. The row's "⋯" opens `activity::row_menu`
   and the expanded row's "Add a rule…" calls `PwrRoute::add_rule`, both in
   `activity_actions.rs`; a `RowKey` names the row, and `Feed::record` reads
-  a journaled row's record back from the journal.
+  a journaled row's record back from the journal. The feed also keeps
+  today's `Tally` (links per rule, handler and default owner, and per
+  browser and profile), reset with the day, for the Overview's map.
+- **Overview is where every window lands (`overview_model.rs`,
+  `overview.rs`).** `Screen::Overview` is the default and the rail's first
+  item; Rules opens as a list with nothing selected (a click or Down
+  selects). `overview_model::build` is plain data over the edited
+  `rules.json`, the config's `describe()`, the routing `Status` (config
+  error > paused > not default > unknown > routing), the scan
+  (`PwrRoute::installed`; a target is drawn missing only once the scan ran)
+  and the feed's counts and `Tally`; `Map::lit` is the hover model (at
+  most `MAX_CURVES` curves). `overview.rs` draws it: rows and cards record
+  their bounds into `MapBounds` while they prepaint and one canvas strokes
+  the curves; a card click pins until Esc. The setup card writes
+  `defaultBrowser`/`defaultProfile`, and the callout writes `precedence`
+  (`"pwrroute"`, with Undo), both through the store and saved at once.
+  `overview::status` reads the router, the tray's pause and the OS; a test
+  or screenshot sets `OverviewState::status` instead. The strip chips and
+  the rail foot use the same reading. A config the router never loaded
+  (`RoutingSource::fallback`) is `ConfigTrouble::NotLoaded`: nothing in it
+  or `rules.json` runs and every link goes to the fallback browser, so
+  the map marks the rules "not running". A failed reload (`error` alone)
+  is `ReloadFailed`, the warning tone: the last load still routes. Rules
+  and Test a link reuse Overview's source chip. Leaving Overview
+  (`OverviewState::leave`) drops its fades and the callout's hand-off.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
   (`activity.keep`, `activity.journal`, `activity.journalDays`) and the
@@ -231,7 +255,7 @@ their own modules.
   the change), which `onboarding::hooks_with`
   takes as a parameter so tests never switch the process-wide source.
   "Open PwrRoute" (every step done) and "Later" mark it done and
-  open the main window on Rules, on the first-run window's display
+  open the main window on Overview, on the first-run window's display
   (`onboarding::main_window_display`); closing the window only marks it
   done. `default_browser.rs` is the only caller of
   `pwrroute_os::set_default_browser`, from a click (Settings, first run's

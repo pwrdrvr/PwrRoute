@@ -320,7 +320,7 @@ thread_local! {
     static SNAPSHOT: RefCell<DefaultState> = const { RefCell::new(DefaultState::Unknown) };
 }
 
-fn snapshot() -> DefaultState {
+pub(crate) fn snapshot() -> DefaultState {
     SNAPSHOT.with(|snapshot| snapshot.borrow().clone())
 }
 

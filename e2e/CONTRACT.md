@@ -82,11 +82,12 @@ while the main window is closed. `frames` counts the main window's
 prepaints, so a positive number means GPUI really laid out and drew a frame.
 `frames` and `regions` belong to the window that painted them: a reopened
 window starts again from zero, never with the closed one's. `section` is the
-screen shown (`rules`, `test`, `activity`); `configInCharge` says a Finicky
-config is routing and shown read-only, and `editing` that the visual rules
-and their editor are shown instead. `selection` is the selected rule, a
-rewrite or a handler by index (`null` with no rules), and `selectionEnabled`
-its switch.
+screen shown (`overview`, `rules`, `test`, `activity`); every window opens on
+`overview`. `configInCharge` says a Finicky config is routing and shown
+read-only, and `editing` that the visual rules and their editor are shown
+instead. `selection` is the selected rule, a rewrite or a handler by index,
+or `null` until one is clicked or Down selects the first (Rules opens as a
+list), and `selectionEnabled` its switch.
 
 ### Regions
 
@@ -102,7 +103,7 @@ a strip with one chip).
 | `titleStrip`, `body` | the window root (`app.rs`) |
 | `rail`, `pane`, `editor` | the body (`app.rs`); `pane` is the screen's own content |
 | `titleStrip.brand`, `.chevron`, `.breadcrumb`, `.spacer`, `.chip1`, `.chip2` | `chrome::title_strip`; the chips depend on the screen |
-| `rail.rules`, `.test`, `.activity`, `.settingsHeading`, `.openSettings`, `.foot` | `chrome::nav_rail` |
+| `rail.overview`, `.rules`, `.test`, `.activity`, `.settingsHeading`, `.openSettings`, `.foot` | `chrome::nav_rail` |
 | `editor.title`, `editor.enabled` | `editor::header` |
 
 When you add, remove or reorder children of one of those divs, update its
@@ -130,10 +131,12 @@ When the launcher lands, R1 must keep holding: `--dry-run` never reaches it.
 
 `rail_navigation_switches_sections` asserts:
 
-- `state.main.section` names the shown section: `rules`, `test`,
-  `activity`.
-- A click on `rail.rules`, `rail.test` or `rail.activity` shows that
-  section, and the editor region is painted on Rules only.
+- `state.main.section` names the shown section: `overview`, `rules`,
+  `test`, `activity`. A launch shows `overview`.
+- A click on `rail.overview`, `rail.rules`, `rail.test` or `rail.activity`
+  shows that section. Rules opens as a list with nothing selected, so the
+  editor region is painted only once a rule is selected (a click, or Down),
+  and on Rules only.
 
 ## Registration (disposable machines only)
 

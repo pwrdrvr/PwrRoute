@@ -87,6 +87,12 @@ mod importer_view;
 #[path = "../src/macos.rs"]
 mod macos;
 #[cfg(target_os = "macos")]
+#[path = "../src/overview.rs"]
+mod overview;
+#[cfg(target_os = "macos")]
+#[path = "../src/overview_model.rs"]
+mod overview_model;
+#[cfg(target_os = "macos")]
 #[path = "../src/router.rs"]
 mod router;
 #[cfg(target_os = "macos")]
@@ -132,6 +138,12 @@ mod tray_model;
 mod tray {
     pub(crate) use crate::tray_dropdown as dropdown;
     pub(crate) use crate::tray_model as model;
+    // Overview's Resume routing, and its pause state: no tray here.
+    pub(crate) use crate::{TrayCommand, run};
+
+    pub fn model(_: &gpui_kit::App) -> Option<gpui_kit::Entity<crate::tray_model::TrayModel>> {
+        None
+    }
 }
 #[cfg(target_os = "macos")]
 use tray_model as model;
@@ -232,11 +244,18 @@ fn main() {
         println!("{}", path.display());
     };
 
-    shoot("app-1a", None, &|_, _, _| {});
-    shoot("app-1a-rewrite", None, &|app, _, cx| {
+    // The window lands on Overview: these open Rules, as a click does.
+    shoot("app-1a", None, &|app, window, cx| {
+        app.navigate(Screen::Rules, window, cx);
+        app.select(Selection::Handler(0), cx);
+    });
+    shoot("app-1a-rewrite", None, &|app, window, cx| {
+        app.navigate(Screen::Rules, window, cx);
         app.select(Selection::Rewrite(0), cx);
     });
-    shoot("app-1b", Some(config.clone()), &|_, _, _| {});
+    shoot("app-1b", Some(config.clone()), &|app, window, cx| {
+        app.navigate(Screen::Rules, window, cx);
+    });
     shoot("app-2a", None, &|app, window, cx| {
         // The design's example; the window itself starts empty.
         app.test.url.set(fixtures::TEST_URL);
@@ -300,8 +319,9 @@ fn main() {
         app.refresh(cx);
         app.run_tests(cx);
     }
-    shoot("app-1a-examples", None, &|app, _, cx| {
+    shoot("app-1a-examples", None, &|app, window, cx| {
         with_examples(app, cx);
+        app.navigate(Screen::Rules, window, cx);
         app.select(Selection::Handler(3), cx);
     });
 
@@ -991,6 +1011,239 @@ fn main() {
                 .capture_screenshot(handle.into())
                 .expect("render with Metal");
             let path = dir.join(format!("{name}.png"));
+            image.save(&path).expect("write the PNG");
+            println!("{}", path.display());
+        }
+    }
+
+    // Overview (WP-D): the landing screen (PwrRoute Overview and Setup
+    // 1a-3f) over its example.com fixtures, with the routing state set by
+    // hand and motion off so each shot is the settled frame.
+    {
+        use overview_model::{ConfigTrouble, Focus, Pause, Status};
+        use pwrroute_engine::{Precedence, RulesFile};
+
+        type Day = fn() -> Vec<pwrroute_router::DispatchRecord>;
+        struct Shot {
+            name: &'static str,
+            width: f32,
+            config: bool,
+            rules: fn() -> RulesFile,
+            exists: bool,
+            day: Option<Day>,
+            status: Status,
+            prepare: fn(&mut PwrRoute),
+        }
+        let routing = Status::routing;
+        let shots = [
+            Shot {
+                name: "app-0-overview-routing",
+                width: 1240.0,
+                config: false,
+                rules: fixtures::overview_rules,
+                exists: true,
+                day: Some(fixtures::overview_rules_day),
+                status: routing(),
+                prepare: |_| {},
+            },
+            Shot {
+                name: "app-0-overview-hover-rule",
+                width: 1240.0,
+                config: false,
+                rules: fixtures::overview_rules,
+                exists: true,
+                day: Some(fixtures::overview_rules_day),
+                status: routing(),
+                prepare: |app| {
+                    app.overview.hover(Some(Focus::Row(1)));
+                },
+            },
+            Shot {
+                name: "app-0-overview-hover-card",
+                width: 1240.0,
+                config: false,
+                rules: fixtures::overview_rules,
+                exists: true,
+                day: Some(fixtures::overview_rules_day),
+                status: routing(),
+                prepare: |app| {
+                    app.overview.hover(Some(Focus::Card(1)));
+                },
+            },
+            Shot {
+                name: "app-0-overview-config",
+                width: 1240.0,
+                config: true,
+                rules: fixtures::overview_config_rules,
+                exists: true,
+                day: Some(fixtures::overview_config_day),
+                status: routing(),
+                prepare: |_| {},
+            },
+            Shot {
+                name: "app-0-overview-override",
+                width: 1240.0,
+                config: true,
+                rules: || RulesFile {
+                    precedence: Precedence::PwrRoute,
+                    ..fixtures::overview_config_rules()
+                },
+                exists: true,
+                day: Some(fixtures::overview_override_day),
+                status: routing(),
+                prepare: |app| app.overview.just_overridden = true,
+            },
+            Shot {
+                name: "app-0-overview-paused",
+                width: 1000.0,
+                config: false,
+                rules: fixtures::overview_paused_rules,
+                exists: true,
+                day: Some(fixtures::overview_paused_day),
+                status: Status {
+                    paused: Some(Pause {
+                        name: "Google Chrome".into(),
+                        display: "Google Chrome \u{00b7} Personal".into(),
+                    }),
+                    ..routing()
+                },
+                prepare: |_| {},
+            },
+            Shot {
+                name: "app-0-overview-not-default",
+                width: 1000.0,
+                config: false,
+                rules: fixtures::overview_paused_rules,
+                exists: true,
+                day: None,
+                status: Status {
+                    default: default_browser::DefaultState::Other("Safari".into()),
+                    ..routing()
+                },
+                prepare: |_| {},
+            },
+            Shot {
+                name: "app-0-overview-config-error",
+                width: 1000.0,
+                config: true,
+                rules: fixtures::overview_config_rules,
+                exists: true,
+                day: Some(fixtures::overview_config_error_day),
+                status: Status {
+                    config_error: Some(ConfigTrouble::NotLoaded(
+                        "SyntaxError: Unexpected token '}' \u{00b7} line 42".into(),
+                    )),
+                    ..routing()
+                },
+                // 3c's machine has no Microsoft Edge.
+                prepare: |app| app.installed.retain(|app| app.name != "Microsoft Edge"),
+            },
+            // A reload failed: the last version that loaded still routes.
+            Shot {
+                name: "app-0-overview-config-stale",
+                width: 1000.0,
+                config: true,
+                rules: fixtures::overview_config_rules,
+                exists: true,
+                day: Some(fixtures::overview_config_day),
+                status: Status {
+                    config_error: Some(ConfigTrouble::ReloadFailed(
+                        "SyntaxError: Unexpected token '}' \u{00b7} line 42".into(),
+                    )),
+                    ..routing()
+                },
+                prepare: |_| {},
+            },
+            Shot {
+                name: "app-0-overview-nothing",
+                width: 1000.0,
+                config: false,
+                rules: RulesFile::default,
+                exists: false,
+                day: Some(fixtures::overview_nothing_day),
+                status: routing(),
+                prepare: |_| {},
+            },
+            Shot {
+                name: "app-0-overview-default-only",
+                width: 1000.0,
+                config: false,
+                rules: || RulesFile {
+                    default_browser: "Google Chrome".into(),
+                    default_profile: "Personal".into(),
+                    ..RulesFile::default()
+                },
+                exists: true,
+                day: Some(fixtures::overview_nothing_day),
+                status: routing(),
+                prepare: |app| {
+                    app.found_config = Some(importer_view::FoundConfig {
+                        file: fixtures::overview_config(),
+                        shown: "~/.finicky.ts".into(),
+                        holds: "2 rewrites, 5 handlers and a default browser".into(),
+                    });
+                },
+            },
+        ];
+        for shot in shots {
+            let mut cx = HeadlessAppContext::with_platform(
+                gpui_kit::platform::current_platform(true).text_system(),
+                Arc::new(assets::Assets),
+                gpui_kit::platform::current_headless_renderer,
+            );
+            cx.update(|cx| {
+                assets::load_fonts(cx);
+                cx.set_reduce_motion(true);
+                if let Some(day) = shot.day {
+                    activity::install_feed(activity::Feed::from_records(day()), cx);
+                }
+            });
+            let store = rules_store::RulesStore::from_file(
+                Some(std::env::temp_dir().join("pwrroute-screens-overview-rules.json")),
+                (shot.rules)(),
+                shot.exists,
+                shot.exists.then(std::time::SystemTime::now),
+            );
+            let config = shot.config.then(fixtures::overview_config);
+            // The config's map runs longer: room for the callout under it.
+            let height = if shot.config { 1100.0 } else { 900.0 };
+            let home = home.clone();
+            let handle = cx
+                .open_window(size(px(shot.width), px(height)), |_, cx| {
+                    cx.new(|cx| PwrRoute::with_store(config, Some(home), store, cx))
+                })
+                .expect("open a headless window");
+            cx.update_window(handle.into(), |view, _, cx| {
+                let view = view.downcast::<PwrRoute>().expect("the PwrRoute view");
+                view.update(cx, |app, cx| {
+                    if let Some(config) = &mut app.config {
+                        config.path = "~/.finicky.ts".into();
+                    }
+                    app.installed = fixtures::overview_browsers();
+                    if let Some(day) = shot.day {
+                        app.activity.load(day());
+                    }
+                    app.overview.status = Some(shot.status.clone());
+                    app.overview.ticked = true;
+                    (shot.prepare)(app);
+                    cx.notify();
+                });
+            })
+            .expect("prepare the window");
+            cx.allow_parking();
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update_window(handle.into(), |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .expect("draw");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let image = cx
+                .capture_screenshot(handle.into())
+                .expect("render with Metal");
+            let path = dir.join(format!("{}.png", shot.name));
             image.save(&path).expect("write the PNG");
             println!("{}", path.display());
         }

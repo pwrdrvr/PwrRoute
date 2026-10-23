@@ -365,16 +365,20 @@ impl RulesStore {
     /// other. Setting the value the store already has changes nothing and
     /// leaves the store clean. [`Precedence::Config`] is written by leaving
     /// the field out.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "for the precedence toggle; only tests call it so far"
-        )
-    )]
     pub fn set_precedence(&mut self, precedence: Precedence) {
         if self.base.precedence != precedence {
             self.base.precedence = precedence;
+            self.touch();
+        }
+    }
+
+    /// Sets `defaultBrowser` and `defaultProfile` ("" for the browser's
+    /// own default), as an edit written on the next save: the Overview's
+    /// setup card. The same values change nothing.
+    pub fn set_default_browser(&mut self, browser: &str, profile: &str) {
+        if self.base.default_browser != browser || self.base.default_profile != profile {
+            self.base.default_browser = browser.to_owned();
+            self.base.default_profile = profile.to_owned();
             self.touch();
         }
     }
@@ -1020,6 +1024,32 @@ mod tests {
         store.set_precedence(Precedence::Config);
         store.save().unwrap();
         assert!(read(&path).get("precedence").is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_default_browser_is_an_edit_and_the_same_values_change_nothing() {
+        let dir = scratch("default-browser");
+        let path = dir.join("rules.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"{ "defaultBrowser": "Firefox", "defaultProfile": "Work" }"#,
+        )
+        .unwrap();
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.set_default_browser("Firefox", "Work");
+        assert!(!store.needs_save());
+
+        store.set_default_browser("Google Chrome", "");
+        assert!(store.needs_save());
+        store.save().unwrap();
+        let read: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            read,
+            json!({ "defaultBrowser": "Google Chrome", "rules": [] })
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -440,6 +440,298 @@ pub fn attribution_activity() -> Vec<DispatchRecord> {
     ]
 }
 
+// Overview (WP-D) ----------------------------------------------------------
+//
+// The Overview design's examples (`design/PwrRoute Overview and Setup.dc.html`):
+// example.com, .org and .net hosts only, real browser names, made-up counts.
+
+/// The Overview's visual rules (1a): three rewrites and six rules across
+/// Chrome's two profiles, Firefox and Arc, rule 6 switched off, and Google
+/// Chrome · Personal taking everything else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_rules() -> RulesFile {
+    serde_json::from_str(include_str!("../fixtures/overview/rules.json"))
+        .expect("fixtures/overview/rules.json is a valid rules.json")
+}
+
+/// The visual rules beside the Overview's Finicky config (2a): one rewrite
+/// and three rules.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config_rules() -> RulesFile {
+    serde_json::from_str(include_str!("../fixtures/overview/config-rules.json"))
+        .expect("fixtures/overview/config-rules.json is a valid rules.json")
+}
+
+/// The Overview's Finicky config (2a): two rewrites, five handlers, Safari
+/// as its defaultBrowser.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/overview/finicky.ts")
+}
+
+/// The browsers the Overview's scan finds: Orion, which the config names,
+/// is not among them.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_browsers() -> Vec<crate::overview_model::Installed> {
+    let app = |name: &str, bundle_id: &str, profiles: &[&str]| crate::overview_model::Installed {
+        name: name.into(),
+        bundle_id: Some(bundle_id.into()),
+        profiles: profiles.iter().map(|p| (*p).to_owned()).collect(),
+        hidden: false,
+    };
+    vec![
+        app("Google Chrome", "com.google.Chrome", &["Personal", "Work"]),
+        app("Firefox", "org.mozilla.firefox", &[]),
+        app("Arc", "company.thebrowser.Browser", &[]),
+        app("Safari", "com.apple.Safari", &[]),
+        app("Microsoft Edge", "com.microsoft.edgemac", &[]),
+    ]
+}
+
+/// One kind of link in a made-up day: what took it, where it opened
+/// (browser, profile), and how many.
+pub type DayPart = (Matched, Option<(&'static str, &'static str)>, u64);
+
+/// A made-up day of dispatches for the Overview's counts, newest first:
+/// `parts` in order, the first `rewritten` of them rewritten and the last
+/// `failed` failed to launch. Every URL is example.com's.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_day(parts: &[DayPart], rewritten: u64, failed: u64) -> Vec<DispatchRecord> {
+    let now = SystemTime::now();
+    let url = "https://www.example.com/";
+    let total: u64 = parts.iter().map(|(_, _, n)| n).sum();
+    let mut records = Vec::new();
+    let mut id = 0;
+    for (matched, opened, n) in parts {
+        for _ in 0..*n {
+            id += 1;
+            let browser = opened.map(|(name, profile)| Browser {
+                name: name.into(),
+                app_type: AppType::AppName,
+                url: url.into(),
+                profile: profile.into(),
+                args: Vec::new(),
+                open_in_background: None,
+                private: false,
+                privacy: pwrroute_engine::Privacy::Full,
+            });
+            let fails = id > total - failed;
+            let mut steps = vec![Step::Received { url: url.into() }];
+            if id <= rewritten {
+                steps.push(Step::Rewrite {
+                    rule: Some(0),
+                    url: url.into(),
+                });
+            }
+            steps.push(Step::Matched { by: *matched });
+            if let Some(browser) = &browser {
+                steps.push(Step::Browser {
+                    browser: browser.clone(),
+                });
+            }
+            steps.push(if fails {
+                Step::LaunchFailed {
+                    message: "not found".into(),
+                }
+            } else {
+                Step::Launched { dry_run: false }
+            });
+            records.push(DispatchRecord {
+                id: DispatchId(id),
+                received_at: ago(now, (total - id) % 900),
+                privacy: Privacy::Full,
+                link: Link::new(url, Source::AppleEvent),
+                forwarded: false,
+                final_url: Some(url.into()),
+                browser,
+                steps,
+                outcome: if fails {
+                    Outcome::Failed
+                } else {
+                    Outcome::Opened
+                },
+                timings: Timings {
+                    queue_us: 40,
+                    resolve_us: 600,
+                    launch_us: 3_000,
+                    total_us: 3_640,
+                },
+            });
+        }
+    }
+    records.reverse();
+    records
+}
+
+/// 1a's day over [`overview_rules`]: 1,412 links, 642 to Everything else,
+/// 1,108 rewritten.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_rules_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[
+            (rule(0), Some(("Google Chrome", "Work")), 214),
+            (rule(1), Some(("Google Chrome", "Work")), 88),
+            (rule(2), Some(("Firefox", "")), 57),
+            (rule(3), Some(("Arc", "")), 402),
+            (rule(4), Some(("Firefox", "")), 9),
+            (pwrroute, Some(("Google Chrome", "Personal")), 642),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 2a's day with the Overview's config in charge: 1,412 links, 627 to its
+/// defaultBrowser, Safari.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config_day() -> Vec<DispatchRecord> {
+    let handler = |index| Matched::Handler { index };
+    let rule = |index| Matched::Rule { index };
+    let config = Matched::Default {
+        owner: Some(pwrroute_router::Owner::Config),
+    };
+    overview_day(
+        &[
+            (handler(0), Some(("Firefox", "")), 57),
+            (handler(1), Some(("Google Chrome", "Work")), 88),
+            (handler(2), Some(("Google Chrome", "Work")), 214),
+            (handler(3), None, 9),
+            (rule(0), Some(("Arc", "")), 402),
+            (rule(1), Some(("Google Chrome", "Personal")), 12),
+            (rule(2), Some(("Safari", "")), 3),
+            (config, Some(("Safari", "")), 627),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 2b's day: [`overview_config_day`] with PwrRoute's default taking what
+/// the config's handlers leave, in Google Chrome · Personal: Chrome 941,
+/// Safari 3.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_override_day() -> Vec<DispatchRecord> {
+    let handler = |index| Matched::Handler { index };
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[
+            (rule(0), Some(("Arc", "")), 402),
+            (rule(1), Some(("Google Chrome", "Personal")), 12),
+            (rule(2), Some(("Safari", "")), 3),
+            (handler(0), Some(("Firefox", "")), 57),
+            (handler(1), Some(("Google Chrome", "Work")), 88),
+            (handler(2), Some(("Google Chrome", "Work")), 214),
+            (handler(3), None, 9),
+            (pwrroute, Some(("Google Chrome", "Personal")), 627),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 3a and 3b's visual rules: [`overview_rules`]' first four.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_paused_rules() -> RulesFile {
+    let mut rules = overview_rules();
+    rules.rules.truncate(4);
+    rules
+}
+
+/// 3a's day over [`overview_paused_rules`]: 1,403 links, 642 to
+/// Everything else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_paused_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[
+            (rule(0), Some(("Google Chrome", "Work")), 214),
+            (rule(1), Some(("Google Chrome", "Work")), 88),
+            (rule(2), Some(("Firefox", "")), 57),
+            (rule(3), Some(("Arc", "")), 402),
+            (pwrroute, Some(("Google Chrome", "Personal")), 642),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 3c's day, the config never loading: the router's fallback took all 212
+/// links, in Google Chrome · Personal, and two failed. Nothing ran a rule
+/// or a rewrite.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config_error_day() -> Vec<DispatchRecord> {
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[(pwrroute, Some(("Google Chrome", "Personal")), 212)],
+        0,
+        2,
+    )
+}
+
+/// 3d's day: 23 links, every one to Safari.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_nothing_day() -> Vec<DispatchRecord> {
+    overview_day(
+        &[(
+            Matched::Default {
+                owner: Some(pwrroute_router::Owner::PwrRoute),
+            },
+            Some(("Safari", "")),
+            23,
+        )],
+        0,
+        0,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

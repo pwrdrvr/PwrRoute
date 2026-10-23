@@ -58,6 +58,18 @@ fn open_store(
         cx.add_window_view(|_, cx| PwrRoute::with_store(config, Some(fixture_home()), store, cx));
     let focus = view.read_with(cx, |app, _| app.focus.clone());
     cx.update(|window, cx| window.focus(&focus, cx));
+    // Every window lands on Overview with nothing selected; these tests
+    // start on Rules with the first handler (else rewrite) selected, as a
+    // click there leaves it.
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::Rules, window, cx);
+        if let Some(first) = (!app.handlers.is_empty())
+            .then_some(Selection::Handler(0))
+            .or((!app.rewrites.is_empty()).then_some(Selection::Rewrite(0)))
+        {
+            app.select(first, cx);
+        }
+    });
     draw(cx);
     (view, cx)
 }
@@ -2734,4 +2746,278 @@ fn the_add_rule_sheet_follows_the_precedence(cx: &mut TestAppContext) {
         "{note}"
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// Overview (WP-D) ----------------------------------------------------------
+
+/// A window over `rules` (and the config, when given) as it opens: on
+/// Overview, with the Overview's browsers, `records` as today's links, the
+/// routing state set by hand and motion off.
+fn open_overview(
+    cx: &mut TestAppContext,
+    config: Option<PathBuf>,
+    rules: RulesFile,
+    records: Vec<DispatchRecord>,
+) -> (Entity<PwrRoute>, &mut VisualTestContext, PathBuf) {
+    let dir = scratch("overview");
+    let path = dir.join("rules.json");
+    rules.save(&path).expect("write the rules");
+    cx.update(|cx| {
+        crate::assets::load_fonts(cx);
+        cx.set_reduce_motion(true);
+        activity::install_feed(Feed::from_records(records.clone()), cx);
+    });
+    let store = RulesStore::load(Some(path.clone()));
+    let (view, cx) =
+        cx.add_window_view(|_, cx| PwrRoute::with_store(config, Some(fixture_home()), store, cx));
+    let focus = view.read_with(cx, |app, _| app.focus.clone());
+    cx.update(|window, cx| window.focus(&focus, cx));
+    view.update(cx, |app, _| {
+        app.installed = fixtures::overview_browsers();
+        app.activity.load(records);
+        app.overview.status = Some(crate::overview_model::Status::routing());
+    });
+    draw(cx);
+    (view, cx, path)
+}
+
+#[gpui_kit::test]
+fn every_window_lands_on_overview_and_rules_opens_as_a_list(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(cx, None, fixtures::rules_file(), Vec::new());
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
+    assert!(cx.debug_bounds(crate::overview::PANE_ID).is_some());
+    assert!(cx.debug_bounds("editor-rail").is_none());
+
+    click(cx, "nav-rules");
+    let selection = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.selection);
+    assert_eq!(selection(cx), None, "Rules opens with nothing selected");
+    assert!(cx.debug_bounds("editor-rail").is_none());
+    cx.simulate_keystrokes("down");
+    draw(cx);
+    assert_eq!(selection(cx), Some(Selection::Rewrite(0)));
+    assert!(cx.debug_bounds("editor-rail").is_some());
+
+    click(cx, "nav-overview");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
+}
+
+#[gpui_kit::test]
+fn hovering_a_row_draws_one_curve_to_its_card(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    scroll_to(cx, "overview-row-1");
+    let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
+    cx.simulate_mouse_move(row.center(), None, Modifiers::default());
+    draw(cx);
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.hovered),
+        Some(crate::overview_model::Focus::Row(1))
+    );
+    let card = cx.debug_bounds("overview-card-0").expect("Chrome's card");
+    let painted = view.read_with(cx, |app, _| app.overview.bounds.borrow().painted.clone());
+    assert_eq!(painted.len(), 1, "one curve: {painted:?}");
+    let (from, to) = painted[0];
+    assert!(
+        (from.x - row.right()).abs() < px(12.0),
+        "{from:?} starts at the row"
+    );
+    assert!(
+        (to.x - card.left()).abs() < px(12.0),
+        "{to:?} ends at the card"
+    );
+}
+
+#[gpui_kit::test]
+fn a_card_click_pins_it_until_escape(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    scroll_to(cx, "overview-card-1");
+    click(cx, "overview-card-1");
+    let pinned = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.overview.pinned);
+    assert_eq!(pinned(cx), Some(crate::overview_model::Focus::Card(1)));
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(pinned(cx), None);
+}
+
+#[gpui_kit::test]
+fn a_tile_opens_activity_filtered_and_a_row_opens_its_rule(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    click(cx, "overview-tile-1");
+    let (screen, filter) = view.read_with(cx, |app, _| (app.screen, app.activity.filter));
+    assert_eq!((screen, filter), (Screen::Activity, Filter::Unrouted));
+
+    click(cx, "nav-overview");
+    scroll_to(cx, "overview-row-3");
+    click(cx, "overview-row-3");
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(screen, Screen::Rules);
+    assert_eq!(selection, Some(Selection::Handler(3)));
+    assert!(cx.debug_bounds("editor-rail").is_some());
+}
+
+#[gpui_kit::test]
+fn the_callout_lets_pwrroutes_default_take_everything_else_and_undo(cx: &mut TestAppContext) {
+    use pwrroute_engine::Precedence;
+    let (view, cx, path) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    assert!(view.read_with(cx, |app, _| app.described.is_some()));
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    assert_eq!(saved(cx, &path).precedence, Precedence::PwrRoute);
+    draw(cx);
+
+    scroll_to(cx, crate::overview::CALLOUT_UNDO_ID);
+    click(cx, crate::overview::CALLOUT_UNDO_ID);
+    assert_eq!(saved(cx, &path).precedence, Precedence::Config);
+    draw(cx);
+    assert!(
+        cx.debug_bounds(crate::overview::CALLOUT_BUTTON_ID)
+            .is_some()
+    );
+}
+
+#[gpui_kit::test]
+fn the_setup_card_chooses_where_everything_else_goes(cx: &mut TestAppContext) {
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (_view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    assert!(cx.debug_bounds("overview-setup").is_some());
+    click(cx, "overview-setup-choose");
+    // The list is as wide as its field.
+    let field = cx.debug_bounds("overview-setup-choose").expect("the field");
+    let menu = cx.debug_bounds("overview-setup-menu").expect("the list");
+    assert_eq!(
+        (menu.left(), menu.size.width),
+        (field.left(), field.size.width)
+    );
+    // Chrome has profiles: its row opens them in the list's place.
+    click(cx, "overview-setup-choice-0");
+    assert!(cx.debug_bounds("overview-setup-choice-0").is_none());
+    assert!(cx.debug_bounds("overview-setup-profile-2").is_some());
+    assert_eq!(saved(cx, &path).default_browser, "", "nothing chosen yet");
+    click(cx, "overview-setup-profile-1");
+    let file = saved(cx, &path);
+    assert_eq!(
+        (file.default_browser.as_str(), file.default_profile.as_str()),
+        ("Google Chrome", "Personal")
+    );
+    draw(cx);
+    assert!(
+        cx.debug_bounds("overview-setup").is_none(),
+        "nothing left to set up"
+    );
+}
+
+#[gpui_kit::test]
+fn the_setup_card_saves_a_browser_without_profiles_at_once(cx: &mut TestAppContext) {
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (_view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    click(cx, "overview-setup-choose");
+    // Firefox, second in the scan, has no profiles.
+    click(cx, "overview-setup-choice-1");
+    let file = saved(cx, &path);
+    assert_eq!(
+        (file.default_browser.as_str(), file.default_profile.as_str()),
+        ("Firefox", "")
+    );
+}
+
+#[gpui_kit::test]
+fn leaving_overview_forgets_its_fades_and_the_hand_off(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    let handoff =
+        |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.overview.handing_off());
+    let first = handoff(cx).expect("the hand-off plays");
+    // Undo plays a new one, and it is gone once played.
+    scroll_to(cx, crate::overview::CALLOUT_UNDO_ID);
+    click(cx, crate::overview::CALLOUT_UNDO_ID);
+    let undo = handoff(cx).expect("Undo plays it back");
+    assert!(undo > first);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    draw(cx);
+    assert_eq!(handoff(cx), None);
+
+    // Leaving drops what plays or fades, so coming back replays nothing.
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    assert!(handoff(cx).is_some());
+    view.update(cx, |app, _| {
+        app.overview
+            .hover(Some(crate::overview_model::Focus::Card(1)));
+    });
+    click(cx, "nav-rules");
+    assert_eq!(handoff(cx), None);
+    assert!(view.read_with(cx, |app, _| app.overview.fading().is_none()));
+    click(cx, "nav-overview");
+    assert_eq!(handoff(cx), None, "coming back does not replay it");
+}
+
+#[test]
+fn the_overview_reads_the_routers_config_trouble() {
+    use crate::overview_model::ConfigTrouble;
+    use crate::router::RoutingSource;
+    let trouble = crate::overview::config_trouble;
+    // Never loaded: the router's fallback, with its load error.
+    let source = RoutingSource {
+        fallback: Some("no config has loaded".into()),
+        error: Some("SyntaxError: Unexpected token\nat line 42".into()),
+        ..RoutingSource::default()
+    };
+    assert_eq!(
+        trouble(source, None),
+        Some(ConfigTrouble::NotLoaded(
+            "SyntaxError: Unexpected token".into()
+        ))
+    );
+    // A reload failed: the last load still routes.
+    let source = RoutingSource {
+        error: Some("SyntaxError: Unexpected token".into()),
+        ..RoutingSource::default()
+    };
+    assert_eq!(
+        trouble(source, None),
+        Some(ConfigTrouble::ReloadFailed(
+            "SyntaxError: Unexpected token".into()
+        ))
+    );
+    // The router routes; only this window could not read the file.
+    assert_eq!(
+        trouble(RoutingSource::default(), Some("It did not load: x")),
+        Some(ConfigTrouble::ReloadFailed("It did not load: x".into()))
+    );
+    assert_eq!(trouble(RoutingSource::default(), None), None);
 }

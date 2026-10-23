@@ -3,14 +3,14 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use gpui_kit::{
     App, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, Render, Styled as _, Window, div,
+    ParentElement as _, Render, Styled as _, Subscription, Window, div,
 };
 
-use pwrroute_engine::{Engine, Limits, NativeHost, discovery};
+use pwrroute_engine::{Description, Engine, Limits, NativeHost, discovery};
 
 use crate::activity::Activity;
 use crate::activity_actions::{self, Actions, BrowserChoice};
@@ -18,13 +18,15 @@ use crate::config_view::{self, ConfigInCharge};
 use crate::editor::{Field, Rail};
 use crate::importer::ImportModel;
 use crate::importer_view::{FoundConfig, ImportDone};
+use crate::overview::OverviewState;
+use crate::overview_model::Installed;
 use crate::rules_model::{self, Handler, Rewrite};
 use crate::rules_store::{Disk, RulesStore};
 use crate::settings_store::SourceSettings;
 use crate::test_link::TestLink;
 use crate::text_field::{Edit, TextField};
 use crate::try_it::{Probe, TestRuns};
-use crate::{activity, chrome, e2e, editor, router, rules_view, test_link, theme};
+use crate::{activity, chrome, e2e, editor, overview, router, rules_view, test_link, theme};
 
 /// The element id of the window's root, for tests and the inspector.
 pub const ROOT_ID: &str = "pwrroute-root";
@@ -33,10 +35,11 @@ pub const ROOT_ID: &str = "pwrroute-root";
 /// typed word in one write, short enough that the router follows along.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 
-/// The rail's sections.
+/// The rail's sections. Overview is where every open lands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
     #[default]
+    Overview,
     Rules,
     TestLink,
     Activity,
@@ -45,6 +48,7 @@ pub enum Screen {
 impl Screen {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Overview => "Overview",
             Self::Rules => "Rules",
             Self::TestLink => "Test a link",
             Self::Activity => "Activity",
@@ -98,8 +102,21 @@ pub struct PwrRoute {
     /// A config discovery found while visual rules are in charge, whose
     /// notice was not dismissed (Finicky Importer 1a).
     pub found_config: Option<FoundConfig>,
+    /// The Overview's hover, pin, callout and setup state.
+    pub overview: OverviewState,
+    /// The browsers the scan found, for the Overview's cards (a test or
+    /// screenshot sets its own; empty, no target is drawn as missing).
+    pub installed: Vec<Installed>,
+    /// What the config in charge says, for the Overview's map: `None`
+    /// while none is in charge or it did not load.
+    pub described: Option<Description>,
+    /// When this window last read the config in charge, for the rail
+    /// foot's "reloaded".
+    pub config_loaded: SystemTime,
     /// A debounced save is on its way.
     save_scheduled: bool,
+    /// Pausing from the tray redraws the Overview.
+    _tray: Option<Subscription>,
 }
 
 impl PwrRoute {
@@ -111,6 +128,18 @@ impl PwrRoute {
             Self::with_store(router::config_in_charge(), std::env::home_dir(), store, cx);
         // The one scan the app makes, less the apps hidden in Settings.
         this.browsers = crate::browser_scan::choices(cx);
+        let hidden = crate::settings_store::store(cx)
+            .map(|store| store.read(cx).settings().browsers.clone())
+            .unwrap_or_default();
+        this.installed = crate::browser_scan::apps(cx)
+            .into_iter()
+            .map(|app| Installed {
+                hidden: hidden.is_hidden(app.id()),
+                name: app.name,
+                bundle_id: app.bundle_id,
+                profiles: app.profiles,
+            })
+            .collect();
         this
     }
 
@@ -133,19 +162,16 @@ impl PwrRoute {
             .as_deref()
             .zip(engine.as_ref())
             .map(|(path, engine)| ConfigInCharge::new(path, home.as_deref(), engine.as_ref()));
-        let selection = if store.handler_count() > 0 {
-            Some(Selection::Handler(0))
-        } else if store.rewrite_count() > 0 {
-            Some(Selection::Rewrite(0))
-        } else {
-            None
-        };
+        let described = described(engine.as_ref());
+        // Pausing and resuming from the tray changes the Overview's hero.
+        let tray = crate::tray::model(cx).map(|model| cx.observe(&model, |_, _, cx| cx.notify()));
+        // Rules opens as a list: the editor appears on a click (or Down).
         let mut this = Self {
             focus: cx.focus_handle(),
-            screen: Screen::Rules,
+            screen: Screen::Overview,
             rewrites: store.rewrites(),
             handlers: store.handlers(),
-            selection,
+            selection: None,
             rail: None,
             probe: Probe::at_home(config.clone(), home.as_deref(), store.edited()),
             tests: TestRuns::new(config.clone(), store.edited()),
@@ -165,7 +191,12 @@ impl PwrRoute {
             browsers: Vec::new(),
             last_import: None,
             found_config: None,
+            overview: OverviewState::default(),
+            installed: Vec::new(),
+            described,
+            config_loaded: SystemTime::now(),
             save_scheduled: false,
+            _tray: tray,
         };
         if this.config.is_none() {
             this.found_config = crate::importer_view::found_config(this.home.as_deref(), cx);
@@ -181,6 +212,9 @@ impl PwrRoute {
     /// Shows a screen. Test a link runs its sample the first time and takes
     /// the keyboard; the others give it to the window.
     pub fn navigate(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.screen == Screen::Overview && screen != Screen::Overview {
+            self.overview.leave();
+        }
         self.screen = screen;
         match screen {
             Screen::TestLink => {
@@ -191,7 +225,7 @@ impl PwrRoute {
                 }
                 window.focus(&self.test.url.focus, cx);
             }
-            Screen::Rules | Screen::Activity => window.focus(&self.focus, cx),
+            Screen::Overview | Screen::Rules | Screen::Activity => window.focus(&self.focus, cx),
         }
         cx.notify();
     }
@@ -255,10 +289,12 @@ impl PwrRoute {
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
         let order = self.order();
-        self.selection = self
-            .selection
-            .filter(|s| order.contains(s))
-            .or_else(|| order.last().copied());
+        // A selected row that is gone gives way to the last; no selection
+        // stays none.
+        self.selection = match self.selection {
+            Some(selection) if !order.contains(&selection) => order.last().copied(),
+            selection => selection,
+        };
         self.test.set_rules(self.store.written());
         self.probe.set_rules(self.store.edited());
         self.tests.set_rules(self.store.edited());
@@ -387,6 +423,8 @@ impl PwrRoute {
             .zip(engine.as_ref())
             .map(|(path, engine)| ConfigInCharge::new(path, self.home.as_deref(), engine.as_ref()));
         self.visual_rules_expanded = false;
+        self.described = described(engine.as_ref());
+        self.config_loaded = SystemTime::now();
         self.probe = Probe::at_home(config.clone(), self.home.as_deref(), self.store.edited());
         self.tests = TestRuns::new(config.clone(), self.store.edited());
         self.test = TestLink::new(
@@ -723,15 +761,40 @@ impl PwrRoute {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<'_, Self>) {
         // A field in the rail has the keyboard: its keys are its own.
-        if !self.editing() || !self.focus.is_focused(window) {
+        if !self.focus.is_focused(window) {
             return;
         }
-        match event.keystroke.key.as_str() {
-            "up" => self.step(-1, cx),
-            "down" => self.step(1, cx),
+        let key = event.keystroke.key.as_str();
+        match self.screen {
+            // Esc lets go of a pinned card.
+            Screen::Overview if key == "escape" => {
+                if self.overview.pin(None) {
+                    cx.notify();
+                }
+            }
+            Screen::Rules if self.config.is_none() || self.visual_rules_expanded => {
+                match (key, self.selection) {
+                    // Nothing selected yet: Down selects the first row.
+                    ("down", None) => {
+                        if let Some(first) = self.order().first().copied() {
+                            self.select(first, cx);
+                        }
+                    }
+                    ("up", Some(_)) => self.step(-1, cx),
+                    ("down", Some(_)) => self.step(1, cx),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// What a loaded config says about itself, for the Overview's map.
+fn described(engine: Option<&anyhow::Result<Engine>>) -> Option<Description> {
+    engine
+        .and_then(|engine| engine.as_ref().ok())
+        .and_then(|engine| engine.describe().ok().flatten())
 }
 
 /// Every main window checks the file now: an in-process agent write
@@ -749,7 +812,11 @@ pub fn sync_rules_windows(cx: &mut App) {
 
 impl Render for PwrRoute {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        // One reading of the routing state for the strip, the rail foot and
+        // the Overview, so they agree.
+        let status = overview::status(self, cx);
         let pane = match (self.screen, &self.config) {
+            (Screen::Overview, _) => overview::pane(self, &status, window, cx).into_any_element(),
             (Screen::Rules, None) => rules_view::pane(self, cx).into_any_element(),
             (Screen::Rules, Some(config)) => config_view::pane(self, config, cx).into_any_element(),
             (Screen::TestLink, _) => test_link::pane(self, window, cx).into_any_element(),
@@ -776,14 +843,14 @@ impl Render for PwrRoute {
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
-            .child(chrome::title_strip(self))
+            .child(chrome::title_strip(self, &status))
             .child(
                 div()
                     .on_children_prepainted(e2e::regions(&["rail", "pane", "editor"]))
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(chrome::nav_rail(self, cx))
+                    .child(chrome::nav_rail(self, &status, cx))
                     .child(pane)
                     .children(rail),
             )
