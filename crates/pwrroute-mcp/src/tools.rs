@@ -104,7 +104,8 @@ struct RulesApplyInput {
     /// `pwrroute_rules_list`. Lists are replaced whole; `null` removes a key.
     /// `"precedence": "pwrroute"` runs these rules before a Finicky
     /// config's handlers and lets `defaultBrowser` take everything else;
-    /// absent (or `"config"`), the config's handlers and default go first.
+    /// absent (or `"config"`), the config's handlers run before these rules
+    /// and its `defaultBrowser` takes what neither matched.
     /// A `browser` (a rule's or `defaultBrowser`) is an app name, a bundle
     /// id as `pwrroute_browsers` lists them, or a `.app` path (`~/` allowed);
     /// `profile` is a profile name from the same listing.

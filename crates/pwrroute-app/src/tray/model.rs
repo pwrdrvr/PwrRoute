@@ -76,7 +76,7 @@ impl BrowserLabel {
 }
 
 /// Which rule sent a recent link where it went, in Activity's words:
-/// "rule 3" is `rules.json`'s, "handler 2" the JS config's.
+/// "rule 3" is `rules.json`'s, "config handler 2" the JS config's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecentRoute {
     /// The JS config's handler matched; its 1-based number in the
@@ -211,7 +211,7 @@ impl Recent {
             parts.push("rewritten".to_owned());
         }
         match self.route {
-            RecentRoute::Handler(n) => parts.push(format!("handler {n}")),
+            RecentRoute::Handler(n) => parts.push(format!("config handler {n}")),
             RecentRoute::Rule(n) => parts.push(format!("rule {n}")),
             RecentRoute::Unnumbered => {}
             RecentRoute::Default => parts.push("default".to_owned()),
@@ -220,7 +220,7 @@ impl Recent {
             RecentRoute::Paused { skipped } => {
                 parts.push("paused".to_owned());
                 match skipped {
-                    Some(Skipped::Handler(n)) => parts.push(format!("skipped handler {n}")),
+                    Some(Skipped::Handler(n)) => parts.push(format!("skipped config handler {n}")),
                     Some(Skipped::Rule(n)) => parts.push(format!("skipped rule {n}")),
                     None => {}
                 }
@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(recent.rewritten_from.as_deref(), Some("x.com"));
         assert_eq!(
             recent.detail(),
-            "Firefox \u{00b7} rewritten \u{00b7} handler 3"
+            "Firefox \u{00b7} rewritten \u{00b7} config handler 3"
         );
 
         // A rewrite that keeps the host (dropped tracking parameters) is
@@ -523,15 +523,15 @@ mod tests {
         assert_eq!(
             details,
             [
-                "Google Chrome \u{00b7} Work \u{00b7} handler 2",
-                "Firefox \u{00b7} rewritten \u{00b7} handler 3",
-                "Arc \u{00b7} handler 5",
+                "Google Chrome \u{00b7} Work \u{00b7} config handler 2",
+                "Firefox \u{00b7} rewritten \u{00b7} config handler 3",
+                "Arc \u{00b7} config handler 5",
             ]
         );
         let paused = TrayModel::paused_fixture(now());
         assert_eq!(
             paused.recents[0].detail(),
-            "Google Chrome \u{00b7} paused \u{00b7} skipped handler 4"
+            "Google Chrome \u{00b7} paused \u{00b7} skipped config handler 4"
         );
         assert_eq!(paused.recents.len(), 2);
     }
@@ -685,7 +685,7 @@ mod tests {
         assert_eq!(recent.host, "bsky.app");
         assert_eq!(
             recent.detail(),
-            "Google Chrome \u{00b7} paused \u{00b7} skipped handler 4"
+            "Google Chrome \u{00b7} paused \u{00b7} skipped config handler 4"
         );
         // The design's paused fixture is this same entry.
         assert_eq!(
@@ -750,7 +750,7 @@ mod tests {
         assert_eq!(recent.browser.app(), "com.microsoft.edgemac");
         assert_eq!(
             recent.detail(),
-            "Microsoft Edge \u{00b7} Work \u{00b7} handler 1"
+            "Microsoft Edge \u{00b7} Work \u{00b7} config handler 1"
         );
     }
 
@@ -766,9 +766,9 @@ mod tests {
         assert_eq!(
             details,
             [
-                "Google Chrome \u{00b7} Work \u{00b7} handler 2",
-                "Firefox \u{00b7} default-release \u{00b7} rewritten \u{00b7} handler 3",
-                "Arc \u{00b7} handler 5",
+                "Google Chrome \u{00b7} Work \u{00b7} config handler 2",
+                "Firefox \u{00b7} default-release \u{00b7} rewritten \u{00b7} config handler 3",
+                "Arc \u{00b7} config handler 5",
             ]
         );
         assert_eq!(model.recents[1].host, "xcancel.com");
@@ -831,7 +831,7 @@ mod tests {
         );
         assert_eq!(
             detail(vec![matched(Matched::Handler { index: 1 })]),
-            "Firefox \u{00b7} handler 2"
+            "Firefox \u{00b7} config handler 2"
         );
         assert_eq!(
             detail(vec![matched(Matched::Default {

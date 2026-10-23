@@ -22,6 +22,8 @@
 //! disk only as the example or test the user adds, by that click alone;
 //! the sheet's footer and each note say so.
 
+use std::time::SystemTime;
+
 use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -38,6 +40,7 @@ use pwrroute_router::{DispatchRecord, Matched, OpenerInfo, Outcome, Owner, Step}
 use crate::activity::{self, RowKey, matched_url};
 use crate::app::{PwrRoute, Selection};
 use crate::rules_model::KEEP_LEVELS;
+use crate::rules_store::Status;
 use crate::text_field::{Edit, TextField};
 use crate::theme::{self, mono, text, tracked};
 use crate::widgets::{
@@ -127,21 +130,24 @@ pub enum Took {
     /// A default (PwrRoute's or the config's) or the fallback browser:
     /// nothing changes hands.
     Unrouted,
-    /// One of `rules.json`'s rules; `None` for a record that did not
-    /// number it. A new rule at the top runs before it, at the bottom
-    /// after it.
-    Rule(Option<usize>),
+    /// One of `rules.json`'s rules, by its place in the file. A new rule
+    /// at the top runs before it, at the bottom after it.
+    Rule(usize),
     /// The JS config's handler: it runs before every `rules.json` rule
     /// unless `rules.json` comes first (`"precedence": "pwrroute"`, or no
     /// config in charge).
     ConfigHandler(usize),
+    /// A rule or a config handler, and the record does not say which
+    /// (`Matched::Unreported`). It changes hands for sure only when the new
+    /// rule runs before both: at the top with `rules.json` first.
+    Unknown,
 }
 
 impl Took {
     fn of(record: &DispatchRecord) -> Self {
         match matched(record) {
-            Some(Matched::Rule { index }) => Self::Rule(Some(index)),
-            Some(Matched::Unreported) => Self::Rule(None),
+            Some(Matched::Rule { index }) => Self::Rule(index),
+            Some(Matched::Unreported) => Self::Unknown,
             Some(Matched::Handler { index }) => Self::ConfigHandler(index),
             Some(Matched::Default { .. }) | None => Self::Unrouted,
         }
@@ -380,6 +386,9 @@ impl AddRule {
     /// default or the fallback took moves to the new rule; one a
     /// `rules.json` rule took moves only when the new rule goes on top;
     /// one a config handler took moves only when `rules.json` runs first.
+    /// One whose record does not say who took it moves for sure only at the
+    /// top with `rules.json` first, stays for sure at the bottom with the
+    /// config first, and otherwise may move.
     pub fn collision_caption(&self) -> String {
         let n = self.collisions.len();
         if n == 0 {
@@ -389,22 +398,27 @@ impl AddRule {
             "Would also catch these {n} recent {}",
             plural(n, "link", "links")
         );
-        let (mut moved_rules, mut moved_config, mut kept_rules, mut kept_config) = (0, 0, 0, 0);
+        let top = self.position == Position::Top;
+        let (mut moved_rules, mut moved_config, mut moved_unknown) = (0, 0, 0);
+        let (mut kept_rules, mut kept_config, mut kept_unknown, mut maybe) = (0, 0, 0, 0);
         for collision in &self.collisions {
             match collision.took {
                 Took::Unrouted => {}
-                Took::Rule(_) if self.position == Position::Top => moved_rules += 1,
+                Took::Rule(_) if top => moved_rules += 1,
                 Took::Rule(_) => kept_rules += 1,
                 Took::ConfigHandler(_) if self.rules_first => moved_config += 1,
                 Took::ConfigHandler(_) => kept_config += 1,
+                Took::Unknown if top && self.rules_first => moved_unknown += 1,
+                Took::Unknown if !top && !self.rules_first => kept_unknown += 1,
+                Took::Unknown => maybe += 1,
             }
         }
         let mut parts = Vec::new();
-        let moved = moved_rules + moved_config;
+        let moved = moved_rules + moved_config + moved_unknown;
         if moved > 0 {
-            let by = match (moved_rules > 0, moved_config > 0) {
-                (true, false) => "a rule",
-                (false, true) => "a config handler",
+            let by = match (moved_rules > 0, moved_config > 0, moved_unknown > 0) {
+                (true, false, false) => "a rule",
+                (false, true, false) => "a config handler",
                 _ => "a rule or config handler",
             };
             parts.push(format!(
@@ -419,11 +433,24 @@ impl AddRule {
                 plural(kept_rules, "runs", "run"),
             ));
         }
+        let config = self.config.as_deref().unwrap_or("the config");
         if kept_config > 0 {
-            let config = self.config.as_deref().unwrap_or("the config");
             parts.push(format!(
                 "{kept_config} {} with {config}'s handlers, which run first",
                 plural(kept_config, "stays", "stay"),
+            ));
+        }
+        if kept_unknown > 0 {
+            parts.push(format!(
+                "{kept_unknown} {} with an earlier rule or {config}'s handlers, which run first",
+                plural(kept_unknown, "stays", "stay"),
+            ));
+        }
+        if maybe > 0 {
+            parts.push(format!(
+                "{maybe} may change hands: {} not say who routed {}",
+                plural(maybe, "its record does", "their records do"),
+                plural(maybe, "it", "them"),
             ));
         }
         if parts.is_empty() {
@@ -448,7 +475,7 @@ fn matched(record: &DispatchRecord) -> Option<Matched> {
 }
 
 /// "09:40:51", local time.
-fn clock(at: std::time::SystemTime) -> String {
+fn clock(at: SystemTime) -> String {
     DateTime::<Local>::from(at).format("%H:%M:%S").to_string()
 }
 
@@ -536,6 +563,9 @@ impl PwrRoute {
         let Some(record) = record(key, cx) else {
             return;
         };
+        // The record's rule number holds only while the file is as it was
+        // when the link was routed: notice a change on disk first.
+        self.sync_with_disk(cx);
         let save = match matched(&record) {
             _ if record.privacy != Privacy::Full || record.browser.is_none() => None,
             // A rules.json rule took it: the link becomes its example.
@@ -569,19 +599,42 @@ impl PwrRoute {
 
     /// The `rules.json` rule a record's link joins as an example: the one
     /// the record names (`Matched::Rule`), read from the record with no
-    /// probe, while the file still has it there, on and sending links
-    /// where this one went. Otherwise (a record that did not number its
-    /// rule, or a file changed since) the rule that takes the link now, by
-    /// probe. `None` when no rule takes it.
+    /// probe, while the file is as it was when the link was routed and
+    /// that rule is still on and sending links where this one went.
+    /// Otherwise (a record that did not number its rule, or a file saved,
+    /// reloaded or edited since) the rule that takes the link now, by
+    /// probe: a rule inserted, moved or edited since may have put another
+    /// rule at that number. `None` when no rule takes it.
     fn example_rule(&mut self, record: &DispatchRecord) -> Option<usize> {
         match matched(record) {
-            Some(Matched::Rule { index }) if self.still_routes(index, record) => Some(index),
+            Some(Matched::Rule { index })
+                if self.rules_unchanged_since(record.received_at)
+                    && self.still_routes(index, record) =>
+            {
+                Some(index)
+            }
             Some(Matched::Rule { .. } | Matched::Unreported) => {
                 let url = matched_url(record).to_owned();
                 let opener = engine_opener(record);
                 self.probe.winning_handler(&url, opener.as_ref())
             }
             Some(Matched::Default { .. } | Matched::Handler { .. }) | None => None,
+        }
+    }
+
+    /// `rules.json` has not changed since `at`: nothing is unsaved, and the
+    /// file was last written (by anyone, read at load) or reloaded no later.
+    /// A reload's time is when the change was noticed, which is never
+    /// earlier than the write, so the answer errs towards a probe.
+    fn rules_unchanged_since(&self, at: SystemTime) -> bool {
+        match self.store.status() {
+            Status::Saved { at: Some(saved) } => *saved <= at,
+            Status::Reloaded { at: reloaded } => *reloaded <= at,
+            Status::Saved { at: None }
+            | Status::Unsaved
+            | Status::Saving
+            | Status::Failed(_)
+            | Status::Changed => false,
         }
     }
 
@@ -982,7 +1035,8 @@ pub fn row_menu(
     let show = menu.added.map(|handler| {
         item(
             "activity-show-rule",
-            format!("Show rule {} in Rules", handler + 1),
+            // No number: the Rules list numbers its own rows.
+            "Show in Rules".to_owned(),
             None,
         )
         .on_click(cx.listener(move |this, _, window, cx| {
@@ -2101,7 +2155,7 @@ mod tests {
         sheet.config = Some("~/.finicky.ts".into());
         sheet.collisions = vec![
             hit(Took::Unrouted),
-            hit(Took::Rule(Some(0))),
+            hit(Took::Rule(0)),
             hit(Took::ConfigHandler(1)),
             hit(Took::ConfigHandler(2)),
         ];
@@ -2135,6 +2189,37 @@ mod tests {
             "Would also catch these 4 recent links \u{00b7} 2 routed by a config handler now, \
              which this rule would take first; 1 stays with an earlier rule, which runs first"
         );
+        // A record that does not say who routed it moves for sure only on
+        // top with rules.json first, stays for sure at the bottom behind
+        // the config, and otherwise may move: never counted as moved.
+        sheet.collisions = vec![hit(Took::Unknown), hit(Took::Unknown)];
+        sheet.position = Position::Top;
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 2 recent links \u{00b7} 2 routed by a rule or config \
+             handler now, which this rule would take first"
+        );
+        sheet.position = Position::Bottom;
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 2 recent links \u{00b7} 2 may change hands: their records \
+             do not say who routed them"
+        );
+        sheet.rules_first = false;
+        sheet.collisions = vec![hit(Took::Unknown)];
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 1 recent link \u{00b7} 1 stays with an earlier rule or \
+             ~/.finicky.ts's handlers, which run first"
+        );
+        sheet.position = Position::Top;
+        sheet.collisions = vec![hit(Took::Unknown), hit(Took::Rule(0))];
+        assert_eq!(
+            sheet.collision_caption(),
+            "Would also catch these 2 recent links \u{00b7} 1 routed by a rule now, which this \
+             rule would take first; 1 may change hands: its record does not say who routed it"
+        );
+
         // Only defaults and the fallback: nobody loses a link.
         sheet.collisions = vec![hit(Took::Unrouted), hit(Took::Unrouted)];
         assert_eq!(
@@ -2153,8 +2238,8 @@ mod tests {
                 None,
             ))
         };
-        assert_eq!(took(Matched::Rule { index: 3 }), Took::Rule(Some(3)));
-        assert_eq!(took(Matched::Unreported), Took::Rule(None));
+        assert_eq!(took(Matched::Rule { index: 3 }), Took::Rule(3));
+        assert_eq!(took(Matched::Unreported), Took::Unknown);
         assert_eq!(took(Matched::Handler { index: 1 }), Took::ConfigHandler(1));
         assert_eq!(
             took(Matched::Default {

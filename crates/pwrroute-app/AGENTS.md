@@ -54,11 +54,14 @@ their own modules.
   it), Failed, Rewritten and Private, each with its count. The Rule
   column says who routed a link: "rule 3" (`rules.json`'s, `Matched::Rule`),
   "cfg h 2" (the config's handler), "default" (PwrRoute's) or "config
-  default" (`Matched::Default`'s owner), "fallback"; the expanded row and
-  the tray's recents say the same in full. Add a rule's collision caption
-  counts which caught links would change hands by that and the order
-  rules run in (`RulesStore::precedence`, the config in charge, Top or
-  Bottom). The retention sentence under the list and
+  default" (`Matched::Default`'s owner; a record from before owners is
+  plain "default"), "fallback"; the expanded row and the tray's recents
+  ("config handler 2") say the same in full. Add a rule's collision
+  caption counts which caught links would change hands by that and the
+  order rules run in (`RulesStore::precedence`, the config in charge, Top
+  or Bottom); a `Matched::Unreported` record is `Took::Unknown`, never
+  counted as moved unless the new rule runs before every handler. The
+  retention sentence under the list and
   the toolbar's note come from `RouterHandle::retention()`, never from a
   literal here. With the journal on, journaled records no longer in memory
   are listed below a "From the journal" divider (`Feed::journal`, at most
@@ -105,10 +108,13 @@ their own modules.
   config in charge and the edited rules (the same sources as the router's
   resolver, so indexes match the rows) at window open, after every debounced
   save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
-  Save as example takes the rule from the record (`Matched::Rule`) while
-  the file still has it there, on and opening what the record opened;
-  otherwise (a record from before rule numbers, or a file changed since)
-  it resolves the link again through `Probe` at click time.
+  Save as example takes the rule from the record (`Matched::Rule`) only
+  while `rules.json` is unchanged since the link was routed (the store's
+  `Status` is `Saved`/`Reloaded` no later than `received_at`, after a
+  `sync_with_disk`) and that rule is on and opening what the record
+  opened; otherwise (a record from before rule numbers, a file saved,
+  reloaded or edited since) it resolves the link again through `Probe` at
+  click time, since an inserted or moved rule may now hold that number.
 - **The Finicky importer (`importer.rs`, `importer_view.rs`).** The model
   is plain data over `Engine::review_import` (verdicts, source lines,
   probed suggestions; recent links come from the feed's `Full` records, in
@@ -146,9 +152,10 @@ their own modules.
   else `FALLBACK_BROWSER`. The dropdown re-reads it on each open; a pause
   keeps the target it began with until resumed. A paused record's
   `Step::Paused` is `RecentRoute::Paused` in the recents ("paused ·
-  skipped rule 2") and "paused · rule 2" (or "paused · cfg h 4") in
-  Activity's Rule column; which list comes from the record's `Matched`
-  step.
+  skipped rule 2") and "paused · skipped rule 2" (or "paused · skipped
+  cfg h 4"; plain "paused" when the record names neither) in Activity's
+  Rule column; which list comes from the record's `Matched` step, else
+  the `Paused` step's `skipped` (the config's handlers).
 - **The dropdown's window is its card** (design: Popovers and Overflow
   2a). A transparent window taller than the card is not invisible: macOS
   draws its frame and shadow at the window's size. It opens at

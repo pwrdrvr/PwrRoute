@@ -669,8 +669,9 @@ pub(crate) fn matched_url(record: &DispatchRecord) -> &str {
 /// and Test a link use: "rule 3" (`rules.json`'s third rule), "cfg h 2"
 /// (the JS config's second handler), "default" (PwrRoute's default),
 /// "config default" (the config's `defaultBrowser`), "fallback". Rewrites
-/// come first ("rw 1, 2 · rule 3"); while paused it names what would have
-/// routed the link ("paused · rule 3"; the trace line says "skipped").
+/// come first ("rw 1, 2 · rule 3"); while paused it names what the pause
+/// passed over ("paused · skipped rule 3"), and a paused link no rule
+/// would have taken, or whose record does not say which, is "paused".
 /// "matched" is a resolver
 /// that did not say which rule, as builds before rule numbers recorded a
 /// `rules.json` rule.
@@ -695,23 +696,25 @@ fn rule_label(steps: &[Step]) -> String {
     let paused = steps.iter().any(|step| matches!(step, Step::Paused { .. }));
     if paused {
         parts.push("paused".into());
+        // What the pause passed over, never what routed the link, as the
+        // trace line says it. Nothing more when a default would have taken
+        // it or the record does not say. The chip ellipsizes when the
+        // column is narrow.
+        match skipped(steps) {
+            Some(Skipped::Rule(index)) => parts.push(format!("skipped rule {}", index + 1)),
+            Some(Skipped::Handler(index)) => parts.push(format!("skipped cfg h {}", index + 1)),
+            None => {}
+        }
     }
     for step in steps {
         match step {
-            Step::Matched { by } => {
-                let who = match by {
-                    Matched::Rule { index } => format!("rule {}", index + 1),
-                    Matched::Handler { index } => format!("cfg h {}", index + 1),
-                    Matched::Unreported => "matched".to_owned(),
-                    // Paused, the pause target took what would have gone
-                    // to a default: "paused" says it all.
-                    Matched::Default { .. } if paused => continue,
-                    Matched::Default { owner } => default_label(*owner).to_owned(),
-                };
-                // Paused, `who` is what the pause passed over; the column
-                // is too narrow for "skipped", which the trace line says.
-                parts.push(who);
-            }
+            Step::Matched { .. } if paused => {}
+            Step::Matched { by } => parts.push(match by {
+                Matched::Rule { index } => format!("rule {}", index + 1),
+                Matched::Handler { index } => format!("cfg h {}", index + 1),
+                Matched::Unreported => "matched".to_owned(),
+                Matched::Default { owner } => default_label(*owner).to_owned(),
+            }),
             Step::Fallback { .. } | Step::RefusedLoop { .. } if !paused => {
                 parts.push("fallback".into());
             }
@@ -751,22 +754,43 @@ fn matched_line(by: Matched) -> String {
     }
 }
 
-/// The expanded row's line for a paused dispatch: what would have routed
-/// the link, from the record's own `Matched` step (which says which list),
-/// else the step's `skipped` (the config's handlers).
-fn paused_line(steps: &[Step], skipped: Option<usize>) -> String {
+/// What a pause passed over.
+enum Skipped {
+    /// `rules.json`'s rule, by its place in the file.
+    Rule(usize),
+    /// The JS config's handler.
+    Handler(usize),
+}
+
+/// What would have routed a paused link: the record's own `Matched` step
+/// (which says which list), else the `Paused` step's `skipped` (the
+/// config's handlers). `None` when a default would have taken it, or the
+/// record does not say.
+fn skipped(steps: &[Step]) -> Option<Skipped> {
     let matched = steps.iter().find_map(|step| match step {
         Step::Matched { by } => Some(*by),
         _ => None,
     });
-    match (matched, skipped) {
-        (Some(Matched::Rule { index }), _) => {
-            format!("paused \u{00b7} skipped rule {}", index + 1)
-        }
-        (Some(Matched::Handler { index }), _) | (_, Some(index)) => {
+    let paused = steps.iter().find_map(|step| match step {
+        Step::Paused { skipped } => *skipped,
+        _ => None,
+    });
+    match (matched, paused) {
+        (Some(Matched::Rule { index }), _) => Some(Skipped::Rule(index)),
+        (Some(Matched::Handler { index }), _) | (_, Some(index)) => Some(Skipped::Handler(index)),
+        (_, None) => None,
+    }
+}
+
+/// The expanded row's line for a paused dispatch: what would have routed
+/// the link ([`skipped`]).
+fn paused_line(steps: &[Step]) -> String {
+    match skipped(steps) {
+        Some(Skipped::Rule(index)) => format!("paused \u{00b7} skipped rule {}", index + 1),
+        Some(Skipped::Handler(index)) => {
             format!("paused \u{00b7} skipped config handler {}", index + 1)
         }
-        (_, None) => "paused \u{00b7} every rule and handler skipped".to_owned(),
+        None => "paused \u{00b7} every rule and handler skipped".to_owned(),
     }
 }
 
@@ -878,9 +902,7 @@ fn trace_lines(record: &DispatchRecord) -> Vec<ActivityStep> {
                 StepMark::Miss(number),
                 format!("{browser} is PwrRoute \u{00b7} fallback instead"),
             ),
-            Step::Paused { skipped } => {
-                (StepMark::Miss(number), paused_line(&record.steps, *skipped))
-            }
+            Step::Paused { .. } => (StepMark::Miss(number), paused_line(&record.steps)),
             Step::NotOpened => (
                 StepMark::Miss(number),
                 "not opened \u{00b7} the rule says browser: null".to_owned(),
@@ -1337,7 +1359,7 @@ fn row(
             cell.child(chip("host only").flex_none())
         });
     // `.ar.unr .tag`: an unrouted row's rule chip is amber.
-    // It stays inside the column: a long one ("rw 1, 2 · paused · rule 12")
+    // It stays inside the column: a long one ("rw 1, 2 · paused · skipped rule 12")
     // ends in an ellipsis, and the expanded row says it in full.
     let rule = if row.default {
         toned_chip("", Tone::Warn)
@@ -2212,7 +2234,7 @@ mod tests {
             ],
         );
         let row = ActivityRow::from_record(&paused);
-        assert_eq!(row.rule, "paused \u{00b7} cfg h 4");
+        assert_eq!(row.rule, "paused \u{00b7} skipped cfg h 4");
         assert!(row.default, "a paused link is unrouted");
         assert!(row.passes(Filter::Unrouted, ""));
         assert_eq!(
@@ -2770,7 +2792,7 @@ mod tests {
                 Matched::Rule { index: 4 },
                 vec![Step::Paused { skipped }],
             ));
-            assert_eq!(paused.rule, "paused \u{00b7} rule 5");
+            assert_eq!(paused.rule, "paused \u{00b7} skipped rule 5");
             assert_eq!(texts(&paused)[1], "paused \u{00b7} skipped rule 5");
             assert!(paused.default, "a paused link is unrouted");
         }
@@ -2789,6 +2811,16 @@ mod tests {
             texts(&paused)[1],
             "paused \u{00b7} every rule and handler skipped"
         );
+
+        // Paused over a rule the record does not number: "paused", never
+        // "matched", which would read as if something routed it.
+        let paused = ActivityRow::from_record(&routed(
+            4,
+            Vec::new(),
+            Matched::Unreported,
+            vec![Step::Paused { skipped: None }],
+        ));
+        assert_eq!(paused.rule, "paused");
     }
 
     #[test]
@@ -2892,7 +2924,7 @@ mod tests {
                 ("cfg h 2", false),
                 ("default", true),
                 ("config default", true),
-                ("paused \u{00b7} rule 2", true),
+                ("paused \u{00b7} skipped rule 2", true),
                 ("fallback", true),
             ]
         );

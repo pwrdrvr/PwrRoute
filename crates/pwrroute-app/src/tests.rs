@@ -2401,35 +2401,84 @@ fn routed_by_rule(
     record
 }
 
+/// Three `rules.json` rules over example.com hosts, the first two opening
+/// the same browser, so a record whose number now points at the other one
+/// would pass a browser check.
+fn attribution_rules() -> RulesFile {
+    serde_json::from_str(
+        r#"{
+            "defaultBrowser": "Safari",
+            "rules": [
+                { "match": "docs.example.com/*", "browser": "Google Chrome", "profile": "Work" },
+                { "match": "tickets.example.com/*", "browser": "Google Chrome", "profile": "Work" },
+                { "match": "news.example.com/*", "browser": "Firefox" }
+            ]
+        }"#,
+    )
+    .expect("a valid rules.json")
+}
+
 /// A record that names its `rules.json` rule shows it as "rule N", and
-/// Save as example puts the link under that rule straight from the record:
-/// no rule matches these links today, so a probe would offer a test. A
-/// record whose rule now opens somewhere else is probed as before.
+/// Save as example puts the link under that rule straight from the record
+/// while the file is as it was when the link was routed. A record older
+/// than the file's last write is probed: the rule at its number now may be
+/// another one (here one that opens the same browser but misses the link).
+/// So is a record whose rule now opens somewhere else, and any record once
+/// the file has been saved since.
 #[gpui_kit::test]
 fn activity_names_the_rule_and_saves_its_example_from_the_record(cx: &mut TestAppContext) {
+    use std::time::{Duration, SystemTime};
+
     let dir = scratch("wp-b-attribution");
     let path = dir.join("rules.json");
+    let store = store_for(&dir, &attribution_rules());
+    // Routed after the file was written, but for the stale one.
+    let now = SystemTime::now();
     let base = fixtures::activity()[0].clone();
+    let at = |mut record: DispatchRecord, at: SystemTime| {
+        record.received_at = at;
+        record
+    };
     let records = vec![
-        routed_by_rule(
-            &base,
-            41,
-            "https://docs.example.com/wp-b",
-            1,
-            "Google Chrome",
-            "Work",
+        at(
+            routed_by_rule(
+                &base,
+                41,
+                "https://tickets.example.com/wp-b",
+                1,
+                "Google Chrome",
+                "Work",
+            ),
+            now,
         ),
-        routed_by_rule(
-            &base,
-            42,
-            "https://docs.example.com/moved",
-            1,
-            "Firefox",
-            "",
+        // Rule 2 opens Google Chrome · Work, not Firefox.
+        at(
+            routed_by_rule(
+                &base,
+                42,
+                "https://other.example.com/moved",
+                1,
+                "Firefox",
+                "",
+            ),
+            now,
+        ),
+        // Routed as rule 2 before the file last changed: a rule has since
+        // gone in above, and rule 2 now is tickets.example.com's.
+        at(
+            routed_by_rule(
+                &base,
+                43,
+                "https://docs.example.com/stale",
+                1,
+                "Google Chrome",
+                "Work",
+            ),
+            now - Duration::from_secs(3600),
         ),
     ];
     cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
-    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let (view, cx) = open_store(cx, None, store);
     click(cx, "nav-activity");
     let labels: Vec<String> = view.read_with(cx, |app, _| {
         app.activity
@@ -2438,20 +2487,44 @@ fn activity_names_the_rule_and_saves_its_example_from_the_record(cx: &mut TestAp
             .map(|row| row.rule.to_string())
             .collect()
     });
-    assert_eq!(labels, ["rule 2", "rule 2"]);
+    assert_eq!(labels, ["rule 2", "rule 2", "rule 2"]);
+    let menu_save = |cx: &mut VisualTestContext, row: usize| {
+        click(cx, "nav-activity");
+        click(
+            cx,
+            ["activity-more-0", "activity-more-1", "activity-more-2"][row],
+        );
+        view.read_with(cx, |app, _| app.actions.menu.clone().and_then(|m| m.save))
+    };
 
-    click(cx, "activity-more-0");
+    // The stale record: rule 2 opens the same browser but does not take
+    // the link, so the probe finds rule 1, which does.
     assert_eq!(
-        view.read_with(cx, |app, _| app.actions.menu.clone().and_then(|m| m.save)),
+        menu_save(cx, 2),
+        Some(Save::Example {
+            handler: 0,
+            pattern: Some("docs.example.com/*".into()),
+        })
+    );
+    // Rule 2 opens somewhere else and no rule takes the link: a test.
+    assert_eq!(
+        menu_save(cx, 1),
+        Some(Save::Test {
+            expects: "Firefox".into()
+        })
+    );
+    // From the record, no probe: rule 2 as it was.
+    assert_eq!(
+        menu_save(cx, 0),
         Some(Save::Example {
             handler: 1,
-            pattern: Some("*.atlassian.net/*".into()),
+            pattern: Some("tickets.example.com/*".into()),
         })
     );
     click(cx, "activity-save-0");
     assert_eq!(
         view.read_with(cx, |app, _| app.handlers[1].examples.clone()),
-        ["https://docs.example.com/wp-b"]
+        ["https://tickets.example.com/wp-b"]
     );
     let note = view.read_with(cx, |app, _| app.actions.note.clone().unwrap().1);
     assert!(
@@ -2460,17 +2533,20 @@ fn activity_names_the_rule_and_saves_its_example_from_the_record(cx: &mut TestAp
     );
     assert_eq!(
         saved(cx, &path).rules[1].examples,
-        ["https://docs.example.com/wp-b"]
+        ["https://tickets.example.com/wp-b"]
     );
 
-    // Rule 2 opens Google Chrome · Work, not Firefox: the record is stale,
-    // so the probe decides, and no rule takes the link now.
-    click(cx, "nav-activity");
-    click(cx, "activity-more-1");
+    // Saved since the link was routed: the record is no longer trusted,
+    // and the probe agrees that rule 2 takes it.
+    assert!(view.read_with(cx, |app, _| matches!(
+        app.store.status(),
+        crate::rules_store::Status::Saved { .. }
+    )));
     assert_eq!(
-        view.read_with(cx, |app, _| app.actions.menu.clone().and_then(|m| m.save)),
-        Some(Save::Test {
-            expects: "Firefox".into()
+        menu_save(cx, 0),
+        Some(Save::Example {
+            handler: 1,
+            pattern: Some("tickets.example.com/*".into()),
         })
     );
     let _ = std::fs::remove_dir_all(dir);
