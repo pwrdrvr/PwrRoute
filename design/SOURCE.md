@@ -55,6 +55,15 @@ the project and re-export here.
   then downloaded from its preview and compared byte for byte with the
   file here. The eleven earlier canvases, `pwrroute.css` and `support.js`
   are unchanged.
+- Updated **2026-10-23**: the Overview canvas's route map redrawn as a
+  graph from rules to profile nodes (one node per profile with its own
+  port, every route always drawn and lit on hover or pin, fan-in into one
+  node, a rule column that grows with the window, every installed browser
+  shown with idle ones under Also installed); artboards 1a to 1d, 2a and
+  2b updated, 1e (a node with eight routes in a wide window) and 1f
+  (pinned) added. Written to the project, then downloaded from its preview
+  and compared byte for byte with the file here. The other canvases,
+  `pwrroute.css` and `support.js` are unchanged.
 
 ## Files
 
