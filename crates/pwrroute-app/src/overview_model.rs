@@ -4,11 +4,12 @@
 //! design draws (`design/PwrRoute Overview and Setup.dc.html`, 1a-3f).
 //!
 //! Four parts, top to bottom: the hero (is it working, and if not, what
-//! to do), the setup card (what is left), today's tiles, and the route map
-//! (the rules in evaluation order on the left, one card per destination on
-//! the right). [`Map::lit`] is the map's hover model: which rows, cards
-//! and pills light, and which curves are drawn, for what is under the
-//! pointer.
+//! to do), the setup card (what is left), today's tiles, and the route map:
+//! a graph from the rules, in evaluation order on the left, to one node per
+//! profile on one card per browser on the right. Every installed browser
+//! the Settings don't hide is on it, routed or not. [`Map::lit`] is the
+//! map's trace model: for what is hovered, pinned or focused, which rows,
+//! cards and nodes light, and every route with its state.
 //!
 //! Nothing here holds a URL: rows show patterns (the rules' own text),
 //! counts and browser names.
@@ -24,11 +25,15 @@ use crate::activity::{Counts, Filter, HitKey, Tally, thousands};
 use crate::default_browser::DefaultState;
 use crate::widgets::badge_for;
 
-/// The most curves drawn at once: a card fed by more draws none.
-pub const MAX_CURVES: usize = 6;
+/// A routed card shows every profile that has a route, then idle ones
+/// until it holds this many nodes; the rest fold into "+N more profiles".
+pub const ROUTED_NODES: usize = 4;
 
-/// The most profile pills a card shows before "+N".
-pub const MAX_PILLS: usize = 4;
+/// An idle card (under "Also installed") shows this many nodes folded.
+pub const IDLE_NODES: usize = 2;
+
+/// A ƒ row's excerpt is cut here before layout.
+pub const EXCERPT_MAX: usize = 200;
 
 /// One browser the scan found.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,7 +41,7 @@ pub struct Installed {
     pub name: String,
     pub bundle_id: Option<String>,
     pub profiles: Vec<String>,
-    /// Hidden in Settings › Browsers: never listed as unused.
+    /// Hidden in Settings › Browsers: never drawn unless a rule names it.
     pub hidden: bool,
 }
 
@@ -248,22 +253,44 @@ pub enum RowSource {
     Handler(usize),
 }
 
-/// A row's match column: its first matcher, and how many more.
+/// One pattern tag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pattern {
+    pub text: String,
+    pub regex: bool,
+}
+
+/// "from [Sl Slack]": the first sending app a rule names, and how many more.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Opener {
+    pub badge: String,
+    pub name: String,
+    pub more: usize,
+}
+
+/// A row's match column.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowMatch {
-    Pattern {
-        text: String,
-        regex: bool,
+    /// The patterns as whole tags, in order: as many as fit, then "+N" for
+    /// the rest and `more` (matchers that are not patterns). A rule with an
+    /// app shows "from [app]" after them.
+    Patterns {
+        patterns: Vec<Pattern>,
+        more: usize,
+        opener: Option<Opener>,
+    },
+    /// A rule with no patterns, only a sending app.
+    Opener(Opener),
+    /// A function matcher: its name when it says something
+    /// ([`telling_name`]), what it tests ([`function_excerpt`]), and its
+    /// whole source for the tooltip. No source (native or bound): "unnamed
+    /// function", or the name.
+    Function {
+        name: Option<String>,
+        excerpt: Option<String>,
+        source: Option<String>,
         more: usize,
     },
-    /// "from [Sl Slack]": a rule with no patterns, only a sending app.
-    Opener {
-        badge: String,
-        name: String,
-        more: usize,
-    },
-    /// "ƒ isWorkplace", or `None` for an anonymous function.
-    Function { name: Option<String>, more: usize },
     /// A matcher Finicky would not match with, by its kind.
     Other { text: String, more: usize },
     /// No pattern and no app: every link.
@@ -306,13 +333,21 @@ impl Target {
         }
     }
 
-    fn profile(&self) -> Option<&str> {
+    pub fn profile(&self) -> Option<&str> {
         match self {
             Self::Browser { profile, .. } => profile.as_deref(),
             _ => None,
         }
     }
+
+    /// A browser that is not installed: its route is not running.
+    pub fn ghost(&self) -> bool {
+        matches!(self, Self::Ghost { .. })
+    }
 }
+
+/// A node: a card's index, and the node's on it.
+pub type NodeRef = (usize, usize);
 
 /// One ranked rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -322,6 +357,8 @@ pub struct Row {
     pub source: RowSource,
     pub matcher: RowMatch,
     pub target: Target,
+    /// The node its route ends at.
+    pub node: Option<NodeRef>,
     pub enabled: bool,
     /// Nothing runs it: the config never loaded, and the router's
     /// stand-in engine holds no rules. Drawn faded.
@@ -351,6 +388,8 @@ pub struct EverythingElse {
     /// "Safari until you choose".
     pub owner: String,
     pub target: Target,
+    /// The node its route ends at.
+    pub node: Option<NodeRef>,
     pub count: Option<u64>,
 }
 
@@ -365,16 +404,27 @@ pub enum CardKind {
     Ghost,
 }
 
-/// A profile pill on a card.
+/// One profile of a browser card, or the one node of a special card.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Pill {
+pub struct Node {
     /// `None`: the browser's own default profile.
     pub profile: Option<String>,
     /// Takes Everything else: "∞".
     pub everything_else: bool,
+    /// Enabled rules that send links here.
+    pub rules: usize,
+    /// Today's links, when there are any and counts are shown.
+    pub links: Option<u64>,
+    /// No rule names it and Everything else does not go there: "no rules
+    /// yet", an empty port, and "+ Add a rule…" on hover.
+    pub unused: bool,
+    /// "1 rule", "7 rules", "1 rule · falls through", "no rules yet".
+    pub meta: Option<String>,
+    /// "Google Chrome · Work: 2 rules, 302 links today".
+    pub tooltip: String,
 }
 
-impl Pill {
+impl Node {
     pub fn label(&self) -> &str {
         self.profile.as_deref().unwrap_or("default profile")
     }
@@ -395,25 +445,46 @@ pub struct Card {
     pub kind: CardKind,
     pub badge: String,
     pub name: String,
-    /// What rules name it by: the identity rows resolve to.
+    /// What rules name it by: the identity rows resolve to, and the key
+    /// the window remembers an expanded card by.
     key: String,
-    pub pills: Vec<Pill>,
-    /// Pills past [`MAX_PILLS`].
-    pub more_pills: usize,
+    /// Routed profiles first, by the rank of the first row that feeds
+    /// them (Everything else after every rule), then the rest in scan
+    /// order. A special card has one.
+    pub nodes: Vec<Node>,
+    /// How many nodes show while the card is folded: all of them, or the
+    /// rest fold into "+N more profiles" (never "+1").
+    pub shown: usize,
     /// Enabled rules that send links here.
     pub rules: usize,
-    /// "2 rules · 944 links today".
+    /// "2 rules · 944 links today", "4 profiles · no rules yet".
     pub meta: String,
     pub links: Option<u64>,
     pub share: Option<Share>,
     /// "Everything else · PwrRoute" on the card that takes it.
     pub ribbon: Option<String>,
-    /// The only card: "Everything opens in Safari", and the count on a
-    /// line of its own.
-    pub alone: Option<(String, Option<String>)>,
+    /// Nothing sends links here yet: under "Also installed", quieter.
+    pub unused: bool,
     /// Only rows that nothing runs send links here ([`Row::idle`]): drawn
     /// faded.
     pub idle: bool,
+}
+
+impl Card {
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Decided by JavaScript, Not opened, not installed: the whole card is
+    /// its one node.
+    pub fn single(&self) -> bool {
+        self.kind != CardKind::Browser
+    }
+
+    /// The nodes "+N more profiles" holds.
+    pub fn folded(&self) -> usize {
+        self.nodes.len() - self.shown
+    }
 }
 
 /// The left column with no rules: the first-rule prompt.
@@ -433,46 +504,83 @@ pub struct Map {
     /// Row counts, "today" and "links today" are shown: not while links
     /// are not reaching PwrRoute.
     pub counts: bool,
-    /// Paused: the body dims.
+    /// Paused: the body dims and no route is running.
     pub dimmed: bool,
-    /// "Not used: Safari, Microsoft Edge".
-    pub not_used: Option<String>,
+    /// "3 in use · 2 more installed": routed browsers, then idle ones.
+    pub in_use: String,
+    /// "Also installed"'s note, "2 browsers · no rules yet", when any
+    /// browser has no rules yet.
+    pub also: Option<String>,
     /// "3 rewrites run on every link first", when there are any.
     pub rewrites: Option<String>,
     pub items: Vec<Item>,
     pub rows: Vec<Row>,
     pub everything_else: EverythingElse,
+    /// Routed browsers, the special cards, then the idle browsers A-Z.
     pub cards: Vec<Card>,
     pub empty: Option<Empty>,
 }
 
-/// What is under the pointer, or pinned.
+/// What is hovered, pinned or has the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Focus {
     /// An index into [`Map::rows`].
     Row(usize),
+    /// A card's header.
     Card(usize),
-    /// A card and one of its pills.
-    Pill(usize, usize),
+    /// A card and one of its nodes.
+    Node(usize, usize),
     EverythingElse,
 }
 
-/// The left end of a curve.
+/// The left end of a route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum End {
     Row(usize),
     EverythingElse,
 }
 
-/// What lights for a [`Focus`]; everything else drops to 45%.
+/// How a route is drawn against the trace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Trace {
+    /// Nothing is traced.
+    Rest,
+    /// Something else is.
+    Dim,
+    /// This route is.
+    Lit,
+}
+
+/// One route, from a row (or Everything else) to its node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Route {
+    pub from: End,
+    pub to: NodeRef,
+    pub trace: Trace,
+    /// Links take it now. Not: the config never loaded, the browser is not
+    /// installed, routing is paused, or the rule is off. Drawn dashed.
+    pub running: bool,
+    /// Its place among the routes into its node, top to bottom by the row
+    /// it comes from, and how many there are: they fan into the port.
+    pub slot: usize,
+    pub fan: usize,
+}
+
+/// The trace for a [`Focus`]: what lights, and every route. Whatever is
+/// not lit drops to 45% while something is traced.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Lit {
+    /// Something is traced: the rest dims.
+    pub traced: bool,
     pub rows: BTreeSet<usize>,
     pub everything_else: bool,
+    /// Traced by their header: the full lit style.
     pub cards: BTreeSet<usize>,
-    pub pills: BTreeSet<(usize, usize)>,
-    /// Row (or Everything else) to card: at most [`MAX_CURVES`].
-    pub curves: Vec<(End, usize)>,
+    /// Holding a lit node: an accent border, at full strength.
+    pub warm: BTreeSet<usize>,
+    pub nodes: BTreeSet<NodeRef>,
+    /// Every route: rows in order, then Everything else.
+    pub routes: Vec<Route>,
 }
 
 impl Lit {
@@ -484,88 +592,493 @@ impl Lit {
         self.cards.contains(&card)
     }
 
-    pub fn pill(&self, card: usize, pill: usize) -> bool {
-        self.pills.contains(&(card, pill))
+    pub fn warm(&self, card: usize) -> bool {
+        self.warm.contains(&card)
+    }
+
+    pub fn node(&self, card: usize, node: usize) -> bool {
+        self.nodes.contains(&(card, node))
+    }
+
+    /// The routes into a node: how wide its port fans.
+    pub fn fan(&self, card: usize, node: usize) -> usize {
+        self.routes
+            .iter()
+            .filter(|route| route.to == (card, node))
+            .count()
+    }
+
+    /// Some route is drawn dashed: the legend says what that means.
+    pub fn any_not_running(&self) -> bool {
+        self.routes.iter().any(|route| !route.running)
+    }
+}
+
+/// Whether two profiles are one: by name without regard to case, or both
+/// the default.
+fn same_profile(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        (None, None) => true,
+        _ => false,
     }
 }
 
 impl Map {
-    /// The pill on `card` a target names: its profile's, else the
-    /// browser's default profile.
-    fn pill_for(&self, card: usize, profile: Option<&str>) -> Option<usize> {
-        self.cards.get(card)?.pills.iter().position(|pill| {
-            match (pill.profile.as_deref(), profile) {
-                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-                (None, None) => true,
-                _ => false,
-            }
-        })
+    fn node_of(&self, focus: End) -> Option<NodeRef> {
+        match focus {
+            End::Row(row) => self.rows.get(row).and_then(|row| row.node),
+            End::EverythingElse => self.everything_else.node,
+        }
     }
 
-    /// What lights for `focus`.
-    pub fn lit(&self, focus: Focus) -> Lit {
+    /// The trace for `focus`, or the map at rest.
+    pub fn lit(&self, focus: Option<Focus>) -> Lit {
         let mut lit = Lit::default();
-        let ee_card = self.everything_else.target.card();
-        let ee_profile = self.everything_else.target.profile();
-        match focus {
-            Focus::Row(row) => {
-                let Some(r) = self.rows.get(row) else {
-                    return lit;
-                };
-                lit.rows.insert(row);
-                if let Some(card) = r.target.card() {
-                    lit.cards.insert(card);
-                    if let Some(pill) = self.pill_for(card, r.target.profile()) {
-                        lit.pills.insert((card, pill));
-                    }
-                    lit.curves.push((End::Row(row), card));
+        let ee = self.everything_else.node;
+        // Light a node and every enabled row (and Everything else) into it.
+        let light_node = |lit: &mut Lit, node: NodeRef| {
+            lit.nodes.insert(node);
+            lit.warm.insert(node.0);
+            for (i, row) in self.rows.iter().enumerate() {
+                if row.enabled && row.node == Some(node) {
+                    lit.rows.insert(i);
                 }
             }
-            Focus::EverythingElse => {
+            if ee == Some(node) {
                 lit.everything_else = true;
-                if let Some(card) = ee_card {
-                    lit.cards.insert(card);
-                    if let Some(pill) = self.pill_for(card, ee_profile) {
-                        lit.pills.insert((card, pill));
+            }
+        };
+        match focus {
+            None => {}
+            Some(Focus::Row(row)) => {
+                if row < self.rows.len() {
+                    lit.rows.insert(row);
+                    if let Some(node) = self.node_of(End::Row(row)) {
+                        lit.nodes.insert(node);
+                        lit.warm.insert(node.0);
                     }
-                    lit.curves.push((End::EverythingElse, card));
                 }
             }
-            Focus::Card(card) | Focus::Pill(card, _) => {
-                if card >= self.cards.len() {
-                    return lit;
+            Some(Focus::EverythingElse) => {
+                lit.everything_else = true;
+                if let Some(node) = ee {
+                    lit.nodes.insert(node);
+                    lit.warm.insert(node.0);
                 }
-                let pill = match focus {
-                    Focus::Pill(_, pill) => self.cards[card].pills.get(pill).map(|_| pill),
-                    _ => None,
-                };
-                let names_pill =
-                    |profile: Option<&str>| pill.is_none() || self.pill_for(card, profile) == pill;
-                lit.cards.insert(card);
-                if let Some(pill) = pill {
-                    lit.pills.insert((card, pill));
+            }
+            Some(Focus::Node(card, node)) => {
+                if self.cards.get(card).is_some_and(|c| node < c.nodes.len()) {
+                    light_node(&mut lit, (card, node));
                 }
-                let mut ends = Vec::new();
-                for (i, row) in self.rows.iter().enumerate() {
-                    if row.enabled
-                        && row.target.card() == Some(card)
-                        && names_pill(row.target.profile())
-                    {
-                        lit.rows.insert(i);
-                        ends.push(End::Row(i));
+            }
+            Some(Focus::Card(card)) => {
+                if let Some(c) = self.cards.get(card) {
+                    lit.cards.insert(card);
+                    lit.warm.insert(card);
+                    for (node, n) in c.nodes.iter().enumerate() {
+                        if !n.unused {
+                            light_node(&mut lit, (card, node));
+                        }
                     }
-                }
-                if ee_card == Some(card) && names_pill(ee_profile) {
-                    lit.everything_else = true;
-                    ends.push(End::EverythingElse);
-                }
-                if ends.len() <= MAX_CURVES {
-                    lit.curves = ends.into_iter().map(|end| (end, card)).collect();
                 }
             }
         }
+        lit.traced = !lit.rows.is_empty()
+            || lit.everything_else
+            || !lit.cards.is_empty()
+            || !lit.nodes.is_empty();
+
+        let trace = |lit_here: bool| {
+            if lit_here {
+                Trace::Lit
+            } else if lit.traced {
+                Trace::Dim
+            } else {
+                Trace::Rest
+            }
+        };
+        let mut routes = Vec::new();
+        for (i, row) in self.rows.iter().enumerate() {
+            let Some(to) = row.node else {
+                continue;
+            };
+            // A rule that is off has no route, but its would-be route shows
+            // while it is the one traced.
+            if !row.enabled && focus != Some(Focus::Row(i)) {
+                continue;
+            }
+            routes.push(Route {
+                from: End::Row(i),
+                to,
+                trace: trace(lit.rows.contains(&i)),
+                running: row.enabled && !row.idle && !self.dimmed && !row.target.ghost(),
+                slot: 0,
+                fan: 0,
+            });
+        }
+        if let Some(to) = ee {
+            routes.push(Route {
+                from: End::EverythingElse,
+                to,
+                trace: trace(lit.everything_else),
+                running: !self.dimmed && !self.everything_else.target.ghost(),
+                slot: 0,
+                fan: 0,
+            });
+        }
+        // Each node's routes fan into its port in the order of their rows,
+        // so they never cross there.
+        for i in 0..routes.len() {
+            let to = routes[i].to;
+            let slot = routes[..i].iter().filter(|r| r.to == to).count();
+            let fan = routes.iter().filter(|r| r.to == to).count();
+            routes[i].slot = slot;
+            routes[i].fan = fan;
+        }
+        lit.routes = routes;
         lit
     }
+
+    /// What the legend calls a pin: "Google Chrome · Work", "rule 3".
+    pub fn focus_label(&self, focus: Focus) -> Option<String> {
+        match focus {
+            Focus::Row(row) => self.rows.get(row).map(|row| row.tooltip.clone()),
+            Focus::EverythingElse => Some("Everything else".to_owned()),
+            Focus::Card(card) => self.cards.get(card).map(|card| card.name.clone()),
+            Focus::Node(card, node) => {
+                let card = self.cards.get(card)?;
+                let node = card.nodes.get(node)?;
+                Some(if card.single() {
+                    card.name.clone()
+                } else {
+                    display(&card.name, Some(node.label()))
+                })
+            }
+        }
+    }
+
+    /// What the keyboard steps through, top to bottom: the rows, Everything
+    /// else, then each card's nodes that show (`expanded` says which cards
+    /// show all of theirs).
+    pub fn keyboard_order(&self, expanded: impl Fn(&Card) -> bool) -> Vec<Focus> {
+        let mut order: Vec<Focus> = self
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Row(row) => Some(Focus::Row(*row)),
+                _ => None,
+            })
+            .collect();
+        order.push(Focus::EverythingElse);
+        for (c, card) in self.cards.iter().enumerate() {
+            let shown = if expanded(card) {
+                card.nodes.len()
+            } else {
+                card.shown
+            };
+            order.extend((0..shown).map(|n| Focus::Node(c, n)));
+        }
+        order
+    }
+}
+
+/// How many of a row's pattern tags show in `room` pixels: whole tags,
+/// 5 apart, as many as fit with "+N" after them for the rest (`plus(n)` is
+/// its width). The first tag always shows, cut short when it is alone.
+pub fn fit_tags(widths: &[f32], more: usize, room: f32, plus: impl Fn(usize) -> f32) -> usize {
+    const GAP: f32 = 5.0;
+    let n = widths.len();
+    for k in (1..=n).rev() {
+        let rest = n - k + more;
+        let need = widths[..k].iter().sum::<f32>()
+            + GAP * (k - 1) as f32
+            + if rest > 0 { GAP + plus(rest) } else { 0.0 };
+        if need <= room {
+            return k;
+        }
+    }
+    n.min(1)
+}
+
+/// The map's columns: the rules take what the gutter and the
+/// destinations leave.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapWidths {
+    pub rule: f32,
+    pub gutter: f32,
+    pub dest: f32,
+}
+
+impl MapWidths {
+    /// For the map's content width (less its borders and padding): the
+    /// gutter is 8% of it within 96-144, the destinations 40% of the rest
+    /// within 266-480.
+    pub fn of_content(content: f32) -> Self {
+        let content = content.max(0.0);
+        let gutter = (content * 0.08).clamp(96.0, 144.0).round();
+        let dest = ((content - gutter) * 0.4).clamp(266.0, 480.0).round();
+        Self {
+            rule: (content - gutter - dest).max(0.0),
+            gutter,
+            dest,
+        }
+    }
+}
+
+/// How `fan` routes into one node spread on its port: the step between
+/// them, at most 3, and the spread, at most 16 (the capsule is 9 plus it).
+pub fn fan_spread(fan: usize) -> (f32, f32) {
+    if fan < 2 {
+        return (0.0, 0.0);
+    }
+    let gaps = (fan - 1) as f32;
+    let step = (16.0 / gaps).min(3.0);
+    (step, step * gaps)
+}
+
+/// How many of `len` nodes show folded: at least `floor`, and all of them
+/// when only one would fold (never "+1 more").
+fn folded_to(len: usize, floor: usize) -> usize {
+    if len <= floor + 1 { len } else { floor }
+}
+
+/// Function names that say nothing about what the function tests.
+const GENERIC_NAMES: [&str; 8] = [
+    "match",
+    "url",
+    "handler",
+    "matcher",
+    "test",
+    "fn",
+    "anonymous",
+    "default",
+];
+
+/// A function's name when it says something: not empty, and not one of
+/// the generic names an inline arrow gets from its property.
+pub fn telling_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty()
+        && !GENERIC_NAMES
+            .iter()
+            .any(|generic| generic.eq_ignore_ascii_case(name)))
+    .then(|| name.to_owned())
+}
+
+/// The source without its comments, strings kept whole.
+fn strip_comments(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            out.push(c);
+            if c == '\\' {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' | '`' => {
+                quote = Some(c);
+                out.push(c);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                while chars.peek().is_some_and(|&next| next != '\n') {
+                    chars.next();
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = ' ';
+                for next in chars.by_ref() {
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    previous = next;
+                }
+                out.push(' ');
+            }
+            '\\' => {
+                out.push(c);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Each character outside strings, by byte offset, with the bracket depth
+/// it sits at (a bracket at the depth of the pair it opens or closes).
+fn top_level(text: &str) -> Vec<(usize, char, usize)> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in text.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '"' | '\'' | '`' => quote = Some(c),
+            '(' | '[' | '{' => {
+                out.push((i, c, depth));
+                depth += 1;
+            }
+            ')' | ']' | '}' => {
+                depth = depth.saturating_sub(1);
+                out.push((i, c, depth));
+            }
+            _ => out.push((i, c, depth)),
+        }
+    }
+    out
+}
+
+/// The close of the bracket opening `text` when it is the last character:
+/// the whole of `text` is wrapped in one pair.
+fn wrapped(text: &str, open: char, close: char) -> Option<&str> {
+    if !text.starts_with(open) {
+        return None;
+    }
+    let end = top_level(text)
+        .into_iter()
+        .skip(1)
+        .find(|&(_, c, depth)| c == close && depth == 0)?
+        .0;
+    (end + close.len_utf8() == text.len()).then(|| &text[open.len_utf8()..end])
+}
+
+/// A block's body (`{ … }`, braces included) as one expression: its first
+/// `return`'s, else its first statement and " …".
+fn block_expression(block: &str) -> String {
+    let inner = &block[1..block.len() - 1];
+    let chars = top_level(inner);
+    let word = |i: usize| inner[i..].starts_with("return");
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let statement_end = |from: usize| {
+        chars
+            .iter()
+            .find(|&&(i, c, depth)| i >= from && depth == 0 && c == ';')
+            .map_or(inner.len(), |&(i, _, _)| i)
+    };
+    for (n, &(i, _, depth)) in chars.iter().enumerate() {
+        if depth != 0 || !word(i) {
+            continue;
+        }
+        let before = n.checked_sub(1).map(|p| chars[p].1);
+        let after = inner[i + 6..].chars().next();
+        if before.is_some_and(ident) || after.is_some_and(ident) {
+            continue;
+        }
+        let start = i + 6;
+        return inner[start..statement_end(start)].trim().to_owned();
+    }
+    let first = inner.trim_start();
+    let start = inner.len() - first.len();
+    let end = chars
+        .iter()
+        .find(|&&(i, c, depth)| i >= start && depth == 0 && (c == ';' || c == '\n'))
+        .map_or(inner.len(), |&(i, _, _)| i);
+    let statement = inner[start..end].trim();
+    if statement.is_empty() {
+        String::new()
+    } else {
+        format!("{statement} \u{2026}")
+    }
+}
+
+/// What a function matcher tests, from its source, for a ƒ row:
+/// `({ url }) => url.host === "tickets.example.com"` reads
+/// `url.host === "tickets.example.com"`. The text after the first
+/// top-level `=>`, or the body of `function (…) {…}`; a block gives its
+/// first `return`'s expression (or its first statement and " …"); one
+/// wrapping pair of parentheses and of braces and a trailing `;` go,
+/// comments go, whitespace collapses, and it is cut at [`EXCERPT_MAX`].
+pub fn function_excerpt(source: &str) -> Option<String> {
+    let clean = strip_comments(source);
+    let mut text = clean.trim();
+    if let Some(rest) = text.strip_prefix("async")
+        && rest.starts_with(|c: char| c.is_whitespace() || c == '(')
+    {
+        text = rest.trim_start();
+    }
+    let chars = top_level(text);
+    let arrow = chars
+        .iter()
+        .find(|&&(i, c, depth)| depth == 0 && c == '=' && text[i + 1..].starts_with('>'))
+        .map(|&(i, _, _)| i);
+    let body = match arrow {
+        Some(at) => text[at + 2..].trim(),
+        None => {
+            // `function name(…) { … }`, or a method: the block after the
+            // parameters.
+            let params = chars
+                .iter()
+                .find(|&&(_, c, depth)| depth == 0 && c == ')')
+                .map(|&(i, _, _)| i);
+            let open = params.and_then(|params| {
+                chars
+                    .iter()
+                    .find(|&&(i, c, depth)| i > params && depth == 0 && c == '{')
+                    .map(|&(i, _, _)| i)
+            });
+            let close = open.and_then(|open| {
+                chars
+                    .iter()
+                    .find(|&&(i, c, depth)| i > open && depth == 0 && c == '}')
+                    .map(|&(i, _, _)| i)
+            });
+            match (open, close) {
+                (Some(open), Some(close)) => &text[open..=close],
+                _ => text,
+            }
+        }
+    };
+    let mut expression = if body.starts_with('{') && wrapped(body, '{', '}').is_some() {
+        block_expression(body)
+    } else {
+        body.to_owned()
+    };
+    let trimmed = expression.trim().trim_end_matches(';').trim();
+    let mut unwrapped = trimmed;
+    if let Some(inner) = wrapped(unwrapped, '(', ')') {
+        unwrapped = inner.trim();
+    }
+    if let Some(inner) = wrapped(unwrapped, '{', '}') {
+        unwrapped = inner.trim();
+    }
+    expression = unwrapped.trim_end_matches(';').to_owned();
+    let collapsed = expression.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(if collapsed.chars().count() > EXCERPT_MAX {
+        let cut: String = collapsed.chars().take(EXCERPT_MAX - 1).collect();
+        format!("{}\u{2026}", cut.trim_end())
+    } else {
+        collapsed
+    })
 }
 
 /// The callout under the map while a config is in charge.
@@ -718,8 +1231,9 @@ fn spec_dest(spec: &BrowserSpec, installed: &[Installed]) -> (Dest, Option<Strin
 #[derive(Default)]
 struct Cards {
     dests: Vec<Dest>,
-    /// Per card: the profiles named, in order (`None`: the default one).
-    pills: Vec<Vec<Option<String>>>,
+    /// Per browser card: the profiles rows and Everything else name, in
+    /// order of use (`None`: the default one).
+    profiles: Vec<Vec<Option<String>>>,
 }
 
 impl Cards {
@@ -733,19 +1247,17 @@ impl Cards {
                     name: dest.name.clone(),
                     badge: dest.badge.clone(),
                 });
-                self.pills.push(Vec::new());
+                self.profiles.push(Vec::new());
                 self.dests.len() - 1
             }
         };
-        if matches!(dest.kind, CardKind::Browser | CardKind::Ghost) {
-            let pills = &mut self.pills[card];
-            let named = pills.iter().any(|p| match (p, &profile) {
-                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-                (None, None) => true,
-                _ => false,
-            });
-            if !named {
-                pills.push(profile.clone());
+        if dest.kind == CardKind::Browser {
+            let profiles = &mut self.profiles[card];
+            if !profiles
+                .iter()
+                .any(|p| same_profile(p.as_deref(), profile.as_deref()))
+            {
+                profiles.push(profile.clone());
             }
         }
         match dest.kind {
@@ -766,6 +1278,10 @@ impl Cards {
     }
 }
 
+fn is_regex(pattern: &str) -> bool {
+    pattern.len() > 1 && pattern.starts_with('/') && pattern.ends_with('/')
+}
+
 /// A `rules.json` rule's match column.
 fn rule_match(rule: &Rule) -> RowMatch {
     let patterns: Vec<&String> = rule
@@ -778,26 +1294,32 @@ fn rule_match(rule: &Rule) -> RowMatch {
         .iter()
         .filter(|o| !o.trim().is_empty())
         .collect();
-    // "*" from an app reads as the app: the pattern says nothing more.
-    let every_link = patterns.iter().all(|p| p.trim() == "*");
-    if let Some(first) = patterns
-        .first()
-        .filter(|_| openers.is_empty() || !every_link)
-    {
-        RowMatch::Pattern {
-            regex: first.len() > 1 && first.starts_with('/') && first.ends_with('/'),
-            text: (*first).clone(),
-            more: patterns.len() - 1,
-        }
-    } else if let Some(first) = openers.first() {
+    let opener = openers.first().map(|first| {
         let name = crate::default_browser::browser_name(first);
         // "Slack:com.tinyspeck.slackmacgap" names Slack.
         let name = name.split(':').next().unwrap_or(&name).to_owned();
-        RowMatch::Opener {
+        Opener {
             badge: badge_for(&name).to_string(),
             name,
             more: openers.len() - 1,
         }
+    });
+    // "*" from an app reads as the app: the pattern says nothing more.
+    let every_link = patterns.iter().all(|p| p.trim() == "*");
+    if !patterns.is_empty() && (opener.is_none() || !every_link) {
+        RowMatch::Patterns {
+            patterns: patterns
+                .iter()
+                .map(|text| Pattern {
+                    regex: is_regex(text),
+                    text: (*text).clone(),
+                })
+                .collect(),
+            more: 0,
+            opener,
+        }
+    } else if let Some(opener) = opener {
+        RowMatch::Opener(opener)
     } else {
         RowMatch::Any
     }
@@ -808,18 +1330,31 @@ fn handler_match(matchers: &[MatcherSpec]) -> RowMatch {
     let more = matchers.len().saturating_sub(1);
     match matchers.first() {
         None => RowMatch::Any,
-        Some(MatcherSpec::Wildcard(text)) => RowMatch::Pattern {
-            text: text.clone(),
-            regex: false,
-            more,
-        },
-        Some(MatcherSpec::Regex(text)) => RowMatch::Pattern {
-            text: text.clone(),
-            regex: true,
-            more,
-        },
+        Some(MatcherSpec::Wildcard(_) | MatcherSpec::Regex(_)) => {
+            let patterns: Vec<Pattern> = matchers
+                .iter()
+                .filter_map(|matcher| match matcher {
+                    MatcherSpec::Wildcard(text) => Some(Pattern {
+                        text: text.clone(),
+                        regex: false,
+                    }),
+                    MatcherSpec::Regex(text) => Some(Pattern {
+                        text: text.clone(),
+                        regex: true,
+                    }),
+                    _ => None,
+                })
+                .collect();
+            RowMatch::Patterns {
+                more: matchers.len() - patterns.len(),
+                patterns,
+                opener: None,
+            }
+        }
         Some(MatcherSpec::Function(function)) => RowMatch::Function {
-            name: (!function.name.trim().is_empty()).then(|| function.name.clone()),
+            name: telling_name(&function.name),
+            excerpt: function.source.as_deref().and_then(function_excerpt),
+            source: function.source.clone(),
             more,
         },
         Some(MatcherSpec::Other(kind)) => RowMatch::Other {
@@ -972,6 +1507,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 source: RowSource::Handler(index),
                 matcher: handler_match(&handler.matchers),
                 target,
+                node: None,
                 enabled: true,
                 idle: false,
                 count: (!ghost && !stale)
@@ -1014,6 +1550,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 source: RowSource::Rule(index),
                 matcher: rule_match(rule),
                 target,
+                node: None,
                 enabled: rule.enabled,
                 idle: not_loaded,
                 count: (!ghost && rule.enabled && !not_loaded && !stale)
@@ -1050,16 +1587,27 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     let everything_else = EverythingElse {
         owner: ee_owner,
         target: ee_target.clone(),
+        node: None,
         count: (counts && inputs.today.unrouted > 0).then_some(inputs.today.unrouted),
     };
 
-    // Each card's rules, links and share.
+    // Today's links per card, and per card and profile (`None`: the
+    // default one).
     let mut links = vec![0u64; cards.dests.len()];
+    let mut profile_links: Vec<Vec<(Option<String>, u64)>> = vec![Vec::new(); cards.dests.len()];
     let mut function_links = 0;
-    for (name, _, n) in inputs.tally.browsers() {
+    for (name, profile, n) in inputs.tally.browsers() {
         let dest = resolve(name, installed);
         if let Some(card) = cards.dests.iter().position(|d| d.key == dest.key) {
             links[card] += n;
+            let profile = (!profile.is_empty()).then(|| profile.to_owned());
+            match profile_links[card]
+                .iter_mut()
+                .find(|(p, _)| same_profile(p.as_deref(), profile.as_deref()))
+            {
+                Some((_, total)) => *total += n,
+                None => profile_links[card].push((profile, n)),
+            }
         }
     }
     for row in &rows {
@@ -1069,7 +1617,6 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     }
     let ee_card = ee_target.card();
     let total = inputs.today.routed;
-    let alone = cards.dests.len() == 1;
     let ribbon = if config_owns_default {
         format!("Everything else \u{00b7} {shown}")
     } else if has_default {
@@ -1077,11 +1624,125 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     } else {
         "Everything else".to_owned()
     };
+    // Everything else counts after every rule.
+    let ee_rank = rows.len();
+    let mut first_ranks = Vec::new();
     let built: Vec<Card> = cards
         .dests
         .iter()
         .enumerate()
         .map(|(card, dest)| {
+            let single = dest.kind != CardKind::Browser;
+            let is_ee = ee_card == Some(card);
+            let feeds = |row: &Row, profile: Option<&str>| {
+                row.target.card() == Some(card)
+                    && (single || same_profile(row.target.profile(), profile))
+            };
+            let ee_feeds = |profile: Option<&str>| {
+                is_ee && (single || same_profile(ee_target.profile(), profile))
+            };
+            let first = |profile: Option<&str>| {
+                rows.iter()
+                    .position(|row| feeds(row, profile))
+                    .or_else(|| ee_feeds(profile).then_some(ee_rank))
+                    .unwrap_or(usize::MAX)
+            };
+            first_ranks.push(
+                rows.iter()
+                    .position(|row| row.target.card() == Some(card))
+                    .or_else(|| is_ee.then_some(ee_rank))
+                    .unwrap_or(usize::MAX),
+            );
+
+            // The routed profiles by their first row, then the rest the
+            // scan found, in its order.
+            let mut profiles: Vec<Option<String>> = if single {
+                vec![None]
+            } else {
+                cards.profiles[card].clone()
+            };
+            profiles.sort_by_key(|profile| first(profile.as_deref()));
+            let routed = profiles.len();
+            if !single
+                && let Some(app) = installed
+                    .iter()
+                    .find(|app| app.name.to_lowercase() == dest.key)
+            {
+                for profile in &app.profiles {
+                    if !profiles
+                        .iter()
+                        .any(|p| same_profile(p.as_deref(), Some(profile)))
+                    {
+                        profiles.push(Some(profile.clone()));
+                    }
+                }
+            }
+            let card_n = match dest.kind {
+                CardKind::Function => function_links,
+                CardKind::Ghost => 0,
+                _ => links[card],
+            };
+            let nodes: Vec<Node> = profiles
+                .iter()
+                .map(|profile| {
+                    let p = profile.as_deref();
+                    let rules_n = rows
+                        .iter()
+                        .filter(|row| row.enabled && feeds(row, p))
+                        .count();
+                    let everything_else = ee_feeds(p);
+                    let unused = !everything_else && !rows.iter().any(|row| feeds(row, p));
+                    let n = if single {
+                        card_n
+                    } else {
+                        profile_links[card]
+                            .iter()
+                            .find(|(q, _)| same_profile(q.as_deref(), p))
+                            .map_or(0, |(_, n)| *n)
+                    };
+                    let node_links = (counts && n > 0 && !unused).then_some(n);
+                    let rules_part = (rules_n > 0).then(|| plural(rules_n, "rule"));
+                    let meta = if unused {
+                        Some("no rules yet".to_owned())
+                    } else if dest.kind == CardKind::Ghost {
+                        Some(match &rules_part {
+                            Some(rules) => format!("{rules} \u{00b7} falls through"),
+                            None => "falls through".to_owned(),
+                        })
+                    } else {
+                        rules_part.clone()
+                    };
+                    let named = if single {
+                        dest.name.clone()
+                    } else {
+                        display(&dest.name, Some(p.unwrap_or("default profile")))
+                    };
+                    let tooltip = if unused {
+                        "No rules send links here yet".to_owned()
+                    } else {
+                        let parts: Vec<String> = rules_part
+                            .into_iter()
+                            .chain(everything_else.then(|| "Everything else".to_owned()))
+                            .chain(node_links.map(|n| format!("{} links today", thousands(n))))
+                            .collect();
+                        if parts.is_empty() {
+                            named
+                        } else {
+                            format!("{named}: {}", parts.join(", "))
+                        }
+                    };
+                    Node {
+                        profile: profile.clone(),
+                        everything_else,
+                        rules: rules_n,
+                        links: node_links,
+                        unused,
+                        meta,
+                        tooltip,
+                    }
+                })
+                .collect();
+
             let feeding = rows
                 .iter()
                 .filter(|row| row.enabled && row.target.card() == Some(card))
@@ -1093,13 +1754,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     .iter()
                     .filter(|row| row.enabled && row.target.card() == Some(card))
                     .all(|row| row.idle);
-            let is_ee = ee_card == Some(card);
-            let n = match dest.kind {
-                CardKind::Function => function_links,
-                CardKind::Ghost => 0,
-                _ => links[card],
-            };
-            let card_links = (counts && n > 0).then_some(n);
+            let card_links = (counts && card_n > 0).then_some(card_n);
             let today = card_links.map(|n| format!("{} links today", thousands(n)));
             let rules_part = if feeding == 0 && is_ee {
                 "Everything else".to_owned()
@@ -1123,86 +1778,121 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     .collect(),
             }
             .join(" \u{00b7} ");
-            let share =
-                (dest.kind == CardKind::Browser && counts && total > 0 && !alone).then(|| {
-                    let fraction = (n as f32 / total as f32).clamp(0.0, 1.0);
-                    let percent = fraction * 100.0;
-                    Share {
-                        label: if n > 0 && percent < 1.0 {
-                            "<1%".to_owned()
-                        } else {
-                            format!("{}%", percent.round() as u64)
-                        },
-                        fraction,
-                    }
-                });
-            let mut pills: Vec<Pill> = cards.pills[card]
-                .iter()
-                .map(|profile| Pill {
-                    profile: profile.clone(),
-                    everything_else: is_ee
-                        && match (profile, ee_target.profile()) {
-                            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-                            (None, None) => true,
-                            _ => false,
-                        },
-                })
-                .collect();
-            // The Everything else pill goes last, as the design draws it.
-            pills.sort_by_key(|pill| pill.everything_else);
-            // Past MAX_PILLS the rest fold into "+N", but the Everything
-            // else pill stays: it is the one the ribbon points at.
-            let more_pills = pills.len().saturating_sub(MAX_PILLS);
-            if more_pills > 0 {
-                let everything_else = pills.last().filter(|pill| pill.everything_else).cloned();
-                pills.truncate(MAX_PILLS);
-                if let Some(pill) = everything_else {
-                    pills[MAX_PILLS - 1] = pill;
+            let share = (dest.kind == CardKind::Browser && counts && total > 0).then(|| {
+                let fraction = (card_n as f32 / total as f32).clamp(0.0, 1.0);
+                let percent = fraction * 100.0;
+                Share {
+                    label: if card_n > 0 && percent < 1.0 {
+                        "<1%".to_owned()
+                    } else {
+                        format!("{}%", percent.round() as u64)
+                    },
+                    fraction,
                 }
-            }
-            let alone = (alone && is_ee).then(|| {
-                let shown = match &ee_target {
-                    Target::Browser { profile, .. } => display(&dest.name, profile.as_deref()),
-                    _ => dest.name.clone(),
-                };
-                (format!("Everything opens in {shown}"), today.clone())
             });
+            let shown = if single {
+                1
+            } else {
+                folded_to(nodes.len(), routed.max(ROUTED_NODES))
+            };
             Card {
                 kind: dest.kind,
                 badge: dest.badge.clone(),
                 name: dest.name.clone(),
                 key: dest.key.clone(),
-                pills,
-                more_pills,
+                nodes,
+                shown,
                 rules: feeding,
                 meta,
                 links: card_links,
                 share,
                 ribbon: is_ee.then(|| ribbon.clone()),
-                alone,
+                unused: false,
                 idle: idle && !is_ee,
             }
         })
         .collect();
 
-    // Ghost cards go last, after the browsers and the special cards.
-    let (built, remap) = order_cards(built);
+    // Each route's node, then the cards in order: routed browsers by
+    // today's share, the special cards, then ghosts.
+    let mut everything_else = everything_else;
+    for row in &mut rows {
+        row.node = node_ref(&built, &row.target);
+    }
+    everything_else.node = node_ref(&built, &everything_else.target);
+    let (mut built, remap) = order_cards(built, &first_ranks);
     for row in &mut rows {
         remap_target(&mut row.target, &remap);
+        row.node = row.node.map(|(card, node)| (remap[card], node));
     }
-    let mut everything_else = everything_else;
     remap_target(&mut everything_else.target, &remap);
+    everything_else.node = everything_else.node.map(|(card, node)| (remap[card], node));
 
-    let used: Vec<&str> = built.iter().map(|card| card.key.as_str()).collect();
-    let not_used: Vec<&str> = installed
+    // Every other browser the Settings don't hide, A-Z, as a place links
+    // could go.
+    let in_use = built
+        .iter()
+        .filter(|card| card.kind == CardKind::Browser)
+        .count();
+    let mut spare: Vec<&Installed> = installed
         .iter()
         .filter(|app| {
             !app.hidden
                 && !app.name.eq_ignore_ascii_case("PwrRoute")
-                && !used.contains(&app.name.to_lowercase().as_str())
+                && !built.iter().any(|card| card.key == app.name.to_lowercase())
         })
-        .map(|app| app.name.as_str())
         .collect();
+    spare.sort_by_key(|app| app.name.to_lowercase());
+    let spare_count = spare.len();
+    for app in spare {
+        let profiles: Vec<Option<String>> = if app.profiles.is_empty() {
+            vec![None]
+        } else {
+            app.profiles.iter().cloned().map(Some).collect()
+        };
+        let nodes: Vec<Node> = profiles
+            .into_iter()
+            .map(|profile| Node {
+                profile,
+                everything_else: false,
+                rules: 0,
+                links: None,
+                unused: true,
+                meta: Some("no rules yet".to_owned()),
+                tooltip: "No rules send links here yet".to_owned(),
+            })
+            .collect();
+        let meta = if app.profiles.is_empty() {
+            "default profile \u{00b7} no rules yet".to_owned()
+        } else {
+            format!(
+                "{} \u{00b7} no rules yet",
+                plural(app.profiles.len(), "profile")
+            )
+        };
+        built.push(Card {
+            kind: CardKind::Browser,
+            badge: badge_for(&app.name).to_string(),
+            name: app.name.clone(),
+            key: app.name.to_lowercase(),
+            shown: folded_to(nodes.len(), IDLE_NODES),
+            nodes,
+            rules: 0,
+            meta,
+            links: None,
+            share: None,
+            ribbon: None,
+            unused: true,
+            idle: false,
+        });
+    }
+    let in_use_line = if spare_count > 0 {
+        format!("{in_use} in use \u{00b7} {spare_count} more installed")
+    } else {
+        format!("{in_use} in use")
+    };
+    let also = (spare_count > 0)
+        .then(|| format!("{} \u{00b7} no rules yet", plural(spare_count, "browser")));
 
     let rewrites = if not_loaded {
         0
@@ -1225,7 +1915,8 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         },
         counts,
         dimmed: state == State::Paused,
-        not_used: (!not_used.is_empty()).then(|| format!("Not used: {}", not_used.join(", "))),
+        in_use: in_use_line,
+        also,
         rewrites: (rewrites > 0).then(|| {
             if rewrites == 1 {
                 "1 rewrite runs on every link first".to_owned()
@@ -1453,27 +2144,41 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     }
 }
 
-/// Everything else's card first (built first), then the browser cards by
-/// how many rules feed them and then today's links, then the special
-/// cards, then ghosts; and where each old index went. Ties keep the order
-/// of first use.
-fn order_cards(cards: Vec<Card>) -> (Vec<Card>, Vec<usize>) {
+/// The node a target's route ends at.
+fn node_ref(cards: &[Card], target: &Target) -> Option<NodeRef> {
+    let card = target.card()?;
+    let c = cards.get(card)?;
+    let node = if c.single() {
+        0
+    } else {
+        c.nodes
+            .iter()
+            .position(|node| same_profile(node.profile.as_deref(), target.profile()))?
+    };
+    Some((card, node))
+}
+
+/// The browser cards by today's links (by their first row while counts
+/// are not shown), then Decided by JavaScript, Not opened, and the
+/// browsers that are not installed, each by its first row; and where each
+/// old index went. `first` is each card's first feeding rank.
+fn order_cards(cards: Vec<Card>, first: &[usize]) -> (Vec<Card>, Vec<usize>) {
     use std::cmp::Reverse;
     let rank = |kind: CardKind| match kind {
         CardKind::Browser => 0,
-        CardKind::Function | CardKind::NotOpened => 1,
-        CardKind::Ghost => 2,
+        CardKind::Function => 1,
+        CardKind::NotOpened => 2,
+        CardKind::Ghost => 3,
     };
     let mut order: Vec<usize> = (0..cards.len()).collect();
-    // The Everything else card keeps its place whatever it is.
     order.sort_by_key(|&i| {
         let card = &cards[i];
-        (
-            if i == 0 { 0 } else { 1 + rank(card.kind) },
-            Reverse(card.rules),
-            Reverse(card.links.unwrap_or(0)),
-            i,
-        )
+        let links = if card.kind == CardKind::Browser {
+            card.links.unwrap_or(0)
+        } else {
+            0
+        };
+        (rank(card.kind), Reverse(links), first[i], i)
     });
     let mut remap = vec![0; cards.len()];
     for (new, &old) in order.iter().enumerate() {
@@ -1725,103 +2430,394 @@ mod tests {
         assert_eq!(map.rows.len(), 6);
         assert_eq!(
             map.rows[0].matcher,
-            RowMatch::Pattern {
-                text: "*.docs.example.com/*".into(),
-                regex: false,
-                more: 1,
+            RowMatch::Patterns {
+                patterns: vec![
+                    Pattern {
+                        text: "*.docs.example.com/*".into(),
+                        regex: false,
+                    },
+                    Pattern {
+                        text: "docs.example.org/*".into(),
+                        regex: false,
+                    },
+                ],
+                more: 0,
+                opener: None,
             }
         );
         assert_eq!(map.rows[0].count, Some(214));
         assert_eq!(map.rows[0].tooltip, "rule 1");
         assert_eq!(
             map.rows[2].matcher,
-            RowMatch::Opener {
+            RowMatch::Opener(Opener {
                 badge: badge_for("Slack").to_string(),
                 name: "Slack".into(),
                 more: 0,
-            },
+            }),
             "\"*\" from an app reads as the app"
         );
         assert!(!map.rows[5].enabled);
         assert_eq!(map.rows[5].count, None, "a rule that is off counts nothing");
 
-        assert_eq!(names(map), ["Google Chrome", "Firefox", "Arc"]);
+        // Routed browsers by today's share, then every other browser the
+        // scan found, A-Z, with no rules yet.
         assert_eq!(
-            map.not_used.as_deref(),
-            Some("Not used: Safari, Microsoft Edge")
+            names(map),
+            [
+                "Google Chrome",
+                "Arc",
+                "Firefox",
+                "Microsoft Edge",
+                "Safari"
+            ]
         );
+        assert_eq!(map.in_use, "3 in use \u{b7} 2 more installed");
+        assert_eq!(map.also.as_deref(), Some("2 browsers \u{b7} no rules yet"));
         let chrome = &map.cards[0];
         assert_eq!(
             chrome.ribbon.as_deref(),
             Some("Everything else \u{b7} PwrRoute")
         );
-        let pills: Vec<(&str, bool)> = chrome
-            .pills
+        // Work (rules 1 and 2), Personal (Everything else, and rule 6 that
+        // is off), then Design, which no rule names.
+        let nodes: Vec<(&str, usize, Option<u64>, bool, bool)> = chrome
+            .nodes
             .iter()
-            .map(|pill| (pill.label(), pill.everything_else))
+            .map(|node| {
+                (
+                    node.label(),
+                    node.rules,
+                    node.links,
+                    node.everything_else,
+                    node.unused,
+                )
+            })
             .collect();
-        assert_eq!(pills, [("Work", false), ("Personal", true)]);
+        assert_eq!(
+            nodes,
+            [
+                ("Work", 2, Some(302), false, false),
+                ("Personal", 0, Some(642), true, false),
+                ("Design", 0, None, false, true),
+            ]
+        );
+        assert_eq!(chrome.nodes[0].meta.as_deref(), Some("2 rules"));
+        assert_eq!(chrome.nodes[1].meta, None);
+        assert_eq!(chrome.nodes[2].meta.as_deref(), Some("no rules yet"));
+        assert_eq!(
+            chrome.nodes[0].tooltip,
+            "Google Chrome \u{b7} Work: 2 rules, 302 links today"
+        );
+        assert_eq!(
+            chrome.nodes[1].tooltip,
+            "Google Chrome \u{b7} Personal: Everything else, 642 links today"
+        );
+        assert_eq!(chrome.nodes[2].tooltip, "No rules send links here yet");
+        assert_eq!(chrome.shown, 3);
         assert_eq!(chrome.meta, "2 rules \u{b7} 944 links today");
         assert_eq!(chrome.share.as_ref().map(|s| s.label.as_str()), Some("67%"));
-        assert_eq!(map.cards[2].meta, "1 rule \u{b7} 402 links today");
+        assert_eq!(map.cards[1].meta, "1 rule \u{b7} 402 links today");
+        assert_eq!(map.cards[1].nodes[0].label(), "default profile");
+        // Each row's route ends at its node.
+        assert_eq!(map.rows[0].node, Some((0, 0)));
+        assert_eq!(map.rows[1].node, Some((0, 0)));
+        assert_eq!(map.rows[2].node, Some((2, 0)), "Firefox");
+        assert_eq!(map.rows[3].node, Some((1, 0)), "Arc");
+        assert_eq!(map.rows[5].node, Some((0, 1)), "off, but Personal's");
+        assert_eq!(map.everything_else.node, Some((0, 1)));
+
+        // The browsers with no rules yet: quiet, Edge folding two of four.
+        let edge = &map.cards[3];
+        assert!(edge.unused && edge.share.is_none());
+        assert_eq!(edge.meta, "4 profiles \u{b7} no rules yet");
+        assert_eq!((edge.nodes.len(), edge.shown, edge.folded()), (4, 2, 2));
+        assert!(edge.nodes.iter().all(|node| node.unused));
+        let safari = &map.cards[4];
+        assert_eq!(safari.meta, "default profile \u{b7} no rules yet");
+        assert_eq!(safari.nodes[0].label(), "default profile");
 
         assert_eq!(map.everything_else.owner, "PwrRoute's default");
         assert_eq!(map.everything_else.count, Some(642));
         assert_eq!(map.everything_else.target.card(), Some(0));
     }
 
+    fn lit_routes(lit: &Lit) -> Vec<End> {
+        lit.routes
+            .iter()
+            .filter(|route| route.trace == Trace::Lit)
+            .map(|route| route.from)
+            .collect()
+    }
+
+    /// At rest every enabled rule and Everything else has a route, and the
+    /// rule that is off has none.
     #[test]
-    fn hovering_a_row_lights_its_card_pill_and_one_curve() {
+    fn every_route_is_drawn_at_rest() {
         let map = World::rules().build().map;
-        let lit = map.lit(Focus::Row(1));
-        assert_eq!(lit.rows, BTreeSet::from([1]));
-        assert!(lit.card(0) && !lit.card(1));
-        assert!(lit.pill(0, 0), "rule 2 sends to Work");
-        assert!(!lit.everything_else);
-        assert_eq!(lit.curves, [(End::Row(1), 0)]);
+        let lit = map.lit(None);
+        assert!(!lit.traced);
+        let from: Vec<End> = lit.routes.iter().map(|route| route.from).collect();
+        assert_eq!(
+            from,
+            [
+                End::Row(0),
+                End::Row(1),
+                End::Row(2),
+                End::Row(3),
+                End::Row(4),
+                End::EverythingElse
+            ]
+        );
+        assert!(
+            lit.routes
+                .iter()
+                .all(|route| route.trace == Trace::Rest && route.running)
+        );
+        // Work's two routes fan into its port in their rows' order.
+        let work: Vec<(usize, usize)> = lit
+            .routes
+            .iter()
+            .filter(|route| route.to == (0, 0))
+            .map(|route| (route.slot, route.fan))
+            .collect();
+        assert_eq!(work, [(0, 2), (1, 2)]);
+        assert_eq!(lit.fan(0, 0), 2);
+        assert!(!lit.any_not_running());
     }
 
     #[test]
-    fn hovering_a_card_lights_every_enabled_rule_and_everything_else() {
+    fn hovering_a_row_lights_its_route_port_and_node() {
         let map = World::rules().build().map;
-        let lit = map.lit(Focus::Card(0));
+        let lit = map.lit(Some(Focus::Row(1)));
+        assert!(lit.traced);
+        assert_eq!(lit.rows, BTreeSet::from([1]));
+        assert!(lit.node(0, 0), "rule 2 sends to Work");
+        assert!(lit.warm(0) && !lit.card(0), "Chrome warms, not fully lit");
+        assert!(!lit.warm(1));
+        assert!(!lit.everything_else);
+        assert_eq!(lit_routes(&lit), [End::Row(1)]);
+        // Every other route dims.
+        assert!(
+            lit.routes
+                .iter()
+                .filter(|route| route.from != End::Row(1))
+                .all(|route| route.trace == Trace::Dim)
+        );
+    }
+
+    #[test]
+    fn hovering_a_card_lights_every_route_into_its_nodes() {
+        let map = World::rules().build().map;
+        let lit = map.lit(Some(Focus::Card(0)));
+        assert!(lit.card(0) && lit.warm(0));
         assert_eq!(lit.rows, BTreeSet::from([0, 1]), "rule 6 is off");
         assert!(lit.everything_else);
+        assert!(lit.node(0, 0) && lit.node(0, 1) && !lit.node(0, 2));
         assert_eq!(
-            lit.curves,
-            [(End::Row(0), 0), (End::Row(1), 0), (End::EverythingElse, 0)]
+            lit_routes(&lit),
+            [End::Row(0), End::Row(1), End::EverythingElse]
         );
 
-        let work = map.lit(Focus::Pill(0, 0));
+        let work = map.lit(Some(Focus::Node(0, 0)));
         assert_eq!(work.rows, BTreeSet::from([0, 1]));
         assert!(!work.everything_else);
-        assert!(work.pill(0, 0) && !work.pill(0, 1));
+        assert!(work.node(0, 0) && !work.node(0, 1) && !work.card(0));
+        assert_eq!(lit_routes(&work), [End::Row(0), End::Row(1)]);
 
-        let personal = map.lit(Focus::Pill(0, 1));
-        assert!(personal.rows.is_empty());
+        let personal = map.lit(Some(Focus::Node(0, 1)));
+        assert!(personal.rows.is_empty(), "rule 6 is off");
         assert!(personal.everything_else);
-        assert_eq!(personal.curves, [(End::EverythingElse, 0)]);
+        assert_eq!(lit_routes(&personal), [End::EverythingElse]);
 
-        let everything_else = map.lit(Focus::EverythingElse);
-        assert!(everything_else.pill(0, 1));
-        assert_eq!(everything_else.curves, [(End::EverythingElse, 0)]);
+        let everything_else = map.lit(Some(Focus::EverythingElse));
+        assert!(everything_else.node(0, 1));
+        assert_eq!(lit_routes(&everything_else), [End::EverythingElse]);
+    }
+
+    /// The old map drew no curve at all past six rows into one place; the
+    /// graph draws every one, fanned into the port.
+    #[test]
+    fn a_node_fed_by_seven_rows_lights_every_route() {
+        let world = World::new(
+            fixtures::overview_fanin_rules(),
+            fixtures::overview_fanin_day(),
+        );
+        let map = world.build().map;
+        let edge = names(&map)
+            .iter()
+            .position(|n| *n == "Microsoft Edge")
+            .unwrap();
+        assert_eq!(edge, 0, "it takes most of today's links");
+        let rnd = &map.cards[edge].nodes[0];
+        assert_eq!(rnd.label(), "Research and Development Team");
+        assert_eq!(rnd.rules, 7);
+        assert!(rnd.everything_else);
+        let lit = map.lit(Some(Focus::Node(edge, 0)));
+        assert_eq!(lit.rows, (0..7).collect::<BTreeSet<_>>());
+        assert!(lit.everything_else);
+        let routes: Vec<&Route> = lit.routes.iter().filter(|r| r.to == (edge, 0)).collect();
+        assert_eq!(routes.len(), 8);
+        assert!(routes.iter().all(|route| route.trace == Trace::Lit));
+        // In row order, so they never cross at the port.
+        let slots: Vec<usize> = routes.iter().map(|route| route.slot).collect();
+        assert_eq!(slots, (0..8).collect::<Vec<_>>());
+        assert!(routes.iter().all(|route| route.fan == 8));
+        assert_eq!(lit_routes(&lit).len(), 8);
+        // The other three rows' routes dim.
+        assert_eq!(
+            lit.routes
+                .iter()
+                .filter(|route| route.trace == Trace::Dim)
+                .count(),
+            3
+        );
+        // The whole card lights them too.
+        assert_eq!(lit_routes(&map.lit(Some(Focus::Card(edge)))).len(), 8);
     }
 
     #[test]
-    fn a_card_fed_by_more_than_six_rows_lights_them_without_curves() {
-        let rules = RulesFile {
-            default_browser: "Safari".into(),
-            rules: (0..7)
-                .map(|i| rule(&format!("site{i}.example.com/*"), "Firefox", ""))
-                .collect(),
-            ..RulesFile::default()
+    fn a_pin_traces_until_it_is_cleared() {
+        // The pin is a focus like any other; the window keeps it over the
+        // pointer and clears it on Esc. Here: what it lights, and that
+        // nothing does once it is gone.
+        let map = World::rules().build().map;
+        let pinned = map.lit(Some(Focus::Node(0, 0)));
+        assert_eq!(lit_routes(&pinned), [End::Row(0), End::Row(1)]);
+        assert_eq!(
+            map.focus_label(Focus::Node(0, 0)).as_deref(),
+            Some("Google Chrome \u{b7} Work")
+        );
+        assert_eq!(map.focus_label(Focus::Row(2)).as_deref(), Some("rule 3"));
+        let cleared = map.lit(None);
+        assert!(!cleared.traced);
+        assert!(
+            cleared
+                .routes
+                .iter()
+                .all(|route| route.trace == Trace::Rest)
+        );
+    }
+
+    #[test]
+    fn a_rule_that_is_off_draws_its_route_only_while_traced() {
+        let map = World::rules().build().map;
+        assert!(
+            !map.lit(None)
+                .routes
+                .iter()
+                .any(|route| route.from == End::Row(5))
+        );
+        let lit = map.lit(Some(Focus::Row(5)));
+        let route = lit
+            .routes
+            .iter()
+            .find(|route| route.from == End::Row(5))
+            .expect("its would-be route");
+        assert_eq!(route.trace, Trace::Lit);
+        assert!(!route.running, "drawn as not running");
+        assert!(lit.node(0, 1));
+        // Its node's trace does not light it.
+        assert!(!map.lit(Some(Focus::Node(0, 1))).row(5));
+    }
+
+    #[test]
+    fn nothing_runs_while_paused_or_before_the_config_loads() {
+        let mut world = World::rules();
+        world.status.paused = Some(Pause {
+            name: "Google Chrome".into(),
+            display: "Google Chrome \u{b7} Personal".into(),
+        });
+        let lit = world.build().map.lit(None);
+        assert!(lit.routes.iter().all(|route| !route.running));
+        assert!(lit.any_not_running());
+
+        // The config never loaded: rules.json's rows do not run, while
+        // Everything else (the fallback) does.
+        let mut world = World::config();
+        world.config = Some(None);
+        world.status.config_error = Some(ConfigTrouble::NotLoaded("x".into()));
+        let lit = world.build().map.lit(None);
+        for route in &lit.routes {
+            assert_eq!(
+                route.running,
+                route.from == End::EverythingElse,
+                "{route:?}"
+            );
+        }
+
+        // A browser that is not installed: its route is not running.
+        let map = World::config().build().map;
+        let ghost = map
+            .rows
+            .iter()
+            .position(|row| row.target.ghost())
+            .expect("Orion's row");
+        let lit = map.lit(None);
+        let route = lit
+            .routes
+            .iter()
+            .find(|route| route.from == End::Row(ghost))
+            .unwrap();
+        assert!(!route.running);
+    }
+
+    #[test]
+    fn the_keyboard_steps_through_rows_then_nodes() {
+        let map = World::rules().build().map;
+        let order = map.keyboard_order(|_| false);
+        assert_eq!(order[0], Focus::Row(0));
+        assert_eq!(order[6], Focus::EverythingElse);
+        assert_eq!(order[7], Focus::Node(0, 0));
+        // Edge shows two of its four until it is opened.
+        let edge = 3;
+        assert_eq!(
+            order
+                .iter()
+                .filter(|focus| matches!(focus, Focus::Node(card, _) if *card == edge))
+                .count(),
+            2
+        );
+        let open = map.keyboard_order(|card| card.name == "Microsoft Edge");
+        assert_eq!(open.len(), order.len() + 2);
+    }
+
+    #[test]
+    fn map_widths_follow_the_window() {
+        // The content width at 1000, 1240, 1440, 1600 and 1880.
+        let at = |content: f32| {
+            let w = MapWidths::of_content(content);
+            (w.rule.round(), w.gutter, w.dest)
         };
-        let map = World::new(rules, Vec::new()).build().map;
-        let firefox = names(&map).iter().position(|n| *n == "Firefox").unwrap();
-        let lit = map.lit(Focus::Card(firefox));
-        assert_eq!(lit.rows.len(), 7);
-        assert!(lit.curves.is_empty());
-        assert_eq!(map.lit(Focus::Row(6)).curves.len(), 1);
+        assert_eq!(at(722.0), (360.0, 96.0, 266.0));
+        assert_eq!(at(962.0), (520.0, 96.0, 346.0));
+        assert_eq!(at(1162.0), (640.0, 96.0, 426.0));
+        assert_eq!(at(1322.0), (736.0, 106.0, 480.0));
+        assert_eq!(at(1602.0), (994.0, 128.0, 480.0));
+    }
+
+    #[test]
+    fn routes_fan_into_a_capsule_no_taller_than_25() {
+        assert_eq!(fan_spread(1), (0.0, 0.0));
+        assert_eq!(fan_spread(2), (3.0, 3.0));
+        assert_eq!(fan_spread(4), (3.0, 9.0));
+        let (step, spread) = fan_spread(9);
+        assert!((step - 2.0).abs() < f32::EPSILON && (spread - 16.0).abs() < f32::EPSILON);
+        let (_, spread) = fan_spread(40);
+        assert!(spread <= 16.0 + f32::EPSILON);
+    }
+
+    #[test]
+    fn tags_fit_whole_then_count_the_rest() {
+        let plus = |_: usize| 14.0;
+        // All three fit.
+        assert_eq!(fit_tags(&[50.0, 60.0, 70.0], 0, 200.0, plus), 3);
+        // Two and "+1".
+        assert_eq!(fit_tags(&[50.0, 60.0, 70.0], 0, 140.0, plus), 2);
+        // Not even one beside "+2": the first shows anyway, cut short.
+        assert_eq!(fit_tags(&[150.0, 60.0, 70.0], 0, 100.0, plus), 1);
+        // Matchers that are not tags count into "+N".
+        assert_eq!(fit_tags(&[50.0], 2, 60.0, plus), 1);
+        assert_eq!(fit_tags(&[], 0, 100.0, plus), 0);
     }
 
     #[test]
@@ -1852,30 +2848,44 @@ mod tests {
         assert_eq!(map.rows.len(), 8);
         assert_eq!(map.rows[0].source, RowSource::Handler(0));
         assert_eq!(map.rows[0].tooltip, "config handler 1 of ~/.finicky.ts");
+        // A named function: its name, then what it tests.
+        let RowMatch::Function {
+            name,
+            excerpt,
+            source,
+            more,
+        } = &map.rows[0].matcher
+        else {
+            panic!("{:?}", map.rows[0].matcher);
+        };
+        assert_eq!(name.as_deref(), Some("isWorkplace"));
         assert_eq!(
-            map.rows[0].matcher,
-            RowMatch::Function {
-                name: Some("isWorkplace".into()),
-                more: 0,
-            }
+            excerpt.as_deref(),
+            Some("url.host.endsWith(\"workplace.example.com\")")
         );
+        assert!(source.as_deref().is_some_and(|s| s.contains("isWorkplace")));
+        assert_eq!(*more, 0);
         assert_eq!(map.rows[5].source, RowSource::Rule(0));
         assert_eq!(map.rows[5].rank, 6);
 
         assert_eq!(map.everything_else.owner, "~/.finicky.ts's default");
-        // Everything else's card, then browsers by rules and today's links.
+        // Browsers by today's share, the special cards, then the one with
+        // no rules yet.
         assert_eq!(
             names(map),
             [
                 "Safari",
-                "Google Chrome",
                 "Arc",
+                "Google Chrome",
                 "Firefox",
                 "Decided by JavaScript",
-                "Orion"
+                "Orion",
+                "Microsoft Edge",
             ]
         );
-        assert_eq!(map.cards[1].meta, "3 rules \u{b7} 314 links today");
+        assert_eq!(map.in_use, "4 in use \u{b7} 1 more installed");
+        assert_eq!(map.also.as_deref(), Some("1 browser \u{b7} no rules yet"));
+        assert_eq!(map.cards[2].meta, "3 rules \u{b7} 314 links today");
         assert_eq!(
             map.cards[0].ribbon.as_deref(),
             Some("Everything else \u{b7} ~/.finicky.ts")
@@ -1890,7 +2900,10 @@ mod tests {
             function.meta,
             "1 rule \u{b7} picks a browser per link \u{b7} 9 links today"
         );
-        let ghost = map.cards.last().expect("cards");
+        assert_eq!(function.nodes.len(), 1);
+        assert_eq!(function.nodes[0].meta.as_deref(), Some("1 rule"));
+        assert_eq!(function.nodes[0].links, Some(9));
+        let ghost = &map.cards[5];
         assert_eq!(
             (ghost.kind, ghost.name.as_str()),
             (CardKind::Ghost, "Orion")
@@ -1899,7 +2912,12 @@ mod tests {
             ghost.meta,
             "1 rule \u{b7} its links fall through to Everything else"
         );
+        assert_eq!(
+            ghost.nodes[0].meta.as_deref(),
+            Some("1 rule \u{b7} falls through")
+        );
         assert!(matches!(map.rows[4].target, Target::Ghost { .. }));
+        assert_eq!(map.rows[4].node, Some((5, 0)));
 
         match overview.callout {
             Some(Callout::Offer { body, warnings }) => {
@@ -2295,24 +3313,27 @@ mod tests {
         };
         let overview = World::new(rules, fixtures::overview_default_only_day()).build();
         assert_eq!(overview.map.everything_else.owner, "PwrRoute's default");
+        // One browser is drawn like any other: its Personal node takes
+        // Everything else, and its other profiles are there to route to.
         let chrome = &overview.map.cards[0];
         assert_eq!(chrome.name, "Google Chrome");
+        assert_eq!(chrome.meta, "Everything else \u{b7} 23 links today");
+        let nodes: Vec<(&str, bool, bool)> = chrome
+            .nodes
+            .iter()
+            .map(|node| (node.label(), node.everything_else, node.unused))
+            .collect();
         assert_eq!(
-            chrome.alone,
-            Some((
-                "Everything opens in Google Chrome \u{b7} Personal".into(),
-                Some("23 links today".into())
-            ))
+            nodes,
+            [
+                ("Personal", true, false),
+                ("Work", false, true),
+                ("Design", false, true)
+            ]
         );
-        assert!(
-            overview
-                .map
-                .not_used
-                .as_deref()
-                .is_none_or(|not_used| !not_used.contains("Google Chrome")),
-            "{:?}",
-            overview.map.not_used
-        );
+        assert_eq!(chrome.nodes[0].links, Some(23));
+        assert_eq!(overview.map.in_use, "1 in use \u{b7} 4 more installed");
+        assert!(overview.map.cards[1..].iter().all(|card| card.unused));
     }
 
     #[test]
@@ -2353,17 +3374,22 @@ mod tests {
             })
         );
         assert_eq!(map.everything_else.owner, "Safari until you choose");
-        assert_eq!(map.cards.len(), 1);
+        assert_eq!(
+            names(&map),
+            [
+                "Safari",
+                "Arc",
+                "Firefox",
+                "Google Chrome",
+                "Microsoft Edge"
+            ]
+        );
         let safari = &map.cards[0];
         assert_eq!(safari.ribbon.as_deref(), Some("Everything else"));
-        assert_eq!(
-            safari.alone,
-            Some((
-                "Everything opens in Safari".into(),
-                Some("23 links today".into())
-            ))
-        );
-        assert!(safari.share.is_none(), "one card has no share to show");
+        assert_eq!(safari.meta, "Everything else \u{b7} 23 links today");
+        assert!(safari.share.is_some(), "a lone browser has its share");
+        assert!(safari.nodes[0].everything_else);
+        assert_eq!(map.everything_else.node, Some((0, 0)));
     }
 
     #[test]
@@ -2400,19 +3426,43 @@ mod tests {
         let mut world = World::new(rules, Vec::new());
         let map = world.build().map;
         assert!(matches!(map.rows[0].target, Target::Ghost { .. }));
+        // After the routed browsers, before the ones with no rules yet.
+        let kinds: Vec<(CardKind, bool)> = map
+            .cards
+            .iter()
+            .map(|card| (card.kind, card.unused))
+            .collect();
         assert_eq!(
-            map.cards.last().map(|card| card.kind),
-            Some(CardKind::Ghost)
+            kinds[..2],
+            [(CardKind::Browser, false), (CardKind::Ghost, false)]
         );
+        assert!(kinds[2..].iter().all(|&(_, unused)| unused));
 
+        // No scan yet: no ghost, and no browser to list as idle.
         world.installed.clear();
         let map = world.build().map;
         assert!(matches!(map.rows[0].target, Target::Browser { .. }));
-        assert!(map.not_used.is_none());
+        assert_eq!(map.in_use, "2 in use");
+        assert_eq!(map.also, None);
+    }
+
+    /// Hidden in Settings › Browsers: off the map, unless a rule names it.
+    #[test]
+    fn hidden_browsers_stay_off_the_map() {
+        let mut world = World::rules();
+        for app in &mut world.installed {
+            if app.name == "Safari" || app.name == "Arc" {
+                app.hidden = true;
+            }
+        }
+        let map = world.build().map;
+        assert!(names(&map).contains(&"Arc"), "a rule names it");
+        assert!(!names(&map).contains(&"Safari"));
+        assert_eq!(map.in_use, "3 in use \u{b7} 1 more installed");
     }
 
     #[test]
-    fn pills_past_four_fold_into_more_and_keep_everything_else() {
+    fn a_routed_card_shows_every_routed_profile_and_folds_the_idle_ones() {
         let rules = RulesFile {
             default_browser: "Google Chrome".into(),
             default_profile: "Personal".into(),
@@ -2424,12 +3474,24 @@ mod tests {
         };
         let map = World::new(rules, Vec::new()).build().map;
         let chrome = &map.cards[0];
-        assert_eq!(chrome.pills.len(), MAX_PILLS);
-        assert_eq!(chrome.more_pills, 2);
-        let last = chrome.pills.last().expect("pills");
-        assert!(last.everything_else);
-        assert_eq!(last.label(), "Personal");
-        assert!(map.lit(Focus::EverythingElse).pill(0, MAX_PILLS - 1));
+        let labels: Vec<&str> = chrome.nodes.iter().map(Node::label).collect();
+        // The routed ones by their first row, Everything else after every
+        // rule, then the scan's others.
+        assert_eq!(
+            labels,
+            ["A", "B", "C", "D", "E", "Personal", "Work", "Design"]
+        );
+        assert_eq!((chrome.shown, chrome.folded()), (6, 2));
+        assert!(chrome.nodes[5].everything_else);
+        assert!(
+            map.lit(Some(Focus::EverythingElse)).node(0, 5),
+            "the ∞ node is never folded"
+        );
+        // Never "+1 more": that node just shows.
+        assert_eq!(folded_to(5, ROUTED_NODES), 5);
+        assert_eq!(folded_to(6, ROUTED_NODES), ROUTED_NODES);
+        assert_eq!(folded_to(3, IDLE_NODES), 3);
+        assert_eq!(folded_to(4, IDLE_NODES), IDLE_NODES);
     }
 
     #[test]
@@ -2471,7 +3533,13 @@ mod tests {
         };
         let map = World::new(rules, Vec::new()).build().map;
         assert_eq!(map.rows[0].target, Target::Unset);
-        assert_eq!(map.lit(Focus::Row(0)).curves, []);
+        assert_eq!(map.rows[0].node, None);
+        assert!(
+            map.lit(Some(Focus::Row(0)))
+                .routes
+                .iter()
+                .all(|r| r.from != End::Row(0))
+        );
         assert_eq!(map.cards[0].rules, 0);
     }
 
@@ -2481,21 +3549,129 @@ mod tests {
             handler_match(&[MatcherSpec::Function(function(""))]),
             RowMatch::Function {
                 name: None,
+                excerpt: None,
+                source: None,
                 more: 0
             },
-            "an anonymous function is a bare \u{192}"
+            "a function with no source and no name: \"unnamed function\""
+        );
+        // An inline arrow's name is its property's: it says nothing, so
+        // the row shows what it tests.
+        let arrow = FunctionSpec {
+            name: "match".into(),
+            source: Some("({ url }) => url.host === \"tickets.example.com\"".into()),
+        };
+        assert_eq!(
+            handler_match(&[
+                MatcherSpec::Function(arrow.clone()),
+                MatcherSpec::Wildcard("x".into())
+            ]),
+            RowMatch::Function {
+                name: None,
+                excerpt: Some("url.host === \"tickets.example.com\"".into()),
+                source: arrow.source.clone(),
+                more: 1
+            }
         );
         assert_eq!(
             handler_match(&[
                 MatcherSpec::Regex("/^https:\\/\\/a\\.example\\.com/".into()),
                 MatcherSpec::Wildcard("b.example.com/*".into()),
+                MatcherSpec::Function(function("")),
             ]),
-            RowMatch::Pattern {
-                text: "/^https:\\/\\/a\\.example\\.com/".into(),
-                regex: true,
+            RowMatch::Patterns {
+                patterns: vec![
+                    Pattern {
+                        text: "/^https:\\/\\/a\\.example\\.com/".into(),
+                        regex: true,
+                    },
+                    Pattern {
+                        text: "b.example.com/*".into(),
+                        regex: false,
+                    },
+                ],
                 more: 1,
+                opener: None,
             }
         );
         assert_eq!(handler_match(&[]), RowMatch::Any);
+    }
+
+    #[test]
+    fn a_function_name_tells_only_when_it_is_not_generic() {
+        for generic in [
+            "",
+            "  ",
+            "match",
+            "URL",
+            "handler",
+            "Matcher",
+            "test",
+            "fn",
+            "anonymous",
+            "default",
+        ] {
+            assert_eq!(telling_name(generic), None, "{generic:?}");
+        }
+        assert_eq!(telling_name("isWorkplace").as_deref(), Some("isWorkplace"));
+    }
+
+    #[test]
+    fn excerpts_read_what_a_function_tests() {
+        let excerpt = |source: &str| function_excerpt(source);
+        // An arrow's expression.
+        assert_eq!(
+            excerpt("({ url }) => url.host === \"tickets.example.com\"").as_deref(),
+            Some("url.host === \"tickets.example.com\"")
+        );
+        assert_eq!(excerpt("() => true").as_deref(), Some("true"));
+        // Wrapped in parentheses.
+        assert_eq!(
+            excerpt("(url) => (url.pathname.startsWith(\"/j/\") ? \"Firefox\" : \"Safari\")")
+                .as_deref(),
+            Some("url.pathname.startsWith(\"/j/\") ? \"Firefox\" : \"Safari\"")
+        );
+        // A named function's first return.
+        assert_eq!(
+            excerpt(
+                "function isWorkplace(url) {\n  return url.host.endsWith(\"workplace.example.com\");\n}"
+            )
+            .as_deref(),
+            Some("url.host.endsWith(\"workplace.example.com\")")
+        );
+        // A multi-line async body: comments go, whitespace collapses, the
+        // return's expression across lines.
+        assert_eq!(
+            excerpt(
+                "async (url) => {\n  // the team's hosts\n  const host = url.host;\n  return host === \"a.example.com\" ||\n    /* or */ host === \"b.example.com\";\n}"
+            )
+            .as_deref(),
+            Some("host === \"a.example.com\" || host === \"b.example.com\"")
+        );
+        // No return: the first statement, and more to it.
+        assert_eq!(
+            excerpt("(url) => { console.log(url.host); }").as_deref(),
+            Some("console.log(url.host) \u{2026}")
+        );
+        // A `=>` inside a string or a nested call is not the arrow.
+        assert_eq!(
+            excerpt("function (url) { return [\"=>\"].includes(url.host); }").as_deref(),
+            Some("[\"=>\"].includes(url.host)")
+        );
+        // "//" in a string is not a comment.
+        assert_eq!(
+            excerpt("(url) => url.href.startsWith(\"https://a.example.com\")").as_deref(),
+            Some("url.href.startsWith(\"https://a.example.com\")")
+        );
+        // Long ones are cut before layout.
+        let long = format!(
+            "(url) => {}",
+            "url.host === \"a.example.com\" || ".repeat(20)
+        );
+        let cut = excerpt(&long).expect("an excerpt");
+        assert!(cut.chars().count() <= EXCERPT_MAX);
+        assert!(cut.ends_with('\u{2026}'));
+        assert_eq!(excerpt(""), None);
+        assert_eq!(excerpt("() => {}"), None);
     }
 }

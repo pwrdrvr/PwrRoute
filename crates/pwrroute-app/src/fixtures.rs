@@ -479,7 +479,8 @@ pub fn overview_config() -> std::path::PathBuf {
 }
 
 /// The browsers the Overview's scan finds: Orion, which the config names,
-/// is not among them.
+/// is not among them. Chrome and Edge have profiles the rules never name,
+/// so the map shows idle nodes and Edge folds two of its four.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the window harness and the screens example")
@@ -492,11 +493,24 @@ pub fn overview_browsers() -> Vec<crate::overview_model::Installed> {
         hidden: false,
     };
     vec![
-        app("Google Chrome", "com.google.Chrome", &["Personal", "Work"]),
+        app(
+            "Google Chrome",
+            "com.google.Chrome",
+            &["Personal", "Work", "Design"],
+        ),
         app("Firefox", "org.mozilla.firefox", &[]),
         app("Arc", "company.thebrowser.Browser", &[]),
         app("Safari", "com.apple.Safari", &[]),
-        app("Microsoft Edge", "com.microsoft.edgemac", &[]),
+        app(
+            "Microsoft Edge",
+            "com.microsoft.edgemac",
+            &[
+                "Research and Development Team",
+                "Personal",
+                "Testing",
+                "Travel",
+            ],
+        ),
     ]
 }
 
@@ -576,6 +590,48 @@ pub fn overview_day(parts: &[DayPart], rewritten: u64, failed: u64) -> Vec<Dispa
     }
     records.reverse();
     records
+}
+
+/// Design 1e's rules: seven rules and Everything else into one profile,
+/// Microsoft Edge · Research and Development Team, and three elsewhere.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_fanin_rules() -> RulesFile {
+    serde_json::from_str(include_str!("../fixtures/overview/fanin-rules.json"))
+        .expect("fixtures/overview/fanin-rules.json is a valid rules.json")
+}
+
+/// The day over [`overview_fanin_rules`]: 724 links, 380 to Everything
+/// else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_fanin_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    let rnd = Some(("Microsoft Edge", "Research and Development Team"));
+    overview_day(
+        &[
+            (rule(0), rnd, 120),
+            (rule(1), rnd, 64),
+            (rule(2), rnd, 41),
+            (rule(3), rnd, 33),
+            (rule(4), rnd, 12),
+            (rule(5), rnd, 8),
+            (rule(6), rnd, 5),
+            (rule(7), Some(("Google Chrome", "Design")), 31),
+            (rule(8), Some(("Google Chrome", "Personal")), 22),
+            (rule(9), Some(("Firefox", "")), 8),
+            (pwrroute, rnd, 380),
+        ],
+        412,
+        0,
+    )
 }
 
 /// 1a's day over [`overview_rules`]: 1,412 links, 642 to Everything else,

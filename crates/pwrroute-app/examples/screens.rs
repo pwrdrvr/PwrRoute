@@ -1067,7 +1067,36 @@ fn main() {
                 day: Some(fixtures::overview_rules_day),
                 status: routing(),
                 prepare: |app| {
-                    app.overview.hover(Some(Focus::Card(1)));
+                    app.overview.hover(Some(Focus::Card(0)));
+                },
+            },
+            // 1e: seven rules and Everything else into one profile, every
+            // route traced, in a wide window.
+            Shot {
+                name: "app-0-overview-hover-profile",
+                width: 1880.0,
+                config: false,
+                rules: fixtures::overview_fanin_rules,
+                exists: true,
+                day: Some(fixtures::overview_fanin_day),
+                status: routing(),
+                prepare: |app| {
+                    app.overview.hover(Some(Focus::Node(0, 0)));
+                },
+            },
+            // 1f: Chrome · Work pinned, and Safari's idle node under the
+            // pointer offering "+ Add a rule…".
+            Shot {
+                name: "app-0-overview-pinned",
+                width: 1240.0,
+                config: false,
+                rules: fixtures::overview_rules,
+                exists: true,
+                day: Some(fixtures::overview_rules_day),
+                status: routing(),
+                prepare: |app| {
+                    app.overview.pin(Some(Focus::Node(0, 0)));
+                    app.overview.idle_hover = Some((4, 0));
                 },
             },
             Shot {
@@ -1205,8 +1234,9 @@ fn main() {
                 shot.exists.then(std::time::SystemTime::now),
             );
             let config = shot.config.then(fixtures::overview_config);
-            // The config's map runs longer: room for the callout under it.
-            let height = if shot.config { 1100.0 } else { 900.0 };
+            // Tall enough for the whole map; the config's runs longer, with
+            // the callout under it.
+            let height = if shot.config { 1300.0 } else { 1100.0 };
             let home = home.clone();
             let handle = cx
                 .open_window(size(px(shot.width), px(height)), |_, cx| {

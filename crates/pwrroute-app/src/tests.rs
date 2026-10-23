@@ -2801,39 +2801,143 @@ fn every_window_lands_on_overview_and_rules_opens_as_a_list(cx: &mut TestAppCont
     assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
 }
 
+/// The routes the map painted last, and how many of them were lit.
+fn painted(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> Vec<crate::overview::Painted> {
+    view.read_with(cx, |app, _| app.overview.bounds.borrow().painted.clone())
+}
+
+fn lit_count(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> usize {
+    painted(view, cx).iter().filter(|route| route.lit).count()
+}
+
+fn hover(cx: &mut VisualTestContext, selector: &'static str) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no element {selector} on screen"));
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+    draw(cx);
+    draw(cx);
+}
+
 #[gpui_kit::test]
-fn hovering_a_row_draws_one_curve_to_its_card(cx: &mut TestAppContext) {
+fn every_route_is_drawn_and_a_hovered_row_lights_its_own(cx: &mut TestAppContext) {
     let (view, cx, _) = open_overview(
         cx,
         None,
         fixtures::overview_rules(),
         fixtures::overview_rules_day(),
     );
+    // At rest: five enabled rules and Everything else, none lit.
+    assert_eq!(painted(&view, cx).len(), 6);
+    assert_eq!(lit_count(&view, cx), 0);
+    assert!(
+        painted(&view, cx).iter().all(|route| !route.dashed),
+        "all running"
+    );
+
     scroll_to(cx, "overview-row-1");
-    let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
-    cx.simulate_mouse_move(row.center(), None, Modifiers::default());
-    draw(cx);
-    draw(cx);
+    hover(cx, "overview-row-1");
     assert_eq!(
         view.read_with(cx, |app, _| app.overview.hovered),
         Some(crate::overview_model::Focus::Row(1))
     );
-    let card = cx.debug_bounds("overview-card-0").expect("Chrome's card");
-    let painted = view.read_with(cx, |app, _| app.overview.bounds.borrow().painted.clone());
-    assert_eq!(painted.len(), 1, "one curve: {painted:?}");
-    let (from, to) = painted[0];
+    let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
+    let node = cx
+        .debug_bounds("overview-node-0-0")
+        .expect("Chrome's Work node");
+    let lit: Vec<_> = painted(&view, cx)
+        .into_iter()
+        .filter(|route| route.lit)
+        .collect();
+    assert_eq!(lit.len(), 1, "one route: {lit:?}");
+    let route = lit[0];
     assert!(
-        (from.x - row.right()).abs() < px(12.0),
-        "{from:?} starts at the row"
+        (route.from.x - row.right()).abs() < px(12.0),
+        "{:?} starts at the row",
+        route.from
     );
     assert!(
-        (to.x - card.left()).abs() < px(12.0),
-        "{to:?} ends at the card"
+        (route.to.x - node.left()).abs() < px(12.0),
+        "{:?} ends at the node",
+        route.to
     );
+    assert!((route.to.y - node.center().y).abs() < px(15.0));
+    // The hovered row offers Edit ›.
+    assert!(cx.debug_bounds("overview-row-edit-1").is_some());
+    assert!(cx.debug_bounds("overview-row-edit-0").is_none());
+}
+
+/// More than six rows into one profile: every route lights (the old map
+/// drew none at all past six).
+#[gpui_kit::test]
+fn hovering_a_node_with_seven_rows_lights_every_route(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_fanin_rules(),
+        fixtures::overview_fanin_day(),
+    );
+    scroll_to(cx, "overview-node-0-0");
+    hover(cx, "overview-node-0-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.hovered),
+        Some(crate::overview_model::Focus::Node(0, 0))
+    );
+    // Seven rules and Everything else.
+    assert_eq!(lit_count(&view, cx), 8);
+    let node = cx.debug_bounds("overview-node-0-0").expect("the node");
+    let ends: Vec<_> = painted(&view, cx)
+        .into_iter()
+        .filter(|route| route.lit)
+        .map(|route| route.to.y)
+        .collect();
+    // They fan into the port top to bottom, within its 25px.
+    assert!(ends.windows(2).all(|pair| pair[0] < pair[1]), "{ends:?}");
+    assert!(ends.iter().all(|y| (*y - node.center().y).abs() <= px(8.5)));
 }
 
 #[gpui_kit::test]
-fn a_card_click_pins_it_until_escape(cx: &mut TestAppContext) {
+fn a_pin_survives_the_pointer_leaving_and_escape_clears_it(cx: &mut TestAppContext) {
+    use crate::overview_model::Focus;
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_fanin_rules(),
+        fixtures::overview_fanin_day(),
+    );
+    scroll_to(cx, "overview-node-0-0");
+    click(cx, "overview-node-0-0");
+    let pinned = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.overview.pinned);
+    assert_eq!(pinned(cx), Some(Focus::Node(0, 0)));
+    assert!(
+        cx.debug_bounds("overview-pinned").is_some(),
+        "the legend says so"
+    );
+
+    // The pointer leaves for a row elsewhere: the pin still traces.
+    hover(cx, "overview-row-9");
+    assert_eq!(pinned(cx), Some(Focus::Node(0, 0)));
+    draw(cx);
+    assert_eq!(lit_count(&view, cx), 8);
+
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(pinned(cx), None);
+    assert!(cx.debug_bounds("overview-pinned").is_none());
+
+    // Clear lets go too, and so does a second click on the pin.
+    click(cx, "overview-node-0-0");
+    assert_eq!(pinned(cx), Some(Focus::Node(0, 0)));
+    click(cx, crate::overview::PIN_CLEAR_ID);
+    assert_eq!(pinned(cx), None);
+    click(cx, "overview-row-8");
+    assert_eq!(pinned(cx), Some(Focus::Row(8)));
+    click(cx, "overview-row-8");
+    assert_eq!(pinned(cx), None);
+}
+
+#[gpui_kit::test]
+fn a_card_header_click_pins_it_until_escape(cx: &mut TestAppContext) {
     let (view, cx, _) = open_overview(
         cx,
         None,
@@ -2849,8 +2953,87 @@ fn a_card_click_pins_it_until_escape(cx: &mut TestAppContext) {
     assert_eq!(pinned(cx), None);
 }
 
+/// Folded profiles open in place and stay open for the session.
 #[gpui_kit::test]
-fn a_tile_opens_activity_filtered_and_a_row_opens_its_rule(cx: &mut TestAppContext) {
+fn more_profiles_open_in_place(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // Microsoft Edge, no rules yet, shows two of its four profiles.
+    scroll_to(cx, "overview-more-3");
+    assert!(cx.debug_bounds("overview-node-3-2").is_none());
+    click(cx, "overview-more-3");
+    assert!(cx.debug_bounds("overview-node-3-3").is_some());
+    click(cx, "nav-rules");
+    click(cx, "nav-overview");
+    assert!(cx.debug_bounds("overview-node-3-3").is_some(), "still open");
+    assert!(view.read_with(cx, |app, _| {
+        app.overview.expanded.contains("microsoft edge")
+    }));
+}
+
+/// A node with no rules yet offers "+ Add a rule…": Rules' new rule, with
+/// that browser and profile chosen.
+#[gpui_kit::test]
+fn an_idle_node_adds_a_rule_for_its_profile(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // Chrome's Design: no rule names it.
+    scroll_to(cx, "overview-node-0-2");
+    hover(cx, "overview-node-0-2");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.idle_hover),
+        Some((0, 2))
+    );
+    click(cx, "overview-node-0-2");
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(screen, Screen::Rules);
+    assert_eq!(selection, Some(Selection::Handler(6)));
+    let rule = view.read_with(cx, |app, _| app.store.edited().rules[6].clone());
+    assert_eq!(
+        (rule.browser.as_str(), rule.profile.as_str()),
+        ("Google Chrome", "Design")
+    );
+}
+
+#[gpui_kit::test]
+fn the_keyboard_traces_and_return_opens_the_rule(cx: &mut TestAppContext) {
+    use crate::overview_model::Focus;
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    cx.simulate_keystrokes("down down");
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.keyed),
+        Some(Focus::Row(1))
+    );
+    assert_eq!(
+        lit_count(&view, cx),
+        1,
+        "the keyboard traces like the pointer"
+    );
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(
+        (screen, selection),
+        (Screen::Rules, Some(Selection::Handler(1)))
+    );
+}
+
+#[gpui_kit::test]
+fn a_tile_opens_activity_filtered_and_edit_opens_a_rule(cx: &mut TestAppContext) {
     let (view, cx, _) = open_overview(
         cx,
         None,
@@ -2863,7 +3046,14 @@ fn a_tile_opens_activity_filtered_and_a_row_opens_its_rule(cx: &mut TestAppConte
 
     click(cx, "nav-overview");
     scroll_to(cx, "overview-row-3");
+    // A click pins the row; it no longer opens Rules.
     click(cx, "overview-row-3");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.pinned),
+        Some(crate::overview_model::Focus::Row(3))
+    );
+    click(cx, "overview-row-edit-3");
     let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
     assert_eq!(screen, Screen::Rules);
     assert_eq!(selection, Some(Selection::Handler(3)));

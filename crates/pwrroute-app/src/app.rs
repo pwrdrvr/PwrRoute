@@ -819,18 +819,21 @@ impl PwrRoute {
         }
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<'_, Self>) {
+    fn on_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         // A field in the rail has the keyboard: its keys are its own.
         if !self.focus.is_focused(window) {
             return;
         }
         let key = event.keystroke.key.as_str();
         match self.screen {
-            // Esc lets go of a pinned card.
-            Screen::Overview if key == "escape" => {
-                if self.overview.pin(None) {
-                    cx.notify();
-                }
+            // The map's keyboard: Esc lets go of the pin.
+            Screen::Overview => {
+                self.overview_key(key, event.keystroke.modifiers.shift, window, cx);
             }
             Screen::Rules if self.config.is_none() || self.visual_rules_expanded => {
                 match (key, self.selection) {

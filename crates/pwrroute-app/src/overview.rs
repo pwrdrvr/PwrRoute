@@ -2,58 +2,65 @@
 //! 1a-3f): the hero, the setup card, today's tiles and the route map, drawn
 //! from [`overview_model::build`].
 //!
-//! The map is two flex columns over an absolutely positioned layer: a
-//! `canvas` paints the dot grid and, for what is hovered or pinned, one
-//! bezier per lit route from the row's port to the card's
-//! (`PathBuilder::stroke`). The columns record their children's bounds in
-//! prepaint (`on_children_prepainted`) into [`MapBounds`], which the canvas
-//! reads when it paints in the same frame. Hover is stateful
-//! (`on_hover`), kept in [`OverviewState`]; a card click pins until Esc.
+//! The map is a graph: the rule column and the destination column (one
+//! card per browser, one node per profile) over one `canvas` that paints
+//! the dot grid and every route, a bezier from a row's port to its node's
+//! (`PathBuilder::stroke`; dashed while a route is not running). The rows
+//! and each card's nodes record their bounds in prepaint
+//! (`on_children_prepainted`) into [`MapBounds`], which the canvas reads
+//! when it paints in the same frame, so a hover builds paths from those
+//! bounds and lays nothing out again. What is traced comes from
+//! [`OverviewState`]: the pin, else the keyboard, else the pointer.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Bounds,
-    BoxShadow, Context, Div, ElementId, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, PathBuilder, Pixels, Point, Render, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, StyledText, Window, anchored, canvas, deferred,
-    div, ease_out_quint, linear_color_stop, linear_gradient, point, px,
+    BoxShadow, ClickEvent, Context, Div, ElementId, Font, HighlightStyle, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, PathBuilder, Pixels, Point, Render,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledText, TextRun,
+    Window, WindowTextSystem, anchored, canvas, deferred, div, ease_out_quint, font,
+    linear_color_stop, linear_gradient, point, px,
 };
 
 use crate::app::{PwrRoute, Screen, Selection};
 use crate::overview_model::{
     self, Action, CHANGE_IN_RULES, Callout, Caption, Card, CardKind, ConfigInputs, ConfigTrouble,
-    DONE_TITLE, End, EverythingElse, Focus, Inputs, Installed, Item, Lit, Map, OFFER_BUTTON,
-    OFFER_TITLE, Overview, Pause, Row, RowMatch, RowSource, Setup, SetupStep, State, Status,
-    Target, Tone,
+    DONE_TITLE, End, EverythingElse, Focus, Inputs, Installed, Item, Lit, Map, MapWidths, Node,
+    NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener, Overview, Pattern, Pause, Route, Row, RowMatch,
+    RowSource, Setup, SetupStep, Share, State, Status, Target, Tone, fit_tags,
 };
 use crate::rules_view::pane_frame;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{
-    ButtonKind, add_button, badge, button, caret, field_label, input_box, menu_card, menu_row,
-    one_line, paragraph, profiles_hint, tag_frame,
+    ButtonKind, add_button, badge, button, caret, field_label, input_box, key_cap, menu_card,
+    menu_row, one_line, paragraph, profiles_hint, tag_frame,
 };
 
-/// The rule column's width, and the gutter the curves cross.
-const RULE_COLUMN: f32 = 360.0;
-const GUTTER: f32 = 96.0;
-/// The share column shows on cards at least this wide.
-const SHARE_MIN: f32 = 360.0;
+/// The share shows on cards at least this wide.
+const SHARE_MIN: f32 = 300.0;
 /// The rail, and the pane's and the map's padding and borders, for the
-/// cards' width at a window width.
+/// map's widths at a window width.
 const RAIL: f32 = 197.0;
 const PANE_X: f32 = 48.0;
 const MAP_X: f32 = 34.0;
+
+/// A route at rest, and while something else is traced: 1px accent.
+const ROUTE_REST: f32 = 0.30;
+const ROUTE_DIM: f32 = 0.08;
+/// A route that is not running, at rest: dashed `--text-primary`.
+const STOPPED_REST: f32 = 0.22;
 
 /// Hover fades and dims over this.
 const FADE: Duration = Duration::from_millis(120);
 /// Today's numbers count up over this the first time they show.
 const TICK: Duration = Duration::from_millis(400);
-/// The override's hand-off curve.
+/// The override's hand-off route.
 const HANDOFF: Duration = Duration::from_millis(900);
 /// What is not lit, while something is.
 const DIM: f32 = 0.45;
@@ -63,14 +70,30 @@ pub const PANE_ID: &str = "overview-pane";
 pub const HERO_ACTION_ID: &str = "overview-hero-action";
 pub const CALLOUT_BUTTON_ID: &str = "overview-callout-button";
 pub const CALLOUT_UNDO_ID: &str = "overview-callout-undo";
+/// The legend's Clear, while something is pinned.
+pub const PIN_CLEAR_ID: &str = "overview-pin-clear";
 
-/// Where the rows and cards were painted this frame, for the curves.
+/// One route as the canvas last painted it.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "read by the window's tests"))]
+pub struct Painted {
+    /// The row's port, and the node's (where in its fan).
+    pub from: Point<Pixels>,
+    pub to: Point<Pixels>,
+    /// Drawn highlighted.
+    pub lit: bool,
+    /// Drawn dashed: not running.
+    pub dashed: bool,
+}
+
+/// Where the rows and nodes were painted this frame, for the routes.
 #[derive(Debug, Default)]
 pub struct MapBounds {
     pub rows: HashMap<End, Bounds<Pixels>>,
-    pub cards: HashMap<usize, Bounds<Pixels>>,
-    /// The curves the canvas painted last, as (row port, card port).
-    pub painted: Vec<(Point<Pixels>, Point<Pixels>)>,
+    /// Each card's nodes that show (a special card is its one node).
+    pub nodes: HashMap<NodeRef, Bounds<Pixels>>,
+    /// Every route the canvas painted last.
+    pub painted: Vec<Painted>,
 }
 
 /// The screen's own state, on the window.
@@ -78,17 +101,27 @@ pub struct MapBounds {
 pub struct OverviewState {
     /// Under the pointer.
     pub hovered: Option<Focus>,
-    /// A clicked card (or Everything else): lit until Esc.
+    /// Clicked: traced until it is clicked again, Esc, Clear, or a click on
+    /// the map's empty ground. It wins over the pointer and the keyboard.
     pub pinned: Option<Focus>,
-    /// Bumps whenever what is lit changes: the old curves fade out and the
-    /// new ones in, each layer keyed by it.
+    /// Where the arrow keys (and Tab) put the keyboard on the map.
+    pub keyed: Option<Focus>,
+    /// The node with no rules yet under the pointer: it offers "+ Add a
+    /// rule…".
+    pub idle_hover: Option<NodeRef>,
+    /// Cards whose "+N more profiles" is open, by key, for the session.
+    pub expanded: HashSet<String>,
+    /// The card that just opened: its new nodes fade in.
+    pub expanding: Option<usize>,
+    /// Bumps whenever what is traced changes: the routes ease from how
+    /// they were drawn, keyed by it.
     generation: usize,
-    /// What was lit before the last change, for the fade-out.
+    /// What was traced before the last change, for the fade.
     previous: Option<Focus>,
     /// The callout's switch was just used: Undo stays until the reader
     /// leaves Overview.
     pub just_overridden: bool,
-    /// The override's hand-off curve while it plays, by its number: every
+    /// The override's hand-off route while it plays, by its number: every
     /// switch (and Undo) plays a new one, and it is gone after [`HANDOFF`].
     handoff: Option<usize>,
     handoffs: usize,
@@ -110,12 +143,12 @@ pub struct OverviewState {
 }
 
 impl OverviewState {
-    /// What is lit: the hover, else the pin.
+    /// What is traced: the pin, else the keyboard, else the pointer.
     pub fn focus(&self) -> Option<Focus> {
-        self.hovered.or(self.pinned)
+        self.pinned.or(self.keyed).or(self.hovered)
     }
 
-    /// Changes what lit, keeping the previous for the fade.
+    /// Changes what is traced, keeping the previous for the fade.
     fn lit_change(&mut self, change: impl FnOnce(&mut Self)) -> bool {
         let before = self.focus();
         change(self);
@@ -127,8 +160,16 @@ impl OverviewState {
         true
     }
 
+    /// The pointer moved onto `focus` (or off everything): the keyboard
+    /// lets go.
     pub fn hover(&mut self, focus: Option<Focus>) -> bool {
-        self.lit_change(|this| this.hovered = focus)
+        let moved = self.hovered != focus;
+        self.lit_change(|this| {
+            this.hovered = focus;
+            if focus.is_some() {
+                this.keyed = None;
+            }
+        }) || moved
     }
 
     /// Leaves `focus` if it is what is hovered.
@@ -144,6 +185,22 @@ impl OverviewState {
         self.lit_change(|this| this.pinned = focus)
     }
 
+    /// Puts the keyboard on `focus`.
+    pub fn key(&mut self, focus: Option<Focus>) -> bool {
+        let moved = self.keyed != focus;
+        self.lit_change(|this| this.keyed = focus) || moved
+    }
+
+    /// Opens or closes a card's "+N more profiles".
+    pub fn toggle_expanded(&mut self, key: &str, card: usize) {
+        if self.expanded.remove(key) {
+            self.expanding = None;
+        } else {
+            self.expanded.insert(key.to_owned());
+            self.expanding = Some(card);
+        }
+    }
+
     /// The hand-off playing now, by its number.
     #[cfg(test)]
     pub fn handing_off(&self) -> Option<usize> {
@@ -157,8 +214,8 @@ impl OverviewState {
     }
 
     /// The reader leaves Overview: its numbers have counted up, the
-    /// callout's Undo is over, nothing stays lit, and nothing fades or
-    /// hands off when they come back.
+    /// callout's Undo is over, nothing stays traced, and nothing fades or
+    /// hands off when they come back. Open cards stay open.
     pub fn leave(&mut self) {
         self.ticked = true;
         self.just_overridden = false;
@@ -167,6 +224,9 @@ impl OverviewState {
         self.choosing = None;
         self.hover(None);
         self.pin(None);
+        self.key(None);
+        self.idle_hover = None;
+        self.expanding = None;
         self.previous = None;
         self.handoff = None;
     }
@@ -275,6 +335,90 @@ impl PwrRoute {
         cx.notify();
     }
 
+    /// A node with no rules yet: "+ Add a rule…" opens Rules' new-rule
+    /// editor with that browser and profile chosen.
+    pub fn add_rule_for(
+        &mut self,
+        browser: &str,
+        profile: &str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.navigate(Screen::Rules, window, cx);
+        if self.config.is_some() {
+            self.visual_rules_expanded = true;
+        }
+        let index = self.store.add_handler();
+        self.store.set_browser(index, browser);
+        self.store.set_profile(index, profile);
+        self.selection = Some(Selection::Handler(index));
+        self.refresh(cx);
+        self.rebuild_rail(cx);
+        self.add_pattern(window, cx);
+    }
+
+    /// A key on Overview while the window has the keyboard. Up, Down and
+    /// Tab (Shift-Tab back) step through the rows, Everything else and the
+    /// nodes, which trace as the pointer does; Return opens the row the
+    /// keyboard is on, or pins the node; Esc lets go of the pin and the
+    /// keyboard.
+    pub fn overview_key(
+        &mut self,
+        key: &str,
+        shift: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match key {
+            "escape" => {
+                let unpinned = self.overview.pin(None);
+                let unkeyed = self.overview.key(None);
+                if unpinned || unkeyed {
+                    cx.notify();
+                }
+            }
+            "up" | "down" | "tab" => {
+                let status = status(self, cx);
+                let map = build(self, &status, cx).map;
+                let expanded = &self.overview.expanded;
+                let order = map.keyboard_order(|card| expanded.contains(card.key()));
+                if order.is_empty() {
+                    return;
+                }
+                let back = key == "up" || (key == "tab" && shift);
+                let at = self
+                    .overview
+                    .keyed
+                    .and_then(|keyed| order.iter().position(|focus| *focus == keyed));
+                let next = match (at, back) {
+                    (None, false) => 0,
+                    (None, true) => order.len() - 1,
+                    (Some(i), false) => (i + 1).min(order.len() - 1),
+                    (Some(i), true) => i.saturating_sub(1),
+                };
+                if self.overview.key(Some(order[next])) {
+                    cx.notify();
+                }
+            }
+            "enter" => match self.overview.keyed {
+                Some(Focus::Row(row)) => {
+                    let status = status(self, cx);
+                    let source = build(self, &status, cx)
+                        .map
+                        .rows
+                        .get(row)
+                        .map(|row| row.source);
+                    if let Some(source) = source {
+                        self.open_rule(source, window, cx);
+                    }
+                }
+                Some(focus) => toggle_pin(self, focus, cx),
+                None => {}
+            },
+            _ => {}
+        }
+    }
+
     /// The callout's switch: PwrRoute's default takes everything else
     /// (`"precedence": "pwrroute"`), written now; Undo writes it back. A
     /// change the store would not write (or that failed) leaves the
@@ -377,25 +521,90 @@ impl PwrRoute {
     }
 }
 
-/// A tooltip's view: one line on the popover card.
-struct Tip(SharedString);
+/// The most lines of a ƒ row's source its tooltip shows.
+const TIP_LINES: usize = 12;
+
+/// A tooltip's view: one line on the popover card, and a ƒ row's source
+/// under it in mono (12 lines at most, 480 wide).
+struct Tip {
+    label: SharedString,
+    source: Option<SharedString>,
+}
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+        let lines: Vec<String> = self
+            .source
+            .as_ref()
+            .map(|source| {
+                let all: Vec<&str> = source.lines().collect();
+                let mut lines: Vec<String> = all
+                    .iter()
+                    .take(TIP_LINES)
+                    .map(|line| line.trim_end().to_owned())
+                    .collect();
+                if all.len() > TIP_LINES {
+                    lines.push("\u{2026}".to_owned());
+                }
+                lines
+            })
+            .unwrap_or_default();
         div()
             .px(px(8.0))
             .py(px(5.0))
+            .max_w(px(480.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
             .bg(theme::bg_popover())
             .border_1()
             .border_color(theme::border_default())
             .rounded(px(6.0))
-            .child(text(self.0.clone(), 11.0, 500.0, theme::text_secondary()))
+            .child(text(
+                self.label.clone(),
+                11.0,
+                500.0,
+                theme::text_secondary(),
+            ))
+            .when(!lines.is_empty(), |tip| {
+                tip.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .children(lines.into_iter().map(|line| {
+                            one_line(
+                                if line.is_empty() {
+                                    " ".to_owned()
+                                } else {
+                                    line
+                                },
+                                theme::mono_family(500.0),
+                                500.0,
+                                10.5,
+                                14.0,
+                                theme::text_muted(),
+                            )
+                            .whitespace_nowrap()
+                        })),
+                )
+            })
     }
 }
 
-fn tip(label: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+fn tip(
+    label: impl Into<SharedString>,
+    source: Option<String>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let label = label.into();
-    move |_, cx| cx.new(|_| Tip(label.clone())).into()
+    let source = source.map(SharedString::from);
+    move |_, cx| {
+        cx.new(|_| Tip {
+            label: label.clone(),
+            source: source.clone(),
+        })
+        .into()
+    }
 }
 
 fn alpha(color: Hsla, a: f32) -> Hsla {
@@ -474,8 +683,7 @@ pub fn pane(
 ) -> Stateful<Div> {
     let overview = build(app, status, cx);
     let width = f32::from(window.viewport_size().width);
-    let cards_width = width - RAIL - PANE_X - MAP_X - RULE_COLUMN - GUTTER;
-    let wide = cards_width >= SHARE_MIN;
+    let widths = MapWidths::of_content(width - RAIL - PANE_X - MAP_X);
     pane_frame(PANE_ID)
         .debug_selector(|| PANE_ID.into())
         .child(hero(&overview, cx))
@@ -486,7 +694,7 @@ pub fn pane(
                 .map(|setup| setup_card(app, setup, cx)),
         )
         .child(today(app, &overview, cx))
-        .child(map(app, &overview.map, wide, cx))
+        .child(map(app, &overview.map, widths, window, cx))
         .children(
             overview
                 .callout
@@ -1034,7 +1242,8 @@ fn tile_number(n: u64, color: Hsla) -> Div {
 
 // --- the map -----------------------------------------------------------------
 
-/// The lit state now and before the last change, for one element.
+/// The lit state now and before the last change, for one element: `None`
+/// while nothing is traced.
 #[derive(Clone, Copy)]
 struct Light {
     now: Option<bool>,
@@ -1046,7 +1255,7 @@ impl Light {
         self.now == Some(true)
     }
 
-    /// Its opacity before and after: dimmed while something else is lit.
+    /// Its opacity before and after: dimmed while something else is traced.
     fn opacities(self) -> (f32, f32) {
         let of = |state: Option<bool>| match state {
             Some(false) => DIM,
@@ -1056,17 +1265,120 @@ impl Light {
     }
 }
 
-fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let focus = app.overview.focus();
-    let lit = focus.map(|focus| map.lit(focus));
-    let before = app.overview.previous.map(|focus| map.lit(focus));
-    let generation = app.overview.generation;
-    let light = |is: &dyn Fn(&Lit) -> bool| Light {
-        now: lit.as_ref().map(is),
-        before: before.as_ref().map(is),
-    };
+/// What the map's parts read while they draw.
+struct Look<'a> {
+    lit: &'a Lit,
+    before: &'a Lit,
+    generation: usize,
+    hovered: Option<Focus>,
+    pinned: Option<Focus>,
+    keyed: Option<Focus>,
+    idle_hover: Option<NodeRef>,
+}
 
-    // The header.
+impl Look<'_> {
+    fn light(&self, is: impl Fn(&Lit) -> bool) -> Light {
+        Light {
+            now: self.lit.traced.then(|| is(self.lit)),
+            before: self.before.traced.then(|| is(self.before)),
+        }
+    }
+
+    /// The pointer or the keyboard is on it, or it is pinned.
+    fn touched(&self, focus: Focus) -> bool {
+        [self.hovered, self.pinned, self.keyed].contains(&Some(focus))
+    }
+}
+
+/// Text widths for the rows' layout, from the window's text system: a row
+/// shows as many whole pattern tags as fit.
+struct Measure(Arc<WindowTextSystem>);
+
+impl Measure {
+    fn width(&self, text: &str, family: &'static str, css_weight: f32, size: f32) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        let run = TextRun {
+            len: text.len(),
+            font: Font {
+                weight: theme::weight(css_weight),
+                ..font(family)
+            },
+            color: theme::text_primary(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        // GPUI rounds a text box up to a whole pixel.
+        f32::from(self.0.layout_line(text, px(size), &[run], None).width).ceil()
+    }
+
+    fn mono(&self, text: &str, size: f32) -> f32 {
+        self.width(text, theme::mono_family(500.0), 500.0, size)
+    }
+
+    fn sans(&self, text: &str, css_weight: f32, size: f32) -> f32 {
+        self.width(text, theme::SANS, css_weight, size)
+    }
+}
+
+/// Clears the pin, from the legend's Clear or the map's empty ground.
+fn clear_pin(this: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+    if this.overview.pin(None) {
+        cx.notify();
+    }
+}
+
+/// Pins `focus`, or lets go of it when it is the pin.
+fn toggle_pin(this: &mut PwrRoute, focus: Focus, cx: &mut Context<'_, PwrRoute>) {
+    let pin = (this.overview.pinned != Some(focus)).then_some(focus);
+    if this.overview.pin(pin) {
+        cx.notify();
+    }
+}
+
+/// A hover handler for a traced element.
+fn hover_listener(
+    focus: Focus,
+    cx: &mut Context<'_, PwrRoute>,
+) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    cx.listener(move |this, over: &bool, _, cx| {
+        let changed = if *over {
+            this.overview.hover(Some(focus))
+        } else {
+            this.overview.unhover(focus, None)
+        };
+        if changed {
+            cx.notify();
+        }
+    })
+}
+
+fn map(
+    app: &PwrRoute,
+    map: &Map,
+    widths: MapWidths,
+    window: &mut Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Stateful<Div> {
+    let state = &app.overview;
+    let focus = state.focus();
+    let lit = map.lit(focus);
+    let before = map.lit(state.previous);
+    let trace = Look {
+        lit: &lit,
+        before: &before,
+        generation: state.generation,
+        hovered: state.hovered,
+        pinned: state.pinned,
+        keyed: state.keyed,
+        idle_hover: state.idle_hover,
+    };
+    let measure = Measure(window.text_system().clone());
+    let wide = widths.dest >= SHARE_MIN;
+
+    // The header: the two captions over their columns.
     let (left_cap, left_small, left_color) = match map.caption {
         Caption::InOrder => ("In order", Some("first match wins"), theme::text_muted()),
         Caption::WhenResumes => ("When routing resumes", None, theme::warn_text()),
@@ -1085,8 +1397,8 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
         .border_color(theme::border_faint())
         .child(
             div()
-                .w(px(RULE_COLUMN))
-                .flex_none()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .justify_between()
@@ -1096,8 +1408,9 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
         )
         .child(
             div()
-                .ml(px(GUTTER))
-                .flex_1()
+                .ml(px(widths.gutter))
+                .w(px(widths.dest))
+                .flex_none()
                 .min_w_0()
                 .flex()
                 .items_center()
@@ -1108,19 +1421,24 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
                     wide.then_some("where links open"),
                     theme::text_muted(),
                 ))
-                .when_some(map.not_used.clone(), |c2, not_used| {
-                    c2.child(div().min_w_0().overflow_hidden().child(one_line(
-                        not_used,
-                        theme::SANS,
-                        500.0,
-                        10.5,
-                        10.5,
-                        theme::text_subtle(),
-                    )))
-                }),
+                .child(
+                    div()
+                        .debug_selector(|| "overview-in-use".into())
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(one_line(
+                            map.in_use.clone(),
+                            theme::SANS,
+                            500.0,
+                            10.5,
+                            10.5,
+                            theme::text_subtle(),
+                        )),
+                ),
         );
+    let legend = legend(map, &lit, state.pinned, cx);
 
-    // The rule column, and which child is which row for the curves.
+    // The rule column, and which child is which row for the routes.
     let mut ends: Vec<Option<End>> = Vec::new();
     let mut left: Vec<AnyElement> = Vec::new();
     if let Some(rewrites) = &map.rewrites {
@@ -1148,10 +1466,8 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
             }
             Item::Row(index) => {
                 let row = &map.rows[*index];
-                let index = *index;
-                let light = light(&|lit: &Lit| lit.row(index));
-                ends.push(Some(End::Row(index)));
-                let drawn = rule_row(index, row, light, generation, cx);
+                ends.push(Some(End::Row(*index)));
+                let drawn = rule_row(*index, row, &trace, widths, &measure, cx);
                 // Nothing runs it (the config never loaded): faded, as a
                 // row that is not lit.
                 left.push(if row.idle {
@@ -1166,18 +1482,20 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
     ends.push(Some(End::EverythingElse));
     left.push(everything_else_row(
         &map.everything_else,
-        light(&|lit: &Lit| lit.everything_else),
-        generation,
+        &trace,
         !map.items.is_empty() || map.empty.is_some(),
         cx,
     ));
 
-    let bounds = app.overview.bounds.clone();
+    let bounds = state.bounds.clone();
     let rows_bounds = bounds.clone();
     let rule_column = div()
         .on_children_prepainted(move |children, _, _| {
             let mut bounds = rows_bounds.borrow_mut();
             bounds.rows.clear();
+            // The cards prepaint after this column: their nodes record
+            // themselves anew.
+            bounds.nodes.clear();
             for (child, end) in children.iter().zip(&ends) {
                 if let Some(end) = end {
                     bounds.rows.insert(*end, *child);
@@ -1185,146 +1503,135 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
             }
         })
         .relative()
-        .w(px(RULE_COLUMN))
-        .flex_none()
+        .flex_1()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap(px(4.0))
         .children(left);
 
-    let cards_bounds = bounds.clone();
-    let cards = map.cards.iter().enumerate().map(|(index, card)| {
-        let drawn = destination_card(
-            index,
-            card,
-            light(&|lit: &Lit| lit.card(index)),
-            &|pill| light(&move |lit: &Lit| lit.pill(index, pill)),
-            generation,
-            wide,
-            app.overview.ticked,
-            cx,
-        );
+    // The destinations: routed browsers, the special cards, then "Also
+    // installed" and the browsers with no rules yet.
+    let mut right: Vec<AnyElement> = Vec::new();
+    let mut also_shown = false;
+    for (index, card) in map.cards.iter().enumerate() {
+        if card.unused && !also_shown {
+            also_shown = true;
+            if let Some(also) = &map.also {
+                right.push(also_header(also.clone()).into_any_element());
+            }
+        }
+        let expanded = state.expanded.contains(card.key());
+        let drawn = if card.single() {
+            single_card(index, card, &trace, &bounds, cx)
+        } else {
+            browser_card(index, card, &trace, expanded, wide, app, &bounds, cx)
+        };
         // Fed only by rows nothing runs.
-        if card.idle {
+        right.push(if card.idle {
             div().opacity(DIM).child(drawn).into_any_element()
         } else {
             drawn
-        }
-    });
+        });
+    }
     let card_column = div()
-        .on_children_prepainted(move |children, _, _| {
-            let mut bounds = cards_bounds.borrow_mut();
-            bounds.cards = children.iter().copied().enumerate().collect();
-        })
         .relative()
-        .flex_1()
-        .min_w_0()
+        .w(px(widths.dest))
+        .flex_none()
         .flex()
         .flex_col()
-        .gap(px(12.0))
-        .children(cards);
+        .gap(px(10.0))
+        .children(right);
 
-    // The curves for what is lit now, fading in, over the ones for what
-    // was lit before, fading out; and the override's hand-off.
-    let curves_now = lit
-        .as_ref()
-        .map(|lit| lit.curves.clone())
-        .unwrap_or_default();
-    let curves_before = before
-        .as_ref()
-        .map(|lit| lit.curves.clone())
-        .unwrap_or_default();
-    let handoff = app.overview.handoff.and_then(|_| {
-        map.everything_else
-            .target
-            .card()
-            .map(|card| vec![(End::EverythingElse, card)])
+    // Every route, at rest or dimmed, then the traced ones over them; they
+    // ease to their new state when the trace changes.
+    let routes = Rc::new(lit.routes.clone());
+    let routes_before = Rc::new(if state.generation == 0 {
+        lit.routes.clone()
+    } else {
+        before.routes.clone()
     });
-    let layer = |curves: Vec<(End, usize)>, record: bool| {
+    let gutter = widths.gutter;
+    let layer = {
         let bounds = bounds.clone();
-        canvas(
-            |_, _, _| {},
-            move |_, _, window, _| paint_curves(&curves, &bounds, record, window),
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-    };
-    let fading = |curves: Vec<(End, usize)>, id: ElementId, from: f32, to: f32, record: bool| {
         div()
             .absolute()
             .top_0()
             .left_0()
             .size_full()
-            .child(layer(curves, record))
             .with_animation(
-                id,
+                ("overview-routes", state.generation),
                 Animation::new(FADE).with_easing(ease_out_quint()),
-                move |layer, t| layer.opacity(from + (to - from) * t),
+                move |layer, t| {
+                    let strokes = strokes(&routes, &routes_before, t);
+                    let bounds = bounds.clone();
+                    layer.child(
+                        canvas(
+                            |_, _, _| {},
+                            move |area, _, window, _| {
+                                paint_dots(area, window);
+                                paint_routes(&strokes, &bounds, gutter, true, window);
+                            },
+                        )
+                        .size_full(),
+                    )
+                },
             )
     };
+    let handoff = app.overview.handoff.and_then(|handoff| {
+        let route = lit
+            .routes
+            .iter()
+            .find(|route| route.from == End::EverythingElse)
+            .copied()?;
+        let bounds = bounds.clone();
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |_, _, window, _| {
+                            let stroke = Stroke {
+                                base: 0.0,
+                                glow: 1.0,
+                                ..Stroke::of(&route)
+                            };
+                            paint_routes(&[stroke], &bounds, gutter, false, window);
+                        },
+                    )
+                    .size_full(),
+                )
+                .with_animation(
+                    ("overview-handoff", handoff),
+                    Animation::new(HANDOFF),
+                    // Up quickly, held, then gone.
+                    |layer, t| layer.opacity(((1.0 - t) * 3.0).min(1.0) * (t * 6.0).min(1.0)),
+                ),
+        )
+    });
 
     let body = div()
+        .id("overview-map-body")
         .debug_selector(|| "overview-map-body".into())
         .relative()
         .flex()
-        .gap(px(GUTTER))
+        .items_start()
+        .gap(px(widths.gutter))
         .p(px(16.0))
         .when(map.dimmed, |body| body.opacity(0.4))
-        .child(
-            canvas(
-                |_, _, _| {},
-                |bounds, _, window, _| paint_dots(bounds, window),
-            )
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full(),
-        )
-        .when(!curves_before.is_empty(), |body| {
-            body.child(fading(
-                curves_before,
-                ("overview-curves-out", generation).into(),
-                1.0,
-                0.0,
-                false,
-            ))
-        })
-        .when(!curves_now.is_empty(), |body| {
-            body.child(fading(
-                curves_now,
-                ("overview-curves-in", generation).into(),
-                0.0,
-                1.0,
-                true,
-            ))
-        })
-        .when(lit.is_none() || curves_now_is_empty(&lit), |body| {
-            // Nothing is drawn: forget the last curves.
-            bounds.borrow_mut().painted.clear();
-            body
-        })
-        .when_some(handoff, |body, curves| {
-            body.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .child(layer(curves, false))
-                    .with_animation(
-                        ("overview-handoff", app.overview.handoff.unwrap_or_default()),
-                        Animation::new(HANDOFF),
-                        // Up quickly, held, then gone.
-                        |layer, t| layer.opacity(((1.0 - t) * 3.0).min(1.0) * (t * 6.0).min(1.0)),
-                    ),
-            )
-        })
+        // A click on the empty ground lets go of the pin.
+        .on_click(cx.listener(|this, _, _, cx| clear_pin(this, cx)))
+        .child(layer)
+        .children(handoff)
         .child(rule_column)
         .child(card_column);
 
     div()
+        .id("overview-map")
         .debug_selector(|| "overview-map".into())
         .flex_none()
         .rounded(px(14.0))
@@ -1332,11 +1639,180 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
         .border_color(theme::border_subtle())
         .bg(theme::bg_panel())
         .child(header)
+        .child(legend)
         .child(body)
 }
 
-fn curves_now_is_empty(lit: &Option<Lit>) -> bool {
-    lit.as_ref().is_none_or(|lit| lit.curves.is_empty())
+/// The legend's line: a 22px swatch and its word.
+fn swatch(label: &'static str, style: Swatch) -> Div {
+    let line = match style {
+        Swatch::Route => div().w(px(22.0)).h(px(1.0)).bg(alpha(theme::accent(), 0.3)),
+        Swatch::Highlighted => div().w(px(22.0)).h(px(2.0)).bg(theme::accent()),
+        Swatch::NotRunning => div()
+            .w(px(22.0))
+            .flex()
+            .gap(px(4.0))
+            .children((0..3).map(|_| {
+                div()
+                    .w(px(4.0))
+                    .h(px(1.0))
+                    .bg(alpha(theme::text_primary(), 0.45))
+            })),
+    };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .child(line)
+        .child(text(label, 10.5, 500.0, theme::text_muted()))
+}
+
+#[derive(Clone, Copy)]
+enum Swatch {
+    Route,
+    Highlighted,
+    NotRunning,
+}
+
+/// The line under the header: what the strokes mean, and how to trace, or
+/// what is pinned.
+fn legend(map: &Map, lit: &Lit, pinned: Option<Focus>, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let hint: AnyElement = match pinned.and_then(|focus| map.focus_label(focus)) {
+        Some(label) => div()
+            .debug_selector(|| "overview-pinned".into())
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(text("Pinned:", 10.5, 400.0, theme::text_subtle()))
+                    .child(text(label, 10.5, 600.0, theme::accent_bright())),
+            )
+            .child(key_cap("esc"))
+            .child(
+                button("Clear", ButtonKind::Quiet, true)
+                    .id(PIN_CLEAR_ID)
+                    .debug_selector(|| PIN_CLEAR_ID.into())
+                    .py(px(4.0))
+                    .px(px(8.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        clear_pin(this, cx);
+                    })),
+            )
+            .into_any_element(),
+        None => text(
+            "Hover a rule or profile to trace its routes \u{00b7} click to pin",
+            10.5,
+            400.0,
+            theme::text_subtle(),
+        )
+        .into_any_element(),
+    };
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(16.0))
+        .h(px(30.0))
+        .px(px(16.0))
+        .border_b_1()
+        .border_color(theme::border_faint())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(14.0))
+                .child(swatch("route", Swatch::Route))
+                .child(swatch("highlighted", Swatch::Highlighted))
+                .when(lit.any_not_running(), |legend| {
+                    legend.child(swatch("not running", Swatch::NotRunning))
+                }),
+        )
+        .child(hint)
+}
+
+/// One route as the canvas strokes it: the 1px resting line's alpha, and
+/// how far it is highlighted (0 to 1).
+#[derive(Clone, Copy, Debug)]
+struct Stroke {
+    from: End,
+    to: NodeRef,
+    slot: usize,
+    fan: usize,
+    running: bool,
+    base: f32,
+    glow: f32,
+}
+
+impl Stroke {
+    fn of(route: &Route) -> Self {
+        let (base, glow) = match (route.trace, route.running) {
+            (overview_model::Trace::Lit, _) => (0.0, 1.0),
+            (overview_model::Trace::Rest, true) => (ROUTE_REST, 0.0),
+            (overview_model::Trace::Rest, false) => (STOPPED_REST, 0.0),
+            (overview_model::Trace::Dim, _) => (ROUTE_DIM, 0.0),
+        };
+        Self {
+            from: route.from,
+            to: route.to,
+            slot: route.slot,
+            fan: route.fan,
+            running: route.running,
+            base,
+            glow,
+        }
+    }
+}
+
+/// Each route `t` of the way from how it was drawn to how it is: a route
+/// that was not there starts unseen, and one that is gone fades out.
+fn strokes(now: &[Route], before: &[Route], t: f32) -> Vec<Stroke> {
+    let mix = |a: f32, b: f32| a + (b - a) * t;
+    let mut out: Vec<Stroke> = now
+        .iter()
+        .map(|route| {
+            let to = Stroke::of(route);
+            let from = before
+                .iter()
+                .find(|old| old.from == route.from && old.to == route.to)
+                .map_or(
+                    Stroke {
+                        base: 0.0,
+                        glow: 0.0,
+                        ..to
+                    },
+                    Stroke::of,
+                );
+            Stroke {
+                base: mix(from.base, to.base),
+                glow: mix(from.glow, to.glow),
+                ..to
+            }
+        })
+        .collect();
+    out.extend(
+        before
+            .iter()
+            .filter(|old| {
+                !now.iter()
+                    .any(|route| route.from == old.from && route.to == old.to)
+            })
+            .map(|old| {
+                let from = Stroke::of(old);
+                Stroke {
+                    base: mix(from.base, 0.0),
+                    glow: mix(from.glow, 0.0),
+                    ..from
+                }
+            }),
+    );
+    out
 }
 
 /// The dot grid: 1px dots every 16px at 5%, offset 8.
@@ -1362,35 +1838,73 @@ fn paint_dots(bounds: Bounds<Pixels>, window: &mut Window) {
     }
 }
 
-/// One curve per lit route: a 6px glow at 16%, then the 1.5px line.
-fn paint_curves(
-    curves: &[(End, usize)],
+/// Every route from its row's port to its node's, as
+/// `M x1 y1 C x1+dx y1, x2-dx y2, x2 y2` with dx half the gutter: the
+/// resting and dimmed lines first, then the highlighted ones over them.
+/// Routes into one node fan into its port in their rows' order.
+fn paint_routes(
+    strokes: &[Stroke],
     bounds: &Rc<RefCell<MapBounds>>,
+    gutter: f32,
     record: bool,
     window: &mut Window,
 ) {
+    let dx = px(gutter / 2.0);
+    let curve = |from: Point<Pixels>, to: Point<Pixels>, width: f32, dashed: bool| {
+        let mut path = PathBuilder::stroke(px(width));
+        if dashed {
+            path = path.dash_array(&[px(4.0), px(4.0)]);
+        }
+        path.move_to(from);
+        path.cubic_bezier_to(to, point(from.x + dx, from.y), point(to.x - dx, to.y));
+        path.build().ok()
+    };
     let mut painted = Vec::new();
     {
         let bounds = bounds.borrow();
-        for (end, card) in curves {
-            let (Some(row), Some(card)) = (bounds.rows.get(end), bounds.cards.get(card)) else {
-                continue;
-            };
-            let from = point(row.right(), row.center().y);
-            let to = point(card.left(), card.center().y);
-            for (width, color) in [(6.0, alpha(theme::accent(), 0.16)), (1.5, theme::accent())] {
-                let mut path = PathBuilder::stroke(px(width));
-                path.move_to(from);
-                path.cubic_bezier_to(
-                    to,
-                    point(from.x + px(56.0), from.y),
-                    point(to.x - px(56.0), to.y),
-                );
-                if let Ok(path) = path.build() {
+        let ends: Vec<Option<(Point<Pixels>, Point<Pixels>)>> = strokes
+            .iter()
+            .map(|stroke| {
+                let row = bounds.rows.get(&stroke.from)?;
+                let node = bounds.nodes.get(&stroke.to)?;
+                let (step, spread) = overview_model::fan_spread(stroke.fan);
+                let y = node.center().y - px(spread / 2.0) + px(step * stroke.slot as f32);
+                Some((point(row.right(), row.center().y), point(node.left(), y)))
+            })
+            .collect();
+        for (stroke, ends) in strokes.iter().zip(&ends) {
+            let Some((from, to)) = *ends else { continue };
+            if stroke.base > 0.003 {
+                let color = if stroke.running {
+                    alpha(theme::accent(), stroke.base)
+                } else {
+                    alpha(theme::text_primary(), stroke.base)
+                };
+                if let Some(path) = curve(from, to, 1.0, !stroke.running) {
                     window.paint_path(path, color);
                 }
             }
-            painted.push((from, to));
+        }
+        for (stroke, ends) in strokes.iter().zip(&ends) {
+            let Some((from, to)) = *ends else { continue };
+            if stroke.glow > 0.003 {
+                if stroke.running {
+                    if let Some(path) = curve(from, to, 6.0, false) {
+                        window.paint_path(path, alpha(theme::accent(), 0.16 * stroke.glow));
+                    }
+                    if let Some(path) = curve(from, to, 2.0, false) {
+                        window.paint_path(path, alpha(theme::accent(), stroke.glow));
+                    }
+                } else if let Some(path) = curve(from, to, 1.5, true) {
+                    window.paint_path(path, alpha(theme::text_secondary(), stroke.glow));
+                }
+            }
+            painted.push(Painted {
+                from,
+                to,
+                lit: stroke.glow >= 0.5,
+                dashed: !stroke.running,
+            });
         }
     }
     if record {
@@ -1398,21 +1912,35 @@ fn paint_curves(
     }
 }
 
-/// `.port`: the 9px dot on a row's right edge or a card's left.
-fn port(right: bool, lit: bool) -> Div {
+/// `.port`: the 9px dot on a row's right edge or a node's left, a capsule
+/// when `fan` routes come in.
+fn port(right: bool, fan: usize, style: PortStyle) -> Div {
+    let (_, spread) = overview_model::fan_spread(fan);
+    let height = 9.0 + spread;
     let dot = div()
         .absolute()
-        .top(px(-4.5))
-        .size(px(9.0))
+        .top(px(-height / 2.0))
+        .left_0()
+        .w(px(9.0))
+        .h(px(height))
         .rounded_full()
-        .border(px(1.5))
-        .map(|dot| {
-            if lit {
-                dot.bg(theme::accent()).border_color(theme::accent())
-            } else {
-                dot.bg(theme::bg_panel())
-                    .border_color(theme::border_strong())
-            }
+        .map(|dot| match style {
+            PortStyle::Lit => dot
+                .border(px(1.5))
+                .bg(theme::accent())
+                .border_color(theme::accent()),
+            PortStyle::Route => dot
+                .border(px(1.5))
+                .bg(theme::bg_panel())
+                .border_color(alpha(theme::accent(), 0.45)),
+            PortStyle::Stopped => dot
+                .border(px(1.5))
+                .bg(theme::bg_panel())
+                .border_color(theme::border_strong()),
+            PortStyle::Empty => dot
+                .border_1()
+                .bg(theme::bg_panel())
+                .border_color(theme::border_default()),
         });
     // Centred on the edge: a zero-height anchor at the middle.
     div()
@@ -1422,12 +1950,22 @@ fn port(right: bool, lit: bool) -> Div {
             if right {
                 anchor.right(px(-5.0))
             } else {
-                anchor.left(px(-5.0))
+                anchor.left(px(-6.0))
             }
         })
         .w(px(9.0))
         .h(px(0.0))
-        .child(dot.left_0())
+        .child(dot)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PortStyle {
+    Lit,
+    Route,
+    /// A browser that is not installed.
+    Stopped,
+    /// A node nothing routes to yet.
+    Empty,
 }
 
 fn rewrites_band(label: String, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
@@ -1448,6 +1986,7 @@ fn rewrites_band(label: String, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div>
         .cursor_pointer()
         .hover(|band| band.bg(theme::bg_hover()))
         .on_click(cx.listener(|this, _, window, cx| {
+            cx.stop_propagation();
             this.navigate(Screen::Rules, window, cx);
         }))
         .child(icon("pwrroute/wand.svg", 13.0, theme::accent()))
@@ -1523,8 +2062,8 @@ fn error_row(title: String, detail: String) -> Div {
         )
 }
 
-/// The row's frame: 40 high (44 for Everything else), lit or not.
-fn row_frame(id: ElementId, lit: bool, ghost: bool) -> Stateful<Div> {
+/// The row's frame: 40 high (44 for Everything else), lit, pinned or not.
+fn row_frame(id: ElementId, lit: bool, pinned: bool, ghost: bool) -> Stateful<Div> {
     div()
         .id(id)
         .relative()
@@ -1539,7 +2078,11 @@ fn row_frame(id: ElementId, lit: bool, ghost: bool) -> Stateful<Div> {
         .border_1()
         .cursor_pointer()
         .map(|row| {
-            if lit {
+            if pinned {
+                row.border_color(theme::accent_border())
+                    .bg(theme::bg_hover_strong())
+                    .shadow(vec![inset(theme::accent())])
+            } else if lit {
                 row.border_color(theme::accent_border())
                     .bg(theme::bg_row_active())
                     .shadow(vec![shadow(alpha(theme::accent(), 0.08), 0.0, 0.0, 3.0)])
@@ -1547,11 +2090,24 @@ fn row_frame(id: ElementId, lit: bool, ghost: bool) -> Stateful<Div> {
                 row.border_dashed()
                     .border_color(theme::border_default())
                     .bg(theme::transparent())
+                    .hover(|row| row.bg(theme::bg_hover()))
             } else {
                 row.border_color(theme::border_faint())
                     .bg(theme::bg_elevated())
+                    .hover(|row| row.bg(theme::bg_hover()))
             }
         })
+}
+
+/// The pin's outline: an inset 1px ring.
+fn inset(color: Hsla) -> BoxShadow {
+    BoxShadow {
+        color,
+        offset: point(px(0.0), px(0.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(1.0),
+        inset: true,
+    }
 }
 
 fn rank(label: String, lit: bool, size: f32, color: Hsla) -> Div {
@@ -1563,25 +2119,28 @@ fn rank(label: String, lit: bool, size: f32, color: Hsla) -> Div {
     ))
 }
 
-/// A pattern tag that ends in an ellipsis, never narrower than 24px.
-fn pattern_tag(label: String, regex: bool) -> Div {
-    let tag = tag_frame()
-        .min_w(px(24.0))
-        .flex_shrink(1.0)
-        .overflow_hidden();
-    let tag = if regex {
+/// A pattern tag: whole, or cut with an ellipsis (never narrower than
+/// 24px) when it is the one tag shown.
+fn pattern_tag(pattern: &Pattern, cut: bool) -> Div {
+    let tag = tag_frame();
+    let tag = if cut {
+        tag.min_w(px(24.0)).flex_shrink(1.0).overflow_hidden()
+    } else {
+        tag
+    };
+    let tag = if pattern.regex {
         tag.bg(theme::info_soft())
             .border_color(theme::transparent())
     } else {
         tag
     };
     tag.child(one_line(
-        label,
+        pattern.text.clone(),
         theme::mono_family(500.0),
         500.0,
         10.5,
         10.5,
-        if regex {
+        if pattern.regex {
             theme::info_text()
         } else {
             theme::text_secondary()
@@ -1600,7 +2159,41 @@ fn fn_mark() -> Div {
         .child(text("\u{0192}", 11.0, 600.0, theme::accent_bright()))
 }
 
-fn match_column(row: &Row) -> Div {
+/// "from [Sl Slack]".
+fn opener_part(opener: &Opener) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(5.0))
+        .child(text("from", 11.0, 500.0, theme::text_muted()))
+        .child(tag_frame().child(badge(opener.badge.clone())).child(mono(
+            opener.name.clone(),
+            10.5,
+            500.0,
+            theme::text_primary(),
+        )))
+        .children(more(opener.more))
+}
+
+fn opener_width(opener: &Opener, measure: &Measure) -> f32 {
+    let more = if opener.more > 0 {
+        5.0 + measure.mono(&format!("+{}", opener.more), 10.5)
+    } else {
+        0.0
+    };
+    measure.sans("from", 500.0, 11.0)
+        + 5.0
+        + 16.0
+        + 12.0
+        + 5.0
+        + measure.mono(&opener.name, 10.5)
+        + more
+}
+
+/// The match column, laid out for `room` pixels: as many whole pattern
+/// tags as fit, then "+N"; a ƒ row's name and what it tests.
+fn match_column(row: &Row, room: f32, measure: &Measure) -> Div {
     let column = div()
         .flex_1()
         .min_w_0()
@@ -1608,60 +2201,102 @@ fn match_column(row: &Row) -> Div {
         .items_center()
         .gap(px(5.0))
         .overflow_hidden();
+    let off = !row.enabled;
+    let off_width = if off { 5.0 + 34.0 } else { 0.0 };
     let column = match &row.matcher {
-        RowMatch::Pattern {
-            text: t,
-            regex,
-            more: n,
-        } => column
-            .child(pattern_tag(t.clone(), *regex))
-            .children(more(*n)),
-        RowMatch::Opener {
-            badge: b,
+        RowMatch::Patterns {
+            patterns,
+            more: extra,
+            opener,
+        } => {
+            let opener_room = opener
+                .as_ref()
+                .map_or(0.0, |opener| 5.0 + opener_width(opener, measure));
+            let widths: Vec<f32> = patterns
+                .iter()
+                .map(|pattern| measure.mono(&pattern.text, 10.5) + 16.0)
+                .collect();
+            let shown = fit_tags(&widths, *extra, room - opener_room - off_width, |n| {
+                measure.mono(&format!("+{n}"), 10.5)
+            });
+            let rest = patterns.len() - shown + extra;
+            column
+                .children(
+                    patterns
+                        .iter()
+                        .take(shown)
+                        .map(|pattern| pattern_tag(pattern, shown == 1)),
+                )
+                .children(more(rest))
+                .children(opener.as_ref().map(opener_part))
+        }
+        RowMatch::Opener(opener) => column.child(opener_part(opener)),
+        RowMatch::Function {
             name,
+            excerpt,
             more: n,
-        } => column
-            .child(text("from", 11.0, 500.0, theme::text_muted()))
-            .child(tag_frame().child(badge(b.clone())).child(mono(
-                name.clone(),
-                10.5,
-                500.0,
-                theme::text_primary(),
-            )))
-            .children(more(*n)),
-        RowMatch::Function { name, more: n } => column
-            .child(fn_mark())
-            .child(match name {
-                Some(name) => mono(name.clone(), 11.0, 500.0, theme::text_secondary()),
-                None => text("unnamed function", 11.0, 500.0, theme::text_muted()),
-            })
-            .children(more(*n)),
+            ..
+        } => {
+            let code = |label: String, color: Hsla| {
+                one_line(label, theme::mono_family(500.0), 500.0, 10.5, 13.0, color)
+            };
+            column
+                .child(fn_mark())
+                .map(|column| match (name, excerpt) {
+                    (Some(name), Some(excerpt)) => column
+                        .child(code(name.clone(), theme::text_secondary()).flex_none())
+                        .child(
+                            code(excerpt.clone(), theme::text_subtle())
+                                .flex_shrink(1.0)
+                                .ml(px(-1.0)),
+                        ),
+                    (Some(name), None) => column.child(code(name.clone(), theme::text_secondary())),
+                    (None, Some(excerpt)) => {
+                        column.child(code(excerpt.clone(), theme::text_secondary()))
+                    }
+                    (None, None) => {
+                        column.child(text("unnamed function", 11.0, 500.0, theme::text_muted()))
+                    }
+                })
+                .children(more(*n))
+        }
         RowMatch::Other { text: t, more: n } => column
             .child(text(t.clone(), 11.0, 500.0, theme::text_muted()))
             .children(more(*n)),
         RowMatch::Any => column.child(text("every link", 11.0, 500.0, theme::text_muted())),
     };
-    column.when(!row.enabled, |column| {
+    column.when(off, |column| {
         column.child(crate::widgets::chip("off").py(px(3.0)).px(px(7.0)))
     })
 }
+
+/// The longest a target's label gets before it is cut.
+const TARGET_LABEL: f32 = 200.0;
 
 fn target_column(target: &Target) -> Div {
     let to = div()
         .flex()
         .flex_none()
+        .min_w_0()
         .items_center()
         .gap(px(6.0))
         .child(text("\u{2192}", 11.5, 500.0, theme::text_subtle()));
+    let label = |label: String, color: Hsla| {
+        div().max_w(px(TARGET_LABEL)).min_w_0().child(one_line(
+            label,
+            theme::SANS,
+            500.0,
+            11.5,
+            11.5,
+            color,
+        ))
+    };
     match target {
         Target::Browser {
-            badge: b, label, ..
-        } => to.child(badge(b.clone())).child(text(
-            label.clone(),
-            11.5,
-            500.0,
-            theme::text_secondary(),
-        )),
+            badge: b, label: l, ..
+        } => to
+            .child(badge(b.clone()))
+            .child(label(l.clone(), theme::text_secondary())),
         Target::Function { .. } => {
             to.child(fn_mark())
                 .child(text("JavaScript", 11.5, 500.0, theme::text_secondary()))
@@ -1674,13 +2309,29 @@ fn target_column(target: &Target) -> Div {
         )),
         Target::Ghost { badge: b, name, .. } => to
             .child(badge(b.clone()).border_dashed())
-            .child(text(name.clone(), 11.5, 500.0, theme::text_subtle()))
+            .child(label(name.clone(), theme::text_subtle()))
             .child(mono("not installed", 10.0, 500.0, theme::warn_text())),
         Target::Unset => to.child(text("Choose a browser", 11.5, 500.0, theme::text_subtle())),
     }
 }
 
-fn count_column(count: Option<u64>) -> Div {
+/// The target column's width, for the room the patterns get.
+fn target_width(target: &Target, measure: &Measure) -> f32 {
+    let arrow = measure.sans("\u{2192}", 500.0, 11.5) + 6.0;
+    let label = |label: &str| measure.sans(label, 500.0, 11.5).min(TARGET_LABEL);
+    arrow
+        + match target {
+            Target::Browser { label: l, .. } => 12.0 + 6.0 + label(l),
+            Target::Function { .. } => 26.0 + 6.0 + label("JavaScript"),
+            Target::NotOpened { .. } => label(crate::widgets::NOT_OPENED),
+            Target::Ghost { name, .. } => {
+                12.0 + 6.0 + label(name) + 6.0 + measure.mono("not installed", 10.0)
+            }
+            Target::Unset => label("Choose a browser"),
+        }
+}
+
+fn count_column(count: Option<u64>, lit: bool) -> Div {
     div()
         .w(px(36.0))
         .flex_none()
@@ -1691,37 +2342,72 @@ fn count_column(count: Option<u64>) -> Div {
                 crate::activity::thousands(n),
                 10.5,
                 500.0,
-                theme::text_subtle(),
+                if lit {
+                    theme::accent_bright()
+                } else {
+                    theme::text_subtle()
+                },
             )
         }))
+}
+
+/// "Edit ›" ("View ›" for a config handler): opens the rule in Rules.
+fn edit_label(source: RowSource) -> &'static str {
+    match source {
+        RowSource::Rule(_) => "Edit \u{203a}",
+        RowSource::Handler(_) => "View \u{203a}",
+    }
 }
 
 fn rule_row(
     index: usize,
     row: &Row,
-    light: Light,
-    generation: usize,
+    trace: &Look<'_>,
+    widths: MapWidths,
+    measure: &Measure,
     cx: &mut Context<'_, PwrRoute>,
 ) -> AnyElement {
-    let lit = light.lit();
-    let ghost = matches!(row.target, Target::Ghost { .. });
-    let source = row.source;
     let focus = Focus::Row(index);
-    let element = row_frame(("overview-row", index).into(), lit, ghost)
+    let light = trace.light(|lit| lit.row(index));
+    let lit = light.lit();
+    let pinned = trace.pinned == Some(focus);
+    let edit = trace.touched(focus);
+    let ghost = row.target.ghost();
+    let source = row.source;
+    let edit_width = if edit {
+        8.0 + measure.sans(edit_label(source), 550.0, 10.5) + 16.0
+    } else {
+        0.0
+    };
+    // The match column gets what the rank, the target, the count and the
+    // gaps leave.
+    let room = widths.rule
+        - 2.0
+        - 22.0
+        - 18.0
+        - 8.0
+        - 8.0
+        - target_width(&row.target, measure)
+        - 8.0
+        - 36.0
+        - edit_width
+        - 4.0;
+    let tip_source = match &row.matcher {
+        RowMatch::Function { source, .. } => source.clone(),
+        _ => None,
+    };
+    let element = row_frame(("overview-row", index).into(), lit, pinned, ghost)
         .debug_selector(move || format!("overview-row-{index}"))
-        .tooltip(tip(row.tooltip.clone()))
-        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-            let changed = if *over {
-                this.overview.hover(Some(focus))
+        .tooltip(tip(row.tooltip.clone(), tip_source))
+        .on_hover(hover_listener(focus, cx))
+        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            // A double-click opens the rule; a click pins it.
+            if event.click_count() >= 2 {
+                this.open_rule(source, window, cx);
             } else {
-                this.overview.unhover(focus, None)
-            };
-            if changed {
-                cx.notify();
+                toggle_pin(this, focus, cx);
             }
-        }))
-        .on_click(cx.listener(move |this, _, window, cx| {
-            this.open_rule(source, window, cx);
         }))
         .child(rank(
             format!("{:02}", row.rank),
@@ -1729,23 +2415,59 @@ fn rule_row(
             10.5,
             theme::text_subtle(),
         ))
-        .child(match_column(row))
+        .child(match_column(row, room, measure))
+        .when(edit, |element| {
+            element.child(
+                div()
+                    .id(("overview-row-edit", index))
+                    .debug_selector(move || format!("overview-row-edit-{index}"))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .h(px(20.0))
+                    .px(px(7.0))
+                    .rounded(px(5.0))
+                    .border_1()
+                    .border_color(theme::border_default())
+                    .bg(theme::bg_panel())
+                    .cursor_pointer()
+                    .hover(|button| button.bg(theme::bg_hover()))
+                    .child(text(
+                        edit_label(source),
+                        10.5,
+                        550.0,
+                        theme::text_secondary(),
+                    ))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_rule(source, window, cx);
+                    })),
+            )
+        })
         .child(target_column(&row.target))
-        .child(count_column(row.count));
-    // The port sits over the row's border: a sibling, painted after it.
+        .child(count_column(row.count, lit));
+    // The port sits over the row's border: a sibling, painted after it. A
+    // rule that is off has none.
+    let port_style = if lit {
+        PortStyle::Lit
+    } else if ghost {
+        PortStyle::Stopped
+    } else {
+        PortStyle::Route
+    };
     let element = div()
         .relative()
         .flex_none()
         .child(element)
-        .when(row.target.card().is_some(), |row| {
-            row.child(port(true, lit))
+        .when(row.node.is_some() && row.enabled, |row| {
+            row.child(port(true, 1, port_style))
         });
     // A switched-off rule stays at 40%, and dims with the rest.
     let (from, to) = light.opacities();
     let scale = if row.enabled { 1.0 } else { 0.4 };
     faded(
         element,
-        ("overview-row-dim", index * 1_000_000 + generation).into(),
+        ("overview-row-dim", index * 1_000_000 + trace.generation).into(),
         from * scale,
         to * scale,
     )
@@ -1753,39 +2475,29 @@ fn rule_row(
 
 fn everything_else_row(
     row: &EverythingElse,
-    light: Light,
-    generation: usize,
+    trace: &Look<'_>,
     after: bool,
     cx: &mut Context<'_, PwrRoute>,
 ) -> AnyElement {
+    let focus = Focus::EverythingElse;
+    let light = trace.light(|lit| lit.everything_else);
     let lit = light.lit();
-    let element = row_frame("overview-everything-else".into(), lit, false)
+    let pinned = trace.pinned == Some(focus);
+    let element = row_frame("overview-everything-else".into(), lit, pinned, false)
         .debug_selector(|| "overview-everything-else".into())
-        .tooltip(tip("Everything else goes here"))
+        .tooltip(tip("Everything else goes here", None))
         .h(px(44.0))
-        .when(!lit, |row| {
+        .when(!lit && !pinned, |row| {
             row.border_color(theme::accent_border()).bg(linear_gradient(
                 90.0,
                 linear_color_stop(over(theme::bg_elevated(), theme::accent(), 0.10), 0.0),
                 linear_color_stop(theme::bg_elevated(), 0.7),
             ))
         })
-        .on_hover(cx.listener(|this, over: &bool, _, cx| {
-            let changed = if *over {
-                this.overview.hover(Some(Focus::EverythingElse))
-            } else {
-                this.overview.unhover(Focus::EverythingElse, None)
-            };
-            if changed {
-                cx.notify();
-            }
-        }))
-        .on_click(cx.listener(|this, _, _, cx| {
-            let pin = (this.overview.pinned != Some(Focus::EverythingElse))
-                .then_some(Focus::EverythingElse);
-            if this.overview.pin(pin) {
-                cx.notify();
-            }
+        .on_hover(hover_listener(focus, cx))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            cx.stop_propagation();
+            toggle_pin(this, focus, cx);
         }))
         .child(rank("\u{221e}".into(), true, 13.0, theme::accent_bright()))
         .child(
@@ -1806,17 +2518,29 @@ fn everything_else_row(
                 )),
         )
         .child(target_column(&row.target))
-        .child(count_column(row.count));
+        .child(count_column(row.count, lit));
+    let port_style = if lit {
+        PortStyle::Lit
+    } else if row.target.ghost() {
+        PortStyle::Stopped
+    } else {
+        PortStyle::Route
+    };
     let element = div()
         .relative()
         .flex_none()
         .when(after, |row| row.mt(px(8.0)))
         .child(element)
-        .when(row.target.card().is_some(), |row| {
-            row.child(port(true, lit))
+        .when(row.node.is_some(), |row| {
+            row.child(port(true, 1, port_style))
         });
     let (from, to) = light.opacities();
-    faded(element, ("overview-ee-dim", generation).into(), from, to)
+    faded(
+        element,
+        ("overview-ee-dim", trace.generation).into(),
+        from,
+        to,
+    )
 }
 
 fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -> Div {
@@ -1861,6 +2585,7 @@ fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -
                         .id("overview-add-rule")
                         .debug_selector(|| "overview-add-rule".into())
                         .on_click(cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
                             this.navigate(Screen::Rules, window, cx);
                             this.add_handler(window, cx);
                         })),
@@ -1871,6 +2596,7 @@ fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -
                             .id("overview-import")
                             .debug_selector(|| "overview-import".into())
                             .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
                                 if let Some(found) = &this.found_config {
                                     crate::importer_view::open(found.file.clone(), false, cx);
                                 }
@@ -1880,36 +2606,37 @@ fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -
         )
 }
 
-#[allow(clippy::too_many_arguments, reason = "one card's parts, drawn once")]
-fn destination_card(
-    index: usize,
-    card: &Card,
-    light: Light,
-    pill_light: &dyn Fn(usize) -> Light,
-    generation: usize,
-    wide: bool,
-    ticked: bool,
-    cx: &mut Context<'_, PwrRoute>,
-) -> AnyElement {
-    let lit = light.lit();
-    let special = matches!(card.kind, CardKind::Function | CardKind::NotOpened)
-        || (card.kind == CardKind::Ghost && card.pills.iter().all(|p| p.profile.is_none()));
-    let ring = card.ribbon.is_some();
-    let ghost = card.kind == CardKind::Ghost;
-    let big = if special { 32.0 } else { 40.0 };
-    let badge_box = div()
+/// "Also installed", over the browsers with no rules yet.
+fn also_header(note_text: String) -> Div {
+    div()
+        .debug_selector(|| "overview-also".into())
+        .h(px(24.0))
+        .mt(px(6.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_between()
+        .gap(px(8.0))
+        .px(px(2.0))
+        .child(text("Also installed", 11.0, 600.0, theme::text_secondary()))
+        .child(note(note_text))
+}
+
+/// A card's 28px badge.
+fn card_badge(card: &Card, lit: bool) -> Div {
+    div()
         .flex()
         .flex_none()
         .items_center()
         .justify_center()
-        .size(px(big))
-        .rounded(px(if special { 8.0 } else { 10.0 }))
+        .size(px(28.0))
+        .rounded(px(7.0))
         .border_1()
         .map(|b| match card.kind {
             CardKind::Function => b
                 .bg(theme::accent_soft())
                 .border_color(theme::transparent())
-                .child(text("\u{0192}", 15.0, 700.0, theme::accent_bright())),
+                .child(text("\u{0192}", 14.0, 700.0, theme::accent_bright())),
             CardKind::Ghost => b
                 .border_dashed()
                 .border_color(theme::border_strong())
@@ -1919,289 +2646,556 @@ fn destination_card(
                 .bg(theme::bg_hover_strong())
                 .child(mono(
                     card.badge.clone(),
-                    13.0,
+                    11.0,
                     700.0,
                     theme::accent_bright(),
                 )),
+            _ if card.unused => b
+                .border_color(theme::border_default())
+                .bg(theme::transparent())
+                .child(mono(card.badge.clone(), 11.0, 700.0, theme::text_subtle())),
             _ => b
                 .border_color(theme::border_strong())
                 .bg(theme::bg_app())
                 .child(mono(
                     card.badge.clone(),
-                    if special { 11.0 } else { 13.0 },
+                    11.0,
                     700.0,
                     theme::text_secondary(),
                 )),
-        });
+        })
+}
 
-    let name = div()
+/// A card's frame for its state: traced by its header (the full lit
+/// style), holding a lit node, taking Everything else, idle, a ghost.
+fn card_frame<E: gpui_kit::Styled + IntoElement>(
+    frame: E,
+    card: &Card,
+    lit: bool,
+    warm: bool,
+) -> E {
+    let ring = card.ribbon.is_some();
+    frame.rounded(px(12.0)).border_1().map(|frame| {
+        if lit {
+            frame
+                .border_color(theme::accent())
+                .bg(theme::bg_elevated())
+                .shadow(vec![
+                    shadow(alpha(theme::accent(), 0.14), 0.0, 0.0, 3.0),
+                    shadow(alpha(theme::accent(), 0.12), 10.0, 30.0, 0.0),
+                ])
+        } else if card.kind == CardKind::Ghost {
+            frame
+                .border_dashed()
+                .border_color(theme::border_default())
+                .bg(theme::transparent())
+        } else if card.unused {
+            frame
+                .border_color(theme::border_faint())
+                .bg(theme::bg_panel())
+        } else if ring {
+            frame
+                .border_color(theme::accent_border())
+                .bg(theme::bg_elevated())
+                .shadow(vec![shadow(alpha(theme::accent(), 0.10), 0.0, 0.0, 3.0)])
+        } else if warm {
+            frame
+                .border_color(theme::accent_border())
+                .bg(theme::bg_elevated())
+        } else {
+            frame
+                .border_color(theme::border_subtle())
+                .bg(theme::bg_elevated())
+        }
+    })
+}
+
+/// "Everything else · PwrRoute" over the card's top edge.
+fn ribbon(label: String) -> Div {
+    div()
+        .absolute()
+        .top(px(-9.0))
+        .right(px(14.0))
+        .h(px(18.0))
+        .px(px(8.0))
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .child(text(
-            card.name.clone(),
-            13.5,
-            600.0,
-            if ghost {
-                theme::text_muted()
-            } else {
-                theme::text_primary()
-            },
-        ))
-        .when(ghost, |name| {
-            name.child(mono("not installed", 10.0, 500.0, theme::warn_text()))
-        });
-    let pills = (!special && !card.pills.is_empty()).then(|| {
-        div()
-            .flex()
-            .gap(px(6.0))
-            .overflow_hidden()
-            .children(card.pills.iter().enumerate().map(|(p, pill)| {
-                pill_chip(index, p, pill, pill_light(p).lit(), cx).into_any_element()
-            }))
-            .children((card.more_pills > 0).then(|| {
-                pill_frame(false)
-                    .child(mono(
-                        format!("+{}", card.more_pills),
-                        10.5,
-                        500.0,
-                        theme::text_subtle(),
-                    ))
-                    .into_any_element()
-            }))
-    });
-    let meta = |line: String| {
-        one_line(
-            line,
-            theme::mono_family(500.0),
-            500.0,
-            10.5,
-            12.0,
-            theme::text_subtle(),
-        )
+        .rounded_full()
+        .bg(theme::accent())
+        .child(text(label, 10.0, 650.0, theme::accent_on()))
+}
+
+/// The card's share of today's links: 13/700 over a 3px bar.
+fn share_block(index: usize, share: &Share, accent: bool, ticked: bool) -> Div {
+    let fill = if accent {
+        theme::accent()
+    } else {
+        theme::text_muted()
     };
-    let words = div()
-        .flex_1()
-        .min_w_0()
+    let fraction = share.fraction.max(0.01);
+    let bar = div().h_full().rounded(px(2.0)).bg(fill);
+    let bar: AnyElement = if ticked {
+        bar.w(gpui_kit::relative(fraction)).into_any_element()
+    } else {
+        bar.with_animation(
+            ("overview-share", index),
+            Animation::new(TICK).with_easing(ease_out_quint()),
+            move |bar, t| bar.w(gpui_kit::relative(fraction * t)),
+        )
+        .into_any_element()
+    };
+    div()
+        .w(px(64.0))
+        .flex_none()
         .flex()
         .flex_col()
-        .gap(px(if special { 6.0 } else { 8.0 }))
-        .child(name)
-        .children(pills)
-        .map(|words| match &card.alone {
-            Some((line, today)) => words
-                .child(
-                    paragraph(line.clone(), 10.5, 14.0, theme::text_subtle())
-                        .font_family(theme::mono_family(500.0)),
-                )
-                .children(today.clone().map(meta)),
-            // A special card's meta explains it, so it wraps rather than
-            // cut off at a narrow window.
-            None if special => words.child(
-                paragraph(card.meta.clone(), 10.5, 14.0, theme::text_subtle())
-                    .font_family(theme::mono_family(500.0)),
-            ),
-            None => words.child(meta(card.meta.clone())),
-        });
-    let share = card.share.clone().filter(|_| wide).map(|share| {
-        let fill = if ring || lit {
-            theme::accent()
-        } else {
-            theme::text_muted()
-        };
-        let fraction = share.fraction.max(0.01);
-        let bar = div().h_full().rounded(px(2.0)).bg(fill);
-        let bar: AnyElement = if ticked {
-            bar.w(gpui_kit::relative(fraction)).into_any_element()
-        } else {
-            bar.with_animation(
-                ("overview-share", index),
-                Animation::new(TICK).with_easing(ease_out_quint()),
-                move |bar, t| bar.w(gpui_kit::relative(fraction * t)),
-            )
-            .into_any_element()
-        };
-        div()
-            .w(px(112.0))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .items_end()
-            .justify_center()
-            .gap(px(7.0))
-            .child(text(share.label, 18.0, 700.0, theme::text_primary()))
-            .child(
-                div()
-                    .w_full()
-                    .h(px(4.0))
-                    .rounded(px(2.0))
-                    .bg(theme::border_subtle())
-                    .overflow_hidden()
-                    .child(bar),
-            )
-            .child(text("of today's links", 9.5, 500.0, theme::text_subtle()))
-    });
+        .items_end()
+        .gap(px(6.0))
+        .child(text(
+            share.label.clone(),
+            13.0,
+            700.0,
+            theme::text_primary(),
+        ))
+        .child(
+            div()
+                .w_full()
+                .h(px(3.0))
+                .rounded(px(2.0))
+                .bg(theme::border_subtle())
+                .overflow_hidden()
+                .child(bar),
+        )
+}
 
+#[allow(clippy::too_many_arguments, reason = "one card's parts, drawn once")]
+fn browser_card(
+    index: usize,
+    card: &Card,
+    trace: &Look<'_>,
+    expanded: bool,
+    wide: bool,
+    app: &PwrRoute,
+    bounds: &Rc<RefCell<MapBounds>>,
+    cx: &mut Context<'_, PwrRoute>,
+) -> AnyElement {
+    let lit = trace.lit.card(index);
+    let warm = trace.lit.warm(index);
+    let ring = card.ribbon.is_some();
     let focus = Focus::Card(index);
-    let element = div()
+    let header = div()
         .id(("overview-card", index))
         .debug_selector(move || format!("overview-card-{index}"))
-        .relative()
+        .h(px(48.0))
         .flex()
         .flex_none()
-        .gap(px(14.0))
-        .px(px(16.0))
-        .py(px(14.0))
-        .map(|frame| match (&card.alone, special) {
-            (Some(_), _) => frame.min_h(px(96.0)),
-            (None, true) => frame.min_h(px(60.0)).items_center(),
-            (None, false) => frame.h(px(96.0)),
-        })
-        .rounded(px(12.0))
-        .border_1()
-        .cursor_pointer()
-        .map(|frame| {
-            if lit {
-                frame
-                    .border_color(theme::accent())
-                    .bg(linear_gradient(
-                        90.0,
-                        linear_color_stop(theme::bg_row_active(), 0.0),
-                        linear_color_stop(theme::bg_elevated(), 0.75),
-                    ))
-                    .shadow(vec![
-                        shadow(alpha(theme::accent(), 0.14), 0.0, 0.0, 3.0),
-                        shadow(alpha(theme::accent(), 0.12), 10.0, 30.0, 0.0),
-                    ])
-            } else if ghost {
-                frame
-                    .border_dashed()
-                    .border_color(theme::border_default())
-                    .bg(theme::transparent())
-            } else if ring {
-                frame
-                    .border_color(theme::accent_border())
-                    .bg(theme::bg_elevated())
-                    .shadow(vec![shadow(alpha(theme::accent(), 0.10), 0.0, 0.0, 3.0)])
-            } else {
-                frame
-                    .border_color(theme::border_subtle())
-                    .bg(theme::bg_elevated())
+        .items_center()
+        .gap(px(10.0))
+        .pl(px(12.0))
+        .pr(px(14.0))
+        .rounded_t(px(12.0))
+        .child(card_badge(card, lit))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .child(one_line(
+                    card.name.clone(),
+                    theme::SANS,
+                    600.0,
+                    13.0,
+                    16.0,
+                    if card.unused {
+                        theme::text_secondary()
+                    } else {
+                        theme::text_primary()
+                    },
+                ))
+                .child(one_line(
+                    card.meta.clone(),
+                    theme::mono_family(500.0),
+                    500.0,
+                    10.0,
+                    12.0,
+                    theme::text_subtle(),
+                )),
+        )
+        .children(
+            card.share
+                .as_ref()
+                .filter(|_| wide)
+                .map(|share| share_block(index, share, ring || lit, app.overview.ticked)),
+        )
+        .when(!card.unused, |header| {
+            header
+                .cursor_pointer()
+                .on_hover(hover_listener(focus, cx))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    toggle_pin(this, focus, cx);
+                }))
+        });
+
+    let shown = if expanded {
+        card.nodes.len()
+    } else {
+        card.shown
+    };
+    let nodes_bounds = bounds.clone();
+    let count = shown;
+    let nodes = div()
+        .on_children_prepainted(move |children, _, _| {
+            let mut bounds = nodes_bounds.borrow_mut();
+            for (node, child) in children.iter().take(count).enumerate() {
+                bounds.nodes.insert((index, node), *child);
             }
         })
-        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-            let changed = if *over {
-                // Entering a pill's card from the pill keeps the pill.
-                match this.overview.hovered {
-                    Some(Focus::Pill(card, _)) if card == index => false,
-                    _ => this.overview.hover(Some(focus)),
-                }
+        .flex()
+        .flex_col()
+        .py(px(4.0))
+        .border_t_1()
+        .border_color(theme::border_faint())
+        .children(card.nodes.iter().take(shown).enumerate().map(|(n, node)| {
+            let drawn = node_row(index, n, card, node, trace, cx);
+            if n >= card.shown && app.overview.expanding == Some(index) {
+                // "+N more profiles" just opened: the new nodes fade in.
+                div()
+                    .child(drawn)
+                    .with_animation(
+                        ("overview-node-in", index * 1_000 + n),
+                        Animation::new(FADE).with_easing(ease_out_quint()),
+                        |node, t| node.opacity(t),
+                    )
+                    .into_any_element()
             } else {
-                match this.overview.hovered {
-                    Some(Focus::Card(card) | Focus::Pill(card, _)) if card == index => {
-                        this.overview.hover(None)
-                    }
-                    _ => false,
-                }
+                drawn
+            }
+        }))
+        .when(card.folded() > 0, |nodes| {
+            let key = card.key().to_owned();
+            let label = if expanded {
+                "Show fewer \u{25b4}".to_owned()
+            } else {
+                format!("+{} more profiles \u{25be}", card.folded())
             };
-            if changed {
-                cx.notify();
-            }
-        }))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            let pin = (this.overview.pinned != Some(focus)).then_some(focus);
-            if this.overview.pin(pin) {
-                cx.notify();
-            }
-        }))
-        .child(badge_box)
-        .child(words)
-        .children(share);
-    // The port and the ribbon sit over the card's border: siblings,
-    // painted after it.
+            nodes.child(
+                div()
+                    .id(("overview-more", index))
+                    .debug_selector(move || format!("overview-more-{index}"))
+                    .h(px(26.0))
+                    .px(px(16.0))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|more| more.bg(theme::bg_hover()))
+                    .child(text(label, 10.5, 500.0, theme::text_subtle()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.overview.toggle_expanded(&key, index);
+                        cx.notify();
+                    })),
+            )
+        });
+
+    let frame = card_frame(
+        div()
+            .debug_selector(move || format!("overview-card-frame-{index}"))
+            .flex()
+            .flex_col(),
+        card,
+        lit,
+        warm,
+    )
+    .child(header)
+    .child(nodes);
     let element = div()
         .relative()
         .flex_none()
-        .child(element)
-        .when_some(card.ribbon.clone(), |frame, ribbon| {
-            frame.child(
-                div()
-                    .absolute()
-                    .top(px(-9.0))
-                    .right(px(14.0))
-                    .h(px(18.0))
-                    .px(px(8.0))
-                    .flex()
-                    .items_center()
-                    .rounded_full()
-                    .bg(theme::accent())
-                    .child(text(ribbon, 10.0, 650.0, theme::accent_on())),
-            )
-        })
-        .child(port(false, lit));
-    let (from, to) = light.opacities();
+        .child(frame)
+        .when_some(card.ribbon.clone(), |element, label| {
+            element.child(ribbon(label))
+        });
+    let (from, to) = trace.light(|lit| lit.warm(index)).opacities();
     faded(
         element,
-        ("overview-card-dim", index * 1_000_000 + generation).into(),
+        ("overview-card-dim", index * 1_000_000 + trace.generation).into(),
         from,
         to,
     )
 }
 
-fn pill_frame(lit: bool) -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(5.0))
-        .h(px(22.0))
-        .px(px(9.0))
-        .rounded_full()
-        .border_1()
-        .map(|pill| {
-            if lit {
-                pill.border_color(theme::accent_border())
-                    .bg(theme::accent_soft())
-            } else {
-                pill.border_color(theme::border_subtle())
-                    .bg(theme::bg_panel())
-            }
-        })
-}
-
-fn pill_chip(
-    card: usize,
+/// One profile: its port, its name (and ∞), its rules and today's links.
+fn node_row(
+    card_index: usize,
     index: usize,
-    pill: &overview_model::Pill,
-    lit: bool,
+    card: &Card,
+    node: &Node,
+    trace: &Look<'_>,
     cx: &mut Context<'_, PwrRoute>,
-) -> Stateful<Div> {
-    let color = if lit {
+) -> AnyElement {
+    let focus = Focus::Node(card_index, index);
+    let lit = trace.lit.node(card_index, index);
+    let pinned = trace.pinned == Some(focus);
+    let adding = node.unused && trace.idle_hover == Some((card_index, index));
+    let fan = trace.lit.fan(card_index, index);
+    let port_style = if node.unused {
+        PortStyle::Empty
+    } else if lit {
+        PortStyle::Lit
+    } else {
+        PortStyle::Route
+    };
+    let name_color = if lit {
         theme::accent_bright()
-    } else if pill.profile.is_none() {
-        theme::text_subtle()
+    } else if node.unused {
+        theme::text_muted()
     } else {
         theme::text_secondary()
     };
-    let focus = Focus::Pill(card, index);
-    pill_frame(lit)
-        .id(("overview-pill", card * 100 + index))
-        .debug_selector(move || format!("overview-pill-{card}-{index}"))
-        .child(mono(pill.label().to_owned(), 10.5, 500.0, color))
-        .when(pill.everything_else, |chip| {
-            chip.child(text("\u{221e}", 11.0, 500.0, theme::accent_bright()))
-                .tooltip(tip("Everything else goes here"))
-        })
-        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-            let changed = if *over {
-                this.overview.hover(Some(focus))
-            } else {
-                this.overview.unhover(focus, Some(Focus::Card(card)))
-            };
-            if changed {
-                cx.notify();
+    let element =
+        div()
+            .id(("overview-node", card_index * 1_000 + index))
+            .debug_selector(move || format!("overview-node-{card_index}-{index}"))
+            .relative()
+            .h(px(30.0))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.0))
+            .pl(px(16.0))
+            .pr(px(14.0))
+            .cursor_pointer()
+            .map(|row| {
+                if pinned {
+                    row.bg(theme::bg_hover_strong())
+                        .shadow(vec![inset(theme::accent())])
+                } else if lit {
+                    row.bg(theme::bg_row_active())
+                } else {
+                    row.hover(|row| row.bg(theme::bg_hover()))
+                }
+            })
+            .tooltip(tip(node.tooltip.clone(), None))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(one_line(
+                        node.label().to_owned(),
+                        theme::SANS,
+                        500.0,
+                        12.0,
+                        12.0,
+                        name_color,
+                    ))
+                    .when(node.everything_else, |name| {
+                        name.child(
+                            div()
+                                .id(("overview-node-ee", card_index * 1_000 + index))
+                                .tooltip(tip("Everything else goes here", None))
+                                .child(text("\u{221e}", 12.0, 600.0, theme::accent_bright())),
+                        )
+                    }),
+            )
+            .map(|row| {
+                if adding {
+                    row.child(text(
+                        "+ Add a rule\u{2026}",
+                        10.5,
+                        550.0,
+                        theme::accent_bright(),
+                    ))
+                } else {
+                    row.children(
+                        node.meta
+                            .clone()
+                            .map(|meta| mono(meta, 10.0, 500.0, theme::text_subtle())),
+                    )
+                }
+            })
+            .when(!node.unused, |row| {
+                row.child(div().w(px(40.0)).flex_none().flex().justify_end().children(
+                    node.links.map(|n| {
+                        mono(
+                            crate::activity::thousands(n),
+                            10.5,
+                            500.0,
+                            if lit {
+                                theme::accent_bright()
+                            } else {
+                                theme::text_secondary()
+                            },
+                        )
+                    }),
+                ))
+            })
+            .child(port(false, fan, port_style));
+    let element = if node.unused {
+        let browser = card.name.clone();
+        let profile = node.profile.clone().unwrap_or_default();
+        let at = (card_index, index);
+        element
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                let next = if *over {
+                    Some(at)
+                } else if this.overview.idle_hover == Some(at) {
+                    None
+                } else {
+                    return;
+                };
+                if this.overview.idle_hover != next {
+                    this.overview.idle_hover = next;
+                    cx.notify();
+                }
+            }))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.add_rule_for(&browser, &profile, window, cx);
+            }))
+    } else {
+        element
+            .on_hover(hover_listener(focus, cx))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                toggle_pin(this, focus, cx);
+            }))
+    };
+    // In a card that holds a lit node, only its other nodes dim; a card
+    // that holds none dims whole.
+    let (from, to) = trace
+        .light(|lit| lit.node(card_index, index) || !lit.warm(card_index))
+        .opacities();
+    faded(
+        element,
+        (
+            "overview-node-dim",
+            (card_index * 1_000 + index) * 1_000_000 + trace.generation,
+        )
+            .into(),
+        from,
+        to,
+    )
+}
+
+/// Decided by JavaScript, Not opened, not installed: one node, the whole
+/// card, 44 high with its port at the middle.
+fn single_card(
+    index: usize,
+    card: &Card,
+    trace: &Look<'_>,
+    bounds: &Rc<RefCell<MapBounds>>,
+    cx: &mut Context<'_, PwrRoute>,
+) -> AnyElement {
+    let focus = Focus::Node(index, 0);
+    let lit = trace.lit.node(index, 0);
+    let pinned = trace.pinned == Some(focus);
+    let ghost = card.kind == CardKind::Ghost;
+    let node = card.nodes.first();
+    let fan = trace.lit.fan(index, 0);
+    let port_style = if lit {
+        PortStyle::Lit
+    } else if ghost {
+        PortStyle::Stopped
+    } else {
+        PortStyle::Route
+    };
+    let frame = card_frame(
+        div()
+            .id(("overview-card", index))
+            .debug_selector(move || format!("overview-card-{index}"))
+            .h(px(44.0))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .pl(px(12.0))
+            .pr(px(14.0))
+            .cursor_pointer(),
+        card,
+        false,
+        lit,
+    )
+    .when(pinned, |frame| {
+        frame
+            .bg(theme::bg_hover_strong())
+            .shadow(vec![inset(theme::accent())])
+    })
+    .when(lit && !pinned, |frame| frame.bg(theme::bg_row_active()))
+    .when_some(node.map(|node| node.tooltip.clone()), |frame, tooltip| {
+        frame.tooltip(tip(tooltip, None))
+    })
+    .on_hover(hover_listener(focus, cx))
+    .on_click(cx.listener(move |this, _, _, cx| {
+        cx.stop_propagation();
+        toggle_pin(this, focus, cx);
+    }))
+    .child(card_badge(card, lit))
+    .child(
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(text(
+                card.name.clone(),
+                13.0,
+                600.0,
+                if ghost {
+                    theme::text_muted()
+                } else if lit {
+                    theme::accent_bright()
+                } else {
+                    theme::text_primary()
+                },
+            ))
+            .when(ghost, |name| {
+                name.child(mono("not installed", 10.0, 500.0, theme::warn_text()))
+            })
+            .when(node.is_some_and(|node| node.everything_else), |name| {
+                name.child(text("\u{221e}", 12.0, 600.0, theme::accent_bright()))
+            }),
+    )
+    .child(div().flex_1())
+    .children(
+        node.and_then(|node| node.meta.clone())
+            .map(|meta| mono(meta, 10.0, 500.0, theme::text_subtle())),
+    )
+    .child(div().w(px(40.0)).flex_none().flex().justify_end().children(
+        node.and_then(|node| node.links).map(|n| {
+            mono(
+                crate::activity::thousands(n),
+                10.5,
+                500.0,
+                theme::text_secondary(),
+            )
+        }),
+    ));
+    let node_bounds = bounds.clone();
+    let element = div()
+        .on_children_prepainted(move |children, _, _| {
+            if let Some(frame) = children.first() {
+                node_bounds.borrow_mut().nodes.insert((index, 0), *frame);
             }
-        }))
+        })
+        .relative()
+        .flex_none()
+        .child(frame)
+        .child(port(false, fan, port_style))
+        .when_some(card.ribbon.clone(), |element, label| {
+            element.child(ribbon(label))
+        });
+    let (from, to) = trace.light(|lit| lit.warm(index)).opacities();
+    faded(
+        element,
+        ("overview-card-dim", index * 1_000_000 + trace.generation).into(),
+        from,
+        to,
+    )
 }
 
 // --- the callout -----------------------------------------------------------
