@@ -588,13 +588,19 @@ fn step_row(
             .flex_col()
             .gap(px(3.0))
             // "Everything else · ~/.finicky.ts's default" is wider than the
-            // column: a line per part, each wrapping only if it must.
-            .child(step.title.split_inclusive(" \u{00b7} ").fold(
+            // column: the owner goes on its own muted line, without the
+            // separator, each wrapping only if it must.
+            .child(step.title.split(" \u{00b7} ").enumerate().fold(
                 div().flex().flex_col(),
-                |title, part| {
+                |title, (i, part)| {
+                    let (color, weight) = if i == 0 {
+                        (theme::text_secondary(), 600.0)
+                    } else {
+                        (theme::text_muted(), 500.0)
+                    };
                     title.child(
-                        paragraph(part.trim_end().to_owned(), 11.5, 16.1, theme::text_secondary())
-                            .font_weight(theme::weight(600.0)),
+                        paragraph(part.to_owned(), 11.5, 16.1, color)
+                            .font_weight(theme::weight(weight)),
                     )
                 },
             ))

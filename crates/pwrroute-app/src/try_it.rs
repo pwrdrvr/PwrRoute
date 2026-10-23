@@ -339,8 +339,18 @@ pub fn interpret(
                         bold: Some(browser),
                     }
                 }
-                // A matcher before this one threw: Finicky stopped there.
+                // A matcher before this one threw, or a handler before it
+                // matched but its browser failed: Finicky stopped there.
                 _ => match threw.filter(|_| !ran) {
+                    Some(threw) if threw.matched => TryResult::text(
+                        Verdict::Beaten,
+                        format!(
+                            "{} matched but its browser failed: {}. {winner_name} opens that \
+                             link in {browser}.",
+                            step_name(threw, config),
+                            threw.error.as_deref().unwrap_or_default()
+                        ),
+                    ),
                     Some(threw) => TryResult::text(
                         Verdict::Beaten,
                         format!(
@@ -705,6 +715,7 @@ mod tests {
       },
       browser: "Opera",
     },
+    { match: "https://null.example.com/*", browser: () => undefined },
   ],
 };"#,
         )
@@ -782,6 +793,24 @@ mod tests {
                 "Config handler 3 threw before this handler ran: handler matcher threw. \
                  ~/finicky.js's default opens that link in Safari."
             )
+        );
+        // A config handler that matched but whose browser failed did not
+        // throw: the result says its browser failed.
+        let failed = probe.run("https://null.example.com/x", None, Selection::Handler(1));
+        let TryResult::Text {
+            verdict, message, ..
+        } = failed
+        else {
+            panic!("a text result: {failed:?}");
+        };
+        assert_eq!(verdict, Verdict::Beaten);
+        assert!(
+            message.starts_with("Config handler 4 matched but its browser failed: "),
+            "{message}"
+        );
+        assert!(
+            message.ends_with(". ~/finicky.js's default opens that link in Safari."),
+            "{message}"
         );
         let _ = std::fs::remove_dir_all(&home);
     }

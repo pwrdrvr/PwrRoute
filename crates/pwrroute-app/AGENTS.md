@@ -98,19 +98,27 @@ their own modules.
   config in charge and the edited rules (the same sources as the router's
   resolver, so indexes match the rows) at window open, after every debounced
   save and on Run tests; `pwrroute rules test` in `main.rs` is the CLI form.
-  Activity records report a `rules.json` handler as `Matched::Unreported`,
-  so Save as example resolves the link again through `Probe` at click time.
+  Activity records carry `Matched::Rule { index }` for a `rules.json`
+  handler (older records `Matched::Unreported`); Save as example still
+  resolves the link again through `Probe` at click time until it uses the
+  index.
 - **Who decides is the trace's to say (`try_it.rs`, `trace_view.rs`).**
   Test a link, Try it and the test runs resolve over the config in charge
   and `rules.json` together, in the order `rules.json`'s `precedence` sets
   (the window's config-only engine is reused only while `rules.json` is
-  empty). Test a link's last step names the default's owner from the
-  default step's source: "Everything else · PwrRoute's default" or
-  "Everything else · ~/.finicky.ts's default", with the config's shown
-  path, never a literal. Try it reads the trace, not the browsers: under
+  empty). Beside a config, Test a link's last step names the default's
+  owner from the default step's source: "Everything else · PwrRoute's
+  default" or "Everything else · ~/.finicky.ts's default", with the
+  config's shown path, never a literal (the owner wraps to its own muted
+  line, without the "·"); with `rules.json` alone both views say plain
+  "Everything else". Try it reads the trace, not the browsers: under
   the Go order a config handler that wins took the link before the rule
   ran, so it never says "Move this rule above it" then; it offers letting
-  PwrRoute's default take everything else, which runs the rules first.
+  PwrRoute's default take everything else, which runs the rules first. A
+  handler that matched but whose browser failed "matched but its browser
+  failed", never "threw". Add a rule's check (`activity_actions.rs`)
+  blames the config's order only under the Go order; under `"pwrroute"` a
+  config handler winning means the new rule's pattern missed.
 - **The Finicky importer (`importer.rs`, `importer_view.rs`).** The model
   is plain data over `Engine::review_import` (verdicts, source lines,
   probed suggestions; recent links come from the feed's `Full` records, in

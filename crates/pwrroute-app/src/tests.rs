@@ -278,7 +278,7 @@ fn the_opener_picker_reruns_the_test(cx: &mut TestAppContext) {
     // From no app: handler 3 does not match and the default opens it.
     let none = trace(&view, cx);
     assert_eq!(none.result.title, "Google Chrome \u{00b7} Personal");
-    assert!(titles(&none).contains(&"Everything else \u{00b7} PwrRoute's default"));
+    assert!(titles(&none).contains(&"Everything else"));
 
     let picking = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.test.picking);
     // The picker opens its menu and, clicked again, closes it.
@@ -2488,4 +2488,34 @@ fn try_it_under_pwrroute_runs_the_rule_before_the_config(cx: &mut TestAppContext
             bold: None,
         }
     );
+}
+
+#[gpui_kit::test]
+fn add_rule_under_pwrroute_blames_the_pattern_not_the_configs_order(cx: &mut TestAppContext) {
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::PwrRoute);
+    let (view, cx) = open_store(cx, Some(config), store);
+    click(cx, "nav-activity");
+    // Row 0 came from Slack, which the config's handler 2 takes. Under
+    // "pwrroute" the rules run first, so a rule that misses the link is
+    // what the sheet says, not the config's order.
+    click(cx, "activity-row-0");
+    click(cx, "activity-add-rule-0");
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-pattern");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("example.com/*");
+    draw(cx);
+    click(cx, "add-rule-save");
+    let problem = sheet_problem(&view, cx).expect("a problem");
+    assert!(
+        problem.starts_with("This rule does not match the link"),
+        "{problem}"
+    );
+    // The suggested pattern takes the link ahead of the config: added.
+    click(cx, "add-rule-candidate-0");
+    assert_eq!(sheet_problem(&view, cx), None);
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
 }

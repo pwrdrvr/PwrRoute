@@ -307,10 +307,7 @@ fn engine_step(
             .map(matcher_label)
     };
     let title = match step.stage {
-        Stage::Default => format!(
-            "Everything else \u{00b7} {}",
-            DefaultOwner::of(step, config).name()
-        ),
+        Stage::Default => DefaultOwner::of(step, config).title(),
         _ => format!("{} {}", rule_name(step, false), step.index + 1),
     };
     if let Some(error) = &step.error {
@@ -416,7 +413,7 @@ fn engine_step(
                 title,
                 detail: if threw {
                     "a rule threw".into()
-                } else if matches!(owner, DefaultOwner::PwrRoute { beside: Some(_) }) {
+                } else if matches!(owner, DefaultOwner::PwrRoute { .. }) {
                     "no rule or config handler matched".into()
                 } else {
                     "no handler matched".into()
@@ -428,49 +425,55 @@ fn engine_step(
 }
 
 /// Whose default took the link: the trace step's source says, never the
-/// browser. `rules.json`'s default is PwrRoute's, alone or, beside a config,
-/// under `"precedence": "pwrroute"`; otherwise it is the config's.
+/// browser. Only beside a config is there an owner to name: `rules.json`'s
+/// default is PwrRoute's under `"precedence": "pwrroute"`, otherwise the
+/// config's. With `rules.json` alone the step is plain "Everything else",
+/// as Try it says, since an empty default there means Safari until the
+/// user picks one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DefaultOwner<'a> {
-    /// PwrRoute's default, `beside` the config in charge when there is one
-    /// (whose own `defaultBrowser` is then not used).
-    PwrRoute { beside: Option<&'a str> },
-    /// The config's `defaultBrowser`; the name is the config's, or `None`
-    /// when the caller did not say.
-    Config(Option<&'a str>),
+    /// No config in charge: the default browser, unnamed.
+    Alone,
+    /// PwrRoute's default, beside the config in charge (whose own
+    /// `defaultBrowser` is then not used).
+    PwrRoute { beside: &'a str },
+    /// The config's `defaultBrowser`, by the config's shown name.
+    Config(&'a str),
 }
 
 impl<'a> DefaultOwner<'a> {
     fn of(step: &Step, config: Option<&'a str>) -> Self {
-        match step.source {
-            Source::Rules => Self::PwrRoute { beside: config },
-            Source::Config => Self::Config(config),
+        match (step.source, config) {
+            (_, None) => Self::Alone,
+            (Source::Rules, Some(config)) => Self::PwrRoute { beside: config },
+            (Source::Config, Some(config)) => Self::Config(config),
         }
     }
 
-    /// "PwrRoute's default", "~/.finicky.ts's default".
-    fn name(self) -> String {
+    /// "Everything else", "Everything else · PwrRoute's default",
+    /// "Everything else · ~/.finicky.ts's default".
+    fn title(self) -> String {
         match self {
-            Self::PwrRoute { .. } => "PwrRoute's default".into(),
-            Self::Config(Some(config)) => format!("{config}'s default"),
-            Self::Config(None) => "the config's default".into(),
+            Self::Alone => "Everything else".into(),
+            Self::PwrRoute { .. } => "Everything else \u{00b7} PwrRoute's default".into(),
+            Self::Config(config) => format!("Everything else \u{00b7} {config}'s default"),
         }
     }
 
     /// The step's sentence: who opens the link, and after an error, why.
     fn opens_it(self, threw: bool) -> String {
         let who = match self {
+            Self::Alone => "the default browser".to_owned(),
             Self::PwrRoute { .. } => "PwrRoute's default".to_owned(),
-            Self::Config(Some(config)) => format!("{config}'s defaultBrowser"),
-            Self::Config(None) => "the config's defaultBrowser".to_owned(),
+            Self::Config(config) => format!("{config}'s defaultBrowser"),
         };
         match self {
             _ if threw => format!("Finicky stops at the error and {who} opens it."),
-            Self::PwrRoute {
-                beside: Some(config),
-            } => format!("{who} opens it; {config}'s defaultBrowser is not used."),
-            Self::Config(None) => "The config's defaultBrowser opens it.".into(),
-            _ => format!("{who} opens it."),
+            Self::Alone => "The default browser opens it.".into(),
+            Self::PwrRoute { beside } => {
+                format!("{who} opens it; {beside}'s defaultBrowser is not used.")
+            }
+            Self::Config(_) => format!("{who} opens it."),
         }
     }
 }
@@ -703,10 +706,7 @@ mod tests {
             false,
         );
         let fallback = &view.steps[2];
-        assert_eq!(
-            fallback.title,
-            "Everything else \u{00b7} the config's default"
-        );
+        assert_eq!(fallback.title, "Everything else");
         assert_eq!(fallback.detail, "a rule threw");
     }
 
@@ -864,13 +864,13 @@ mod tests {
                 text("~/.finicky.ts's defaultBrowser opens it.")
             )
         );
-        // rules.json alone.
+        // rules.json alone: no owner to name, as Try it says.
         assert_eq!(
             last(vec![default(Source::Rules)], None),
             (
-                "Everything else \u{00b7} PwrRoute's default".into(),
+                "Everything else".into(),
                 "no handler matched".into(),
-                text("PwrRoute's default opens it.")
+                text("The default browser opens it.")
             )
         );
         // A config matcher threw: Finicky falls to whoever owns the default.
