@@ -152,9 +152,9 @@ their own modules.
   else `FALLBACK_BROWSER`. The dropdown re-reads it on each open; a pause
   keeps the target it began with until resumed. A paused record's
   `Step::Paused` is `RecentRoute::Paused` in the recents ("paused ·
-  skipped rule 2") and "paused · skipped rule 2" (or "paused · skipped
-  cfg h 4"; plain "paused" when the record names neither) in Activity's
-  Rule column; which list comes from the record's `Matched` step, else
+  skipped rule 2") and "skipped rule 2" (or "skipped cfg h 4"; plain
+  "paused" when the record names neither) in Activity's amber Rule chip,
+  with "paused · skipped rule 2" in the expanded row; which list comes from the record's `Matched` step, else
   the `Paused` step's `skipped` (the config's handlers).
 - **The dropdown's window is its card** (design: Popovers and Overflow
   2a). A transparent window taller than the card is not invisible: macOS

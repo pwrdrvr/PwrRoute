@@ -670,8 +670,8 @@ pub(crate) fn matched_url(record: &DispatchRecord) -> &str {
 /// (the JS config's second handler), "default" (PwrRoute's default),
 /// "config default" (the config's `defaultBrowser`), "fallback". Rewrites
 /// come first ("rw 1, 2 · rule 3"); while paused it names what the pause
-/// passed over ("paused · skipped rule 3"), and a paused link no rule
-/// would have taken, or whose record does not say which, is "paused".
+/// passed over ("skipped rule 3"), and a paused link no rule would have
+/// taken, or whose record does not say which, is "paused".
 /// "matched" is a resolver
 /// that did not say which rule, as builds before rule numbers recorded a
 /// `rules.json` rule.
@@ -695,16 +695,15 @@ fn rule_label(steps: &[Step]) -> String {
     }
     let paused = steps.iter().any(|step| matches!(step, Step::Paused { .. }));
     if paused {
-        parts.push("paused".into());
-        // What the pause passed over, never what routed the link, as the
-        // trace line says it. Nothing more when a default would have taken
-        // it or the record does not say. The chip ellipsizes when the
-        // column is narrow.
-        match skipped(steps) {
-            Some(Skipped::Rule(index)) => parts.push(format!("skipped rule {}", index + 1)),
-            Some(Skipped::Handler(index)) => parts.push(format!("skipped cfg h {}", index + 1)),
-            None => {}
-        }
+        // What the pause passed over, never what routed the link: "skipped
+        // rule 2" (the amber chip and the trace line's "paused · skipped
+        // rule 2" say why), short enough for the column. "paused" when a
+        // default would have taken it or the record does not say.
+        parts.push(match skipped(steps) {
+            Some(Skipped::Rule(index)) => format!("skipped rule {}", index + 1),
+            Some(Skipped::Handler(index)) => format!("skipped cfg h {}", index + 1),
+            None => "paused".into(),
+        });
     }
     for step in steps {
         match step {
@@ -1359,7 +1358,7 @@ fn row(
             cell.child(chip("host only").flex_none())
         });
     // `.ar.unr .tag`: an unrouted row's rule chip is amber.
-    // It stays inside the column: a long one ("rw 1, 2 · paused · skipped rule 12")
+    // It stays inside the column: a long one ("rw 1, 2 · skipped rule 12")
     // ends in an ellipsis, and the expanded row says it in full.
     let rule = if row.default {
         toned_chip("", Tone::Warn)
@@ -2234,7 +2233,7 @@ mod tests {
             ],
         );
         let row = ActivityRow::from_record(&paused);
-        assert_eq!(row.rule, "paused \u{00b7} skipped cfg h 4");
+        assert_eq!(row.rule, "skipped cfg h 4");
         assert!(row.default, "a paused link is unrouted");
         assert!(row.passes(Filter::Unrouted, ""));
         assert_eq!(
@@ -2792,7 +2791,7 @@ mod tests {
                 Matched::Rule { index: 4 },
                 vec![Step::Paused { skipped }],
             ));
-            assert_eq!(paused.rule, "paused \u{00b7} skipped rule 5");
+            assert_eq!(paused.rule, "skipped rule 5");
             assert_eq!(texts(&paused)[1], "paused \u{00b7} skipped rule 5");
             assert!(paused.default, "a paused link is unrouted");
         }
@@ -2924,7 +2923,7 @@ mod tests {
                 ("cfg h 2", false),
                 ("default", true),
                 ("config default", true),
-                ("paused \u{00b7} skipped rule 2", true),
+                ("skipped rule 2", true),
                 ("fallback", true),
             ]
         );
