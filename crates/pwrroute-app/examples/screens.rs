@@ -751,7 +751,7 @@ fn main() {
     // 1a-3f) over its example.com fixtures, with the routing state set by
     // hand and motion off so each shot is the settled frame.
     {
-        use overview_model::{Focus, Pause, Status};
+        use overview_model::{ConfigTrouble, Focus, Pause, Status};
         use pwrroute_engine::{Precedence, RulesFile};
 
         type Day = fn() -> Vec<pwrroute_router::DispatchRecord>;
@@ -820,7 +820,7 @@ fn main() {
                     ..fixtures::overview_config_rules()
                 },
                 exists: true,
-                day: Some(fixtures::overview_config_day),
+                day: Some(fixtures::overview_override_day),
                 status: routing(),
                 prepare: |app| app.overview.just_overridden = true,
             },
@@ -828,9 +828,9 @@ fn main() {
                 name: "app-0-overview-paused",
                 width: 1000.0,
                 config: false,
-                rules: fixtures::overview_rules,
+                rules: fixtures::overview_paused_rules,
                 exists: true,
-                day: Some(fixtures::overview_rules_day),
+                day: Some(fixtures::overview_paused_day),
                 status: Status {
                     paused: Some(Pause {
                         name: "Google Chrome".into(),
@@ -844,7 +844,7 @@ fn main() {
                 name: "app-0-overview-not-default",
                 width: 1000.0,
                 config: false,
-                rules: fixtures::overview_rules,
+                rules: fixtures::overview_paused_rules,
                 exists: true,
                 day: None,
                 status: Status {
@@ -861,7 +861,26 @@ fn main() {
                 exists: true,
                 day: Some(fixtures::overview_config_error_day),
                 status: Status {
-                    config_error: Some("SyntaxError: Unexpected token '}' \u{00b7} line 42".into()),
+                    config_error: Some(ConfigTrouble::NotLoaded(
+                        "SyntaxError: Unexpected token '}' \u{00b7} line 42".into(),
+                    )),
+                    ..routing()
+                },
+                // 3c's machine has no Microsoft Edge.
+                prepare: |app| app.installed.retain(|app| app.name != "Microsoft Edge"),
+            },
+            // A reload failed: the last version that loaded still routes.
+            Shot {
+                name: "app-0-overview-config-stale",
+                width: 1000.0,
+                config: true,
+                rules: fixtures::overview_config_rules,
+                exists: true,
+                day: Some(fixtures::overview_config_day),
+                status: Status {
+                    config_error: Some(ConfigTrouble::ReloadFailed(
+                        "SyntaxError: Unexpected token '}' \u{00b7} line 42".into(),
+                    )),
                     ..routing()
                 },
                 prepare: |_| {},
@@ -914,7 +933,7 @@ fn main() {
                 Some(std::env::temp_dir().join("pwrroute-screens-overview-rules.json")),
                 (shot.rules)(),
                 shot.exists,
-                Some(std::time::SystemTime::now()),
+                shot.exists.then(std::time::SystemTime::now),
             );
             let config = shot.config.then(fixtures::overview_config);
             // The config's map runs longer: room for the callout under it.

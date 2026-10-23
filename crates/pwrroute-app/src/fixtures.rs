@@ -466,25 +466,84 @@ pub fn overview_config_day() -> Vec<DispatchRecord> {
     )
 }
 
-/// 3c's day, the config not loading: 212 links, 131 to PwrRoute's default,
-/// two that failed.
+/// 2b's day: [`overview_config_day`] with PwrRoute's default taking what
+/// the config's handlers leave, in Google Chrome · Personal: Chrome 941,
+/// Safari 3.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the window harness and the screens example")
 )]
-pub fn overview_config_error_day() -> Vec<DispatchRecord> {
+pub fn overview_override_day() -> Vec<DispatchRecord> {
+    let handler = |index| Matched::Handler { index };
     let rule = |index| Matched::Rule { index };
     let pwrroute = Matched::Default {
         owner: Some(pwrroute_router::Owner::PwrRoute),
     };
     overview_day(
         &[
-            (rule(0), Some(("Arc", "")), 66),
+            (rule(0), Some(("Arc", "")), 402),
             (rule(1), Some(("Google Chrome", "Personal")), 12),
             (rule(2), Some(("Safari", "")), 3),
-            (pwrroute, Some(("Google Chrome", "Personal")), 131),
+            (handler(0), Some(("Firefox", "")), 57),
+            (handler(1), Some(("Google Chrome", "Work")), 88),
+            (handler(2), Some(("Google Chrome", "Work")), 214),
+            (handler(3), None, 9),
+            (pwrroute, Some(("Google Chrome", "Personal")), 627),
         ],
-        164,
+        1_108,
+        0,
+    )
+}
+
+/// 3a and 3b's visual rules: [`overview_rules`]' first four.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_paused_rules() -> RulesFile {
+    let mut rules = overview_rules();
+    rules.rules.truncate(4);
+    rules
+}
+
+/// 3a's day over [`overview_paused_rules`]: 1,403 links, 642 to
+/// Everything else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_paused_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[
+            (rule(0), Some(("Google Chrome", "Work")), 214),
+            (rule(1), Some(("Google Chrome", "Work")), 88),
+            (rule(2), Some(("Firefox", "")), 57),
+            (rule(3), Some(("Arc", "")), 402),
+            (pwrroute, Some(("Google Chrome", "Personal")), 642),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 3c's day, the config never loading: the router's fallback took all 212
+/// links, in Google Chrome · Personal, and two failed. Nothing ran a rule
+/// or a rewrite.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config_error_day() -> Vec<DispatchRecord> {
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[(pwrroute, Some(("Google Chrome", "Personal")), 212)],
+        0,
         2,
     )
 }

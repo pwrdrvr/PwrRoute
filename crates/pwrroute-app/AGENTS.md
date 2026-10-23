@@ -80,7 +80,13 @@ their own modules.
   (`"pwrroute"`, with Undo), both through the store and saved at once.
   `overview::status` reads the router, the tray's pause and the OS; a test
   or screenshot sets `OverviewState::status` instead. The strip chips and
-  the rail foot use the same reading.
+  the rail foot use the same reading. A config the router never loaded
+  (`RoutingSource::fallback`) is `ConfigTrouble::NotLoaded`: nothing in it
+  or `rules.json` runs and every link goes to the fallback browser, so
+  the map marks the rules "not running". A failed reload (`error` alone)
+  is `ReloadFailed`, the warning tone: the last load still routes. Rules
+  and Test a link reuse Overview's source chip. Leaving Overview
+  (`OverviewState::leave`) drops its fades and the callout's hand-off.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
   (`activity.keep`, `activity.journal`, `activity.journalDays`) and the

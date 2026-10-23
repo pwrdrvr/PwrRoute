@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use gpui_kit::{
     App, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
@@ -110,6 +110,9 @@ pub struct PwrRoute {
     /// What the config in charge says, for the Overview's map: `None`
     /// while none is in charge or it did not load.
     pub described: Option<Description>,
+    /// When this window last read the config in charge, for the rail
+    /// foot's "reloaded".
+    pub config_loaded: SystemTime,
     /// A debounced save is on its way.
     save_scheduled: bool,
     /// Pausing from the tray redraws the Overview.
@@ -185,6 +188,7 @@ impl PwrRoute {
             overview: OverviewState::default(),
             installed: Vec::new(),
             described,
+            config_loaded: SystemTime::now(),
             save_scheduled: false,
             _tray: tray,
         };
@@ -203,13 +207,7 @@ impl PwrRoute {
     /// the keyboard; the others give it to the window.
     pub fn navigate(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<'_, Self>) {
         if self.screen == Screen::Overview && screen != Screen::Overview {
-            // Leaving Overview: its numbers have counted up, the callout's
-            // Undo is over, and nothing stays lit.
-            self.overview.ticked = true;
-            self.overview.just_overridden = false;
-            self.overview.picking = false;
-            self.overview.hover(None);
-            self.overview.pin(None);
+            self.overview.leave();
         }
         self.screen = screen;
         match screen {
@@ -420,6 +418,7 @@ impl PwrRoute {
             .map(|(path, engine)| ConfigInCharge::new(path, self.home.as_deref(), engine.as_ref()));
         self.visual_rules_expanded = false;
         self.described = described(engine.as_ref());
+        self.config_loaded = SystemTime::now();
         self.probe = Probe::new(config.clone(), self.store.edited());
         self.tests = TestRuns::new(config.clone(), self.store.edited());
         self.test = TestLink::new(

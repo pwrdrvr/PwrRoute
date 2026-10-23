@@ -11,7 +11,7 @@ use gpui_kit::{
 use crate::app::{PwrRoute, Screen};
 use crate::default_browser::DefaultState;
 use crate::e2e;
-use crate::overview_model::{State, Status, plural};
+use crate::overview_model::{ConfigTrouble, State, Status, plural};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{ButtonKind, button, key_cap, status_chip};
 
@@ -40,42 +40,31 @@ fn strip_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
             theme::status_ok(),
         )
     };
-    // A config in charge is the accent, not a warning: warning only when
-    // its last reload failed, and the error tone when it never loaded.
-    let config = |path: &str| {
-        let source = crate::router::routing_source();
-        if source.fallback.is_some() {
-            status_chip(
-                format!("{path} \u{00b7} did not load"),
-                theme::status_error(),
-            )
-        } else if source.error.is_some() {
-            status_chip(
-                format!("{path} \u{00b7} in charge"),
-                theme::status_warning(),
-            )
-        } else {
-            status_chip(format!("{path} \u{00b7} in charge"), theme::accent())
-        }
-    };
     match (app.screen, &app.config) {
         (Screen::Overview, _) => overview_chips(app, status),
-        (Screen::Rules | Screen::TestLink, Some(in_charge)) => vec![config(&in_charge.path)],
+        // The config's chip, as Overview draws it (design 5a/5b).
+        (Screen::Rules | Screen::TestLink, Some(_)) => vec![source_chip(app, status)],
         (Screen::Rules, None) => vec![rules(), crate::default_browser::chip()],
         (Screen::TestLink, None) => vec![rules()],
         (Screen::Activity, _) => vec![status_chip(app.activity.today.label(), theme::status_ok())],
     }
 }
 
-/// Overview's chips: where the rules come from, then whether links reach
-/// PwrRoute, in the words of `TrayModel::chip()` (paused / default browser
-/// / not default), so the tray and the window agree.
-fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
+/// Where the rules come from. A config in charge is the accent, not a
+/// warning: warning only when its last reload failed, and the error tone
+/// when it never loaded.
+fn source_chip(app: &PwrRoute, status: &Status) -> Div {
     use pwrroute_engine::Precedence;
-    let source = match &app.config {
+    match &app.config {
+        Some(config) if matches!(status.config_error, Some(ConfigTrouble::NotLoaded(_))) => {
+            status_chip(
+                format!("{} \u{00b7} didn't load", config.path),
+                theme::status_error(),
+            )
+        }
         Some(config) if status.config_error.is_some() => status_chip(
-            format!("{} \u{00b7} didn't load", config.path),
-            theme::status_error(),
+            format!("{} \u{00b7} didn't reload", config.path),
+            theme::status_warning(),
         ),
         Some(config) if app.store.precedence() == Precedence::PwrRoute => status_chip(
             format!("{} \u{00b7} after your rules", config.path),
@@ -94,7 +83,14 @@ fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
             ),
             theme::status_ok(),
         ),
-    };
+    }
+}
+
+/// Overview's chips: where the rules come from, then whether links reach
+/// PwrRoute, in the words of `TrayModel::chip()` (paused / default browser
+/// / not default), so the tray and the window agree.
+fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
+    let source = source_chip(app, status);
     let state = if status.paused.is_some() {
         status_chip("paused", theme::status_warning())
     } else {
@@ -113,6 +109,10 @@ pub fn routing_line(status: &Status) -> (gpui_kit::Hsla, String) {
         State::ConfigError => (
             theme::status_error(),
             "routing \u{00b7} config didn't load".to_owned(),
+        ),
+        State::ConfigStale => (
+            theme::status_warning(),
+            "routing \u{00b7} config didn't reload".to_owned(),
         ),
         State::Paused => (
             theme::status_warning(),
@@ -294,6 +294,28 @@ fn changed_actions(cx: &mut Context<'_, PwrRoute>) -> Div {
         )
 }
 
+/// The rail foot's second line: what was last read or written. A config
+/// in charge that loaded says when it was (re)loaded; else `rules.json`
+/// when it was saved. Anything the store has to say about an edit
+/// (unsaved, saving, a failed save, a change on disk) wins.
+pub fn foot_label(app: &PwrRoute, status: &Status) -> String {
+    use crate::rules_store::{Status as Store, clock};
+    match (app.store.status(), &app.config) {
+        (Store::Saved { .. }, Some(config))
+            if config.problem.is_none() && status.config_error.is_none() =>
+        {
+            // The router reloads the file soon after it changes; this
+            // window read it when it opened, or when the source changed.
+            let reloaded = config.modified.map_or(app.config_loaded, |modified| {
+                modified.max(app.config_loaded)
+            });
+            format!("reloaded {}", clock(reloaded))
+        }
+        (Store::Saved { at: Some(at) }, _) => format!("rules.json \u{00b7} saved {}", clock(*at)),
+        _ => app.store.status_label(),
+    }
+}
+
 /// `.rail`: the sections, Settings, and the routing state at the foot.
 pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>) -> Div {
     let count = |label: String| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
@@ -342,7 +364,7 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
                 } else {
                     theme::text_subtle()
                 })
-                .child(app.store.status_label()),
+                .child(foot_label(app, status)),
         )
         .children(app.store.changed_on_disk().then(|| changed_actions(cx)));
     div()

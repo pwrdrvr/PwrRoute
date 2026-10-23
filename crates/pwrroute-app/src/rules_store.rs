@@ -1028,6 +1028,32 @@ mod tests {
     }
 
     #[test]
+    fn the_default_browser_is_an_edit_and_the_same_values_change_nothing() {
+        let dir = scratch("default-browser");
+        let path = dir.join("rules.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"{ "defaultBrowser": "Firefox", "defaultProfile": "Work" }"#,
+        )
+        .unwrap();
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.set_default_browser("Firefox", "Work");
+        assert!(!store.needs_save());
+
+        store.set_default_browser("Google Chrome", "");
+        assert!(store.needs_save());
+        store.save().unwrap();
+        let read: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            read,
+            json!({ "defaultBrowser": "Google Chrome", "rules": [] })
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn add_edit_delete_and_save_produce_the_expected_json() {
         let dir = scratch("edits");
         let path = dir.join("nested").join("rules.json");

@@ -64,13 +64,33 @@ pub struct Pause {
     pub display: String,
 }
 
+/// The config in charge is in trouble, as the router reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConfigTrouble {
+    /// It has never loaded (the router's `fallback`): nothing it or
+    /// `rules.json` says runs, and every link opens in the fallback browser
+    /// until it loads. The first line of why.
+    NotLoaded(String),
+    /// A reload failed (the router's `error` alone): the last version that
+    /// loaded still routes, with `rules.json`. The first line of why.
+    ReloadFailed(String),
+}
+
+impl ConfigTrouble {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::NotLoaded(message) | Self::ReloadFailed(message) => message,
+        }
+    }
+}
+
 /// What the router and the OS say right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
     pub paused: Option<Pause>,
     pub default: DefaultState,
-    /// The config in charge did not load: the first line of why.
-    pub config_error: Option<String>,
+    /// The config in charge did not load, or did not reload.
+    pub config_error: Option<ConfigTrouble>,
 }
 
 impl Status {
@@ -87,11 +107,14 @@ impl Status {
         }
     }
 
-    /// The hero's state, highest priority first: the config did not load,
-    /// paused, not the default browser, unknown, routing.
+    /// The hero's state, highest priority first: the config did not load
+    /// (or reload), paused, not the default browser, unknown, routing.
     pub fn state(&self) -> State {
-        if self.config_error.is_some() {
-            State::ConfigError
+        if let Some(trouble) = &self.config_error {
+            match trouble {
+                ConfigTrouble::NotLoaded(_) => State::ConfigError,
+                ConfigTrouble::ReloadFailed(_) => State::ConfigStale,
+            }
         } else if self.paused.is_some() {
             State::Paused
         } else {
@@ -107,7 +130,10 @@ impl Status {
 /// The routing state, as the hero, the strip chip and the rail foot say it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
+    /// The config never loaded: every link goes to the fallback browser.
     ConfigError,
+    /// Its last reload failed: the version that loaded before still runs.
+    ConfigStale,
     Paused,
     NotDefault,
     Unknown,
@@ -830,17 +856,23 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     let rules = inputs.rules;
     let installed = inputs.installed;
     let config = inputs.config;
-    let config_error = config.and_then(|config| {
+    // The config's trouble, as the router reports it. A config this window
+    // could not read while the router reports none is the router's copy
+    // routing: the map says so rather than that links skip it.
+    let trouble = config.and_then(|config| {
         status.config_error.clone().or_else(|| {
             config
                 .description
                 .is_none()
-                .then(|| "It did not load.".to_owned())
+                .then(|| ConfigTrouble::ReloadFailed("It did not load here.".to_owned()))
         })
     });
+    // Never loaded: neither the config nor rules.json runs, and every link
+    // goes to the fallback browser.
+    let not_loaded = matches!(trouble, Some(ConfigTrouble::NotLoaded(_)));
     let description = config
         .and_then(|config| config.description)
-        .filter(|_| config_error.is_none());
+        .filter(|_| !not_loaded);
     let rules_first = rules.precedence == Precedence::PwrRoute;
     let has_default = !rules.default_browser.trim().is_empty();
     let counts = state != State::NotDefault;
@@ -887,8 +919,18 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 note: String::new(),
             });
             items.push(Item::Error {
-                title: format!("{} didn't load: links skip it", config.shown),
-                detail: config_error.clone().unwrap_or_default(),
+                title: if not_loaded {
+                    format!("{} didn't load: links skip it", config.shown)
+                } else {
+                    format!(
+                        "{} didn't reload: the last version that loaded still runs",
+                        config.shown
+                    )
+                },
+                detail: trouble
+                    .as_ref()
+                    .map(|trouble| trouble.message().to_owned())
+                    .unwrap_or_default(),
             });
             return;
         };
@@ -921,7 +963,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         }
         if config.is_some() {
             items.push(Item::Header {
-                label: if rules_first {
+                label: if not_loaded {
+                    // The router's fallback engine holds no rules.
+                    "Your rules \u{00b7} not running".to_owned()
+                } else if rules_first {
                     "Your rules \u{00b7} run first".to_owned()
                 } else {
                     "Your rules \u{00b7} run after".to_owned()
@@ -944,7 +989,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 matcher: rule_match(rule),
                 target,
                 enabled: rule.enabled,
-                count: (!ghost && rule.enabled)
+                count: (!ghost && rule.enabled && !not_loaded)
                     .then(|| count_of(HitKey::Rule(index)))
                     .flatten(),
                 tooltip: format!("rule {}", index + 1),
@@ -1124,7 +1169,11 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         .map(|app| app.name.as_str())
         .collect();
 
-    let rewrites = description.map_or(0, |d| d.rewrites.len()) + rules.rewrites.len();
+    let rewrites = if not_loaded {
+        0
+    } else {
+        description.map_or(0, |d| d.rewrites.len()) + rules.rewrites.len()
+    };
     let nothing = config.is_none() && rules.rules.is_empty();
     let empty = nothing.then(|| Empty {
         title: format!("Every link opens in {pwrroute_display}."),
@@ -1168,7 +1217,19 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 title: "Choose where everything else goes",
                 done: has_default,
                 body: (!has_default).then(|| {
-                    format!("Links no rule claims open here. Until you choose, that's {fallback}.")
+                    if config_owns_default {
+                        // The config's default takes them; this browser is
+                        // the router's fallback (First run 4e).
+                        format!(
+                            "{shown}'s defaultBrowser handles links its handlers don't \
+                             claim. The browser below still catches config errors, \
+                             browsers that can't open, and every link while paused."
+                        )
+                    } else {
+                        format!(
+                            "Links no rule claims open here. Until you choose, that's {fallback}."
+                        )
+                    }
                 }),
                 result: has_default.then(|| {
                     let (dest, _) = pwrroute_dest();
@@ -1177,13 +1238,17 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             },
             default_browser: SetupStep {
                 title: "Make PwrRoute the default browser",
-                done: other_default.is_none(),
-                body: Some(match &other_default {
-                    Some(name) => format!(
+                // Done only when the OS says so: an unknown default is not.
+                done: status.default == DefaultState::PwrRoute,
+                body: Some(match &status.default {
+                    DefaultState::Other(name) => format!(
                         "macOS will ask you to confirm. Until then, links keep opening in \
                          {name} and skip your rules."
                     ),
-                    None => "PwrRoute is the default browser.".to_owned(),
+                    DefaultState::Unknown => "macOS will ask you to confirm. PwrRoute can't \
+                                              tell which browser is the default now."
+                        .to_owned(),
+                    DefaultState::PwrRoute => "PwrRoute is the default browser.".to_owned(),
                 }),
                 result: None,
             },
@@ -1201,14 +1266,35 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     };
     let quiet_action = |action: Action| (setup.is_none()).then_some(action);
     let hero = match state {
+        // The router's fallback engine routes nothing: every link opens in
+        // the fallback browser (design 3c drew rules still running, which
+        // the router does not do).
         State::ConfigError => Hero {
             state,
             tone: Tone::Danger,
             sentence: format!("{shown} didn't load."),
             detail: vec![format!(
-                "Your rules still run. Everything else goes to {pwrroute_display} until it loads."
+                "Every link opens in {pwrroute_display} until it loads."
             )],
             action: Some(Action::ShowError),
+        },
+        // The last version that loaded still runs; the error is here, and
+        // on Rules only when this window could not read the file either.
+        State::ConfigStale => Hero {
+            state,
+            tone: Tone::Warn,
+            sentence: format!("{shown} didn't reload."),
+            detail: std::iter::once(
+                "Links still route with the version that last loaded.".to_owned(),
+            )
+            .chain(
+                status
+                    .config_error
+                    .as_ref()
+                    .map(|trouble| trouble.message().to_owned()),
+            )
+            .collect(),
+            action: description.is_none().then_some(Action::ShowError),
         },
         State::Paused => Hero {
             state,
@@ -1322,17 +1408,28 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     }
 }
 
-/// Browser cards first (Everything else's first of all, as built), then
-/// the special cards, then ghosts; and where each old index went.
+/// Everything else's card first (built first), then the browser cards by
+/// how many rules feed them and then today's links, then the special
+/// cards, then ghosts; and where each old index went. Ties keep the order
+/// of first use.
 fn order_cards(cards: Vec<Card>) -> (Vec<Card>, Vec<usize>) {
+    use std::cmp::Reverse;
     let rank = |kind: CardKind| match kind {
         CardKind::Browser => 0,
         CardKind::Function | CardKind::NotOpened => 1,
         CardKind::Ghost => 2,
     };
     let mut order: Vec<usize> = (0..cards.len()).collect();
-    // The Everything else card (built first) keeps its place whatever it is.
-    order.sort_by_key(|&i| (if i == 0 { 0 } else { 1 + rank(cards[i].kind) }, i));
+    // The Everything else card keeps its place whatever it is.
+    order.sort_by_key(|&i| {
+        let card = &cards[i];
+        (
+            if i == 0 { 0 } else { 1 + rank(card.kind) },
+            Reverse(card.rules),
+            Reverse(card.links.unwrap_or(0)),
+            i,
+        )
+    });
     let mut remap = vec![0; cards.len()];
     for (new, &old) in order.iter().enumerate() {
         remap[old] = new;
@@ -1688,7 +1785,19 @@ mod tests {
         assert_eq!(map.rows[5].rank, 6);
 
         assert_eq!(map.everything_else.owner, "~/.finicky.ts's default");
-        assert_eq!(map.cards[0].name, "Safari");
+        // Everything else's card, then browsers by rules and today's links.
+        assert_eq!(
+            names(map),
+            [
+                "Safari",
+                "Google Chrome",
+                "Arc",
+                "Firefox",
+                "Decided by JavaScript",
+                "Orion"
+            ]
+        );
+        assert_eq!(map.cards[1].meta, "3 rules \u{b7} 314 links today");
         assert_eq!(
             map.cards[0].ribbon.as_deref(),
             Some("Everything else \u{b7} ~/.finicky.ts")
@@ -1733,7 +1842,20 @@ mod tests {
         let mut world = World::config();
         world.rules.precedence = Precedence::PwrRoute;
         world.just_overridden = true;
+        world.day = fixtures::overview_override_day();
         let overview = world.build();
+        let chrome = &overview.map.cards[0];
+        assert_eq!(chrome.meta, "3 rules \u{b7} 941 links today");
+        assert_eq!(chrome.share.as_ref().map(|s| s.label.as_str()), Some("67%"));
+        let safari = overview
+            .map
+            .cards
+            .iter()
+            .find(|card| card.name == "Safari")
+            .expect("Safari's card");
+        assert_eq!(safari.meta, "1 rule \u{b7} 3 links today");
+        assert_eq!(safari.share.as_ref().map(|s| s.label.as_str()), Some("<1%"));
+        assert_eq!(overview.map.everything_else.count, Some(627));
         assert_eq!(
             headers(&overview.map),
             [
@@ -1802,7 +1924,10 @@ mod tests {
 
     #[test]
     fn paused_3a_dims_the_map_and_offers_resume() {
-        let mut world = World::rules();
+        let mut world = World::new(
+            fixtures::overview_paused_rules(),
+            fixtures::overview_paused_day(),
+        );
         world.status.paused = Some(Pause {
             name: "Google Chrome".into(),
             display: "Google Chrome \u{b7} Personal".into(),
@@ -1819,6 +1944,8 @@ mod tests {
         );
         assert_eq!(overview.hero.action, Some(Action::Resume));
         assert!(overview.hero.action.unwrap().primary());
+        assert_eq!(overview.tiles[0].count, 1_403);
+        assert_eq!(overview.map.rows.len(), 4);
         assert_eq!(overview.map.caption, Caption::WhenResumes);
         assert!(overview.map.dimmed);
     }
@@ -1870,25 +1997,62 @@ mod tests {
         let overview = world.build();
         assert_eq!(overview.hero.state, State::Unknown);
         assert_eq!(overview.hero.action, Some(Action::OpenBrowsersSettings));
+        assert!(overview.setup.is_none(), "rules.json has a default");
+
+        // With no default chosen, the setup card never calls an unknown
+        // default done.
+        world.rules.default_browser = String::new();
+        world.rules.default_profile = String::new();
+        let setup = world.build().setup.expect("the setup card");
+        assert_eq!(setup.done(), 0);
+        assert!(!setup.default_browser.done);
+        assert!(
+            setup
+                .default_browser
+                .body
+                .as_deref()
+                .is_some_and(|body| body.contains("can't tell")),
+            "{:?}",
+            setup.default_browser.body
+        );
     }
 
     #[test]
-    fn config_error_3c_keeps_rules_and_sends_the_rest_to_pwrroutes_default() {
+    fn the_setup_step_names_the_configs_default_while_it_owns_everything_else() {
+        let mut world = World::config();
+        world.rules.default_browser = String::new();
+        world.rules.default_profile = String::new();
+        let setup = world.build().setup.expect("the setup card");
+        assert_eq!(
+            setup.everything_else.body.as_deref(),
+            Some(
+                "~/.finicky.ts's defaultBrowser handles links its handlers don't claim. The \
+                 browser below still catches config errors, browsers that can't open, and every \
+                 link while paused."
+            )
+        );
+    }
+
+    #[test]
+    fn config_error_3c_sends_every_link_to_the_fallback_until_it_loads() {
+        // The router's fallback engine routes nothing: not the config, not
+        // rules.json's rules or rewrites.
         let mut world = World::config();
         world.config = Some(None);
         world.day = fixtures::overview_config_error_day();
-        world.status.config_error = Some("SyntaxError: Unexpected token \u{b7} line 42".into());
+        world.status.config_error = Some(ConfigTrouble::NotLoaded(
+            "SyntaxError: Unexpected token \u{b7} line 42".into(),
+        ));
         let overview = world.build();
         assert_eq!(overview.hero.state, State::ConfigError);
         assert_eq!(overview.hero.tone, Tone::Danger);
         assert_eq!(overview.hero.sentence, "~/.finicky.ts didn't load.");
         assert_eq!(
             overview.hero.detail,
-            [
-                "Your rules still run. Everything else goes to Google Chrome \u{b7} Personal until it loads."
-            ]
+            ["Every link opens in Google Chrome \u{b7} Personal until it loads."]
         );
         assert_eq!(overview.hero.action, Some(Action::ShowError));
+        assert_eq!(overview.tiles[0].count, 212);
         assert!(overview.tiles[3].danger, "two failed");
         assert!(overview.callout.is_none());
         let map = overview.map;
@@ -1898,13 +2062,85 @@ mod tests {
                 if title == "~/.finicky.ts didn't load: links skip it"
                     && detail.starts_with("SyntaxError")
         )));
-        assert_eq!(map.rows.len(), 3, "only the visual rules");
         assert_eq!(
-            map.rewrites.as_deref(),
-            Some("1 rewrite runs on every link first")
+            headers(&map),
+            [
+                ("~/.finicky.ts \u{b7} runs first", ""),
+                ("Your rules \u{b7} not running", "3 rules"),
+            ]
         );
+        assert_eq!(map.rows.len(), 3, "only the visual rules");
+        assert!(map.rows.iter().all(|row| row.count.is_none()));
+        assert_eq!(map.rewrites, None, "no rewrite runs either");
         assert_eq!(map.everything_else.owner, "PwrRoute's default");
+        assert_eq!(map.everything_else.count, Some(212));
         assert_eq!(map.cards[0].name, "Google Chrome");
+    }
+
+    #[test]
+    fn a_failed_reload_keeps_the_last_version_routing() {
+        // The window read the config before it broke: the map is the one
+        // that still routes, and the hero carries the error.
+        let mut world = World::config();
+        world.status.config_error = Some(ConfigTrouble::ReloadFailed(
+            "SyntaxError: Unexpected token \u{b7} line 42".into(),
+        ));
+        let overview = world.build();
+        assert_eq!(overview.hero.state, State::ConfigStale);
+        assert_eq!(overview.hero.tone, Tone::Warn);
+        assert_eq!(overview.hero.sentence, "~/.finicky.ts didn't reload.");
+        assert_eq!(
+            overview.hero.detail,
+            [
+                "Links still route with the version that last loaded.",
+                "SyntaxError: Unexpected token \u{b7} line 42",
+            ]
+        );
+        assert_eq!(overview.hero.action, None, "Rules has no error to show");
+        let map = &overview.map;
+        assert!(
+            !map.items
+                .iter()
+                .any(|item| matches!(item, Item::Error { .. }))
+        );
+        assert_eq!(
+            headers(map)[0],
+            (
+                "~/.finicky.ts \u{b7} runs first",
+                "5 handlers \u{b7} read-only"
+            )
+        );
+        assert!(map.rows.iter().any(|row| row.count.is_some()));
+        assert_eq!(map.everything_else.owner, "~/.finicky.ts's default");
+
+        // This window could not read it either: an error row that says the
+        // last version still runs, and Show the error.
+        world.config = Some(None);
+        let overview = world.build();
+        assert_eq!(overview.hero.action, Some(Action::ShowError));
+        assert!(overview.map.items.iter().any(|item| matches!(
+            item,
+            Item::Error { title, .. }
+                if title == "~/.finicky.ts didn't reload: the last version that loaded still runs"
+        )));
+        assert_eq!(
+            headers(&overview.map)[1],
+            ("Your rules \u{b7} run after", "3 rules")
+        );
+    }
+
+    #[test]
+    fn the_hero_puts_a_config_that_did_not_load_before_a_pause() {
+        let mut status = Status::routing();
+        status.paused = Some(Pause {
+            name: "Google Chrome".into(),
+            display: "Google Chrome".into(),
+        });
+        assert_eq!(status.state(), State::Paused);
+        status.config_error = Some(ConfigTrouble::ReloadFailed("x".into()));
+        assert_eq!(status.state(), State::ConfigStale);
+        status.config_error = Some(ConfigTrouble::NotLoaded("x".into()));
+        assert_eq!(status.state(), State::ConfigError);
     }
 
     #[test]

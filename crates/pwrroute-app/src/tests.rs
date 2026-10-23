@@ -2540,7 +2540,19 @@ fn the_setup_card_chooses_where_everything_else_goes(cx: &mut TestAppContext) {
     let (_view, cx, path) = open_overview(cx, None, rules, Vec::new());
     assert!(cx.debug_bounds("overview-setup").is_some());
     click(cx, "overview-setup-choose");
+    // The list is as wide as its field.
+    let field = cx.debug_bounds("overview-setup-choose").expect("the field");
+    let menu = cx.debug_bounds("overview-setup-menu").expect("the list");
+    assert_eq!(
+        (menu.left(), menu.size.width),
+        (field.left(), field.size.width)
+    );
+    // Chrome has profiles: its row opens them in the list's place.
     click(cx, "overview-setup-choice-0");
+    assert!(cx.debug_bounds("overview-setup-choice-0").is_none());
+    assert!(cx.debug_bounds("overview-setup-profile-2").is_some());
+    assert_eq!(saved(cx, &path).default_browser, "", "nothing chosen yet");
+    click(cx, "overview-setup-profile-1");
     let file = saved(cx, &path);
     assert_eq!(
         (file.default_browser.as_str(), file.default_profile.as_str()),
@@ -2551,4 +2563,96 @@ fn the_setup_card_chooses_where_everything_else_goes(cx: &mut TestAppContext) {
         cx.debug_bounds("overview-setup").is_none(),
         "nothing left to set up"
     );
+}
+
+#[gpui_kit::test]
+fn the_setup_card_saves_a_browser_without_profiles_at_once(cx: &mut TestAppContext) {
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (_view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    click(cx, "overview-setup-choose");
+    // Firefox, second in the scan, has no profiles.
+    click(cx, "overview-setup-choice-1");
+    let file = saved(cx, &path);
+    assert_eq!(
+        (file.default_browser.as_str(), file.default_profile.as_str()),
+        ("Firefox", "")
+    );
+}
+
+#[gpui_kit::test]
+fn leaving_overview_forgets_its_fades_and_the_hand_off(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    let handoff =
+        |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.overview.handing_off());
+    let first = handoff(cx).expect("the hand-off plays");
+    // Undo plays a new one, and it is gone once played.
+    scroll_to(cx, crate::overview::CALLOUT_UNDO_ID);
+    click(cx, crate::overview::CALLOUT_UNDO_ID);
+    let undo = handoff(cx).expect("Undo plays it back");
+    assert!(undo > first);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    draw(cx);
+    assert_eq!(handoff(cx), None);
+
+    // Leaving drops what plays or fades, so coming back replays nothing.
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    assert!(handoff(cx).is_some());
+    view.update(cx, |app, _| {
+        app.overview
+            .hover(Some(crate::overview_model::Focus::Card(1)));
+    });
+    click(cx, "nav-rules");
+    assert_eq!(handoff(cx), None);
+    assert!(view.read_with(cx, |app, _| app.overview.fading().is_none()));
+    click(cx, "nav-overview");
+    assert_eq!(handoff(cx), None, "coming back does not replay it");
+}
+
+#[test]
+fn the_overview_reads_the_routers_config_trouble() {
+    use crate::overview_model::ConfigTrouble;
+    use crate::router::RoutingSource;
+    let trouble = crate::overview::config_trouble;
+    // Never loaded: the router's fallback, with its load error.
+    let source = RoutingSource {
+        fallback: Some("no config has loaded".into()),
+        error: Some("SyntaxError: Unexpected token\nat line 42".into()),
+        ..RoutingSource::default()
+    };
+    assert_eq!(
+        trouble(source, None),
+        Some(ConfigTrouble::NotLoaded(
+            "SyntaxError: Unexpected token".into()
+        ))
+    );
+    // A reload failed: the last load still routes.
+    let source = RoutingSource {
+        error: Some("SyntaxError: Unexpected token".into()),
+        ..RoutingSource::default()
+    };
+    assert_eq!(
+        trouble(source, None),
+        Some(ConfigTrouble::ReloadFailed(
+            "SyntaxError: Unexpected token".into()
+        ))
+    );
+    // The router routes; only this window could not read the file.
+    assert_eq!(
+        trouble(RoutingSource::default(), Some("It did not load: x")),
+        Some(ConfigTrouble::ReloadFailed("It did not load: x".into()))
+    );
+    assert_eq!(trouble(RoutingSource::default(), None), None);
 }

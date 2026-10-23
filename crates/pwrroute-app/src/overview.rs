@@ -26,15 +26,16 @@ use gpui_kit::{
 
 use crate::app::{PwrRoute, Screen, Selection};
 use crate::overview_model::{
-    self, Action, CHANGE_IN_RULES, Callout, Caption, Card, CardKind, ConfigInputs, DONE_TITLE, End,
-    EverythingElse, Focus, Inputs, Item, Lit, Map, OFFER_BUTTON, OFFER_TITLE, Overview, Pause, Row,
-    RowMatch, RowSource, Setup, SetupStep, State, Status, Target, Tone,
+    self, Action, CHANGE_IN_RULES, Callout, Caption, Card, CardKind, ConfigInputs, ConfigTrouble,
+    DONE_TITLE, End, EverythingElse, Focus, Inputs, Installed, Item, Lit, Map, OFFER_BUTTON,
+    OFFER_TITLE, Overview, Pause, Row, RowMatch, RowSource, Setup, SetupStep, State, Status,
+    Target, Tone,
 };
 use crate::rules_view::pane_frame;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{
     ButtonKind, add_button, badge, button, caret, field_label, input_box, menu_card, menu_row,
-    one_line, paragraph, tag_frame,
+    one_line, paragraph, profiles_hint, tag_frame,
 };
 
 /// The rule column's width, and the gutter the curves cross.
@@ -87,10 +88,15 @@ pub struct OverviewState {
     /// The callout's switch was just used: Undo stays until the reader
     /// leaves Overview.
     pub just_overridden: bool,
-    /// The override's hand-off curve, by the generation it started at.
+    /// The override's hand-off curve while it plays, by its number: every
+    /// switch (and Undo) plays a new one, and it is gone after [`HANDOFF`].
     handoff: Option<usize>,
+    handoffs: usize,
     /// The setup card's browser list is open.
     pub picking: bool,
+    /// The browser (in the list's order) whose profiles the list shows in
+    /// place of the browsers.
+    pub choosing: Option<usize>,
     was_picking: bool,
     /// Today's numbers have counted up once.
     pub ticked: bool,
@@ -134,6 +140,32 @@ impl OverviewState {
     pub fn pin(&mut self, focus: Option<Focus>) -> bool {
         self.lit_change(|this| this.pinned = focus)
     }
+
+    /// The hand-off playing now, by its number.
+    #[cfg(test)]
+    pub fn handing_off(&self) -> Option<usize> {
+        self.handoff
+    }
+
+    /// What is fading out.
+    #[cfg(test)]
+    pub fn fading(&self) -> Option<Focus> {
+        self.previous
+    }
+
+    /// The reader leaves Overview: its numbers have counted up, the
+    /// callout's Undo is over, nothing stays lit, and nothing fades or
+    /// hands off when they come back.
+    pub fn leave(&mut self) {
+        self.ticked = true;
+        self.just_overridden = false;
+        self.picking = false;
+        self.choosing = None;
+        self.hover(None);
+        self.pin(None);
+        self.previous = None;
+        self.handoff = None;
+    }
 }
 
 /// The routing state as the router, the tray and the OS report it, or the
@@ -150,17 +182,33 @@ pub fn status(app: &PwrRoute, cx: &App) -> Status {
         })
     });
     let config_error = app.config.as_ref().and_then(|config| {
-        let source = crate::router::routing_source();
-        source
-            .fallback
-            .or(source.error)
-            .or_else(|| config.problem.clone())
-            .map(|error| first_line(&error))
+        config_trouble(crate::router::routing_source(), config.problem.as_deref())
     });
     Status {
         paused,
         default: crate::default_browser::state(cx),
         config_error,
+    }
+}
+
+/// What the router says of the config in charge. `fallback` set: nothing
+/// has loaded and every link goes to the fallback browser. `error` alone: a
+/// reload failed and the last load still routes. Neither, while this window
+/// could not read the file (`problem`): the router's copy routes, so it is
+/// the stale case, not the broken one.
+pub fn config_trouble(
+    source: crate::router::RoutingSource,
+    problem: Option<&str>,
+) -> Option<ConfigTrouble> {
+    if let Some(fallback) = source.fallback {
+        let why = source.error.or_else(|| problem.map(str::to_owned));
+        Some(ConfigTrouble::NotLoaded(first_line(
+            why.as_deref().unwrap_or(&fallback),
+        )))
+    } else if let Some(error) = source.error {
+        Some(ConfigTrouble::ReloadFailed(first_line(&error)))
+    } else {
+        problem.map(|problem| ConfigTrouble::ReloadFailed(first_line(problem)))
     }
 }
 
@@ -226,7 +274,19 @@ impl PwrRoute {
             Precedence::Config
         });
         self.overview.just_overridden = on;
-        self.overview.handoff = Some(self.overview.generation);
+        self.overview.handoffs += 1;
+        let handoff = self.overview.handoffs;
+        self.overview.handoff = Some(handoff);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(HANDOFF).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.overview.handoff == Some(handoff) {
+                    this.overview.handoff = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         self.refresh(cx);
         self.save_now(cx);
     }
@@ -236,6 +296,7 @@ impl PwrRoute {
     pub fn choose_default(&mut self, browser: &str, profile: &str, cx: &mut Context<'_, Self>) {
         self.store.set_default_browser(browser, profile);
         self.overview.picking = false;
+        self.overview.choosing = None;
         self.refresh(cx);
         self.save_now(cx);
     }
@@ -263,7 +324,12 @@ impl PwrRoute {
                 cx,
             ),
             Action::Resume => {
-                crate::tray::run(crate::tray::TrayCommand::TogglePause, cx);
+                // Only while paused: the tray may have resumed already, and
+                // the toggle would pause again.
+                let paused = crate::tray::model(cx).is_some_and(|model| model.read(cx).is_paused());
+                if paused {
+                    crate::tray::run(crate::tray::TrayCommand::TogglePause, cx);
+                }
                 cx.notify();
             }
             Action::MakeDefault => {
@@ -433,7 +499,7 @@ fn hero(overview: &Overview, cx: &mut Context<'_, PwrRoute>) -> Div {
     };
     let orb_icon = match hero.state {
         State::Paused => "pwrroute/pause.svg",
-        State::ConfigError => "pwrroute/alert.svg",
+        State::ConfigError | State::ConfigStale => "pwrroute/alert.svg",
         _ => "pwrroute/mark.svg",
     };
     let orb_size = if orb_icon == "pwrroute/mark.svg" {
@@ -631,47 +697,79 @@ fn step_words(step: &SetupStep) -> Div {
         })
 }
 
-/// The browser list the setup card's select opens: one row per browser,
-/// or per profile when it has some.
-fn browser_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
-    let mut choices: Vec<(String, String)> = Vec::new();
-    for browser in app.installed.iter().filter(|b| !b.hidden) {
-        if browser.profiles.is_empty() {
-            choices.push((browser.name.clone(), String::new()));
-        } else {
-            for profile in &browser.profiles {
-                choices.push((browser.name.clone(), profile.clone()));
-            }
-        }
-    }
-    choices.into_iter().enumerate().fold(
-        menu_card("overview-setup-menu")
-            .debug_selector(|| "overview-setup-menu".into())
-            .absolute()
-            .top(px(34.0))
-            .right_0()
-            .w(px(260.0))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.overview.picking = false;
-                cx.notify();
-            })),
-        |menu, (index, (name, profile))| {
-            let hint = (!profile.is_empty()).then(|| SharedString::from(profile.clone()));
-            menu.child(
-                menu_row(
-                    ("overview-setup-choice", index),
-                    Some(crate::widgets::badge_for(&name)),
-                    name.clone(),
-                    hint,
+/// The setup card's select width: the field's, and the list's under
+/// "Change…".
+const SELECT_WIDTH: f32 = 220.0;
+
+/// The browser list the setup card's select opens, as first run's: one
+/// row per browser with its profiles as the hint; a browser with profiles
+/// shows its profile list in place of the browsers ("Default profile",
+/// then each). Under the field it is the field's width; under "Change…"
+/// (`field` false) it keeps the field's width, right-aligned.
+fn browser_menu(app: &PwrRoute, field: bool, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
+    let browsers: Vec<&Installed> = app
+        .installed
+        .iter()
+        .filter(|browser| !browser.hidden && !browser.name.eq_ignore_ascii_case("PwrRoute"))
+        .collect();
+    let menu = menu_card("overview-setup-menu")
+        .debug_selector(|| "overview-setup-menu".into())
+        .absolute()
+        .top(px(34.0))
+        .when(field, |menu| menu.left_0().right_0())
+        .when(!field, |menu| menu.right_0().w(px(SELECT_WIDTH)))
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            this.overview.picking = false;
+            this.overview.choosing = None;
+            cx.notify();
+        }));
+    match app.overview.choosing.and_then(|index| browsers.get(index)) {
+        Some(browser) => {
+            let name = browser.name.clone();
+            let profiles = std::iter::once(String::new()).chain(browser.profiles.iter().cloned());
+            profiles.enumerate().fold(menu, |menu, (index, profile)| {
+                let name = name.clone();
+                let label = if profile.is_empty() {
+                    "Default profile".to_owned()
+                } else {
+                    profile.clone()
+                };
+                menu.child(
+                    menu_row(("overview-setup-profile", index), None, label, None)
+                        .debug_selector(move || format!("overview-setup-profile-{index}"))
+                        .hover(|row| row.bg(theme::bg_hover()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.choose_default(&name, &profile, cx);
+                        })),
                 )
-                .debug_selector(move || format!("overview-setup-choice-{index}"))
-                .hover(|row| row.bg(theme::bg_hover()))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.choose_default(&name, &profile, cx);
-                })),
-            )
-        },
-    )
+            })
+        }
+        None => browsers
+            .iter()
+            .enumerate()
+            .fold(menu, |menu, (index, browser)| {
+                let name = browser.name.clone();
+                let has_profiles = !browser.profiles.is_empty();
+                menu.child(
+                    menu_row(
+                        ("overview-setup-choice", index),
+                        Some(crate::widgets::badge_for(&name)),
+                        name.clone(),
+                        profiles_hint(&browser.profiles).map(SharedString::from),
+                    )
+                    .debug_selector(move || format!("overview-setup-choice-{index}"))
+                    .hover(|row| row.bg(theme::bg_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if has_profiles {
+                            this.overview.choosing = Some(index);
+                            cx.notify();
+                        } else {
+                            this.choose_default(&name, "", cx);
+                        }
+                    })),
+                )
+            }),
+    }
 }
 
 fn setup_card(app: &PwrRoute, setup: &Setup, cx: &mut Context<'_, PwrRoute>) -> Div {
@@ -696,6 +794,7 @@ fn setup_card(app: &PwrRoute, setup: &Setup, cx: &mut Context<'_, PwrRoute>) -> 
     let picking = app.overview.picking;
     let toggle = cx.listener(|this, _, _, cx| {
         this.overview.picking = !this.overview.was_picking;
+        this.overview.choosing = None;
         cx.notify();
     });
     let remember = cx.listener(|this, _, _, _| {
@@ -712,7 +811,7 @@ fn setup_card(app: &PwrRoute, setup: &Setup, cx: &mut Context<'_, PwrRoute>) -> 
         input_box()
             .id("overview-setup-choose")
             .debug_selector(|| "overview-setup-choose".into())
-            .w(px(220.0))
+            .w(px(SELECT_WIDTH))
             .cursor_pointer()
             .child(field_label("Choose a browser", theme::text_subtle()))
             .child(caret())
@@ -725,7 +824,8 @@ fn setup_card(app: &PwrRoute, setup: &Setup, cx: &mut Context<'_, PwrRoute>) -> 
         .flex_none()
         .child(choose)
         .when(picking, |control| {
-            control.child(deferred(browser_menu(app, cx)))
+            let field = !setup.everything_else.done;
+            control.child(deferred(browser_menu(app, field, cx)))
         });
     let first = step_frame(&setup.everything_else, 1, first_current)
         .child(step_words(&setup.everything_else))
