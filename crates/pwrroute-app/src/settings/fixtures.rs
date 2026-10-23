@@ -99,7 +99,7 @@ pub fn privacy() -> Privacy {
             since: "2026-10-14".into(),
         }),
         journal_error: None,
-        rules_keep_less: Some("Handler 9 keeps host only and handler 10 keeps nothing".into()),
+        rules_keep_less: Some("Rule 9 keeps host only and rule 10 keeps nothing".into()),
         can_save: true,
     }
 }
@@ -517,7 +517,7 @@ pub fn configuration_everything_else_warnings() -> Configuration {
                 .into();
         field.warnings = vec![
             "Its defaultBrowser function will no longer run.".into(),
-            "Handler 5 matches every link, so PwrRoute's default never applies.".into(),
+            "Config handler 5 matches every link, so PwrRoute's default never applies.".into(),
         ];
     }
     configuration

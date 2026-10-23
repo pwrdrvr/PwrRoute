@@ -188,7 +188,7 @@ fn size_label(bytes: u64) -> String {
     }
 }
 
-/// "Handler 9 keeps host only and handler 10 keeps nothing": the rules
+/// "Rule 9 keeps host only and rule 10 keeps nothing": the rules
 /// in the `rules.json` at `path` that keep less than full, for the confirm
 /// sheet.
 fn rules_keep_less(path: Option<&Path>) -> Option<SharedString> {

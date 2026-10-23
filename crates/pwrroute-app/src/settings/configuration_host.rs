@@ -302,16 +302,19 @@ fn everything_else(facts: &Facts, config: &Path) -> EverythingElse {
     };
     let default_browser = rules.map_or("", |file| file.default_browser.trim());
     let mut warnings: Vec<SharedString> = Vec::new();
+    // PwrRoute's default chosen with none PwrRoute can open (none, or
+    // PwrRoute itself): the engine leaves the config's default in place,
+    // as the Rules banner says.
+    if rules.is_some_and(|file| file.precedence == Precedence::PwrRoute && !file.owns_default()) {
+        warnings.push(crate::config_view::NEEDS_DEFAULT.into());
+    }
     match (&config_default, spec) {
         (ConfigDefault::Null, _) => warnings.push(NULL_WARNING.into()),
         (_, Some(BrowserSpec::Function(_))) => warnings.push(FUNCTION_WARNING.into()),
         _ => {}
     }
     if let Some(handler) = facts.config.as_ref().and_then(|config| config.catch_all) {
-        warnings.push(
-            format!("Handler {handler} matches every link, so PwrRoute's default never applies.")
-                .into(),
-        );
+        warnings.push(catch_all_warning(handler).into());
     }
     let mut browsers: Vec<DefaultChoice> = facts
         .browsers
@@ -385,9 +388,21 @@ pub fn catch_all(handlers: &[HandlerRule]) -> Option<usize> {
         .map(|index| index + 1)
 }
 
-fn matches_everything(matcher: &MatcherSpec) -> bool {
+/// The warning for config handler `number` (1-based) matching every link,
+/// on the Rules banner, the Overview's callout and here.
+pub fn catch_all_warning(number: usize) -> String {
+    format!("Config handler {number} matches every link, so PwrRoute's default never applies.")
+}
+
+/// A matcher that takes every link: a pattern of nothing but wildcards and
+/// separators (`"*"`, `"*://*/*"`), a regex that matches anything, or a
+/// function that only returns `true`. The one test every surface uses.
+pub fn matches_everything(matcher: &MatcherSpec) -> bool {
     match matcher {
-        MatcherSpec::Wildcard(pattern) => matches!(pattern.trim(), "*" | "*://*" | "*://*/*"),
+        MatcherSpec::Wildcard(pattern) => {
+            let pattern = pattern.trim();
+            pattern.contains('*') && pattern.chars().all(|c| matches!(c, '*' | ':' | '/'))
+        }
         MatcherSpec::Regex(regex) => {
             // `/source/flags`: the source between the outer slashes.
             let source = regex
@@ -396,7 +411,7 @@ fn matches_everything(matcher: &MatcherSpec) -> bool {
                 .map_or("", |(source, _)| source);
             matches!(
                 source,
-                ".*" | "^.*" | "^.*$" | ".+" | "^.+" | "^.+$" | "." | "^" | "(?:)"
+                ".*" | "^.*" | ".*$" | "^.*$" | ".+" | "^.+" | "^.+$" | "." | "^" | "(?:)"
             )
         }
         MatcherSpec::Function(function) => function.source.as_deref().is_some_and(returns_true),
@@ -1107,18 +1122,60 @@ mod tests {
         facts.config.as_mut().unwrap().catch_all = Some(5);
         assert_eq!(
             field_of(&facts).warnings,
-            ["Handler 5 matches every link, so PwrRoute's default never applies."]
+            ["Config handler 5 matches every link, so PwrRoute's default never applies."]
         );
 
-        // rules.json names no default: the select asks for one, with no
-        // warning beyond the three the design names.
+        // rules.json names no default PwrRoute can open (none, or PwrRoute
+        // itself): the select asks for one, and the engine leaves the
+        // config's default in place, so the warning says so, as the Rules
+        // banner does.
+        for rules_json in [
+            r#"{ "precedence": "pwrroute" }"#,
+            r#"{ "precedence": "pwrroute", "defaultBrowser": "PwrRoute" }"#,
+        ] {
+            let facts = in_charge(rules_json, Some(fixed("Safari", AppType::AppName)));
+            let field = field_of(&facts);
+            assert_eq!(
+                field.warnings,
+                [crate::config_view::NEEDS_DEFAULT],
+                "{rules_json}"
+            );
+        }
         let facts = in_charge(
             r#"{ "precedence": "pwrroute" }"#,
             Some(fixed("Safari", AppType::AppName)),
         );
-        let field = field_of(&facts);
-        assert!(field.warnings.is_empty());
-        assert_eq!(field.browser, None);
+        assert_eq!(field_of(&facts).browser, None);
+        // Under the config's order nothing is missing.
+        let facts = in_charge("{}", Some(fixed("Safari", AppType::AppName)));
+        assert!(field_of(&facts).warnings.is_empty());
+    }
+
+    #[test]
+    fn every_catch_all_shape_is_one_test() {
+        let handler = |matcher: MatcherSpec| HandlerRule {
+            matchers: vec![matcher],
+            browser: BrowserSpec::Function(function("x")),
+        };
+        for everything in ["*", "*://*", "*://*/*", "**"] {
+            assert!(
+                matches_everything(&MatcherSpec::Wildcard(everything.into())),
+                "{everything}"
+            );
+        }
+        for regex in ["/.*/", "/^.*$/i", "/.*$/"] {
+            assert!(
+                matches_everything(&MatcherSpec::Regex(regex.into())),
+                "{regex}"
+            );
+        }
+        assert!(!matches_everything(&MatcherSpec::Wildcard(
+            "*.example.com/*".into()
+        )));
+        assert_eq!(
+            catch_all(&[handler(MatcherSpec::Wildcard("*://*/*".into()))]),
+            Some(1)
+        );
     }
 
     #[test]

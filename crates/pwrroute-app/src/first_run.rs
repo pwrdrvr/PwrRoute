@@ -217,6 +217,9 @@ pub struct FirstRunModel {
     pub default_error: Option<String>,
     /// The OS reports PwrRoute is the default browser.
     pub is_default: bool,
+    /// Why the last Everything else choice was not saved (`rules.json`
+    /// does not load, say): the step keeps the previous answer.
+    pub save_error: Option<String>,
 }
 
 impl FirstRunModel {
@@ -852,6 +855,8 @@ fn tray_line() -> &'static str {
 }
 
 type Hook<T> = Rc<dyn Fn(T, &mut App)>;
+/// A choice that is written: `Err` is why it was not.
+type Save<T> = Rc<dyn Fn(T, &mut App) -> Result<(), String>>;
 /// The config step's answer, and how an import it starts answers back.
 type ImportHook = Rc<dyn Fn(ImportChoice, ImportReply, &mut App)>;
 /// A hook that answers: the browsers read again, or why a request failed.
@@ -879,10 +884,12 @@ pub struct Finished {
 pub struct FirstRunHooks {
     /// The Everything else browser, or a profile of it, was picked: by the
     /// reader, or by the window's preselection.
-    pub on_fallback: Hook<Fallback>,
+    /// A choice that was not saved keeps the previous one, with the
+    /// reason under the step.
+    pub on_fallback: Save<Fallback>,
     /// The segmented control: who owns everything else while a config is
     /// in charge (`rules.json`'s `precedence`).
-    pub on_precedence: Hook<Precedence>,
+    pub on_precedence: Save<Precedence>,
     /// The config step's answer. Keep and Don't use it are done at once;
     /// Import opens the importer, and the reply says how it was left.
     pub on_import: ImportHook,
@@ -964,9 +971,26 @@ impl FirstRun {
         };
         let mut label = fallback.browser.label.clone();
         label.profile.clone_from(&fallback.profile);
-        self.model.fallback = Some(label);
-        self.model.picked = Some(picked);
-        (self.hooks.on_fallback)(fallback, cx);
+        self.save_fallback(fallback, label, Some(picked), cx);
+    }
+
+    /// Writes an Everything else choice and shows it; one that was not
+    /// saved leaves the step as it was, with the reason.
+    fn save_fallback(
+        &mut self,
+        fallback: Fallback,
+        label: BrowserLabel,
+        picked: Option<Picked>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match (self.hooks.on_fallback)(fallback, cx) {
+            Ok(()) => {
+                self.model.fallback = Some(label);
+                self.model.picked = picked;
+                self.model.save_error = None;
+            }
+            Err(reason) => self.model.save_error = Some(reason),
+        }
         cx.notify();
     }
 
@@ -983,13 +1007,14 @@ impl FirstRun {
     fn choose_fallback(&mut self, index: usize, cx: &mut Context<'_, Self>) {
         self.picking = Picking::None;
         if let Some(choice) = self.model.browsers.get(index).cloned() {
-            self.model.fallback = Some(choice.label.clone());
-            self.model.picked = None;
-            (self.hooks.on_fallback)(
+            let label = choice.label.clone();
+            self.save_fallback(
                 Fallback {
                     browser: choice,
                     profile: None,
                 },
+                label,
+                None,
                 cx,
             );
         }
@@ -1014,12 +1039,13 @@ impl FirstRun {
                 }
             },
         };
-        if let Some(fallback) = &mut self.model.fallback {
-            fallback.profile.clone_from(&profile);
-        }
-        self.model.picked = None;
-        (self.hooks.on_fallback)(Fallback { browser, profile }, cx);
-        cx.notify();
+        let mut label = self
+            .model
+            .fallback
+            .clone()
+            .unwrap_or_else(|| browser.label.clone());
+        label.profile.clone_from(&profile);
+        self.save_fallback(Fallback { browser, profile }, label, None, cx);
     }
 
     /// The segmented control: who owns everything else.
@@ -1027,8 +1053,13 @@ impl FirstRun {
         if self.model.precedence == precedence {
             return;
         }
-        self.model.precedence = precedence;
-        (self.hooks.on_precedence)(precedence, cx);
+        match (self.hooks.on_precedence)(precedence, cx) {
+            Ok(()) => {
+                self.model.precedence = precedence;
+                self.model.save_error = None;
+            }
+            Err(reason) => self.model.save_error = Some(reason),
+        }
         cx.notify();
     }
 
@@ -1963,6 +1994,12 @@ fn everything_else_body(
     body.when_some(owner, |body, owner| body.child(owner))
         .child(paragraph(model.everything_else_detail()))
         .child(fallback_pickers(model, picking, cx))
+        .when_some(model.save_error.clone(), |body, reason| {
+            body.child(
+                error_line(crate::settings::configuration_host::not_saved(&reason))
+                    .debug_selector(|| SAVE_ERROR_ID.into()),
+            )
+        })
         .when_some(model.picked_note(), |body, note| {
             body.child(detail_line(note).debug_selector(|| "first-run-picked".into()))
         })
@@ -1970,6 +2007,8 @@ fn everything_else_body(
 
 /// The element id of the Everything else browser select.
 pub const FALLBACK_ID: &str = "first-run-fallback";
+/// Why the last Everything else choice was not saved.
+pub const SAVE_ERROR_ID: &str = "first-run-not-saved";
 /// The element id of its profile select.
 pub const PROFILE_ID: &str = "first-run-profile";
 
@@ -2648,6 +2687,8 @@ mod tests {
         defaults: Rc<Cell<usize>>,
         default_fails: Rc<RefCell<Option<String>>>,
         finishes: Rc<RefCell<Vec<Finish>>>,
+        /// Set: the Everything else hooks answer this instead of saving.
+        save_fails: Rc<RefCell<Option<String>>>,
     }
 
     fn open(cx: &mut TestAppContext) -> (Entity<FirstRun>, Calls, &mut VisualTestContext) {
@@ -2669,6 +2710,7 @@ mod tests {
             defaults: Rc::default(),
             default_fails: Rc::default(),
             finishes: Rc::default(),
+            save_fails: Rc::default(),
         };
         let fallbacks = calls.fallbacks.clone();
         let precedences = calls.precedences.clone();
@@ -2679,9 +2721,23 @@ mod tests {
         let defaults = calls.defaults.clone();
         let default_fails = calls.default_fails.clone();
         let finishes = calls.finishes.clone();
+        let fallback_fails = calls.save_fails.clone();
+        let precedence_fails = calls.save_fails.clone();
         let hooks = FirstRunHooks {
-            on_fallback: Rc::new(move |choice, _| fallbacks.borrow_mut().push(choice)),
-            on_precedence: Rc::new(move |precedence, _| precedences.borrow_mut().push(precedence)),
+            on_fallback: Rc::new(move |choice, _| {
+                if let Some(reason) = fallback_fails.borrow().clone() {
+                    return Err(reason);
+                }
+                fallbacks.borrow_mut().push(choice);
+                Ok(())
+            }),
+            on_precedence: Rc::new(move |precedence, _| {
+                if let Some(reason) = precedence_fails.borrow().clone() {
+                    return Err(reason);
+                }
+                precedences.borrow_mut().push(precedence);
+                Ok(())
+            }),
             on_import: Rc::new(move |choice, reply, _| {
                 imports.borrow_mut().push(choice);
                 replies.borrow_mut().push(reply);
@@ -3005,6 +3061,45 @@ mod tests {
         );
         // The step stays done throughout.
         assert_eq!(steps(&view, cx), [Done, Done, Current]);
+    }
+
+    /// A choice that cannot be saved (rules.json does not load, say) keeps
+    /// the previous answer and says why under the step; the next one that
+    /// saves clears it.
+    #[gpui_kit::test]
+    fn a_choice_that_cannot_be_saved_says_why(cx: &mut TestAppContext) {
+        let mut model = FirstRunModel::fixture();
+        model.import = Some(ImportChoice::KeepFile);
+        let (view, calls, cx) = open_with(cx, model);
+        let before = view.read_with(cx, |this, _| this.model.fallback.clone());
+        assert!(cx.debug_bounds(SAVE_ERROR_ID).is_none());
+        *calls.save_fails.borrow_mut() =
+            Some("rules.json did not load, so it is not overwritten".to_owned());
+
+        click("first-run-owner-pwrroute", cx);
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.precedence),
+            Precedence::Config,
+            "the previous answer stays"
+        );
+        assert!(cx.debug_bounds(SAVE_ERROR_ID).is_some());
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.save_error.clone()),
+            Some("rules.json did not load, so it is not overwritten".to_owned())
+        );
+
+        click(FALLBACK_ID, cx);
+        click("first-run-browser-1", cx);
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback.clone()),
+            before
+        );
+        assert!(calls.fallbacks.borrow().is_empty());
+
+        *calls.save_fails.borrow_mut() = None;
+        click("first-run-owner-pwrroute", cx);
+        assert_eq!(*calls.precedences.borrow(), [Precedence::PwrRoute]);
+        assert!(cx.debug_bounds(SAVE_ERROR_ID).is_none());
     }
 
     /// With nothing chosen, the window picks the browser and saves it at

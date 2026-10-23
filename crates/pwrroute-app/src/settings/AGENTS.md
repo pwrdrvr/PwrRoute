@@ -34,7 +34,9 @@ the family's panes in the same controls. General is a placeholder.
   the browser and profile selects that are its `defaultBrowser` /
   `defaultProfile`, and, only while PwrRoute's default is chosen, the
   Rules banner's warnings from the config's `describe()` (a function or
-  `null` default, a handler that matches every link: `catch_all`).
+  `null` default, a handler that matches every link: `catch_all`, whose
+  `matches_everything` the banner and Overview use too) and, with no
+  default PwrRoute can open, the banner's `NEEDS_DEFAULT`.
   `configuration_host::edit_rules` writes them through the main window's
   `RulesStore` when it is open (sync, refuse as the store would, edit,
   save now), else through a store over the file; never around a store.

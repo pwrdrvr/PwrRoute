@@ -139,17 +139,20 @@ pub struct Rewrite {
     pub problems: Vec<String>,
 }
 
-/// The hits column until the router counts dispatches per rule.
+/// The hits column with no links today, or a count that cannot be trusted.
 const NO_HITS: &str = "\u{2014}";
 
 /// The row and editor model of a handler at `badge` in the file.
 pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> Handler {
     let mut matchers = Vec::new();
     for (i, app) in rule.opener.iter().enumerate() {
+        // Named as the Overview names it: "Slack", not its bundle id.
+        let name = crate::default_browser::browser_name(app);
+        let name = name.split(':').next().unwrap_or(&name).to_owned();
         matchers.push(Matcher::Label(if i == 0 { "sent from" } else { "or" }));
         matchers.push(Matcher::App {
-            badge: badge_for(app),
-            name: app.clone().into(),
+            badge: badge_for(&name),
+            name: name.into(),
         });
     }
     if !rule.opener.is_empty() && !rule.patterns.is_empty() {
@@ -165,9 +168,10 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
     let destination = if rule.browser.trim().is_empty() {
         Destination::Unset("Choose a browser")
     } else {
+        let name = crate::default_browser::browser_name(&rule.browser);
         Destination::Browser {
-            badge: badge_for(&rule.browser),
-            name: rule.browser.clone().into(),
+            badge: badge_for(&name),
+            name: name.into(),
             profile: (!rule.profile.is_empty()).then(|| rule.profile.clone().into()),
         }
     };
@@ -179,7 +183,7 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
             enabled: rule.enabled,
             badge,
         },
-        title: title(&rule.patterns, "New handler"),
+        title: title(&rule.patterns, "New rule"),
         patterns: rule.patterns.clone(),
         openers: rule.opener.clone(),
         browser: rule.browser.clone(),
@@ -276,9 +280,16 @@ pub fn default_browser(file: &engine::RulesFile) -> (SharedString, SharedString)
 }
 
 fn hits(badge: RowBadge) -> SharedString {
-    match badge {
-        RowBadge::Draft => "draft".into(),
-        RowBadge::None | RowBadge::NotSaved => NO_HITS.into(),
+    hits_label(badge, None)
+}
+
+/// The hits column: today's links for a saved rule ("1,204"), "—" with
+/// none (or no count to trust), and "draft" for a draft.
+pub fn hits_label(badge: RowBadge, today: Option<u64>) -> SharedString {
+    match (badge, today) {
+        (RowBadge::Draft, _) => "draft".into(),
+        (RowBadge::None, Some(n)) if n > 0 => crate::activity::thousands(n).into(),
+        (RowBadge::None | RowBadge::NotSaved, _) => NO_HITS.into(),
     }
 }
 
@@ -451,7 +462,7 @@ mod tests {
     #[test]
     fn a_draft_has_placeholders() {
         let row = handler(&engine::Rule::default(), RowBadge::Draft, Vec::new());
-        assert_eq!(row.title, "New handler");
+        assert_eq!(row.title, "New rule");
         assert_eq!(row.rule.destination, Destination::Unset("Choose a browser"));
         assert_eq!(row.rule.hits, "draft");
         let row = rewrite(&engine::Rewrite::default(), RowBadge::Draft, Vec::new());

@@ -573,8 +573,8 @@ fn main() {
         };
         let chrome_work = || Some(BrowserLabel::new("Ch", "Google Chrome", Some("Work")));
         let hooks = || FirstRunHooks {
-            on_fallback: std::rc::Rc::new(|_, _| {}),
-            on_precedence: std::rc::Rc::new(|_, _| {}),
+            on_fallback: std::rc::Rc::new(|_, _| Ok(())),
+            on_precedence: std::rc::Rc::new(|_, _| Ok(())),
             on_import: std::rc::Rc::new(|_, _, _| {}),
             on_rescan: std::rc::Rc::new(|_| Vec::new()),
             on_set_default_browser: std::rc::Rc::new(|_| Ok(())),
@@ -950,8 +950,8 @@ fn main() {
             ..plain.clone()
         };
         let hooks = || FirstRunHooks {
-            on_fallback: std::rc::Rc::new(|_, _| {}),
-            on_precedence: std::rc::Rc::new(|_, _| {}),
+            on_fallback: std::rc::Rc::new(|_, _| Ok(())),
+            on_precedence: std::rc::Rc::new(|_, _| Ok(())),
             on_import: std::rc::Rc::new(|_, _, _| {}),
             on_rescan: std::rc::Rc::new(|_| Vec::new()),
             on_set_default_browser: std::rc::Rc::new(|_| Ok(())),
@@ -1174,7 +1174,7 @@ fn main() {
                     ..RulesFile::default()
                 },
                 exists: true,
-                day: Some(fixtures::overview_nothing_day),
+                day: Some(fixtures::overview_default_only_day),
                 status: routing(),
                 prepare: |app| {
                     app.found_config = Some(importer_view::FoundConfig {
@@ -1326,14 +1326,17 @@ fn main() {
         };
         let canvas = std::rc::Rc::new(canvas);
         let on = canvas.clone();
-        shoot("app-1b-override", Some(plain), &move |app, _, cx| {
-            on(app, cx)
+        // The window opens on Overview: these are the Rules banner's.
+        shoot("app-1b-override", Some(plain), &move |app, window, cx| {
+            on(app, cx);
+            app.navigate(Screen::Rules, window, cx);
         });
         shoot(
             "app-1b-override-warnings",
             Some(warned),
-            &move |app, _, cx| {
+            &move |app, window, cx| {
                 canvas(app, cx);
+                app.navigate(Screen::Rules, window, cx);
             },
         );
     }

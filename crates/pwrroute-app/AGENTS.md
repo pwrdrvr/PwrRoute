@@ -51,8 +51,9 @@ their own modules.
   (`Feed::reload` takes the router's buffer back after Settings changes the
   retention or clears the journal). A record is a row at `Full` or `Host`
   (the host-only chip) and a count at `None`; the filters are All,
-  Unrouted (a default, PwrRoute's or the config's, or the fallback took
-  it), Failed, Rewritten and Private, each with its count. The Rule
+  Everything else (`Filter::Unrouted`: a default, PwrRoute's or the
+  config's, or the fallback took it), Failed, Rewritten and Private, each
+  with its count. The Rule
   column says who routed a link: "rule 3" (`rules.json`'s, `Matched::Rule`),
   "cfg h 2" (the config's handler), "default" (PwrRoute's) or "config
   default" (`Matched::Default`'s owner; a record from before owners is
@@ -91,14 +92,24 @@ their own modules.
   their bounds into `MapBounds` while they prepaint and one canvas strokes
   the curves; a card click pins until Esc. The setup card writes
   `defaultBrowser`/`defaultProfile`, and the callout writes `precedence`
-  (`"pwrroute"`, with Undo), both through the store and saved at once.
+  (`"pwrroute"`, with Undo), both through `PwrRoute::write_now` (as the
+  Rules banner's switch does: sync, refuse as the store would, save now,
+  take the change back when the write fails), so a change that was not
+  saved never shows as made: the card keeps its state and says why
+  (`OverviewState::refused`).
   `overview::status` reads the router, the tray's pause and the OS; a test
   or screenshot sets `OverviewState::status` instead. The strip chips and
   the rail foot use the same reading. A config the router never loaded
   (`RoutingSource::fallback`) is `ConfigTrouble::NotLoaded`: nothing in it
   or `rules.json` runs and every link goes to the fallback browser, so
-  the map marks the rules "not running". A failed reload (`error` alone)
-  is `ReloadFailed`, the warning tone: the last load still routes. Rules
+  the map marks both sections "not running" and fades their rows and the
+  cards only they feed (`Row::idle`). A failed reload (`error` alone)
+  is `ReloadFailed`, the warning tone: the last load still routes, config
+  and `rules.json` together, so the headers say "as last loaded", no row
+  or Rules list count is shown by number, the switches say a change
+  applies once it reloads, and Save as example probes instead of trusting
+  a record's rule number. Everything else's owner is the engine's
+  (`RulesFile::owns_default`), never the precedence alone. Rules
   and Test a link reuse Overview's source chip. Leaving Overview
   (`OverviewState::leave`) drops its fades and the callout's hand-off.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data

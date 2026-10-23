@@ -418,6 +418,9 @@ fn engine_step(
                     "a rule threw".into()
                 } else if matches!(owner, DefaultOwner::PwrRoute { .. }) {
                     "no rule or config handler matched".into()
+                } else if rules.rules.iter().any(|rule| rule.enabled) {
+                    // The visual rules ran too, and missed.
+                    "no config handler or rule matched".into()
                 } else {
                     "no handler matched".into()
                 },

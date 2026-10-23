@@ -599,7 +599,7 @@ pub enum Filter {
 impl Filter {
     pub const ALL: [(Self, &'static str); 5] = [
         (Self::All, "All"),
-        (Self::Unrouted, "Unrouted"),
+        (Self::Unrouted, "Everything else"),
         (Self::Failed, "Failed"),
         (Self::Rewritten, "Rewritten"),
         (Self::Private, "Private"),
@@ -1668,7 +1668,7 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
                         count_color,
                     ))
                     .id(label)
-                    .debug_selector(move || format!("activity-filter-{label}"))
+                    .debug_selector(move || format!("activity-filter-{filter:?}"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activity.filter = filter;
                         cx.notify();

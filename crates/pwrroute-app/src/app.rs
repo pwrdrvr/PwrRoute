@@ -552,6 +552,62 @@ impl PwrRoute {
         cx.notify();
     }
 
+    /// One change the router must see on its next link (the precedence
+    /// switches, Overview's default browser), written now over the file as
+    /// it stands: another writer's change is read first, a store that would
+    /// refuse the save writes nothing, and a write that fails is taken back
+    /// (by the undo `change` returns), so the screen keeps showing what the
+    /// router has. `Err` is why it was not saved; the selection stays
+    /// either way.
+    pub fn write_now<U: FnOnce(&mut RulesStore)>(
+        &mut self,
+        change: impl FnOnce(&mut RulesStore) -> U,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), String> {
+        self.sync_with_disk(cx);
+        if let Some(reason) = self.store.save_refused() {
+            cx.notify();
+            return Err(reason);
+        }
+        let undo = change(&mut self.store);
+        let selection = self.selection;
+        self.refresh(cx);
+        self.selection = selection;
+        self.save_now(cx);
+        let failed = match self.store.status() {
+            crate::rules_store::Status::Failed(reason) => Some(reason.clone()),
+            crate::rules_store::Status::Changed => {
+                Some(crate::rules_store::CHANGED_ON_DISK.to_owned())
+            }
+            _ => None,
+        };
+        if let Some(reason) = failed {
+            undo(&mut self.store);
+            self.refresh(cx);
+            self.selection = selection;
+            return Err(reason);
+        }
+        Ok(())
+    }
+
+    /// `rules.json`'s `precedence`, through [`PwrRoute::write_now`]: `next`
+    /// is given the precedence the file has once another writer's change
+    /// is read.
+    pub fn write_precedence(
+        &mut self,
+        next: impl FnOnce(pwrroute_engine::Precedence) -> pwrroute_engine::Precedence,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), String> {
+        self.write_now(
+            |store| {
+                let previous = store.precedence();
+                store.set_precedence(next(previous));
+                move |store: &mut RulesStore| store.set_precedence(previous)
+            },
+            cx,
+        )
+    }
+
     /// A new, empty rewrite at the end of its list, selected, with its
     /// first pattern ready to type.
     pub fn add_rewrite(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {

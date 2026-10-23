@@ -124,7 +124,7 @@ impl Order {
 /// Whether `rules.json`'s `defaultBrowser` can take everything else from a
 /// config: it names a browser, and not PwrRoute (which the engine flags
 /// and the router refuses as a loop).
-fn has_own_default(browser: &str) -> bool {
+pub fn has_own_default(browser: &str) -> bool {
     let name = browser.split(':').next().unwrap_or(browser).trim();
     !name.is_empty()
         && !name.eq_ignore_ascii_case("PwrRoute")
@@ -211,10 +211,12 @@ impl ConfigInCharge {
             handlers: description.handlers.iter().map(handler_row).collect(),
             default_browser: Some(destination(&description.default_browser)),
             default_kind: DefaultKind::of(&description.default_browser),
-            catch_all: description
-                .handlers
-                .iter()
-                .position(|handler| handler.matchers.iter().any(matches_every_link)),
+            catch_all: description.handlers.iter().position(|handler| {
+                handler
+                    .matchers
+                    .iter()
+                    .any(crate::settings::configuration_host::matches_everything)
+            }),
             flips: 0,
             refused: None,
         }
@@ -257,9 +259,8 @@ impl ConfigInCharge {
             }
         }
         if let Some(index) = self.catch_all {
-            warnings.push(format!(
-                "Handler {} matches every link, so PwrRoute's default never applies.",
-                index + 1
+            warnings.push(crate::settings::configuration_host::catch_all_warning(
+                index + 1,
             ));
         }
         warnings
@@ -394,26 +395,6 @@ fn row(matchers: &[MatcherSpec], destination: Destination) -> Rule {
     Rule::plain(matchers.iter().map(matcher).collect(), destination)
 }
 
-/// A match that takes every link: Finicky's `"*"` (or `"*://*"`-like
-/// patterns of nothing but wildcards and separators), or a regex that
-/// matches anything.
-fn matches_every_link(spec: &MatcherSpec) -> bool {
-    match spec {
-        MatcherSpec::Wildcard(pattern) => {
-            let pattern = pattern.trim();
-            pattern.contains('*') && pattern.chars().all(|c| matches!(c, '*' | ':' | '/'))
-        }
-        MatcherSpec::Regex(pattern) => {
-            let body = pattern
-                .strip_prefix('/')
-                .and_then(|rest| rest.rsplit_once('/'))
-                .map_or(pattern.as_str(), |(body, _flags)| body);
-            matches!(body, ".*" | "^.*" | ".*$" | "^.*$" | ".+" | "^.+$")
-        }
-        MatcherSpec::Function(_) | MatcherSpec::Other(_) => false,
-    }
-}
-
 fn matcher(spec: &MatcherSpec) -> Matcher {
     match spec {
         MatcherSpec::Wildcard(pattern) => Matcher::Pattern(pattern.clone().into()),
@@ -520,49 +501,30 @@ impl PwrRoute {
     /// so the router takes it on the next link.
     pub fn toggle_precedence(&mut self, cx: &mut Context<'_, Self>) {
         // Another writer's change is read first, so the flip lands on the
-        // file as it now is.
-        self.sync_with_disk(cx);
-        // A file that would not be written (changed under unsaved edits,
-        // unreadable, or no directory for it) keeps the switch where the
-        // router has it; the banner says why.
-        if let Some(reason) = self.store.save_refused() {
-            if let Some(config) = &mut self.config {
-                config.refused = Some(reason);
-            }
-            cx.notify();
-            return;
-        }
-        let previous = self.store.precedence();
-        let next = if previous.is_config() {
-            Precedence::PwrRoute
-        } else {
-            Precedence::Config
-        };
-        self.store.set_precedence(next);
-        // The switch edits no rule: the selection stays as it was, and an
-        // empty one does not open the editor on the last row.
-        let selection = self.selection;
-        self.refresh(cx);
-        self.selection = selection;
-        self.save_now(cx);
-        let failed = match self.store.status() {
-            Status::Failed(reason) => Some(reason.clone()),
-            _ => None,
-        };
-        if let Some(reason) = failed {
-            // The write failed: the screen goes back to the file's order.
-            self.store.set_precedence(previous);
-            self.refresh(cx);
-            self.selection = selection;
-            if let Some(config) = &mut self.config {
-                config.refused = Some(reason);
-            }
-            return;
-        }
+        // file as it now is. A file that would not be written (changed
+        // under unsaved edits, unreadable, or no directory for it), or a
+        // write that fails, keeps the switch where the router has it; the
+        // banner says why.
+        let written = self.write_precedence(
+            |previous| {
+                if previous.is_config() {
+                    Precedence::PwrRoute
+                } else {
+                    Precedence::Config
+                }
+            },
+            cx,
+        );
         if let Some(config) = &mut self.config {
-            config.flips += 1;
-            config.refused = None;
+            match written {
+                Ok(()) => {
+                    config.flips += 1;
+                    config.refused = None;
+                }
+                Err(reason) => config.refused = Some(reason),
+            }
         }
+        cx.notify();
     }
 
     /// "Stop using": the router reads no config from now on (`settings.json`
@@ -735,9 +697,15 @@ fn banner(
             app.store.save_refused().is_some() || matches!(app.store.status(), Status::Failed(_))
         })
         .map(|reason| format!("The switch was not saved. {reason}"));
+    // The router routes with the last load until the config reloads, so a
+    // flip is written now and taken then.
+    let waits = order
+        .stale
+        .then(|| crate::overview_model::stale_note(&config.path));
     let warnings = refused
         .into_iter()
         .chain(config.override_warnings(order))
+        .chain(waits)
         .enumerate()
         .map(|(index, warning)| warning_line(index, warning));
     let import = config.file.clone();

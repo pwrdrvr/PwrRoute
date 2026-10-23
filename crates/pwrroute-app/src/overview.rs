@@ -17,11 +17,11 @@ use std::time::{Duration, SystemTime};
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Bounds, BoxShadow,
-    Context, Div, ElementId, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
+    Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Bounds,
+    BoxShadow, Context, Div, ElementId, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, PathBuilder, Pixels, Point, Render, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, StyledText, Window, canvas, deferred, div,
-    ease_out_quint, linear_color_stop, linear_gradient, point, px,
+    StatefulInteractiveElement as _, Styled as _, StyledText, Window, anchored, canvas, deferred,
+    div, ease_out_quint, linear_color_stop, linear_gradient, point, px,
 };
 
 use crate::app::{PwrRoute, Screen, Selection};
@@ -92,6 +92,9 @@ pub struct OverviewState {
     /// switch (and Undo) plays a new one, and it is gone after [`HANDOFF`].
     handoff: Option<usize>,
     handoffs: usize,
+    /// Why the callout's last change, or the setup card's last choice, was
+    /// not saved: shown on that card until the next one is.
+    pub refused: Option<Refused>,
     /// The setup card's browser list is open.
     pub picking: bool,
     /// The browser (in the list's order) whose profiles the list shows in
@@ -159,6 +162,7 @@ impl OverviewState {
     pub fn leave(&mut self) {
         self.ticked = true;
         self.just_overridden = false;
+        self.refused = None;
         self.picking = false;
         self.choosing = None;
         self.hover(None);
@@ -166,6 +170,13 @@ impl OverviewState {
         self.previous = None;
         self.handoff = None;
     }
+}
+
+/// Which card a change that was not saved came from, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refused {
+    Callout(String),
+    Setup(String),
 }
 
 /// The routing state as the router, the tray and the OS report it, or the
@@ -265,14 +276,24 @@ impl PwrRoute {
     }
 
     /// The callout's switch: PwrRoute's default takes everything else
-    /// (`"precedence": "pwrroute"`), written now; Undo writes it back.
+    /// (`"precedence": "pwrroute"`), written now; Undo writes it back. A
+    /// change the store would not write (or that failed) leaves the
+    /// callout where the router is and says why, as the Rules banner does.
     pub fn set_override(&mut self, on: bool, cx: &mut Context<'_, Self>) {
         use pwrroute_engine::Precedence;
-        self.store.set_precedence(if on {
+        let next = if on {
             Precedence::PwrRoute
         } else {
             Precedence::Config
-        });
+        };
+        if let Err(reason) = self.write_precedence(|_| next, cx) {
+            self.overview.just_overridden = false;
+            self.overview.handoff = None;
+            self.overview.refused = Some(Refused::Callout(reason));
+            cx.notify();
+            return;
+        }
+        self.overview.refused = None;
         self.overview.just_overridden = on;
         self.overview.handoffs += 1;
         let handoff = self.overview.handoffs;
@@ -287,18 +308,29 @@ impl PwrRoute {
             });
         })
         .detach();
-        self.refresh(cx);
-        self.save_now(cx);
+        cx.notify();
     }
 
     /// The setup card's browser list: `rules.json`'s default browser and
-    /// profile, written now.
+    /// profile, written now. A choice that was not saved keeps the card
+    /// open on that step, with the reason.
     pub fn choose_default(&mut self, browser: &str, profile: &str, cx: &mut Context<'_, Self>) {
-        self.store.set_default_browser(browser, profile);
         self.overview.picking = false;
         self.overview.choosing = None;
-        self.refresh(cx);
-        self.save_now(cx);
+        let written = self.write_now(
+            |store| {
+                let file = store.edited();
+                let (was, was_profile) =
+                    (file.default_browser.clone(), file.default_profile.clone());
+                store.set_default_browser(browser, profile);
+                move |store: &mut crate::rules_store::RulesStore| {
+                    store.set_default_browser(&was, &was_profile);
+                }
+            },
+            cx,
+        );
+        self.overview.refused = written.err().map(Refused::Setup);
+        cx.notify();
     }
 
     /// A tile's click: Activity, filtered to what it counts.
@@ -459,9 +491,31 @@ pub fn pane(
             overview
                 .callout
                 .as_ref()
-                .map(|callout| callout_card(callout, cx)),
+                .map(|callout| callout_card(app, callout, cx)),
         )
 }
+
+/// Why a change on this screen was not saved (`.errl`).
+fn refused_line(id: &'static str, reason: &str) -> Div {
+    div().debug_selector(move || id.into()).flex().child(
+        div()
+            .py(px(6.0))
+            .px(px(8.0))
+            .rounded(px(5.0))
+            .bg(theme::danger_soft())
+            .child(paragraph(
+                crate::settings::configuration_host::not_saved(reason),
+                10.5,
+                14.7,
+                theme::danger_text(),
+            )),
+    )
+}
+
+/// The callout's "not saved" line.
+pub const CALLOUT_REFUSED_ID: &str = "overview-callout-refused";
+/// The setup card's "not saved" line.
+pub const SETUP_REFUSED_ID: &str = "overview-setup-refused";
 
 // --- the hero ------------------------------------------------------------
 
@@ -704,9 +758,9 @@ const SELECT_WIDTH: f32 = 220.0;
 /// The browser list the setup card's select opens, as first run's: one
 /// row per browser with its profiles as the hint; a browser with profiles
 /// shows its profile list in place of the browsers ("Default profile",
-/// then each). Under the field it is the field's width; under "Change…"
-/// (`field` false) it keeps the field's width, right-aligned.
-fn browser_menu(app: &PwrRoute, field: bool, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
+/// then each). It is the field's width, under "Change…" too, where the
+/// popover aligns it to the right.
+fn browser_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
     let browsers: Vec<&Installed> = app
         .installed
         .iter()
@@ -714,10 +768,7 @@ fn browser_menu(app: &PwrRoute, field: bool, cx: &mut Context<'_, PwrRoute>) -> 
         .collect();
     let menu = menu_card("overview-setup-menu")
         .debug_selector(|| "overview-setup-menu".into())
-        .absolute()
-        .top(px(34.0))
-        .when(field, |menu| menu.left_0().right_0())
-        .when(!field, |menu| menu.right_0().w(px(SELECT_WIDTH)))
+        .w(px(SELECT_WIDTH))
         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
             this.overview.picking = false;
             this.overview.choosing = None;
@@ -824,11 +875,43 @@ fn setup_card(app: &PwrRoute, setup: &Setup, cx: &mut Context<'_, PwrRoute>) -> 
         .flex_none()
         .child(choose)
         .when(picking, |control| {
+            // A popover under the control that stays in the window: under
+            // the field from its left edge, under "Change…" from its right.
             let field = !setup.everything_else.done;
-            control.child(deferred(browser_menu(app, field, cx)))
+            let corner = div().absolute().top_0().map(|corner| {
+                if field {
+                    corner.left_0()
+                } else {
+                    corner.right_0()
+                }
+            });
+            control.child(
+                corner.child(
+                    deferred(
+                        anchored()
+                            .anchor(if field {
+                                Anchor::TopLeft
+                            } else {
+                                Anchor::TopRight
+                            })
+                            .offset(point(px(0.0), px(34.0)))
+                            .snap_to_window_with_margin(px(8.0))
+                            .child(browser_menu(app, cx)),
+                    )
+                    .with_priority(1),
+                ),
+            )
         });
+    let refused = match &app.overview.refused {
+        Some(Refused::Setup(reason)) => Some(reason.clone()),
+        _ => None,
+    };
     let first = step_frame(&setup.everything_else, 1, first_current)
-        .child(step_words(&setup.everything_else))
+        .child(
+            step_words(&setup.everything_else).when_some(refused, |words, reason| {
+                words.child(refused_line(SETUP_REFUSED_ID, &reason).mt(px(4.0)))
+            }),
+        )
         .child(control);
     let second_current = setup.everything_else.done && !setup.default_browser.done;
     let second = step_frame(&setup.default_browser, 2, second_current)
@@ -1068,7 +1151,14 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
                 let index = *index;
                 let light = light(&|lit: &Lit| lit.row(index));
                 ends.push(Some(End::Row(index)));
-                left.push(rule_row(index, row, light, generation, cx));
+                let drawn = rule_row(index, row, light, generation, cx);
+                // Nothing runs it (the config never loaded): faded, as a
+                // row that is not lit.
+                left.push(if row.idle {
+                    div().opacity(DIM).child(drawn).into_any_element()
+                } else {
+                    drawn
+                });
                 after_row = true;
             }
         }
@@ -1104,7 +1194,7 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
 
     let cards_bounds = bounds.clone();
     let cards = map.cards.iter().enumerate().map(|(index, card)| {
-        destination_card(
+        let drawn = destination_card(
             index,
             card,
             light(&|lit: &Lit| lit.card(index)),
@@ -1113,7 +1203,13 @@ fn map(app: &PwrRoute, map: &Map, wide: bool, cx: &mut Context<'_, PwrRoute>) ->
             wide,
             app.overview.ticked,
             cx,
-        )
+        );
+        // Fed only by rows nothing runs.
+        if card.idle {
+            div().opacity(DIM).child(drawn).into_any_element()
+        } else {
+            drawn
+        }
     });
     let card_column = div()
         .on_children_prepainted(move |children, _, _| {
@@ -1899,6 +1995,12 @@ fn destination_card(
                         .font_family(theme::mono_family(500.0)),
                 )
                 .children(today.clone().map(meta)),
+            // A special card's meta explains it, so it wraps rather than
+            // cut off at a narrow window.
+            None if special => words.child(
+                paragraph(card.meta.clone(), 10.5, 14.0, theme::text_subtle())
+                    .font_family(theme::mono_family(500.0)),
+            ),
             None => words.child(meta(card.meta.clone())),
         });
     let share = card.share.clone().filter(|_| wide).map(|share| {
@@ -1952,7 +2054,7 @@ fn destination_card(
         .py(px(14.0))
         .map(|frame| match (&card.alone, special) {
             (Some(_), _) => frame.min_h(px(96.0)),
-            (None, true) => frame.h(px(60.0)).items_center(),
+            (None, true) => frame.min_h(px(60.0)).items_center(),
             (None, false) => frame.h(px(96.0)),
         })
         .rounded(px(12.0))
@@ -2104,7 +2206,11 @@ fn pill_chip(
 
 // --- the callout -----------------------------------------------------------
 
-fn callout_card(callout: &Callout, cx: &mut Context<'_, PwrRoute>) -> Div {
+fn callout_card(app: &PwrRoute, callout: &Callout, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let refused = match &app.overview.refused {
+        Some(Refused::Callout(reason)) => Some(reason.clone()),
+        _ => None,
+    };
     let (plain, icon_label, title, body, warnings) = match callout {
         Callout::Offer { body, warnings } => (
             false,
@@ -2174,7 +2280,10 @@ fn callout_card(callout: &Callout, cx: &mut Context<'_, PwrRoute>) -> Div {
                         .child(text("!", 9.0, 700.0, theme::warn_text())),
                 )
                 .child(paragraph(warning, 10.5, 15.75, theme::warn_text()))
-        }));
+        }))
+        .when_some(refused, |words, reason| {
+            words.child(refused_line(CALLOUT_REFUSED_ID, &reason).mt(px(4.0)))
+        });
     let rules = || {
         button(CHANGE_IN_RULES, ButtonKind::Quiet, true)
             .id("overview-callout-rules")

@@ -360,8 +360,8 @@ pub struct Privacy {
     pub journal_files: Option<JournalFiles>,
     /// Why the journal's last write failed, when it is on and did.
     pub journal_error: Option<SharedString>,
-    /// The rules that keep less than full, for the confirm sheet: "Handler
-    /// 9 keeps host only and handler 10 keeps nothing". `None` when none.
+    /// The rules that keep less than full, for the confirm sheet: "Rule 9
+    /// keeps host only and rule 10 keeps nothing". `None` when none.
     pub rules_keep_less: Option<SharedString>,
     /// The data directory exists: settings can be saved and the journal
     /// can be turned on.

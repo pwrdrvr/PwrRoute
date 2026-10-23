@@ -978,6 +978,45 @@ mod tests {
         assert_eq!(source.fallback, None);
     }
 
+    /// The switch's write reaches the router on the next link: rules.json's
+    /// `precedence` puts its rule before the config's handler and its
+    /// default in place of the config's, and taking it out puts the Go
+    /// order back.
+    #[test]
+    fn a_precedence_flip_takes_effect_on_the_next_link() {
+        let home = Home::new();
+        home.write(
+            ".finicky.js",
+            r#"export default {
+              defaultBrowser: "Safari",
+              handlers: [{ match: "https://both.example.com/*", browser: "Arc" }],
+            };"#,
+        );
+        let rules = |precedence: &str| {
+            format!(
+                r#"{{ {precedence} "defaultBrowser": "Firefox",
+                  "rules": [{{ "match": "https://both.example.com/*", "browser": "Orion" }}] }}"#
+            )
+        };
+        home.write("PwrRoute/rules.json", &rules(""));
+        let resolver = home.resolver();
+        let routes = |resolver: &LiveResolver| {
+            resolver.refresh().unwrap();
+            (
+                resolve(resolver, "https://both.example.com/a"),
+                resolve(resolver, "https://unmatched.example.com/"),
+            )
+        };
+        assert_eq!(routes(&resolver), ("Arc".into(), "Safari".into()));
+        home.write(
+            "PwrRoute/rules.json",
+            &rules(r#""precedence": "pwrroute","#),
+        );
+        assert_eq!(routes(&resolver), ("Orion".into(), "Firefox".into()));
+        home.write("PwrRoute/rules.json", &rules(""));
+        assert_eq!(routes(&resolver), ("Arc".into(), "Safari".into()));
+    }
+
     #[test]
     fn a_config_that_appears_later_takes_charge() {
         let home = Home::new();

@@ -732,6 +732,26 @@ pub fn overview_nothing_day() -> Vec<DispatchRecord> {
     )
 }
 
+/// Design 3f's day: rules.json names only a default, Google Chrome ·
+/// Personal, and today's 23 links all went there.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_default_only_day() -> Vec<DispatchRecord> {
+    overview_day(
+        &[(
+            Matched::Default {
+                owner: Some(pwrroute_router::Owner::PwrRoute),
+            },
+            Some(("Google Chrome", "Personal")),
+            23,
+        )],
+        0,
+        0,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

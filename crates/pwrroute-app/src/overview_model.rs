@@ -323,6 +323,9 @@ pub struct Row {
     pub matcher: RowMatch,
     pub target: Target,
     pub enabled: bool,
+    /// Nothing runs it: the config never loaded, and the router's
+    /// stand-in engine holds no rules. Drawn faded.
+    pub idle: bool,
     /// Today's links, when there are any and counts are shown.
     pub count: Option<u64>,
     /// Names the row's own list in Activity's words: "rule 1", "config
@@ -408,6 +411,9 @@ pub struct Card {
     /// The only card: "Everything opens in Safari", and the count on a
     /// line of its own.
     pub alone: Option<(String, Option<String>)>,
+    /// Only rows that nothing runs send links here ([`Row::idle`]): drawn
+    /// faded.
+    pub idle: bool,
 }
 
 /// The left column with no rules: the first-rule prompt.
@@ -784,7 +790,7 @@ fn rule_match(rule: &Rule) -> RowMatch {
             more: patterns.len() - 1,
         }
     } else if let Some(first) = openers.first() {
-        let name = crate::default_browser::handler_name(first, &|_| None);
+        let name = crate::default_browser::browser_name(first);
         // "Slack:com.tinyspeck.slackmacgap" names Slack.
         let name = name.split(':').next().unwrap_or(&name).to_owned();
         RowMatch::Opener {
@@ -836,18 +842,18 @@ pub fn override_warnings(description: &Description) -> Vec<String> {
         }
         BrowserSpec::Browser(_) => {}
     }
-    if let Some(at) = description.handlers.iter().position(|handler| {
-        handler
-            .matchers
-            .iter()
-            .any(|m| matches!(m, MatcherSpec::Wildcard(w) if w.trim() == "*"))
-    }) {
-        warnings.push(format!(
-            "Handler {} matches every link, so PwrRoute's default never applies.",
-            at + 1
+    if let Some(number) = crate::settings::configuration_host::catch_all(&description.handlers) {
+        warnings.push(crate::settings::configuration_host::catch_all_warning(
+            number,
         ));
     }
     warnings
+}
+
+/// While a reload failed: a change to the order is written, but the router
+/// takes it only with the config.
+pub fn stale_note(shown: &str) -> String {
+    format!("A change here applies once {shown} reloads.")
 }
 
 /// Builds the screen.
@@ -871,15 +877,25 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     // Never loaded: neither the config nor rules.json runs, and every link
     // goes to the fallback browser.
     let not_loaded = matches!(trouble, Some(ConfigTrouble::NotLoaded(_)));
+    // A failed reload: the router routes with the files as they last
+    // loaded, config and rules.json together, so neither the order nor a
+    // rule's number on screen need be the one it uses (an edit since then
+    // waits for the reload). Counts by number are not shown, and the
+    // headers do not claim an order.
+    let stale = matches!(trouble, Some(ConfigTrouble::ReloadFailed(_)));
     let description = config
         .and_then(|config| config.description)
         .filter(|_| !not_loaded);
     let rules_first = rules.precedence == Precedence::PwrRoute;
-    let has_default = !rules.default_browser.trim().is_empty();
+    // A default PwrRoute can open: not empty, and not PwrRoute itself, which
+    // the router turns into its fallback.
+    let has_default = crate::config_view::has_own_default(&rules.default_browser);
     let counts = state != State::NotDefault;
 
     // Everything else: PwrRoute's default, or the config's while it owns it.
-    let config_owns_default = description.is_some() && (!rules_first || !has_default);
+    // As the engine decides: the config keeps its default unless the rules
+    // run first with a default of their own.
+    let config_owns_default = description.is_some() && !rules.owns_default();
     let mut cards = Cards::default();
     let mut rows: Vec<Row> = Vec::new();
     let mut items: Vec<Item> = Vec::new();
@@ -909,7 +925,11 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         let Some(config) = config else {
             return;
         };
-        let header = if rules_first {
+        let header = if not_loaded {
+            format!("{} \u{00b7} not running", config.shown)
+        } else if stale {
+            format!("{} \u{00b7} as last loaded", config.shown)
+        } else if rules_first {
             format!("{} handlers \u{00b7} run after", config.shown)
         } else {
             format!("{} \u{00b7} runs first", config.shown)
@@ -921,7 +941,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             });
             items.push(Item::Error {
                 title: if not_loaded {
-                    format!("{} didn't load: links skip it", config.shown)
+                    format!("{} didn't load: nothing runs until it does", config.shown)
                 } else {
                     format!(
                         "{} didn't reload: the last version that loaded still runs",
@@ -953,7 +973,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 matcher: handler_match(&handler.matchers),
                 target,
                 enabled: true,
-                count: (!ghost).then(|| count_of(HitKey::Handler(index))).flatten(),
+                idle: false,
+                count: (!ghost && !stale)
+                    .then(|| count_of(HitKey::Handler(index)))
+                    .flatten(),
                 tooltip: format!("config handler {} of {}", index + 1, config.shown),
             });
         }
@@ -967,6 +990,8 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 label: if not_loaded {
                     // The router's fallback engine holds no rules.
                     "Your rules \u{00b7} not running".to_owned()
+                } else if stale {
+                    "Your rules \u{00b7} as last loaded".to_owned()
                 } else if rules_first {
                     "Your rules \u{00b7} run first".to_owned()
                 } else {
@@ -990,7 +1015,8 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 matcher: rule_match(rule),
                 target,
                 enabled: rule.enabled,
-                count: (!ghost && rule.enabled && !not_loaded)
+                idle: not_loaded,
+                count: (!ghost && rule.enabled && !not_loaded && !stale)
                     .then(|| count_of(HitKey::Rule(index)))
                     .flatten(),
                 tooltip: format!("rule {}", index + 1),
@@ -1060,6 +1086,13 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 .iter()
                 .filter(|row| row.enabled && row.target.card() == Some(card))
                 .count();
+            let idle = rows
+                .iter()
+                .any(|row| row.enabled && row.target.card() == Some(card))
+                && rows
+                    .iter()
+                    .filter(|row| row.enabled && row.target.card() == Some(card))
+                    .all(|row| row.idle);
             let is_ee = ee_card == Some(card);
             let n = match dest.kind {
                 CardKind::Function => function_links,
@@ -1147,6 +1180,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 share,
                 ribbon: is_ee.then(|| ribbon.clone()),
                 alone,
+                idle: idle && !is_ee,
             }
         })
         .collect();
@@ -1286,7 +1320,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             tone: Tone::Warn,
             sentence: format!("{shown} didn't reload."),
             detail: std::iter::once(
-                "Links still route with the version that last loaded.".to_owned(),
+                "Links still route with the version that last loaded".to_owned(),
             )
             .chain(
                 status
@@ -1361,6 +1395,13 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
 
     // The callout: only while a config that loaded is in charge, and
     // PwrRoute has a default of its own to offer.
+    let with_stale_note = |body: String| {
+        if stale {
+            format!("{body} {}", stale_note(shown))
+        } else {
+            body
+        }
+    };
     let callout = description.filter(|_| has_default).map(|description| {
         let config_default = match &description.default_browser {
             BrowserSpec::Browser(fixed) if fixed.app_type != AppType::None => {
@@ -1385,17 +1426,20 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     "Your rules would run first, then {shown}'s handlers, and \
                      {pwrroute_display} would take what is left {instead}."
                 ),
-                warnings: override_warnings(description),
+                warnings: override_warnings(description)
+                    .into_iter()
+                    .chain(stale.then(|| stale_note(shown)))
+                    .collect(),
             }
         } else if inputs.just_overridden {
             Callout::Done {
-                body: format!("{theirs} isn't used while this is on."),
+                body: with_stale_note(format!("{theirs} isn't used while this is on.")),
             }
         } else {
             Callout::Settled {
-                body: format!(
+                body: with_stale_note(format!(
                     "{theirs} isn't used while PwrRoute's default takes everything else."
-                ),
+                )),
             }
         }
     });
@@ -1951,7 +1995,7 @@ mod tests {
             override_warnings(&dropped),
             [
                 "Unmatched links will now open instead of being dropped.",
-                "Handler 2 matches every link, so PwrRoute's default never applies.",
+                "Config handler 2 matches every link, so PwrRoute's default never applies.",
             ]
         );
     }
@@ -2093,18 +2137,29 @@ mod tests {
         assert!(map.items.iter().any(|item| matches!(
             item,
             Item::Error { title, detail }
-                if title == "~/.finicky.ts didn't load: links skip it"
+                if title == "~/.finicky.ts didn't load: nothing runs until it does"
                     && detail.starts_with("SyntaxError")
         )));
         assert_eq!(
             headers(&map),
             [
-                ("~/.finicky.ts \u{b7} runs first", ""),
+                ("~/.finicky.ts \u{b7} not running", ""),
                 ("Your rules \u{b7} not running", "3 rules"),
             ]
         );
         assert_eq!(map.rows.len(), 3, "only the visual rules");
         assert!(map.rows.iter().all(|row| row.count.is_none()));
+        // Nothing runs them: the rows, and the cards only they feed, fade.
+        assert!(map.rows.iter().all(|row| row.idle));
+        let ee = map.everything_else.target.card();
+        for (index, card) in map.cards.iter().enumerate() {
+            let fed = map
+                .rows
+                .iter()
+                .any(|row| row.enabled && row.target.card() == Some(index));
+            assert_eq!(card.idle, fed && Some(index) != ee, "{}", card.name);
+        }
+        assert!(map.cards.iter().any(|card| card.idle));
         assert_eq!(map.rewrites, None, "no rewrite runs either");
         assert_eq!(map.everything_else.owner, "PwrRoute's default");
         assert_eq!(map.everything_else.count, Some(212));
@@ -2126,7 +2181,7 @@ mod tests {
         assert_eq!(
             overview.hero.detail,
             [
-                "Links still route with the version that last loaded.",
+                "Links still route with the version that last loaded",
                 "SyntaxError: Unexpected token \u{b7} line 42",
             ]
         );
@@ -2137,15 +2192,30 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, Item::Error { .. }))
         );
+        // The router routes with what last loaded, rules.json included: the
+        // headers claim no order, and no count by a number that may have
+        // moved since.
         assert_eq!(
-            headers(map)[0],
-            (
-                "~/.finicky.ts \u{b7} runs first",
-                "5 handlers \u{b7} read-only"
-            )
+            headers(map),
+            [
+                (
+                    "~/.finicky.ts \u{b7} as last loaded",
+                    "5 handlers \u{b7} read-only"
+                ),
+                ("Your rules \u{b7} as last loaded", "3 rules"),
+            ]
         );
-        assert!(map.rows.iter().any(|row| row.count.is_some()));
+        assert!(map.rows.iter().all(|row| row.count.is_none()));
+        assert!(map.rows.iter().all(|row| !row.idle));
         assert_eq!(map.everything_else.owner, "~/.finicky.ts's default");
+        // The callout's switch is written now and taken with the reload.
+        let Some(Callout::Offer { warnings, .. }) = &overview.callout else {
+            panic!("{:?}", overview.callout);
+        };
+        assert_eq!(
+            warnings.last().map(String::as_str),
+            Some("A change here applies once ~/.finicky.ts reloads.")
+        );
 
         // This window could not read it either: an error row that says the
         // last version still runs, and Show the error.
@@ -2159,7 +2229,89 @@ mod tests {
         )));
         assert_eq!(
             headers(&overview.map)[1],
-            ("Your rules \u{b7} run after", "3 rules")
+            ("Your rules \u{b7} as last loaded", "3 rules")
+        );
+    }
+
+    /// rules.json's default naming PwrRoute itself owns nothing: the
+    /// engine leaves the config's default in place, and so does the map.
+    #[test]
+    fn a_rules_json_default_of_pwrroute_leaves_the_configs_default() {
+        let mut world = World::config();
+        world.rules.precedence = Precedence::PwrRoute;
+        world.rules.default_browser = "PwrRoute".into();
+        assert!(!world.rules.owns_default());
+        let overview = world.build();
+        assert_eq!(
+            overview.map.everything_else.owner,
+            "~/.finicky.ts's default"
+        );
+        assert!(
+            overview
+                .map
+                .cards
+                .iter()
+                .all(|card| !card.name.eq_ignore_ascii_case("PwrRoute")),
+            "no PwrRoute card"
+        );
+    }
+
+    /// Every surface finds a handler that takes every link the same way:
+    /// `"*"`, `"*://*/*"`, an anything regex, a function that returns true.
+    #[test]
+    fn the_callout_warns_about_every_kind_of_catch_all() {
+        for matcher in [
+            MatcherSpec::Wildcard("*".into()),
+            MatcherSpec::Wildcard("*://*/*".into()),
+            MatcherSpec::Regex("/.*/".into()),
+            MatcherSpec::Function(FunctionSpec {
+                source: Some("() => true".into()),
+                ..function("")
+            }),
+        ] {
+            let description = Description {
+                rewrites: Vec::new(),
+                handlers: vec![HandlerRule {
+                    matchers: vec![matcher.clone()],
+                    browser: browser("Firefox"),
+                }],
+                default_browser: browser("Safari"),
+            };
+            assert_eq!(
+                override_warnings(&description),
+                ["Config handler 1 matches every link, so PwrRoute's default never applies."],
+                "{matcher:?}"
+            );
+        }
+    }
+
+    /// 3f: rules.json names only a default, and today's links went there.
+    #[test]
+    fn default_only_3f_counts_the_links_on_its_card() {
+        let rules = RulesFile {
+            default_browser: "Google Chrome".into(),
+            default_profile: "Personal".into(),
+            ..RulesFile::default()
+        };
+        let overview = World::new(rules, fixtures::overview_default_only_day()).build();
+        assert_eq!(overview.map.everything_else.owner, "PwrRoute's default");
+        let chrome = &overview.map.cards[0];
+        assert_eq!(chrome.name, "Google Chrome");
+        assert_eq!(
+            chrome.alone,
+            Some((
+                "Everything opens in Google Chrome \u{b7} Personal".into(),
+                Some("23 links today".into())
+            ))
+        );
+        assert!(
+            overview
+                .map
+                .not_used
+                .as_deref()
+                .is_none_or(|not_used| !not_used.contains("Google Chrome")),
+            "{:?}",
+            overview.map.not_used
         );
     }
 

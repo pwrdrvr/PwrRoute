@@ -30,60 +30,76 @@ pub const STRIP_HEIGHT: f32 = 40.0;
 
 /// The strip's status chips for what is on screen.
 fn strip_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
-    let rules = || {
-        status_chip(
-            format!(
-                "rules.json \u{00b7} {} rewrites \u{00b7} {} handlers",
-                app.rewrites.len(),
-                app.handlers.len()
-            ),
-            theme::status_ok(),
-        )
-    };
     match (app.screen, &app.config) {
         (Screen::Overview, _) => overview_chips(app, status),
         // The config's chip, as Overview draws it (design 5a/5b).
         (Screen::Rules | Screen::TestLink, Some(_)) => vec![source_chip(app, status)],
-        (Screen::Rules, None) => vec![rules(), crate::default_browser::chip()],
-        (Screen::TestLink, None) => vec![rules()],
+        (Screen::Rules, None) => vec![source_chip(app, status), crate::default_browser::chip()],
+        (Screen::TestLink, None) => vec![source_chip(app, status)],
         (Screen::Activity, _) => vec![status_chip(app.activity.today.label(), theme::status_ok())],
     }
 }
 
-/// Where the rules come from. A config in charge is the accent, not a
-/// warning: warning only when its last reload failed, and the error tone
-/// when it never loaded.
-fn source_chip(app: &PwrRoute, status: &Status) -> Div {
-    use pwrroute_engine::Precedence;
-    match &app.config {
-        Some(config) if matches!(status.config_error, Some(ConfigTrouble::NotLoaded(_))) => {
-            status_chip(
-                format!("{} \u{00b7} didn't load", config.path),
-                theme::status_error(),
-            )
-        }
-        Some(config) if status.config_error.is_some() => status_chip(
-            format!("{} \u{00b7} didn't reload", config.path),
+/// What the source chip reads from: the config in charge by its shown
+/// path, the router's word on it, the saved order, and `rules.json`.
+#[derive(Clone, Copy, Debug)]
+pub struct Source<'a> {
+    pub config: Option<&'a str>,
+    pub trouble: Option<&'a ConfigTrouble>,
+    /// `rules.json`'s `precedence` is `"pwrroute"`.
+    pub rules_first: bool,
+    /// `rules.json` exists.
+    pub exists: bool,
+    pub rewrites: usize,
+    pub rules: usize,
+}
+
+/// Where the rules come from, and the chip's tone. A config in charge is
+/// the accent, not a warning: warning only when its last reload failed,
+/// and the error tone when it never loaded.
+pub fn source_label(source: Source<'_>) -> (String, gpui_kit::Hsla) {
+    match source.config {
+        Some(path) if matches!(source.trouble, Some(ConfigTrouble::NotLoaded(_))) => (
+            format!("{path} \u{00b7} didn't load"),
+            theme::status_error(),
+        ),
+        Some(path) if source.trouble.is_some() => (
+            format!("{path} \u{00b7} didn't reload"),
             theme::status_warning(),
         ),
-        Some(config) if app.store.precedence() == Precedence::PwrRoute => status_chip(
-            format!("{} \u{00b7} after your rules", config.path),
-            theme::accent(),
+        Some(path) if source.rules_first => {
+            (format!("{path} \u{00b7} after your rules"), theme::accent())
+        }
+        Some(path) => (format!("{path} \u{00b7} runs first"), theme::accent()),
+        None if !source.exists => ("no rules.json yet".to_owned(), theme::status_suspended()),
+        None if source.rewrites == 0 && source.rules == 0 => (
+            "rules.json \u{00b7} no rules yet".to_owned(),
+            theme::status_ok(),
         ),
-        Some(config) => status_chip(
-            format!("{} \u{00b7} runs first", config.path),
-            theme::accent(),
-        ),
-        None if !app.store.exists() => status_chip("no rules.json yet", theme::status_suspended()),
-        None => status_chip(
+        None => (
             format!(
                 "rules.json \u{00b7} {} \u{00b7} {}",
-                plural(app.rewrites.len(), "rewrite"),
-                plural(app.handlers.len(), "rule")
+                plural(source.rewrites, "rewrite"),
+                plural(source.rules, "rule")
             ),
             theme::status_ok(),
         ),
     }
+}
+
+/// [`source_label`]'s chip over the window. The order is the store's, which
+/// only ever holds what was written (a refused or failed write is put
+/// back).
+fn source_chip(app: &PwrRoute, status: &Status) -> Div {
+    let (label, tone) = source_label(Source {
+        config: app.config.as_ref().map(|config| config.path.as_str()),
+        trouble: status.config_error.as_ref(),
+        rules_first: !app.store.precedence().is_config(),
+        exists: app.store.exists(),
+        rewrites: app.rewrites.len(),
+        rules: app.handlers.len(),
+    });
+    status_chip(label, tone)
 }
 
 /// Overview's chips: where the rules come from, then whether links reach
@@ -415,4 +431,134 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
             .on_click(|_, _, cx| crate::settings::open(cx, None)),
         )
         .child(div().mt_auto().pt(px(10.0)).px(px(8.0)).child(foot))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::overview_model::Pause;
+
+    /// The rail foot names each routing state in its own words and tone.
+    #[test]
+    fn routing_line_names_each_state() {
+        let with = |change: &dyn Fn(&mut Status)| {
+            let mut status = Status::routing();
+            change(&mut status);
+            routing_line(&status)
+        };
+        assert_eq!(with(&|_| {}), (theme::status_ok(), "routing".to_owned()));
+        assert_eq!(
+            with(&|status| status.default = DefaultState::Unknown),
+            (
+                theme::status_suspended(),
+                "can't tell the default browser".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| status.default = DefaultState::Other("Safari".into())),
+            (
+                theme::status_warning(),
+                "not the default browser".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| {
+                status.paused = Some(Pause {
+                    name: "Google Chrome".into(),
+                    display: "Google Chrome \u{00b7} Personal".into(),
+                });
+            }),
+            (
+                theme::status_warning(),
+                "paused \u{00b7} Google Chrome".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| {
+                status.config_error = Some(ConfigTrouble::ReloadFailed("x".into()));
+            }),
+            (
+                theme::status_warning(),
+                "routing \u{00b7} config didn't reload".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| {
+                status.config_error = Some(ConfigTrouble::NotLoaded("x".into()));
+            }),
+            (
+                theme::status_error(),
+                "routing \u{00b7} config didn't load".to_owned()
+            )
+        );
+    }
+
+    /// The source chip follows the router's word on the config and the
+    /// order as written; without a config, what rules.json holds.
+    #[test]
+    fn the_source_chip_follows_the_router_and_the_saved_precedence() {
+        let source = Source {
+            config: Some("~/.finicky.ts"),
+            trouble: None,
+            rules_first: false,
+            exists: true,
+            rewrites: 1,
+            rules: 3,
+        };
+        let label = |source: Source<'_>| source_label(source).0;
+        assert_eq!(label(source), "~/.finicky.ts \u{00b7} runs first");
+        assert_eq!(
+            label(Source {
+                rules_first: true,
+                ..source
+            }),
+            "~/.finicky.ts \u{00b7} after your rules"
+        );
+        let stale = ConfigTrouble::ReloadFailed("x".into());
+        assert_eq!(
+            source_label(Source {
+                trouble: Some(&stale),
+                rules_first: true,
+                ..source
+            }),
+            (
+                "~/.finicky.ts \u{00b7} didn't reload".to_owned(),
+                theme::status_warning()
+            )
+        );
+        let broken = ConfigTrouble::NotLoaded("x".into());
+        assert_eq!(
+            source_label(Source {
+                trouble: Some(&broken),
+                ..source
+            }),
+            (
+                "~/.finicky.ts \u{00b7} didn't load".to_owned(),
+                theme::status_error()
+            )
+        );
+        let alone = Source {
+            config: None,
+            ..source
+        };
+        assert_eq!(
+            label(alone),
+            "rules.json \u{00b7} 1 rewrite \u{00b7} 3 rules"
+        );
+        assert_eq!(
+            label(Source {
+                rewrites: 0,
+                rules: 0,
+                ..alone
+            }),
+            "rules.json \u{00b7} no rules yet"
+        );
+        assert_eq!(
+            label(Source {
+                exists: false,
+                ..alone
+            }),
+            "no rules.json yet"
+        );
+    }
 }

@@ -134,20 +134,19 @@ fn edit_state(dir: Option<&Path>, edit: impl FnOnce(&mut State)) {
     }
 }
 
-/// Loads, edits and saves `rules.json`, reporting a failure on stderr as
-/// `what`. Written directly, as the first-run window runs before the main
-/// window's store; the store follows the file when it opens.
-fn edit_rules(path: Option<&Path>, what: &str, edit: impl FnOnce(&mut RulesFile)) {
+/// Loads, edits and saves `rules.json`; `Err` is why it was not saved,
+/// for the window to show (a `rules.json` that does not load is never
+/// overwritten). Written directly, as the first-run window runs before the
+/// main window's store; the store follows the file when it opens. With no
+/// home directory there is no file to write.
+pub fn edit_rules(path: Option<&Path>, edit: impl FnOnce(&mut RulesFile)) -> Result<(), String> {
     let Some(path) = path else {
-        return;
+        return Ok(());
     };
-    let saved = RulesFile::load(path).and_then(|mut rules| {
-        edit(&mut rules);
-        rules.save(path)
-    });
-    if let Err(error) = saved {
-        eprintln!("pwrroute: cannot save {what}: {error:#}");
-    }
+    let mut rules = RulesFile::load(path)
+        .map_err(|_| "rules.json did not load, so it is not overwritten".to_owned())?;
+    edit(&mut rules);
+    rules.save(path).map_err(|error| format!("{error:#}"))
 }
 
 /// A Finicky config the router found, and what it holds.
@@ -491,27 +490,20 @@ pub fn hooks_with(
     let precedence_rules = rules_path.clone();
     FirstRunHooks {
         on_fallback: Rc::new(move |choice: first_run::Fallback, _| {
-            edit_rules(
-                fallback_rules.as_deref(),
-                "the Everything else browser",
-                |rules| {
-                    rules.default_browser.clone_from(&choice.browser.value);
-                    rules.default_profile = choice.profile.clone().unwrap_or_default();
-                },
-            );
+            edit_rules(fallback_rules.as_deref(), |rules| {
+                rules.default_browser.clone_from(&choice.browser.value);
+                rules.default_profile = choice.profile.clone().unwrap_or_default();
+            })?;
             edit_state(fallback_dir.as_deref(), |state| {
                 state.fallback = Some(choice.browser.value.clone());
                 state.fallback_profile.clone_from(&choice.profile);
             });
+            Ok(())
         }),
         on_precedence: Rc::new(move |precedence, _| {
-            edit_rules(
-                precedence_rules.as_deref(),
-                "who owns everything else",
-                |rules| {
-                    rules.precedence = precedence;
-                },
-            );
+            edit_rules(precedence_rules.as_deref(), |rules| {
+                rules.precedence = precedence;
+            })
         }),
         on_import: Rc::new(move |choice, reply, cx| match choice {
             ImportChoice::KeepFile => {
@@ -903,8 +895,9 @@ mod tests {
                     profile: Some("Work".to_owned()),
                 },
                 cx,
-            );
-        });
+            )
+        })
+        .unwrap();
         let (rules, state) = saved();
         assert_eq!(rules.default_browser, "com.google.Chrome");
         assert_eq!(rules.default_profile, "Work");
@@ -933,8 +926,9 @@ mod tests {
                     profile: None,
                 },
                 cx,
-            );
-        });
+            )
+        })
+        .unwrap();
         let (rules, state) = saved();
         assert_eq!(rules.default_browser, "com.apple.Safari");
         assert_eq!(rules.default_profile, "");
@@ -966,7 +960,8 @@ mod tests {
             Rc::new(|_, _| {}),
         );
 
-        cx.update(|cx| (hooks.on_precedence)(Precedence::PwrRoute, cx));
+        cx.update(|cx| (hooks.on_precedence)(Precedence::PwrRoute, cx))
+            .unwrap();
         let rules = RulesFile::load(&rules_path).unwrap();
         assert_eq!(rules.precedence, Precedence::PwrRoute);
         assert_eq!(rules.default_browser, "com.apple.Safari");
@@ -976,7 +971,8 @@ mod tests {
                 .contains("\"precedence\": \"pwrroute\"")
         );
 
-        cx.update(|cx| (hooks.on_precedence)(Precedence::Config, cx));
+        cx.update(|cx| (hooks.on_precedence)(Precedence::Config, cx))
+            .unwrap();
         assert_eq!(
             RulesFile::load(&rules_path).unwrap().precedence,
             Precedence::Config
@@ -986,6 +982,41 @@ mod tests {
                 .unwrap()
                 .contains("precedence")
         );
+    }
+
+    /// A rules.json that does not load (left by an older install, or a
+    /// sync) is never overwritten: both choices say why instead, and
+    /// state.json does not record a fallback that was not written.
+    #[gpui_kit::test]
+    fn edit_rules_reports_a_rules_json_that_does_not_load(cx: &mut TestAppContext) {
+        use crate::first_run::Fallback;
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("PwrRoute");
+        let rules_path = dir.path().join("rules.json");
+        fs::write(&rules_path, "{ not json").unwrap();
+        let hooks = hooks_with(
+            Some(data_dir.clone()),
+            Some(rules_path.clone()),
+            None,
+            no_source(),
+            Rc::new(|_, _| {}),
+        );
+        let fallback = cx.update(|cx| {
+            (hooks.on_fallback)(
+                Fallback {
+                    browser: safari(),
+                    profile: None,
+                },
+                cx,
+            )
+        });
+        let precedence = cx.update(|cx| (hooks.on_precedence)(Precedence::PwrRoute, cx));
+        for result in [fallback, precedence] {
+            let reason = result.expect_err("not saved");
+            assert!(reason.contains("did not load"), "{reason}");
+        }
+        assert_eq!(fs::read_to_string(&rules_path).unwrap(), "{ not json");
+        assert_eq!(State::load(&data_dir).unwrap_or_default().fallback, None);
     }
 
     /// Don't use it with a config in charge: the source it saves is visual
@@ -1186,6 +1217,87 @@ mod tests {
             State::load(&data_dir).unwrap().import,
             Some(ImportChoice::Import)
         );
+    }
+
+    /// First run's importer over a `rules.json` the store would refuse to
+    /// write (it does not load): Import writes nothing and opens the
+    /// importer again with the reason, first run still waiting; Cancel then
+    /// answers it.
+    #[gpui_kit::test]
+    fn an_import_the_store_refuses_reopens_and_still_answers_first_run(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("PwrRoute");
+        let rules_path = data_dir.join("rules.json");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(&rules_path, "{ not json").unwrap();
+        let hooks = hooks_with(
+            Some(data_dir.clone()),
+            Some(rules_path.clone()),
+            Some(importer_config()),
+            no_source(),
+            Rc::new(|_, _| panic!("first run's import opens no main window")),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let heard = replies.clone();
+        cx.update(|cx| {
+            (hooks.on_import)(
+                ImportChoice::Import,
+                Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                cx,
+            );
+        });
+        let window = importer_window(cx).expect("the importer opened");
+        let mut importer = VisualTestContext::from_window(window.into(), cx);
+        press(&mut importer, crate::importer_view::NEXT_ID);
+
+        let window = importer_window(cx).expect("the importer is back");
+        let refused = window
+            .read_with(cx, |importer, _| importer.model.refused.clone())
+            .unwrap();
+        assert!(refused.is_some_and(|reason| reason.contains("did not load")));
+        assert!(replies.borrow().is_empty(), "first run is still waiting");
+        assert_eq!(fs::read_to_string(&rules_path).unwrap(), "{ not json");
+
+        // It is back on Choose source: Back to Review, then Cancel.
+        let mut importer = VisualTestContext::from_window(window.into(), cx);
+        press(&mut importer, crate::importer_view::BACK_ID);
+        press(&mut importer, crate::importer_view::CANCEL_ID);
+        cx.run_until_parked();
+        assert_eq!(*replies.borrow(), [ImportOutcome::Cancelled]);
+    }
+
+    /// A first-run importer closed some other way than Cancel (its close
+    /// button, the app quitting) answers Cancelled, so first run never
+    /// waits on Importing… for good.
+    #[gpui_kit::test]
+    fn closing_the_importer_answers_cancelled(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("PwrRoute");
+        let hooks = hooks_with(
+            Some(data_dir.clone()),
+            Some(data_dir.join("rules.json")),
+            Some(importer_config()),
+            no_source(),
+            Rc::new(|_, _| panic!("no main window")),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let heard = replies.clone();
+        cx.update(|cx| {
+            (hooks.on_import)(
+                ImportChoice::Import,
+                Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                cx,
+            );
+        });
+        let window = importer_window(cx).expect("the importer opened");
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        assert!(importer_window(cx).is_none());
+        assert_eq!(*replies.borrow(), [ImportOutcome::Cancelled]);
     }
 
     /// Import with no config to import: cancelled, answered on the next

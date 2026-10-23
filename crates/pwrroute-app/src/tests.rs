@@ -731,7 +731,7 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
     let handler = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.handlers[7].clone());
     assert_eq!(handler(cx).rule.badge, RowBadge::Draft);
     assert_eq!(handler(cx).rule.hits, "draft");
-    assert_eq!(handler(cx).title, "New handler");
+    assert_eq!(handler(cx).title, "New rule");
     // The new pattern field has the keyboard.
     cx.simulate_input("notion.so/*");
     draw(cx);
@@ -753,7 +753,7 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
         result,
         Some(crate::try_it::TryResult::Text {
             verdict: crate::try_it::Verdict::Takes,
-            message: "This handler opens that link in Firefox.".into(),
+            message: "This rule opens that link in Firefox.".into(),
             bold: None,
         })
     );
@@ -2431,7 +2431,7 @@ fn test_a_link_names_the_configs_default_in_the_go_order(cx: &mut TestAppContext
         test_unmatched(&view, cx, "https://unmatched.example.com/"),
         (
             "Everything else \u{00b7} ~/.finicky.ts's default".into(),
-            "no handler matched".into(),
+            "no config handler or rule matched".into(),
             "Google Chrome".into()
         )
     );
@@ -2497,7 +2497,7 @@ fn try_it_under_pwrroute_runs_the_rule_before_the_config(cx: &mut TestAppContext
         try_first_handler(&view, cx),
         crate::try_it::TryResult::Text {
             verdict: crate::try_it::Verdict::Takes,
-            message: "This handler opens that link in Google Chrome \u{00b7} Work.".into(),
+            message: "This rule opens that link in Google Chrome \u{00b7} Work.".into(),
             bold: None,
         }
     );
@@ -2986,6 +2986,94 @@ fn leaving_overview_forgets_its_fades_and_the_hand_off(cx: &mut TestAppContext) 
     assert_eq!(handoff(cx), None, "coming back does not replay it");
 }
 
+/// The callout over a store that will not write (the file changed on disk
+/// under an unsaved edit): nothing is written, the callout still offers
+/// the switch with no Undo, and it says why.
+#[gpui_kit::test]
+fn the_callout_says_why_when_the_save_is_refused(cx: &mut TestAppContext) {
+    use pwrroute_engine::Precedence;
+    let (view, cx, path) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    view.update(cx, |app, cx| {
+        app.store.set_enabled(Selection::Handler(0), false);
+        app.refresh(cx);
+    });
+    written_by_someone_else(&path, 2);
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    draw(cx);
+    assert_eq!(
+        RulesFile::load(&path).unwrap().precedence,
+        Precedence::Config
+    );
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.precedence()),
+        Precedence::Config
+    );
+    assert!(!view.read_with(cx, |app, _| app.overview.just_overridden));
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.handing_off()),
+        None
+    );
+    assert!(
+        cx.debug_bounds(crate::overview::CALLOUT_BUTTON_ID)
+            .is_some()
+    );
+    assert!(cx.debug_bounds(crate::overview::CALLOUT_UNDO_ID).is_none());
+    assert!(
+        cx.debug_bounds(crate::overview::CALLOUT_REFUSED_ID)
+            .is_some()
+    );
+}
+
+/// The setup card over a rules.json that does not load: the choice writes
+/// nothing, and the card stays with the reason.
+#[gpui_kit::test]
+fn the_setup_card_stays_when_rules_json_does_not_load(cx: &mut TestAppContext) {
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    std::fs::write(&path, "{ not json").unwrap();
+    click(cx, "overview-setup-choose");
+    // Firefox has no profiles: it is saved at once, or would be.
+    click(cx, "overview-setup-choice-1");
+    draw(cx);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    assert!(cx.debug_bounds("overview-setup").is_some());
+    assert!(cx.debug_bounds(crate::overview::SETUP_REFUSED_ID).is_some());
+    assert!(matches!(
+        view.read_with(cx, |app, _| app.overview.refused.clone()),
+        Some(crate::overview::Refused::Setup(reason)) if reason.contains("did not load")
+    ));
+}
+
+/// The Rules list's hits column counts today's links per rule from the
+/// feed, as the Overview's rows do.
+#[gpui_kit::test]
+fn rules_rows_show_todays_hits(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    click(cx, "nav-rules");
+    let hits = cx.update(|_, cx| {
+        let app = view.read(cx);
+        crate::rules_view::todays_hits(app, cx)
+    });
+    let hits: Vec<&str> = hits.iter().map(|hits| hits.as_ref()).collect();
+    assert_eq!(hits[..5], ["214", "88", "57", "402", "9"], "{hits:?}");
+    assert!(hits[5..].iter().all(|hits| *hits == "\u{2014}"), "{hits:?}");
+}
+
 #[test]
 fn the_overview_reads_the_routers_config_trouble() {
     use crate::overview_model::ConfigTrouble;
@@ -3208,7 +3296,7 @@ mod rules_and_config_views {
         for order in [on, off] {
             assert_eq!(
                 config.override_warnings(order),
-                ["Handler 2 matches every link, so PwrRoute's default never applies."]
+                ["Config handler 2 matches every link, so PwrRoute's default never applies."]
             );
         }
 
@@ -3302,6 +3390,43 @@ mod rules_and_config_views {
         assert!(cx.debug_bounds("config-handlers").is_none());
         assert!(cx.debug_bounds("handler-0").is_some());
         assert!(cx.debug_bounds("import-found").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// First run's Don't use it while the main window is open: the real
+    /// `set_source_and_show` turns the config off and shows the window the
+    /// visual rules.
+    #[gpui_kit::test]
+    fn dont_use_it_with_the_main_window_open_shows_the_visual_rules(cx: &mut TestAppContext) {
+        let dir = scratch("dont-use-it-open");
+        let settings = crate::settings_store::SettingsStore::load(Some(dir.clone()));
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(&dir));
+        assert!(cx.debug_bounds("config-handlers").is_some());
+
+        let hooks = crate::onboarding::hooks_with(
+            Some(dir.clone()),
+            Some(dir.join("rules.json")),
+            Some(config),
+            std::rc::Rc::new(crate::importer_view::set_source_and_show),
+            std::rc::Rc::new(|_, _| {}),
+        );
+        // From outside the main window, as first run's own window calls it.
+        cx.cx.update(|cx| {
+            (hooks.on_import)(
+                crate::first_run::ImportChoice::DontUse,
+                std::rc::Rc::new(|_, _| {}),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        draw(cx);
+        assert!(view.read_with(cx, |app, _| app.config.is_none()));
+        assert!(cx.debug_bounds("config-handlers").is_none());
+        assert!(cx.debug_bounds("handler-0").is_some());
+        let saved = crate::settings_store::Settings::load(&dir).unwrap();
+        assert!(saved.source.visual_only);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3466,6 +3591,35 @@ mod rules_and_config_views {
         assert!(cx.debug_bounds("config-default-struck").is_none());
         assert!(cx.debug_bounds("config-warning-0").is_some());
         let _ = std::fs::remove_dir_all(&dir);
+
+        // The write itself fails (the folder is read-only): the switch goes
+        // back to the file's order, and a later save does not write it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = scratch("override-write-fails");
+            let path = dir.join("rules.json");
+            let (view, cx) = open_store(cx, Some(fixture_home().join(".finicky.ts")), {
+                fixture_store(&dir)
+            });
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            click(cx, config_view::SWITCH_ID);
+            let (precedence, flips, refused) = view.read_with(cx, |app, _| {
+                let config = app.config.as_ref().unwrap();
+                (app.store.precedence(), config.flips, config.refused.clone())
+            });
+            assert_eq!(precedence, Precedence::Config);
+            assert_eq!(flips, 0);
+            assert!(refused.is_some());
+            assert!(cx.debug_bounds("config-warning-0").is_some());
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            view.update(cx, |app, cx| app.save_now(cx));
+            assert_eq!(
+                RulesFile::load(&path).unwrap().precedence,
+                Precedence::Config
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[gpui_kit::test]

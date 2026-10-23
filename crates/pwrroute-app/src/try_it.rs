@@ -318,7 +318,7 @@ pub fn interpret(
             match winner {
                 Some(step) if is_rule(step, Stage::Handler, h) => TryResult::text(
                     Verdict::Takes,
-                    format!("This handler opens that link in {browser}."),
+                    format!("This rule opens that link in {browser}."),
                 ),
                 Some(step)
                     if step.stage == Stage::Handler
@@ -354,7 +354,7 @@ pub fn interpret(
                     Some(threw) => TryResult::text(
                         Verdict::Beaten,
                         format!(
-                            "{} threw before this handler ran: {}. {winner_name} opens that \
+                            "{} threw before this rule ran: {}. {winner_name} opens that \
                              link in {browser}.",
                             step_name(threw, config),
                             threw.error.as_deref().unwrap_or_default()
@@ -484,7 +484,7 @@ mod tests {
             taken,
             TryResult::text(
                 Verdict::Takes,
-                "This handler opens that link in Google Chrome \u{00b7} Work."
+                "This rule opens that link in Google Chrome \u{00b7} Work."
             )
         );
         // Rule 4 (Social) loses to rule 2 on that link.
@@ -594,7 +594,7 @@ mod tests {
         );
         assert_eq!(
             result,
-            TryResult::text(Verdict::Takes, "This handler opens that link in Firefox.")
+            TryResult::text(Verdict::Takes, "This rule opens that link in Firefox.")
         );
     }
 
@@ -791,7 +791,7 @@ mod tests {
             probe.run("https://boom.example.com/", None, Selection::Handler(1)),
             TryResult::text(
                 Verdict::Beaten,
-                "Config handler 3 threw before this handler ran: handler matcher threw. \
+                "Config handler 3 threw before this rule ran: handler matcher threw. \
                  ~/finicky.js's default opens that link in Safari."
             )
         );
@@ -827,7 +827,7 @@ mod tests {
         );
         assert_eq!(
             probe.run("https://both.example.com/x", None, Selection::Handler(0)),
-            TryResult::text(Verdict::Takes, "This handler opens that link in Arc.")
+            TryResult::text(Verdict::Takes, "This rule opens that link in Arc.")
         );
         // An earlier rule still wins first, and moving this one fixes that.
         let mut beaten = probe.with_rules(RulesFile {

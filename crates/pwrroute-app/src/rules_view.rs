@@ -474,8 +474,33 @@ pub(crate) fn chip_in(label: impl Into<SharedString>, tone: ChipTone) -> Div {
         .text_color(foreground)
 }
 
-/// The count chip of a card: "7 handlers · 1 off · 1 draft", or in red
-/// when an edit is not saved.
+/// The rules list's hits column: today's links for each `rules.json`
+/// rule, from the feed. After a failed reload the router numbers rules as
+/// they last loaded, so there is no count to trust then.
+pub fn todays_hits(app: &PwrRoute, cx: &App) -> Vec<SharedString> {
+    let stale = matches!(
+        crate::overview::status(app, cx).config_error,
+        Some(crate::overview_model::ConfigTrouble::ReloadFailed(_))
+    );
+    let tally = crate::activity::feed(cx)
+        .filter(|_| !stale)
+        .map(|feed| feed.read(cx).tally(std::time::SystemTime::now()));
+    app.handlers
+        .iter()
+        .enumerate()
+        .map(|(index, handler)| {
+            crate::rules_model::hits_label(
+                handler.rule.badge,
+                tally
+                    .as_ref()
+                    .map(|tally| tally.rule(crate::activity::HitKey::Rule(index))),
+            )
+        })
+        .collect()
+}
+
+/// The count chip of a card: "7 rules · 1 off · 1 draft", or in red
+/// when an edit is not saved. `noun` is singular.
 fn count_chip(rules: &[&Rule], noun: &str) -> Div {
     let off = rules.iter().filter(|r| !r.enabled).count();
     let drafts = rules.iter().filter(|r| r.badge == RowBadge::Draft).count();
@@ -486,7 +511,7 @@ fn count_chip(rules: &[&Rule], noun: &str) -> Div {
     if not_saved > 0 {
         return chip_in(format!("{not_saved} not saved"), ChipTone::Bad);
     }
-    let mut parts = vec![format!("{} {noun}", rules.len())];
+    let mut parts = vec![crate::overview_model::plural(rules.len(), noun)];
     if off > 0 {
         parts.push(format!("{off} off"));
     }
@@ -556,8 +581,8 @@ fn heading(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
             everything_else_name(&app.store)
         )
     } else {
-        "Rewrites run in order and every match applies. Then the first matching handler \
-         opens the link. Anything left goes to the default."
+        "Rewrites run in order and every match applies. Then the first matching rule \
+         opens the link. Anything left goes to Everything else."
             .into()
     };
     div()
@@ -577,7 +602,7 @@ fn heading(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                         .on_click(cx.listener(|this, _, window, cx| this.add_rewrite(window, cx))),
                 )
                 .child(
-                    add_button("Add handler", true)
+                    add_button("Add rule", true)
                         .id("add-handler")
                         .debug_selector(|| "add-handler".into())
                         .on_click(cx.listener(|this, _, window, cx| this.add_handler(window, cx))),
@@ -643,7 +668,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
     let rewrites = card().child(card_header_with(
         "Step 1 \u{00b7} run in order \u{00b7} every match applies",
         "Rewrites",
-        count_chip(&rewrite_rules, "rewrites"),
+        count_chip(&rewrite_rules, "rewrite"),
     ));
     let rewrites = if app.rewrites.is_empty() {
         rewrites.child(empty_card(
@@ -696,13 +721,13 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
     let handler_rules: Vec<&Rule> = app.handlers.iter().map(|h| &h.rule).collect();
     let handlers = card().child(card_header_with(
         "Step 2 \u{00b7} first match wins",
-        "Handlers",
-        count_chip(&handler_rules, "handlers"),
+        "Rules",
+        count_chip(&handler_rules, "rule"),
     ));
     let handlers = if app.handlers.is_empty() {
         handlers.child(empty_card(
-            "No handlers",
-            "A handler sends matching links to a browser, a profile or an app. The first one \
+            "No rules",
+            "A rule sends matching links to a browser, a profile or an app. The first one \
              that matches wins, so specific rules go above general ones.",
             div()
                 .flex()
@@ -717,16 +742,21 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                     500.0,
                     theme::text_secondary(),
                 )),
-            button("Add handler", ButtonKind::Primary, true)
+            button("Add rule", ButtonKind::Primary, true)
                 .id("empty-add-handler")
                 .debug_selector(|| "empty-add-handler".into())
                 .on_click(cx.listener(|this, _, window, cx| this.add_handler(window, cx))),
         ))
     } else {
+        let hits = todays_hits(app, cx);
         app.handlers
             .iter()
             .enumerate()
             .fold(handlers, |card, (index, handler)| {
+                let mut rule = handler.rule.clone();
+                if let Some(hits) = hits.get(index) {
+                    rule.hits = hits.clone();
+                }
                 let last = index + 1 == app.handlers.len();
                 let examples = examples_row(app, Selection::Handler(index), last);
                 let state = RowState {
@@ -738,7 +768,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                     rule_row(
                         ElementId::named_usize("handler", index),
                         &format!("{:02}", index + 1),
-                        &handler.rule,
+                        &rule,
                         state,
                         None,
                     )
@@ -859,7 +889,7 @@ fn failure_row(index: usize, failure: &TestFailure, cx: &mut Context<'_, PwrRout
                 ))
             })
         }
-        None => value("no handler".into()),
+        None => value("no rule".into()),
     };
     let edit = failure
         .winner
@@ -1458,10 +1488,10 @@ fn nothing_to_route_by(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                         ))
                         .child(choice(
                             false,
-                            "Start with a handler",
+                            "Start with a rule",
                             &stays,
                             div().child(
-                                button("Add handler", ButtonKind::Default, true)
+                                button("Add rule", ButtonKind::Default, true)
                                     .id("blank-add-handler")
                                     .debug_selector(|| "blank-add-handler".into())
                                     .on_click(cx.listener(|this, _, window, cx| {

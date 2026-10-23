@@ -625,8 +625,13 @@ impl PwrRoute {
     /// `rules.json` has not changed since `at`: nothing is unsaved, and the
     /// file was last written (by anyone, read at load) or reloaded no later.
     /// A reload's time is when the change was noticed, which is never
-    /// earlier than the write, so the answer errs towards a probe.
+    /// earlier than the write, so the answer errs towards a probe. While
+    /// the router's last reload failed it still routes with the files as
+    /// they were before it, whatever the store says, so never then.
     fn rules_unchanged_since(&self, at: SystemTime) -> bool {
+        if crate::router::routing_source().error.is_some() {
+            return false;
+        }
         match self.store.status() {
             Status::Saved { at: Some(saved) } => *saved <= at,
             Status::Reloaded { at: reloaded } => *reloaded <= at,
