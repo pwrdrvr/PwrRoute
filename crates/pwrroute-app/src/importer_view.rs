@@ -11,6 +11,12 @@
 //! a file that is not the config in charge never takes its place.
 //! Recent links reach the engine's probes from the Activity feed, in
 //! memory only.
+//!
+//! First run's "Import N rules" opens it with [`open_from_first_run`]:
+//! Import then writes `rules.json` through the main window's store only
+//! when that window is already open (never opening it), and the importer
+//! tells first run how it was left, through its [`OnDone`]: imported, with
+//! the count, or cancelled however it closed.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -95,6 +101,28 @@ pub struct FoundConfig {
     pub holds: String,
 }
 
+/// How the importer first run opened was left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportOutcome {
+    /// It closed without importing: Cancel, its close button, Choose
+    /// another file, or another caller taking the window over.
+    Cancelled,
+    /// `count` rules written. `keeps_config`: Choose source kept the config
+    /// in charge; otherwise the router stopped reading it.
+    Imported { count: usize, keeps_config: bool },
+}
+
+/// What first run hears back from the importer.
+pub type OnDone = Rc<dyn Fn(ImportOutcome, &mut App)>;
+
+/// An importer first run opened: where it writes without a main window,
+/// and whom it answers.
+#[derive(Clone)]
+struct FromFirstRun {
+    rules: Option<PathBuf>,
+    on_done: OnDone,
+}
+
 /// The main window, when one is open.
 fn main_window(cx: &App) -> Option<WindowHandle<PwrRoute>> {
     cx.windows()
@@ -126,9 +154,10 @@ fn recent_links(cx: &App) -> Vec<String> {
     links
 }
 
-/// Opens the importer on the config at `path`: on Review, or for first
-/// run's "Import N rules" (`first_run`) on Choose source with every proven
-/// rule checked. A second call replaces what the open importer shows.
+/// Opens the importer on the config at `path`: on Review, or (`first_run`)
+/// on Choose source with every proven rule checked, as
+/// [`open_from_first_run`] does. A second call replaces what the open
+/// importer shows.
 pub fn open(path: PathBuf, first_run: bool, cx: &mut App) {
     open_with(path, first_run, crate::router::config_in_charge(), cx);
 }
@@ -136,6 +165,32 @@ pub fn open(path: PathBuf, first_run: bool, cx: &mut App) {
 /// [`open`], with the config the router reads now given: tests name it,
 /// since the router's source is one for the whole process.
 pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBuf>, cx: &mut App) {
+    open_inner(path, first_run, in_charge, None, cx);
+}
+
+/// First run's "Import N rules": the importer on Choose source with every
+/// proven rule checked, for `path`, the config in charge. Import writes
+/// `rules` (through the main window's store when it is open; the main
+/// window is never opened for it), and `on_done` hears how the importer was
+/// left.
+pub fn open_from_first_run(path: PathBuf, rules: Option<PathBuf>, on_done: OnDone, cx: &mut App) {
+    let in_charge = Some(path.clone());
+    open_inner(
+        path,
+        true,
+        in_charge,
+        Some(FromFirstRun { rules, on_done }),
+        cx,
+    );
+}
+
+fn open_inner(
+    path: PathBuf,
+    first_run: bool,
+    in_charge: Option<PathBuf>,
+    from_first_run: Option<FromFirstRun>,
+    cx: &mut App,
+) {
     let (existing, home) = main_window(cx)
         .and_then(|main| {
             main.read(cx)
@@ -143,11 +198,11 @@ pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBu
                 .map(|app| (app.store.written(), app.home.clone()))
         })
         .unwrap_or_else(|| {
-            let environment = discovery::Environment::current();
-            (
-                RulesStore::load(discovery::rules_path(&environment)).written(),
-                std::env::home_dir(),
-            )
+            let rules = match &from_first_run {
+                Some(from) => from.rules.clone(),
+                None => discovery::rules_path(&discovery::Environment::current()),
+            };
+            (RulesStore::load(rules).written(), std::env::home_dir())
         });
     let recent = recent_links(cx);
     let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
@@ -161,14 +216,18 @@ pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBu
     if first_run {
         model.start_at_source();
     }
-    show(model, cx);
+    show(model, from_first_run, cx);
 }
 
-/// Shows `model` in the importer, opening it when none is open.
-fn show(model: ImportModel, cx: &mut App) {
+/// Shows `model` in the importer, opening it when none is open. An open
+/// importer first run was waiting on answers it was cancelled.
+fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) {
     if let Some(window) = importer_window(cx) {
         let _ = window.update(cx, |this, window, cx| {
             this.model = model;
+            if let Some(earlier) = std::mem::replace(&mut this.from_first_run, from_first_run) {
+                cx.defer(move |cx| (earlier.on_done)(ImportOutcome::Cancelled, cx));
+            }
             window.activate_window();
             cx.notify();
         });
@@ -190,7 +249,13 @@ fn show(model: ImportModel, cx: &mut App) {
             window_min_size: Some(size(px(980.0), px(560.0))),
             ..Default::default()
         },
-        |_, cx| cx.new(|cx| Importer::new(model, cx)),
+        |_, cx| {
+            cx.new(|cx| {
+                let mut importer = Importer::new(model, cx);
+                importer.from_first_run = from_first_run;
+                importer
+            })
+        },
     );
     match opened {
         Ok(window) => {
@@ -205,13 +270,23 @@ fn show(model: ImportModel, cx: &mut App) {
 pub struct Importer {
     pub model: ImportModel,
     pub focus: FocusHandle,
+    /// First run opened it and waits to hear how it is left. Taken by
+    /// Import; still here when the window goes, which is a cancel.
+    from_first_run: Option<FromFirstRun>,
 }
 
 impl Importer {
     pub fn new(model: ImportModel, cx: &mut Context<'_, Self>) -> Self {
+        cx.on_release(|this: &mut Self, cx| {
+            if let Some(from) = this.from_first_run.take() {
+                (from.on_done)(ImportOutcome::Cancelled, cx);
+            }
+        })
+        .detach();
         Self {
             model,
             focus: cx.focus_handle(),
+            from_first_run: None,
         }
     }
 
@@ -254,12 +329,28 @@ impl Importer {
     fn import(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let mut model = self.model.clone();
         model.refused = None;
+        let from_first_run = self.from_first_run.take();
         window.remove_window();
-        cx.defer(move |cx| {
-            if let Err(reason) = finish(&model, cx) {
-                model.refused = Some(reason);
-                show(model, cx);
+        cx.defer(move |cx| match from_first_run {
+            None => {
+                if let Err(reason) = finish(&model, cx) {
+                    model.refused = Some(reason);
+                    show(model, None, cx);
+                }
             }
+            Some(from) => match finish_for_first_run(&model, from.rules.clone(), cx) {
+                Ok(count) => (from.on_done)(
+                    ImportOutcome::Imported {
+                        count,
+                        keeps_config: model.final_source() == SourceChoice::KeepConfig,
+                    },
+                    cx,
+                ),
+                Err(reason) => {
+                    model.refused = Some(reason);
+                    show(model, Some(from), cx);
+                }
+            },
         });
     }
 
@@ -312,6 +403,45 @@ pub fn finish(model: &ImportModel, cx: &mut App) -> Result<(), String> {
     Ok(())
 }
 
+/// First run's Import: writes the import through the main window's store
+/// when that window is open, else straight to `rules` through a store of
+/// its own, without opening the main window, then switches the source as
+/// Choose source said. Returns the rules written; a refused write comes
+/// back as the reason.
+fn finish_for_first_run(
+    model: &ImportModel,
+    rules: Option<PathBuf>,
+    cx: &mut App,
+) -> Result<usize, String> {
+    let count = match main_window(cx) {
+        Some(main) => {
+            let previous_source =
+                settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+            main.update(cx, |app, _, cx| {
+                app.apply_import(model, previous_source, cx)?;
+                Ok::<usize, String>(app.last_import.as_ref().map_or(0, |done| done.count))
+            })
+            .map_err(|error| format!("{error:#}"))??
+        }
+        None => {
+            let mut store = RulesStore::load(rules);
+            if let Some(reason) = store.save_refused() {
+                return Err(reason);
+            }
+            let plan = model.plan(&store.written());
+            store.replace_all(plan.file.clone());
+            store.save()?;
+            plan.count()
+        }
+    };
+    if let Some(config) = switch_source(model, cx)
+        && let Some(main) = main_window(cx)
+    {
+        let _ = main.update(cx, |app, _, cx| app.set_config(config, cx));
+    }
+    Ok(count)
+}
+
 /// Saves the source Choose source picked (`ImportModel::source_after`) and
 /// hands it to the router. Keep never touches it, so a file that is not
 /// the config in charge never takes its place. Returns the config now in
@@ -328,8 +458,9 @@ fn switch_source(model: &ImportModel, cx: &mut App) -> Option<Option<PathBuf>> {
 }
 
 /// Saves `source` to `settings.json` and switches the router to it.
-/// Returns the config it puts in charge.
-fn set_source(source: SourceSettings, cx: &mut App) -> Option<Option<PathBuf>> {
+/// Returns the config it puts in charge. First run's Don't use it calls it
+/// with `visualOnly`.
+pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> Option<Option<PathBuf>> {
     let store = settings_store::store(cx)?;
     let choice = source.choice(discovery::config_candidates(
         &discovery::Environment::current(),
