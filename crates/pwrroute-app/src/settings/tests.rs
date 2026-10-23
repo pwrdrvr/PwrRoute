@@ -622,3 +622,275 @@ fn the_privacy_pane_draws_the_journal_off_state(cx: &mut TestAppContext) {
         JournalLevel::Off
     );
 }
+
+// Settings Everything else (WP-F)
+
+mod everything_else {
+    use std::path::{Path, PathBuf};
+
+    use gpui_kit::{TestAppContext, VisualTestContext};
+    use pwrroute_engine::{Precedence, RulesFile};
+
+    use super::super::configuration::{
+        BROWSER_OPTION_ID, CONFIG_DEFAULT_ID, DEFAULT_BROWSER_ID, DEFAULT_PROFILE_ID,
+        EVERYTHING_ELSE_ID, PROFILE_OPTION_ID, PWRROUTE_DEFAULT_ID, Picking, WARNINGS_ID,
+    };
+    use super::super::configuration_host::edit_rules;
+    use super::super::model::{DefaultOwner, RulesSource, SettingsRequest};
+    use super::super::{Pane, fixtures};
+    use super::{click, draw, settings, visible};
+    use crate::app::PwrRoute;
+    use crate::rules_store::{CHANGED_ON_DISK, RulesStore};
+
+    fn owner(
+        view: &gpui_kit::Entity<super::SettingsWindow>,
+        cx: &mut VisualTestContext,
+    ) -> DefaultOwner {
+        view.read_with(cx, |view, _| {
+            view.model
+                .configuration
+                .everything_else
+                .as_ref()
+                .expect("the Everything else field")
+                .owner
+        })
+    }
+
+    #[gpui_kit::test]
+    fn the_row_is_hidden_while_visual_rules_are_in_charge(cx: &mut TestAppContext) {
+        // The fixture: visual rules in charge, a config found beside them.
+        let (_view, cx, _) = settings(cx, |_| {});
+        click(cx, Pane::Configuration.nav_id());
+        assert!(!visible(cx, EVERYTHING_ELSE_ID));
+    }
+
+    #[gpui_kit::test]
+    fn the_row_shows_only_while_a_config_is_in_charge(cx: &mut TestAppContext) {
+        let (view, cx, _) = settings(cx, |model| {
+            model.configuration = fixtures::configuration_everything_else();
+        });
+        click(cx, Pane::Configuration.nav_id());
+        assert!(visible(cx, EVERYTHING_ELSE_ID));
+        assert!(visible(cx, CONFIG_DEFAULT_ID));
+        assert!(visible(cx, PWRROUTE_DEFAULT_ID));
+        assert!(visible(cx, DEFAULT_BROWSER_ID));
+        // Google Chrome has profiles: the profile select sits beside it.
+        assert!(visible(cx, DEFAULT_PROFILE_ID));
+
+        // The same field with visual rules in charge is not drawn: that is
+        // a rule for the window, whatever the producer sends.
+        view.update(cx, |view, cx| {
+            view.model.configuration.active = RulesSource::Visual;
+            cx.notify();
+        });
+        draw(cx);
+        assert!(!visible(cx, EVERYTHING_ELSE_ID));
+    }
+
+    #[gpui_kit::test]
+    fn choosing_an_answer_asks_to_write_precedence(cx: &mut TestAppContext) {
+        let (view, cx, requests) = settings(cx, |model| {
+            model.configuration = fixtures::configuration_everything_else();
+        });
+        click(cx, Pane::Configuration.nav_id());
+        assert_eq!(owner(&view, cx), DefaultOwner::PwrRoute);
+
+        // The answer already chosen asks for nothing.
+        click(cx, PWRROUTE_DEFAULT_ID);
+        assert!(requests.borrow().is_empty());
+
+        click(cx, CONFIG_DEFAULT_ID);
+        assert_eq!(owner(&view, cx), DefaultOwner::Config);
+        draw(cx);
+        click(cx, PWRROUTE_DEFAULT_ID);
+        assert_eq!(owner(&view, cx), DefaultOwner::PwrRoute);
+        assert_eq!(
+            *requests.borrow(),
+            [
+                SettingsRequest::SetDefaultOwner(DefaultOwner::Config),
+                SettingsRequest::SetDefaultOwner(DefaultOwner::PwrRoute),
+            ]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn warnings_show_only_while_pwrroutes_default_takes_everything_else(cx: &mut TestAppContext) {
+        let (_view, cx, _) = settings(cx, |model| {
+            model.configuration = fixtures::configuration_everything_else_warnings();
+        });
+        click(cx, Pane::Configuration.nav_id());
+        assert!(visible(cx, WARNINGS_ID));
+
+        click(cx, CONFIG_DEFAULT_ID);
+        draw(cx);
+        assert!(!visible(cx, WARNINGS_ID));
+
+        click(cx, PWRROUTE_DEFAULT_ID);
+        draw(cx);
+        assert!(visible(cx, WARNINGS_ID));
+    }
+
+    #[gpui_kit::test]
+    fn no_warning_line_when_nothing_changes_hands(cx: &mut TestAppContext) {
+        let (_view, cx, _) = settings(cx, |model| {
+            model.configuration = fixtures::configuration_everything_else();
+        });
+        click(cx, Pane::Configuration.nav_id());
+        assert!(!visible(cx, WARNINGS_ID));
+    }
+
+    #[gpui_kit::test]
+    fn the_browser_and_profile_are_chosen_from_the_selects(cx: &mut TestAppContext) {
+        let (view, cx, requests) = settings(cx, |model| {
+            model.configuration = fixtures::configuration_everything_else();
+        });
+        click(cx, Pane::Configuration.nav_id());
+
+        click(cx, DEFAULT_BROWSER_ID);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.configuration.open_menu()),
+            Some(Picking::Browser)
+        );
+        draw(cx);
+        click(cx, (BROWSER_OPTION_ID, 1_usize));
+        assert_eq!(
+            view.read_with(cx, |view, _| view.configuration.open_menu()),
+            None
+        );
+        // Safari has no profiles: its own default, and no profile select.
+        draw(cx);
+        assert!(!visible(cx, DEFAULT_PROFILE_ID));
+
+        click(cx, DEFAULT_BROWSER_ID);
+        draw(cx);
+        click(cx, (BROWSER_OPTION_ID, 0_usize));
+        draw(cx);
+        click(cx, DEFAULT_PROFILE_ID);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.configuration.open_menu()),
+            Some(Picking::Profile)
+        );
+        draw(cx);
+        // "Default profile", then Personal and Work.
+        click(cx, (PROFILE_OPTION_ID, 2_usize));
+        assert_eq!(
+            *requests.borrow(),
+            [
+                SettingsRequest::SetDefaultBrowser {
+                    browser: "com.apple.Safari".into(),
+                    profile: "".into(),
+                },
+                SettingsRequest::SetDefaultBrowser {
+                    browser: "com.google.Chrome".into(),
+                    profile: "".into(),
+                },
+                SettingsRequest::SetDefaultBrowser {
+                    browser: "com.google.Chrome".into(),
+                    profile: "Work".into(),
+                },
+            ]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_pane_switch_closes_an_open_select(cx: &mut TestAppContext) {
+        let (view, cx, _) = settings(cx, |model| {
+            model.configuration = fixtures::configuration_everything_else();
+        });
+        click(cx, Pane::Configuration.nav_id());
+        click(cx, DEFAULT_BROWSER_ID);
+        click(cx, Pane::Browsers.nav_id());
+        assert_eq!(
+            view.read_with(cx, |view, _| view.configuration.open_menu()),
+            None
+        );
+    }
+
+    fn rules_at(dir: &Path, text: &str) -> PathBuf {
+        let path = dir.join("rules.json");
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn on_disk(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn the_main_windows_store_writes_precedence(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = rules_at(
+            dir.path(),
+            r#"{ "defaultBrowser": "com.google.Chrome",
+                 "rules": [{ "match": "a.example.com/*", "browser": "Safari" }] }"#,
+        );
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let store = RulesStore::load(Some(path.clone()));
+        let (app, cx) = cx.add_window_view(|_, cx| PwrRoute::with_store(None, None, store, cx));
+        draw(cx);
+
+        // The path is not read while the main window is open: its store is.
+        // As the Settings window's deferred request runs: outside the main
+        // window's own update.
+        let saved = cx
+            .cx
+            .update(|cx| edit_rules(None, cx, |store| store.set_precedence(Precedence::PwrRoute)));
+        assert_eq!(saved, Ok(()));
+        assert_eq!(on_disk(&path)["precedence"], "pwrroute");
+        assert_eq!(on_disk(&path)["rules"][0]["match"], "a.example.com/*");
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.store.precedence(), Precedence::PwrRoute);
+            assert!(!app.store.needs_save());
+        });
+
+        // Back to the config's default: the field is left out again.
+        let saved = cx
+            .cx
+            .update(|cx| edit_rules(None, cx, |store| store.set_precedence(Precedence::Config)));
+        assert_eq!(saved, Ok(()));
+        assert!(on_disk(&path).get("precedence").is_none());
+
+        // Another writer changed the file under an unsaved edit: refused,
+        // and nothing is written over it.
+        app.update(cx, |app, _| app.store.set_browser(0, "Firefox"));
+        std::fs::write(&path, r#"{ "defaultBrowser": "com.apple.Safari" }"#).unwrap();
+        let saved = cx
+            .cx
+            .update(|cx| edit_rules(None, cx, |store| store.set_precedence(Precedence::PwrRoute)));
+        assert_eq!(saved, Err(CHANGED_ON_DISK.to_owned()));
+        assert_eq!(
+            on_disk(&path),
+            serde_json::json!({ "defaultBrowser": "com.apple.Safari" })
+        );
+    }
+
+    #[gpui_kit::test]
+    fn without_a_main_window_the_file_is_written_through_a_store(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = rules_at(dir.path(), r#"{ "defaultBrowser": "com.apple.Safari" }"#);
+        let saved = cx.update(|cx| {
+            edit_rules(Some(path.clone()), cx, |store| {
+                store.set_precedence(Precedence::PwrRoute);
+                store.set_default_browser("com.google.Chrome", "Personal");
+            })
+        });
+        assert_eq!(saved, Ok(()));
+        let file = RulesFile::load(&path).unwrap();
+        assert_eq!(file.precedence, Precedence::PwrRoute);
+        assert_eq!(file.default_browser, "com.google.Chrome");
+        assert_eq!(file.default_profile, "Personal");
+
+        // A file that does not load is never written over.
+        std::fs::write(&path, "{ not json").unwrap();
+        let saved = cx.update(|cx| {
+            edit_rules(Some(path.clone()), cx, |store| {
+                store.set_precedence(Precedence::Config);
+            })
+        });
+        assert_eq!(
+            saved,
+            Err("rules.json did not load, so it is not overwritten.".to_owned())
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+}

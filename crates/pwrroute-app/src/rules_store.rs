@@ -372,16 +372,20 @@ impl RulesStore {
     /// other. Setting the value the store already has changes nothing and
     /// leaves the store clean. [`Precedence::Config`] is written by leaving
     /// the field out.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "for the precedence toggle; only tests call it so far"
-        )
-    )]
     pub fn set_precedence(&mut self, precedence: Precedence) {
         if self.base.precedence != precedence {
             self.base.precedence = precedence;
+            self.touch();
+        }
+    }
+
+    /// Sets `defaultBrowser` and `defaultProfile` ("" for the browser's own
+    /// profile), as an edit written on the next save. The same values
+    /// change nothing.
+    pub fn set_default_browser(&mut self, browser: &str, profile: &str) {
+        if self.base.default_browser != browser || self.base.default_profile != profile {
+            browser.clone_into(&mut self.base.default_browser);
+            profile.clone_into(&mut self.base.default_profile);
             self.touch();
         }
     }

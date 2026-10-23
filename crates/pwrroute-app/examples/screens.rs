@@ -726,6 +726,58 @@ fn main() {
         image.save(&path).expect("write the PNG");
         println!("{}", path.display());
     }
+
+    // Settings Everything else (WP-F): Configuration while ~/.finicky.ts is
+    // in charge (Overview and Setup 5d, its 1000px card less the border),
+    // and the same row with design 5c's warnings.
+    for (name, configuration) in [
+        (
+            "settings-configuration-everything-else",
+            settings::fixtures::configuration_everything_else(),
+        ),
+        (
+            "settings-configuration-everything-else-warnings",
+            settings::fixtures::configuration_everything_else_warnings(),
+        ),
+    ] {
+        let mut cx = HeadlessAppContext::with_platform(
+            gpui_kit::platform::current_platform(true).text_system(),
+            Arc::new(assets::Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(|cx| {
+            assets::load_fonts(cx);
+            settings::install(cx);
+        });
+        let handle = cx
+            .open_window(size(px(998.0), px(620.0)), |_, cx| {
+                cx.new(|cx| {
+                    let mut model = settings::fixtures::model();
+                    model.configuration = configuration;
+                    let mut view =
+                        settings::SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx);
+                    view.pane = settings::Pane::Configuration;
+                    view
+                })
+            })
+            .expect("open a headless window");
+        cx.allow_parking();
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .expect("draw");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let image = cx
+            .capture_screenshot(handle.into())
+            .expect("render with Metal");
+        let path = dir.join(format!("{name}.png"));
+        image.save(&path).expect("write the PNG");
+        println!("{}", path.display());
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
