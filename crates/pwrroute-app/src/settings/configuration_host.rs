@@ -254,7 +254,6 @@ enum ConfigDefault {
 
 pub const FUNCTION_WARNING: &str = "Its defaultBrowser function will no longer run.";
 pub const NULL_WARNING: &str = "Unmatched links will now open instead of being dropped.";
-pub const NO_DEFAULT_WARNING: &str = "Pick a default browser for PwrRoute to take everything else.";
 
 /// The Everything else field while the config at `config` is in charge:
 /// `rules.json`'s `precedence` and default against the config's own.
@@ -302,10 +301,7 @@ fn everything_else(facts: &Facts, config: &Path) -> EverythingElse {
         ),
     };
     let default_browser = rules.map_or("", |file| file.default_browser.trim());
-    let mut warnings = Vec::new();
-    if default_browser.is_empty() {
-        warnings.push(SharedString::from(NO_DEFAULT_WARNING));
-    }
+    let mut warnings: Vec<SharedString> = Vec::new();
     match (&config_default, spec) {
         (ConfigDefault::Null, _) => warnings.push(NULL_WARNING.into()),
         (_, Some(BrowserSpec::Function(_))) => warnings.push(FUNCTION_WARNING.into()),
@@ -568,27 +564,15 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
                 None => eprintln!("pwrroute: settings: no Finicky config to import"),
             }
         }
-        SettingsRequest::SetDefaultOwner(owner) => {
-            let precedence = match owner {
-                DefaultOwner::Config => Precedence::Config,
-                DefaultOwner::PwrRoute => Precedence::PwrRoute,
-            };
-            let saved = edit_rules(live_rules_path(), cx, |store| {
-                store.set_precedence(precedence);
-            });
-            settle(saved, cx);
-        }
-        SettingsRequest::SetDefaultBrowser { browser, profile } => {
-            let saved = edit_rules(live_rules_path(), cx, |store| {
-                store.set_default_browser(browser, profile);
-            });
-            settle(saved, cx);
+        SettingsRequest::SetDefaultOwner(_) | SettingsRequest::SetDefaultBrowser { .. } => {
+            set_everything_else(request, live_rules_path(), model, cx);
         }
         SettingsRequest::ReloadRules => {
             if let Some(router) = settings_store::router(cx) {
                 let _ = router.refresh();
             }
-            refresh(cx);
+            // Requests run inside the Settings window's own update.
+            cx.defer(refresh);
             // The reload lands on the dispatch thread; read it back once
             // it has.
             cx.spawn(async move |cx| {
@@ -633,9 +617,12 @@ pub(crate) fn edit_rules(
                 }
                 edit(&mut app.store);
                 app.refresh(cx);
+                // Only a save made now can fail this change; an earlier
+                // failure is the Rules screen's to show.
+                let saving = app.store.needs_save();
                 app.save_now(cx);
                 match app.store.status() {
-                    Status::Failed(reason) => Err(reason.clone()),
+                    Status::Failed(reason) if saving => Err(reason.clone()),
                     _ => Ok(()),
                 }
             })
@@ -652,22 +639,64 @@ pub(crate) fn edit_rules(
     Ok(())
 }
 
+/// Writes an Everything else answer to `rules.json` at `path` (through
+/// the main window's store when one is open), then reads the pane back
+/// with `read`: the live producer is [`model`].
+pub(crate) fn set_everything_else(
+    request: &SettingsRequest,
+    path: Option<PathBuf>,
+    read: impl FnOnce(&mut App) -> Configuration + 'static,
+    cx: &mut App,
+) {
+    let saved = match request {
+        SettingsRequest::SetDefaultOwner(owner) => {
+            let precedence = match owner {
+                DefaultOwner::Config => Precedence::Config,
+                DefaultOwner::PwrRoute => Precedence::PwrRoute,
+            };
+            edit_rules(path, cx, |store| store.set_precedence(precedence))
+        }
+        SettingsRequest::SetDefaultBrowser { browser, profile } => edit_rules(path, cx, |store| {
+            store.set_default_browser(browser, profile);
+        }),
+        _ => return,
+    };
+    settle(saved, read, cx);
+}
+
 /// After an Everything else change: the router catches up now rather than
 /// at the next link, and the window reads the file back, with the reason
-/// when the change was not saved.
-fn settle(saved: Result<(), String>, cx: &mut App) {
+/// when the change was not saved. The request runs inside the Settings
+/// window's own update, where the window cannot be updated, so the read
+/// back waits until that is done.
+fn settle(
+    saved: Result<(), String>,
+    read: impl FnOnce(&mut App) -> Configuration + 'static,
+    cx: &mut App,
+) {
     if let Some(router) = settings_store::router(cx) {
         let _ = router.refresh();
     }
-    refresh(cx);
-    if let Err(reason) = saved {
+    if let Err(reason) = &saved {
         eprintln!("pwrroute: settings: cannot save rules.json: {reason}");
-        settings::update(cx, move |model| {
-            if let Some(field) = model.configuration.everything_else.as_mut() {
-                field.problem = Some(format!("Not saved: {reason}.").into());
-            }
-        });
     }
+    cx.defer(move |cx| {
+        if !settings::is_open(cx) {
+            return;
+        }
+        let mut configuration = read(cx);
+        if let (Err(reason), Some(field)) = (saved, configuration.everything_else.as_mut()) {
+            field.problem = Some(not_saved(&reason).into());
+        }
+        settings::update(cx, move |model| model.configuration = configuration);
+        super::system_host::refresh_diagnostics(cx);
+    });
+}
+
+/// The error line for a change that was not saved: "Not saved: " and the
+/// store's reason, as one sentence.
+pub fn not_saved(reason: &str) -> String {
+    format!("Not saved: {}.", reason.trim().trim_end_matches('.'))
 }
 
 /// What the pane was last built from, cheaply: the router's word on the
@@ -1081,13 +1110,14 @@ mod tests {
             ["Handler 5 matches every link, so PwrRoute's default never applies."]
         );
 
-        // rules.json names no default: PwrRoute's would take nothing.
+        // rules.json names no default: the select asks for one, with no
+        // warning beyond the three the design names.
         let facts = in_charge(
             r#"{ "precedence": "pwrroute" }"#,
             Some(fixed("Safari", AppType::AppName)),
         );
         let field = field_of(&facts);
-        assert_eq!(field.warnings, [NO_DEFAULT_WARNING]);
+        assert!(field.warnings.is_empty());
         assert_eq!(field.browser, None);
     }
 
@@ -1116,6 +1146,22 @@ mod tests {
         assert_eq!(
             field.problem.as_deref(),
             Some("rules.json did not load, so nothing here can be saved.")
+        );
+    }
+
+    #[test]
+    fn a_change_not_saved_is_one_sentence() {
+        assert_eq!(
+            not_saved("rules.json did not load, so it is not overwritten."),
+            "Not saved: rules.json did not load, so it is not overwritten."
+        );
+        assert_eq!(
+            not_saved("No configuration directory: edits last for this session."),
+            "Not saved: No configuration directory: edits last for this session."
+        );
+        assert_eq!(
+            not_saved("permission denied (os error 13)"),
+            "Not saved: permission denied (os error 13)."
         );
     }
 

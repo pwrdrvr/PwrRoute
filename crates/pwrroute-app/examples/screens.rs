@@ -729,7 +729,8 @@ fn main() {
 
     // Settings Everything else (WP-F): Configuration while ~/.finicky.ts is
     // in charge (Overview and Setup 5d, its 1000px card less the border),
-    // and the same row with design 5c's warnings.
+    // the same row with design 5c's warnings, and after a change that was
+    // not saved.
     for (name, configuration) in [
         (
             "settings-configuration-everything-else",
@@ -738,6 +739,10 @@ fn main() {
         (
             "settings-configuration-everything-else-warnings",
             settings::fixtures::configuration_everything_else_warnings(),
+        ),
+        (
+            "settings-configuration-everything-else-not-saved",
+            settings::fixtures::configuration_everything_else_not_saved(),
         ),
     ] {
         let mut cx = HeadlessAppContext::with_platform(

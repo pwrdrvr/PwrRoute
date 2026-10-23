@@ -37,6 +37,8 @@ pub const CONFIG_DEFAULT_ID: &str = "config-everything-else-config";
 pub const PWRROUTE_DEFAULT_ID: &str = "config-everything-else-pwrroute";
 /// What PwrRoute's default changes, under the control.
 pub const WARNINGS_ID: &str = "config-everything-else-warnings";
+/// Why the last change was not saved, under the selects.
+pub const PROBLEM_ID: &str = "config-everything-else-problem";
 /// The browser and profile selects, and their options (by index).
 pub const DEFAULT_BROWSER_ID: &str = "config-default-browser";
 pub const DEFAULT_PROFILE_ID: &str = "config-default-profile";
@@ -674,7 +676,7 @@ fn everything_else_field(
     let problem = field_model
         .problem
         .clone()
-        .map(|problem| warning_line(problem, theme::danger_text()).into_any_element());
+        .map(|problem| error_line(problem).test_support().into_any_element());
     field(
         "Everything else",
         Some(field_sub("Links no handler or rule claims.")),
@@ -750,6 +752,21 @@ fn warning_line(words: SharedString, color: gpui_kit::Hsla) -> Div {
                 .child(text("!", 9.0, 700.0, color)),
         )
         .child(para(words, 10.5, 500.0, 1.5, color))
+}
+
+/// `.errl`: why a change was not saved, in mono on danger-soft.
+fn error_line(words: SharedString) -> gpui_kit::Stateful<Div> {
+    div()
+        .id(PROBLEM_ID)
+        .self_start()
+        .py(px(6.0))
+        .px(px(8.0))
+        .rounded(px(5.0))
+        .bg(theme::danger_soft())
+        .child(
+            para(words, 10.5, 500.0, 1.4, theme::danger_text())
+                .font_family(theme::mono_family(500.0)),
+        )
 }
 
 /// An `.inp` select trigger with its value and caret.

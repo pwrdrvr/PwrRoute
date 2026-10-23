@@ -522,3 +522,15 @@ pub fn configuration_everything_else_warnings() -> Configuration {
     }
     configuration
 }
+
+/// [`configuration_everything_else`] after a change that was not saved:
+/// the error line under the selects.
+#[cfg_attr(not(test), allow(dead_code, reason = "for the screens example"))]
+pub fn configuration_everything_else_not_saved() -> Configuration {
+    let mut configuration = configuration_everything_else();
+    if let Some(field) = configuration.everything_else.as_mut() {
+        field.problem =
+            Some("Not saved: rules.json did not load, so it is not overwritten.".into());
+    }
+    configuration
+}

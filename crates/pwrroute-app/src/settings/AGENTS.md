@@ -38,6 +38,10 @@ the family's panes in the same controls. General is a placeholder.
   `configuration_host::edit_rules` writes them through the main window's
   `RulesStore` when it is open (sync, refuse as the store would, edit,
   save now), else through a store over the file; never around a store.
+  A request runs inside the Settings window's own update, so the read
+  back after a change (`settle`) is deferred; a change that was not
+  saved comes back as the `.errl` line "Not saved: {reason}." and the
+  control shows what the file still says.
   `follow` reads the pane again when the window comes to the front and
   the router's source or either file's time changed. `updates_host`:
   `updater::installation` and
