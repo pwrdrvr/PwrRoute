@@ -26,7 +26,7 @@
 //! [`PwrRoute::add_rule`], the same sheet.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::SystemTime;
 
@@ -38,8 +38,8 @@ use gpui_kit::{
     Styled as _, Subscription, Window, div, px,
 };
 use pwrroute_router::{
-    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, Options, Outcome, Privacy,
-    RetentionInfo, RouterHandle, Step,
+    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, Options, Outcome, Owner,
+    Privacy, RetentionInfo, RouterHandle, Step,
 };
 
 use crate::app::{PwrRoute, Screen};
@@ -150,6 +150,75 @@ pub fn thousands(n: u64) -> String {
     out
 }
 
+/// Which rule took a link, for today's [`Tally`]: the Overview's "N
+/// today" beside each rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HitKey {
+    /// The JS config's `handlers[index]`.
+    Handler(usize),
+    /// `rules.json`'s `rules[index]`.
+    Rule(usize),
+    /// No rule matched: a default browser took it, by its owner when the
+    /// record names one.
+    Default(Option<Owner>),
+}
+
+/// Today's links by the rule that took them and by the browser and
+/// profile they opened in: the Overview's per-rule and per-browser counts.
+/// Counted in [`Feed::push`] beside [`Counts`], so it survives retention 0
+/// and Clear and resets with the day. Keys are rule numbers and browser
+/// names, never a host or URL. A paused link counts for its browser only;
+/// a record kept at nothing has no browser, so it counts for its rule
+/// only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tally {
+    rules: HashMap<HitKey, u64>,
+    browsers: HashMap<(String, String), u64>,
+}
+
+impl Tally {
+    /// Adds one record to the day.
+    fn count(&mut self, record: &DispatchRecord) {
+        let paused = record
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::Paused { .. }));
+        if !paused {
+            let key = record.steps.iter().find_map(|step| match step {
+                Step::Matched { by } => match *by {
+                    Matched::Handler { index } => Some(HitKey::Handler(index)),
+                    Matched::Rule { index } => Some(HitKey::Rule(index)),
+                    Matched::Default { owner } => Some(HitKey::Default(owner)),
+                    Matched::Unreported => None,
+                },
+                _ => None,
+            });
+            if let Some(key) = key {
+                *self.rules.entry(key).or_default() += 1;
+            }
+        }
+        if let Some(browser) = &record.browser {
+            *self
+                .browsers
+                .entry((browser.name.clone(), browser.profile.clone()))
+                .or_default() += 1;
+        }
+    }
+
+    /// How many of today's links `key` took.
+    pub fn rule(&self, key: HitKey) -> u64 {
+        self.rules.get(&key).copied().unwrap_or(0)
+    }
+
+    /// Today's links per browser (as the router named it) and profile
+    /// (empty for the browser's own default).
+    pub fn browsers(&self) -> impl Iterator<Item = (&str, &str, u64)> {
+        self.browsers
+            .iter()
+            .map(|((name, profile), n)| (name.as_str(), profile.as_str(), *n))
+    }
+}
+
 /// The dispatch history behind Activity, the tray's recents and the counts.
 pub struct Feed {
     /// Newest first, at most [`capacity`](Self::capacity): the records the
@@ -160,6 +229,8 @@ pub struct Feed {
     /// The local day `counts` is for.
     day: Option<NaiveDate>,
     counts: Counts,
+    /// Today's links by the rule that took them and where they opened.
+    tally: Tally,
     handle: Option<RouterHandle>,
     /// The journal as last read, so a sync that finds its files unchanged
     /// lists the same records without reading them again.
@@ -218,6 +289,7 @@ impl Feed {
             capacity: Options::default().retention.count,
             day: None,
             counts: Counts::default(),
+            tally: Tally::default(),
             handle,
             journal_cache: RefCell::new(JournalCache::default()),
         }
@@ -243,8 +315,10 @@ impl Feed {
         if self.day != Some(day) {
             self.day = Some(day);
             self.counts = Counts::default();
+            self.tally = Tally::default();
         }
         self.counts.count(&record);
+        self.tally.count(&record);
         self.records.insert(0, record);
         let capacity = self.capacity();
         self.records.truncate(capacity);
@@ -341,6 +415,16 @@ impl Feed {
             self.counts
         } else {
             Counts::default()
+        }
+    }
+
+    /// Today's tally by rule and by browser, by the local calendar; empty
+    /// once the day has turned. Like the counts, it survives Clear.
+    pub fn tally(&self, now: SystemTime) -> Tally {
+        if self.day == Some(local_day(now)) {
+            self.tally.clone()
+        } else {
+            Tally::default()
         }
     }
 

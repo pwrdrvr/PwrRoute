@@ -289,7 +289,7 @@ pub fn hooks() -> FirstRunHooks {
             #[cfg(not(target_os = "macos"))]
             let under_mouse = None;
             let display = main_window_display(first_run, under_mouse, &connected);
-            crate::tray::show_screen_on(Screen::Rules, display, cx);
+            crate::tray::show_screen_on(Screen::Overview, display, cx);
         }),
     )
 }

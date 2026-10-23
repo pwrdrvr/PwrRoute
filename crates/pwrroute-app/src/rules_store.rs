@@ -357,13 +357,6 @@ impl RulesStore {
     /// browser go before a JS config's handlers and default.
     /// [`Precedence::Config`] (the file's absent field) is the Go host's
     /// order.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "for the precedence toggle; only tests call it so far"
-        )
-    )]
     pub fn precedence(&self) -> Precedence {
         self.base.precedence
     }
@@ -372,16 +365,20 @@ impl RulesStore {
     /// other. Setting the value the store already has changes nothing and
     /// leaves the store clean. [`Precedence::Config`] is written by leaving
     /// the field out.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "for the precedence toggle; only tests call it so far"
-        )
-    )]
     pub fn set_precedence(&mut self, precedence: Precedence) {
         if self.base.precedence != precedence {
             self.base.precedence = precedence;
+            self.touch();
+        }
+    }
+
+    /// Sets `defaultBrowser` and `defaultProfile` ("" for the browser's
+    /// own default), as an edit written on the next save: the Overview's
+    /// setup card. The same values change nothing.
+    pub fn set_default_browser(&mut self, browser: &str, profile: &str) {
+        if self.base.default_browser != browser || self.base.default_profile != profile {
+            self.base.default_browser = browser.to_owned();
+            self.base.default_profile = profile.to_owned();
             self.touch();
         }
     }

@@ -32,6 +32,8 @@ mod importer_view;
 mod macos;
 mod mcp;
 mod onboarding;
+mod overview;
+mod overview_model;
 mod placement;
 mod router;
 mod rules_model;
@@ -451,7 +453,8 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
             },
         )
         .expect("open the PwrRoute window");
-    // The rules list owns the keyboard from the first frame.
+    // The window owns the keyboard from the first frame: Overview's Esc,
+    // and the Rules list's arrows once the reader goes there.
     let _ = window.update(cx, |this, window, cx| {
         let focus = this.focus.clone();
         window.focus(&focus, cx);
