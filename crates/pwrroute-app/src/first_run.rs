@@ -354,10 +354,12 @@ pub fn open(
     hooks: FirstRunHooks,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<FirstRun>> {
-    let bounds = Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let display = crate::placement::display_for_new_window(cx);
+    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let window = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id: display,
             titlebar: Some(TitlebarOptions {
                 title: Some("PwrRoute".into()),
                 appears_transparent: true,

@@ -94,9 +94,15 @@ pub fn display_under_mouse() -> Option<DisplayId> {
     let mouse = NSEvent::mouseLocation();
     NSScreen::screens(mtm).iter().find_map(|screen| {
         let frame = screen.frame();
-        let inside = (frame.origin.x..frame.origin.x + frame.size.width).contains(&mouse.x)
-            && (frame.origin.y..frame.origin.y + frame.size.height).contains(&mouse.y);
-        if !inside {
+        if !in_frame(
+            (
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            ),
+            (mouse.x, mouse.y),
+        ) {
             return None;
         }
         let number = screen
@@ -160,6 +166,15 @@ pub fn set_dropdown_height(height: f32) -> bool {
 /// How far a dropdown keeps from the menu bar and the display's edges.
 const DROPDOWN_MARGIN: f32 = 4.0;
 
+/// Whether `point` is on the screen whose frame is `(x, y, width, height)`,
+/// both in AppKit's bottom-left space. As `NSMouseInRect` reads an
+/// unflipped rect: the top edge is in and the bottom edge is not, because a
+/// pointer pushed against the top of a display (to click its menu bar) sits
+/// at exactly `y + height`.
+fn in_frame((x, y, width, height): (f64, f64, f64, f64), (px, py): (f64, f64)) -> bool {
+    (x..x + width).contains(&px) && py > y && py <= y + height
+}
+
 /// Where a `width` × `height` dropdown opens under the item: centered on it,
 /// 4pt below the menu bar, kept 4pt inside the display.
 pub fn dropdown_origin(anchor: &StatusItemAnchor, width: Pixels) -> Point<Pixels> {
@@ -222,5 +237,20 @@ mod tests {
         assert_eq!(right.x, px(1136.0));
         let left = dropdown_origin(&anchor(0.0, 1440.0), px(300.0));
         assert_eq!(left.x, px(4.0));
+    }
+
+    #[test]
+    fn the_pointer_at_the_top_of_a_display_is_on_it() {
+        // The built-in display, with a taller one to its right.
+        let built_in = (0.0, 0.0, 1496.0, 967.0);
+        let external = (1496.0, 0.0, 2560.0, 1440.0);
+        // Pushed against the external display's menu bar.
+        assert!(in_frame(external, (2000.0, 1440.0)));
+        assert!(!in_frame(built_in, (2000.0, 1440.0)));
+        // On the edge the two share: the display to the right.
+        assert!(in_frame(external, (1496.0, 500.0)));
+        assert!(!in_frame(built_in, (1496.0, 500.0)));
+        // The bottom edge belongs to the display below, if any.
+        assert!(!in_frame(built_in, (100.0, 0.0)));
     }
 }

@@ -61,6 +61,16 @@ mod e2e {
 
     pub fn frame(_: &Window) {}
 }
+/// New windows on the primary display: the example's windows render
+/// offscreen, so it skips the real rule, which follows the pointer.
+#[cfg(target_os = "macos")]
+mod placement {
+    use gpui_kit::{App, DisplayId};
+
+    pub fn display_for_new_window(_: &mut App) -> Option<DisplayId> {
+        None
+    }
+}
 #[cfg(target_os = "macos")]
 #[path = "../src/first_run.rs"]
 mod first_run;

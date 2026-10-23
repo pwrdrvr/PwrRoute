@@ -4,6 +4,14 @@ The GPUI shell: the main window, the tray, the first-run window and the
 resident router's hand-off. `main.rs` only wires them; put new surfaces in
 their own modules.
 
+- **New windows open where the user is.** Every `open_window` passes the
+  display from `placement::display_for_new_window` (PwrRoute's focused
+  window's display, else the one under the pointer, else primary) both to
+  `Bounds::centered` and as `WindowOptions::display_id`; GPUI opens on the
+  primary display without it. `NSScreen.mainScreen` is not used: with no
+  key window of its own (the tray, a link, an agent's request) the app gets
+  the primary display from it, not the one the user is on. A window that is
+  already open stays put. The tray dropdown uses its menu bar item's display.
 - **Fixtures only for tests and the `screens` example.** The Rules screen
   reads and writes the real `rules.json` through `rules_store.rs` (tests
   write `fixtures/rules.json` to a scratch directory); Activity draws the

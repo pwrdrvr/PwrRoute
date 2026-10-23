@@ -224,10 +224,12 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
         },
         |host| (host.model.clone(), host.on_request.clone()),
     );
-    let bounds = Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let display = crate::placement::display_for_new_window(cx);
+    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id: display,
             titlebar: Some(TitlebarOptions {
                 title: Some("PwrRoute Settings".into()),
                 appears_transparent: true,
