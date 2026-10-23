@@ -410,7 +410,17 @@ impl RulesFile {
             });
         };
         if self.default_browser.trim().is_empty() {
-            flag(Place::DefaultBrowser, "Select a default browser.");
+            flag(
+                Place::DefaultBrowser,
+                match self.precedence {
+                    Precedence::Config => "Select a default browser.",
+                    // The override is inert without a browser: the
+                    // config's default keeps everything else.
+                    Precedence::PwrRoute => {
+                        "Pick a default browser for PwrRoute to take everything else."
+                    }
+                },
+            );
         } else if is_self(&self.default_browser) {
             flag(Place::DefaultBrowser, "PwrRoute cannot route to itself.");
         }
@@ -477,10 +487,35 @@ impl RulesFile {
         problems
     }
 
+    /// Whether these rules run before a JS config's handlers:
+    /// `"precedence": "pwrroute"`. Without a config it changes nothing.
+    pub fn rules_first(&self) -> bool {
+        self.precedence == Precedence::PwrRoute
+    }
+
+    /// Whether this file's `defaultBrowser` (and `defaultProfile`) takes
+    /// everything else while a JS config is in charge, in place of the
+    /// config's own `defaultBrowser`: `"precedence": "pwrroute"` with a
+    /// default browser that is not empty and not PwrRoute itself. Otherwise
+    /// the config keeps its default, and [`RulesFile::problems`] says why.
+    /// Without a config this file's default always applies.
+    pub fn owns_default(&self) -> bool {
+        self.rules_first()
+            && !self.default_browser.trim().is_empty()
+            && !is_self(&self.default_browser)
+    }
+
     /// The rules as Finicky config objects, the shape the host's JS glue
     /// turns into `handlers` and `rewrite` entries. Handlers follow the Go
     /// host's `ToJSHandlers`: empty patterns are dropped, and a rule with no
     /// pattern or no browser is skipped. Disabled rules are skipped too.
+    ///
+    /// With a JS config in charge the glue also reads `rulesFirst` (put
+    /// these handlers before the config's) and, when present,
+    /// `defaultBrowser` (use it instead of the config's): see
+    /// [`RulesFile::rules_first`] and [`RulesFile::owns_default`]. Without a
+    /// config, [`RulesFile::base_config`] is the whole config and both are
+    /// ignored.
     pub(crate) fn plan(&self) -> Value {
         let handlers: Vec<Value> = self
             .planned_rules()
@@ -505,7 +540,15 @@ impl RulesFile {
                 Some(json!({ "match": matches, "actions": r.actions }))
             })
             .collect();
-        json!({ "handlers": handlers, "rewrites": rewrites })
+        let mut plan = json!({
+            "handlers": handlers,
+            "rewrites": rewrites,
+            "rulesFirst": self.rules_first(),
+        });
+        if self.owns_default() {
+            plan["defaultBrowser"] = browser_spec(&self.default_browser, &self.default_profile);
+        }
+        plan
     }
 
     /// Which of `rules` the plan keeps, by position in the file: enabled,
@@ -1170,5 +1213,73 @@ mod tests {
         file.save(&path).unwrap();
         assert_eq!(RulesFile::load(&path).unwrap(), file);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_plan_carries_the_precedence_flags() {
+        let file = RulesFile {
+            default_browser: "Firefox".into(),
+            default_profile: "Work".into(),
+            ..RulesFile::default()
+        };
+        // The Go order: nothing for the glue to change.
+        let plan = file.plan();
+        assert_eq!(plan["rulesFirst"], json!(false));
+        assert!(plan.get("defaultBrowser").is_none(), "{plan}");
+
+        let file = RulesFile {
+            precedence: Precedence::PwrRoute,
+            ..file
+        };
+        assert!(file.rules_first() && file.owns_default());
+        let plan = file.plan();
+        assert_eq!(plan["rulesFirst"], json!(true));
+        assert_eq!(
+            plan["defaultBrowser"],
+            json!({ "name": "Firefox", "appType": "appName", "profile": "Work" })
+        );
+        let plain = RulesFile {
+            default_profile: String::new(),
+            ..file.clone()
+        };
+        assert_eq!(plain.plan()["defaultBrowser"], json!("Firefox"));
+
+        // No usable default: the handlers still go first, the config keeps
+        // its default.
+        for default_browser in ["", " ", "PwrRoute", "PwrRoute:Work"] {
+            let file = RulesFile {
+                default_browser: default_browser.into(),
+                ..file.clone()
+            };
+            assert!(
+                file.rules_first() && !file.owns_default(),
+                "{default_browser:?}"
+            );
+            let plan = file.plan();
+            assert_eq!(plan["rulesFirst"], json!(true));
+            assert!(plan.get("defaultBrowser").is_none(), "{plan}");
+        }
+    }
+
+    #[test]
+    fn an_empty_default_under_pwrroute_asks_for_one_to_take_everything_else() {
+        let message = |precedence| {
+            RulesFile {
+                precedence,
+                ..RulesFile::default()
+            }
+            .problems()
+            .into_iter()
+            .find(|p| p.place == Place::DefaultBrowser)
+            .map(|p| p.message)
+        };
+        assert_eq!(
+            message(Precedence::Config).as_deref(),
+            Some("Select a default browser.")
+        );
+        assert_eq!(
+            message(Precedence::PwrRoute).as_deref(),
+            Some("Pick a default browser for PwrRoute to take everything else.")
+        );
     }
 }

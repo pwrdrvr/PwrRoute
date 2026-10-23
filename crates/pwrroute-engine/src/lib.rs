@@ -227,10 +227,20 @@ pub enum AppType {
 }
 
 /// What an [`Engine`] is built from: a JS or TS config, `rules.json`, or
-/// both. With both, the config's rewrites and handlers run first and it owns
-/// the default browser and options; the rules' rewrites and handlers follow
-/// its own, as the Go host appended them. With neither, the default browser
-/// is [`FALLBACK_BROWSER`].
+/// both. With both, the config's rewrites run first, then the rules'; who
+/// goes first after that is `rules.json`'s `precedence` ([`Precedence`]):
+///
+/// - absent or `config` (the Go host's order): the config's handlers, then
+///   the rules' (appended, as the Go host appended them), then the config's
+///   `defaultBrowser`;
+/// - `pwrroute`: the rules' handlers, then the config's, then the rules'
+///   `defaultBrowser`/`defaultProfile` instead of the config's
+///   ([`RulesFile::owns_default`]; an empty default leaves the config's).
+///
+/// The config keeps its options either way. A trace says who decided: a
+/// handler step's [`Source`], and the [`Stage::Default`] step's source is
+/// [`Source::Rules`] when the rules' default took the link. With neither
+/// file, the default browser is [`FALLBACK_BROWSER`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Sources {
     pub config: Option<PathBuf>,

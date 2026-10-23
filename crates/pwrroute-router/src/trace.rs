@@ -149,8 +149,10 @@ pub enum Step {
         browser: String,
     },
     /// Routing was paused: every handler is ignored and the link goes to the
-    /// pause target instead, after the rewrites. `skipped` is the handler
-    /// that matched and was passed over, when the resolver numbers it.
+    /// pause target instead, after the rewrites. `skipped` is the config
+    /// handler that matched and was passed over, when the resolver numbers
+    /// it; a `rules.json` rule passed over is the record's
+    /// [`Matched::Rule`], and `skipped` is then `None`.
     Paused {
         skipped: Option<usize>,
     },
@@ -189,8 +191,7 @@ pub enum Matched {
     Handler { index: usize },
     /// `rules.json`'s `rules[index]` matched first: its position in the
     /// file, 0-based, counting disabled rules (the engine's trace index for
-    /// a `rules.json` step). Not yet produced by `Resolver for Engine`,
-    /// which still reports these as [`Matched::Unreported`].
+    /// a `rules.json` step), whether it ran before or after the config's.
     Rule { index: usize },
     /// No handler matched; a default browser applied. `owner` says whose:
     /// the config's `defaultBrowser` or PwrRoute's (`rules.json`'s). `None`
@@ -200,9 +201,9 @@ pub enum Matched {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         owner: Option<Owner>,
     },
-    /// The resolver did not say: a resolver that returns no rule steps, or
-    /// (until the router numbers them as [`Matched::Rule`]) a `rules.json`
-    /// handler.
+    /// The resolver did not say: a resolver that returns no rule steps.
+    /// `Resolver for Engine` always says; records journaled before
+    /// `rules.json` rules were numbered carry this for those.
     Unreported,
 }
 
