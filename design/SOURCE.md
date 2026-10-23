@@ -67,9 +67,18 @@ the project and re-export here.
 - Updated **2026-10-23**: Overview and Setup's artboard 3c (config didn't
   load) again shows the visual rules running without the config, with their
   counts, as the router now does; faded "not running" rows are only for
-  nothing loading at all, and the hero copy note says so. Changed here
-  first, on top of the route-map revision above; the project takes it with
-  the next upload of this canvas. Nothing else changed.
+  nothing loading at all, and the hero copy note says so. Written to the
+  project together with the route-map revision above, then downloaded and
+  compared byte for byte. Nothing else changed.
+- Updated **2026-10-23**: the Overview map gives spare width to the
+  routes (the rule column stops at 720 and the destinations at 420, and
+  the gutter takes the rest, shown in 1e at 1880 with a width table), and
+  every browser card with a private mode ends with a private-window node
+  in the browser's own words (Incognito, InPrivate, Private window), idle
+  in most artboards and routed by rule 05 in 1a to 1g. 1g (adding a rule
+  from an idle private node) and a note with the three callout copy
+  variants added. Artboard 3c is unchanged here. The other canvases,
+  `pwrroute.css` and `support.js` are unchanged.
 
 ## Files
 
