@@ -205,7 +205,10 @@ impl Privacy {
 /// of leading dashes (Edge and Firefox accept one) and any `=value`.
 const PRIVATE_FLAGS: [&str; 4] = ["incognito", "inprivate", "private-window", "private"];
 
-fn is_private_flag(arg: &str) -> bool {
+/// Whether a config's browser argument asks for a private window (see
+/// [`PRIVATE_FLAGS`]): the engine marks such a result [`Browser::private`],
+/// and the window draws its route to the browser's private-window node.
+pub fn is_private_flag(arg: &str) -> bool {
     let arg = arg.trim();
     if !arg.starts_with('-') {
         return false;

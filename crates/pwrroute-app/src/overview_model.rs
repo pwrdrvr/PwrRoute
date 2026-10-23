@@ -343,16 +343,33 @@ pub enum RowMatch {
     Any,
 }
 
+/// Whether a row's link opens in a private window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Private {
+    /// A normal window.
+    No,
+    /// A private window, by the browser's word for it ("Incognito"): the
+    /// route ends at the card's private-window node, whatever profile the
+    /// rule names.
+    Window(String),
+    /// Asked for one, but the browser cannot open a private window from a
+    /// link (`Note::PrivateUnsupported`): a normal window opens, and the
+    /// route ends at the profile.
+    Unsupported,
+}
+
 /// Where a row sends links.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
     /// A browser card; `label` is the profile when the rule names one,
-    /// else the browser.
+    /// else the browser, and "Incognito" or "Incognito · Work" for a
+    /// private window.
     Browser {
         card: usize,
         badge: String,
         label: String,
         profile: Option<String>,
+        private: Private,
     },
     /// A JS function picks the browser per link.
     Function { card: usize },
@@ -390,10 +407,40 @@ impl Target {
     pub fn ghost(&self) -> bool {
         matches!(self, Self::Ghost { .. })
     }
+
+    /// Opens a private window: its route ends at the private-window node.
+    pub fn private_window(&self) -> bool {
+        matches!(
+            self,
+            Self::Browser {
+                private: Private::Window(_),
+                ..
+            }
+        )
+    }
+
+    /// Asked for a private window the browser cannot open.
+    pub fn not_private(&self) -> bool {
+        matches!(
+            self,
+            Self::Browser {
+                private: Private::Unsupported,
+                ..
+            }
+        )
+    }
 }
 
 /// A node: a card's index, and the node's on it.
 pub type NodeRef = (usize, usize);
+
+/// Where on a browser card a route ends: a profile (`None`: the default
+/// one), or the private-window node.
+#[derive(Clone, Copy, Debug)]
+enum Slot<'a> {
+    Profile(Option<&'a str>),
+    Private,
+}
 
 /// One ranked rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -450,11 +497,17 @@ pub enum CardKind {
     Ghost,
 }
 
-/// One profile of a browser card, or the one node of a special card.
+/// One profile of a browser card, its private-window node, or the one node
+/// of a special card.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
-    /// `None`: the browser's own default profile.
+    /// `None`: the browser's own default profile (or the private-window
+    /// node, which is no profile's).
     pub profile: Option<String>,
+    /// The private-window node, by the browser's word for it: "Incognito",
+    /// "InPrivate", "Private window". Always last on its card, never
+    /// folded.
+    pub private: Option<String>,
     /// Takes Everything else: "∞".
     pub everything_else: bool,
     /// Enabled rules that send links here.
@@ -472,7 +525,10 @@ pub struct Node {
 
 impl Node {
     pub fn label(&self) -> &str {
-        self.profile.as_deref().unwrap_or("default profile")
+        self.private
+            .as_deref()
+            .or(self.profile.as_deref())
+            .unwrap_or("default profile")
     }
 }
 
@@ -496,10 +552,12 @@ pub struct Card {
     key: String,
     /// Routed profiles first, by the rank of the first row that feeds
     /// them (Everything else after every rule), then the rest in scan
-    /// order. A special card has one.
+    /// order, then the private-window node when the browser has one. A
+    /// special card has one.
     pub nodes: Vec<Node>,
-    /// How many nodes show while the card is folded: all of them, or the
-    /// rest fold into "+N more profiles" (never "+1").
+    /// How many profile nodes show while the card is folded: all of them,
+    /// or the rest fold into "+N more profiles" (never "+1"). The
+    /// private-window node shows after them either way.
     pub shown: usize,
     /// Enabled rules that send links here.
     pub rules: usize,
@@ -527,9 +585,33 @@ impl Card {
         self.kind != CardKind::Browser
     }
 
+    /// The private-window node's index: the last one, when there is one.
+    pub fn private_node(&self) -> Option<usize> {
+        self.nodes
+            .last()
+            .filter(|node| node.private.is_some())
+            .map(|_| self.nodes.len() - 1)
+    }
+
+    /// The profile nodes: every node but the private-window one.
+    pub fn profiles(&self) -> usize {
+        self.nodes.len() - usize::from(self.private_node().is_some())
+    }
+
     /// The nodes "+N more profiles" holds.
     pub fn folded(&self) -> usize {
-        self.nodes.len() - self.shown
+        self.profiles() - self.shown
+    }
+
+    /// The nodes drawn, in order: the profiles that show (all of them
+    /// while `expanded`), then the private-window node.
+    pub fn visible(&self, expanded: bool) -> Vec<usize> {
+        let profiles = if expanded {
+            self.profiles()
+        } else {
+            self.shown
+        };
+        (0..profiles).chain(self.private_node()).collect()
     }
 }
 
@@ -590,6 +672,8 @@ pub enum FocusKey {
     /// A card by its key, and one of its profiles (`None`: the default
     /// one, or a special card's one node).
     Node(String, Option<String>),
+    /// A card's private-window node, by the card's key.
+    Private(String),
     EverythingElse,
 }
 
@@ -849,7 +933,11 @@ impl Map {
             Focus::Node(card, node) => {
                 let card = self.cards.get(card)?;
                 let node = card.nodes.get(node)?;
-                Some(FocusKey::Node(card.key.clone(), node.profile.clone()))
+                Some(if node.private.is_some() {
+                    FocusKey::Private(card.key.clone())
+                } else {
+                    FocusKey::Node(card.key.clone(), node.profile.clone())
+                })
             }
         }
     }
@@ -867,11 +955,15 @@ impl Map {
             FocusKey::Card(key) => card_at(key).map(Focus::Card),
             FocusKey::Node(key, profile) => {
                 let card = card_at(key)?;
-                let node = self.cards[card]
-                    .nodes
-                    .iter()
-                    .position(|node| same_profile(node.profile.as_deref(), profile.as_deref()))?;
+                let node = self.cards[card].nodes.iter().position(|node| {
+                    node.private.is_none()
+                        && same_profile(node.profile.as_deref(), profile.as_deref())
+                })?;
                 Some(Focus::Node(card, node))
+            }
+            FocusKey::Private(key) => {
+                let card = card_at(key)?;
+                Some(Focus::Node(card, self.cards[card].private_node()?))
             }
         }
     }
@@ -896,7 +988,7 @@ impl Map {
 
     /// What the keyboard steps through, top to bottom: the rows, Everything
     /// else, then each card's nodes that show (`expanded` says which cards
-    /// show all of theirs).
+    /// show all of theirs), its private-window node after its profiles.
     pub fn keyboard_order(&self, expanded: impl Fn(&Card) -> bool) -> Vec<Focus> {
         let mut order: Vec<Focus> = self
             .items
@@ -908,12 +1000,11 @@ impl Map {
             .collect();
         order.push(Focus::EverythingElse);
         for (c, card) in self.cards.iter().enumerate() {
-            let shown = if expanded(card) {
-                card.nodes.len()
-            } else {
-                card.shown
-            };
-            order.extend((0..shown).map(|n| Focus::Node(c, n)));
+            order.extend(
+                card.visible(expanded(card))
+                    .into_iter()
+                    .map(|n| Focus::Node(c, n)),
+            );
         }
         order
     }
@@ -937,8 +1028,8 @@ pub fn fit_tags(widths: &[f32], more: usize, room: f32, plus: impl Fn(usize) -> 
     n.min(1)
 }
 
-/// The map's columns: the rules take what the gutter and the
-/// destinations leave.
+/// The map's columns: each column grows to a cap, and the routes' gutter
+/// takes every pixel past them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapWidths {
     pub rule: f32,
@@ -946,17 +1037,29 @@ pub struct MapWidths {
     pub dest: f32,
 }
 
+/// The routes' gutter is never narrower.
+pub const GUTTER_MIN: f32 = 96.0;
+/// The destinations stop growing here (a 1424 window).
+pub const DEST_MAX: f32 = 420.0;
+/// The rules stop growing here (a 1514 window); past it, all extra width
+/// is gutter.
+pub const RULE_MAX: f32 = 720.0;
+
 impl MapWidths {
     /// For the map's content width (less its borders and padding): the
-    /// gutter is 8% of it within 96-144, the destinations 40% of the rest
-    /// within 266-480.
+    /// destinations are 40% of what the narrowest gutter leaves, within
+    /// 266-420, the rules what is left up to 720, and the gutter the rest.
+    /// The caps are fixed rather than measured, so the columns stay put
+    /// when a rule is added or a count grows.
     pub fn of_content(content: f32) -> Self {
         let content = content.max(0.0);
-        let gutter = (content * 0.08).clamp(96.0, 144.0).round();
-        let dest = ((content - gutter) * 0.4).clamp(266.0, 480.0).round();
+        let dest = ((content - GUTTER_MIN) * 0.4)
+            .clamp(266.0, DEST_MAX)
+            .round();
+        let rule = (content - GUTTER_MIN - dest).clamp(0.0, RULE_MAX);
         Self {
-            rule: (content - gutter - dest).max(0.0),
-            gutter,
+            rule,
+            gutter: (content - rule - dest).max(GUTTER_MIN),
             dest,
         }
     }
@@ -1528,15 +1631,55 @@ fn not_opened_dest() -> Dest {
     }
 }
 
-/// A config browser spec as a destination and a profile.
-fn spec_dest(spec: &BrowserSpec, installed: &[Installed]) -> (Dest, Option<String>) {
+/// A config browser spec as a destination, a profile, and whether its
+/// `args` ask for a private window (the Finicky API has no field of its
+/// own for it).
+fn spec_dest(spec: &BrowserSpec, installed: &[Installed]) -> (Dest, Option<String>, bool) {
     match spec {
-        BrowserSpec::Function(_) => (function_dest(), None),
-        BrowserSpec::Browser(fixed) if fixed.app_type == AppType::None => (not_opened_dest(), None),
+        BrowserSpec::Function(_) => (function_dest(), None, false),
+        BrowserSpec::Browser(fixed) if fixed.app_type == AppType::None => {
+            (not_opened_dest(), None, false)
+        }
         BrowserSpec::Browser(fixed) => (
             resolve(&fixed.name, installed),
             (!fixed.profile.is_empty()).then(|| fixed.profile.clone()),
+            fixed
+                .args
+                .iter()
+                .any(|arg| pwrroute_engine::is_private_flag(arg)),
         ),
+    }
+}
+
+/// What a browser calls its private window ("Incognito", "InPrivate",
+/// "Private window"), from the catalog, by its name or the scan's bundle
+/// id; `None` when it cannot open one from a link (Safari, Arc) or the
+/// catalog does not know it.
+fn private_term(name: &str, installed: &[Installed]) -> Option<String> {
+    let catalog = Catalog::builtin();
+    let key = name.to_lowercase();
+    catalog
+        .find(name)
+        .or_else(|| {
+            installed
+                .iter()
+                .find(|app| app.name.to_lowercase() == key)
+                .and_then(|app| app.bundle_id.as_deref())
+                .and_then(|id| catalog.find(id))
+        })
+        .and_then(|browser| browser.private_label())
+        .map(str::to_owned)
+}
+
+/// "an Incognito window", "an InPrivate window", "a private window".
+fn window_phrase(term: &str) -> String {
+    let lower = term.to_lowercase();
+    if lower.ends_with("window") {
+        format!("a {lower}")
+    } else if term.starts_with(['A', 'E', 'I', 'O', 'U', 'a', 'e', 'i', 'o', 'u']) {
+        format!("an {term} window")
+    } else {
+        format!("a {term} window")
     }
 }
 
@@ -1559,8 +1702,18 @@ impl<'a> Cards<'a> {
         }
     }
 
-    fn add(&mut self, dest: Dest, profile: Option<String>) -> Target {
+    /// The target for `dest` and `profile`, in a private window when
+    /// `private` asks for one: its route then ends at the card's
+    /// private-window node, or at the profile when the browser has none.
+    fn add(&mut self, dest: Dest, profile: Option<String>, private: bool) -> Target {
         let profile = canonical_profile(self.installed, &dest.key, profile);
+        let private = match (private, dest.kind) {
+            (true, CardKind::Browser) => match private_term(&dest.name, self.installed) {
+                Some(term) => Private::Window(term),
+                None => Private::Unsupported,
+            },
+            _ => Private::No,
+        };
         let card = match self.dests.iter().position(|d| d.key == dest.key) {
             Some(card) => card,
             None => {
@@ -1574,7 +1727,7 @@ impl<'a> Cards<'a> {
                 self.dests.len() - 1
             }
         };
-        if dest.kind == CardKind::Browser {
+        if dest.kind == CardKind::Browser && !matches!(private, Private::Window(_)) {
             let profiles = &mut self.profiles[card];
             if !profiles
                 .iter()
@@ -1586,9 +1739,13 @@ impl<'a> Cards<'a> {
         match dest.kind {
             CardKind::Browser => Target::Browser {
                 card,
-                label: profile.clone().unwrap_or_else(|| dest.name.clone()),
+                label: match &private {
+                    Private::Window(term) => display(term, profile.as_deref()),
+                    _ => profile.clone().unwrap_or_else(|| dest.name.clone()),
+                },
                 badge: dest.badge,
                 profile,
+                private,
             },
             CardKind::Ghost => Target::Ghost {
                 card,
@@ -1599,6 +1756,35 @@ impl<'a> Cards<'a> {
             CardKind::NotOpened => Target::NotOpened { card },
         }
     }
+}
+
+impl Cards<'_> {
+    /// A row's tooltip, with what its private window does: "rule 5 · opens
+    /// an Incognito window as Work", or why it opens a normal one.
+    fn with_private_tip(&self, tooltip: String, target: &Target) -> String {
+        let tip = match target {
+            Target::Browser {
+                private: Private::Window(term),
+                profile,
+                ..
+            } => match profile {
+                Some(profile) => format!("opens {} as {profile}", window_phrase(term)),
+                None => format!("opens {}", window_phrase(term)),
+            },
+            Target::Browser {
+                private: Private::Unsupported,
+                card,
+                ..
+            } => not_private_tip(&self.dests[*card].name),
+            _ => return tooltip,
+        };
+        format!("{tooltip} \u{00b7} {tip}")
+    }
+}
+
+/// Why a private rule to `browser` opens a normal window.
+pub fn not_private_tip(browser: &str) -> String {
+    format!("{browser} can't open a private window from a link, so this opens a normal one.")
 }
 
 fn is_regex(pattern: &str) -> bool {
@@ -1884,22 +2070,25 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             ),
         });
         for (index, handler) in description.handlers.iter().enumerate() {
-            let (dest, profile) = spec_dest(&handler.browser, installed);
-            let target = cards.add(dest, profile);
+            let (dest, profile, private) = spec_dest(&handler.browser, installed);
+            let target = cards.add(dest, profile, private);
             let ghost = matches!(target, Target::Ghost { .. });
             items.push(Item::Row(rows.len()));
             rows.push(Row {
                 rank: rows.len() + 1,
                 source: RowSource::Handler(index),
                 matcher: handler_match(&handler.matchers),
-                target,
                 node: None,
                 enabled: true,
                 idle: false,
                 count: (!ghost && !stale)
                     .then(|| count_of(HitKey::Handler(index)))
                     .flatten(),
-                tooltip: format!("config handler {} of {}", index + 1, config.shown),
+                tooltip: cards.with_private_tip(
+                    format!("config handler {} of {}", index + 1, config.shown),
+                    &target,
+                ),
+                target,
             });
         }
     };
@@ -1930,7 +2119,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 Target::Unset
             } else {
                 let profile = (!rule.profile.is_empty()).then(|| rule.profile.clone());
-                cards.add(resolve(&rule.browser, installed), profile)
+                cards.add(resolve(&rule.browser, installed), profile, rule.private)
             };
             let ghost = matches!(target, Target::Ghost { .. });
             items.push(Item::Row(rows.len()));
@@ -1938,26 +2127,29 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 rank: rows.len() + 1,
                 source: RowSource::Rule(index),
                 matcher: rule_match(rule),
-                target,
                 node: None,
                 enabled: rule.enabled,
                 idle: nothing_runs,
                 count: (!ghost && rule.enabled && !nothing_runs && !stale)
                     .then(|| count_of(HitKey::Rule(index)))
                     .flatten(),
-                tooltip: format!("rule {}", index + 1),
+                tooltip: cards.with_private_tip(format!("rule {}", index + 1), &target),
+                target,
             });
         }
     };
 
     // The Everything else card comes first; the rest follow first use.
-    let (ee_dest, ee_profile) = match description {
+    let (ee_dest, ee_profile, ee_private) = match description {
         Some(description) if config_owns_default => {
             spec_dest(&description.default_browser, installed)
         }
-        _ => pwrroute_dest(),
+        _ => {
+            let (dest, profile) = pwrroute_dest();
+            (dest, profile, false)
+        }
     };
-    let ee_target = cards.add(ee_dest, ee_profile);
+    let ee_target = cards.add(ee_dest, ee_profile, ee_private);
     if rules_first {
         rules_section(&mut rows, &mut items, &mut cards);
         config_section(&mut rows, &mut items, &mut cards);
@@ -1980,12 +2172,13 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         count: (counts && inputs.today.unrouted > 0).then_some(inputs.today.unrouted),
     };
 
-    // Today's links per card, and per card and profile (`None`: the
-    // default one).
+    // Today's links per card, and per card, profile (`None`: the default
+    // one) and whether the window was private.
     let mut links = vec![0u64; cards.dests.len()];
-    let mut profile_links: Vec<Vec<(Option<String>, u64)>> = vec![Vec::new(); cards.dests.len()];
+    let mut profile_links: Vec<Vec<(Option<String>, bool, u64)>> =
+        vec![Vec::new(); cards.dests.len()];
     let mut function_links = 0;
-    for (name, profile, n) in inputs.tally.browsers() {
+    for (name, profile, private, n) in inputs.tally.browsers() {
         let dest = resolve(name, installed);
         if let Some(card) = cards.dests.iter().position(|d| d.key == dest.key) {
             links[card] += n;
@@ -1996,10 +2189,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             );
             match profile_links[card]
                 .iter_mut()
-                .find(|(p, _)| same_profile(p.as_deref(), profile.as_deref()))
+                .find(|(p, q, _)| *q == private && same_profile(p.as_deref(), profile.as_deref()))
             {
-                Some((_, total)) => *total += n,
-                None => profile_links[card].push((profile, n)),
+                Some((_, _, total)) => *total += n,
+                None => profile_links[card].push((profile, private, n)),
             }
         }
     }
@@ -2027,17 +2220,28 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         .map(|(card, dest)| {
             let single = dest.kind != CardKind::Browser;
             let is_ee = ee_card == Some(card);
-            let feeds = |row: &Row, profile: Option<&str>| {
-                row.target.card() == Some(card)
-                    && (single || same_profile(row.target.profile(), profile))
+            // The browser's private-window node, by its word for it.
+            let term = (!single)
+                .then(|| private_term(&dest.name, installed))
+                .flatten();
+            // Whether a target's route ends at a profile of this card (or
+            // at its private-window node).
+            let lands = |target: &Target, at: Slot<'_>| {
+                target.card() == Some(card)
+                    && (single
+                        || match at {
+                            Slot::Private => target.private_window(),
+                            Slot::Profile(profile) => {
+                                !target.private_window() && same_profile(target.profile(), profile)
+                            }
+                        })
             };
-            let ee_feeds = |profile: Option<&str>| {
-                is_ee && (single || same_profile(ee_target.profile(), profile))
-            };
-            let first = |profile: Option<&str>| {
+            let feeds = |row: &Row, at: Slot<'_>| lands(&row.target, at);
+            let ee_feeds = |at: Slot<'_>| is_ee && lands(&ee_target, at);
+            let first = |at: Slot<'_>| {
                 rows.iter()
-                    .position(|row| feeds(row, profile))
-                    .or_else(|| ee_feeds(profile).then_some(ee_rank))
+                    .position(|row| feeds(row, at))
+                    .or_else(|| ee_feeds(at).then_some(ee_rank))
                     .unwrap_or(usize::MAX)
             };
             first_ranks.push(
@@ -2050,9 +2254,8 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             // Something runs into it: an enabled row, or Everything else. A
             // profile only rules that are off name is idle, kept so their
             // would-be route has an end.
-            let live = |profile: Option<&str>| {
-                ee_feeds(profile) || rows.iter().any(|row| row.enabled && feeds(row, profile))
-            };
+            let live =
+                |at: Slot<'_>| ee_feeds(at) || rows.iter().any(|row| row.enabled && feeds(row, at));
             // The routed profiles by their first row, then those only rules
             // that are off name, then the rest the scan found, in its order.
             let mut profiles: Vec<Option<String>> = if single {
@@ -2061,10 +2264,13 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 cards.profiles[card].clone()
             };
             profiles.sort_by_key(|profile| {
-                let p = profile.as_deref();
-                (!live(p), first(p))
+                let at = Slot::Profile(profile.as_deref());
+                (!live(at), first(at))
             });
-            let routed = profiles.iter().filter(|p| live(p.as_deref())).count();
+            let routed = profiles
+                .iter()
+                .filter(|p| live(Slot::Profile(p.as_deref())))
+                .count();
             if !single
                 && let Some(app) = installed
                     .iter()
@@ -2079,29 +2285,50 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     }
                 }
             }
+            // A browser that has no profile yet still has its default one
+            // beside its private-window node.
+            if !single && profiles.is_empty() {
+                profiles.push(None);
+            }
             let card_n = match dest.kind {
                 CardKind::Function => function_links,
                 CardKind::Ghost => 0,
                 _ => links[card],
             };
-            let nodes: Vec<Node> = profiles
+            // A private link opened in a normal window counts where it
+            // opened: on its profile, when the card has no private node.
+            let links_at = |at: Slot<'_>| -> u64 {
+                profile_links[card]
+                    .iter()
+                    .filter(|(p, private, _)| match at {
+                        Slot::Private => *private,
+                        Slot::Profile(profile) => {
+                            (!*private || term.is_none()) && same_profile(p.as_deref(), profile)
+                        }
+                    })
+                    .map(|(_, _, n)| n)
+                    .sum()
+            };
+            let slots: Vec<(Option<String>, Option<String>)> = profiles
                 .iter()
-                .map(|profile| {
-                    let p = profile.as_deref();
+                .map(|profile| (profile.clone(), None))
+                .chain(term.clone().map(|term| (None, Some(term))))
+                .collect();
+            let nodes: Vec<Node> = slots
+                .into_iter()
+                .map(|(profile, private)| {
+                    let at = if private.is_some() {
+                        Slot::Private
+                    } else {
+                        Slot::Profile(profile.as_deref())
+                    };
                     let rules_n = rows
                         .iter()
-                        .filter(|row| row.enabled && feeds(row, p))
+                        .filter(|row| row.enabled && feeds(row, at))
                         .count();
-                    let everything_else = ee_feeds(p);
-                    let unused = !live(p);
-                    let n = if single {
-                        card_n
-                    } else {
-                        profile_links[card]
-                            .iter()
-                            .find(|(q, _)| same_profile(q.as_deref(), p))
-                            .map_or(0, |(_, n)| *n)
-                    };
+                    let everything_else = ee_feeds(at);
+                    let unused = !live(at);
+                    let n = if single { card_n } else { links_at(at) };
                     let node_links = (counts && n > 0 && !unused).then_some(n);
                     let rules_part = (rules_n > 0).then(|| plural(rules_n, "rule"));
                     let meta = if unused {
@@ -2117,24 +2344,60 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     let named = if single {
                         dest.name.clone()
                     } else {
-                        display(&dest.name, Some(p.unwrap_or("default profile")))
+                        display(
+                            &dest.name,
+                            Some(
+                                private
+                                    .as_deref()
+                                    .or(profile.as_deref())
+                                    .unwrap_or("default profile"),
+                            ),
+                        )
                     };
-                    let tooltip = if unused {
-                        "No rules send links here yet".to_owned()
-                    } else {
-                        let parts: Vec<String> = rules_part
-                            .into_iter()
-                            .chain(everything_else.then(|| "Everything else".to_owned()))
-                            .chain(node_links.map(|n| format!("{} links today", thousands(n))))
-                            .collect();
-                        if parts.is_empty() {
-                            named
-                        } else {
-                            format!("{named}: {}", parts.join(", "))
+                    let tooltip = match &private {
+                        Some(term) if unused => {
+                            format!("No rules open {} yet", window_phrase(term))
+                        }
+                        _ if unused => "No rules send links here yet".to_owned(),
+                        _ => {
+                            let parts: Vec<String> = rules_part
+                                .into_iter()
+                                .chain(everything_else.then(|| "Everything else".to_owned()))
+                                .chain(node_links.map(|n| format!("{} links today", thousands(n))))
+                                .collect();
+                            let tooltip = if parts.is_empty() {
+                                named
+                            } else {
+                                format!("{named}: {}", parts.join(", "))
+                            };
+                            // Whose profiles a private window opens as.
+                            let mut named_profiles: Vec<&str> = Vec::new();
+                            if private.is_some() {
+                                let targets = rows
+                                    .iter()
+                                    .filter(|row| row.enabled)
+                                    .map(|row| &row.target)
+                                    .chain(is_ee.then_some(&ee_target));
+                                for target in targets.filter(|t| lands(t, Slot::Private)) {
+                                    if let Some(profile) = target.profile()
+                                        && !named_profiles
+                                            .iter()
+                                            .any(|p| same_profile(Some(p), Some(profile)))
+                                    {
+                                        named_profiles.push(profile);
+                                    }
+                                }
+                            }
+                            if named_profiles.is_empty() {
+                                tooltip
+                            } else {
+                                format!("{tooltip} \u{00b7} as {}", named_profiles.join(", "))
+                            }
                         }
                     };
                     Node {
-                        profile: profile.clone(),
+                        profile,
+                        private,
                         everything_else,
                         rules: rules_n,
                         links: node_links,
@@ -2200,9 +2463,9 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             let shown = if single {
                 1
             } else if unused_card {
-                folded_to(nodes.len(), routed.max(IDLE_NODES))
+                folded_to(profiles.len(), routed.max(IDLE_NODES))
             } else {
-                folded_to(nodes.len(), routed.max(ROUTED_NODES))
+                folded_to(profiles.len(), routed.max(ROUTED_NODES))
             };
             Card {
                 kind: dest.kind,
@@ -2239,16 +2502,24 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         } else {
             app.profiles.iter().cloned().map(Some).collect()
         };
+        let shown = folded_to(profiles.len(), IDLE_NODES);
+        let term = private_term(&app.name, installed);
         let nodes: Vec<Node> = profiles
             .into_iter()
-            .map(|profile| Node {
+            .map(|profile| (profile, None))
+            .chain(term.map(|term| (None, Some(term))))
+            .map(|(profile, private)| Node {
+                tooltip: match &private {
+                    Some(term) => format!("No rules open {} yet", window_phrase(term)),
+                    None => "No rules send links here yet".to_owned(),
+                },
                 profile,
+                private,
                 everything_else: false,
                 rules: 0,
                 links: None,
                 unused: true,
                 meta: Some("no rules yet".to_owned()),
-                tooltip: "No rules send links here yet".to_owned(),
             })
             .collect();
         first_ranks.push(usize::MAX);
@@ -2257,7 +2528,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             badge: badge_for(&app.name).to_string(),
             name: app.name.clone(),
             key: app.name.to_lowercase(),
-            shown: folded_to(nodes.len(), IDLE_NODES),
+            shown,
             meta: idle_meta(&nodes),
             nodes,
             rules: 0,
@@ -2507,18 +2778,47 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         }
     };
     let callout = description.filter(|_| has_default).map(|description| {
+        // Each side as the map names a node. When both are one browser, a
+        // side with no profile is its "default profile", so the two read
+        // apart.
+        let (ours_dest, ours_profile) = pwrroute_dest();
         let config_default = match &description.default_browser {
             BrowserSpec::Browser(fixed) if fixed.app_type != AppType::None => {
-                Some(resolve(&fixed.name, installed).name)
+                let dest = resolve(&fixed.name, installed);
+                let profile = canonical_profile(
+                    installed,
+                    &dest.key,
+                    (!fixed.profile.is_empty()).then(|| fixed.profile.clone()),
+                );
+                Some((dest, profile))
             }
             _ => None,
         };
-        let theirs = match &config_default {
+        let same_browser = config_default
+            .as_ref()
+            .is_some_and(|(dest, _)| dest.key == ours_dest.key);
+        let side = |name: &str, profile: Option<&str>| {
+            if same_browser {
+                display(name, Some(profile.unwrap_or("default profile")))
+            } else {
+                display(name, profile)
+            }
+        };
+        let ours = side(&ours_dest.name, ours_profile.as_deref());
+        // The same browser and profile: what is left opens where it did.
+        let unchanged = same_browser
+            && config_default.as_ref().is_some_and(|(_, profile)| {
+                same_profile(profile.as_deref(), ours_profile.as_deref())
+            });
+        let theirs_name = config_default
+            .as_ref()
+            .map(|(dest, profile)| side(&dest.name, profile.as_deref()));
+        let theirs = match &theirs_name {
             Some(name) => format!("{shown}'s defaultBrowser, {name},"),
             None => format!("{shown}'s defaultBrowser"),
         };
         if !rules_first {
-            let instead = match (&config_default, &description.default_browser) {
+            let instead = match (&theirs_name, &description.default_browser) {
                 (Some(name), _) => format!("instead of {name}"),
                 (None, BrowserSpec::Function(_)) => {
                     "instead of its defaultBrowser function".to_owned()
@@ -2526,10 +2826,17 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 (None, _) => "instead of leaving them unopened".to_owned(),
             };
             Callout::Offer {
-                body: format!(
-                    "Your rules would run first, then {shown}'s handlers, and \
-                     {pwrroute_display} would take what is left {instead}."
-                ),
+                body: if unchanged {
+                    format!(
+                        "Your rules would run first, then {shown}'s handlers, and what is \
+                         left would still open in {pwrroute_display}."
+                    )
+                } else {
+                    format!(
+                        "Your rules would run first, then {shown}'s handlers, and {ours} \
+                         would take what is left {instead}."
+                    )
+                },
                 warnings: override_warnings(description)
                     .into_iter()
                     .chain(stale.then(|| stale_note(shown)))
@@ -2537,13 +2844,23 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             }
         } else if inputs.just_overridden {
             Callout::Done {
-                body: with_stale_note(format!("{theirs} isn't used while this is on.")),
+                body: with_stale_note(if unchanged {
+                    format!(
+                        "Your rules now run first. What is left still opens in {pwrroute_display}."
+                    )
+                } else {
+                    format!("{theirs} isn't used while this is on.")
+                }),
             }
         } else {
             Callout::Settled {
-                body: with_stale_note(format!(
-                    "{theirs} isn't used while PwrRoute's default takes everything else."
-                )),
+                body: with_stale_note(if unchanged {
+                    format!(
+                        "Your rules run first. What is left opens in {pwrroute_display} either way."
+                    )
+                } else {
+                    format!("{theirs} isn't used while PwrRoute's default takes everything else.")
+                }),
             }
         }
     });
@@ -2558,11 +2875,15 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
 }
 
 /// A card with no rules yet: "4 profiles · no rules yet", "default
-/// profile · no rules yet".
+/// profile · no rules yet". The private-window node is no profile.
 fn idle_meta(nodes: &[Node]) -> String {
-    match nodes {
+    let profiles: Vec<&Node> = nodes.iter().filter(|node| node.private.is_none()).collect();
+    match profiles[..] {
         [only] if only.profile.is_none() => "default profile \u{00b7} no rules yet".to_owned(),
-        _ => format!("{} \u{00b7} no rules yet", plural(nodes.len(), "profile")),
+        _ => format!(
+            "{} \u{00b7} no rules yet",
+            plural(profiles.len(), "profile")
+        ),
     }
 }
 
@@ -2572,10 +2893,12 @@ fn node_ref(cards: &[Card], target: &Target) -> Option<NodeRef> {
     let c = cards.get(card)?;
     let node = if c.single() {
         0
+    } else if target.private_window() {
+        c.private_node()?
     } else {
-        c.nodes
-            .iter()
-            .position(|node| same_profile(node.profile.as_deref(), target.profile()))?
+        c.nodes.iter().position(|node| {
+            node.private.is_none() && same_profile(node.profile.as_deref(), target.profile())
+        })?
     };
     Some((card, node))
 }
@@ -2762,6 +3085,314 @@ mod tests {
         }
     }
 
+    fn private(rule: Rule) -> Rule {
+        Rule {
+            private: true,
+            ..rule
+        }
+    }
+
+    fn fixed(name: &str, profile: &str, args: &[&str]) -> BrowserSpec {
+        BrowserSpec::Browser(FixedBrowser {
+            name: name.into(),
+            app_type: AppType::AppName,
+            profile: profile.into(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            open_in_background: None,
+        })
+    }
+
+    /// Private rules to one browser share its one private-window node,
+    /// whatever profile they name: the profile is the row's detail and
+    /// the node's tooltip's, not a node of its own.
+    #[test]
+    fn private_rules_route_to_the_browsers_private_window() {
+        let rules = RulesFile {
+            default_browser: "Google Chrome".into(),
+            default_profile: "Personal".into(),
+            rules: vec![
+                private(rule("bank.example.com/*", "Google Chrome", "Work")),
+                rule("docs.example.com/*", "Google Chrome", "Work"),
+                private(rule("shop.example.com/*", "Google Chrome", "Personal")),
+                private(rule("news.example.com/*", "Google Chrome", "")),
+            ],
+            ..RulesFile::default()
+        };
+        let map = World::new(rules, Vec::new()).build().map;
+        let chrome = &map.cards[0];
+        let labels: Vec<&str> = chrome.nodes.iter().map(Node::label).collect();
+        // Work for rule 2 and Personal for Everything else: no profile node
+        // is made for a private rule.
+        assert_eq!(labels, ["Work", "Personal", "Design", "Incognito"]);
+        let incognito = chrome.private_node().expect("Chrome's Incognito node");
+        assert_eq!(incognito, 3);
+        for row in [0, 2, 3] {
+            assert_eq!(map.rows[row].node, Some((0, incognito)), "rule {}", row + 1);
+        }
+        assert_eq!(map.rows[1].node, Some((0, 0)));
+        let node = &chrome.nodes[incognito];
+        assert!(!node.unused);
+        assert_eq!(node.rules, 3);
+        assert_eq!(node.meta.as_deref(), Some("3 rules"));
+        assert_eq!(
+            node.tooltip,
+            "Google Chrome \u{b7} Incognito: 3 rules \u{b7} as Work, Personal"
+        );
+        assert_eq!(chrome.meta, "4 rules", "the card counts private rules too");
+        let label = |row: usize| match &map.rows[row].target {
+            Target::Browser { label, .. } => label.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(label(0), "Incognito \u{b7} Work");
+        assert_eq!(label(3), "Incognito");
+        assert_eq!(
+            map.rows[0].tooltip,
+            "rule 1 \u{b7} opens an Incognito window as Work"
+        );
+        assert_eq!(
+            map.rows[3].tooltip,
+            "rule 4 \u{b7} opens an Incognito window"
+        );
+
+        // Hovering the node lights its three rows; its key survives a
+        // re-sort, and a profile's key never lands on it.
+        let lit = map.lit(Some(Focus::Node(0, incognito)));
+        assert_eq!(lit.rows.iter().copied().collect::<Vec<_>>(), [0, 2, 3]);
+        assert_eq!(lit.fan(0, incognito), 3);
+        let key = map.key_of(Focus::Node(0, incognito)).expect("its key");
+        assert_eq!(key, FocusKey::Private("google chrome".into()));
+        assert_eq!(map.resolve(&key), Some(Focus::Node(0, incognito)));
+        assert_eq!(
+            map.resolve(&FocusKey::Node("google chrome".into(), None)),
+            None,
+            "Chrome has no default-profile node here"
+        );
+        assert_eq!(
+            map.focus_label(Focus::Node(0, incognito)).as_deref(),
+            Some("Google Chrome \u{b7} Incognito")
+        );
+    }
+
+    /// Today's private links count on the private-window node, the rest
+    /// on their profile.
+    #[test]
+    fn private_links_count_on_the_private_window() {
+        let map = World::rules().build().map;
+        let firefox = map
+            .cards
+            .iter()
+            .find(|card| card.name == "Firefox")
+            .expect("Firefox's card");
+        assert_eq!(firefox.nodes[0].links, Some(57));
+        assert_eq!(firefox.nodes[1].private.as_deref(), Some("Private window"));
+        assert_eq!(firefox.nodes[1].links, Some(9));
+        assert_eq!(firefox.links, Some(66));
+    }
+
+    /// A browser with no private mode opens a private rule's link in a
+    /// normal window: the route ends at the profile, and the row says so.
+    #[test]
+    fn a_private_rule_to_a_browser_without_one_opens_a_normal_window() {
+        let rules = RulesFile {
+            default_browser: "Google Chrome".into(),
+            rules: vec![
+                private(rule("bank.example.com/*", "Safari", "")),
+                private(rule("dev.example.com/*", "Arc", "")),
+            ],
+            ..RulesFile::default()
+        };
+        let map = World::new(rules, Vec::new()).build().map;
+        for (row, name) in [(0, "Safari"), (1, "Arc")] {
+            let target = &map.rows[row].target;
+            assert!(target.not_private() && !target.private_window(), "{name}");
+            let card = &map.cards[target.card().expect("a card")];
+            assert_eq!(card.name, name);
+            assert_eq!(card.private_node(), None, "{name} has no private node");
+            assert_eq!(map.rows[row].node, Some((target.card().unwrap(), 0)));
+            assert!(matches!(target, Target::Browser { label, .. } if label == name));
+        }
+        assert_eq!(
+            map.rows[0].tooltip,
+            "rule 1 \u{b7} Safari can't open a private window from a link, so this \
+             opens a normal one."
+        );
+    }
+
+    /// A private window is named as the browser names it, and a browser
+    /// the catalog knows by its bundle id still gets one.
+    #[test]
+    fn private_windows_take_the_browsers_own_word() {
+        let mut world = World::new(RulesFile::default(), Vec::new());
+        world.installed.push(Installed {
+            name: "Brave Browser".into(),
+            bundle_id: Some("com.brave.Browser".into()),
+            profiles: vec!["Personal".into()],
+            directories: vec!["Default".into()],
+            hidden: false,
+        });
+        world.installed.push(Installed {
+            name: "Chromium Nightly".into(),
+            bundle_id: Some("org.chromium.Chromium".into()),
+            profiles: Vec::new(),
+            directories: Vec::new(),
+            hidden: false,
+        });
+        let map = world.build().map;
+        let term = |name: &str| {
+            let card = map
+                .cards
+                .iter()
+                .find(|card| card.name == name)
+                .unwrap_or_else(|| panic!("{name}'s card"));
+            card.private_node()
+                .map(|node| card.nodes[node].label().to_owned())
+        };
+        assert_eq!(term("Google Chrome").as_deref(), Some("Incognito"));
+        assert_eq!(term("Microsoft Edge").as_deref(), Some("InPrivate"));
+        assert_eq!(term("Firefox").as_deref(), Some("Private window"));
+        assert_eq!(term("Brave Browser").as_deref(), Some("Private window"));
+        assert_eq!(term("Chromium Nightly").as_deref(), Some("Incognito"));
+        assert_eq!(term("Safari"), None);
+        assert_eq!(term("Arc"), None);
+        let brave = map
+            .cards
+            .iter()
+            .find(|card| card.name == "Brave Browser")
+            .expect("Brave's card");
+        assert_eq!(brave.meta, "1 profile \u{b7} no rules yet");
+        assert_eq!(brave.nodes[1].tooltip, "No rules open a private window yet");
+    }
+
+    /// A config handler, or its defaultBrowser, whose args carry a private
+    /// flag opens a private window: the Finicky API has no field for it.
+    #[test]
+    fn a_configs_private_flag_routes_to_the_private_window() {
+        let mut description = description();
+        description.handlers[1].browser = fixed("Google Chrome", "Work", &["--incognito"]);
+        description.default_browser = fixed("Firefox", "", &["--private-window"]);
+        let world = World {
+            config: Some(Some(description)),
+            ..World::new(RulesFile::default(), Vec::new())
+        };
+        let map = world.build().map;
+        let row = &map.rows[1];
+        assert!(row.target.private_window());
+        let chrome = row.target.card().expect("Chrome");
+        assert_eq!(
+            row.node,
+            Some((chrome, map.cards[chrome].private_node().unwrap()))
+        );
+        assert_eq!(
+            row.tooltip,
+            "config handler 2 of ~/.finicky.ts \u{b7} opens an Incognito window as Work"
+        );
+        // Everything else's ∞ sits on Firefox's private window.
+        let (card, node) = map.everything_else.node.expect("Everything else's node");
+        assert_eq!(map.cards[card].name, "Firefox");
+        assert_eq!(Some(node), map.cards[card].private_node());
+        assert!(map.cards[card].nodes[node].everything_else);
+    }
+
+    /// The callout names both defaults as the map names a node: by browser
+    /// when they differ, by profile when the browser is the same, and says
+    /// plainly when nothing would change.
+    #[test]
+    fn the_callout_names_both_defaults_by_how_they_compare() {
+        let bodies = |ours: (&str, &str), theirs: BrowserSpec| {
+            let rules = |precedence| RulesFile {
+                default_browser: ours.0.into(),
+                default_profile: ours.1.into(),
+                precedence,
+                ..RulesFile::default()
+            };
+            let mut description = description();
+            description.default_browser = theirs;
+            let world = |precedence, just_overridden| World {
+                config: Some(Some(description.clone())),
+                just_overridden,
+                ..World::new(rules(precedence), Vec::new())
+            };
+            let body = |callout: Option<Callout>| match callout.expect("a callout") {
+                Callout::Offer { body, .. }
+                | Callout::Done { body }
+                | Callout::Settled { body } => body,
+            };
+            [
+                body(world(Precedence::Config, false).build().callout),
+                body(world(Precedence::PwrRoute, true).build().callout),
+                body(world(Precedence::PwrRoute, false).build().callout),
+            ]
+        };
+        let lead = "Your rules would run first, then ~/.finicky.ts's handlers, and";
+
+        // 1. Different browsers.
+        assert_eq!(
+            bodies(("Google Chrome", "Personal"), fixed("Safari", "", &[])),
+            [
+                format!(
+                    "{lead} Google Chrome \u{b7} Personal would take what is left instead of Safari."
+                ),
+                "~/.finicky.ts's defaultBrowser, Safari, isn't used while this is on.".into(),
+                "~/.finicky.ts's defaultBrowser, Safari, isn't used while PwrRoute's default \
+                 takes everything else."
+                    .into(),
+            ]
+        );
+
+        // 2. The same browser, other profiles: named by profile, and a
+        // side with none is the default profile.
+        assert_eq!(
+            bodies(
+                ("Microsoft Edge", "Testing"),
+                fixed("Microsoft Edge", "Personal", &[])
+            ),
+            [
+                format!(
+                    "{lead} Microsoft Edge \u{b7} Testing would take what is left instead of \
+                     Microsoft Edge \u{b7} Personal."
+                ),
+                "~/.finicky.ts's defaultBrowser, Microsoft Edge \u{b7} Personal, isn't used \
+                 while this is on."
+                    .into(),
+                "~/.finicky.ts's defaultBrowser, Microsoft Edge \u{b7} Personal, isn't used \
+                 while PwrRoute's default takes everything else."
+                    .into(),
+            ]
+        );
+        assert_eq!(
+            bodies(
+                ("Microsoft Edge", "Testing"),
+                fixed("Microsoft Edge", "", &[])
+            )[0],
+            format!(
+                "{lead} Microsoft Edge \u{b7} Testing would take what is left instead of \
+                 Microsoft Edge \u{b7} default profile."
+            )
+        );
+
+        // 3. The same browser and profile (a directory names the same
+        // one): what is left opens where it did.
+        assert_eq!(
+            bodies(
+                ("Microsoft Edge", "Personal"),
+                fixed("Microsoft Edge", "Profile 1", &[])
+            ),
+            [
+                format!("{lead} what is left would still open in Microsoft Edge \u{b7} Personal."),
+                "Your rules now run first. What is left still opens in Microsoft Edge \u{b7} \
+                 Personal."
+                    .into(),
+                "Your rules run first. What is left opens in Microsoft Edge \u{b7} Personal \
+                 either way."
+                    .into(),
+            ]
+        );
+        assert_eq!(
+            bodies(("Safari", ""), fixed("Safari", "", &[]))[0],
+            format!("{lead} what is left would still open in Safari.")
+        );
+    }
+
     #[test]
     fn plural_counts_one_and_many() {
         assert_eq!(plural(0, "rule"), "0 rules");
@@ -2779,8 +3410,10 @@ mod tests {
         assert_eq!(tally.rule(HitKey::Default(Some(Owner::PwrRoute))), 642);
         let work = tally
             .browsers()
-            .find(|(name, profile, _)| *name == "Google Chrome" && *profile == "Work")
-            .map(|(_, _, n)| n);
+            .find(|(name, profile, private, _)| {
+                *name == "Google Chrome" && *profile == "Work" && !private
+            })
+            .map(|(_, _, _, n)| n);
         assert_eq!(work, Some(302));
     }
 
@@ -2928,8 +3561,18 @@ mod tests {
                 ("Work", 2, Some(302), false, false),
                 ("Personal", 0, Some(642), true, false),
                 ("Design", 0, None, false, true),
+                ("Incognito", 0, None, false, true),
             ]
         );
+        // Chrome's private window: last, never folded, no profile.
+        assert_eq!(chrome.private_node(), Some(3));
+        assert_eq!(chrome.nodes[3].profile, None);
+        assert_eq!(
+            chrome.nodes[3].tooltip,
+            "No rules open an Incognito window yet"
+        );
+        assert_eq!(chrome.profiles(), 3);
+        assert_eq!(chrome.visible(false), [0, 1, 2, 3]);
         assert_eq!(chrome.nodes[0].meta.as_deref(), Some("2 rules"));
         assert_eq!(chrome.nodes[1].meta, None);
         assert_eq!(chrome.nodes[2].meta.as_deref(), Some("no rules yet"));
@@ -2952,18 +3595,58 @@ mod tests {
         assert_eq!(map.rows[1].node, Some((0, 0)));
         assert_eq!(map.rows[2].node, Some((2, 0)), "Firefox");
         assert_eq!(map.rows[3].node, Some((1, 0)), "Arc");
+        assert_eq!(map.rows[4].node, Some((2, 1)), "Firefox's private window");
         assert_eq!(map.rows[5].node, Some((0, 1)), "off, but Personal's");
         assert_eq!(map.everything_else.node, Some((0, 1)));
 
-        // The browsers with no rules yet: quiet, Edge folding two of four.
+        // Rule 5 opens a private Firefox window: its route ends at the
+        // private-window node, and the card counts it with the rest.
+        let firefox = &map.cards[2];
+        let nodes: Vec<(&str, Option<&str>, Option<u64>)> = firefox
+            .nodes
+            .iter()
+            .map(|node| (node.label(), node.meta.as_deref(), node.links))
+            .collect();
+        assert_eq!(
+            nodes,
+            [
+                ("default profile", Some("1 rule"), Some(57)),
+                ("Private window", Some("1 rule"), Some(9)),
+            ]
+        );
+        assert_eq!(firefox.meta, "2 rules \u{b7} 66 links today");
+        assert_eq!(
+            firefox.nodes[1].tooltip,
+            "Firefox \u{b7} Private window: 1 rule, 9 links today"
+        );
+        assert!(map.rows[4].target.private_window());
+        assert!(matches!(
+            &map.rows[4].target,
+            Target::Browser { label, .. } if label == "Private window"
+        ));
+        assert_eq!(map.rows[4].tooltip, "rule 5 \u{b7} opens a private window");
+        // Arc has no private mode: its card ends with its profile.
+        assert_eq!(map.cards[1].nodes.len(), 1);
+        assert_eq!(map.cards[1].private_node(), None);
+
+        // The browsers with no rules yet: quiet, Edge folding two of four
+        // profiles, its InPrivate node after them and not counted.
         let edge = &map.cards[3];
         assert!(edge.unused && edge.share.is_none());
         assert_eq!(edge.meta, "4 profiles \u{b7} no rules yet");
-        assert_eq!((edge.nodes.len(), edge.shown, edge.folded()), (4, 2, 2));
+        assert_eq!((edge.nodes.len(), edge.shown, edge.folded()), (5, 2, 2));
+        assert_eq!(edge.visible(false), [0, 1, 4]);
+        assert_eq!(edge.visible(true), [0, 1, 2, 3, 4]);
+        assert_eq!(edge.nodes[4].label(), "InPrivate");
+        assert_eq!(
+            edge.nodes[4].tooltip,
+            "No rules open an InPrivate window yet"
+        );
         assert!(edge.nodes.iter().all(|node| node.unused));
         let safari = &map.cards[4];
         assert_eq!(safari.meta, "default profile \u{b7} no rules yet");
         assert_eq!(safari.nodes[0].label(), "default profile");
+        assert_eq!(safari.nodes.len(), 1, "Safari has no private window");
 
         assert_eq!(map.everything_else.owner, "PwrRoute's default");
         assert_eq!(map.everything_else.count, Some(642));
@@ -3215,31 +3898,59 @@ mod tests {
         assert_eq!(order[0], Focus::Row(0));
         assert_eq!(order[6], Focus::EverythingElse);
         assert_eq!(order[7], Focus::Node(0, 0));
-        // Edge shows two of its four until it is opened.
+        // A card's private window comes after its profiles.
+        assert_eq!(order[10], Focus::Node(0, 3));
+        // Edge shows two of its four profiles until it is opened, then its
+        // InPrivate node.
         let edge = 3;
-        assert_eq!(
+        let edge_nodes = |order: &[Focus]| -> Vec<Focus> {
             order
                 .iter()
                 .filter(|focus| matches!(focus, Focus::Node(card, _) if *card == edge))
-                .count(),
-            2
+                .copied()
+                .collect()
+        };
+        assert_eq!(
+            edge_nodes(&order),
+            [
+                Focus::Node(edge, 0),
+                Focus::Node(edge, 1),
+                Focus::Node(edge, 4)
+            ]
         );
         let open = map.keyboard_order(|card| card.name == "Microsoft Edge");
         assert_eq!(open.len(), order.len() + 2);
+        assert_eq!(edge_nodes(&open).last(), Some(&Focus::Node(edge, 4)));
     }
 
     #[test]
     fn map_widths_follow_the_window() {
-        // The content width at 1000, 1240, 1440, 1600 and 1880.
+        // The content width at 1000, 1240, 1440, 1600, 1880 and 2560:
+        // both columns stop at their caps, and the routes take the rest.
         let at = |content: f32| {
             let w = MapWidths::of_content(content);
-            (w.rule.round(), w.gutter, w.dest)
+            (w.rule, w.gutter, w.dest)
         };
         assert_eq!(at(722.0), (360.0, 96.0, 266.0));
         assert_eq!(at(962.0), (520.0, 96.0, 346.0));
-        assert_eq!(at(1162.0), (640.0, 96.0, 426.0));
-        assert_eq!(at(1322.0), (736.0, 106.0, 480.0));
-        assert_eq!(at(1602.0), (994.0, 128.0, 480.0));
+        assert_eq!(at(1162.0), (646.0, 96.0, 420.0));
+        assert_eq!(at(1322.0), (720.0, 182.0, 420.0));
+        assert_eq!(at(1602.0), (720.0, 462.0, 420.0));
+        assert_eq!(at(2282.0), (720.0, 1142.0, 420.0));
+        // The breakpoints: destinations reach 420 at a 1424 window, the
+        // rules 720 at 1514.
+        assert_eq!(at(1146.0).2, 420.0);
+        assert!(at(1140.0).2 < 420.0);
+        assert_eq!(at(1236.0), (720.0, 96.0, 420.0));
+        assert!(at(1240.0).1 > 96.0);
+        // Never wider than the content, and never under the gutter's 96.
+        for content in [0.0, 300.0, 722.0, 1500.0, 4000.0] {
+            let w = MapWidths::of_content(content);
+            assert!(w.gutter >= GUTTER_MIN);
+            if content >= 458.0 {
+                assert_eq!(w.rule + w.gutter + w.dest, content, "{content}");
+            }
+        }
     }
 
     #[test]
@@ -3824,7 +4535,8 @@ mod tests {
             [
                 ("Personal", true, false),
                 ("Work", false, true),
-                ("Design", false, true)
+                ("Design", false, true),
+                ("Incognito", false, true)
             ]
         );
         assert_eq!(chrome.nodes[0].links, Some(23));
@@ -3977,9 +4689,21 @@ mod tests {
         // rule, then the scan's others.
         assert_eq!(
             labels,
-            ["A", "B", "C", "D", "E", "Personal", "Work", "Design"]
+            [
+                "A",
+                "B",
+                "C",
+                "D",
+                "E",
+                "Personal",
+                "Work",
+                "Design",
+                "Incognito"
+            ]
         );
+        // The private window does not count toward the folding.
         assert_eq!((chrome.shown, chrome.folded()), (6, 2));
+        assert_eq!(chrome.visible(false), [0, 1, 2, 3, 4, 5, 8]);
         assert!(chrome.nodes[5].everything_else);
         assert!(
             map.lit(Some(Focus::EverythingElse)).node(0, 5),
@@ -4353,7 +5077,7 @@ mod tests {
             .find(|card| card.name == "Google Chrome")
             .expect("Chrome's card");
         let labels: Vec<&str> = chrome.nodes.iter().map(Node::label).collect();
-        assert_eq!(labels, ["Work", "Personal", "Design"]);
+        assert_eq!(labels, ["Work", "Personal", "Design", "Incognito"]);
         assert_eq!(chrome.nodes[0].rules, 2);
         assert_eq!(map.rows[0].node, map.rows[1].node);
         assert!(matches!(

@@ -173,7 +173,7 @@ pub enum HitKey {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tally {
     rules: HashMap<HitKey, u64>,
-    browsers: HashMap<(String, String), u64>,
+    browsers: HashMap<(String, String, bool), u64>,
 }
 
 impl Tally {
@@ -200,7 +200,11 @@ impl Tally {
         if let Some(browser) = &record.browser {
             *self
                 .browsers
-                .entry((browser.name.clone(), browser.profile.clone()))
+                .entry((
+                    browser.name.clone(),
+                    browser.profile.clone(),
+                    browser.private,
+                ))
                 .or_default() += 1;
         }
     }
@@ -210,12 +214,13 @@ impl Tally {
         self.rules.get(&key).copied().unwrap_or(0)
     }
 
-    /// Today's links per browser (as the router named it) and profile
-    /// (empty for the browser's own default).
-    pub fn browsers(&self) -> impl Iterator<Item = (&str, &str, u64)> {
+    /// Today's links per browser (as the router named it), profile (empty
+    /// for the browser's own default) and whether a private window was
+    /// asked for.
+    pub fn browsers(&self) -> impl Iterator<Item = (&str, &str, bool, u64)> {
         self.browsers
             .iter()
-            .map(|((name, profile), n)| (name.as_str(), profile.as_str(), *n))
+            .map(|((name, profile, private), n)| (name.as_str(), profile.as_str(), *private, *n))
     }
 }
 

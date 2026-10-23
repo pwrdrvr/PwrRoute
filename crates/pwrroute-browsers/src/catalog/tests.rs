@@ -268,6 +268,35 @@ fn private_window_flags_match_the_engine() {
     assert_eq!(PrivateFlag::from_arg("--profile-directory=Default"), None);
 }
 
+/// A private window is called what the browser's own menu calls it: the
+/// flag's word unless the entry says otherwise, and nothing for a browser
+/// without one. An override is never set on a browser that cannot go
+/// private.
+#[test]
+fn private_windows_are_named_as_the_browser_names_them() {
+    let label = |id: &str| catalog().find(id).unwrap().private_label();
+    for b in catalog().browsers() {
+        if b.private_label.is_some() {
+            assert_ne!(b.private_flag(), PrivateFlag::None, "{}", b.id);
+        }
+        assert_eq!(
+            b.private_label().is_some(),
+            b.private_flag() != PrivateFlag::None,
+            "{}",
+            b.id
+        );
+    }
+    assert_eq!(label("chrome"), Some("Incognito"));
+    assert_eq!(label("edge"), Some("InPrivate"));
+    assert_eq!(label("firefox"), Some("Private window"));
+    for id in ["brave", "brave-beta", "vivaldi", "opera", "opera-gx"] {
+        assert_eq!(label(id), Some("Private window"), "{id}");
+    }
+    for id in ["safari", "orion", "arc", "dia"] {
+        assert_eq!(label(id), None, "{id}");
+    }
+}
+
 #[derive(Deserialize)]
 struct FinickyBrowser {
     config_dir_relative: String,

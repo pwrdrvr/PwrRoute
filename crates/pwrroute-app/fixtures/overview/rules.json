@@ -37,7 +37,8 @@
     },
     {
       "match": ["news.example.org/*", "forum.example.org/*"],
-      "browser": "Firefox"
+      "browser": "Firefox",
+      "private": true
     },
     {
       "match": "billing.example.com/*",

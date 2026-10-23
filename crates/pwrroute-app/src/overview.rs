@@ -31,9 +31,10 @@ use gpui_kit::{
 use crate::app::{PwrRoute, Screen, Selection};
 use crate::overview_model::{
     self, Action, CHANGE_IN_RULES, Callout, Caption, Card, CardKind, ConfigInputs, ConfigTrouble,
-    DONE_TITLE, End, EverythingElse, Focus, FocusKey, Inputs, Installed, Item, Lit, Map, MapWidths,
-    Node, NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener, Overview, Pattern, Pause, Route, Row,
-    RowMatch, RowSource, Setup, SetupStep, Share, State, Status, Target, Tone, fit_tags,
+    DONE_TITLE, End, EverythingElse, Focus, FocusKey, GUTTER_MIN, Inputs, Installed, Item, Lit,
+    Map, MapWidths, Node, NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener, Overview, Pattern, Pause,
+    Private, Route, Row, RowMatch, RowSource, Setup, SetupStep, Share, State, Status, Target, Tone,
+    fit_tags,
 };
 use crate::rules_view::pane_frame;
 use crate::theme::{self, icon, mono, text, tracked};
@@ -358,11 +359,13 @@ impl PwrRoute {
     }
 
     /// A node with no rules yet: "+ Add a rule…" opens Rules' new-rule
-    /// editor with that browser and profile chosen.
+    /// editor with that browser and profile chosen, and a private window
+    /// on for a private-window node.
     pub fn add_rule_for(
         &mut self,
         browser: &str,
         profile: &str,
+        private: bool,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
@@ -373,6 +376,9 @@ impl PwrRoute {
         let index = self.store.add_handler();
         self.store.set_browser(index, browser);
         self.store.set_profile(index, profile);
+        if private {
+            self.store.set_private(index, true);
+        }
         self.selection = Some(Selection::Handler(index));
         self.refresh(cx);
         self.rebuild_rail(cx);
@@ -439,11 +445,10 @@ impl PwrRoute {
                     }
                     Some(Focus::Node(card, node)) if map.cards[card].nodes[node].unused => {
                         let browser = map.cards[card].name.clone();
-                        let profile = map.cards[card].nodes[node]
-                            .profile
-                            .clone()
-                            .unwrap_or_default();
-                        self.add_rule_for(&browser, &profile, window, cx);
+                        let node = &map.cards[card].nodes[node];
+                        let profile = node.profile.clone().unwrap_or_default();
+                        let private = node.private.is_some();
+                        self.add_rule_for(&browser, &profile, private, window, cx);
                     }
                     Some(_) => toggle_pin(self, keyed, cx),
                     None => {}
@@ -1456,10 +1461,13 @@ fn map(
         .px(px(16.0))
         .border_b_1()
         .border_color(theme::border_faint())
+        .justify_between()
+        .gap(px(GUTTER_MIN))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
+                .max_w(px(widths.rule))
                 .flex()
                 .items_center()
                 .justify_between()
@@ -1469,7 +1477,6 @@ fn map(
         )
         .child(
             div()
-                .ml(px(widths.gutter))
                 .w(px(widths.dest))
                 .flex_none()
                 .min_w_0()
@@ -1566,6 +1573,7 @@ fn map(
         .relative()
         .flex_1()
         .min_w_0()
+        .max_w(px(widths.rule))
         .flex()
         .flex_col()
         .gap(px(4.0))
@@ -1612,7 +1620,6 @@ fn map(
     } else {
         before.routes.clone()
     });
-    let gutter = widths.gutter;
     let layer = {
         let bounds = bounds.clone();
         div()
@@ -1631,7 +1638,7 @@ fn map(
                             |_, _, _| {},
                             move |area, _, window, _| {
                                 paint_dots(area, window);
-                                paint_routes(&strokes, &bounds, gutter, true, window);
+                                paint_routes(&strokes, &bounds, true, window);
                             },
                         )
                         .size_full(),
@@ -1661,7 +1668,7 @@ fn map(
                                 glow: 1.0,
                                 ..Stroke::of(&route)
                             };
-                            paint_routes(&[stroke], &bounds, gutter, false, window);
+                            paint_routes(&[stroke], &bounds, false, window);
                         },
                     )
                     .size_full(),
@@ -1681,7 +1688,10 @@ fn map(
         .relative()
         .flex()
         .items_start()
-        .gap(px(widths.gutter))
+        // The columns stop at their caps; every pixel past them is the
+        // routes' gutter, never under its 96.
+        .justify_between()
+        .gap(px(GUTTER_MIN))
         .p(px(16.0))
         .when(map.dimmed, |body| body.opacity(0.4))
         // A click on the empty ground lets go of the pin.
@@ -1899,18 +1909,19 @@ fn paint_dots(bounds: Bounds<Pixels>, window: &mut Window) {
 }
 
 /// Every route from its row's port to its node's, as
-/// `M x1 y1 C x1+dx y1, x2-dx y2, x2 y2` with dx half the gutter: the
-/// resting and dimmed lines first, then the highlighted ones over them.
-/// Routes into one node fan into its port in their rows' order.
+/// `M x1 y1 C x1+dx y1, x2-dx y2, x2 y2` with dx half the gutter as drawn
+/// (from the port to the node), so a wide window's gutter gives long,
+/// gentle curves: the resting and dimmed lines first, then the highlighted
+/// ones over them. Routes into one node fan into its port in their rows'
+/// order.
 fn paint_routes(
     strokes: &[Stroke],
     bounds: &Rc<RefCell<MapBounds>>,
-    gutter: f32,
     record: bool,
     window: &mut Window,
 ) {
-    let dx = px(gutter / 2.0);
     let curve = |from: Point<Pixels>, to: Point<Pixels>, width: f32, dashed: bool| {
+        let dx = ((to.x - from.x) / 2.0).max(px(0.0));
         let mut path = PathBuilder::stroke(px(width));
         if dashed {
             path = path.dash_array(&[px(4.0), px(4.0)]);
@@ -2347,6 +2358,10 @@ fn match_column(row: &Row, room: f32, measure: &Measure) -> Div {
 
 /// The longest a target's label gets before it is cut.
 const TARGET_LABEL: f32 = 200.0;
+/// The private-window glyph: a mask.
+const MASK: &str = "pwrroute/mask.svg";
+/// A private rule's tag when its browser cannot open a private window.
+const NOT_PRIVATE: &str = "not private";
 
 fn target_column(target: &Target) -> Div {
     let to = div()
@@ -2371,7 +2386,17 @@ fn target_column(target: &Target) -> Div {
             badge: b, label: l, ..
         } => to
             .child(badge(b.clone()))
-            .child(label(l.clone(), theme::text_secondary())),
+            .when(target.private_window(), |to| {
+                to.child(
+                    div()
+                        .mr(px(-2.0))
+                        .child(icon(MASK, 11.0, theme::text_subtle())),
+                )
+            })
+            .child(label(l.clone(), theme::text_secondary()))
+            .when(target.not_private(), |to| {
+                to.child(mono(NOT_PRIVATE, 10.0, 500.0, theme::warn_text()))
+            }),
         Target::Function { .. } => {
             to.child(fn_mark())
                 .child(text("JavaScript", 11.5, 500.0, theme::text_secondary()))
@@ -2396,7 +2421,17 @@ fn target_width(target: &Target, measure: &Measure) -> f32 {
     let label = |label: &str| measure.sans(label, 500.0, 11.5).min(TARGET_LABEL);
     arrow
         + match target {
-            Target::Browser { label: l, .. } => 12.0 + 6.0 + label(l),
+            Target::Browser {
+                label: l, private, ..
+            } => {
+                12.0 + 6.0
+                    + label(l)
+                    + match private {
+                        Private::No => 0.0,
+                        Private::Window(_) => 11.0 - 2.0 + 6.0,
+                        Private::Unsupported => 6.0 + measure.mono(NOT_PRIVATE, 10.0),
+                    }
+            }
             Target::Function { .. } => 26.0 + 6.0 + label("JavaScript"),
             Target::NotOpened { .. } => label(crate::widgets::NOT_OPENED),
             Target::Ghost { name, .. } => {
@@ -2936,49 +2971,49 @@ fn browser_card(
         })
         .when(spot, |header| header.opacity(DIM));
 
-    let shown = if expanded {
-        card.nodes.len()
-    } else {
-        card.shown
-    };
+    // The profiles that show, "+N more profiles" when some fold, then the
+    // private-window node, which never folds: which child is which node,
+    // for the routes.
+    let visible = card.visible(expanded);
+    let private = card.private_node();
+    let mut children: Vec<Option<usize>> = visible
+        .iter()
+        .copied()
+        .filter(|node| Some(*node) != private)
+        .map(Some)
+        .collect();
+    if card.folded() > 0 {
+        children.push(None);
+    }
+    children.extend(private.map(Some));
     let nodes_bounds = bounds.clone();
-    let count = shown;
-    let nodes = div()
-        .on_children_prepainted(move |children, _, _| {
-            let mut bounds = nodes_bounds.borrow_mut();
-            for (node, child) in children.iter().take(count).enumerate() {
-                bounds.nodes.insert((index, node), *child);
+    let drawn: Vec<AnyElement> = children
+        .iter()
+        .map(|child| match child {
+            Some(n) => {
+                let drawn = node_row(index, *n, card, &card.nodes[*n], trace, spot, cx);
+                if Some(*n) != private && *n >= card.shown && app.overview.expanding == Some(index)
+                {
+                    // "+N more profiles" just opened: the new nodes fade in.
+                    div()
+                        .child(drawn)
+                        .with_animation(
+                            ("overview-node-in", index * 1_000 + n),
+                            Animation::new(FADE).with_easing(ease_out_quint()),
+                            |node, t| node.opacity(t),
+                        )
+                        .into_any_element()
+                } else {
+                    drawn
+                }
             }
-        })
-        .flex()
-        .flex_col()
-        .py(px(4.0))
-        .border_t_1()
-        .border_color(theme::border_faint())
-        .children(card.nodes.iter().take(shown).enumerate().map(|(n, node)| {
-            let drawn = node_row(index, n, card, node, trace, spot, cx);
-            if n >= card.shown && app.overview.expanding == Some(index) {
-                // "+N more profiles" just opened: the new nodes fade in.
-                div()
-                    .child(drawn)
-                    .with_animation(
-                        ("overview-node-in", index * 1_000 + n),
-                        Animation::new(FADE).with_easing(ease_out_quint()),
-                        |node, t| node.opacity(t),
-                    )
-                    .into_any_element()
-            } else {
-                drawn
-            }
-        }))
-        .when(card.folded() > 0, |nodes| {
-            let key = card.key().to_owned();
-            let label = if expanded {
-                "Show fewer \u{25b4}".to_owned()
-            } else {
-                format!("+{} more profiles \u{25be}", card.folded())
-            };
-            nodes.child(
+            None => {
+                let key = card.key().to_owned();
+                let label = if expanded {
+                    "Show fewer \u{25b4}".to_owned()
+                } else {
+                    format!("+{} more profiles \u{25be}", card.folded())
+                };
                 div()
                     .id(("overview-more", index))
                     .debug_selector(move || format!("overview-more-{index}"))
@@ -2994,9 +3029,26 @@ fn browser_card(
                         cx.stop_propagation();
                         this.overview.toggle_expanded(&key, index);
                         cx.notify();
-                    })),
-            )
-        });
+                    }))
+                    .into_any_element()
+            }
+        })
+        .collect();
+    let nodes = div()
+        .on_children_prepainted(move |bounds, _, _| {
+            let mut recorded = nodes_bounds.borrow_mut();
+            for (child, node) in bounds.iter().zip(&children) {
+                if let Some(node) = node {
+                    recorded.nodes.insert((index, *node), *child);
+                }
+            }
+        })
+        .flex()
+        .flex_col()
+        .py(px(4.0))
+        .border_t_1()
+        .border_color(theme::border_faint())
+        .children(drawn);
 
     let frame = card_frame(
         div()
@@ -3026,9 +3078,11 @@ fn browser_card(
     )
 }
 
-/// One profile: its port, its name (and ∞), its rules and today's links.
-/// `spot`: its card holds the node with no rules yet under the pointer
-/// while something else is traced, and every other node dims.
+/// One profile, or the card's private-window node: its port, its name (and
+/// ∞), its rules and today's links. The private-window node sits apart
+/// under a dashed hairline, with the mask before its name. `spot`: its
+/// card holds the node with no rules yet under the pointer while something
+/// else is traced, and every other node dims.
 #[allow(clippy::too_many_arguments, reason = "one node's parts, drawn once")]
 fn node_row(
     card_index: usize,
@@ -3040,7 +3094,12 @@ fn node_row(
     cx: &mut Context<'_, PwrRoute>,
 ) -> AnyElement {
     let focus = Focus::Node(card_index, index);
-    let key = FocusKey::Node(card.key().to_owned(), node.profile.clone());
+    let private = node.private.is_some();
+    let key = if private {
+        FocusKey::Private(card.key().to_owned())
+    } else {
+        FocusKey::Node(card.key().to_owned(), node.profile.clone())
+    };
     let lit = trace.lit.node(card_index, index);
     let pinned = trace.pinned == Some(focus);
     let adding = node.unused && trace.idle_hover == Some((card_index, index));
@@ -3067,6 +3126,19 @@ fn node_row(
             .debug_selector(move || format!("overview-node-{card_index}-{index}"))
             .relative()
             .h(px(30.0))
+            .when(private, |row| {
+                row.mt(px(4.0)).child(
+                    div()
+                        .absolute()
+                        .top(px(-3.0))
+                        .left(px(16.0))
+                        .right(px(14.0))
+                        .h(px(0.0))
+                        .border_t_1()
+                        .border_dashed()
+                        .border_color(theme::border_subtle()),
+                )
+            })
             .flex()
             .flex_none()
             .items_center()
@@ -3095,6 +3167,17 @@ fn node_row(
                     .flex()
                     .items_center()
                     .gap(px(6.0))
+                    .when(private, |name| {
+                        name.child(icon(
+                            MASK,
+                            13.0,
+                            if lit || pinned {
+                                theme::accent_bright()
+                            } else {
+                                theme::text_subtle()
+                            },
+                        ))
+                    })
                     .child(one_line(
                         node.label().to_owned(),
                         theme::SANS,
@@ -3164,7 +3247,7 @@ fn node_row(
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
-                this.add_rule_for(&browser, &profile, window, cx);
+                this.add_rule_for(&browser, &profile, private, window, cx);
             }))
     } else {
         element

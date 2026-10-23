@@ -1137,6 +1137,39 @@ fn main() {
                     app.overview.idle_hover = Some(FocusKey::Node("safari".into(), None));
                 },
             },
+            // Private windows: rule 5's private Firefox window pinned, and
+            // Chrome's idle Incognito under the pointer offering "+ Add a
+            // rule…"; Edge's InPrivate idle, Arc and Safari without one.
+            Shot {
+                name: "app-0-overview-private",
+                width: 1240.0,
+                config: None,
+                rules: fixtures::overview_rules,
+                exists: true,
+                day: Some(fixtures::overview_rules_day),
+                status: routing(),
+                prepare: |app| {
+                    app.overview.pin(Some(FocusKey::Private("firefox".into())));
+                    app.overview.idle_hover = Some(FocusKey::Private("google chrome".into()));
+                },
+            },
+            // 1e at 2560: both columns at their caps, the rest to the
+            // routes.
+            Shot {
+                name: "app-0-overview-wide",
+                width: 2560.0,
+                config: None,
+                rules: fixtures::overview_fanin_rules,
+                exists: true,
+                day: Some(fixtures::overview_fanin_day),
+                status: routing(),
+                prepare: |app| {
+                    app.overview.hover(Some(FocusKey::Node(
+                        "microsoft edge".into(),
+                        Some("Research and Development Team".into()),
+                    )));
+                },
+            },
             // 1e with the user's kind of config: inline handlers Finicky
             // names "match", each read by its source, and a matchHostnames
             // list read as its hostnames, all into one Edge profile, traced.

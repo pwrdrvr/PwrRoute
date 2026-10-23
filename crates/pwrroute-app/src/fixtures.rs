@@ -446,8 +446,9 @@ pub fn attribution_activity() -> Vec<DispatchRecord> {
 // example.com, .org and .net hosts only, real browser names, made-up counts.
 
 /// The Overview's visual rules (1a): three rewrites and six rules across
-/// Chrome's two profiles, Firefox and Arc, rule 6 switched off, and Google
-/// Chrome · Personal taking everything else.
+/// Chrome's two profiles, Firefox (rule 5 in a private window) and Arc,
+/// rule 6 switched off, and Google Chrome · Personal taking everything
+/// else.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the window harness and the screens example")
@@ -655,8 +656,30 @@ pub fn overview_fanin_day() -> Vec<DispatchRecord> {
     )
 }
 
+/// `records` with the links `rule` routed opened in a private window, as
+/// the engine marks a `"private": true` rule's result.
+fn in_private(mut records: Vec<DispatchRecord>, rule: usize) -> Vec<DispatchRecord> {
+    for record in &mut records {
+        let routed = record.steps.iter().any(
+            |step| matches!(step, Step::Matched { by: Matched::Rule { index } } if *index == rule),
+        );
+        if !routed {
+            continue;
+        }
+        if let Some(browser) = &mut record.browser {
+            browser.private = true;
+        }
+        for step in &mut record.steps {
+            if let Step::Browser { browser } = step {
+                browser.private = true;
+            }
+        }
+    }
+    records
+}
+
 /// 1a's day over [`overview_rules`]: 1,412 links, 642 to Everything else,
-/// 1,108 rewritten.
+/// 1,108 rewritten; rule 5's 9 opened in a private Firefox window.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the window harness and the screens example")
@@ -666,17 +689,20 @@ pub fn overview_rules_day() -> Vec<DispatchRecord> {
     let pwrroute = Matched::Default {
         owner: Some(pwrroute_router::Owner::PwrRoute),
     };
-    overview_day(
-        &[
-            (rule(0), Some(("Google Chrome", "Work")), 214),
-            (rule(1), Some(("Google Chrome", "Work")), 88),
-            (rule(2), Some(("Firefox", "")), 57),
-            (rule(3), Some(("Arc", "")), 402),
-            (rule(4), Some(("Firefox", "")), 9),
-            (pwrroute, Some(("Google Chrome", "Personal")), 642),
-        ],
-        1_108,
-        0,
+    in_private(
+        overview_day(
+            &[
+                (rule(0), Some(("Google Chrome", "Work")), 214),
+                (rule(1), Some(("Google Chrome", "Work")), 88),
+                (rule(2), Some(("Firefox", "")), 57),
+                (rule(3), Some(("Arc", "")), 402),
+                (rule(4), Some(("Firefox", "")), 9),
+                (pwrroute, Some(("Google Chrome", "Personal")), 642),
+            ],
+            1_108,
+            0,
+        ),
+        4,
     )
 }
 

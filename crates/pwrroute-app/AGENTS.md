@@ -95,7 +95,17 @@ their own modules.
   `browsers.hidden` does not hide (never PwrRoute) under "Also installed"
   when no enabled rule or Everything else routes there, idle profiles
   folded into "+N more profiles" (`OverviewState::expanded`, by card key,
-  for the session). What is hovered, pinned or keyed is kept as a
+  for the session). A browser whose catalog entry can open a private
+  window (`BrowserInfo::private_label`: "Incognito", "InPrivate", "Private
+  window") ends its card with one private-window node, after the fold,
+  never folded or counted in it (`Card::visible`, `FocusKey::Private`):
+  a `"private": true` rule, a handler or `defaultBrowser` whose `args`
+  carry a private flag (`pwrroute_engine::is_private_flag`) routes there
+  whatever profile it names, and today's private links (`Tally` keys on
+  `Browser::private`) count there; a browser without one keeps the route
+  on its profile and the row says "not private". The columns stop at
+  their caps (`MapWidths::of_content`: destinations 266-420, rules up to
+  720) and every pixel past them is the routes' gutter. What is hovered, pinned or keyed is kept as a
   `FocusKey` (a row's `RowSource`, a card's key and profile), never an
   index: the cards re-sort as links come in, so each frame
   `Map::resolve`s it, and a scroll or a reload of `rules.json` lets go of
@@ -113,7 +123,10 @@ their own modules.
   when it returns a literal; a `finicky.matchHostnames` function reads as
   its hostnames (`FunctionSpec::hostnames`, from the engine). An idle
   node's "+ Add a rule…" (its click, or Return) is
-  `PwrRoute::add_rule_for`. The setup card writes
+  `PwrRoute::add_rule_for`, with a private window on for a private-window
+  node. The callout names both defaults as the map names a node (by
+  profile when the browser is the same) and says so plainly when they
+  are the same browser and profile. The setup card writes
   `defaultBrowser`/`defaultProfile`, and the callout writes `precedence`
   (`"pwrroute"`, with Undo), both through `PwrRoute::write_now` (as the
   Rules banner's switch does: sync, refuse as the store would, save now,
