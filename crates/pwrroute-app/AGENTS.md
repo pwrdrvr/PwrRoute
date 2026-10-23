@@ -42,7 +42,8 @@ their own modules.
   `settings.json`'s `browsers.hidden` (bundle ids, or names where there is
   none) keeps apps out of the pickers; rules that name a hidden app still
   resolve. `browser_scan::install_fixture` gives a test a scan; first run
-  (`onboarding.rs`) still scans for itself, since it runs before the window.
+  (`onboarding.rs`) reads the same scan, and its "Look again" (no browsers
+  found) is a rescan.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the
   router's `DispatchRecord`s into a `Feed` entity and keeps it current from
   `Resident::dispatched`; the window's `Activity` and the tray observe it.
@@ -151,7 +152,14 @@ their own modules.
   same setting. Window tests open the importer with `open_with`, naming
   the config in charge, since the router's source is process-wide. Entry points: the 1b banner, the 1a notice,
   Settings' Review import…, File › Import Finicky Config… and first run's
-  Import N rules. The config file is only ever read.
+  Import N rules. First run opens it with `open_from_first_run`: Import
+  writes `rules.json` without opening the main window (through its store
+  only when it is already open), and the importer answers through its
+  `OnDone`, imported with the count or cancelled however it closed (its
+  release counts as a cancel, and so does a window that fails to open).
+  Choose another file keeps the first-run context: the file picked opens
+  for first run the same way, and no file picked is a cancel. The config
+  file is only ever read.
 - **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
   `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
   handle and an engine that follows the same files; `pwrroute mcp` in
@@ -204,23 +212,39 @@ their own modules.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
   buttons do; `onboarding.rs` builds the real ones and the model from
   `Facts` (tests write their own facts and count hook calls). `state.json`
-  in the data directory says whether first run already ran. Step 1 saves
-  `rules.json`'s `defaultBrowser` and, from its profile menu (shown when
-  the browser has profiles), `defaultProfile` ("" for the browser's own
-  default). "Open PwrRoute" (every step done) and "Later" mark it done and
+  in the data directory says whether first run already ran. With a Finicky
+  config in charge the window has three steps (the config, Everything
+  else, the OS default), else two; the body scrolls, and finished steps
+  fold under "Where links go" once routing starts. Everything else is
+  preselected (the config's fixed `defaultBrowser`, the OS default unless
+  it is PwrRoute, the first browser found, all less the apps
+  `browsers.hidden` hides) and written at once to
+  `rules.json`'s `defaultBrowser` and `defaultProfile` ("" for the
+  browser's own default); for a config kept in charge, its "who owns
+  everything else" control writes `rules.json`'s `precedence` (shown only
+  while that config loads; a broken one kept speaks of the browser alone
+  until it does). Both are
+  direct `RulesFile` writes; the main window's store follows the file.
+  Import N rules shows "Importing…" until the importer answers; Don't use
+  it turns the config off through `importer_view::set_source_and_show`
+  (`visualOnly`, `router::choose_source`, and an open main window shown
+  the change), which `onboarding::hooks_with`
+  takes as a parameter so tests never switch the process-wide source.
+  "Open PwrRoute" (every step done) and "Later" mark it done and
   open the main window on Rules, on the first-run window's display
   (`onboarding::main_window_display`); closing the window only marks it
   done. `default_browser.rs` is the only caller of
   `pwrroute_os::set_default_browser`, from a click (Settings, first run's
-  step 3, the tray's "Make default browser…" row); its `Os` struct takes
+  last step, the tray's "Make default browser…" row); its `Os` struct takes
   fakes, so tests never reach the OS. After a request it re-reads the
   status every second for a minute (`POLL_EVERY`, `POLL_FOR`) and on
   window activation. LaunchServices can still name the old browser just
   after the dialog is approved, so an activation only settles a request
-  as refused `ACTIVATION_GRACE` later. While first run is open and step 3
-  is not done it re-reads every second regardless (`follow_while`); step 3
-  shows the wait and "Ask again", and names an uncatalogued default by its
-  bundle's name (`pwrroute_os::app_display_name`).
+  as refused `ACTIVATION_GRACE` later. While first run is open and its last
+  step is not done it re-reads every second regardless (`follow_while`);
+  the step shows the wait and "Ask again", names an uncatalogued default
+  by its bundle's name (`pwrroute_os::app_display_name`), and says why
+  when the OS refuses the request with an error.
   It also re-reads every `RECHECK_EVERY` (a minute) for the life of the
   app and when the tray dropdown opens, so a router with no window
   notices losing the default; the tray chip and its Make default row
