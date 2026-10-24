@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.2.1 - 2026-10-24
+
+- Rule editor - Every way to start a rule opens the same editor. The Rules screen has Add rule and Add rewrite under a Finicky config too, Overview's browser cards have "+ Rule" for the browser and "+ Rule for <profile>" for one profile, Test a link has "Add a rule…" with the narrowest pattern for the tested link, and Activity's sheet no longer preselects a browser. Open in and Profile are pickers built from the browsers and profiles on this Mac, with a field for anything else; a browser or profile this Mac doesn't have is kept, with a warning. Changing the browser clears a profile it lacks, and the private-window switch uses the browser's own word.
+- Diagnostic log - PwrRoute writes `~/Library/Logs/PwrRoute/main.log` (`main.old.log` past 1 MB, readable by you only): its own messages, the updater's, and one line per link with where it came from, where it opened, the rule that chose it and how long each step took, including a short link whose shortener did not answer. On macOS a second line times the hand-off: whose window was on top when the link arrived, and when the browser's came to the front. Never a link's address; a `privacy: none` rule's links show times only, and nothing per link is written while Activity keeps nothing. Activity's retention note names the log.
+
 ## v0.2.0 - 2026-10-24
 
 - App icons - On macOS, browsers and apps show their own icons, as Finder draws them, where they had a two-letter badge: the Overview's rules and destination cards, Rules, Activity, Test a link, Add a rule, first run, Settings › Browsers and Configuration, and the tray dropdown. Icons are read in the background and cached, and Settings › Browsers' Rescan reads them again. An app that is not installed keeps its letters, as do Windows and Linux for now.
