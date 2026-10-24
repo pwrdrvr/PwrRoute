@@ -426,8 +426,9 @@ fn sessions_card(
     if agents.sessions.is_empty() {
         rows.push(empty_row(
             EMPTY_SESSIONS_ID,
-            "No agent has connected yet. Run one of the commands above; the approval window \
-             opens when it does.",
+            "No agent has connected yet. Add PwrRoute with a command above, then start a new \
+             session in that agent: it connects as the session starts, and the approval window \
+             opens over your other windows.",
         ));
     }
     this.disclosure(
