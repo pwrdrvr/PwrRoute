@@ -16,7 +16,8 @@
 //! window order to read, and nothing is logged.
 //!
 //! Privacy follows the link's record: nothing while links are not kept at
-//! all, and only the times, not the apps, for a `privacy: none` rule's link.
+//! all, and only the times, not the apps, for a `privacy: none` rule's link
+//! or a link whose record is not in memory to ask.
 
 use std::{
     sync::{Arc, OnceLock},
@@ -33,6 +34,9 @@ pub const WATCH_FOR: Duration = Duration::from_secs(3);
 pub const SLOW_HANDOFF: Duration = Duration::from_millis(1_000);
 
 const EVERY: Duration = Duration::from_millis(15);
+
+/// How long the watcher waits for the link's record after the hand-off.
+const RECORD_WAIT: Duration = Duration::from_secs(2);
 
 /// Filled once the router is spawned, so the watcher can read the link's
 /// record (its privacy) when it is done.
@@ -71,9 +75,10 @@ pub fn watch(id: DispatchId, received: Instant, router: HandleSlot) {
             if retention.memory.count == 0 && retention.journal.is_none() {
                 return;
             }
-            let hide_apps = router
-                .get(id)
-                .is_some_and(|record| record.privacy == Privacy::None);
+            // The browser can be on top before the dispatch thread has
+            // stored the record, so wait for it a little. A record that
+            // never shows up (not kept in memory) hides the apps.
+            let hide_apps = finished(router, id).is_none_or(|privacy| privacy == Privacy::None);
             let line = track.line(id, hide_apps);
             if track.slow() {
                 log::warn!(target: "pwrroute::link", "{line}");
@@ -81,6 +86,21 @@ pub fn watch(id: DispatchId, received: Instant, router: HandleSlot) {
                 log::info!(target: "pwrroute::link", "{line}");
             }
         });
+}
+
+/// The privacy level link `id`'s record was kept at, once the dispatch
+/// thread has stored it; `None` if it is not there within [`RECORD_WAIT`].
+fn finished(router: &RouterHandle, id: DispatchId) -> Option<Privacy> {
+    let deadline = Instant::now() + RECORD_WAIT;
+    loop {
+        if let Some(record) = router.get(id) {
+            return Some(record.privacy);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(EVERY);
+    }
 }
 
 /// Who owns the frontmost window.
