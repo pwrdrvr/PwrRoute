@@ -143,64 +143,42 @@ fn format_line(time: &str, level: Level, target: &str, message: &str) -> String 
 /// [`MAX_BYTES`].
 ///
 /// Other PwrRoute processes write it too (a second launch, Velopack's hooks,
-/// a copy the link helper starts), and any of them can rotate it. So each
-/// write goes by the file at the path, not by what this process last saw:
-/// when the path names another file (rotated elsewhere), this one reopens
-/// it, and the size checked is the file's own.
+/// a copy the link helper starts), and any of them can rotate it. So nothing
+/// is held open: each line opens the file the path names now, checks that
+/// file's own size, appends and closes. A few lines per link make that
+/// cheap, and no process can be left writing to a file another one moved.
 struct LogFile {
     path: PathBuf,
-    file: File,
 }
 
 impl LogFile {
     fn open(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
-        let path = dir.join(FILE);
-        let file = open_append(&path)?;
-        let mut log = Self { path, file };
-        if log.file.metadata()?.len() >= MAX_BYTES {
-            log.rotate()?;
-        }
+        let log = Self {
+            path: dir.join(FILE),
+        };
+        // Fails here, at install, rather than silently on every line.
+        drop(open_append(&log.path)?);
         Ok(log)
     }
 
     fn write(&mut self, line: &str) {
-        if !self.still_at_path() {
-            match open_append(&self.path) {
-                Ok(file) => self.file = file,
-                Err(_) => return,
-            }
-        }
-        let len = self.file.metadata().map_or(0, |m| m.len());
-        if len + line.len() as u64 > MAX_BYTES && self.rotate().is_err() {
+        let Ok(mut file) = self.rotated_if_full(line.len() as u64) else {
             return;
-        }
-        let _ = self.file.write_all(line.as_bytes());
+        };
+        let _ = file.write_all(line.as_bytes());
     }
 
-    /// The path still names the file this process has open.
-    fn still_at_path(&self) -> bool {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            match (fs::metadata(&self.path), self.file.metadata()) {
-                (Ok(at_path), Ok(open)) => {
-                    at_path.dev() == open.dev() && at_path.ino() == open.ino()
-                }
-                _ => false,
-            }
+    /// The file to append `extra` bytes to: `main.log`, moved aside first
+    /// when they would take it past [`MAX_BYTES`].
+    fn rotated_if_full(&self, extra: u64) -> io::Result<File> {
+        let file = open_append(&self.path)?;
+        if file.metadata()?.len() + extra <= MAX_BYTES {
+            return Ok(file);
         }
-        #[cfg(not(unix))]
-        {
-            // Windows cannot rename a file another process holds open.
-            self.path.exists()
-        }
-    }
-
-    fn rotate(&mut self) -> io::Result<()> {
+        drop(file);
         fs::rename(&self.path, self.path.with_file_name(OLD_FILE))?;
-        self.file = open_append(&self.path)?;
-        Ok(())
+        open_append(&self.path)
     }
 }
 
@@ -288,19 +266,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ours = LogFile::open(dir.path()).unwrap();
         ours.write("ours 1\n");
-        // Another process rotates, then writes the new main.log.
+        // Another process fills the log and rotates it.
         let mut theirs = LogFile::open(dir.path()).unwrap();
-        theirs.rotate().unwrap();
+        theirs.write(&"t".repeat(MAX_BYTES as usize - "ours 1\n".len()));
         theirs.write("theirs\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join(FILE)).unwrap(),
+            "theirs\n"
+        );
 
         ours.write("ours 2\n");
         assert_eq!(
             fs::read_to_string(dir.path().join(FILE)).unwrap(),
             "theirs\nours 2\n"
         );
-        assert_eq!(
-            fs::read_to_string(dir.path().join(OLD_FILE)).unwrap(),
-            "ours 1\n"
+        assert!(
+            fs::read_to_string(dir.path().join(OLD_FILE))
+                .unwrap()
+                .starts_with("ours 1\n")
         );
     }
 
