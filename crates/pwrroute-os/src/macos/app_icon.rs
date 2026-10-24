@@ -14,9 +14,10 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
 
-/// The `.app` bundle `app` names: a bundle path, a bundle id
-/// (`com.google.Chrome`) or an app's name (`Google Chrome`), as
-/// LaunchServices finds it. `None` when no installed app answers to it.
+/// The `.app` bundle `app` names: a bundle id (`com.google.Chrome`) or an
+/// app's name (`Google Chrome`), as LaunchServices finds it, or a path,
+/// which may be any file (Finder draws an icon for each). `None` when no
+/// installed app or file answers to it.
 pub fn bundle_path(app: &str) -> Option<PathBuf> {
     let app = app.trim();
     if app.is_empty() {
@@ -24,7 +25,7 @@ pub fn bundle_path(app: &str) -> Option<PathBuf> {
     }
     if app.starts_with('/') {
         let path = PathBuf::from(app);
-        return path.is_dir().then_some(path);
+        return path.exists().then_some(path);
     }
     autoreleasepool(|_| {
         let workspace = NSWorkspace::sharedWorkspace();
@@ -119,6 +120,9 @@ mod tests {
         assert!(by_id.ends_with("Finder.app"), "{by_id:?}");
         assert_eq!(bundle_path("Finder").as_ref(), Some(&by_id));
         assert_eq!(bundle_path(by_id.to_str().unwrap()).as_ref(), Some(&by_id));
+        // A path to a file in it, as a rule may name an app.
+        let file = by_id.join("Contents/Info.plist");
+        assert_eq!(bundle_path(file.to_str().unwrap()), Some(file));
     }
 
     #[test]

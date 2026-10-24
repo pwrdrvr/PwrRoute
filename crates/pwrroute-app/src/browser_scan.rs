@@ -110,6 +110,12 @@ pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
     })
 }
 
+/// Whether the scan has run, so [`location_of`] can answer.
+pub fn has_run(cx: &App) -> bool {
+    cx.try_global::<ScanGlobal>()
+        .is_some_and(|global| global.apps.is_some())
+}
+
 /// Where the scan found the app `value` names, when it has already run;
 /// never starts one, so it never reads the disk.
 pub fn location_of(value: &str, cx: &App) -> Option<PathBuf> {

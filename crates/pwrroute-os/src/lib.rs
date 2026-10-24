@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use pwrroute_router::OpenerInfo;
 
 /// The installed app `app` names: a bundle id, an app's name as Finder
-/// shows it, or a bundle path. Reads LaunchServices and the disk, so call it
+/// shows it, or a path to any file. Reads LaunchServices and the disk, so call it
 /// off the UI thread. Always `None` off macOS, which has no implementation
 /// yet.
 pub fn app_bundle(app: &str) -> Option<PathBuf> {

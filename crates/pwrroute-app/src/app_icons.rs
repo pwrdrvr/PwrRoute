@@ -30,8 +30,8 @@ pub struct IconSource {
 }
 
 /// Every icon asked for so far, so [`forget`] can drop them, and where the
-/// scan placed each app the first time it was asked, so a scan that runs
-/// later does not load the same icon again under another key.
+/// scan placed each app once the scan has run, so the key stays the same
+/// from then on.
 #[derive(Default)]
 struct AppIcons {
     asked: HashSet<IconSource>,
@@ -40,7 +40,9 @@ struct AppIcons {
 
 impl Global for AppIcons {}
 
-/// Turns icons on for this process. Without it every badge is letters.
+/// Turns icons on for this process. Without it every badge is letters. Off
+/// macOS there is no implementation yet, so badges stay letters from the
+/// first frame and nothing is loaded.
 pub fn install(cx: &mut App) {
     cx.set_global(AppIcons::default());
 }
@@ -52,8 +54,21 @@ pub fn forget(cx: &mut App) {
         return;
     }
     let icons = std::mem::take(cx.global_mut::<AppIcons>());
-    for source in icons.asked {
-        cx.remove_asset::<AppIcon>(&source);
+    let loaded: Vec<Arc<RenderImage>> = icons
+        .asked
+        .iter()
+        .filter_map(|source| cx.fetch_asset::<AppIcon>(source)?.ok())
+        .collect();
+    for source in &icons.asked {
+        cx.remove_asset::<AppIcon>(source);
+    }
+    // Their textures stay in each window's atlas until dropped.
+    for window in cx.windows() {
+        let _ = window.update(cx, |_, window, _| {
+            for image in &loaded {
+                let _ = window.drop_image(image.clone());
+            }
+        });
     }
     cx.refresh_windows();
 }
@@ -62,12 +77,15 @@ pub fn forget(cx: &mut App) {
 /// `widgets::badge_for` was given: a name, a bundle id or a path.
 pub fn source(app: SharedString, points: f32) -> ImageSource {
     ImageSource::Custom(Arc::new(move |window, cx| {
-        if !cx.has_global::<AppIcons>() {
+        if !cfg!(target_os = "macos") || !cx.has_global::<AppIcons>() {
             return Some(Err(ImageCacheError::Asset("app icons are off".into())));
         }
         let pixels = (points * window.scale_factor()).ceil() as u32;
         let bundle = match cx.global::<AppIcons>().bundles.get(&app) {
             Some(bundle) => bundle.clone(),
+            // Before the scan runs, LaunchServices finds the app; once it
+            // has, its answer is kept so a later frame keeps the same key.
+            None if !browser_scan::has_run(cx) => None,
             None => {
                 let bundle = browser_scan::location_of(&app, cx);
                 cx.global_mut::<AppIcons>()
