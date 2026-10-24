@@ -51,7 +51,7 @@ impl Loader for Following {
         if let Some(Err(e)) = self.0.reload_if_changed() {
             // The last engine that worked goes on answering; say so where
             // a developer looks, without the files' contents.
-            eprintln!("pwrroute-mcp: the config did not reload: {e:#}");
+            log::warn!("the config did not reload: {e:#}");
         }
         Ok(self.0.engine())
     }

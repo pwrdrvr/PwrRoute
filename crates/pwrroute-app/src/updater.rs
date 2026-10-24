@@ -131,10 +131,10 @@ pub fn apply_pending_on_quit() {
     match apply_pending() {
         QuitApply::Nothing => {}
         QuitApply::Applying(version) => {
-            eprintln!("pwrroute: updates: installing {version} after this quit");
+            log::info!("updates: installing {version} after this quit");
         }
         QuitApply::Failed(why) => {
-            eprintln!("pwrroute: updates: could not install the downloaded update: {why}");
+            log::warn!("updates: could not install the downloaded update: {why}");
         }
     }
 }
@@ -592,7 +592,7 @@ fn save_held(held: &Held) {
         return;
     };
     if let Err(error) = write_held(&path, held) {
-        eprintln!("pwrroute: updates: could not record the download: {error}");
+        log::warn!("updates: could not record the download: {error}");
     }
 }
 
@@ -660,7 +660,7 @@ fn log(trigger: Trigger, outcome: &Outcome) {
         Trigger::Settings => "settings",
         Trigger::Selection => "channel",
     };
-    eprintln!("pwrroute: updates ({trigger}): {outcome}");
+    log::info!("updates ({trigger}): {outcome}");
 }
 
 #[cfg(test)]

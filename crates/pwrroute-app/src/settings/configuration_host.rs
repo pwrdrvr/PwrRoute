@@ -580,7 +580,7 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
                 .or_else(|| discovery::find_config(&discovery::config_candidates(&environment)));
             match config {
                 Some(path) => crate::importer_view::open(path, false, cx),
-                None => eprintln!("pwrroute: settings: no Finicky config to import"),
+                None => log::warn!("settings: no Finicky config to import"),
             }
         }
         SettingsRequest::SetDefaultOwner(_) | SettingsRequest::SetDefaultBrowser { .. } => {
@@ -697,7 +697,7 @@ fn settle(
         let _ = router.refresh();
     }
     if let Err(reason) = &saved {
-        eprintln!("pwrroute: settings: cannot save rules.json: {reason}");
+        log::warn!("settings: cannot save rules.json: {reason}");
     }
     cx.defer(move |cx| {
         if !settings::is_open(cx) {
@@ -795,7 +795,7 @@ pub fn follow(window: &mut Window, cx: &mut App) {
 /// when nothing has written there yet.
 fn open_data_folder(cx: &App) {
     let Some(dir) = pwrroute_os::data_dir() else {
-        eprintln!("pwrroute: settings: no data directory to open");
+        log::warn!("settings: no data directory to open");
         return;
     };
     if !dir.exists() {
@@ -807,7 +807,7 @@ fn open_data_folder(cx: &App) {
             builder.mode(0o700);
         }
         if let Err(error) = builder.create(&dir) {
-            eprintln!("pwrroute: cannot create {}: {error}", dir.display());
+            log::warn!("cannot create {}: {error}", dir.display());
             return;
         }
     }

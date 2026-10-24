@@ -22,12 +22,14 @@ mod browser_scan;
 mod chrome;
 mod config_view;
 mod default_browser;
+mod diag_log;
 mod dock;
 mod e2e;
 mod editor;
 mod first_run;
 mod fixtures;
 mod github_releases;
+mod handoff;
 mod importer;
 mod importer_view;
 #[cfg(target_os = "macos")]
@@ -123,6 +125,8 @@ fn main() -> ExitCode {
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
         return pwrroute_mcp::proxy::main();
     }
+    // Before Velopack's hooks, so an install or update that fails says why.
+    diag_log::install();
     // First: Velopack's install, update and uninstall hooks run here and
     // exit, before this process could take the router lock.
     updater::run_startup_hooks();
@@ -131,6 +135,13 @@ fn main() -> ExitCode {
         return code;
     }
     let args = router::Args::from_env();
+    log::info!(
+        target: "pwrroute",
+        "PwrRoute {} starting (pid {}{})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+        if args.links.is_empty() { "" } else { ", launched with links" }
+    );
     let resident = match router::start(&args) {
         router::Start::Exit => return ExitCode::SUCCESS,
         router::Start::Resident(resident) => *resident,

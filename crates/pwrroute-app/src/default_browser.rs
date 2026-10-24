@@ -503,17 +503,17 @@ pub fn handle_settings_request(asked: &SettingsRequest, cx: &mut App) -> bool {
         SettingsRequest::RegisterDefaultBrowser => {
             match request(cx) {
                 Ok(outcome) => {
-                    eprintln!("pwrroute: asked the OS for the default browser: {outcome:?}");
+                    log::info!("asked the OS for the default browser: {outcome:?}");
                 }
                 Err(error) => {
-                    eprintln!("pwrroute: could not ask for the default browser: {error}");
+                    log::warn!("could not ask for the default browser: {error}");
                 }
             }
             true
         }
         SettingsRequest::OpenDefaultAppsSettings => {
             if let Err(error) = open_settings(cx) {
-                eprintln!("pwrroute: could not open the default-apps settings: {error}");
+                log::warn!("could not open the default-apps settings: {error}");
             }
             true
         }

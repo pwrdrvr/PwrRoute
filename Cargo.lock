@@ -5985,6 +5985,7 @@ dependencies = [
  "chrono",
  "gpui-kit",
  "interprocess",
+ "log",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -6052,6 +6053,7 @@ name = "pwrroute-mcp"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "log",
  "pwrroute-browsers",
  "pwrroute-engine",
  "pwrroute-os",
@@ -6075,6 +6077,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-core-services",
  "objc2-foundation 0.3.2",
  "pwrroute-router",
@@ -6088,6 +6091,7 @@ dependencies = [
  "anyhow",
  "interprocess",
  "libc",
+ "log",
  "pwrroute-engine",
  "serde",
  "serde_json",

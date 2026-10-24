@@ -168,10 +168,10 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
                     let saved =
                         store.update(cx, |store, _| store.update(|all| all.updates = settings));
                     if let Err(error) = saved {
-                        eprintln!("pwrroute: cannot save settings: {error:#}");
+                        log::warn!("cannot save settings: {error:#}");
                     }
                 }
-                None => eprintln!("pwrroute: settings: no store; the release channel is not saved"),
+                None => log::warn!("settings: no store; the release channel is not saved"),
             }
             updater::set_selection(settings);
             refresh(cx);
@@ -183,11 +183,11 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
                 .name("pwrroute-restart".to_owned())
                 .spawn(|| {
                     if let Err(error) = updater::restart_to_update() {
-                        eprintln!("pwrroute: updates: could not restart to update: {error}");
+                        log::warn!("updates: could not restart to update: {error}");
                     }
                 });
             if let Err(error) = spawned {
-                eprintln!("pwrroute: updates: could not restart to update: {error}");
+                log::warn!("updates: could not restart to update: {error}");
             }
         }
         _ => return false,

@@ -266,7 +266,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
         }
         // First run would otherwise wait on Importing… for good.
         Err(error) => {
-            eprintln!("pwrroute: could not open the importer: {error}");
+            log::warn!("could not open the importer: {error}");
             if let Some(on_done) = failed {
                 cx.defer(move |cx| on_done(ImportOutcome::Cancelled, cx));
             }
@@ -492,7 +492,7 @@ pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> Option<Option<
     ));
     store.update(cx, |store, _| {
         if let Err(error) = store.update(|settings| settings.source = source) {
-            eprintln!("pwrroute: cannot save the rules source: {error:#}");
+            log::warn!("cannot save the rules source: {error:#}");
         }
     });
     let config = match &choice {
@@ -535,7 +535,7 @@ fn dismiss(file: &Path, cx: &mut App) {
                 }
             });
             if let Err(error) = saved {
-                eprintln!("pwrroute: cannot save the dismissal: {error:#}");
+                log::warn!("cannot save the dismissal: {error:#}");
             }
         });
     }

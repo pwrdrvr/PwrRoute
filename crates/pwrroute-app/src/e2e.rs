@@ -176,11 +176,11 @@ pub fn start(router: RouterHandle) -> Option<Hook> {
     match listen(&name, router) {
         Ok(hook) => {
             ENABLED.store(true, Ordering::Relaxed);
-            eprintln!("pwrroute: e2e control socket on {name}");
+            log::info!("e2e control socket on {name}");
             Some(hook)
         }
         Err(e) => {
-            eprintln!("pwrroute: cannot open the e2e control socket {name}: {e}");
+            log::warn!("cannot open the e2e control socket {name}: {e}");
             None
         }
     }

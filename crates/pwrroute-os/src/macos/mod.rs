@@ -1,10 +1,12 @@
-//! macOS: the sender of an Apple Event, LaunchServices registration and
-//! apps' icons.
+//! macOS: the sender of an Apple Event, LaunchServices registration, apps'
+//! icons and the window order.
 
 mod app_icon;
 mod launch_services;
+mod window_order;
 
 pub use app_icon::{bundle_path as installed_app_bundle, icon_png as app_icon_png};
+pub use window_order::top_window_owner;
 
 use std::path::{Path, PathBuf};
 

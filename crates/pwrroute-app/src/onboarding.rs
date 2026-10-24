@@ -104,10 +104,7 @@ impl State {
         match Self::load(dir) {
             Ok(state) => !state.first_run_completed,
             Err(error) => {
-                eprintln!(
-                    "pwrroute: cannot read {}: {error:#}",
-                    Self::path(dir).display()
-                );
+                log::warn!("cannot read {}: {error:#}", Self::path(dir).display());
                 false
             }
         }
@@ -130,7 +127,7 @@ fn edit_state(dir: Option<&Path>, edit: impl FnOnce(&mut State)) {
         state.save(dir)
     });
     if let Err(error) = result {
-        eprintln!("pwrroute: cannot save first-run state: {error:#}");
+        log::warn!("cannot save first-run state: {error:#}");
     }
 }
 
@@ -556,11 +553,11 @@ pub fn hooks_with(
         }),
         on_set_default_browser: Rc::new(|cx| match default_browser::request(cx) {
             Ok(outcome) => {
-                eprintln!("pwrroute: first run asked the OS for the default browser: {outcome:?}");
+                log::info!("first run asked the OS for the default browser: {outcome:?}");
                 Ok(())
             }
             Err(error) => {
-                eprintln!("pwrroute: first run could not ask for the default browser: {error}");
+                log::warn!("first run could not ask for the default browser: {error}");
                 Err(format!("{error:#}"))
             }
         }),
@@ -592,7 +589,7 @@ pub fn open(cx: &mut App) {
     let window = match first_run::open(model, hooks(), cx) {
         Ok(window) => window,
         Err(error) => {
-            eprintln!("pwrroute: could not open the first-run window: {error}");
+            log::warn!("could not open the first-run window: {error}");
             return;
         }
     };

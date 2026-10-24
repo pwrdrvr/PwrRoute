@@ -182,7 +182,7 @@ impl Default for SettingsHost {
             on_request: Rc::new(|request, _, _| {
                 // Never act on the OS from here: registration in particular
                 // is the explicit action the router's owner wires up.
-                eprintln!("pwrroute: settings: {request:?} is not wired up yet");
+                log::warn!("settings: {request:?} is not wired up yet");
             }),
         }
     }
@@ -259,7 +259,7 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
             cx.set_global(OpenWindow(Some(handle)));
             cx.activate(true);
         }
-        Err(error) => eprintln!("pwrroute: could not open Settings: {error}"),
+        Err(error) => log::warn!("could not open Settings: {error}"),
     }
 }
 

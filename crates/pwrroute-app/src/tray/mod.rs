@@ -144,7 +144,7 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
     let native = match NativeTray::create(model.read(cx), events) {
         Ok(native) => Some(native),
         Err(error) => {
-            eprintln!("pwrroute: no tray icon: {error}");
+            log::warn!("no tray icon: {error}");
             None
         }
     };
@@ -411,7 +411,7 @@ fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
     };
     match dropdown::open(model, origin, display, max_height, cx) {
         Ok(window) => cx.global_mut::<Tray>().dropdown = Some(window),
-        Err(error) => eprintln!("pwrroute: could not open the tray dropdown: {error}"),
+        Err(error) => log::warn!("could not open the tray dropdown: {error}"),
     }
 }
 

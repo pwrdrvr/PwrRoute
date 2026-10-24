@@ -397,7 +397,7 @@ impl Feed {
         match cache.refresh(&config, limit) {
             Ok(_) => f(cache.records()),
             Err(error) => {
-                eprintln!("pwrroute: cannot read the activity journal: {error}");
+                log::warn!("cannot read the activity journal: {error}");
                 cache.forget();
                 f(&[])
             }
@@ -2162,6 +2162,7 @@ mod tests {
             outcome,
             timings: Timings {
                 queue_us: 40,
+                expand_us: 0,
                 resolve_us: 600,
                 launch_us: 5_100,
                 total_us: 5_740,

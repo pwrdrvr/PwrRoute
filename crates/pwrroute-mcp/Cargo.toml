@@ -12,6 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
+log = "0.4"
 pwrroute-browsers = { workspace = true }
 pwrroute-engine = { workspace = true }
 pwrroute-os = { workspace = true }

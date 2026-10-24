@@ -16,6 +16,8 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+# The diagnostic log (diag_log): one logger for PwrRoute, Velopack and GPUI.
+log = "0.4"
 anyhow = { workspace = true }
 pwrroute-browsers = { workspace = true }
 pwrroute-engine = { workspace = true }

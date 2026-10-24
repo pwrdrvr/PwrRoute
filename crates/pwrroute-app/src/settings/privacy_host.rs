@@ -266,12 +266,12 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
 
 fn save(cx: &mut App, edit: impl FnOnce(&mut crate::settings_store::Settings)) {
     let Some(store) = settings_store::store(cx) else {
-        eprintln!("pwrroute: settings: no store; the change is not saved");
+        log::warn!("settings: no store; the change is not saved");
         return;
     };
     let result = store.update(cx, |store, _| store.update(edit));
     if let Err(error) = result {
-        eprintln!("pwrroute: cannot save settings: {error:#}");
+        log::warn!("cannot save settings: {error:#}");
     }
 }
 
@@ -306,7 +306,7 @@ fn reveal(dir: &Path, cx: &App) {
             builder.mode(0o700);
         }
         if let Err(error) = builder.create(dir) {
-            eprintln!("pwrroute: cannot create {}: {error}", dir.display());
+            log::warn!("cannot create {}: {error}", dir.display());
             return;
         }
     }
@@ -347,11 +347,11 @@ pub fn delete_journal_files(dir: &Path) {
                 if let Err(error) = fs::remove_file(&path)
                     && error.kind() != io::ErrorKind::NotFound
                 {
-                    eprintln!("pwrroute: cannot delete {}: {error}", path.display());
+                    log::warn!("cannot delete {}: {error}", path.display());
                 }
             }
         }
-        Err(error) => eprintln!("pwrroute: cannot read {}: {error}", dir.display()),
+        Err(error) => log::warn!("cannot read {}: {error}", dir.display()),
     }
 }
 
@@ -376,7 +376,7 @@ fn clear_recent(cx: &mut App) {
 /// anywhere until it names a path. Activity's Export… comes here too.
 pub fn export(cx: &mut App) {
     let Some(router) = settings_store::router(cx) else {
-        eprintln!("pwrroute: settings: nothing to export without a router");
+        log::warn!("settings: nothing to export without a router");
         return;
     };
     let directory = std::env::home_dir()
@@ -388,14 +388,11 @@ pub fn export(cx: &mut App) {
     cx.spawn(async move |_| match chosen.await {
         Ok(Ok(Some(path))) => {
             if let Err(error) = write_export(&router, &path) {
-                eprintln!(
-                    "pwrroute: cannot export Activity to {}: {error}",
-                    path.display()
-                );
+                log::warn!("cannot export Activity to {}: {error}", path.display());
             }
         }
         Ok(Ok(None)) => {}
-        Ok(Err(error)) => eprintln!("pwrroute: the save dialog failed: {error:#}"),
+        Ok(Err(error)) => log::warn!("the save dialog failed: {error:#}"),
         Err(_) => {}
     })
     .detach();

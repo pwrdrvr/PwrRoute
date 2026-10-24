@@ -108,6 +108,6 @@ impl AssetSource for Assets {
 pub fn load_fonts(cx: &App) {
     let fonts = FONTS.iter().map(|bytes| Cow::Borrowed(*bytes)).collect();
     if let Err(error) = cx.text_system().add_fonts(fonts) {
-        eprintln!("pwrroute: could not load Geist, using the system font: {error}");
+        log::warn!("could not load Geist, using the system font: {error}");
     }
 }

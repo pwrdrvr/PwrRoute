@@ -190,7 +190,7 @@ impl Journal {
                     self.config.dir.display()
                 );
                 if self.error.is_none() {
-                    eprintln!("pwrroute: {message}; links are still routed");
+                    log::warn!("{message}; links are still routed");
                 }
                 self.error = Some(message);
             }
@@ -217,7 +217,7 @@ impl Journal {
                     self.config.dir.display()
                 );
                 if self.prune_error.is_none() {
-                    eprintln!("pwrroute: {message}");
+                    log::warn!("{message}");
                 }
                 self.prune_error = Some(message);
             } else {

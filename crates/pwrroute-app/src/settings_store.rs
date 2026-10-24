@@ -231,7 +231,7 @@ impl SettingsStore {
         let settings = match dir.as_deref().map(Settings::load) {
             Some(Ok(settings)) => settings,
             Some(Err(error)) => {
-                eprintln!("pwrroute: cannot read settings: {error:#}; using the defaults");
+                log::warn!("cannot read settings: {error:#}; using the defaults");
                 Settings::default()
             }
             None => Settings::default(),

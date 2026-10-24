@@ -184,6 +184,20 @@ their own modules.
   `pwrroute_rules_apply` the audit reports as written. Never write the
   file around the store from the app; agents and editors go through the
   check instead.
+- **Log with the `log` macros, never `eprintln!` (`diag_log.rs`).**
+  `diag_log::install` (top of `main`) sends PwrRoute's lines, Velopack's and
+  GPUI's warnings to `main.log` in `pwrroute_os::log_dir()`
+  (`~/Library/Logs/PwrRoute`), rotated to `main.old.log` past 1 MB, and
+  echoes to stderr only when stderr is a terminal. A launched app has no
+  terminal, so a message on stderr is lost. `PWRROUTE_LOG=debug` raises
+  PwrRoute's level. `eprintln!` stays only for the `pwrroute rules` CLI and
+  `pwrroute mcp`, whose stderr is someone's terminal or MCP client.
+  **Never log a URL, a host, a window title or error text that can quote
+  one.** Per-link lines come from the router (`DispatchRecord::log_line`,
+  after the record is reduced to its rule's privacy) and from `handoff.rs`
+  (who owns the top window from receipt until the browser does), and both
+  are written only while links are kept at all; the retention text in
+  Activity, Settings and MCP names the log while it is.
 - **Examples and tests are the only URLs that reach disk, and only by
   hand.** `rules_store.rs` writes a rule's `examples`, a rewrite's
   `url`/`becomes` pairs, `rules[].private` / `rules[].privacy` and the
