@@ -32,7 +32,8 @@ use gpui_kit::base::Button;
 use gpui_kit::{
     App, AppContext as _, BorrowAppContext as _, Bounds, Context, FocusHandle, Global,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px,
+    size,
 };
 use pwrroute_engine::{
     ConfigChoice, Limits,
@@ -684,8 +685,22 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
 
 // ---- The approval window --------------------------------------------------
 
+/// The approval window's kind. An agent connects from a terminal or an
+/// editor, which is the active app then, and since macOS 14 PwrRoute can't
+/// make itself active: a normal window would open behind that app, or on
+/// another Space when it is full screen, and nobody would see it. A pop-up
+/// panel shows over every app and on every Space (full-screen ones too) and
+/// takes clicks and keys without activating PwrRoute. Elsewhere `PopUp` is a
+/// window without a frame (Windows) or one the window manager ignores (X11),
+/// so it stays a normal window.
+#[cfg(target_os = "macos")]
+const PROMPT_KIND: WindowKind = WindowKind::PopUp;
+#[cfg(not(target_os = "macos"))]
+const PROMPT_KIND: WindowKind = WindowKind::Normal;
+
 fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     let id = request.id.clone();
+    let client = request.client_name.clone();
     let display = crate::placement::display_for_new_window(cx);
     let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let opened = cx.open_window(
@@ -702,14 +717,23 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
             }),
             app_id: Some("pwrroute".to_owned()),
             window_min_size: Some(size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1))),
+            kind: PROMPT_KIND,
+            focus: true,
+            show: true,
             ..Default::default()
         },
         |_, cx| cx.new(|cx| ApprovalWindow::new(request, reply, cx)),
     );
     match opened {
         Ok(window) => {
+            log::info!("approval window open for agent {client:?}");
             let _ = window.update(cx, |this, window, cx| window.focus(&this.focus, cx));
-            cx.activate(true);
+            // Off macOS the window is a normal one and needs the app in
+            // front; on macOS the panel shows without it, and an activation
+            // that went through would switch the person to PwrRoute's Space.
+            if PROMPT_KIND == WindowKind::Normal {
+                cx.activate(true);
+            }
             cx.update_global::<Prompts, _>(|prompts, _| {
                 prompts.0.insert(id, window);
             });
