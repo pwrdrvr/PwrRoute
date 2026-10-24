@@ -436,7 +436,7 @@ pub enum Usage {
 /// what the updater last said.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
-    /// "0.1.0".
+    /// "0.2.0".
     pub version: SharedString,
     /// "Stable · Latest": the release channel slot this copy follows.
     pub channel: SharedString,
@@ -492,7 +492,7 @@ pub enum UpdateState {
 /// and states, never a link.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostics {
-    /// "0.1.0 · release · arm64".
+    /// "0.2.0 · release · arm64".
     pub version: SharedString,
     /// "macOS 15.6 (arm64)".
     pub os: SharedString,
