@@ -46,6 +46,23 @@ use std::path::{Path, PathBuf};
 
 use pwrroute_router::OpenerInfo;
 
+/// Hands the front to the running `app` (a bundle id, app name or path)
+/// when this app is the active one, as macOS 14's cooperative activation
+/// asks of an app that opens another. Any thread. `false` when nothing was
+/// asked: off macOS, before macOS 14, this app not active, or `app` not
+/// running.
+pub fn pass_front_to(app: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::pass_front_to(app)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        false
+    }
+}
+
 /// The process that owns a window, and its bundle id when it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowOwner {

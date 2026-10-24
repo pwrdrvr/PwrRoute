@@ -11,7 +11,8 @@ pub use window_order::top_window_owner;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use objc2_app_kit::{NSRunningApplication, NSWorkspace};
+use objc2::rc::autoreleasepool;
+use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
 use pwrroute_router::OpenerInfo;
 
@@ -90,6 +91,48 @@ pub fn open_settings() -> Result<()> {
         .spawn()
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
+}
+
+/// Hands the front to the running `app` (a bundle id, an app name or a
+/// path), when this app is the active one: macOS 14's cooperative
+/// activation lets an app bring itself forward only when the active app
+/// gives way, and a browser that takes a link from a second instance
+/// (`open -g -n`, a Chromium profile hand-off) brings itself forward. Called
+/// from any thread: `NSRunningApplication` is thread-safe, unlike
+/// `NSApp.yieldActivation`, and the main thread may be the one busy.
+/// `false` when nothing was asked: an older macOS, this app not active, or
+/// `app` not running.
+pub fn pass_front_to(app: &str) -> bool {
+    if !objc2::available!(macos = 14.0) {
+        return false;
+    }
+    autoreleasepool(|_| {
+        let me = NSRunningApplication::currentApplication();
+        if !me.isActive() {
+            return false;
+        }
+        let Some(id) = bundle_id_for(app) else {
+            return false;
+        };
+        let running =
+            NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(&id));
+        let Some(target) = running.firstObject() else {
+            return false;
+        };
+        target.activateFromApplication_options(&me, NSApplicationActivationOptions::empty())
+    })
+}
+
+/// The bundle id of `app`: itself when an app with that id is running,
+/// else the installed bundle's that `app` names.
+fn bundle_id_for(app: &str) -> Option<String> {
+    if app_is_running(app) {
+        return Some(app.to_owned());
+    }
+    let path = installed_app_bundle(app)?;
+    NSBundle::bundleWithPath(&NSString::from_str(path.to_str()?))?
+        .bundleIdentifier()
+        .map(|id| id.to_string())
 }
 
 /// Whether an app with `bundle_id` is running, as AppKit's running

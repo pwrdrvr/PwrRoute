@@ -676,9 +676,23 @@ impl Launcher for BrowserLauncher {
             for note in &plan.notes {
                 log::warn!("{}", describe_note(note));
             }
+            if passes_the_front(browser, &plan.args) {
+                let passed = pwrroute_os::pass_front_to(&browser.name);
+                log::debug!("passed the front to {:?}: {passed}", browser.name);
+            }
         }
         Ok(())
     }
+}
+
+/// A hand-off launch (`open -g -n`, which a Chromium profile needs) keeps
+/// the short-lived second instance in the background, so the running
+/// browser brings itself forward. macOS 14 lets it only when the active app
+/// gives way, and when a link activated PwrRoute that is PwrRoute: the
+/// person watches PwrRoute's window until macOS relents. So the launcher
+/// passes the front on, unless the link asked to open in the background.
+fn passes_the_front(browser: &Browser, args: &[String]) -> bool {
+    browser.open_in_background != Some(true) && args.iter().any(|a| a == "-g")
 }
 
 /// Only the error's `Display`: `LaunchError::Failed` also carries `open`'s
@@ -724,6 +738,29 @@ mod tests {
         Args::parse(args.iter().map(OsString::from).collect())
     }
 
+    #[test]
+    fn a_hand_off_launch_passes_the_front_unless_it_asked_for_the_background() {
+        let mut browser = Browser {
+            name: "Google Chrome".into(),
+            app_type: pwrroute_engine::AppType::AppName,
+            url: "https://example.com/".into(),
+            profile: "Profile 1".into(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy: pwrroute_engine::Privacy::Full,
+        };
+        let hand_off: Vec<String> = ["-a", "Google Chrome", "-g", "-n", "--args"]
+            .map(String::from)
+            .to_vec();
+        let plain: Vec<String> = ["-a", "Google Chrome", "https://example.com/"]
+            .map(String::from)
+            .to_vec();
+        assert!(passes_the_front(&browser, &hand_off));
+        assert!(!passes_the_front(&browser, &plain));
+        browser.open_in_background = Some(true);
+        assert!(!passes_the_front(&browser, &hand_off));
+    }
     #[test]
     fn the_command_line_carries_links_and_flags() {
         let args = parse(&[
