@@ -142,7 +142,9 @@ mod tests {
         };
         let model = build(&installation, &State::default(), Local::now());
         assert_eq!(model.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(model.channel, "prerelease");
+        // The crate's own version decides: stable for 0.1.0, prerelease for
+        // an -rc build.
+        assert_eq!(model.channel, updater::channel(env!("CARGO_PKG_VERSION")));
         assert!(matches!(model.state, UpdateState::NotUpdatable(_)));
         assert_eq!(model.last_checked, None);
         // The real producer on this test binary says the same.
