@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* ---- overview: hero ---- */
+          .hero { position: relative; display: flex; align-items: center; gap: 16px; min-height: 96px; padding: 18px 20px; border: 1px solid var(--accent-border); border-radius: var(--radius-xl); background: linear-gradient(90deg, rgba(255,138,31,0.11) 0%, rgba(255,138,31,0.03) 42%, var(--bg-panel) 72%); flex: 0 0 auto; }
+          .hero.warn { border-color: rgba(217,154,61,0.4); background: linear-gradient(90deg, rgba(217,154,61,0.12) 0%, rgba(217,154,61,0.03) 42%, var(--bg-panel) 72%); }
+          .hero.off { border-color: var(--border-default); background: var(--bg-panel); }
+          .hero.bad { border-color: rgba(196,90,58,0.5); background: linear-gradient(90deg, rgba(185,66,50,0.16) 0%, rgba(185,66,50,0.04) 42%, var(--bg-panel) 72%); }
+          .ht { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+          .ht b { font: 700 24px/1.15 var(--font-sans); letter-spacing: -0.015em; color: var(--text-primary); }
+          .ht span { font: 500 11.5px/1.5 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .ht span em { font-style: normal; color: var(--text-subtle); }
+          .orb { width: 56px; height: 56px; flex: 0 0 auto; border-radius: 14px; display: flex; align-items: center; justify-content: center; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-border); box-shadow: 0 0 0 4px rgba(255,138,31,0.06), 0 0 28px rgba(255,138,31,0.2); }
+          .orb svg { display: block; }
+          .orb.warn { color: var(--status-warning); background: var(--warn-soft); border-color: rgba(217,154,61,0.4); box-shadow: none; }
+          .orb.off { color: var(--text-muted); background: var(--bg-panel-elevated); border-color: var(--border-default); box-shadow: none; }
+          .orb.bad { color: var(--danger-text); background: var(--danger-soft); border-color: transparent; box-shadow: none; }
+          .strip-chip.acc .dot { background: var(--accent); }
+          .strip-chip.bad .dot { background: var(--status-error); }
+          .cap { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+          .cap small { margin-left: 8px; font: 500 10.5px/1 var(--font-sans); letter-spacing: 0; text-transform: none; color: var(--text-subtle); }
+          .wcap { color: var(--warn-text); }
+          /* ---- today strip ---- */
+          .blk { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+          .blk-hd { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+          .today { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+          .tile { display: flex; flex-direction: column; gap: 9px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-panel); }
+          .tile .tl { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+          .tile .tl em { font: 500 13px/1 var(--font-sans); font-style: normal; color: var(--text-subtle); letter-spacing: 0; }
+          .tile .tn { font: 700 22px/1 var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--text-primary); }
+          .tile .tn.zero { color: var(--text-subtle); }
+          .tile .tn.bad { color: var(--danger-text); }
+          /* ---- route map ---- */
+          .map { flex: 0 0 auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); background: var(--bg-panel); overflow: hidden; }
+          .map-hd { display: flex; align-items: center; height: 40px; padding: 0 16px; border-bottom: 1px solid var(--border-faint); }
+          .map-hd .c1 { width: 360px; flex: none; display: flex; align-items: center; justify-content: space-between; padding-right: 12px; }
+          .map-hd .c2 { margin-left: 96px; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+          .map-hd .c2 .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .map-bd { position: relative; display: flex; gap: 96px; padding: 16px; background-image: radial-gradient(circle, rgba(247,243,235,0.05) 1px, transparent 1.3px); background-size: 16px 16px; background-position: 8px 8px; }
+          .map.paused .map-bd { opacity: 0.4; }
+          .curves { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+          .curves path { fill: none; stroke: var(--accent); stroke-linecap: round; }
+          .curves .glow { stroke-width: 6; opacity: 0.16; }
+          .curves .ln { stroke-width: 1.5; }
+          .col-r { position: relative; width: 360px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+          .col-d { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+          .rwb { height: 32px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px dashed var(--border-default); border-radius: 8px; font: 500 11px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .rwb svg { color: var(--accent); flex: none; }
+          .rwb span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+          .sh { height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px; }
+          .sh .shl { font: 600 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .rw + .sh { margin-top: 8px; }
+          .rw { position: relative; height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 10px; border: 1px solid var(--border-faint); border-radius: 8px; background: var(--bg-panel-elevated); }
+          .rw .rk { width: 18px; flex: none; font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rw .pt { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; }
+          .rw .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rw .more { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rw .fnn { font: 500 11px/1 var(--font-mono); color: var(--text-secondary); }
+          .rw .chip { padding: 3px 7px; }
+          .to { flex: none; display: flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .to.gh { color: var(--text-subtle); }
+          .rw .n { width: 36px; flex: none; text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .port { position: absolute; top: calc(50% - 4.5px); width: 9px; height: 9px; border-radius: 50%; background: var(--bg-panel); border: 1.5px solid var(--border-strong); z-index: 1; }
+          .rw .port { right: -5px; }
+          .dc .port { left: -5px; }
+          .rw.off { opacity: 0.4; }
+          .rw.ee { height: 44px; margin-top: 8px; border-color: var(--accent-border); background: linear-gradient(90deg, rgba(255,138,31,0.1), var(--bg-panel-elevated) 70%); }
+          .rw.ee .rk { color: var(--accent-bright); font-size: 13px; }
+          .rw .eep { flex-direction: column; align-items: flex-start; gap: 4px; }
+          .eep b { font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .eep small { font: 500 10px/1 var(--font-mono); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+          .rw.err { height: 44px; border-color: rgba(196,90,58,0.5); background: var(--danger-soft); }
+          .rw.err .rk { color: var(--danger-text); font-size: 13px; }
+          .rw.err b { color: var(--danger-text); }
+          .rw.on { border-color: var(--accent-border); background: var(--bg-row-active); box-shadow: 0 0 0 3px rgba(255,138,31,0.08); }
+          .rw.on .rk { color: var(--accent-bright); }
+          .rw.on .port, .dc.on .port { background: var(--accent); border-color: var(--accent); }
+          .dim { opacity: 0.45; }
+          .dc { position: relative; height: 96px; flex: none; display: flex; gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-panel-elevated); }
+          .dc .big { width: 40px; height: 40px; flex: none; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-app); display: flex; align-items: center; justify-content: center; font: 700 13px/1 var(--font-mono); color: var(--text-secondary); }
+          .dc .di { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+          .dc .dn { display: flex; align-items: center; gap: 8px; font: 600 13.5px/16px var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .dc .dm { font: 500 10.5px/12px var(--font-mono); color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .pills { display: flex; gap: 6px; overflow: hidden; }
+          .pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-panel); font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); white-space: nowrap; }
+          .pill.mute { color: var(--text-subtle); }
+          .pill .inf { color: var(--accent-bright); font-family: var(--font-sans); }
+          .pill.on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+          .dc.ring { border-color: var(--accent-border); box-shadow: 0 0 0 3px rgba(255,138,31,0.1); }
+          .ribbon { position: absolute; top: -9px; right: 14px; height: 18px; padding: 0 8px; border-radius: 999px; background: var(--accent); color: var(--accent-on); font: 650 10px/18px var(--font-sans); white-space: nowrap; }
+          .dc.on { border-color: var(--accent); background: linear-gradient(90deg, var(--bg-row-active), var(--bg-panel-elevated) 75%); box-shadow: 0 0 0 3px rgba(255,138,31,0.14), 0 10px 30px rgba(255,138,31,0.12); }
+          .dc.on .big { border-color: var(--accent-border); background: var(--bg-active-strong); color: var(--accent-bright); }
+          .dc.sm { height: 60px; align-items: center; }
+          .dc.sm .di { gap: 6px; }
+          .dc.sm .big { width: 32px; height: 32px; border-radius: 8px; font-size: 11px; }
+          .dc.js .big { color: var(--accent-bright); background: var(--accent-soft); border-color: transparent; }
+          .fnb { font: 700 15px/1 var(--font-sans); }
+          .dc.ghost { border-style: dashed; border-color: var(--border-default); background: transparent; }
+          .dc.ghost .dn { color: var(--text-muted); }
+          .dc.ghost .big { border-style: dashed; color: var(--text-subtle); background: transparent; }
+          .gtag { font: 500 10px/1 var(--font-mono); color: var(--warn-text); }
+          .dc.tall { height: auto; min-height: 96px; }
+          .dc.tall .dm { white-space: normal; }
+          .share { flex: none; width: 112px; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 7px; }
+          .share b { font: 700 18px/1 var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--text-primary); }
+          .share .bar { width: 100%; height: 4px; border-radius: 2px; background: var(--border-subtle); overflow: hidden; display: flex; }
+          .share .bar i { display: block; height: 100%; min-width: 2px; border-radius: 2px; background: var(--text-muted); }
+          .dc.ring .share .bar i, .dc.on .share .bar i { background: var(--accent); }
+          .share .sl { font: 500 9.5px/1 var(--font-sans); color: var(--text-subtle); white-space: nowrap; }
+          .emp { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; border: 1px dashed var(--border-default); border-radius: 10px; background: var(--bg-panel-elevated); }
+          .emp b { font: 600 13.5px/1.2 var(--font-sans); color: var(--text-primary); }
+          .emp p { margin: 0 0 4px; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          /* callout under the map */
+          .callout { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--accent-border); border-radius: var(--radius-lg); background: var(--bg-row-active); }
+          .callout.plain { border-color: var(--border-subtle); background: var(--bg-panel); }
+          .co-ic { width: 28px; height: 28px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-bright); font: 600 16px/1 var(--font-sans); }
+          .co-ic.mute { background: var(--bg-panel-elevated); color: var(--text-muted); }
+          .co-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+          .co-t b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .co-t span { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          /* setup card, built from first-run step cards */
+          .setup { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; }
+          .prog { display: flex; align-items: center; gap: 4px; }
+          .prog i { width: 22px; height: 4px; border-radius: 2px; background: var(--border-default); }
+          .prog i.on { background: var(--accent); }
+          .prog .note { margin-left: 6px; }
+          /* first run, as in Tray and First Run */
+          .fr { padding: 26px 28px 22px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+          .steps { display: flex; flex-direction: column; gap: 10px; }
+          .step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); }
+          .step.cur { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .step.todo { opacity: 0.6; }
+          .step .sn { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--font-mono); border: 1px solid var(--border-default); color: var(--text-muted); background: var(--bg-panel-elevated); }
+          .step.done .sn { background: var(--success-soft); border-color: transparent; color: var(--success-text); }
+          .step.cur .sn { background: var(--accent); border-color: transparent; color: var(--accent-on); }
+          .step .sb { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+          .step .sb b { font: 600 13px/1.3 var(--font-sans); color: var(--text-primary); }
+          .step .sb p { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .step .sb .inp { width: 300px; }
+          .step .sb .inp.pfl { width: 180px; }
+          .step.side { grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; }
+          .step.side .sb { gap: 5px; }
+          .step .res { display: flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .step.warnc { border-color: rgba(196,90,58,0.5); background: rgba(185,66,50,0.08); }
+          .step.warnc .sn { background: var(--danger-soft); color: var(--danger-text); }
+          .step .det { font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); }
+          .step .seg { align-self: flex-start; }
+          .step.mini { grid-template-columns: 20px minmax(0, 1fr); gap: 12px; padding: 10px 14px; align-items: center; }
+          .step.mini .sn { width: 20px; height: 20px; font-size: 10px; }
+          .step.mini .sb { flex-direction: row; align-items: baseline; gap: 10px; }
+          .step.mini .sb b { font-size: 12px; white-space: nowrap; }
+          .step.mini .sb p { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .selrow { display: flex; align-items: center; gap: 8px; }
+          .errl { align-self: flex-start; padding: 6px 8px; border-radius: 5px; background: var(--danger-soft); font: 500 10.5px/1.4 var(--font-mono); color: var(--danger-text); }
+          .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(22,10,0,0.3); border-top-color: var(--accent-on); display: block; }
+          .frfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; }
+          .frhero { display: flex; align-items: center; gap: 16px; }
+          .card.wl { border-color: var(--accent-border); box-shadow: 0 0 0 3px rgba(255,138,31,0.06); }
+          .wl .card-hd { align-items: center; padding: 11px 16px; }
+          .wl-row { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border-faint); font: 500 12px/1.4 var(--font-sans); color: var(--text-secondary); }
+          .wl-row:last-child { border-bottom: none; }
+          .wl-row b { font-weight: 600; color: var(--text-primary); }
+          .wl-row .bi { display: inline-flex; vertical-align: -1px; }
+          .tick { width: 18px; height: 18px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--success-soft); color: var(--success-text); font: 700 10px/1 var(--font-sans); }
+          .stage { background: var(--bg-panel); padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+          .stage .steps { gap: 8px; }
+          .slab { margin-top: 4px; font: 600 11px/1 var(--font-sans); color: var(--text-subtle); }
+          .slab:first-child { margin-top: 0; }
+          /* rules, as in App Baseline */
+          .rules { display: flex; flex-direction: column; }
+          .rr { position: relative; display: grid; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.ro { grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 200px) 20px; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr.nw .m { flex-wrap: nowrap; }
+          .rr .m .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .rr .strike { text-decoration: line-through; color: var(--text-subtle); display: inline-flex; align-items: center; gap: 7px; }
+          .rr .m .lbl.strike { color: var(--text-subtle); }
+          .rr .ovn { font: 500 10.5px/1.3 var(--font-sans); color: var(--text-muted); }
+          .rr.ovr { background: var(--bg-panel-elevated); }
+          .rr.ee .idx { color: var(--accent-bright); font-size: 13px; }
+          .srcline { flex: 1; font: 400 10.5px/1.3 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .banner { flex: 0 0 auto; display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; border: 1px solid var(--accent-border); border-radius: var(--radius-lg); background: var(--bg-row-active); }
+          .banner > svg { flex: none; margin-top: 1px; }
+          .banner .bt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+          .banner .bt b { font: 600 12.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .banner .bt > span { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .swrow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+          .swl { font: 600 11.5px/1.3 var(--font-sans); color: var(--text-primary); }
+          .banner .bt > .warnl { display: flex; align-items: center; gap: 6px; margin-top: 2px; font: 500 10.5px/1.5 var(--font-sans); color: var(--warn-text); }
+          .wi { width: 14px; height: 14px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--warn-soft); font: 700 9px/1 var(--font-sans); }
+          /* settings, as in Settings */
+          .snav { flex: 0 0 208px; }
+          .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+          .spane > .card { flex: 0 0 auto; }
+          .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+          .slot { display: flex; flex-direction: column; gap: 6px; padding: 11px 12px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 8px; }
+          .slot.sel { background: var(--bg-row-active); border-color: var(--accent-border); }
+          .slot .sv { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .slot.sel .sv { color: var(--accent-bright); }
+          .slot .sp { font: 500 10.5px/1.3 var(--font-mono); color: var(--text-muted); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          /* revision 2 */
+          .bi.gh { border-style: dashed; color: var(--text-subtle); }
+          .rw.ghost { border-style: dashed; border-color: var(--border-default); background: transparent; }
+          .rw .gtag { margin-left: 2px; }
+          .rw.pulse { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .rw.pulse .rk, .rw.pulse .n { color: var(--accent-bright); }
+          .rw.pulse .port, .dc.pulse .port { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,138,31,0.2); }
+          .dc.pulse { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,138,31,0.14), 0 10px 30px rgba(255,138,31,0.12); }
+          .dc.pulse .dm { color: var(--accent-bright); }
+          .dc.pulse .share .bar i { background: var(--accent); }
+          .orb.ping { box-shadow: 0 0 0 4px rgba(255,138,31,0.06), 0 0 0 9px rgba(255,138,31,0.16), 0 0 28px rgba(255,138,31,0.3); }
+          .tile .tn.up { color: var(--accent-bright); }
+          .tick.mute { background: transparent; border: 1px solid var(--border-strong); }
+          .tick.mute::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-subtle); }
+          .wnote { display: flex; align-items: flex-start; gap: 6px; font: 500 11px/1.5 var(--font-sans); color: var(--warn-text); }
+          .wnote .wi { margin-top: 2px; }
+          .chiprow { display: flex; align-items: center; gap: 18px; }
+          .chiprow .rail-foot { margin: 0; padding: 0; }
+          .stage > .hero { min-height: 96px; }
+          .rw .pt > .tag:not(.app):not(.fn) { display: block; flex: 0 1 auto; min-width: 24px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .rw .pt > .more, .rw .pt > .chip, .rw .pt > .lbl { flex: none; }
+          /* revision 3: the route graph, rules to profile nodes (.map.g) */
+          .map.g .map-hd .c1 { width: var(--rc); }
+          .map.g .map-hd .c2 { margin-left: var(--gt); }
+          .map.g .map-bd { gap: var(--gt); }
+          .map.g .col-r { width: var(--rc); }
+          .map.g .col-d { gap: 10px; }
+          .map-lg { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 30px; padding: 0 16px; border-bottom: 1px solid var(--border-faint); }
+          .lg { display: flex; align-items: center; gap: 14px; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .lg span { display: inline-flex; align-items: center; gap: 6px; }
+          .lg i { display: block; width: 22px; height: 0; border-top: 1px solid rgba(255,138,31,0.3); }
+          .lg i.hl { border-top: 2px solid var(--accent); }
+          .lg i.nr { border-top: 1px dashed rgba(247,243,235,0.45); }
+          .hint { display: flex; align-items: center; gap: 8px; font: 400 10.5px/1 var(--font-sans); color: var(--text-subtle); white-space: nowrap; }
+          .hint b { font-weight: 600; color: var(--accent-bright); }
+          .hint .btn.sm { padding: 4px 8px; font-size: 10.5px; }
+          .map.g .curves path { fill: none; stroke-linecap: round; }
+          .map.g .curves .r { stroke: var(--accent); stroke-width: 1; opacity: 0.3; }
+          .map.g .curves .r.dm { opacity: 0.08; }
+          .map.g .curves .r.nr { stroke: var(--text-primary); opacity: 0.22; stroke-dasharray: 4 4; }
+          .map.g .curves .r.nr.dm { opacity: 0.08; }
+          .map.g .curves .glow { stroke: var(--accent); stroke-width: 6; opacity: 0.16; }
+          .map.g .curves .hl { stroke: var(--accent); stroke-width: 2; }
+          .map.g .curves .hl.nr { stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; }
+          .map.g .rw .port { border-color: rgba(255,138,31,0.45); }
+          .map.g .rw.off .port { display: none; }
+          .map.g .rw.ghost .port { border-color: var(--border-strong); }
+          .map.g .rw.on .port, .map.g .rw.pulse .port { background: var(--accent); border-color: var(--accent); }
+          .map.g .rw.hov { background: var(--bg-panel-hover); }
+          .rw .pt > .fnn { flex: none; }
+          .rw .fnx { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 10.5px/1.3 var(--font-mono); color: var(--text-secondary); }
+          .rw .fnx.sub { color: var(--text-subtle); margin-left: 4px; }
+          .map.g .rw .to { min-width: 0; }
+          .rw .to .tl { overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+          .rw .ed { flex: none; height: 20px; display: inline-flex; align-items: center; padding: 0 7px; border: 1px solid var(--border-default); border-radius: 5px; background: var(--bg-panel); font: 550 10.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .dsh { height: 24px; margin-top: 6px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px; }
+          .dsh .shl { font: 600 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .dk { position: relative; flex: none; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-panel-elevated); }
+          .dk-hd { height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 12px; }
+          .bdg { width: 28px; height: 28px; flex: none; border-radius: 7px; border: 1px solid var(--border-strong); background: var(--bg-app); display: flex; align-items: center; justify-content: center; font: 700 11px/1 var(--font-mono); color: var(--text-secondary); }
+          .dk-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+          .dk-t b { display: flex; align-items: center; gap: 8px; font: 600 13px/16px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .dk-t small { font: 500 10px/12px var(--font-mono); color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .shr { flex: none; width: 64px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+          .shr b { font: 700 13px/1 var(--font-sans); font-variant-numeric: tabular-nums; color: var(--text-primary); }
+          .shr .bar { width: 100%; height: 3px; border-radius: 2px; background: var(--border-subtle); overflow: hidden; display: flex; }
+          .shr .bar i { display: block; height: 100%; min-width: 2px; border-radius: 2px; background: var(--text-muted); }
+          .dk.ring .shr .bar i, .dk.on .shr .bar i, .dk.pulse .shr .bar i { background: var(--accent); }
+          .nodes { border-top: 1px solid var(--border-faint); padding: 4px 0; }
+          .nd { position: relative; height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 14px 0 16px; }
+          .nn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font: 500 12px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; overflow: hidden; }
+          .nn .t { overflow: hidden; text-overflow: ellipsis; }
+          .nn .inf { flex: none; font: 600 12px/1 var(--font-sans); color: var(--accent-bright); }
+          .nm { flex: none; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); white-space: nowrap; }
+          .nc { flex: none; width: 40px; text-align: right; font: 500 10.5px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+          .np { position: absolute; left: -5px; top: 10.5px; width: 9px; height: 9px; border-radius: 999px; background: var(--bg-panel); border: 1.5px solid rgba(255,138,31,0.45); z-index: 1; }
+          .nd.idle .nn { color: var(--text-muted); }
+          .nd.idle .np { border: 1px solid var(--border-default); background: transparent; }
+          .nd.on { background: var(--bg-row-active); }
+          .nd.on .nn, .nd.on .nc, .nd.pulse .nc { color: var(--accent-bright); }
+          .nd.on .np, .nd.pulse .np, .dk.one.on .np, .dk.one.pulse .np { background: var(--accent); border-color: var(--accent); }
+          .nd.pulse .np { box-shadow: 0 0 0 3px rgba(255,138,31,0.2); }
+          .nd.pnd { background: var(--bg-active-strong); box-shadow: inset 0 0 0 1px var(--accent); }
+          .nd.hov { background: var(--bg-panel-hover); }
+          .nd .add { flex: none; font: 550 10.5px/1 var(--font-sans); color: var(--accent-bright); white-space: nowrap; }
+          .ndm { height: 26px; display: flex; align-items: center; gap: 5px; padding: 0 16px; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); white-space: nowrap; }
+          .dk.ring { border-color: var(--accent-border); box-shadow: 0 0 0 3px rgba(255,138,31,0.1); }
+          .dk.has { border-color: var(--accent-border); }
+          .dk.on, .dk.pulse { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,138,31,0.14), 0 10px 30px rgba(255,138,31,0.12); }
+          .dk.on .bdg { border-color: var(--accent-border); background: var(--bg-active-strong); color: var(--accent-bright); }
+          .dk.idle { background: var(--bg-panel); border-color: var(--border-faint); }
+          .dk.idle .bdg { background: transparent; border-color: var(--border-default); color: var(--text-subtle); }
+          .dk.idle .dk-t b { color: var(--text-secondary); }
+          .dk.one { height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 12px; }
+          .dk.one .dk-t { gap: 0; }
+          .dk.js .bdg { color: var(--accent-bright); background: var(--accent-soft); border-color: transparent; }
+          .dk.js .fnb { font: 700 14px/1 var(--font-sans); }
+          .dk.one .nc { width: 40px; }
+          .dk.ghost { border-style: dashed; border-color: var(--border-default); background: transparent; }
+          .dk.ghost .bdg { border-style: dashed; color: var(--text-subtle); background: transparent; }
+          .dk.ghost .dk-t b { color: var(--text-muted); }
+          .dk.ghost .np { border-color: var(--border-strong); }
+          /* revision 4: private-window nodes, spare width to the routes */
+          .nd.pv { margin-top: 4px; }
+          .nd.pv::before { content: ""; position: absolute; left: 16px; right: 14px; top: -3px; border-top: 1px dashed var(--border-subtle); }
+          .pvi { flex: none; display: block; color: var(--text-subtle); }
+          .nd.pv.on .pvi, .nd.pv.pulse .pvi, .nd.pv.pnd .pvi { color: var(--accent-bright); }
+          .rw .to .pvi { margin-right: -2px; }
+          .ttp { position: absolute; z-index: 6; padding: 6px 9px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); font: 500 11px/1.3 var(--font-sans); color: var(--text-secondary); white-space: nowrap; pointer-events: none; }
+          .wtab { width: 100%; max-width: 640px; margin: 14px 0 0; border-collapse: collapse; font: 500 11px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; }
+          .wtab th { text-align: right; padding: 4px 10px; font: 600 10px/1.2 var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle); }
+          .wtab td { text-align: right; padding: 4px 10px; color: var(--text-secondary); border-bottom: 1px solid var(--border-faint); }
+          .wtab th:first-child, .wtab td:first-child { text-align: left; }
+          .wtab td.g { color: var(--accent-bright); }
+          .wtab td.was { color: var(--text-subtle); }
+        </style>
+      </helmet>
+
+      <section class="dv-turn" id="t4">
+        <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">First run, revised</span></div>
+        <p class="dv-sub">The wizard hands off only when four things hold. The router's source is decided and applied. <code>rules.json</code> has an Everything else browser. Finicky users have decided who owns Everything else. PwrRoute is the default browser, or the user chose Later. When a config is found it comes first (three steps); otherwise the wizard goes straight to Everything else (two steps). The OS step stays last, so it stays safe. The body scrolls and both selects open as popovers.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="4a" data-screen-label="4a Config found">
+            <div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a><span>A config is found and 3 of its 5 handlers import exactly; the other 2 need JavaScript. Step 1 offers three answers: Import, Keep, or Don't use it, which replaces Start empty and actually stops the router from using the file.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>not routing yet</span></div>
+              <div class="fr"><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 21px;">Three steps, then links start routing</h1><p class="help">Links keep opening the way they do now until the last step. Close this any time; PwrRoute's Overview shows what's left.</p></div>
+              <div class="steps">
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Bring your Finicky config</b><p>Found <span class="tag">~/.finicky.ts</span>: 2 rewrites and 5 handlers. Keep it running exactly as Finicky did, or copy the 3 rules PwrRoute can show as visual rules. The file is never changed.</p><div class="row-actions"><span class="btn primary">Import 3 rules</span><span class="btn">Keep using ~/.finicky.ts</span><span class="btn quiet">Don't use it</span></div></div></div>
+              <div class="step todo"><span class="sn">2</span><div class="sb"><b>Where should everything else go?</b><p>Links no rule claims open here. It also takes links whose browser can't open, and every link while routing is paused.</p></div></div>
+              <div class="step todo"><span class="sn">3</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Safari as they do now.</p><div class="row-actions"><span class="btn">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4b" data-screen-label="4b Config step variants">
+            <div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a><span>The other states of step 1: nothing importable, the importer open (it no longer counts as done), a finished import with the real count, and after Don't use it.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <span class="slab">Nothing importable</span>
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Bring your Finicky config</b><p>Found <span class="tag">~/.finicky.ts</span>: 2 rewrites and 5 handlers. They use JavaScript that visual rules can't hold, so PwrRoute runs the file as Finicky did. The file is never changed.</p><div class="row-actions"><span class="btn primary">Keep using ~/.finicky.ts</span><span class="btn quiet">Don't use it</span></div></div></div>
+              <span class="slab">While the importer is open</span>
+              <div class="step cur"><span class="sn"><i class="spin"></i></span><div class="sb"><b>Bring your Finicky config</b><p>Importing&hellip; Finish or cancel in the importer window. Cancel brings this step back unchanged.</p></div></div>
+              <span class="slab">After a finished import</span>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>Imported 3 rules. ~/.finicky.ts is unchanged.</p></div></div>
+              <span class="slab">After Don't use it</span>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>PwrRoute won't read ~/.finicky.ts. Turn it back on in Settings &rsaquo; Configuration.</p></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4c" data-screen-label="4c Config broken">
+            <div class="dv-olabel"><a class="dv-oid" href="#4c">4c</a><span>The config doesn't load. The step says so and shows the first line of the error, instead of &ldquo;0 rewrites and 0 handlers&rdquo;.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step cur warnc"><span class="sn">1</span><div class="sb"><b>Bring your Finicky config</b><p>Found <span class="tag">~/.finicky.ts</span>, but it doesn't load. Keep it and PwrRoute uses it once it loads; until then links go to the browser you pick in the next step.</p><span class="errl">SyntaxError: Unexpected token '}' &middot; ~/.finicky.ts line 42</span><div class="row-actions"><span class="btn">Keep using ~/.finicky.ts</span><span class="btn quiet">Don't use it</span></div></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4d" data-screen-label="4d No config two steps">
+            <div class="dv-olabel"><a class="dv-oid" href="#4d">4d</a><span>No config, so two steps. Everything else starts &#10003; with the current default browser preselected and written, and the OS step is current.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>not routing yet</span></div>
+              <div class="fr"><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 21px;">Two steps, then links start routing</h1><p class="help">Links keep opening the way they do now until the last step. Close this any time; PwrRoute's Overview shows what's left.</p></div>
+              <div class="steps">
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Where should everything else go?</b><p>Links no rule claims open here. It also takes links whose browser can't open, and every link while routing is paused.</p><div class="selrow"><div class="inp"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp pfl">Personal<span class="caret">&#9662;</span></div></div><span class="det">Picked from your current default browser. Change it any time.</span></div></div>
+              <div class="step cur"><span class="sn">2</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Google Chrome as they do now.</p><div class="row-actions"><span class="btn primary">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4e" data-screen-label="4e Everything else for Finicky users">
+            <div class="dv-olabel"><a class="dv-oid" href="#4e">4e</a><span>Config kept. Step 2 asks who owns everything else and starts answered with the config's own default, written at once, so it shows &#10003; and step 3 is current. The select stays the pause and error target.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>not routing yet</span></div>
+              <div class="fr"><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 21px;">Three steps, then links start routing</h1><p class="help">Links keep opening the way they do now until the last step. Close this any time; PwrRoute's Overview shows what's left.</p></div>
+              <div class="steps">
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>~/.finicky.ts stays in charge. Edit it as you do now; PwrRoute reloads it.</p></div></div>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Where should everything else go?</b><div class="seg"><span class="on">~/.finicky.ts's default &middot; Safari</span><span>PwrRoute's default</span></div><p>~/.finicky.ts's defaultBrowser handles links its handlers don't claim. The browser below still catches config errors, browsers that can't open, and every link while paused.</p><div class="selrow"><div class="inp"><span class="bi">Sf</span>Safari<span class="caret">&#9662;</span></div></div><span class="det">Picked from ~/.finicky.ts's defaultBrowser. Change it any time.</span></div></div>
+              <div class="step cur"><span class="sn">3</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Safari as they do now.</p><div class="row-actions"><span class="btn primary">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4f" data-screen-label="4f PwrRoute's default">
+            <div class="dv-olabel"><a class="dv-oid" href="#4f">4f</a><span>Choosing PwrRoute's default: the same select now takes everything else. The step stays &#10003;; the choice is written as it changes.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Where should everything else go?</b><div class="seg"><span>~/.finicky.ts's default &middot; Safari</span><span class="on">PwrRoute's default</span></div><p>Your rules run first, then ~/.finicky.ts's handlers. Links nothing claims go here instead of Safari.</p><div class="selrow"><div class="inp"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp pfl">Personal<span class="caret">&#9662;</span></div></div></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4g" data-screen-label="4g Done">
+            <div class="dv-olabel"><a class="dv-oid" href="#4g">4g</a><span>Done. The heading becomes the outcome, Where links go says it in three lines, and finished steps fold to one line. A line with nothing in it yet gets a neutral dot, not a tick. Open PwrRoute lands on Overview.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>routing</span></div>
+              <div class="fr">
+              <div class="frhero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 24px;">Links are routing.</h1><p class="help">Every link now goes where ~/.finicky.ts and your rules say. The menu bar icon shows recent links and can pause routing.</p></div></div>
+              <section class="card wl">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Where links go</p></div></div>
+              <div class="wl-row"><span class="tick">&#10003;</span><span><b>~/.finicky.ts</b> handles links its 5 handlers claim</span></div>
+              <div class="wl-row"><span class="tick mute"></span><span><b>Your rules</b> run after it &middot; none yet</span></div>
+              <div class="wl-row"><span class="tick">&#10003;</span><span><b>Everything else</b> &rarr; ~/.finicky.ts's default &middot; <span class="bi">Sf</span> Safari</span></div></section>
+              <div class="steps">
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Bring your Finicky config</b><p>~/.finicky.ts stays in charge.</p></div></div>
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Everything else</b><p>~/.finicky.ts's default &middot; Safari</p></div></div>
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Default browser</b><p>PwrRoute is the default browser.</p></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn primary">Open PwrRoute</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="4h" data-screen-label="4h No browsers found">
+            <div class="dv-olabel"><a class="dv-oid" href="#4h">4h</a><span>The no-config path when the scan finds nothing. The step names the problem and offers one way out, Look again; Later stays in the footer.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Where should everything else go?</b><p>No browsers found on this Mac. PwrRoute needs at least one to send links to.</p><div class="row-actions"><span class="btn primary">Look again</span></div></div></div>
+              <div class="step todo"><span class="sn">2</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening the way they do now.</p><div class="row-actions"><span class="btn">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div>
+          </div>
+
+          <div class="dv-opt" id="4i" data-screen-label="4i Default request failed">
+            <div class="dv-olabel"><a class="dv-oid" href="#4i">4i</a><span>The OS step when macOS refuses the request with an error. A warning line names it and points to Settings; the button stays so the user can retry.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step cur"><span class="sn">2</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Google Chrome as they do now.</p><span class="wnote"><span class="wi">!</span>macOS didn't take the request: Launch Services returned error -54. Try Settings &rsaquo; Browsers.</span><div class="row-actions"><span class="btn primary">Set as default browser</span></div></div></div></div></div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Measurements:</b> window 680 wide, at least 600 high. The body scrolls (<code>overflow_y_scroll</code>) and the footer stays in the flow at the end. Body padding is 26/28/22 with gap 16. Eyebrow &ldquo;Set up&rdquo;. The heading is 21/700, or 24/700 once routing. Steps: gap 10, padding 14/16, radius 10, a 26px number, title 13/600, body 11.5/1.55, and 8 between lines. Selects are 300 (browser) and 180 (profile) with 8 between. The segmented control is the shared <code>.seg</code> (11/550, radius 7), and its detail line is 11.5 muted under it. The error line is 10.5 mono on <code>--danger-soft</code>. Done steps fold to one line: padding 10/14, a 20px tick, title 12/600, result 11 muted. Where links go is a card with 10/16 rows, an 18px tick and 12/500 text. A row with nothing in it yet (&ldquo;none yet&rdquo;) gets a neutral 18px dot instead of a tick. The segmented control's two answers are named exactly as Overview and Rules name the owners: <b>{config}'s default &middot; {browser}</b> and <b>PwrRoute's default</b>. A fixed defaultBrowser names its browser; a function or null default shows the first part alone.<br><b>Copy rules.</b> Pluralise every count: 1 rewrite, 2 rewrites, Import 1 rule. A failed OS request adds a warning line under the step body (4i): &ldquo;macOS didn't take the request: {error}. Try Settings &rsaquo; Browsers.&rdquo; The step stays current and its button stays. A refused consent prompt is not an error and adds nothing. Windows replaces &ldquo;Waiting for Windows&hellip;&rdquo; with &ldquo;Finish in Windows Settings: select Set default on PwrRoute's page.&rdquo; With no browsers found (4h), the Everything else step's body becomes &ldquo;No browsers found on this Mac. PwrRoute needs at least one to send links to.&rdquo; and its only control is <b>Look again</b>, which rescans. Later stays. The Everything else select is preselected from, in order, the config's fixed defaultBrowser, the current OS default (unless it is PwrRoute), then the first scanned browser. The choice is written at once, so the step starts &#10003; and the next step is current (4d, 4e).<br><b>Motion.</b> The strip chip's dot fades from grey to green over 200ms. When the last step completes, finished steps fold to one line over 160ms. The heading cross-fades to &ldquo;Links are routing.&rdquo; over 150ms. The orb arrives with a single 600ms ping. Each &#10003; in Where links go scales 0.6 &rarr; 1 and fades in over 180ms, staggered 60ms, once.</p>
+        <p class="dv-next">Try next: "Windows and Linux help-line wording" &middot; "done panel for the no-config path: &lsquo;Your rules: none yet / Everything else &rarr; Google Chrome &middot; Personal&rsquo;"</p>
+      </section>
+
+      <section class="dv-turn" id="t5">
+        <div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">Rules and Settings &rsaquo; Everything else override</span></div>
+        <p class="dv-sub">One switch with one name: <b>Let PwrRoute's default take everything else</b>. It lives on the Rules banner, where the config is explained, and as the Everything else row in Settings &rsaquo; Configuration. Overview's callout and first run's step 2 write the same <code>precedence</code> field. The banner is accent, not warning, because nothing is wrong. Stop using now calls <code>set_source(visual_only)</code>, and Open in editor calls <code>cx.open_with_system(path)</code>.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="5a" data-screen-label="5a Banner off">
+            <div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a><span>Off: the default, and what every upgrade sees. The config's defaultBrowser is tagged as Everything else.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip acc"><span class="dot"></span>~/.finicky.ts &middot; runs first</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">11</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>reloaded 09:38</span></div></nav>
+              <div class="pane">
+              <div class="banner"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13 4-2 16"/></svg><div class="bt"><b>~/.finicky.ts is in charge</b><span>Its rewrites and handlers run first and its defaultBrowser takes everything else. Your visual rules run after it. Edited 4 min ago.</span><div class="swrow"><span class="sw"></span><span class="swl">Let PwrRoute's default take everything else</span></div></div><div class="row-actions"><span class="btn sm">Open in editor</span><span class="btn sm">Import to visual rules&hellip;</span><span class="btn sm quiet">Stop using</span></div></div>
+              <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">From ~/.finicky.ts &middot; read-only</p><h2 class="card-title">Handlers</h2></div><span class="chip">2 need JS</span></div>
+              <div class="rules">
+              <div class="rr ro nw"><span class="idx">01</span><div class="m"><span class="tag fn">fn</span><span class="srcline">function isWorkplace(url) { return url.host.endsWith("workplace.example.com") }</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">02</span><div class="m"><span class="tag">chat.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">03</span><div class="m"><span class="tag">*.docs.example.com/*</span><span class="tag">*.wiki.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">04</span><div class="m"><span class="tag">meet.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="tag fn">fn</span><span class="pf">browser function</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">05</span><div class="m"><span class="tag">beta.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Or</span>Orion<span class="pf">not installed</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx"></span><div class="m"><span class="lbl" style="font-weight: 600; color: var(--text-primary);">defaultBrowser</span><span class="tag fn">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Sf</span>Safari</div><span class="more"></span></div></div></section>
+              <section class="card"><div class="card-hd" style="border-bottom: none;"><div class="card-hd-main"><p class="card-eyebrow">Run after the config</p><h2 class="card-title">Visual rules</h2><p class="card-desc">1 rewrite, 3 rules. ~/.finicky.ts's defaultBrowser, Safari, takes everything else.</p></div><span class="btn sm quiet">Expand</span></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="5b" data-screen-label="5b Banner on">
+            <div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a><span>On. Your rules move above the config's handlers. defaultBrowser is struck through and says why, and the Everything else row appears under the handlers.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip acc"><span class="dot"></span>~/.finicky.ts &middot; after your rules</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">11</span></div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">1.4k</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>reloaded 09:38</span></div></nav>
+              <div class="pane">
+              <div class="banner"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13 4-2 16"/></svg><div class="bt"><b>~/.finicky.ts is in charge</b><span>Your rules run first, then its handlers. PwrRoute's default, Google Chrome &middot; Personal, takes everything else. Edited 4 min ago.</span><div class="swrow"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div></div><div class="row-actions"><span class="btn sm">Open in editor</span><span class="btn sm">Import to visual rules&hellip;</span><span class="btn sm quiet">Stop using</span></div></div>
+              <section class="card"><div class="card-hd" style="border-bottom: none;"><div class="card-hd-main"><p class="card-eyebrow">Run before the config's handlers</p><h2 class="card-title">Visual rules</h2><p class="card-desc">1 rewrite, 3 rules. They run before the config's handlers.</p></div><span class="btn sm quiet">Expand</span></div></section>
+              <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">From ~/.finicky.ts &middot; read-only &middot; runs after your rules</p><h2 class="card-title">Handlers</h2></div><span class="chip">2 need JS</span></div>
+              <div class="rules">
+              <div class="rr ro nw"><span class="idx">01</span><div class="m"><span class="tag fn">fn</span><span class="srcline">function isWorkplace(url) { return url.host.endsWith("workplace.example.com") }</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">02</span><div class="m"><span class="tag">chat.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">03</span><div class="m"><span class="tag">*.docs.example.com/*</span><span class="tag">*.wiki.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">04</span><div class="m"><span class="tag">meet.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="tag fn">fn</span><span class="pf">browser function</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro"><span class="idx">05</span><div class="m"><span class="tag">beta.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Or</span>Orion<span class="pf">not installed</span></div><span class="more">&#8943;</span></div>
+              <div class="rr ro ovr"><span class="idx"></span><div class="m"><span class="lbl strike">defaultBrowser</span><span class="ovn">not used: PwrRoute's default takes everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="strike"><span class="bi">Sf</span>Safari</span></div><span class="more"></span></div></div></section>
+              <section class="card">
+              <div class="rules">
+              <div class="rr ro ee"><span class="idx">&infin;</span><div class="m"><span class="lbl" style="color: var(--text-primary); font-weight: 600;">Everything else</span><span class="tag fn">PwrRoute's default</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="more">&#8943;</span></div></div></section></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="5c" data-screen-label="5c Toggle warnings">
+            <div class="dv-olabel"><a class="dv-oid" href="#5c">5c</a><span>Warnings under the switch, shown only when they apply.</span></div>
+            <div class="dv-card stage" style="width: 560px;">
+              <span class="slab">defaultBrowser is a function</span>
+              <div class="banner"><div class="bt"><div class="swrow" style="margin-top: 0;"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div><span class="warnl"><span class="wi">!</span>Its defaultBrowser function will no longer run.</span></div></div>
+              <span class="slab">defaultBrowser is null</span>
+              <div class="banner"><div class="bt"><div class="swrow" style="margin-top: 0;"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div><span class="warnl"><span class="wi">!</span>Unmatched links will now open instead of being dropped.</span></div></div>
+              <span class="slab">A config handler matches &ldquo;*&rdquo;</span>
+              <div class="banner"><div class="bt"><div class="swrow" style="margin-top: 0;"><span class="sw on"></span><span class="swl">Let PwrRoute's default take everything else</span></div><span class="warnl"><span class="wi">!</span>Handler 5 matches every link, so PwrRoute's default never applies.</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="5d" data-screen-label="5d Settings Everything else row">
+            <div class="dv-olabel"><a class="dv-oid" href="#5d">5d</a><span>Settings &rsaquo; Configuration while a config is in charge: the same segmented control and detail lines as first run. The rail matches the shipped Settings, Privacy included.</span></div>
+            <div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span></div>
+              <div class="body">
+              <nav class="rail snav">
+              <div class="rail-item">General</div>
+              <div class="rail-item">Browsers</div>
+              <div class="rail-item on">Configuration</div>
+              <div class="rail-item">Privacy</div>
+              <div class="rail-item">Local agents<span class="cnt">2</span></div>
+              <div class="rail-item">Updates</div>
+              <div class="rail-item">Diagnostics</div>
+              <div class="rail-item">About</div></nav>
+              <div class="spane"><div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Rules source</div><h1 class="ttl">Configuration</h1><p class="help">Where the router reads its rules from. Visual rules are the default. A Finicky config, when selected, runs its rewrites first.</p></div></div>
+              <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Where rules come from</p><h2 class="card-title">Source</h2></div><span class="chip acc">Finicky config</span></div>
+              <div class="field"><div class="field-l"><span>Active source</span><span class="field-sub">Switching takes effect on the next link. Nothing is deleted either way.</span></div><div class="field-c"><div class="slots"><div class="slot"><div class="sv">Visual rules<span class="radio"></span></div><span class="sp">rules.json &middot; 1 rewrite &middot; 3 rules</span></div><div class="slot sel"><div class="sv">Finicky config<span class="radio on"></span></div><span class="sp">~/.finicky.ts &middot; 5 handlers</span></div></div></div></div>
+              <div class="field"><div class="field-l"><span>Everything else</span><span class="field-sub">Links no handler or rule claims.</span></div><div class="field-c"><div class="seg"><span>~/.finicky.ts's default &middot; Safari</span><span class="on">PwrRoute's default</span></div><span class="field-help">Your rules run first, then ~/.finicky.ts's handlers. Links nothing claims go here instead of Safari.</span><div class="selrow"><div class="inp" style="width: 260px;"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp" style="width: 150px;">Personal<span class="caret">&#9662;</span></div></div></div></div></section></div></div></div>
+          </div>
+
+        </div>
+        <p class="dv-note">When the switch is on, Rules draws the Visual rules card <b>above</b> the config's Handlers card, so the page reads in evaluation order as Overview does. Only the eyebrow and description change otherwise. The Everything else row appears only while the switch is on; while it is off, the config's own defaultBrowser row is that row and carries an Everything else tag. Warnings come from <code>describe()</code>. Each is 10.5/500 in warning text under the switch, appears only when it applies, and stacks when several do. The switch row is 18 high with an 8px gap and 11.5/600 label, 6 below the banner text. The struck row uses subtle text with a strikethrough on the key and the browser, followed by the reason in 10.5 muted; the browser is named once, in the struck destination. Settings shows the Everything else row only while a config is in charge; that is a rule for the code, not copy. The fixture config is the same one throughout the canvas: 2 rewrites and 5 handlers, 2 of which need JavaScript (handler 1 matches with the named function <code>isWorkplace</code>; handler 4 picks its browser with a function).<br><b>Motion:</b> the switch thumb slides over 120ms. The two cards swap order with no animation, and the banner sentence cross-fades over 150ms.</p>
+        <p class="dv-next">Try next: "Test a link's last step: Everything else &middot; PwrRoute's default" &middot; "Activity's rule column: rule 3 / cfg h 2 / default / config default"</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
