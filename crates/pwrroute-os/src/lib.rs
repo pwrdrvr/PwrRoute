@@ -46,19 +46,18 @@ use std::path::{Path, PathBuf};
 
 use pwrroute_router::OpenerInfo;
 
-/// Hands the front to the running `app` (a bundle id, app name or path)
-/// when this app is the active one, as macOS 14's cooperative activation
-/// asks of an app that opens another. Any thread. `false` when nothing was
-/// asked: off macOS, before macOS 14, this app not active, or `app` not
-/// running.
-pub fn pass_front_to(app: &str) -> bool {
+/// Hands the front to the running app with `bundle_id` when this app is
+/// the active one, as macOS 14's cooperative activation asks of an app that
+/// opens another. Any thread. `false` when nothing was asked: off macOS,
+/// before macOS 14, this app not active, or no app with `bundle_id` running.
+pub fn pass_front_to(bundle_id: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        macos::pass_front_to(app)
+        macos::pass_front_to(bundle_id)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
+        let _ = bundle_id;
         false
     }
 }

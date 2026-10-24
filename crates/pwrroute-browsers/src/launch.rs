@@ -68,6 +68,12 @@ pub struct Plan {
     pub args: Vec<String>,
     /// What the command could not honor. Never contains the URL.
     pub notes: Vec<Note>,
+    /// The bundle id of the running browser this launch hands the link to
+    /// (macOS, a Chromium browser with a profile or flags), when the link
+    /// is not meant for the background. That copy brings itself forward,
+    /// and since macOS 14 it may only once the active app gives way, so
+    /// the launching app should. `None` for every other launch.
+    pub hand_off_to: Option<String>,
     platform: Platform,
 }
 
@@ -229,10 +235,15 @@ impl Launcher {
         let background = browser
             .open_in_background
             .unwrap_or(self.options.background_by_default);
+        let mut hand_off_to = None;
         let plan = match platform {
             Platform::MacOs => {
-                let hand_off = self.hands_off(browser, entry);
-                macos_plan(browser, background, hand_off, flags)
+                let running = self.hands_off(browser, entry);
+                let uses_args = flags.is_some() || !browser.args.is_empty();
+                if uses_args && !background {
+                    hand_off_to.clone_from(&running);
+                }
+                macos_plan(browser, background, running.is_some(), flags)
             }
             _ => {
                 if background {
@@ -251,6 +262,7 @@ impl Launcher {
             program,
             args,
             notes,
+            hand_off_to,
             platform,
         }))
     }
@@ -266,23 +278,23 @@ impl Launcher {
         Ok(Some(plan))
     }
 
-    /// Whether a `-n` launch of `browser` only hands the link to a copy
-    /// already running: a Chromium browser that [`Launcher::with_running`]
-    /// says is running. Firefox's remote hand-off is not covered: whether
-    /// the running Firefox raises its window from a background launch is
+    /// The bundle id of the copy a `-n` launch of `browser` only hands the
+    /// link to: a Chromium browser that [`Launcher::with_running`] says is
+    /// running. Firefox's remote hand-off is not covered: whether the
+    /// running Firefox raises its window from a background launch is
     /// untested.
-    fn hands_off(&self, browser: &Browser, entry: Option<&BrowserInfo>) -> bool {
+    fn hands_off(&self, browser: &Browser, entry: Option<&BrowserInfo>) -> Option<String> {
         let (Some(running), Some(entry)) = (&self.running, entry) else {
-            return false;
+            return None;
         };
         if entry.engine != BrowserEngine::Chromium {
-            return false;
+            return None;
         }
         let bundle_id = match browser.app_type {
             AppType::BundleId => Some(browser.name.as_str()),
             _ => entry.macos.as_ref().and_then(|m| m.bundle_id.as_deref()),
         };
-        bundle_id.is_some_and(|id| (running.0)(id))
+        bundle_id.filter(|id| (running.0)(id)).map(str::to_owned)
     }
 
     fn profile_args(
@@ -640,6 +652,7 @@ mod tests {
                 .map(String::from)
                 .to_vec(),
             notes: Vec::new(),
+            hand_off_to: None,
             platform: Platform::MacOs,
         }
     }
@@ -666,6 +679,7 @@ mod tests {
                 "ü".into(),
             ],
             notes: Vec::new(),
+            hand_off_to: None,
             platform: Platform::Windows,
         };
         assert_eq!(
@@ -791,9 +805,12 @@ mod tests {
         let running = Launcher::with_env(env.clone(), LaunchOptions::default())
             .with_running(|id| id == "com.google.Chrome" || id == "org.mozilla.firefox");
         let chrome = browser("Google Chrome", AppType::AppName);
-        // The new instance only hands over: it starts in the background.
+        // The new instance only hands over: it starts in the background,
+        // and the running copy is the one to bring forward.
+        let handed = private_plan(&running, &chrome);
+        assert_eq!(handed.hand_off_to.as_deref(), Some("com.google.Chrome"));
         assert_eq!(
-            args(&private_plan(&running, &chrome)),
+            args(&handed),
             [
                 "-a",
                 "Google Chrome",
@@ -818,15 +835,25 @@ mod tests {
             ]
         );
         // A plain link starts no instance and keeps `open`'s activation.
-        assert_eq!(
-            args(&running.plan(&chrome).unwrap().unwrap()),
-            ["-a", "Google Chrome", URL]
-        );
-        // Asked for the background as well: `-g` once.
+        let plain = running.plan(&chrome).unwrap().unwrap();
+        assert_eq!(args(&plain), ["-a", "Google Chrome", URL]);
+        assert_eq!(plain.hand_off_to, None);
+        // Asked for the background as well: `-g` once, and nothing to
+        // bring forward, whether the link or the config asked.
         let mut quiet = chrome.clone();
         quiet.open_in_background = Some(true);
+        let quiet_plan = private_plan(&running, &quiet);
+        assert_eq!(quiet_plan.hand_off_to, None);
+        let by_default = Launcher::with_env(
+            env.clone(),
+            LaunchOptions {
+                background_by_default: true,
+            },
+        )
+        .with_running(|id| id == "com.google.Chrome");
+        assert_eq!(private_plan(&by_default, &chrome).hand_off_to, None);
         assert_eq!(
-            args(&private_plan(&running, &quiet)),
+            args(&quiet_plan),
             [
                 "-a",
                 "Google Chrome",
@@ -1019,6 +1046,7 @@ mod tests {
             program: PathBuf::from("/nonexistent/browser"),
             args: Vec::new(),
             notes: Vec::new(),
+            hand_off_to: None,
             platform: Platform::Linux,
         };
         let err = spawn(&plan).unwrap_err();

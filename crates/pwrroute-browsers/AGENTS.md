@@ -40,8 +40,10 @@ behind its own trait; keep the public API in `src/lib.rs` small.
 - **Running browsers are asked, not detected.** `Launcher::with_running`
   takes a bundle-id check (the app passes `pwrroute_os::app_is_running`);
   this crate never calls AppKit. With it, a macOS `-n` launch of a running
-  Chromium browser adds `-g` so the hand-off instance does not take focus.
-  Tests pass a closure.
+  Chromium browser adds `-g` so the hand-off instance does not take focus,
+  and `Plan::hand_off_to` names the running copy unless the link (or the
+  config's default) asked for the background: the app gives that copy the
+  front. Tests pass a closure.
 - **No `unsafe`.** Registry access goes through `windows-registry`'s safe
   API, confined to `src/registry.rs`. macOS detection reads XML
   `Info.plist`s rather than calling Launch Services.
