@@ -1,9 +1,10 @@
 //! `settings.json` in the data directory: what Settings keeps between
 //! launches, as plain data. Today that is the Activity retention and the
 //! journal (Settings › Privacy), the browsers hidden from the pickers
-//! (Settings › Browsers) and the rules source the importer's Choose source
-//! picked, with the config notices dismissed (`source`); other panes join
-//! as their producers land.
+//! (Settings › Browsers), the rules source the importer's Choose source
+//! picked, with the config notices dismissed (`source`), and the release
+//! channel picked in Settings › Updates (`updates`); other panes join as
+//! their producers land.
 //!
 //! [`Settings::load`] reads the file (absent means the defaults) and
 //! [`Settings::save`] writes it through a sibling file and a rename, like
@@ -23,6 +24,8 @@ use anyhow::{Context as _, Result};
 use gpui_kit::{App, AppContext as _, Entity, Global};
 use pwrroute_router::{JournalConfig, JournalMode, Retention, RouterHandle};
 use serde::{Deserialize, Serialize};
+
+use crate::update_channel::UpdateSettings;
 
 /// The file in `pwrroute_os::data_dir()`.
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -44,6 +47,10 @@ pub struct Settings {
     /// Left out while discovery decides, as before this field existed.
     #[serde(skip_serializing_if = "SourceSettings::is_default")]
     pub source: SourceSettings,
+    /// Settings › Updates' release channel. Left out while it follows the
+    /// installed build, as before this field existed.
+    #[serde(skip_serializing_if = "UpdateSettings::is_default")]
+    pub updates: UpdateSettings,
 }
 
 /// Which file the router reads its rules from. The default is Finicky's

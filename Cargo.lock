@@ -5994,10 +5994,13 @@ dependencies = [
  "pwrroute-os",
  "pwrroute-router",
  "resvg 0.46.0",
+ "rustls",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
  "tray-icon",
+ "ureq",
  "url",
  "velopack",
 ]

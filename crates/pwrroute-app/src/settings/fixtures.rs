@@ -8,7 +8,7 @@ use super::model::{
     About, AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, Configuration,
     DefaultBrowser, DefaultState, Diagnostics, FinickyConfig, Grant, ImportCandidate, ImportPlan,
     JournalFiles, JournalLevel, Listener, LocalAgents, Permission, Piece, Privacy, RoleId,
-    RulesSource, SessionId, SettingsModel, Status, UpdateState, Updates, Usage,
+    RulesSource, SessionId, SettingsModel, Slot, SlotTile, Status, UpdateState, Updates, Usage,
 };
 
 pub fn model() -> SettingsModel {
@@ -25,12 +25,50 @@ pub fn model() -> SettingsModel {
 
 /// Updates as the design's 1a draws it: a release downloaded and waiting.
 pub fn updates() -> Updates {
+    let tile = |slot: Slot, release: &str, note: &str, selected: bool, installed: bool| SlotTile {
+        slot,
+        release: Some(release.into()),
+        note: note.into(),
+        selected,
+        installed,
+    };
     Updates {
         version: "0.2.0".into(),
-        channel: "stable".into(),
+        channel: "Stable \u{00b7} Latest".into(),
         install: "Installed by Velopack; updates apply on a restart.".into(),
         state: UpdateState::Ready("0.2.1".into()),
         last_checked: Some("Today 08:13".into()),
+        slots: vec![
+            tile(
+                Slot::STABLE_LATEST,
+                "v0.2.1",
+                "Smoke-checked. The default for everyone.",
+                true,
+                false,
+            ),
+            tile(
+                Slot::STABLE_PRERELEASE,
+                "v0.2.2-rc.1",
+                "Release candidates for the stable line.",
+                false,
+                false,
+            ),
+            tile(
+                Slot::BETA_LATEST,
+                "v0.3.0-beta.2",
+                "Beta builds off main.",
+                false,
+                false,
+            ),
+            tile(
+                Slot::BETA_PRERELEASE,
+                "v0.3.0-alpha.9",
+                "Newest alpha off main. May not install.",
+                false,
+                false,
+            ),
+        ],
+        inferred: true,
     }
 }
 

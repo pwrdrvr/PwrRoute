@@ -373,7 +373,13 @@ their own modules.
   which the tray's Quit also calls: `apply_pending_on_quit` hands it to
   Velopack's updater, no restart) or from Settings' Restart to update.
   `updater::install` checks again every `CHECK_EVERY` on a Velopack
-  install only. Route every new Quit through `app_menu::quit`.
+  install only. Route every new Quit through `app_menu::quit`. Which
+  release is the release channel's (`update_channel.rs`, the Pwr family's
+  Stable/Beta × Latest/Prerelease): keep its selection logic pure and
+  tested there, the network in `github_releases.rs`, and the check's
+  decision in `updater::plan`. Only a manual check (`Trigger::is_manual`)
+  may switch back to an older release, and a switch back never installs
+  on quit.
 - **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
   sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`

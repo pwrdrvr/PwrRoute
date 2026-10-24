@@ -27,6 +27,7 @@ mod e2e;
 mod editor;
 mod first_run;
 mod fixtures;
+mod github_releases;
 mod importer;
 mod importer_view;
 #[cfg(target_os = "macos")]
@@ -51,6 +52,7 @@ mod theme;
 mod trace_view;
 mod tray;
 mod try_it;
+mod update_channel;
 mod updater;
 mod widgets;
 

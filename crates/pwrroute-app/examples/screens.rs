@@ -178,6 +178,12 @@ fn dropdown_closed(_: &mut gpui_kit::App) {}
 fn run(_: TrayCommand, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
+#[path = "../src/github_releases.rs"]
+mod github_releases;
+#[cfg(target_os = "macos")]
+#[path = "../src/update_channel.rs"]
+mod update_channel;
+#[cfg(target_os = "macos")]
 #[path = "../src/updater.rs"]
 mod updater;
 

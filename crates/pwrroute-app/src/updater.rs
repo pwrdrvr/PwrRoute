@@ -16,12 +16,24 @@
 //! Only a copy Velopack installed can update. `cargo run`, the .deb and the
 //! tar.gz have no Velopack manifest, so their check logs that and stops.
 //!
+//! Which release: the slot of the release channel in force
+//! ([`crate::update_channel`]), the Pwr family's Stable or Beta × Latest or
+//! Prerelease. A check reads the published list
+//! ([`crate::github_releases`]), picks the slot's release, and points
+//! Velopack at that one release's files. A release older than this copy is
+//! a switch back: only Check now (the menu, Settings) downloads one, and it
+//! installs only from Restart to switch, never on quit. A download is
+//! recorded with its slot ([`Held`], `updates.json` in the data directory);
+//! after another slot is picked it is neither shown nor installed.
+//!
 //! What a check found is kept in [`state`] for Settings › Updates, which
-//! [`install`] redraws when it changes; nothing is persisted, so a fresh
-//! launch starts at "not checked yet".
+//! [`install`] redraws when it changes; apart from the held download nothing
+//! is persisted, so a fresh launch starts at "not checked yet".
 
 use std::{
-    fmt,
+    cmp::Ordering as Precedence,
+    fmt, fs,
+    path::{Path, PathBuf},
     sync::{
         Mutex, OnceLock, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -31,16 +43,19 @@ use std::{
 };
 
 use gpui_kit::App;
+use serde::{Deserialize, Serialize};
 
 use velopack::{
-    UpdateCheck, UpdateManager, VelopackApp, VelopackAsset,
-    locator::{self, LocationContext},
-    sources::GithubSource,
+    UpdateCheck, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
+    locator::{self, LocationContext, VelopackLocator},
+    sources::{HttpSource, NoneSource},
 };
 
-/// Where releases are published. `release.yml` uploads Velopack's feed
-/// (`releases.<channel>.json` and the `.nupkg` packages) to each release.
-const RELEASES: &str = "https://github.com/pwrdrvr/PwrRoute";
+use crate::github_releases;
+use crate::update_channel::{self, Release, Slot, UpdateSettings};
+
+/// The held download's record, in the data directory.
+const HELD_FILE: &str = "updates.json";
 
 /// How often a resident router checks again after the startup check: the
 /// design's "At startup and every 6 hours while running". A Velopack
@@ -126,13 +141,24 @@ pub fn apply_pending_on_quit() {
 
 fn apply_pending() -> QuitApply {
     // The manager locates the manifest itself and refuses a copy Velopack
-    // did not install; the feed is never read here.
-    let source = GithubSource::new(RELEASES, None, false);
-    let manager = match UpdateManager::new(source, None, None) {
+    // did not install; no feed is read here.
+    let Ok(locator) = locator::auto_locate_app_manifest(LocationContext::FromCurrentExe) else {
+        return QuitApply::Nothing;
+    };
+    let manager = match UpdateManager::new(NoneSource {}, None, None) {
         Ok(manager) => manager,
         Err(_) => return QuitApply::Nothing,
     };
-    on_quit(manager.get_update_pending_restart(), |pending| {
+    let installed = locator.get_manifest_version().to_string();
+    let slot = selection().resolve(&installed);
+    let held = load_held().filter(|held| package_exists(&locator, held));
+    let pending = match &held {
+        Some(held) => quit_package(&installed, slot, held).map(Held::asset),
+        // Nothing recorded: a package an earlier build downloaded, which
+        // only ever fetched its own channel's newer releases.
+        None => manager.get_update_pending_restart(),
+    };
+    on_quit(pending, |pending| {
         manager
             // Silent: no progress window over a quit, and no restart.
             .wait_exit_then_apply_updates(pending, true, false, Vec::<String>::new())
@@ -162,6 +188,16 @@ pub enum Trigger {
     Timer,
     Menu,
     Settings,
+    /// Another slot was picked in Settings › Updates.
+    Selection,
+}
+
+impl Trigger {
+    /// Check now, from the menu or Settings: the one check that may switch
+    /// back to an older release.
+    pub fn is_manual(self) -> bool {
+        matches!(self, Self::Menu | Self::Settings)
+    }
 }
 
 /// What the updater has said so far this launch.
@@ -171,12 +207,51 @@ pub struct State {
     pub checking: bool,
     /// The last check that finished, and when.
     pub last: Option<(SystemTime, Outcome)>,
+    /// The published releases the last check read, or why it could not.
+    pub releases: Option<Result<Vec<Release>, String>>,
+    /// The package downloaded and not installed yet, and its slot.
+    pub held: Option<Held>,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
     checking: false,
     last: None,
+    releases: None,
+    held: None,
 });
+
+/// The release channel as `settings.json` has it; [`set_selection`] keeps
+/// it current. `None` until the settings are read: the defaults.
+static SELECTION: Mutex<Option<UpdateSettings>> = Mutex::new(None);
+
+/// The release channel as `settings.json` has it.
+pub fn selection() -> UpdateSettings {
+    SELECTION
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .unwrap_or_default()
+}
+
+/// Follows `settings` from now on. When the slot in force changes, the
+/// new slot is checked at once, forward only, and the window redrawn: a
+/// download held for the old slot is neither shown nor installed now.
+pub fn set_selection(settings: UpdateSettings) {
+    let installed = installed_version();
+    let before = selection().resolve(&installed);
+    *SELECTION.lock().unwrap_or_else(PoisonError::into_inner) = Some(settings);
+    if settings.resolve(&installed) != before {
+        check_in_background(Trigger::Selection);
+    }
+    set_state(|_| {});
+}
+
+/// The version this copy reports: Velopack's manifest, else the crate's.
+pub fn installed_version() -> String {
+    match installation() {
+        Installation::Velopack { version } => version,
+        Installation::NotInstalled { .. } => env!("CARGO_PKG_VERSION").to_owned(),
+    }
+}
 
 /// Wakes [`install`]'s task after every change to [`state`].
 static CHANGED: OnceLock<async_channel::Sender<()>> = OnceLock::new();
@@ -200,6 +275,13 @@ pub fn install(cx: &mut App) {
     let (tx, rx) = async_channel::unbounded::<()>();
     if CHANGED.set(tx).is_err() {
         return;
+    }
+    if let Some(store) = crate::settings_store::store(cx) {
+        let settings = store.read(cx).settings().updates;
+        *SELECTION.lock().unwrap_or_else(PoisonError::into_inner) = Some(settings);
+    }
+    if let Some(held) = load_held() {
+        set_state(|state| state.held = Some(held));
     }
     cx.spawn(async move |cx| {
         while rx.recv().await.is_ok() {
@@ -252,15 +334,6 @@ pub fn installation() -> Installation {
     }
 }
 
-/// Which releases a version follows: see [`includes_prereleases`].
-pub fn channel(version: &str) -> &'static str {
-    if includes_prereleases(version) {
-        "prerelease"
-    } else {
-        "stable"
-    }
-}
-
 /// Check for an update, and download it, on a thread of its own: Velopack's
 /// client blocks, and a download can take a while.
 pub fn check_in_background(trigger: Trigger) {
@@ -272,7 +345,7 @@ pub fn check_in_background(trigger: Trigger) {
     let spawned = thread::Builder::new()
         .name("pwrroute-updater".to_owned())
         .spawn(move || {
-            let outcome = check_and_download();
+            let outcome = check_and_download(trigger);
             CHECKING.store(false, Ordering::Release);
             log(trigger, &outcome);
             set_state(|state| {
@@ -292,56 +365,247 @@ pub fn check_in_background(trigger: Trigger) {
 }
 
 /// Installs the downloaded release and starts PwrRoute again: Settings'
-/// "Restart to update". Velopack swaps the package and relaunches, so this
-/// returns only when there is nothing to apply or it could not start.
+/// "Restart to update" (or "Restart to switch", for an older release).
+/// Velopack swaps the package and relaunches, so this returns only when
+/// there is nothing to apply or it could not start.
 pub fn restart_to_update() -> Result<(), String> {
-    // The manager locates the manifest itself and refuses a copy Velopack
-    // did not install; the feed is never read here.
-    let source = GithubSource::new(RELEASES, None, false);
-    let manager = UpdateManager::new(source, None, None).map_err(|e| e.to_string())?;
-    let pending = manager
-        .get_update_pending_restart()
-        .ok_or_else(|| "no downloaded update to install".to_owned())?;
+    let locator = locator::auto_locate_app_manifest(LocationContext::FromCurrentExe)
+        .map_err(|e| e.to_string())?;
+    // The manager refuses a copy Velopack did not install; no feed is read.
+    let manager = UpdateManager::new(NoneSource {}, None, None).map_err(|e| e.to_string())?;
+    let installed = locator.get_manifest_version().to_string();
+    let slot = selection().resolve(&installed);
+    let pending = match load_held().filter(|held| package_exists(&locator, held)) {
+        Some(held) => restart_package(&installed, slot, &held)
+            .map(Held::asset)
+            .ok_or_else(|| "the downloaded update is not for the selected channel".to_owned())?,
+        None => manager
+            .get_update_pending_restart()
+            .ok_or_else(|| "no downloaded update to install".to_owned())?,
+    };
     manager
         .apply_updates_and_restart(&pending)
         .map_err(|e| e.to_string())
 }
 
-fn check_and_download() -> Outcome {
+/// A downloaded package and the slot it was downloaded for. Velopack keeps
+/// one package at a time (a download deletes the others), so one record.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Held {
+    /// Velopack's version: "0.1.1".
+    pub version: String,
+    /// The full package's file in Velopack's packages directory.
+    pub file_name: String,
+    /// The slot's key ([`Slot::key`]): "stable:latest".
+    pub slot: String,
+    /// Older than the copy that downloaded it: installed only from Restart
+    /// to switch.
+    #[serde(default)]
+    pub switch_back: bool,
+}
+
+impl Held {
+    /// Held for `slot`.
+    pub fn is_for(&self, slot: Slot) -> bool {
+        Slot::from_key(&self.slot) == Some(slot)
+    }
+
+    /// The package, as Velopack's apply takes it: by its file name.
+    fn asset(&self) -> VelopackAsset {
+        VelopackAsset {
+            Version: self.version.clone(),
+            FileName: self.file_name.clone(),
+            Type: "Full".to_owned(),
+            ..VelopackAsset::default()
+        }
+    }
+}
+
+/// What quitting installs: the held package when it is for `slot`, newer
+/// than `installed` and not a switch back.
+fn quit_package<'a>(installed: &str, slot: Slot, held: &'a Held) -> Option<&'a Held> {
+    let newer = matches!(compare(&held.version, installed), Some(Precedence::Greater));
+    (held.is_for(slot) && newer && !held.switch_back).then_some(held)
+}
+
+/// What Restart to update installs: the held package when it is for
+/// `slot` and not this very version.
+fn restart_package<'a>(installed: &str, slot: Slot, held: &'a Held) -> Option<&'a Held> {
+    let other = !matches!(compare(&held.version, installed), Some(Precedence::Equal));
+    (held.is_for(slot) && other).then_some(held)
+}
+
+/// `a` against `b` by SemVer precedence; `None` when either does not parse.
+fn compare(a: &str, b: &str) -> Option<Precedence> {
+    Some(update_channel::parse(a)?.cmp(&update_channel::parse(b)?))
+}
+
+/// What a check does once it knows the slot's release.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Plan {
+    /// Nothing to do: `Outcome` says why.
+    Done(Outcome),
+    /// Download `tag`; `switch_back` for an older release.
+    Download { tag: String, switch_back: bool },
+}
+
+/// The check's decision, apart from Velopack and the network: `target` is
+/// the slot's release, `held` what is downloaded already.
+fn plan(
+    installed: &str,
+    slot: Slot,
+    target: Option<&Release>,
+    held: Option<&Held>,
+    trigger: Trigger,
+) -> Plan {
+    let Some(target) = target else {
+        return Plan::Done(Outcome::NothingPublished(slot.to_string()));
+    };
+    let version = target.tag.trim_start_matches('v').to_owned();
+    let held = held.filter(|held| held.is_for(slot));
+    // A switch back already downloaded stays until Restart to switch; only
+    // Check now looks past it.
+    if let Some(held) = held.filter(|held| held.switch_back && !trigger.is_manual()) {
+        return Plan::Done(Outcome::SwitchReady(held.version.clone()));
+    }
+    match compare(&version, installed) {
+        // A tag that does not parse is never taken for an older release.
+        None | Some(Precedence::Equal) => Plan::Done(Outcome::UpToDate(installed.to_owned())),
+        Some(Precedence::Less) if !trigger.is_manual() => {
+            Plan::Done(Outcome::UpToDate(installed.to_owned()))
+        }
+        Some(Precedence::Less) => match held {
+            Some(held) if held.switch_back && held.version == version => {
+                Plan::Done(Outcome::SwitchReady(held.version.clone()))
+            }
+            _ => Plan::Download {
+                tag: target.tag.clone(),
+                switch_back: true,
+            },
+        },
+        Some(Precedence::Greater) => match held {
+            // As new or newer is downloaded already for this slot.
+            Some(held)
+                if !held.switch_back
+                    && matches!(
+                        compare(&held.version, &version),
+                        Some(Precedence::Greater | Precedence::Equal)
+                    ) =>
+            {
+                Plan::Done(Outcome::Pending(held.version.clone()))
+            }
+            _ => Plan::Download {
+                tag: target.tag.clone(),
+                switch_back: false,
+            },
+        },
+    }
+}
+
+fn check_and_download(trigger: Trigger) -> Outcome {
     // The installed version (Velopack's sq.version), not the one compiled
     // in: packages are stamped separately from Cargo.toml.
-    let installed = match locator::auto_locate_app_manifest(LocationContext::FromCurrentExe) {
-        Ok(locator) => locator.get_manifest_version().to_string(),
+    let locator = match locator::auto_locate_app_manifest(LocationContext::FromCurrentExe) {
+        Ok(locator) => locator,
         Err(error) => return Outcome::NotInstalled(error.to_string()),
     };
-    let source = GithubSource::new(RELEASES, None, includes_prereleases(&installed));
-    let manager = match UpdateManager::new(source, None, None) {
+    let installed = locator.get_manifest_version().to_string();
+    let slot = selection().resolve(&installed);
+    let releases = github_releases::fetch(&locator.get_manifest_channel());
+    set_state(|state| state.releases = Some(releases.clone()));
+    let releases = match releases {
+        Ok(releases) => releases,
+        Err(error) => return Outcome::Failed(error),
+    };
+    let target = update_channel::select(&releases, slot);
+    let held = load_held().filter(|held| package_exists(&locator, held));
+    // A package Velopack no longer has is not ready to install.
+    set_state(|state| state.held = held.clone());
+    let (tag, switch_back) = match plan(&installed, slot, target.as_ref(), held.as_ref(), trigger) {
+        Plan::Done(outcome) => return outcome,
+        Plan::Download { tag, switch_back } => (tag, switch_back),
+    };
+    let options = UpdateOptions {
+        AllowVersionDowngrade: switch_back,
+        ..UpdateOptions::default()
+    };
+    let source = HttpSource::new(github_releases::download_base(&tag));
+    let manager = match UpdateManager::new(source, Some(options), None) {
         Ok(manager) => manager,
         Err(error) => return Outcome::NotInstalled(error.to_string()),
     };
-    if let Some(pending) = manager.get_update_pending_restart() {
-        return Outcome::Pending(pending.Version);
-    }
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => {
-            let version = update.TargetFullRelease.Version.clone();
-            match manager.download_updates(&update, None) {
-                Ok(()) => Outcome::Downloaded(version),
-                Err(error) => Outcome::Failed(error.to_string()),
+            let target = &update.TargetFullRelease;
+            if let Err(error) = manager.download_updates(&update, None) {
+                return Outcome::Failed(error.to_string());
+            }
+            let held = Held {
+                version: target.Version.clone(),
+                file_name: target.FileName.clone(),
+                slot: slot.key(),
+                switch_back,
+            };
+            save_held(&held);
+            set_state(|state| state.held = Some(held.clone()));
+            if switch_back {
+                Outcome::SwitchReady(held.version)
+            } else {
+                Outcome::Downloaded(held.version)
             }
         }
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
-            Outcome::UpToDate(manager.get_current_version_as_string())
+            Outcome::UpToDate(installed)
         }
         Err(error) => Outcome::Failed(error.to_string()),
     }
 }
 
-/// Releases are born as GitHub Pre-releases and promoted to Latest by hand.
-/// A prerelease install follows every release; a stable install only
-/// promoted ones.
-fn includes_prereleases(version: &str) -> bool {
-    version.contains('-')
+/// Whether `held`'s package is still in Velopack's packages directory.
+fn package_exists(locator: &VelopackLocator, held: &Held) -> bool {
+    locator.get_packages_dir().join(&held.file_name).is_file()
+}
+
+fn held_path() -> Option<PathBuf> {
+    pwrroute_os::data_dir().map(|dir| dir.join(HELD_FILE))
+}
+
+/// The file's shape: room for more than the held download later.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct HeldFile {
+    held: Option<Held>,
+}
+
+fn load_held() -> Option<Held> {
+    read_held(&held_path()?)
+}
+
+fn read_held(path: &Path) -> Option<Held> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<HeldFile>(&text).ok()?.held
+}
+
+fn save_held(held: &Held) {
+    let Some(path) = held_path() else {
+        return;
+    };
+    if let Err(error) = write_held(&path, held) {
+        eprintln!("pwrroute: updates: could not record the download: {error}");
+    }
+}
+
+fn write_held(path: &Path, held: &Held) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let file = HeldFile {
+        held: Some(held.clone()),
+    };
+    let mut text = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
+    text.push('\n');
+    fs::write(path, text)
 }
 
 /// How a check went. The version strings are Velopack's.
@@ -350,8 +614,12 @@ pub enum Outcome {
     AlreadyChecking,
     NotInstalled(String),
     UpToDate(String),
+    /// The slot (by name) has no release published yet.
+    NothingPublished(String),
     Downloaded(String),
     Pending(String),
+    /// An older release is downloaded; Restart to switch installs it.
+    SwitchReady(String),
     Failed(String),
 }
 
@@ -375,6 +643,10 @@ impl fmt::Display for Outcome {
                     "{version} is downloaded and installs when PwrRoute quits or restarts"
                 )
             }
+            Self::NothingPublished(slot) => write!(f, "nothing is published on {slot} yet"),
+            Self::SwitchReady(version) => {
+                write!(f, "{version} is downloaded; Restart to switch installs it")
+            }
             Self::Failed(why) => write!(f, "check failed: {why}"),
         }
     }
@@ -386,6 +658,7 @@ fn log(trigger: Trigger, outcome: &Outcome) {
         Trigger::Timer => "timer",
         Trigger::Menu => "menu",
         Trigger::Settings => "settings",
+        Trigger::Selection => "channel",
     };
     eprintln!("pwrroute: updates ({trigger}): {outcome}");
 }
@@ -393,15 +666,6 @@ fn log(trigger: Trigger, outcome: &Outcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn prerelease_builds_follow_prereleases() {
-        assert!(includes_prereleases("0.0.1-alpha.0"));
-        assert!(includes_prereleases("1.2.0-beta.3"));
-        assert!(!includes_prereleases("1.2.0"));
-        assert_eq!(channel("0.0.1-alpha.0"), "prerelease");
-        assert_eq!(channel("1.2.0"), "stable");
-    }
 
     #[test]
     fn a_dev_build_has_no_installation_and_nothing_to_restart_into() {
@@ -475,7 +739,165 @@ mod tests {
     fn a_dev_build_reports_it_is_not_installed() {
         // The test binary is not in a Velopack layout, so the manager cannot
         // load and nothing reaches the network.
-        assert!(matches!(check_and_download(), Outcome::NotInstalled(_)));
+        assert!(matches!(
+            check_and_download(Trigger::Menu),
+            Outcome::NotInstalled(_)
+        ));
+    }
+
+    fn held(version: &str, slot: Slot, switch_back: bool) -> Held {
+        Held {
+            version: version.to_owned(),
+            file_name: format!("PwrRoute-{version}-osx-full.nupkg"),
+            slot: slot.key(),
+            switch_back,
+        }
+    }
+
+    fn download(tag: &str, switch_back: bool) -> Plan {
+        Plan::Download {
+            tag: tag.to_owned(),
+            switch_back,
+        }
+    }
+
+    #[test]
+    fn a_check_downloads_a_newer_release_for_the_slot() {
+        let target = Release::new("v0.1.1", true);
+        let slot = Slot::STABLE_PRERELEASE;
+        assert_eq!(
+            plan("0.1.0", slot, Some(&target), None, Trigger::Timer),
+            download("v0.1.1", false)
+        );
+        // Already downloaded for this slot: kept, not fetched again.
+        let same = held("0.1.1", slot, false);
+        assert_eq!(
+            plan("0.1.0", slot, Some(&target), Some(&same), Trigger::Startup),
+            Plan::Done(Outcome::Pending("0.1.1".into()))
+        );
+        // A newer release replaces an older download.
+        let older = held("0.1.0-rc.9", slot, false);
+        assert_eq!(
+            plan(
+                "0.1.0-rc.3",
+                slot,
+                Some(&target),
+                Some(&older),
+                Trigger::Timer
+            ),
+            download("v0.1.1", false)
+        );
+        // A download for another slot does not count.
+        let other = held("0.1.1", Slot::BETA_LATEST, false);
+        assert_eq!(
+            plan("0.1.0", slot, Some(&target), Some(&other), Trigger::Timer),
+            download("v0.1.1", false)
+        );
+    }
+
+    #[test]
+    fn only_check_now_switches_back_to_an_older_release() {
+        let target = Release::new("v0.1.0", false);
+        let slot = Slot::STABLE_LATEST;
+        for trigger in [Trigger::Startup, Trigger::Timer, Trigger::Selection] {
+            assert_eq!(
+                plan("0.2.0-alpha.1", slot, Some(&target), None, trigger),
+                Plan::Done(Outcome::UpToDate("0.2.0-alpha.1".into())),
+                "{trigger:?}"
+            );
+        }
+        for trigger in [Trigger::Menu, Trigger::Settings] {
+            assert_eq!(
+                plan("0.2.0-alpha.1", slot, Some(&target), None, trigger),
+                download("v0.1.0", true),
+                "{trigger:?}"
+            );
+        }
+        // Downloaded already: ready to switch, and a background check
+        // leaves it alone.
+        let back = held("0.1.0", slot, true);
+        assert_eq!(
+            plan(
+                "0.2.0-alpha.1",
+                slot,
+                Some(&target),
+                Some(&back),
+                Trigger::Menu
+            ),
+            Plan::Done(Outcome::SwitchReady("0.1.0".into()))
+        );
+        let newer = Release::new("v0.2.0", false);
+        assert_eq!(
+            plan(
+                "0.2.0-alpha.1",
+                slot,
+                Some(&newer),
+                Some(&back),
+                Trigger::Timer
+            ),
+            Plan::Done(Outcome::SwitchReady("0.1.0".into()))
+        );
+    }
+
+    #[test]
+    fn the_same_version_or_an_empty_slot_downloads_nothing() {
+        let slot = Slot::STABLE_LATEST;
+        assert_eq!(
+            plan(
+                "0.1.0",
+                slot,
+                Some(&Release::new("v0.1.0", false)),
+                None,
+                Trigger::Menu
+            ),
+            Plan::Done(Outcome::UpToDate("0.1.0".into()))
+        );
+        assert_eq!(
+            plan("0.1.0", slot, None, None, Trigger::Menu),
+            Plan::Done(Outcome::NothingPublished("Stable \u{00b7} Latest".into()))
+        );
+        // A tag that does not parse is never taken for an older release.
+        assert_eq!(
+            plan(
+                "0.1.0",
+                slot,
+                Some(&Release::new("nightly", false)),
+                None,
+                Trigger::Menu
+            ),
+            Plan::Done(Outcome::UpToDate("0.1.0".into()))
+        );
+    }
+
+    #[test]
+    fn quit_installs_only_a_newer_download_for_the_slot_in_force() {
+        let slot = Slot::STABLE_LATEST;
+        let newer = held("0.1.1", slot, false);
+        assert_eq!(quit_package("0.1.0", slot, &newer), Some(&newer));
+        assert_eq!(quit_package("0.1.0", Slot::BETA_LATEST, &newer), None);
+        assert_eq!(quit_package("0.1.1", slot, &newer), None);
+        let back = held("0.0.9", slot, true);
+        assert_eq!(quit_package("0.1.0", slot, &back), None);
+        // Restart to switch installs it; Restart never reinstalls this copy.
+        assert_eq!(restart_package("0.1.0", slot, &back), Some(&back));
+        assert_eq!(restart_package("0.1.0", Slot::BETA_LATEST, &back), None);
+        assert_eq!(restart_package("0.1.1", slot, &newer), None);
+    }
+
+    #[test]
+    fn the_held_download_is_recorded_beside_the_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(HELD_FILE);
+        assert_eq!(read_held(&path), None);
+        let back = held("0.0.9", Slot::BETA_PRERELEASE, true);
+        write_held(&path, &back).unwrap();
+        assert_eq!(read_held(&path), Some(back.clone()));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"slot\": \"beta:prerelease\""), "{text}");
+        assert!(text.contains("\"switchBack\": true"), "{text}");
+        assert_eq!(back.asset().FileName, "PwrRoute-0.0.9-osx-full.nupkg");
+        fs::write(&path, "{").unwrap();
+        assert_eq!(read_held(&path), None, "a bad file is no download");
     }
 
     #[test]
