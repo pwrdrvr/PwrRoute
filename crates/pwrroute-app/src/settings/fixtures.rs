@@ -339,7 +339,7 @@ fn app(
     BrowserApp {
         id: id.into(),
         name: name.into(),
-        badge: badge.into(),
+        badge: AppBadge::new(badge, id),
         location: location.into(),
         profiles: profiles.iter().map(|profile| (*profile).into()).collect(),
         note: note.map(Into::into),
@@ -444,6 +444,7 @@ pub fn browsers() -> Browsers {
 // Settings Everything else (WP-F)
 
 use super::model::{DefaultChoice, DefaultOwner, EverythingElse};
+use crate::widgets::AppBadge;
 
 /// Overview and Setup 5d: `~/.finicky.ts` in charge, and PwrRoute's
 /// default, Google Chrome · Personal, takes everything else.
@@ -455,19 +456,19 @@ pub fn configuration_everything_else() -> Configuration {
     let chrome = DefaultChoice {
         value: "com.google.Chrome".into(),
         name: "Google Chrome".into(),
-        badge: "Ch".into(),
+        badge: AppBadge::new("Ch", "com.google.Chrome"),
         profiles: vec!["Personal".into(), "Work".into()],
     };
     let safari = DefaultChoice {
         value: "com.apple.Safari".into(),
         name: "Safari".into(),
-        badge: "Sf".into(),
+        badge: AppBadge::new("Sf", "com.apple.Safari"),
         profiles: Vec::new(),
     };
     let firefox = DefaultChoice {
         value: "org.mozilla.firefox".into(),
         name: "Firefox".into(),
-        badge: "Ff".into(),
+        badge: AppBadge::new("Ff", "org.mozilla.firefox"),
         profiles: vec!["default-release".into()],
     };
     Configuration {

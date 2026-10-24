@@ -14,8 +14,12 @@
 //!   Nothing calls any of them at launch, and tests never do.
 //! - **Paths.** [`router_dir`] is where the router's lock and socket live.
 //!
-//! Everything that needs `unsafe` (the LaunchServices calls) is in one
-//! module, `macos::launch_services`.
+//! - **App icons.** [`app_bundle`] finds the app a rule or the scan names and
+//!   [`app_icon_png`] renders the icon Finder shows for it. macOS only for
+//!   now: elsewhere both are `None` and the app draws its letter badge.
+//!
+//! Everything that needs `unsafe` is in two modules: `macos::launch_services`
+//! (the LaunchServices calls) and `macos::app_icon` (two AppKit calls).
 
 mod args;
 #[cfg(target_os = "macos")]
@@ -33,7 +37,40 @@ pub use registration::{
 // Plans the platform code applies, public so they can be checked anywhere.
 pub use registration::{RegistryValue, desktop_entry, windows_registry_values};
 
+use std::path::{Path, PathBuf};
+
 use pwrroute_router::OpenerInfo;
+
+/// The installed app `app` names: a bundle id, an app's name as Finder
+/// shows it, or a bundle path. Reads LaunchServices and the disk, so call it
+/// off the UI thread. Always `None` off macOS, which has no implementation
+/// yet.
+pub fn app_bundle(app: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::installed_app_bundle(app)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        None
+    }
+}
+
+/// The icon Finder shows for the app at `bundle`, unmodified, as a
+/// `pixels`-square PNG (clamped to 16-1024). Reads the disk, so call it off
+/// the UI thread. Always `None` off macOS, which has no implementation yet.
+pub fn app_icon_png(bundle: &Path, pixels: u32) -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::app_icon_png(bundle, pixels)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (bundle, pixels);
+        None
+    }
+}
 
 /// Whether an app with `bundle_id` is running in this login session.
 /// Always `false` off macOS, where browsers are not found by bundle id.

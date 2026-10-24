@@ -13,6 +13,7 @@
 mod activity;
 mod activity_actions;
 mod app;
+mod app_icons;
 mod app_menu;
 mod assets;
 #[cfg(target_os = "windows")]
@@ -188,6 +189,8 @@ fn main() -> ExitCode {
         );
         // The one browser scan, read when a picker or Settings first asks.
         browser_scan::install(pwrroute_browsers::Env::system(), cx);
+        // Each app's own icon on its badge, read when a badge first draws.
+        app_icons::install(cx);
         cx.set_global(importer_view::ImporterHost {
             show_rules: Rc::new(|cx| tray::show_screen(app::Screen::Rules, cx)),
         });

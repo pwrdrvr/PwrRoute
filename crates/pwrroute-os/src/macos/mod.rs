@@ -1,6 +1,10 @@
-//! macOS: the sender of an Apple Event, and LaunchServices registration.
+//! macOS: the sender of an Apple Event, LaunchServices registration and
+//! apps' icons.
 
+mod app_icon;
 mod launch_services;
+
+pub use app_icon::{bundle_path as installed_app_bundle, icon_png as app_icon_png};
 
 use std::path::{Path, PathBuf};
 

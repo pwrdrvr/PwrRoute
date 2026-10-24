@@ -36,8 +36,8 @@ use crate::default_browser::DefaultState;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::tray::model::BrowserLabel;
 use crate::widgets::{
-    badge, badge_for, caret, field_label, input_box, menu_card, menu_row, profiles_hint, segment,
-    segmented,
+    AppBadge, badge, badge_for, caret, field_label, input_box, menu_card, menu_row, profiles_hint,
+    segment, segmented,
 };
 
 /// The element id of the window's root, for tests and the inspector.
@@ -687,7 +687,7 @@ impl FirstRunModel {
                 config
                     .default_name
                     .clone()
-                    .map(|name| (badge_for(&name).to_string(), name)),
+                    .map(|name| (badge_for(&name), name)),
             ),
             Some(_) if self.config_in_charge() && self.precedence == Precedence::PwrRoute => {
                 (" \u{2192} PwrRoute's default".to_owned(), fallback)
@@ -774,7 +774,7 @@ pub struct WhereLine {
     pub subject: String,
     pub rest: String,
     /// The badge and the name, after the rest.
-    pub browser: Option<(String, String)>,
+    pub browser: Option<(AppBadge, String)>,
 }
 
 /// The label for a browser `rules.json` names (a bundle id or a name), as
@@ -788,7 +788,7 @@ pub fn label_for(browsers: &[BrowserChoice], value: &str, profile: &str) -> Brow
                 || choice.label.name.eq_ignore_ascii_case(value)
         })
         .map_or_else(
-            || BrowserLabel::new(&badge_for(value), value, None),
+            || BrowserLabel::new(badge_for(value), value, None),
             |choice| choice.label.clone(),
         );
     label.profile = Some(profile.to_owned()).filter(|profile| !profile.is_empty());
@@ -2147,7 +2147,7 @@ fn browser_picker(
             let selected = chosen == Some(index);
             menu_row(
                 ("first-run-browser", index),
-                Some(choice.label.badge.clone().into()),
+                Some(choice.label.badge.clone()),
                 choice.label.name.clone(),
                 profiles_hint(&choice.profiles).map(Into::into),
             )
@@ -2346,6 +2346,13 @@ mod tests {
 
     use super::*;
     use StepState::{Current, Done, Todo};
+
+    /// A "Where links go" line's browser, by its badge's letters.
+    fn browser_letters(line: &WhereLine) -> Option<(&str, &str)> {
+        line.browser
+            .as_ref()
+            .map(|(badge, name)| (badge.letters().as_ref(), name.as_str()))
+    }
 
     fn states(model: &FirstRunModel) -> Vec<StepState> {
         model.steps().into_iter().map(|(_, state)| state).collect()
@@ -2597,10 +2604,7 @@ mod tests {
                 (true, "Everything else", " \u{2192} ~/.finicky.ts's default"),
             ]
         );
-        assert_eq!(
-            lines[2].browser,
-            Some(("Sf".to_owned(), "Safari".to_owned()))
-        );
+        assert_eq!(browser_letters(&lines[2]), Some(("Sf", "Safari")));
 
         model.precedence = Precedence::PwrRoute;
         model.fallback = Some(BrowserLabel::new("Ch", "Google Chrome", Some("Personal")));
@@ -2618,11 +2622,8 @@ mod tests {
         assert_eq!(lines[0].rest, " run first \u{00b7} none yet");
         assert_eq!(lines[2].rest, " \u{2192} PwrRoute's default");
         assert_eq!(
-            lines[2].browser,
-            Some((
-                "Ch".to_owned(),
-                "Google Chrome \u{00b7} Personal".to_owned()
-            ))
+            browser_letters(&lines[2]),
+            Some(("Ch", "Google Chrome \u{00b7} Personal"))
         );
 
         // Kept while it does not load: the router leaves it out and runs
@@ -2650,11 +2651,8 @@ mod tests {
                 ("Everything else", " \u{2192}")
             );
             assert_eq!(
-                lines[2].browser,
-                Some((
-                    "Ch".to_owned(),
-                    "Google Chrome \u{00b7} Personal".to_owned()
-                ))
+                browser_letters(&lines[2]),
+                Some(("Ch", "Google Chrome \u{00b7} Personal"))
             );
         }
         let mut broken = model.clone();

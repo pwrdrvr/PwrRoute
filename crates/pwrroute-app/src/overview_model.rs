@@ -24,7 +24,7 @@ use pwrroute_engine::{
 
 use crate::activity::{Counts, Filter, HitKey, Tally, thousands};
 use crate::default_browser::DefaultState;
-use crate::widgets::badge_for;
+use crate::widgets::{AppBadge, badge_for};
 
 /// A routed card shows every profile that has a route, then idle ones
 /// until it holds this many nodes; the rest fold into "+N more profiles".
@@ -249,7 +249,7 @@ pub struct SetupStep {
     /// The help line, or the done line.
     pub body: Option<String>,
     /// Step 1 once done: the badge and "Google Chrome · Personal".
-    pub result: Option<(String, String)>,
+    pub result: Option<(AppBadge, String)>,
 }
 
 /// "Finish setting up": shown while `rules.json` names no default browser
@@ -309,7 +309,7 @@ pub struct Pattern {
 /// "from [Sl Slack]": the first sending app a rule names, and how many more.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opener {
-    pub badge: String,
+    pub badge: AppBadge,
     pub name: String,
     pub more: usize,
 }
@@ -350,7 +350,7 @@ pub enum Target {
     /// else the browser.
     Browser {
         card: usize,
-        badge: String,
+        badge: AppBadge,
         label: String,
         profile: Option<String>,
     },
@@ -361,7 +361,7 @@ pub enum Target {
     /// A browser the scan did not find: its links fall through.
     Ghost {
         card: usize,
-        badge: String,
+        badge: AppBadge,
         name: String,
     },
     /// A draft with no browser yet.
@@ -489,7 +489,7 @@ pub struct Share {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Card {
     pub kind: CardKind,
-    pub badge: String,
+    pub badge: AppBadge,
     pub name: String,
     /// What rules name it by: the identity rows resolve to, and the key
     /// the window remembers an expanded card by.
@@ -1469,7 +1469,7 @@ struct Dest {
     kind: CardKind,
     key: String,
     name: String,
-    badge: String,
+    badge: AppBadge,
 }
 
 /// The browser a rule names, as the reader knows it: the installed app's
@@ -1502,7 +1502,7 @@ fn resolve(value: &str, installed: &[Installed]) -> Dest {
             CardKind::Browser
         },
         key: name.to_lowercase(),
-        badge: badge_for(&name).to_string(),
+        badge: badge_for(&name),
         name,
     }
 }
@@ -1622,7 +1622,7 @@ fn rule_match(rule: &Rule) -> RowMatch {
         // "Slack:com.tinyspeck.slackmacgap" names Slack.
         let name = name.split(':').next().unwrap_or(&name).to_owned();
         Opener {
-            badge: badge_for(&name).to_string(),
+            badge: badge_for(&name),
             name,
             more: openers.len() - 1,
         }
@@ -2254,7 +2254,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         first_ranks.push(usize::MAX);
         built.push(Card {
             kind: CardKind::Browser,
-            badge: badge_for(&app.name).to_string(),
+            badge: badge_for(&app.name),
             name: app.name.clone(),
             key: app.name.to_lowercase(),
             shown: folded_to(nodes.len(), IDLE_NODES),
@@ -2879,7 +2879,7 @@ mod tests {
         assert_eq!(
             map.rows[2].matcher,
             RowMatch::Opener(Opener {
-                badge: badge_for("Slack").to_string(),
+                badge: badge_for("Slack"),
                 name: "Slack".into(),
                 more: 0,
             }),
@@ -3513,7 +3513,7 @@ mod tests {
         assert_eq!(
             setup.everything_else.result,
             Some((
-                badge_for("Google Chrome").to_string(),
+                badge_for("Google Chrome"),
                 "Google Chrome \u{b7} Personal".into()
             ))
         );

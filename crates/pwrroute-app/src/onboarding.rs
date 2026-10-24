@@ -297,7 +297,7 @@ fn choices(
     apps.into_iter()
         .filter(|app| !hidden.is_hidden(app.id()))
         .map(|app| BrowserChoice {
-            label: BrowserLabel::new(&badge_for(&app.name), &app.name, None),
+            label: BrowserLabel::new(badge_for(&app.name), &app.name, None),
             value: app.id().to_owned(),
             profiles: app.profiles,
         })
@@ -790,7 +790,7 @@ mod tests {
         assert_eq!(
             built.fallback,
             Some(BrowserLabel::new(
-                &badge_for("com.example.Browser"),
+                badge_for("com.example.Browser"),
                 "com.example.Browser",
                 None
             ))

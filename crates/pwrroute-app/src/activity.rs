@@ -49,8 +49,8 @@ use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{
-    ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge, badge_for, button, chip, note, one_line,
-    paragraph, segment, segmented, status, tag, toned_chip,
+    AppBadge, ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge, badge_for, button, chip, note,
+    one_line, paragraph, segment, segmented, status, tag, toned_chip,
 };
 
 /// The element id of the empty state, for tests.
@@ -540,7 +540,7 @@ pub struct ActivityRow {
 #[derive(Clone, Debug)]
 pub enum Opened {
     Browser {
-        badge: SharedString,
+        badge: AppBadge,
         name: SharedString,
         profile: Option<SharedString>,
         /// The rule asked for a private window.
@@ -553,7 +553,7 @@ pub enum Opened {
     Fallback {
         /// Why, as the router traced it: "Arc could not be opened".
         why: SharedString,
-        badge: SharedString,
+        badge: AppBadge,
         name: SharedString,
         profile: Option<SharedString>,
     },
@@ -2182,7 +2182,10 @@ mod tests {
         let Opened::Browser { badge, name, .. } = opened(&record) else {
             panic!("opened in a browser");
         };
-        assert_eq!((badge.as_ref(), name.as_ref()), ("Ed", "Microsoft Edge"));
+        assert_eq!(
+            (badge.letters().as_ref(), name.as_ref()),
+            ("Ed", "Microsoft Edge")
+        );
     }
 
     #[test]
@@ -2274,7 +2277,7 @@ mod tests {
         else {
             panic!("opened in a browser");
         };
-        assert_eq!((badge.as_ref(), name.as_ref()), ("Ff", "Firefox"));
+        assert_eq!((badge.letters().as_ref(), name.as_ref()), ("Ff", "Firefox"));
         assert_eq!(profile.as_deref(), Some("default-release"));
         assert!(!private);
         assert_eq!(
@@ -2519,7 +2522,10 @@ mod tests {
             panic!("opened in the fallback: {:?}", row.opened);
         };
         assert_eq!(why.as_ref(), "zoom.us could not be opened");
-        assert_eq!((badge.as_ref(), name.as_ref()), ("Ch", "Google Chrome"));
+        assert_eq!(
+            (badge.letters().as_ref(), name.as_ref()),
+            ("Ch", "Google Chrome")
+        );
         assert_eq!(profile.as_deref(), Some("Personal"));
         assert_eq!(row.rule, "cfg h 6 \u{00b7} fallback");
         assert!(

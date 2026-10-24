@@ -3,8 +3,9 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Div, ElementId, Hsla, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, div, px,
+    Div, ElementId, Hsla, InteractiveElement as _, IntoElement as _, ParentElement as _,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledImage as _, div,
+    img, px,
 };
 
 use crate::theme::{self, icon, mono, text};
@@ -39,7 +40,7 @@ pub fn fn_tag() -> Div {
 }
 
 /// `.tag.app`: an app, with its badge.
-pub fn app_tag(badge_label: impl Into<SharedString>, name: impl Into<SharedString>) -> Div {
+pub fn app_tag(badge_label: impl Into<AppBadge>, name: impl Into<SharedString>) -> Div {
     tag_frame()
         .child(badge(badge_label))
         .child(mono(name, 10.5, 500.0, theme::text_primary()))
@@ -67,8 +68,143 @@ pub fn tag_frame() -> Div {
         .bg(theme::bg_elevated())
 }
 
-/// `.bi`: a browser or app's two-letter badge.
-pub fn badge(label: impl Into<SharedString>) -> Div {
+/// A browser or app's `.bi` badge: the app's own icon, as Finder shows it,
+/// once it has loaded, else its two letters (`app_icons.rs`). [`badge_for`]
+/// makes one for an app; a plain string is a fixed label that never becomes
+/// an icon ([`NOT_OPENED_BADGE`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct AppBadge {
+    letters: SharedString,
+    /// The app, as `badge_for` was given it: a name, a bundle id or a path.
+    app: Option<SharedString>,
+}
+
+impl AppBadge {
+    /// `app`'s badge with the `letters` given, not the ones [`badge_for`]
+    /// would pick: Test a link's example senders.
+    pub fn new(letters: impl Into<SharedString>, app: impl Into<SharedString>) -> Self {
+        Self {
+            letters: letters.into(),
+            app: Some(app.into()),
+        }
+    }
+
+    /// The two letters, which the badge draws when there is no icon.
+    pub fn letters(&self) -> &SharedString {
+        &self.letters
+    }
+
+    /// These letters for `app` when they name no app yet: a label built
+    /// from fixed letters and a name.
+    pub fn or_app(self, app: &str) -> Self {
+        let app = app.trim();
+        if self.app.is_some() || app.is_empty() {
+            return self;
+        }
+        Self {
+            app: Some(app.to_owned().into()),
+            ..self
+        }
+    }
+
+    /// The same letters that never become an icon: a target drawn as not
+    /// installed.
+    pub fn without_icon(&self) -> Self {
+        Self::from(self.letters.clone())
+    }
+}
+
+impl From<SharedString> for AppBadge {
+    fn from(letters: SharedString) -> Self {
+        Self { letters, app: None }
+    }
+}
+
+impl From<&str> for AppBadge {
+    fn from(letters: &str) -> Self {
+        Self::from(SharedString::from(letters.to_owned()))
+    }
+}
+
+impl From<String> for AppBadge {
+    fn from(letters: String) -> Self {
+        Self::from(SharedString::from(letters))
+    }
+}
+
+impl From<&AppBadge> for AppBadge {
+    fn from(badge: &AppBadge) -> Self {
+        badge.clone()
+    }
+}
+
+impl PartialEq<str> for AppBadge {
+    fn eq(&self, letters: &str) -> bool {
+        self.letters == letters
+    }
+}
+
+impl PartialEq<&str> for AppBadge {
+    fn eq(&self, letters: &&str) -> bool {
+        self.letters == *letters
+    }
+}
+
+/// How far an icon reaches past its badge's box on each side. Finder's icons
+/// keep a transparent margin, so a 16px icon's art covers about a 12px
+/// badge, and the layout around it is the same as with the letters.
+const ICON_BLEED: f32 = 2.0;
+
+/// `.bi`: a browser or app's 12px badge, its icon or its letters.
+pub fn badge(label: impl Into<AppBadge>) -> Div {
+    icon_or(&label.into(), 12.0, letter_badge)
+}
+
+/// `badge`'s app icon, centered over a `size` box, or `letters` drawn from
+/// its letters when there is no icon (or while it loads). The box keeps its
+/// size either way.
+pub fn icon_or(
+    badge: &AppBadge,
+    size: f32,
+    letters: impl Fn(SharedString) -> Div + Clone + 'static,
+) -> Div {
+    let Some(app) = badge.app.clone() else {
+        return letters(badge.letters.clone());
+    };
+    let icon = size + 2.0 * ICON_BLEED;
+    let fallback = {
+        let label = badge.letters.clone();
+        let app = app.clone();
+        move || {
+            let app = app.clone();
+            letters(label.clone())
+                .debug_selector(move || format!("app-letters-{app}"))
+                .into_any_element()
+        }
+    };
+    let selector = app.clone();
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .child(
+            img(crate::app_icons::source(app, icon))
+                .debug_selector(move || format!("app-icon-{selector}"))
+                .flex_none()
+                .size(px(icon))
+                // Centers the letters when they stand in.
+                .flex()
+                .items_center()
+                .justify_center()
+                .with_loading(fallback.clone())
+                .with_fallback(fallback),
+        )
+}
+
+/// `.bi`'s two letters in their 12px box.
+fn letter_badge(label: SharedString) -> Div {
     div()
         .flex()
         .flex_none()
@@ -83,7 +219,7 @@ pub fn badge(label: impl Into<SharedString>) -> Div {
         .text_size(px(7.0))
         .line_height(px(7.0))
         .text_color(theme::text_muted())
-        .child(label.into())
+        .child(label)
 }
 
 /// A `.chip`'s colors.
@@ -413,7 +549,7 @@ pub fn menu_card(id: impl Into<ElementId>) -> Stateful<Div> {
 /// it alone does not fit (design: Popovers and Overflow 1a, 1d).
 pub fn menu_row(
     id: impl Into<ElementId>,
-    badge_label: Option<SharedString>,
+    badge_label: Option<AppBadge>,
     label: impl Into<SharedString>,
     hint: Option<SharedString>,
 ) -> Stateful<Div> {
@@ -476,8 +612,18 @@ pub fn profiles_hint(profiles: &[String]) -> Option<String> {
     }
 }
 
+/// The badge for a browser or app: its icon, with the letters the design
+/// draws for it when there is none.
+pub fn badge_for(name: &str) -> AppBadge {
+    let app = name.trim();
+    AppBadge {
+        letters: badge_letters(name),
+        app: (!app.is_empty()).then(|| SharedString::from(app.to_owned())),
+    }
+}
+
 /// The badge letters for a browser or app, as the design draws them.
-pub fn badge_for(name: &str) -> SharedString {
+fn badge_letters(name: &str) -> SharedString {
     const KNOWN: &[(&str, &str)] = &[
         ("chrome", "Ch"),
         ("firefox", "Ff"),
@@ -519,7 +665,106 @@ pub fn badge_for(name: &str) -> SharedString {
 
 #[cfg(test)]
 mod tests {
-    use super::{badge_for, profiles_hint};
+    use gpui_kit::{
+        Context, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
+        VisualTestContext, Window, div,
+    };
+
+    use super::{AppBadge, NOT_OPENED_BADGE, badge, badge_for, profiles_hint};
+
+    #[test]
+    fn a_badge_names_its_app_and_a_fixed_label_names_none() {
+        let chrome = badge_for(" Google Chrome ");
+        assert_eq!(chrome, "Ch");
+        assert_eq!(chrome.app.as_deref(), Some("Google Chrome"));
+        assert_eq!(badge_for("  ").app, None);
+        assert_eq!(AppBadge::from(NOT_OPENED_BADGE).app, None);
+        assert_eq!(chrome.without_icon().app, None);
+        assert_eq!(chrome.without_icon(), "Ch");
+        // Bare letters take the name they are shown with; a badge that
+        // names its app keeps it.
+        assert_eq!(
+            AppBadge::from("Ch").or_app("Google Chrome").app.as_deref(),
+            Some("Google Chrome")
+        );
+        assert_eq!(
+            badge_for("com.google.Chrome")
+                .or_app("Google Chrome")
+                .app
+                .as_deref(),
+            Some("com.google.Chrome")
+        );
+        let slack = AppBadge::new("Sl", "com.tinyspeck.slackmacgap");
+        assert_eq!(
+            (slack.letters().as_ref(), slack.app.as_deref()),
+            ("Sl", Some("com.tinyspeck.slackmacgap"))
+        );
+    }
+
+    /// A row of badges.
+    struct Badges(Vec<AppBadge>);
+
+    impl Render for Badges {
+        fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .children(self.0.iter().map(|b| badge(b.clone())))
+        }
+    }
+
+    fn open(cx: &mut TestAppContext) -> &mut VisualTestContext {
+        let (_, cx) = cx.add_window_view(|_, _| {
+            Badges(vec![
+                badge_for("com.apple.finder"),
+                badge_for("com.example.no-such-app"),
+            ])
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx
+    }
+
+    #[gpui_kit::test]
+    fn without_icons_every_badge_is_letters(cx: &mut TestAppContext) {
+        let cx = open(cx);
+        assert!(cx.debug_bounds("app-letters-com.apple.finder").is_some());
+        assert!(
+            cx.debug_bounds("app-letters-com.example.no-such-app")
+                .is_some()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn an_installed_app_draws_its_icon_and_a_missing_one_its_letters(cx: &mut TestAppContext) {
+        cx.update(crate::app_icons::install);
+        let cx = open(cx);
+        // The icon loads off the UI thread, then the view draws again.
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let finder = cx
+            .debug_bounds("app-icon-com.apple.finder")
+            .expect("Finder's badge");
+        // The badge keeps its 12px box; the icon is 16px around it.
+        assert_eq!(finder.size.width, gpui_kit::px(16.0));
+        assert_eq!(
+            cx.debug_bounds("app-letters-com.apple.finder").is_none(),
+            cfg!(target_os = "macos"),
+            "Finder's icon on macOS, its letters elsewhere"
+        );
+        assert!(
+            cx.debug_bounds("app-letters-com.example.no-such-app")
+                .is_some()
+        );
+
+        // A rescan drops what was read and reads it again.
+        cx.update(|_, cx| crate::app_icons::forget(cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(
+            cx.debug_bounds("app-letters-com.apple.finder").is_none(),
+            cfg!(target_os = "macos")
+        );
+    }
 
     #[test]
     fn a_browser_row_names_two_profiles_and_counts_more() {
