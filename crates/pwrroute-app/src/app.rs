@@ -87,6 +87,9 @@ pub struct PwrRoute {
     pub config: Option<ConfigInCharge>,
     /// 1b's folded visual rules are open.
     pub visual_rules_expanded: bool,
+    /// The draft handler a surface other than Rules started, for the
+    /// note above its fields: its index and where it came from.
+    pub draft_from: Option<(usize, crate::editor::DraftFrom)>,
     pub test: TestLink,
     pub activity: Activity,
     /// Activity's row actions: the Add a rule sheet and what the last
@@ -187,6 +190,7 @@ impl PwrRoute {
             home,
             config: in_charge,
             visual_rules_expanded: false,
+            draft_from: None,
             activity: Activity::new(cx),
             actions: Actions::default(),
             browsers: Vec::new(),
@@ -486,11 +490,18 @@ impl PwrRoute {
 
     /// The selected rule's editor, fresh from the store, and its Try it.
     pub(crate) fn rebuild_rail(&mut self, cx: &mut Context<'_, Self>) {
+        let old = self.rail.take();
         self.rail = match self.selection {
             Some(Selection::Handler(i)) => self.handlers.get(i).map(|h| Rail::for_handler(h, cx)),
             Some(Selection::Rewrite(i)) => self.rewrites.get(i).map(|r| Rail::for_rewrite(r, cx)),
             None => None,
         };
+        if let Some(rail) = &mut self.rail {
+            rail.of = self.selection;
+            if let Some(old) = old.filter(|old| old.of == self.selection) {
+                rail.keep_from(old);
+            }
+        }
         self.try_it();
     }
 
@@ -622,6 +633,9 @@ impl PwrRoute {
     /// A new, empty rewrite at the end of its list, selected, with its
     /// first pattern ready to type.
     pub fn add_rewrite(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // Under a config the visual rules are folded: open them, so the
+        // new row is on screen beside its editor.
+        self.visual_rules_expanded = true;
         let index = self.store.add_rewrite();
         self.selection = Some(Selection::Rewrite(index));
         self.refresh(cx);
@@ -632,11 +646,47 @@ impl PwrRoute {
     /// A new, empty handler just above Everything else, selected, with its
     /// first pattern ready to type.
     pub fn add_handler(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.visual_rules_expanded = true;
+        self.draft_from = None;
         let index = self.store.add_handler();
         self.selection = Some(Selection::Handler(index));
         self.refresh(cx);
         self.rebuild_rail(cx);
         self.add_pattern(window, cx);
+    }
+
+    /// Test a link's "Add a rule…": a new handler on Rules whose first
+    /// pattern is the narrowest `suggest_rule` offers for the tested link,
+    /// selected so typing replaces it, and Try it holding the link (design:
+    /// Rule Editor Pickers 5a, 5b). Nothing else is preset: the browser is
+    /// the person's to choose.
+    pub fn add_rule_from_test(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let url = self.test.url.text.trim().to_owned();
+        let pattern = pwrroute_engine::suggest_rule(&url)
+            .candidates
+            .into_iter()
+            .next();
+        self.navigate(Screen::Rules, window, cx);
+        self.add_handler(window, cx);
+        let Some(Selection::Handler(h)) = self.selection else {
+            return;
+        };
+        if let Some(pattern) = &pattern {
+            self.store.set_pattern(Selection::Handler(h), 0, pattern);
+            self.refresh(cx);
+            self.rebuild_rail(cx);
+        }
+        if let Some(rail) = &mut self.rail {
+            if let Some(field) = rail.patterns.first_mut() {
+                field.selected = !field.text.is_empty();
+            }
+            rail.sample.set(url);
+            rail.sample_edited = true;
+        }
+        self.try_it();
+        self.focus_field(window, cx, |rail| rail.patterns.first());
+        self.draft_from = Some((h, crate::editor::DraftFrom::TestLink));
+        cx.notify();
     }
 
     /// Removes the selected rule; the row that takes its place is selected.

@@ -104,6 +104,9 @@ mod overview_model;
 #[path = "../src/router.rs"]
 mod router;
 #[cfg(target_os = "macos")]
+#[path = "../src/rule_pickers.rs"]
+mod rule_pickers;
+
 #[path = "../src/rules_model.rs"]
 mod rules_model;
 #[cfg(target_os = "macos")]
@@ -390,6 +393,74 @@ fn main() {
         with_examples(app, cx);
         app.navigate(Screen::Rules, window, cx);
         app.select(Selection::Handler(3), cx);
+    });
+
+    // The rule editor's pickers (Rule Editor Pickers 3a-5b) over the
+    // Overview's contrived scan. Shots that add a rule get a scratch store,
+    // so a debounced save never reaches the fixture file.
+    fn with_scan(app: &mut PwrRoute) {
+        app.installed = fixtures::overview_browsers();
+        app.browsers = app
+            .installed
+            .iter()
+            .map(|app| activity_actions::BrowserChoice {
+                name: app.name.clone(),
+                profiles: app.profiles.clone(),
+            })
+            .collect();
+    }
+    fn scratch_store(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+        app.store = rules_store::RulesStore::from_file(
+            Some(std::env::temp_dir().join("pwrroute-screens-rules.json")),
+            fixtures::rules_file(),
+            true,
+            Some(std::time::SystemTime::now()),
+        );
+        app.refresh(cx);
+    }
+    shoot("app-1a-open-in", None, &|app, window, cx| {
+        with_scan(app);
+        app.navigate(Screen::Rules, window, cx);
+        app.select(Selection::Handler(0), cx);
+        if let Some(rail) = &mut app.rail {
+            rail.menu = Some(editor::RailMenu::Browser);
+        }
+    });
+    shoot("app-1a-profile", None, &|app, window, cx| {
+        with_scan(app);
+        app.navigate(Screen::Rules, window, cx);
+        app.select(Selection::Handler(0), cx);
+        if let Some(rail) = &mut app.rail {
+            rail.menu = Some(editor::RailMenu::Profile);
+        }
+    });
+    shoot("app-1a-new-rule", None, &|app, window, cx| {
+        with_scan(app);
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        app.add_handler(window, cx);
+    });
+    shoot(
+        "app-1b-new-rule",
+        Some(config.clone()),
+        &|app, window, cx| {
+            with_scan(app);
+            scratch_store(app, cx);
+            app.navigate(Screen::Rules, window, cx);
+            app.add_handler(window, cx);
+        },
+    );
+    shoot("app-0-overview-card-add", None, &|app, window, cx| {
+        with_scan(app);
+        scratch_store(app, cx);
+        app.add_rule_for("Microsoft Edge", "", false, window, cx);
+    });
+    shoot("app-2a-new-rule", None, &|app, window, cx| {
+        with_scan(app);
+        scratch_store(app, cx);
+        app.test.url.set(fixtures::TEST_URL);
+        app.navigate(Screen::TestLink, window, cx);
+        app.add_rule_from_test(window, cx);
     });
 
     // Activity's Add a rule sheet for the design's apple.com record, which
@@ -1165,7 +1236,7 @@ fn main() {
                 },
             },
             // 1f: Chrome · Work pinned, and Safari's idle node under the
-            // pointer offering "+ Add a rule…".
+            // pointer offering "+ Rule for …".
             Shot {
                 name: "app-0-overview-pinned",
                 width: 1240.0,

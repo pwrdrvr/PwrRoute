@@ -1718,7 +1718,7 @@ impl Ask {
 /// ("Incognito", "InPrivate", "Private window"); `None` when a rule naming
 /// it would open a normal one (Safari, Arc, or a name the catalog does not
 /// know, so the launcher could not add the flag).
-fn private_term(name: &str) -> Option<String> {
+pub(crate) fn private_term(name: &str) -> Option<String> {
     let name = name.trim();
     pwrroute_browsers::private_window(
         name,
@@ -1730,7 +1730,7 @@ fn private_term(name: &str) -> Option<String> {
 }
 
 /// "an Incognito window", "an InPrivate window", "a private window".
-fn window_phrase(term: &str) -> String {
+pub(crate) fn window_phrase(term: &str) -> String {
     let lower = term.to_lowercase();
     if lower.ends_with("window") {
         format!("a {lower}")

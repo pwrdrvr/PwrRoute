@@ -38,7 +38,8 @@ their own modules.
 - **One browser scan (`browser_scan.rs`).** The machine's browsers and
   their profiles are read once, the first time a picker or Settings asks,
   and again only on Settings › Browsers' Rescan; `PwrRoute::browsers`
-  (Activity's Add a rule sheet) and the Browsers pane read the same scan.
+  (the rule editor's pickers, Activity's Add a rule sheet) and the
+  Browsers pane read the same scan.
   `settings.json`'s `browsers.hidden` (bundle ids, or names where there is
   none) keeps apps out of the pickers; rules that name a hidden app still
   resolve. `browser_scan::install_fixture` gives a test a scan; first run
@@ -126,10 +127,12 @@ their own modules.
   Return opens Rules); Esc, Clear or the empty ground lets go. A ƒ row
   reads `function_excerpt` of the function's source, a guard's condition
   when it returns a literal; a `finicky.matchHostnames` function reads as
-  its hostnames (`FunctionSpec::hostnames`, from the engine). An idle
-  node's "+ Add a rule…" (its click, or Return) is
-  `PwrRoute::add_rule_for`, with a private window on for a private-window
-  node; it writes the card's name, so a private node whose word came only
+  its hostnames (`FunctionSpec::hostnames`, from the engine). A browser
+  card's header "+ Rule" is `PwrRoute::add_rule_for` with no profile (the
+  browser's own default); an idle node's "+ Rule for Travel" (its click,
+  or Return) is the same with that profile, and a private window on for a
+  private-window node. Both name what they add for, so a profile's button
+  never reads as the card's. The node's writes the card's name, so a private node whose word came only
   from a route naming the browser another way does not offer it
   (`Node::addable`). The callout names both defaults as the map names a node (by
   profile when the browser is the same) and says so plainly when they
@@ -341,6 +344,24 @@ their own modules.
   in an ellipsis; a browser row's hint is `profiles_hint` (two names, then
   a count). A field's value is `field_label`, never `theme::text`, which
   does not shrink.
+- **Every way to start a rule ends in one editor (`editor.rs`,
+  `rule_pickers.rs`; design: Rule Editor Pickers).** Rules' Add rule (also
+  under a config, where it opens the folded visual rules), the Overview's
+  "+ Rule" and "+ Rule for …", and Test a link's "Add a rule…" all add a
+  draft handler and select it; `PwrRoute::draft_from` gives the draft its
+  note (where it came from, and `config_hint`'s line beside a config).
+  Activity's sheet is the one other form, with the same rule: no browser
+  is chosen for the person, and Add waits for one. Open in and Profile are
+  pickers over the scan (`rule_pickers`: this Mac's browsers, then the apps
+  the rules name, dimmed when the scan ran and found nothing), each with a
+  way out to a typed value ("Other app…", "Profile by name or folder…")
+  that `Rail::browser_typed` / `profile_typed` keep across rebuilds of the
+  same rule's rail. A value the scan cannot match is never rewritten: it
+  shows as written with a warning. Choosing another browser clears a
+  profile it does not have. "Missing" needs `PwrRoute::installed` to be
+  non-empty, as on the Overview. The private switch reads in the browser's
+  word (`overview_model::private_term`) and is off-limits for a scanned
+  browser without one.
 - **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
   Settings or first-run window is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays

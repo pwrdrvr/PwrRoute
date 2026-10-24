@@ -358,7 +358,8 @@ impl PwrRoute {
         cx.notify();
     }
 
-    /// A node with no rules yet: "+ Add a rule…" opens Rules' new-rule
+    /// A card's "+ Rule" (no profile: the browser's own default) or a node
+    /// with no rules yet ("+ Rule for Travel"): opens Rules' new-rule
     /// editor with that browser and profile chosen, and a private window
     /// on for a private-window node.
     pub fn add_rule_for(
@@ -383,6 +384,7 @@ impl PwrRoute {
         self.refresh(cx);
         self.rebuild_rail(cx);
         self.add_pattern(window, cx);
+        self.draft_from = Some((index, crate::editor::DraftFrom::Overview));
     }
 
     /// A key on Overview while the window has the keyboard. Up, Down and
@@ -1415,7 +1417,7 @@ fn map(
     let before = map.lit(on_map(&state.previous));
     let pinned = on_map(&state.pinned);
     let keyed = on_map(&state.keyed);
-    // The keyboard on a node with no rules yet offers "+ Add a rule…" as
+    // The keyboard on a node with no rules yet offers "+ Rule for …" as
     // the pointer does.
     let idle_hover = [on_map(&state.idle_hover), keyed]
         .into_iter()
@@ -2903,6 +2905,37 @@ fn share_block(index: usize, share: &Share, accent: bool, ticked: bool) -> Div {
         )
 }
 
+/// The card's "+ Rule": a new rule for the browser, in whichever profile
+/// the browser opens (design: Rule Editor Pickers 2a, 2b). A profile's own
+/// "+ Rule for …" is on its node.
+fn card_add(index: usize, name: &str, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
+    let browser = name.to_owned();
+    div()
+        .id(("overview-card-add", index))
+        .debug_selector(move || format!("overview-card-add-{index}"))
+        .flex_none()
+        .px(px(8.0))
+        .py(px(3.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(theme::border_subtle())
+        .cursor_pointer()
+        .hover(|button| {
+            button
+                .bg(theme::bg_hover())
+                .border_color(theme::border_default())
+        })
+        .tooltip(tip(
+            format!("New rule for {name}, in the profile {name} chooses"),
+            None,
+        ))
+        .child(text("+ Rule", 10.5, 550.0, theme::text_muted()))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            cx.stop_propagation();
+            this.add_rule_for(&browser, "", false, window, cx);
+        }))
+}
+
 #[allow(clippy::too_many_arguments, reason = "one card's parts, drawn once")]
 fn browser_card(
     index: usize,
@@ -2918,7 +2951,7 @@ fn browser_card(
     let warm = trace.lit.warm(index);
     let ring = card.ribbon.is_some();
     // While something else is traced, the node with no rules yet under the
-    // pointer stays at full strength with its "+ Add a rule…"; the rest of
+    // pointer stays at full strength with its "+ Rule for …"; the rest of
     // its card dims around it.
     let spot = trace.lit.traced
         && !warm
@@ -2971,6 +3004,15 @@ fn browser_card(
                 .as_ref()
                 .filter(|_| wide)
                 .map(|share| share_block(index, share, ring || lit, app.overview.ticked)),
+        )
+        // At rest only where nothing routes yet; on a busy card while it is
+        // under the pointer or pinned, so its counts keep their room.
+        .children(
+            (card.kind == CardKind::Browser
+                && (card.unused
+                    || app.overview.hovered.as_ref() == Some(&key)
+                    || app.overview.pinned.as_ref() == Some(&key)))
+            .then(|| card_add(index, &card.name, cx)),
         )
         .when(!card.unused, |header| {
             header
@@ -3209,12 +3251,19 @@ fn node_row(
             )
             .map(|row| {
                 if adding {
-                    row.child(text(
-                        "+ Add a rule\u{2026}",
-                        10.5,
-                        550.0,
-                        theme::accent_bright(),
-                    ))
+                    // Names the profile it adds for, so it never reads as
+                    // the card's own button (design: Rule Editor Pickers 2c).
+                    row.child(
+                        one_line(
+                            format!("+ Rule for {}", node.label()),
+                            theme::SANS,
+                            550.0,
+                            10.5,
+                            12.0,
+                            theme::accent_bright(),
+                        )
+                        .min_w_0(),
+                    )
                 } else {
                     row.children(
                         node.meta

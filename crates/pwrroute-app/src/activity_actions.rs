@@ -187,6 +187,9 @@ pub struct AddRule {
     /// The rule also requires the link to come from `from`.
     pub only_from: bool,
     pub browser: String,
+    /// The browser this link opened in, offered in the browser list (as
+    /// "where it opened") when the scan does not list it.
+    pub opened_in: Option<String>,
     pub profile: String,
     pub picking: Picking,
     was_picking: Picking,
@@ -218,8 +221,10 @@ pub enum ProblemKind {
 
 impl AddRule {
     /// The sheet for a record kept in full: the suggestion for its link,
-    /// the first candidate selected, `browser` as the first choice.
-    pub fn new(record: &DispatchRecord, browsers: &[BrowserChoice], cx: &mut App) -> Self {
+    /// the first candidate selected, and no browser yet: Add waits for one
+    /// (design: Rule Editor Pickers 5c), so a rule never opens in a browser
+    /// nobody chose.
+    pub fn new(record: &DispatchRecord, cx: &mut App) -> Self {
         let url = matched_url(record).to_owned();
         let suggestion = suggest_rule(&url);
         let candidates: Vec<(String, &'static str)> = suggestion
@@ -236,11 +241,6 @@ impl AddRule {
         let first = candidates
             .first()
             .map(|(p, _)| p.clone())
-            .unwrap_or_default();
-        let browser = browsers
-            .first()
-            .map(|b| b.name.clone())
-            .or_else(|| record.browser.as_ref().map(|b| b.name.clone()))
             .unwrap_or_default();
         Self {
             key: RowKey {
@@ -261,7 +261,12 @@ impl AddRule {
             rules_first: true,
             config: None,
             only_from: false,
-            browser,
+            browser: String::new(),
+            opened_in: record
+                .browser
+                .as_ref()
+                .map(|b| b.name.clone())
+                .filter(|name| !name.trim().is_empty()),
             profile: String::new(),
             picking: Picking::None,
             was_picking: Picking::None,
@@ -286,7 +291,7 @@ impl AddRule {
         );
         Self {
             disabled: Some(reason),
-            ..Self::new(record, &[], cx)
+            ..Self::new(record, cx)
         }
     }
 
@@ -366,6 +371,12 @@ impl AddRule {
 
     /// The footer: where the rule lands and how the link is kept with it.
     pub fn footer(&self, handler: usize) -> String {
+        if self.disabled.is_none()
+            && self.browser.trim().is_empty()
+            && !self.pattern.text.trim().is_empty()
+        {
+            return format!("Choose a browser to add it as rule {handler}.");
+        }
         if self.test().is_some() {
             let app = self
                 .from
@@ -547,7 +558,7 @@ fn test_for(record: &DispatchRecord) -> Option<RouteTest> {
 impl PwrRoute {
     /// `rules.json`'s rules run before the config's handlers: no config
     /// is in charge, or the file says `"precedence": "pwrroute"`.
-    fn rules_first(&self) -> bool {
+    pub(crate) fn rules_first(&self) -> bool {
         self.config.is_none() || self.store.precedence() == Precedence::PwrRoute
     }
 
@@ -663,7 +674,7 @@ impl PwrRoute {
         // "Becomes rule N" counts the file as it is.
         self.sync_with_disk(cx);
         let mut sheet = if record.privacy == Privacy::Full {
-            AddRule::new(&record, &self.browsers, cx)
+            AddRule::new(&record, cx)
         } else {
             AddRule::disabled(&record, cx)
         };
@@ -1358,6 +1369,10 @@ fn pattern_field(
         }))
 }
 
+/// The profile picker's first choice: the browser's own default, written
+/// as no profile.
+const DEFAULT_PROFILE: &str = "Default profile";
+
 /// A picker: the current value in a box, and while open its menu.
 fn picker(
     id: &'static str,
@@ -1402,7 +1417,7 @@ fn picker(
                                     sheet.browser = chosen;
                                 }
                                 Picking::Profile => {
-                                    sheet.profile = if chosen == "Default" {
+                                    sheet.profile = if chosen == DEFAULT_PROFILE {
                                         String::new()
                                     } else {
                                         chosen
@@ -1458,10 +1473,15 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
         .iter()
         .map(|b| (b.name.clone(), profiles_hint(&b.profiles)))
         .collect();
+    if let Some(opened) = &sheet.opened_in
+        && !browsers.iter().any(|(name, _)| name == opened)
+    {
+        browsers.push((opened.clone(), Some("where it opened".into())));
+    }
     if !sheet.browser.is_empty() && !browsers.iter().any(|(name, _)| *name == sheet.browser) {
         browsers.push((sheet.browser.clone(), None));
     }
-    let mut profiles: Vec<(String, Option<String>)> = vec![("Default".into(), None)];
+    let mut profiles: Vec<(String, Option<String>)> = vec![(DEFAULT_PROFILE.into(), None)];
     profiles.extend(
         app.browsers
             .iter()
@@ -1486,7 +1506,7 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
             .child(field_label(sheet.browser.clone(), theme::text_primary()))
     };
     let profile_label = if sheet.profile.is_empty() {
-        div().child(text("Default", 12.5, 400.0, theme::text_subtle()))
+        div().child(text(DEFAULT_PROFILE, 12.5, 400.0, theme::text_subtle()))
     } else {
         div()
             .min_w_0()
@@ -1513,7 +1533,7 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
 
 /// The sheet's line about the config in charge, in the order
 /// `rules.json`'s `precedence` sets, as the router runs it.
-fn config_hint(path: &str, rules_first: bool) -> String {
+pub(crate) fn config_hint(path: &str, rules_first: bool) -> String {
     if rules_first {
         format!(
             "{path} is in charge, and your rules run before its handlers: a rule here takes \
@@ -1688,7 +1708,7 @@ fn sheet_body(
             "Keep",
             Some("What Activity and the journal remember."),
             div().child(keep).child(help(
-                "Full: the link as received and as opened. Host only: scheme and host. Nothing: \
+                "Full link: the link as received and as opened. Host only: scheme and host. Nothing: \
                  a count.",
             )),
         )
@@ -1958,11 +1978,7 @@ mod tests {
             Matched::Default { owner: None },
             Some("Slack"),
         );
-        let browsers = vec![BrowserChoice {
-            name: "Firefox".into(),
-            profiles: vec!["default-release".into()],
-        }];
-        let mut sheet = cx.update(|cx| AddRule::new(&record, &browsers, cx));
+        let mut sheet = cx.update(|cx| AddRule::new(&record, cx));
         assert_eq!(
             sheet.eyebrow(),
             format!(
@@ -1981,7 +1997,11 @@ mod tests {
         assert!(sheet.needs_js.is_empty());
         assert_eq!(sheet.selected, Some(0));
         assert_eq!(sheet.pattern.text, "app.metrics.example/dashboard/*");
-        assert_eq!(sheet.browser, "Firefox");
+        // No browser is chosen for the person: Add waits for one.
+        assert_eq!(sheet.browser, "");
+        assert_eq!(sheet.rule(), None);
+        assert_eq!(sheet.footer(8), "Choose a browser to add it as rule 8.");
+        sheet.browser = "Firefox".into();
         let rule = sheet.rule().expect("a rule");
         assert_eq!(rule.patterns, ["app.metrics.example/dashboard/*"]);
         assert_eq!(rule.browser, "Firefox");
@@ -2038,17 +2058,14 @@ mod tests {
             Matched::Default { owner: None },
             None,
         );
-        let sheet = cx.update(|cx| AddRule::new(&with_id, &[], cx));
+        let sheet = cx.update(|cx| AddRule::new(&with_id, cx));
         assert_eq!(sheet.needs_js.len(), 1);
         assert!(sheet.needs_js[0].contains("regex"), "{:?}", sheet.needs_js);
         assert_eq!(
             sheet.eyebrow(),
             format!("From Activity \u{00b7} {}", sheet.time)
         );
-        assert_eq!(
-            sheet.browser, "Google Chrome",
-            "the record's browser when none is detected"
-        );
+        assert_eq!(sheet.browser, "", "no browser is chosen for the person");
 
         let host = record(
             "https://bank.example/login",
@@ -2139,7 +2156,8 @@ mod tests {
 
         // Add a rule suggests patterns for the landing host, with it as
         // the example.
-        let sheet = cx.update(|cx| AddRule::new(&record, &[], cx));
+        let mut sheet = cx.update(|cx| AddRule::new(&record, cx));
+        sheet.browser = "Firefox".into();
         assert_eq!(sheet.url, landed);
         assert!(
             sheet
@@ -2162,7 +2180,7 @@ mod tests {
             Matched::Default { owner: None },
             None,
         );
-        let mut sheet = cx.update(|cx| AddRule::new(&record, &[], cx));
+        let mut sheet = cx.update(|cx| AddRule::new(&record, cx));
         let hit = |took| Collision {
             time: "09:33:05".into(),
             url: "https://docs.example.com/b".into(),

@@ -519,6 +519,24 @@ pub fn field_label(content: impl Into<SharedString>, color: Hsla) -> Div {
     one_line(content, theme::SANS, 400.0, 12.5, 12.5, color)
 }
 
+/// A group's heading inside a `.menu`: "On this Mac", "In your rules".
+pub fn menu_heading(title: impl Into<SharedString>) -> Div {
+    div()
+        .px(px(8.0))
+        .pt(px(8.0))
+        .pb(px(3.0))
+        .child(text(title, 10.0, 600.0, theme::text_subtle()))
+}
+
+/// The rule between a `.menu`'s choices and its way out ("Other app…").
+pub fn menu_divider() -> Div {
+    div()
+        .h(px(1.0))
+        .my(px(4.0))
+        .mx(px(4.0))
+        .bg(theme::border_subtle())
+}
+
 /// The tallest a `.menu` gets before it scrolls: 8½ rows of `.mi`, so the
 /// half row says there is more (design: Popovers and Overflow 1c).
 pub const MENU_MAX_HEIGHT: f32 = 280.0;

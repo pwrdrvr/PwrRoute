@@ -575,7 +575,16 @@ pub(crate) fn everything_else_name(store: &RulesStore) -> String {
 /// `.pane-head`: what this screen is, and the add buttons. With no rules
 /// the help says where every link goes instead.
 fn heading(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let help = if app.store.is_empty() {
+    heading_with(app, None, cx)
+}
+
+/// The Rules head with its Add rewrite and Add rule, and `help` in place of
+/// the visual rules' own: under a config, what adding one means there
+/// (design: Rule Editor Pickers 1a).
+pub fn heading_with(app: &PwrRoute, help: Option<String>, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let help = if let Some(help) = help {
+        help
+    } else if app.store.is_empty() {
         format!(
             "Every link opens in {} until a rule says otherwise.",
             everything_else_name(&app.store)

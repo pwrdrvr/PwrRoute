@@ -789,8 +789,8 @@ fn saved_banner(
         )
 }
 
-/// `.res`: where the link opens, and the actions: Copy trace, Save as test
-/// and Open now.
+/// `.res`: where the link opens, and the actions: Copy trace, Save as test,
+/// Add a rule… and Open now.
 fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>) -> Div {
     let copied = app.test.copied;
     let proposed = app.test.proposed_test();
@@ -818,6 +818,17 @@ fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>)
         ),
         (None, false) => None,
     };
+    // A rule for this link, from its suggested pattern: only for text a
+    // pattern can match.
+    let add_rule = (!pwrroute_engine::suggest_rule(&app.test.url.text)
+        .candidates
+        .is_empty())
+    .then(|| {
+        button("Add a rule\u{2026}", ButtonKind::Default, false)
+            .id("test-add-rule")
+            .debug_selector(|| "test-add-rule".into())
+            .on_click(cx.listener(|this, _, window, cx| this.add_rule_from_test(window, cx)))
+    });
     card()
         .child(
             div()
@@ -892,6 +903,7 @@ fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>)
                         })),
                     )
                     .children(save)
+                    .children(add_rule)
                     // Dispatching from here waits for the browser launcher.
                     .child(button("Open now", ButtonKind::Primary, false)),
                 ),
