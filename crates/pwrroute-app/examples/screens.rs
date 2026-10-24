@@ -106,7 +106,7 @@ mod router;
 #[cfg(target_os = "macos")]
 #[path = "../src/rule_pickers.rs"]
 mod rule_pickers;
-
+#[cfg(target_os = "macos")]
 #[path = "../src/rules_model.rs"]
 mod rules_model;
 #[cfg(target_os = "macos")]
