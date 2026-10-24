@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.0 - 2026-10-23
+
 - Overview - The window now opens on Overview: whether links are routing (or paused, not reaching PwrRoute, or held up by a config that did not load or reload), a setup card for what is left, today's links, Everything else, rewrites and failures, and a map of every rule in the order it runs with a curve to the browser and profile it opens. Hovering a row or a card lights its routes, a click pins them, and rows open their rule in Rules. Rules opens as a list with nothing selected.
 - Who takes everything else - With a Finicky config in charge, `rules.json` can say `"precedence": "pwrroute"`: its rules run before the config's handlers and its `defaultBrowser` takes every link nothing claims, in place of the config's (fixed, `null` or a function). Left out, the order is Finicky's as before. The Rules banner's switch, Overview's callout (with Undo), first run and Settings › Configuration › Everything else all write it, say what changes (a `defaultBrowser` function that stops running, a handler that matches every link, no default of PwrRoute's own) and, when the file cannot be written, leave the choice where the router has it and say why. `pwrroute_rules_apply` refuses a `precedence` other than `"pwrroute"` or `"config"`.
 - Who routed a link - Activity, the tray's recents, Test a link, Try it and MCP traces name the rule that routed a link by its list and number ("rule 3" for `rules.json`, "config handler 2" for the config) and a default by its owner ("PwrRoute's default", "~/.finicky.ts's default"). Activity's Unrouted filter is now Everything else, and the Rules list counts today's links per rule.
