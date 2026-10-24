@@ -245,11 +245,11 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
     match request {
         SettingsRequest::RevealThirdPartyNotices => match shipped_file("THIRD_PARTY_LICENSES") {
             Some(path) => cx.reveal_path(&path),
-            None => eprintln!("pwrroute: settings: THIRD_PARTY_LICENSES is not beside this copy"),
+            None => log::warn!("settings: THIRD_PARTY_LICENSES is not beside this copy"),
         },
         SettingsRequest::OpenReleaseNotes => match shipped_file("CHANGELOG.md") {
             Some(path) => cx.open_with_system(&path),
-            None => eprintln!("pwrroute: settings: CHANGELOG.md is not beside this copy"),
+            None => log::warn!("settings: CHANGELOG.md is not beside this copy"),
         },
         _ => return false,
     }

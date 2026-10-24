@@ -1,13 +1,14 @@
 //! The dispatch thread: normalize, resolve, launch, record.
 
 use std::{
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
     thread,
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Result;
@@ -148,6 +149,16 @@ pub type ResolverFactory = Box<dyn FnOnce() -> Result<Box<dyn Resolver>> + Send>
 /// a link). Keep it quick: the next link waits for it.
 pub type DispatchCallback = Arc<dyn Fn(&DispatchRecord) + Send + Sync>;
 
+/// Called on the thread that hands a link to the router (AppKit's, for an
+/// Apple Event; the IPC server's, for a forwarded link), right after it is
+/// queued, with its id and the instant its timings count from. Not for Test
+/// a link. Keep it quick: the OS edge waits for it.
+pub type ReceivedCallback = Arc<dyn Fn(DispatchId, Instant) + Send + Sync>;
+
+/// A dispatch that took this long, from receipt to the launcher's return, is
+/// logged as a warning.
+pub const SLOW_DISPATCH: Duration = Duration::from_millis(500);
+
 /// Where the fallback browser comes from: asked each time a link needs it,
 /// so a choice saved while the router runs (first run, an edit of
 /// `rules.json`) applies from the next link, without a restart. Keep the
@@ -206,6 +217,12 @@ pub struct Options {
     /// [`FALLBACK_BROWSER`] by default.
     pub fallback: FallbackSource,
     pub on_dispatch: Option<DispatchCallback>,
+    pub on_received: Option<ReceivedCallback>,
+    /// The diagnostic log, when the app writes one. While links are kept at
+    /// all (in memory or the journal), the dispatch thread logs one URL-free
+    /// line per dispatch to the `log` facade ([`DispatchRecord::log_line`]),
+    /// and the retention description names this path.
+    pub diagnostic_log: Option<PathBuf>,
     /// What expands short links: the one request a dispatch makes off the
     /// machine, to the shortener's host, as Finicky made it. `None`, the
     /// default, is the real network ([`HttpNetwork`]), built on the dispatch
@@ -217,7 +234,11 @@ impl Options {
     /// Where dispatches are kept and for how long, in words the Activity
     /// screen and an agent can show verbatim.
     pub fn retention_description(&self) -> String {
-        describe_retention(self.retention, self.journal.as_ref())
+        describe_retention(
+            self.retention,
+            self.journal.as_ref(),
+            self.diagnostic_log.as_deref(),
+        )
     }
 }
 
@@ -228,12 +249,34 @@ impl std::fmt::Debug for Options {
             .field("journal", &self.journal)
             .field("fallback", &self.fallback)
             .field("on_dispatch", &self.on_dispatch.is_some())
+            .field("on_received", &self.on_received.is_some())
+            .field("diagnostic_log", &self.diagnostic_log)
             .field("network", &self.network.is_some())
             .finish()
     }
 }
 
-fn describe_retention(retention: Retention, journal: Option<&JournalConfig>) -> String {
+fn describe_retention(
+    retention: Retention,
+    journal: Option<&JournalConfig>,
+    log: Option<&Path>,
+) -> String {
+    let kept = describe_kept(retention, journal);
+    match log {
+        Some(log) if keeps_links(retention, journal) => format!(
+            "{kept} The diagnostic log, {}, notes each link's timings and the apps it came from and opened in, never its address.",
+            log.display()
+        ),
+        _ => kept,
+    }
+}
+
+/// Links are kept somewhere: in memory, or in the journal.
+fn keeps_links(retention: Retention, journal: Option<&JournalConfig>) -> bool {
+    retention.count > 0 || journal.is_some()
+}
+
+fn describe_kept(retention: Retention, journal: Option<&JournalConfig>) -> String {
     let links = |n: usize| if n == 1 { "link" } else { "links" };
     let hours = |n: u64| if n == 1 { "hour" } else { "hours" };
     // "the last 500 links or 24 hours", or "" when nothing is kept.
@@ -275,6 +318,14 @@ pub struct RetentionInfo {
     pub journal: Option<JournalConfig>,
     /// The same, in words to show verbatim.
     pub description: String,
+}
+
+impl RetentionInfo {
+    /// Links are kept somewhere, in memory or the journal. While they are
+    /// not, nothing about them is logged either.
+    pub fn keeps_links(&self) -> bool {
+        keeps_links(self.memory, self.journal.as_ref())
+    }
 }
 
 /// What the router is running on, for status displays.
@@ -380,6 +431,8 @@ impl Router {
         launcher: impl Launcher,
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
+        let on_received = options.on_received.clone();
+        let diagnostic_log = options.diagnostic_log.clone();
         let recent = Arc::new(RecentDispatches::new(options.retention));
         let worker_recent = Arc::clone(&recent);
         let journal = Arc::new(Mutex::new(options.journal.clone()));
@@ -412,6 +465,8 @@ impl Router {
                 journal,
                 paused,
                 next_id: Arc::new(AtomicU64::new(1)),
+                on_received,
+                diagnostic_log,
             },
             thread: Some(thread),
         })
@@ -458,6 +513,8 @@ pub struct RouterHandle {
     /// [`set_paused`]: Self::set_paused
     paused: Paused,
     next_id: Arc<AtomicU64>,
+    on_received: Option<ReceivedCallback>,
+    diagnostic_log: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for RouterHandle {
@@ -484,10 +541,12 @@ impl RouterHandle {
     pub fn dispatch_and_wait(&self, link: Link) -> std::result::Result<DispatchRecord, RouterGone> {
         let (reply, rx) = mpsc::channel();
         let request = self.request(link, false);
+        let (id, received) = (request.id, request.received);
         self.send(Command::Dispatch {
             request,
             reply: Some(reply),
         })?;
+        self.received(id, received);
         rx.recv().map_err(|_| RouterGone)
     }
 
@@ -550,7 +609,11 @@ impl RouterHandle {
         let memory = self.recent.retention();
         let journal = self.journal_config();
         RetentionInfo {
-            description: describe_retention(memory, journal.as_ref()),
+            description: describe_retention(
+                memory,
+                journal.as_ref(),
+                self.diagnostic_log.as_deref(),
+            ),
             memory,
             journal,
         }
@@ -640,12 +703,19 @@ impl RouterHandle {
 
     fn submit(&self, link: Link, forwarded: bool) -> std::result::Result<DispatchId, RouterGone> {
         let request = self.request(link, forwarded);
-        let id = request.id;
+        let (id, received) = (request.id, request.received);
         self.send(Command::Dispatch {
             request,
             reply: None,
         })?;
+        self.received(id, received);
         Ok(id)
+    }
+
+    fn received(&self, id: DispatchId, at: Instant) {
+        if let Some(callback) = &self.on_received {
+            callback(id, at);
+        }
     }
 
     fn request(&self, link: Link, forwarded: bool) -> Queued {
@@ -700,6 +770,7 @@ impl Worker {
                     // thread sees it: the buffer, the journal, the callback
                     // and the reply all get the same record.
                     record.reduce(record.privacy);
+                    self.log(&record);
                     self.recent.push(record.clone());
                     if let Some(journal) = &mut self.journal {
                         journal.append(&record);
@@ -759,6 +830,22 @@ impl Worker {
         }
     }
 
+    /// The record's line in the diagnostic log, while links are kept at all:
+    /// "Nothing is kept" means nothing, here too.
+    fn log(&self, record: &DispatchRecord) {
+        let kept = self.recent.retention().count > 0 || self.journal.is_some();
+        if self.options.diagnostic_log.is_none() || !kept {
+            return;
+        }
+        let slow = record.timings.total_us >= Timings::micros(SLOW_DISPATCH);
+        let level = if slow {
+            log::Level::Warn
+        } else {
+            log::Level::Info
+        };
+        log::log!(target: "pwrroute::link", level, "{}", record.log_line());
+    }
+
     fn process(&mut self, request: Queued, mode: Mode) -> DispatchRecord {
         let dequeued = Instant::now();
         let mut record = DispatchRecord {
@@ -789,7 +876,8 @@ impl Worker {
         };
         record.steps.push(Step::Received { url: url.clone() });
 
-        let (mut browser, privacy) = self.resolve(&url, &record.link, &mut record.steps);
+        let (mut browser, privacy) =
+            self.resolve(&url, &record.link, &mut record.steps, &mut record.timings);
         // Paused: the rules ran (so the rewrites and the privacy level
         // stand), and the pause target takes the link from whatever they
         // chose. A test still reports what the rules say.
@@ -845,7 +933,13 @@ impl Worker {
     /// of the link its rule lets the record keep. A link no rule routed is
     /// kept in full. A short link is expanded first, so the rules match
     /// where it lands.
-    fn resolve(&self, url: &str, link: &Link, steps: &mut Vec<Step>) -> (Browser, Privacy) {
+    fn resolve(
+        &self,
+        url: &str,
+        link: &Link,
+        steps: &mut Vec<Step>,
+        timings: &mut Timings,
+    ) -> (Browser, Privacy) {
         let resolver = match self.in_charge() {
             Ok(resolver) => resolver,
             Err(reason) => {
@@ -854,7 +948,7 @@ impl Worker {
             }
         };
         let opener = link.opener.as_ref().map(Opener::from);
-        let expanded = self.expand(resolver, url, steps);
+        let expanded = self.expand(resolver, url, steps, timings);
         let url = expanded.url.as_str();
         let mut privacy = Privacy::Full;
         let mut browser = match resolver.resolve(&expanded, opener.as_ref()) {
@@ -902,7 +996,13 @@ impl Worker {
     /// the dispatch thread, after the resolver's list is read and before
     /// its resolve. The link goes on unchanged when it is not short, the
     /// list is empty, or the shortener does not answer; nothing is logged.
-    fn expand(&self, resolver: &dyn Resolver, url: &str, steps: &mut Vec<Step>) -> EngineLink {
+    fn expand(
+        &self,
+        resolver: &dyn Resolver,
+        url: &str,
+        steps: &mut Vec<Step>,
+        timings: &mut Timings,
+    ) -> EngineLink {
         let Some(short_links) = resolver.short_links() else {
             return EngineLink::new(url);
         };
@@ -912,7 +1012,10 @@ impl Worker {
         let network = self
             .network
             .get_or_init(|| Arc::new(HttpNetwork::new()) as Arc<dyn Network + Send + Sync>);
+        let started = Instant::now();
         let link = short_links.expand(url, network.as_ref());
+        // At least 1 µs, so the log can tell "tried" from "not short".
+        timings.expand_us = Timings::micros(started.elapsed()).max(1);
         if link.was_expanded() {
             steps.push(Step::Expanded {
                 url: link.url.clone(),

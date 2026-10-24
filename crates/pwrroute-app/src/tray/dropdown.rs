@@ -93,7 +93,7 @@ fn native_resize() -> Resize {
         // scrolls until the next change.
         #[cfg(target_os = "macos")]
         if !crate::macos::set_dropdown_height(height.as_f32()) {
-            eprintln!("pwrroute: the tray dropdown was not resized: no open panel");
+            log::warn!("the tray dropdown was not resized: no open panel");
         }
         #[cfg(not(target_os = "macos"))]
         let _ = height;

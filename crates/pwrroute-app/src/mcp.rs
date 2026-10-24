@@ -253,7 +253,7 @@ impl Door {
                 self.failure = None;
             }
             Err(e) => {
-                eprintln!("pwrroute: local agents: {e:#}");
+                log::warn!("local agents: {e:#}");
                 self.failure = Some(format!("{e:#}"));
             }
         }
@@ -298,7 +298,7 @@ pub fn install(wiring: Wiring, cx: &mut App) {
         Err(e) => {
             // Failing closed keeps a damaged file from forgetting a
             // revocation: no door at all until the file is looked at.
-            eprintln!("pwrroute: local agents: {e:#}");
+            log::warn!("local agents: {e:#}");
             let agents = Agents::open(None).expect("an in-memory store");
             let door = Door {
                 data_dir: data_dir.clone(),
@@ -619,7 +619,7 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
                 }
                 let saved = Preferences { local_agents: *on }.save(door.data_dir.as_deref());
                 if let Err(e) = saved {
-                    eprintln!("pwrroute: local agents: could not save the switch: {e}");
+                    log::warn!("local agents: could not save the switch: {e}");
                 }
             }
             refresh_settings(cx);
@@ -629,17 +629,17 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
             match role_of(role) {
                 Some(role) => {
                     if let Err(e) = agents.set_role(&session.0, role) {
-                        eprintln!("pwrroute: local agents: {e:#}");
+                        log::warn!("local agents: {e:#}");
                     }
                 }
-                None => eprintln!("pwrroute: local agents: no role named {}", role.0),
+                None => log::warn!("local agents: no role named {}", role.0),
             }
             refresh_settings(cx);
         }
         SettingsRequest::RevokeSession(session) => {
             let agents = door.borrow().agents.clone();
             if let Err(e) = agents.revoke(&session.0) {
-                eprintln!("pwrroute: local agents: {e:#}");
+                log::warn!("local agents: {e:#}");
             }
             refresh_settings(cx);
         }
@@ -648,17 +648,17 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
             match role_of(role) {
                 Some(role) => {
                     if let Err(e) = agents.allow(&session.0, role) {
-                        eprintln!("pwrroute: local agents: {e:#}");
+                        log::warn!("local agents: {e:#}");
                     }
                 }
-                None => eprintln!("pwrroute: local agents: no role named {}", role.0),
+                None => log::warn!("local agents: no role named {}", role.0),
             }
             refresh_settings(cx);
         }
         SettingsRequest::ForgetSession(session) => {
             let agents = door.borrow().agents.clone();
             if let Err(e) = agents.forget(&session.0) {
-                eprintln!("pwrroute: local agents: {e:#}");
+                log::warn!("local agents: {e:#}");
             }
             refresh_settings(cx);
         }
@@ -675,7 +675,7 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
             }
         }
         SettingsRequest::NewCustomRole => {
-            eprintln!("pwrroute: local agents: custom roles are not built yet");
+            log::warn!("local agents: custom roles are not built yet");
         }
         _ => return false,
     }
@@ -716,7 +716,7 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
         }
         Err(e) => {
             // The reply is dropped with the window that never was: a denial.
-            eprintln!("pwrroute: could not open the approval window: {e}");
+            log::warn!("could not open the approval window: {e}");
         }
     }
 }

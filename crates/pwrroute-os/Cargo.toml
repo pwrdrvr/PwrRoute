@@ -51,6 +51,15 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
     "std",
     "CFString",
     "CFURL",
+    # The window server's window list (window_order).
+    "CFArray",
+    "CFDictionary",
+    "CFNumber",
+] }
+# CGWindowListCopyWindowInfo, for which app's window is on top.
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std",
+    "CGWindow",
 ] }
 objc2-core-services = { version = "0.3", default-features = false, features = [
     "std",

@@ -122,6 +122,7 @@ pub fn activity() -> Vec<DispatchRecord> {
     };
     let timings = |total_ms: u64| Timings {
         queue_us: 40,
+        expand_us: 0,
         resolve_us: 600,
         launch_us: total_ms * 1_000 - 700,
         total_us: total_ms * 1_000,
@@ -336,6 +337,7 @@ pub fn attribution_activity() -> Vec<DispatchRecord> {
             outcome: Outcome::Opened,
             timings: Timings {
                 queue_us: 40,
+                expand_us: 0,
                 resolve_us: 600,
                 launch_us: total_ms * 1_000 - 700,
                 total_us: total_ms * 1_000,
@@ -633,6 +635,7 @@ pub fn overview_day(parts: &[DayPart], rewritten: u64, failed: u64) -> Vec<Dispa
                 },
                 timings: Timings {
                     queue_us: 40,
+                    expand_us: 0,
                     resolve_us: 600,
                     launch_us: 3_000,
                     total_us: 3_640,

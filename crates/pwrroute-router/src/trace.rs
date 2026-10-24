@@ -259,6 +259,11 @@ pub enum Outcome {
 pub struct Timings {
     /// Waiting for the dispatch thread.
     pub queue_us: u64,
+    /// Inside `resolve_us`: following a short link to where it lands. `0`
+    /// when the link was not short. A shortener that did not answer spends
+    /// up to its timeout here and leaves no [`Step::Expanded`].
+    #[serde(default)]
+    pub expand_us: u64,
     pub resolve_us: u64,
     pub launch_us: u64,
     pub total_us: u64,
@@ -348,6 +353,93 @@ impl DispatchRecord {
                 .any(|s| matches!(s, Step::ConfigError { .. })),
             timings: self.timings,
         }
+    }
+
+    /// One line for the diagnostic log: what [`timing`](Self::timing)
+    /// carries, plus the apps the link went between, when this record still
+    /// holds them (a `privacy: none` rule's record does not). Never a URL,
+    /// a host, a window title or error text.
+    pub fn log_line(&self) -> String {
+        let ms = |us: u64| format!("{:.1}ms", us as f64 / 1_000.0);
+        let mut line = format!(
+            "link {} source={}{} outcome={}",
+            self.id.0,
+            Source::label(self.link.source),
+            if self.forwarded { " forwarded" } else { "" },
+            outcome_label(self.outcome),
+        );
+        if let Some(opener) = &self.link.opener
+            && !opener.bundle_id.is_empty()
+        {
+            line.push_str(&format!(" from={}", opener.bundle_id));
+        }
+        if let Some(browser) = &self.browser {
+            line.push_str(&format!(" browser={:?}", browser.name));
+            if !browser.profile.is_empty() {
+                line.push_str(&format!(" profile={:?}", browser.profile));
+            }
+            if browser.private {
+                line.push_str(" private");
+            }
+        }
+        for step in &self.steps {
+            match step {
+                Step::Matched { by } => line.push_str(&format!(" by={}", matched_label(by))),
+                Step::Fallback { .. } => line.push_str(" by=fallback"),
+                Step::Paused { .. } => line.push_str(" paused"),
+                Step::ConfigError { .. } => line.push_str(" config-error"),
+                Step::LaunchFailed { .. } => line.push_str(" launch-failed"),
+                _ => {}
+            }
+        }
+        let t = self.timings;
+        line.push_str(&format!(
+            " queue={} resolve={}",
+            ms(t.queue_us),
+            ms(t.resolve_us)
+        ));
+        if t.expand_us > 0 {
+            let expanded = self
+                .steps
+                .iter()
+                .any(|s| matches!(s, Step::Expanded { .. }));
+            line.push_str(&format!(
+                " expand={}({})",
+                ms(t.expand_us),
+                if expanded { "expanded" } else { "unanswered" }
+            ));
+        }
+        line.push_str(&format!(
+            " launch={} total={}",
+            ms(t.launch_us),
+            ms(t.total_us)
+        ));
+        line
+    }
+}
+
+fn outcome_label(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Opened => "opened",
+        Outcome::DryRun => "dry-run",
+        Outcome::Tested => "tested",
+        Outcome::NotOpened => "not-opened",
+        Outcome::Failed => "failed",
+    }
+}
+
+fn matched_label(by: &Matched) -> String {
+    match by {
+        Matched::Handler { index } => format!("config-handler-{}", index + 1),
+        Matched::Rule { index } => format!("rule-{}", index + 1),
+        Matched::Default {
+            owner: Some(Owner::Config),
+        } => "config-default".into(),
+        Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        } => "pwrroute-default".into(),
+        Matched::Default { owner: None } => "default".into(),
+        Matched::Unreported => "unreported".into(),
     }
 }
 
@@ -468,11 +560,44 @@ mod tests {
             outcome: Outcome::Failed,
             timings: Timings {
                 queue_us: 1,
+                expand_us: 0,
                 resolve_us: 2,
                 launch_us: 3,
                 total_us: 6,
             },
         }
+    }
+
+    #[test]
+    fn the_log_line_names_apps_and_times_but_never_the_link() {
+        let mut record = record();
+        record.timings.expand_us = 750_000;
+        let line = record.log_line();
+        assert_eq!(
+            line,
+            "link 3 source=apple_event outcome=failed from=com.apple.mail browser=\"Firefox\" \
+             profile=\"Work\" config-error by=config-handler-3 paused launch-failed \
+             queue=0.0ms resolve=0.0ms expand=750.0ms(unanswered) launch=0.0ms total=0.0ms"
+        );
+        for kept_out in [
+            "bank.example.com",
+            "hunter2",
+            "Inbox",
+            "threw",
+            "cannot open",
+        ] {
+            assert!(!line.contains(kept_out), "{kept_out} in {line}");
+        }
+
+        // A `privacy: none` rule's record keeps no apps, so its line has none.
+        record.reduce(Privacy::None);
+        let line = record.log_line();
+        assert!(!line.contains("com.apple.mail"), "{line}");
+        assert!(!line.contains("Firefox"), "{line}");
+        assert!(
+            line.ends_with("expand=750.0ms(unanswered) launch=0.0ms total=0.0ms"),
+            "{line}"
+        );
     }
 
     #[test]

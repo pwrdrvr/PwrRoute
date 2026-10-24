@@ -153,14 +153,14 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
         SettingsRequest::SetAppVisible { app, visible } => {
             let hidden = !visible;
             let Some(store) = settings_store::store(cx) else {
-                eprintln!("pwrroute: settings: no store; the browser switch is not saved");
+                log::warn!("settings: no store; the browser switch is not saved");
                 return true;
             };
             let saved = store.update(cx, |store, _| {
                 store.update(|settings| settings.browsers.set_hidden(app, hidden))
             });
             if let Err(error) = saved {
-                eprintln!("pwrroute: cannot save settings: {error:#}");
+                log::warn!("cannot save settings: {error:#}");
             }
             browser_scan::refresh_windows(cx);
             refresh(cx);

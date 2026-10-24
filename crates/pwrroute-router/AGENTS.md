@@ -33,9 +33,15 @@ runs on every platform.
   JSON line per dispatch to `<dir>/activity-YYYY-MM-DD.jsonl` (UTC days,
   `0600`), capped at the lesser of the record's level and `JournalMode`, and
   never with error text, which can quote a URL. `DispatchRecord::timing()`
-  is the only other view meant for logs; tests check both carry no link data
-  beyond their level. `Options::retention_description()` is the sentence the
-  UI and MCP show about all this; keep it true.
+  and `DispatchRecord::log_line()` are the only other views meant for logs;
+  tests check they carry no link data beyond their level. With
+  `Options::diagnostic_log` set, the dispatch thread logs `log_line()` for
+  each reduced record to the `log` facade (target `pwrroute::link`, a
+  warning past `SLOW_DISPATCH`), but only while links are kept in memory or
+  the journal. `Options::on_received` fires on the handing-over thread with
+  each link's id and receipt instant (the app times the hand-off to the
+  browser from it). `Options::retention_description()` is the sentence the
+  UI and MCP show about all this, the log included; keep it true.
 - **`Privacy` is the engine's type.** `trace.rs` re-exports
   `pwrroute_engine::Privacy` (serialized `full`/`host`/`none`) and adds what
   the router needs through `PrivacyExt` (`at_most`, `label`), written in

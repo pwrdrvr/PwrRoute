@@ -2200,3 +2200,50 @@ fn skipped_handler_numbers_only_the_configs_handlers() {
     }
     assert_eq!(skipped_handler(&[]), None);
 }
+
+#[test]
+fn the_received_hook_gets_each_dispatched_links_id_but_not_a_test() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hook = Arc::clone(&seen);
+    let (_dir, router, _launcher) = engine_router(Options {
+        on_received: Some(Arc::new(move |id, _| hook.lock().unwrap().push(id))),
+        ..Options::default()
+    });
+    let handle = router.handle();
+    let first = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/a"))
+        .unwrap();
+    let second = handle
+        .dispatch(link("https://team.chat.example.com/b"))
+        .unwrap();
+    handle
+        .test(link("https://team.chat.example.com/c"))
+        .unwrap();
+    assert_eq!(*seen.lock().unwrap(), [first.id, second]);
+}
+
+#[test]
+fn the_retention_names_the_diagnostic_log_only_while_links_are_kept() {
+    let log = std::path::PathBuf::from("/Users/someone/Library/Logs/PwrRoute/main.log");
+    let kept = Options {
+        diagnostic_log: Some(log.clone()),
+        ..Options::default()
+    };
+    assert!(
+        kept.retention_description().ends_with(
+            " The diagnostic log, /Users/someone/Library/Logs/PwrRoute/main.log, notes each \
+             link's timings and the apps it came from and opened in, never its address."
+        ),
+        "{}",
+        kept.retention_description()
+    );
+    let nothing = Options {
+        retention: Retention { count: 0, hours: 0 },
+        diagnostic_log: Some(log),
+        ..Options::default()
+    };
+    assert_eq!(
+        nothing.retention_description(),
+        "Nothing is kept: not in memory, and nothing is written to disk."
+    );
+}

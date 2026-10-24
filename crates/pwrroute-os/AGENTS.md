@@ -13,11 +13,17 @@ browser registration on macOS, Windows and Linux, and apps' icons (macOS).
   unlist PwrRoute as a browser (installer and updater hooks; keep the names).
   `set_default_browser` asks to become the default and runs only from an
   explicit user action; the OS always gets the last word.
-- **`unsafe` lives in `src/macos/launch_services.rs` and
-  `src/macos/app_icon.rs` only**: the LaunchServices C calls, and the two
-  AppKit calls that render an icon (`CGImageForProposedRect`, the PNG
-  export), each with a `SAFETY` comment. objc2's other Foundation and AppKit
-  bindings are safe; prefer them.
+- **`unsafe` lives in `src/macos/launch_services.rs`,
+  `src/macos/app_icon.rs` and `src/macos/window_order.rs` only**: the
+  LaunchServices C calls, the two AppKit calls that render an icon
+  (`CGImageForProposedRect`, the PNG export), and the window server's list
+  (a typed cast and three CoreGraphics key constants), each with a `SAFETY`
+  comment. objc2's other Foundation and AppKit bindings are safe; prefer
+  them.
+- **`top_window_owner` reads the window server, not AppKit**, so it is
+  current from any thread even while the app's main thread is busy (which
+  is what the app's hand-off log measures). Owner pids and layers need no
+  Screen Recording permission; never read window titles there.
 - **App icons (`app_bundle`, `app_icon_png`) read the disk.** Callers run
   them off the UI thread and cache the result; the app's `app_icons.rs`
   does. Windows and Linux return `None` until they have an implementation.

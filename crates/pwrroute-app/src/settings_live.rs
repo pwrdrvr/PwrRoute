@@ -41,6 +41,6 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
         || updates_host::handle_request(request, cx)
         || system_host::handle_request(request, cx);
     if !handled {
-        eprintln!("pwrroute: settings: {request:?} is not wired up yet");
+        log::warn!("settings: {request:?} is not wired up yet");
     }
 }

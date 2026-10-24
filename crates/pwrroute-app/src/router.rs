@@ -42,9 +42,6 @@ const FORWARD_TIMEOUT: Duration = Duration::from_secs(3);
 /// rechecks them first, whatever the timer last saw.
 const WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
-/// A dispatch slower than this is reported on stderr, as the Go router did.
-const SLOW_DISPATCH_US: u64 = 500_000;
-
 /// This process serves the router's socket, so later launches reach it.
 /// Set once by [`start`]; Settings › Diagnostics reads it.
 static LISTENING: AtomicBool = AtomicBool::new(false);
@@ -177,11 +174,11 @@ pub fn start(args: &Args) -> Start {
             };
             match client.send(&request, FORWARD_TIMEOUT) {
                 Ok(response) if response.ok => return Start::Exit,
-                Ok(response) => eprintln!(
-                    "pwrroute: the running router refused the request: {}",
+                Ok(response) => log::warn!(
+                    "the running router refused the request: {}",
                     response.error.unwrap_or_default()
                 ),
-                Err(e) => eprintln!("pwrroute: the running router did not answer: {e}"),
+                Err(e) => log::warn!("the running router did not answer: {e}"),
             }
             // Never lose a link to a stuck router: route it here, then go.
             if !links.is_empty() {
@@ -190,11 +187,11 @@ pub fn start(args: &Args) -> Start {
             return Start::Exit;
         }
         Some(Err(e)) => {
-            eprintln!("pwrroute: cannot take the router lock ({e}); running without it");
+            log::warn!("cannot take the router lock ({e}); running without it");
             None
         }
         None => {
-            eprintln!("pwrroute: no data directory; running without the router lock");
+            log::warn!("no data directory; running without the router lock");
             None
         }
     };
@@ -211,7 +208,7 @@ pub fn start(args: &Args) -> Start {
                     let _ = activate_tx.try_send(());
                 })
             })
-            .map_err(|e| eprintln!("pwrroute: cannot listen for other launches: {e}"))
+            .map_err(|e| log::warn!("cannot listen for other launches: {e}"))
             .ok()
     });
     LISTENING.store(server.is_some(), Ordering::Release);
@@ -436,23 +433,28 @@ fn spawn_router(
     } else {
         Box::new(BrowserLauncher::new())
     };
-    let report_all = env::var_os("PWRROUTE_DIAGNOSTICS").is_some_and(|v| v == "1");
+    let slot = crate::handoff::HandleSlot::default();
+    let watcher = slot.clone();
     let options = Options {
         retention: settings.retention(),
         journal: settings.journal(),
         fallback,
         on_dispatch: Some(Arc::new(move |record| {
-            report_timing(record, report_all);
             if let Some(dispatched) = &dispatched {
                 // Unbounded: never blocks the dispatch thread. Nobody
                 // listening (a router without a window) just drops it.
                 let _ = dispatched.try_send(record.clone());
             }
         })),
+        on_received: Some(Arc::new(move |id, received| {
+            crate::handoff::watch(id, received, watcher.clone());
+        })),
+        diagnostic_log: crate::diag_log::path().map(Path::to_path_buf),
         network: None,
     };
     let router =
         Router::spawn(options, Some(factory), launcher).expect("start the dispatch thread");
+    let _ = slot.set(router.handle());
     let _ = handle_tx.send(router.handle());
     (router, settings)
 }
@@ -526,7 +528,7 @@ impl LiveResolver {
         self.watcher = Watcher::spawn(watch, WATCH_INTERVAL, move || {
             let _ = handle.refresh();
         })
-        .map_err(|e| eprintln!("pwrroute: cannot watch the config for changes: {e}"))
+        .map_err(|e| log::warn!("cannot watch the config for changes: {e}"))
         .ok();
     }
 
@@ -563,13 +565,13 @@ impl Resolver for LiveResolver {
         let chosen = CHOSEN.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(choice) = chosen {
             if let Err(e) = reloader.set_choice(choice) {
-                eprintln!("pwrroute: the chosen source did not load: {e:#}");
+                log::warn!("the chosen source did not load: {e:#}");
             }
             self.publish(&reloader);
         }
         if let Some(result) = reloader.reload_if_changed() {
             if let Err(e) = result {
-                eprintln!("pwrroute: the config did not reload: {e:#}");
+                log::warn!("the config did not reload: {e:#}");
             }
             self.publish(&reloader);
         }
@@ -672,7 +674,7 @@ impl Launcher for BrowserLauncher {
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()> {
         if let Some(plan) = self.inner.launch(browser).map_err(launch_error)? {
             for note in &plan.notes {
-                eprintln!("pwrroute: {}", describe_note(note));
+                log::warn!("{}", describe_note(note));
             }
         }
         Ok(())
@@ -703,16 +705,6 @@ fn describe_note(note: &Note) -> String {
                 .to_owned()
         }
         other => format!("{other:?}"),
-    }
-}
-
-/// Slow dispatches, or all with `PWRROUTE_DIAGNOSTICS=1`, as one line of
-/// URL-free JSON on stderr.
-fn report_timing(record: &DispatchRecord, report_all: bool) {
-    if (report_all || record.timings.total_us >= SLOW_DISPATCH_US)
-        && let Ok(json) = serde_json::to_string(&record.timing())
-    {
-        eprintln!("pwrroute dispatch {json}");
     }
 }
 
