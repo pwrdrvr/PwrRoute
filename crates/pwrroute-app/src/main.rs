@@ -32,6 +32,8 @@ mod importer_view;
 mod macos;
 mod mcp;
 mod onboarding;
+mod overview;
+mod overview_model;
 mod placement;
 mod router;
 mod rules_model;
@@ -371,6 +373,9 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
                 };
                 match step.stage {
                     pwrroute_engine::Stage::Default => "the default".to_owned(),
+                    pwrroute_engine::Stage::Handler if list.is_empty() => {
+                        format!("rule {}", step.index + 1)
+                    }
                     pwrroute_engine::Stage::Handler => {
                         format!("{list}handler {}", step.index + 1)
                     }
@@ -451,7 +456,8 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
             },
         )
         .expect("open the PwrRoute window");
-    // The rules list owns the keyboard from the first frame.
+    // The window owns the keyboard from the first frame: Overview's Esc,
+    // and the Rules list's arrows once the reader goes there.
     let _ = window.update(cx, |this, window, cx| {
         let focus = this.focus.clone();
         window.focus(&focus, cx);
@@ -499,7 +505,7 @@ mod cli_tests {
             text.starts_with("FAIL rules[1].examples[0]\n  input:    https://github.com/x\n"),
             "{text}"
         );
-        assert!(text.contains("  winner:   handler 1\n"), "{text}");
+        assert!(text.contains("  winner:   rule 1\n"), "{text}");
         assert!(text.ends_with("0 passed, 1 failed, 1 total\n"), "{text}");
 
         // A file that does not load: 2.

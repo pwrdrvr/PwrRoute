@@ -188,7 +188,7 @@ fn size_label(bytes: u64) -> String {
     }
 }
 
-/// "Handler 9 keeps host only and handler 10 keeps nothing": the rules
+/// "Rule 9 keeps host only and rule 10 keeps nothing": the rules
 /// in the `rules.json` at `path` that keep less than full, for the confirm
 /// sheet.
 fn rules_keep_less(path: Option<&Path>) -> Option<SharedString> {
@@ -206,7 +206,7 @@ fn rules_keep_less(path: Option<&Path>) -> Option<SharedString> {
     }
     for (index, rule) in file.rules.iter().enumerate() {
         if let Some(what) = keeps(rule.effective_privacy()) {
-            parts.push(format!("handler {} keeps {what}", index + 1));
+            parts.push(format!("rule {} keeps {what}", index + 1));
         }
     }
     if parts.is_empty() {
@@ -477,9 +477,7 @@ mod tests {
             build(None, None, None, Some(&rules))
                 .rules_keep_less
                 .as_deref(),
-            Some(
-                "Rewrite 1 keeps host only and handler 2 keeps host only and handler 3 keeps nothing"
-            )
+            Some("Rewrite 1 keeps host only and rule 2 keeps host only and rule 3 keeps nothing")
         );
     }
 

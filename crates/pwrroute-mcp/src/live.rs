@@ -19,27 +19,56 @@ use pwrroute_browsers::{Env, detect_installed, list_profiles};
 use pwrroute_engine::{AppType, Browser, Opener, Privacy, RulesFile};
 use pwrroute_os::DefaultStatus;
 use pwrroute_router::{
-    DispatchRecord, Link, Matched, OpenerInfo, Outcome, RouterHandle, Source, Step,
+    DispatchRecord, Link, Matched, OpenerInfo, Outcome, Owner, RouterHandle, Source, Step,
 };
 use serde_json::Value;
 
 use crate::backend::{
     ActivityEntry, ActivityLog, ActivityOutcome, ActivitySource, AgentRef, BrowserCatalog,
     BrowserList, DetectedBrowser, Resolver, Router, RulesError, RulesSnapshot, RulesSource,
-    RulesStore, StepKind, Trace, TraceStep,
+    RulesStore, StepKind, StepSource, Trace, TraceStep,
 };
 
 /// The router behind `pwrroute_resolve`, `pwrroute_open` and
 /// `pwrroute_activity`: resolving is the router's Test a link, opening is a
 /// dispatch, and activity is its buffer and journal.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LiveRouter {
     handle: RouterHandle,
+    config: Option<ConfigName>,
+}
+
+/// The config in charge as the app shows it ("~/.finicky.ts"), asked at
+/// each call: a trace names the config's default after it.
+pub type ConfigName = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
+impl std::fmt::Debug for LiveRouter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveRouter")
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LiveRouter {
     pub fn new(handle: RouterHandle) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            config: None,
+        }
+    }
+
+    /// Names the config in charge in traces: its default is "~/.finicky.ts's
+    /// default", as the app's views say it, not "the config's default".
+    pub fn with_config(self, config: ConfigName) -> Self {
+        Self {
+            config: Some(config),
+            ..self
+        }
+    }
+
+    fn config(&self) -> Option<String> {
+        self.config.as_ref().and_then(|config| config())
     }
 }
 
@@ -47,7 +76,7 @@ impl Resolver for LiveRouter {
     fn resolve(&self, url: &str, opener: Option<&Opener>) -> Result<Trace> {
         let link = Link::new(url, Source::Api).with_opener(opener.map(opener_info));
         let record = self.handle.test(link)?;
-        Ok(trace_of(&record))
+        Ok(trace_of(&record, self.config().as_deref()))
     }
 }
 
@@ -61,28 +90,30 @@ impl Router for LiveRouter {
         });
         let link = Link::new(url, Source::Api).with_opener(Some(opener));
         let record = self.handle.dispatch_and_wait(link)?;
-        Ok(trace_of(&record))
+        Ok(trace_of(&record, self.config().as_deref()))
     }
 }
 
 impl ActivityLog for LiveRouter {
     fn recent(&self, limit: usize) -> Result<Vec<ActivityEntry>> {
+        let config = self.config();
         Ok(self
             .handle
             .recent()
             .iter()
             .take(limit)
-            .map(|r| entry_of(r, ActivitySource::Memory))
+            .map(|r| entry_of(r, ActivitySource::Memory, config.as_deref()))
             .collect())
     }
 
     fn journal(&self, limit: usize) -> Result<Vec<ActivityEntry>> {
+        let config = self.config();
         Ok(self
             .handle
             .journal(limit)
             .context("reading the activity journal")?
             .iter()
-            .map(|r| entry_of(r, ActivitySource::Journal))
+            .map(|r| entry_of(r, ActivitySource::Journal, config.as_deref()))
             .collect())
     }
 
@@ -102,13 +133,17 @@ fn opener_info(opener: &Opener) -> OpenerInfo {
 
 /// A record as an entry. The record is already at its level: a `none`
 /// record has no link, opener, browser or steps, so the entry has no trace
-/// and no `via`.
-pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntry {
+/// and no `via`. `config` names the config in charge, as in [`trace_of`].
+pub fn entry_of(
+    record: &DispatchRecord,
+    source: ActivitySource,
+    config: Option<&str>,
+) -> ActivityEntry {
     let unrouted = record.steps.iter().any(|s| {
         matches!(
             s,
             Step::Matched {
-                by: Matched::Default
+                by: Matched::Default { .. }
             } | Step::Fallback { .. }
                 | Step::Paused { .. }
         )
@@ -118,7 +153,7 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
         .iter()
         .any(|s| matches!(s, Step::Rewrite { .. }));
     let private = record.browser.as_ref().is_some_and(|b| b.private);
-    let trace = (record.privacy != Privacy::None).then(|| trace_of(record));
+    let trace = (record.privacy != Privacy::None).then(|| trace_of(record, config));
     ActivityEntry {
         id: record.id.0,
         at_ms: record
@@ -147,9 +182,13 @@ pub fn entry_of(record: &DispatchRecord, source: ActivitySource) -> ActivityEntr
 }
 
 /// The router's record as the tools' trace: each rewrite that ran, then
-/// what chose the browser. Error text comes along as the record has it
-/// (withheld already for a `host` record).
-pub fn trace_of(record: &DispatchRecord) -> Trace {
+/// what chose the browser, naming who decided: `rules.json`'s rule N, the
+/// config's handler N, or whose default (PwrRoute's or the config's). A
+/// record that does not say is not passed off as a rule. Error text comes
+/// along as the record has it (withheld already for a `host` record).
+/// `config` is the config in charge as the app shows it ("~/.finicky.ts"),
+/// which names its default; without one it is "the config's default".
+pub fn trace_of(record: &DispatchRecord, config: Option<&str>) -> Trace {
     let mut steps = Vec::new();
     let mut error = None;
     // A fallback after a launch failure is the chosen browser missing, not
@@ -157,67 +196,125 @@ pub fn trace_of(record: &DispatchRecord) -> Trace {
     let mut launch_failed = false;
     let mut received = None;
     let mut expanded = None;
-    for step in &record.steps {
-        match step {
+    // What chose the browser, for a pause that passed it over.
+    let mut matched = None;
+    let step = |kind, index, summary: String, source| TraceStep {
+        kind,
+        index,
+        summary,
+        url: None,
+        source,
+    };
+    for each in &record.steps {
+        match each {
             Step::Received { url } => received = Some(url.clone()),
             Step::Expanded { url } => expanded = Some(url.clone()),
             Step::Rewrite { rule, url } => steps.push(TraceStep {
-                kind: StepKind::Rewrite,
-                index: *rule,
-                summary: match rule {
-                    Some(n) => format!("config rewrite {} matched", n + 1),
-                    None => "a rules.json rewrite matched".to_owned(),
-                },
                 url: Some(url.clone()),
+                ..match rule {
+                    Some(n) => step(
+                        StepKind::Rewrite,
+                        Some(*n),
+                        format!("config rewrite {} matched", n + 1),
+                        Some(StepSource::Config),
+                    ),
+                    None => step(
+                        StepKind::Rewrite,
+                        None,
+                        "a rules.json rewrite matched".to_owned(),
+                        Some(StepSource::Rules),
+                    ),
+                }
             }),
-            Step::Matched { by } => steps.push(match by {
-                Matched::Handler { index } => TraceStep {
-                    kind: StepKind::Handler,
-                    index: Some(*index),
-                    summary: format!("config handler {} matched", index + 1),
-                    url: None,
-                },
-                Matched::Default => TraceStep {
-                    kind: StepKind::Default,
-                    index: None,
-                    summary: "no handler matched: the default browser".to_owned(),
-                    url: None,
-                },
-                Matched::Unreported => TraceStep {
-                    kind: StepKind::Handler,
-                    index: None,
-                    summary: "a rules.json rule matched".to_owned(),
-                    url: None,
-                },
-            }),
-            Step::Fallback { reason } => steps.push(TraceStep {
-                kind: StepKind::Default,
-                index: None,
-                summary: if launch_failed {
+            Step::Matched { by } => {
+                matched = Some(*by);
+                steps.push(match by {
+                    Matched::Handler { index } => step(
+                        StepKind::Handler,
+                        Some(*index),
+                        format!("config handler {} matched", index + 1),
+                        Some(StepSource::Config),
+                    ),
+                    Matched::Rule { index } => step(
+                        StepKind::Handler,
+                        Some(*index),
+                        format!("rules.json rule {} matched", index + 1),
+                        Some(StepSource::Rules),
+                    ),
+                    Matched::Default {
+                        owner: Some(Owner::PwrRoute),
+                    } => step(
+                        StepKind::Default,
+                        None,
+                        crate::engine::DEFAULT_PWRROUTE.to_owned(),
+                        Some(StepSource::Rules),
+                    ),
+                    Matched::Default {
+                        owner: Some(Owner::Config),
+                    } => step(
+                        StepKind::Default,
+                        None,
+                        crate::engine::default_config(config),
+                        Some(StepSource::Config),
+                    ),
+                    Matched::Default { owner: None } => step(
+                        StepKind::Default,
+                        None,
+                        "no rule or handler matched: the default browser".to_owned(),
+                        None,
+                    ),
+                    Matched::Unreported => step(
+                        StepKind::Handler,
+                        None,
+                        "a rule or handler matched; the router did not say which".to_owned(),
+                        None,
+                    ),
+                });
+            }
+            Step::Fallback { reason } => steps.push(step(
+                StepKind::Default,
+                None,
+                if launch_failed {
                     format!("the fallback browser: {reason}")
                 } else {
                     format!("no config in charge: the fallback browser ({reason})")
                 },
-                url: None,
-            }),
-            Step::RefusedLoop { browser } => steps.push(TraceStep {
-                kind: StepKind::Default,
-                index: None,
-                summary: format!("{browser} would send the link back: the fallback browser"),
-                url: None,
-            }),
-            Step::Paused { skipped } => steps.push(TraceStep {
-                kind: StepKind::Default,
-                index: *skipped,
-                summary: match skipped {
-                    Some(n) => format!(
-                        "routing is paused: config handler {} skipped, the pause target instead",
-                        n + 1
+                None,
+            )),
+            Step::RefusedLoop { browser } => steps.push(step(
+                StepKind::Default,
+                None,
+                format!("{browser} would send the link back: the fallback browser"),
+                None,
+            )),
+            // The step that chose the browser says which list the skipped
+            // rule is in; the pause's own number is the config's.
+            Step::Paused { skipped } => steps.push(match (matched, skipped) {
+                (Some(Matched::Rule { index }), _) => step(
+                    StepKind::Default,
+                    Some(index),
+                    format!(
+                        "routing is paused: rules.json rule {} skipped, the pause target instead",
+                        index + 1
                     ),
-                    None => "routing is paused: every handler skipped, the pause target instead"
+                    Some(StepSource::Rules),
+                ),
+                (Some(Matched::Handler { index }), _) | (_, &Some(index)) => step(
+                    StepKind::Default,
+                    Some(index),
+                    format!(
+                        "routing is paused: config handler {} skipped, the pause target instead",
+                        index + 1
+                    ),
+                    Some(StepSource::Config),
+                ),
+                (_, None) => step(
+                    StepKind::Default,
+                    None,
+                    "routing is paused: every rule and handler skipped, the pause target instead"
                         .to_owned(),
-                },
-                url: None,
+                    None,
+                ),
             }),
             Step::LaunchFailed { message } => {
                 launch_failed = true;
@@ -463,7 +560,7 @@ mod tests {
                 },
                 error: None,
                 rule_steps: vec![Step::Matched {
-                    by: Matched::Default,
+                    by: Matched::Default { owner: None },
                 }],
                 privacy,
             })
@@ -494,7 +591,7 @@ mod tests {
     #[test]
     fn the_trace_tells_a_missing_browser_from_a_config_out_of_charge() {
         let summaries = |record: &DispatchRecord| -> Vec<String> {
-            trace_of(record)
+            trace_of(record, None)
                 .steps
                 .into_iter()
                 .map(|step| step.summary)
@@ -515,7 +612,7 @@ mod tests {
         .unwrap();
         let record = router.handle().dispatch_and_wait(link()).unwrap();
         assert_eq!(record.outcome, Outcome::Opened);
-        let trace = trace_of(&record);
+        let trace = trace_of(&record, None);
         assert_eq!(
             trace.error.as_deref(),
             Some("browser \"Firefox\" is not installed")
@@ -803,5 +900,147 @@ mod tests {
         assert!(!list.pwrroute_is_default);
         assert_eq!(list.os_default.as_deref(), Some("com.apple.Safari"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Attribution (WP-B): a record's trace names who decided, by list and
+    /// number, and whose default took an unclaimed link; a record that did
+    /// not say is not called a rule.
+    #[test]
+    fn the_trace_names_who_routed_a_record() {
+        use pwrroute_router::{DispatchId, Timings};
+        let url = "https://docs.example.com/a";
+        let record = |steps: Vec<Step>| DispatchRecord {
+            id: DispatchId(7),
+            received_at: SystemTime::now(),
+            privacy: Privacy::Full,
+            link: Link::new(url, Source::CommandLine),
+            forwarded: false,
+            final_url: Some(url.into()),
+            browser: None,
+            steps,
+            outcome: Outcome::DryRun,
+            timings: Timings::default(),
+        };
+        let last = |steps: Vec<Step>| {
+            let trace = trace_of(&record(steps), None);
+            let step = trace.steps.last().expect("a step").clone();
+            (step.kind, step.index, step.source, step.summary)
+        };
+        let matched = |by| Step::Matched { by };
+
+        assert_eq!(
+            last(vec![matched(Matched::Rule { index: 2 })]),
+            (
+                StepKind::Handler,
+                Some(2),
+                Some(StepSource::Rules),
+                "rules.json rule 3 matched".to_owned()
+            )
+        );
+        assert_eq!(
+            last(vec![matched(Matched::Handler { index: 1 })]),
+            (
+                StepKind::Handler,
+                Some(1),
+                Some(StepSource::Config),
+                "config handler 2 matched".to_owned()
+            )
+        );
+        assert_eq!(
+            last(vec![matched(Matched::Default {
+                owner: Some(Owner::PwrRoute)
+            })]),
+            (
+                StepKind::Default,
+                None,
+                Some(StepSource::Rules),
+                "no rule or handler matched: PwrRoute's default (rules.json's defaultBrowser)"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            last(vec![matched(Matched::Default {
+                owner: Some(Owner::Config)
+            })]),
+            (
+                StepKind::Default,
+                None,
+                Some(StepSource::Config),
+                "no handler or rule matched: the config's default (its defaultBrowser)".to_owned()
+            )
+        );
+        // With the config in charge named, its default goes by its path,
+        // as the app's views say it.
+        let config_default = record(vec![matched(Matched::Default {
+            owner: Some(Owner::Config),
+        })]);
+        assert_eq!(
+            trace_of(&config_default, Some("~/.finicky.ts"))
+                .steps
+                .last()
+                .map(|step| step.summary.clone()),
+            Some(
+                "no handler or rule matched: ~/.finicky.ts's default (its defaultBrowser)"
+                    .to_owned()
+            )
+        );
+        // A record from before owners: a default, nobody's in particular.
+        assert_eq!(
+            last(vec![matched(Matched::Default { owner: None })]).3,
+            "no rule or handler matched: the default browser"
+        );
+        // Unreported is not passed off as a rules.json rule.
+        let (kind, index, source, summary) = last(vec![matched(Matched::Unreported)]);
+        assert_eq!((kind, index, source), (StepKind::Handler, None, None));
+        assert!(!summary.contains("rules.json"), "{summary}");
+        assert_eq!(
+            summary,
+            "a rule or handler matched; the router did not say which"
+        );
+
+        // Paused: the skipped rule is named from its own list.
+        assert_eq!(
+            last(vec![
+                matched(Matched::Rule { index: 0 }),
+                Step::Paused { skipped: None },
+            ]),
+            (
+                StepKind::Default,
+                Some(0),
+                Some(StepSource::Rules),
+                "routing is paused: rules.json rule 1 skipped, the pause target instead".to_owned()
+            )
+        );
+        assert_eq!(
+            last(vec![
+                matched(Matched::Handler { index: 3 }),
+                Step::Paused { skipped: Some(3) },
+            ])
+            .3,
+            "routing is paused: config handler 4 skipped, the pause target instead"
+        );
+        assert_eq!(
+            last(vec![
+                matched(Matched::Default {
+                    owner: Some(Owner::PwrRoute)
+                }),
+                Step::Paused { skipped: None },
+            ])
+            .3,
+            "routing is paused: every rule and handler skipped, the pause target instead"
+        );
+
+        // On the wire: `source` says whose list `index` counts.
+        let json = serde_json::to_value(trace_of(
+            &record(vec![matched(Matched::Rule { index: 4 })]),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(json["steps"][0]["source"], "rules");
+        assert_eq!(json["steps"][0]["index"], 4);
+        let json =
+            serde_json::to_value(trace_of(&record(vec![matched(Matched::Unreported)]), None))
+                .unwrap();
+        assert!(json["steps"][0].get("source").is_none(), "{json}");
     }
 }

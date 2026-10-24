@@ -1,0 +1,25 @@
+{
+  "defaultBrowser": "Google Chrome",
+  "defaultProfile": "Personal",
+  "rewrites": [
+    {
+      "match": "links.example.org/*",
+      "actions": [{ "setHost": "example.org" }]
+    }
+  ],
+  "rules": [
+    {
+      "match": ["localhost:*", "127.0.0.1:*", "*.localhost/*"],
+      "browser": "Arc"
+    },
+    {
+      "match": "billing.example.com/*",
+      "browser": "Google Chrome",
+      "profile": "Personal"
+    },
+    {
+      "match": "status.example.com/*",
+      "browser": "Safari"
+    }
+  ]
+}

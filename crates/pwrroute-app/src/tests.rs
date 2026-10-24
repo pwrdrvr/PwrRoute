@@ -58,6 +58,18 @@ fn open_store(
         cx.add_window_view(|_, cx| PwrRoute::with_store(config, Some(fixture_home()), store, cx));
     let focus = view.read_with(cx, |app, _| app.focus.clone());
     cx.update(|window, cx| window.focus(&focus, cx));
+    // Every window lands on Overview with nothing selected; these tests
+    // start on Rules with the first handler (else rewrite) selected, as a
+    // click there leaves it.
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::Rules, window, cx);
+        if let Some(first) = (!app.handlers.is_empty())
+            .then_some(Selection::Handler(0))
+            .or((!app.rewrites.is_empty()).then_some(Selection::Rewrite(0)))
+        {
+            app.select(first, cx);
+        }
+    });
     draw(cx);
     (view, cx)
 }
@@ -227,7 +239,7 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
     assert!(cx.debug_bounds("test-trace").is_none());
 
-    // The design's example: two rewrites apply, handler 3 wins on Slack.
+    // The design's example: two rewrites apply, rule 3 wins on Slack.
     type_sample(cx);
     let first = trace(&view, cx);
     assert_eq!(
@@ -237,8 +249,8 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
             "Rewrite 1",
             "Rewrite 2",
             "Rewrite 3",
-            "Handlers 1 and 2",
-            "Handler 3",
+            "Rules 1 and 2",
+            "Rule 3",
             "Opens in",
         ]
     );
@@ -250,7 +262,7 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
 
     // Unfold the missed handlers.
     click(cx, "trace-show-each");
-    assert!(titles(&trace(&view, cx)).contains(&"Handler 2"));
+    assert!(titles(&trace(&view, cx)).contains(&"Rule 2"));
 
     // Type a new link and press Return.
     click(cx, "test-url");
@@ -264,7 +276,7 @@ fn test_a_link_traces_the_fixture_rules(cx: &mut TestAppContext) {
     );
     let meet = trace(&view, cx);
     assert_eq!(meet.result.title, "Google Chrome \u{00b7} Work");
-    assert!(titles(&meet).contains(&"Handler 1"));
+    assert!(titles(&meet).contains(&"Rule 1"));
 }
 
 #[gpui_kit::test]
@@ -526,9 +538,9 @@ fn switching_a_rule_off_changes_test_a_link(cx: &mut TestAppContext) {
 
     // Show each is for one trace: the next test folds again.
     click(cx, "trace-show-each");
-    assert!(titles(&trace(&view, cx)).contains(&"Handler 2"));
+    assert!(titles(&trace(&view, cx)).contains(&"Rule 2"));
     click(cx, "test-run");
-    assert!(titles(&trace(&view, cx)).contains(&"Handlers 1 and 2"));
+    assert!(titles(&trace(&view, cx)).contains(&"Rules 1 and 2"));
 }
 
 #[gpui_kit::test]
@@ -546,7 +558,12 @@ fn test_a_link_reloads_a_changed_config(cx: &mut TestAppContext) {
     write("Firefox");
     let (view, cx) = open_with(cx, Some(config.clone()));
     click(cx, "nav-test");
-    type_sample(cx);
+    // A link no visual rule takes: rules.json routes beside the config.
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("https://unmatched.example.com/");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
     assert_eq!(trace(&view, cx).result.title, "Firefox");
 
     // A later modification time, as an edit gives it.
@@ -714,7 +731,7 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
     let handler = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.handlers[7].clone());
     assert_eq!(handler(cx).rule.badge, RowBadge::Draft);
     assert_eq!(handler(cx).rule.hits, "draft");
-    assert_eq!(handler(cx).title, "New handler");
+    assert_eq!(handler(cx).title, "New rule");
     // The new pattern field has the keyboard.
     cx.simulate_input("notion.so/*");
     draw(cx);
@@ -736,7 +753,7 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
         result,
         Some(crate::try_it::TryResult::Text {
             verdict: crate::try_it::Verdict::Takes,
-            message: "This handler opens that link in Firefox.".into(),
+            message: "This rule opens that link in Firefox.".into(),
             bold: None,
         })
     );
@@ -1571,8 +1588,9 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     assert!(collisions.contains(&"https://www.apple.com/macos/".to_owned()));
     assert!(!collisions.iter().any(|url| url.contains("zoom.us")));
     assert!(
-        caption
-            .starts_with("Would also catch these 6 recent links \u{00b7} 5 routed by a rule now"),
+        caption.starts_with(
+            "Would also catch these 6 recent links \u{00b7} 5 routed by a config handler now"
+        ),
         "{caption}"
     );
     assert!(cx.debug_bounds("add-rule-collision-5").is_some());
@@ -1687,7 +1705,7 @@ fn a_rule_added_beside_a_config_shows_under_its_visual_rules(cx: &mut TestAppCon
     assert!(cx.debug_bounds("add-rule-sheet").is_none());
     assert_eq!(saved(cx, &path).rules.len(), 8);
     let note = action_note(&view, cx);
-    assert!(note.starts_with("Added handler 1 "), "{note}");
+    assert!(note.starts_with("Added rule 1 "), "{note}");
     assert!(note.contains("after ~/.finicky.ts"), "{note}");
     // The visual rules open, so the Rules screen shows the new rule rather
     // than the config's handlers alone.
@@ -1735,7 +1753,7 @@ fn a_rule_an_earlier_rule_shadows_is_flagged_before_it_is_added(cx: &mut TestApp
     assert!(cx.debug_bounds("add-rule-problem").is_some());
     let problem = sheet_problem(&view, cx).expect("a problem");
     assert!(
-        problem.starts_with("Handler 2 (github.com/pwrdrvr/*) takes this link first"),
+        problem.starts_with("Rule 2 (github.com/pwrdrvr/*) takes this link first"),
         "{problem}"
     );
     assert_eq!(saved(cx, &path).rules.len(), 7, "nothing was added");
@@ -1764,7 +1782,7 @@ fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(cx: &mu
     assert!(cx.debug_bounds("add-rule-sheet").is_some());
     let problem = sheet_problem(&view, cx).expect("a problem");
     assert!(
-        problem.starts_with("~/.finicky.ts handler 2 takes this link first"),
+        problem.starts_with("Config handler 2 of ~/.finicky.ts takes this link first"),
         "{problem}"
     );
     assert_eq!(saved(cx, &path).rules.len(), 7);
@@ -1774,7 +1792,7 @@ fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(cx: &mu
     assert_eq!(saved(cx, &path).rules.len(), 8);
     let note = action_note(&view, cx);
     assert!(
-        note.contains("~/.finicky.ts handler 2 takes this link first"),
+        note.contains("Config handler 2 of ~/.finicky.ts takes this link first"),
         "{note}"
     );
     let _ = std::fs::remove_dir_all(dir);
@@ -1797,7 +1815,7 @@ fn the_same_rule_is_never_added_twice(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("add-rule-sheet").is_some());
     let problem = sheet_problem(&view, cx).expect("a problem");
     assert!(
-        problem.starts_with("Handler 1 is already this rule"),
+        problem.starts_with("Rule 1 is already this rule"),
         "{problem}"
     );
     // A second click does not add it either.
@@ -1830,7 +1848,7 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
             &base,
             31,
             "https://issues.example/12345/comments",
-            Matched::Default,
+            Matched::Default { owner: None },
         ),
     );
     let mut host = record_like(&base, 32, "https://bank.example/login", Matched::Unreported);
@@ -1910,7 +1928,7 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
     assert!(cx.debug_bounds("activity-action-note").is_some());
     let note = view.read_with(cx, |app, _| app.actions.note.clone().unwrap().1);
     assert!(
-        note.starts_with("Saved to rules.json under handler 1."),
+        note.starts_with("Saved to rules.json under rule 1."),
         "{note}"
     );
 
@@ -2369,4 +2387,1545 @@ fn a_refused_import_opens_the_importer_again_with_the_reason(cx: &mut TestAppCon
     );
     assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Engine precedence (WP-A): with the fixture config in charge, Test a link
+// and Try it say who decides, in the order rules.json's `precedence` sets.
+
+/// The fixture rules under `precedence`, written to a scratch directory.
+fn precedence_store(precedence: pwrroute_engine::Precedence) -> RulesStore {
+    let path = scratch("precedence").join("rules.json");
+    RulesFile {
+        precedence,
+        ..crate::fixtures::rules_file()
+    }
+    .save(&path)
+    .expect("write the rules");
+    RulesStore::load(Some(path))
+}
+
+/// Test a link on `url` from no app; the trace's last step before
+/// "Opens in", and the result.
+fn test_unmatched(
+    view: &Entity<PwrRoute>,
+    cx: &mut VisualTestContext,
+    url: &str,
+) -> (String, String, String) {
+    click(cx, "nav-test");
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input(url);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let view = trace(view, cx);
+    let last = &view.steps[view.steps.len() - 2];
+    (last.title.clone(), last.detail.clone(), view.result.title)
+}
+
+#[gpui_kit::test]
+fn test_a_link_names_the_configs_default_in_the_go_order(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::Config);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        test_unmatched(&view, cx, "https://unmatched.example.com/"),
+        (
+            "Everything else \u{00b7} ~/.finicky.ts's default".into(),
+            "no config handler or rule matched".into(),
+            "Google Chrome".into()
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn test_a_link_names_pwrroutes_default_when_it_takes_everything_else(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::PwrRoute);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        test_unmatched(&view, cx, "https://unmatched.example.com/"),
+        (
+            "Everything else \u{00b7} PwrRoute's default".into(),
+            "no rule or config handler matched".into(),
+            "Google Chrome \u{00b7} Personal".into()
+        )
+    );
+}
+
+/// Try it on the first handler, whose sample the config's handler 4 also
+/// matches.
+fn try_first_handler(
+    view: &Entity<PwrRoute>,
+    cx: &mut VisualTestContext,
+) -> crate::try_it::TryResult {
+    click(cx, "visual-rules-toggle");
+    view.update(cx, |app, cx| {
+        app.select(Selection::Handler(1), cx);
+        app.select(Selection::Handler(0), cx);
+    });
+    draw(cx);
+    view.read_with(cx, |app, _| {
+        app.rail.as_ref().and_then(|r| r.try_result.clone())
+    })
+    .expect("Try it ran")
+}
+
+#[gpui_kit::test]
+fn try_it_never_says_to_move_a_rule_above_a_config_handler(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::Config);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        try_first_handler(&view, cx),
+        crate::try_it::TryResult::Text {
+            verdict: crate::try_it::Verdict::Beaten,
+            message: "Config handler 4 wins first: Google Chrome. ~/.finicky.ts's handlers \
+                      run before your rules; let PwrRoute's default take everything else to \
+                      run yours first."
+                .into(),
+            bold: Some("Google Chrome".into()),
+        }
+    );
+}
+
+#[gpui_kit::test]
+fn try_it_under_pwrroute_runs_the_rule_before_the_config(cx: &mut TestAppContext) {
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::PwrRoute);
+    let (view, cx) = open_store(cx, Some(config), store);
+    assert_eq!(
+        try_first_handler(&view, cx),
+        crate::try_it::TryResult::Text {
+            verdict: crate::try_it::Verdict::Takes,
+            message: "This rule opens that link in Google Chrome \u{00b7} Work.".into(),
+            bold: None,
+        }
+    );
+}
+
+#[gpui_kit::test]
+fn add_rule_under_pwrroute_blames_the_pattern_not_the_configs_order(cx: &mut TestAppContext) {
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let config = fixture_home().join(".finicky.ts");
+    let store = precedence_store(pwrroute_engine::Precedence::PwrRoute);
+    let (view, cx) = open_store(cx, Some(config), store);
+    click(cx, "nav-activity");
+    // Row 0 came from Slack, which the config's handler 2 takes. Under
+    // "pwrroute" the rules run first, so a rule that misses the link is
+    // what the sheet says, not the config's order.
+    click(cx, "activity-row-0");
+    click(cx, "activity-add-rule-0");
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-pattern");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("example.com/*");
+    draw(cx);
+    click(cx, "add-rule-save");
+    let problem = sheet_problem(&view, cx).expect("a problem");
+    assert!(
+        problem.starts_with("This rule does not match the link"),
+        "{problem}"
+    );
+    // The suggested pattern takes the link ahead of the config: added.
+    click(cx, "add-rule-candidate-0");
+    assert_eq!(sheet_problem(&view, cx), None);
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+}
+
+// --- Attribution (WP-B) -----------------------------------------------------
+
+/// `base` as if `rules.json`'s rule `index` routed `url`, from no app, to
+/// `browser` · `profile`.
+fn routed_by_rule(
+    base: &DispatchRecord,
+    id: u64,
+    url: &str,
+    index: usize,
+    browser: &str,
+    profile: &str,
+) -> DispatchRecord {
+    let mut record = record_like(base, id, url, Matched::Rule { index });
+    record.link.opener = None;
+    let set = |b: &mut pwrroute_router::Browser| {
+        b.name = browser.into();
+        b.profile = profile.into();
+    };
+    if let Some(b) = &mut record.browser {
+        set(b);
+    }
+    for step in &mut record.steps {
+        if let Step::Browser { browser: b } = step {
+            set(b);
+        }
+    }
+    record
+}
+
+/// Three `rules.json` rules over example.com hosts, the first two opening
+/// the same browser, so a record whose number now points at the other one
+/// would pass a browser check.
+fn attribution_rules() -> RulesFile {
+    serde_json::from_str(
+        r#"{
+            "defaultBrowser": "Safari",
+            "rules": [
+                { "match": "docs.example.com/*", "browser": "Google Chrome", "profile": "Work" },
+                { "match": "tickets.example.com/*", "browser": "Google Chrome", "profile": "Work" },
+                { "match": "news.example.com/*", "browser": "Firefox" }
+            ]
+        }"#,
+    )
+    .expect("a valid rules.json")
+}
+
+/// A record that names its `rules.json` rule shows it as "rule N", and
+/// Save as example puts the link under that rule straight from the record
+/// while the file is as it was when the link was routed. A record older
+/// than the file's last write is probed: the rule at its number now may be
+/// another one (here one that opens the same browser but misses the link).
+/// So is a record whose rule now opens somewhere else, and any record once
+/// the file has been saved since.
+#[gpui_kit::test]
+fn activity_names_the_rule_and_saves_its_example_from_the_record(cx: &mut TestAppContext) {
+    use std::time::{Duration, SystemTime};
+
+    let dir = scratch("wp-b-attribution");
+    let path = dir.join("rules.json");
+    let store = store_for(&dir, &attribution_rules());
+    // Routed after the file was written, but for the stale one.
+    let now = SystemTime::now();
+    let base = fixtures::activity()[0].clone();
+    let at = |mut record: DispatchRecord, at: SystemTime| {
+        record.received_at = at;
+        record
+    };
+    let records = vec![
+        at(
+            routed_by_rule(
+                &base,
+                41,
+                "https://tickets.example.com/wp-b",
+                1,
+                "Google Chrome",
+                "Work",
+            ),
+            now,
+        ),
+        // Rule 2 opens Google Chrome · Work, not Firefox.
+        at(
+            routed_by_rule(
+                &base,
+                42,
+                "https://other.example.com/moved",
+                1,
+                "Firefox",
+                "",
+            ),
+            now,
+        ),
+        // Routed as rule 2 before the file last changed: a rule has since
+        // gone in above, and rule 2 now is tickets.example.com's.
+        at(
+            routed_by_rule(
+                &base,
+                43,
+                "https://docs.example.com/stale",
+                1,
+                "Google Chrome",
+                "Work",
+            ),
+            now - Duration::from_secs(3600),
+        ),
+    ];
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, store);
+    click(cx, "nav-activity");
+    let labels: Vec<String> = view.read_with(cx, |app, _| {
+        app.activity
+            .rows
+            .iter()
+            .map(|row| row.rule.to_string())
+            .collect()
+    });
+    assert_eq!(labels, ["rule 2", "rule 2", "rule 2"]);
+    let menu_save = |cx: &mut VisualTestContext, row: usize| {
+        click(cx, "nav-activity");
+        click(
+            cx,
+            ["activity-more-0", "activity-more-1", "activity-more-2"][row],
+        );
+        view.read_with(cx, |app, _| app.actions.menu.clone().and_then(|m| m.save))
+    };
+
+    // The stale record: rule 2 opens the same browser but does not take
+    // the link, so the probe finds rule 1, which does.
+    assert_eq!(
+        menu_save(cx, 2),
+        Some(Save::Example {
+            handler: 0,
+            pattern: Some("docs.example.com/*".into()),
+        })
+    );
+    // Rule 2 opens somewhere else and no rule takes the link: a test.
+    assert_eq!(
+        menu_save(cx, 1),
+        Some(Save::Test {
+            expects: "Firefox".into()
+        })
+    );
+    // From the record, no probe: rule 2 as it was.
+    assert_eq!(
+        menu_save(cx, 0),
+        Some(Save::Example {
+            handler: 1,
+            pattern: Some("tickets.example.com/*".into()),
+        })
+    );
+    click(cx, "activity-save-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[1].examples.clone()),
+        ["https://tickets.example.com/wp-b"]
+    );
+    let note = view.read_with(cx, |app, _| app.actions.note.clone().unwrap().1);
+    assert!(
+        note.starts_with("Saved to rules.json under rule 2."),
+        "{note}"
+    );
+    assert_eq!(
+        saved(cx, &path).rules[1].examples,
+        ["https://tickets.example.com/wp-b"]
+    );
+
+    // Saved since the link was routed: the record is no longer trusted,
+    // and the probe agrees that rule 2 takes it.
+    assert!(view.read_with(cx, |app, _| matches!(
+        app.store.status(),
+        crate::rules_store::Status::Saved { .. }
+    )));
+    assert_eq!(
+        menu_save(cx, 0),
+        Some(Save::Example {
+            handler: 1,
+            pattern: Some("tickets.example.com/*".into()),
+        })
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Beside a config, the sheet knows whose rules run first: the config's
+/// handlers, until `rules.json` says `"precedence": "pwrroute"`; the note
+/// after Add says which.
+#[gpui_kit::test]
+fn the_add_rule_sheet_follows_the_precedence(cx: &mut TestAppContext) {
+    let dir = scratch("wp-b-precedence");
+    let (view, cx) = open_activity(cx, &dir, Some(fixture_home().join(".finicky.ts")));
+    let sheet = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let sheet = app.actions.sheet.as_ref().expect("the sheet is open");
+            (sheet.rules_first, sheet.config.clone())
+        })
+    };
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    assert_eq!(sheet(cx), (false, Some("~/.finicky.ts".to_owned())));
+    click(cx, "add-rule-cancel");
+
+    view.update(cx, |app, _| {
+        app.store
+            .set_precedence(pwrroute_engine::Precedence::PwrRoute);
+    });
+    click(cx, "activity-add-rule-4");
+    assert_eq!(sheet(cx), (true, Some("~/.finicky.ts".to_owned())));
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-save");
+    let note = action_note(&view, cx);
+    assert!(note.starts_with("Added rule 1 "), "{note}");
+    assert!(
+        note.contains("your rules run before ~/.finicky.ts's handlers"),
+        "{note}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// Overview (WP-D) ----------------------------------------------------------
+
+/// A window over `rules` (and the config, when given) as it opens: on
+/// Overview, with the Overview's browsers, `records` as today's links, the
+/// routing state set by hand and motion off.
+fn open_overview(
+    cx: &mut TestAppContext,
+    config: Option<PathBuf>,
+    rules: RulesFile,
+    records: Vec<DispatchRecord>,
+) -> (Entity<PwrRoute>, &mut VisualTestContext, PathBuf) {
+    let dir = scratch("overview");
+    let path = dir.join("rules.json");
+    rules.save(&path).expect("write the rules");
+    cx.update(|cx| {
+        crate::assets::load_fonts(cx);
+        cx.set_reduce_motion(true);
+        activity::install_feed(Feed::from_records(records.clone()), cx);
+    });
+    let store = RulesStore::load(Some(path.clone()));
+    let (view, cx) =
+        cx.add_window_view(|_, cx| PwrRoute::with_store(config, Some(fixture_home()), store, cx));
+    let focus = view.read_with(cx, |app, _| app.focus.clone());
+    cx.update(|window, cx| window.focus(&focus, cx));
+    view.update(cx, |app, _| {
+        app.installed = fixtures::overview_browsers();
+        app.activity.load(records);
+        app.overview.status = Some(crate::overview_model::Status::routing());
+    });
+    draw(cx);
+    (view, cx, path)
+}
+
+#[gpui_kit::test]
+fn every_window_lands_on_overview_and_rules_opens_as_a_list(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(cx, None, fixtures::rules_file(), Vec::new());
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
+    assert!(cx.debug_bounds(crate::overview::PANE_ID).is_some());
+    assert!(cx.debug_bounds("editor-rail").is_none());
+
+    click(cx, "nav-rules");
+    let selection = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.selection);
+    assert_eq!(selection(cx), None, "Rules opens with nothing selected");
+    assert!(cx.debug_bounds("editor-rail").is_none());
+    cx.simulate_keystrokes("down");
+    draw(cx);
+    assert_eq!(selection(cx), Some(Selection::Rewrite(0)));
+    assert!(cx.debug_bounds("editor-rail").is_some());
+
+    click(cx, "nav-overview");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
+}
+
+/// The routes the map painted last, and how many of them were lit.
+fn painted(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> Vec<crate::overview::Painted> {
+    view.read_with(cx, |app, _| app.overview.bounds.borrow().painted.clone())
+}
+
+/// Where a focus the Overview keeps (by key) is on the map drawn now.
+fn placed(
+    view: &Entity<PwrRoute>,
+    cx: &mut VisualTestContext,
+    which: fn(&crate::overview::OverviewState) -> Option<crate::overview_model::FocusKey>,
+) -> Option<crate::overview_model::Focus> {
+    view.update(cx, |app, cx| {
+        let key = which(&app.overview)?;
+        let status = crate::overview::status(app, cx);
+        crate::overview::build(app, &status, cx).map.resolve(&key)
+    })
+}
+
+fn lit_count(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> usize {
+    painted(view, cx).iter().filter(|route| route.lit).count()
+}
+
+fn hover(cx: &mut VisualTestContext, selector: &'static str) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no element {selector} on screen"));
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+    draw(cx);
+    draw(cx);
+}
+
+#[gpui_kit::test]
+fn every_route_is_drawn_and_a_hovered_row_lights_its_own(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // At rest: five enabled rules and Everything else, none lit.
+    assert_eq!(painted(&view, cx).len(), 6);
+    assert_eq!(lit_count(&view, cx), 0);
+    assert!(
+        painted(&view, cx).iter().all(|route| !route.dashed),
+        "all running"
+    );
+
+    scroll_to(cx, "overview-row-1");
+    hover(cx, "overview-row-1");
+    assert_eq!(
+        placed(&view, cx, |state| state.hovered.clone()),
+        Some(crate::overview_model::Focus::Row(1))
+    );
+    let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
+    let node = cx
+        .debug_bounds("overview-node-0-0")
+        .expect("Chrome's Work node");
+    let lit: Vec<_> = painted(&view, cx)
+        .into_iter()
+        .filter(|route| route.lit)
+        .collect();
+    assert_eq!(lit.len(), 1, "one route: {lit:?}");
+    let route = lit[0];
+    assert!(
+        (route.from.x - row.right()).abs() < px(12.0),
+        "{:?} starts at the row",
+        route.from
+    );
+    assert!(
+        (route.to.x - node.left()).abs() < px(12.0),
+        "{:?} ends at the node",
+        route.to
+    );
+    assert!((route.to.y - node.center().y).abs() < px(15.0));
+    // The hovered row offers Edit ›.
+    assert!(cx.debug_bounds("overview-row-edit-1").is_some());
+    assert!(cx.debug_bounds("overview-row-edit-0").is_none());
+}
+
+/// More than six rows into one profile: every route lights (the old map
+/// drew none at all past six).
+#[gpui_kit::test]
+fn hovering_a_node_with_seven_rows_lights_every_route(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_fanin_rules(),
+        fixtures::overview_fanin_day(),
+    );
+    scroll_to(cx, "overview-node-0-0");
+    hover(cx, "overview-node-0-0");
+    assert_eq!(
+        placed(&view, cx, |state| state.hovered.clone()),
+        Some(crate::overview_model::Focus::Node(0, 0))
+    );
+    // Seven rules and Everything else.
+    assert_eq!(lit_count(&view, cx), 8);
+    let node = cx.debug_bounds("overview-node-0-0").expect("the node");
+    let ends: Vec<_> = painted(&view, cx)
+        .into_iter()
+        .filter(|route| route.lit)
+        .map(|route| route.to.y)
+        .collect();
+    // They fan into the port top to bottom, within its 25px.
+    assert!(ends.windows(2).all(|pair| pair[0] < pair[1]), "{ends:?}");
+    assert!(ends.iter().all(|y| (*y - node.center().y).abs() <= px(8.5)));
+}
+
+#[gpui_kit::test]
+fn a_pin_survives_the_pointer_leaving_and_escape_clears_it(cx: &mut TestAppContext) {
+    use crate::overview_model::Focus;
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_fanin_rules(),
+        fixtures::overview_fanin_day(),
+    );
+    scroll_to(cx, "overview-node-0-0");
+    click(cx, "overview-node-0-0");
+    let pinned = |cx: &mut VisualTestContext| placed(&view, cx, |state| state.pinned.clone());
+    assert_eq!(pinned(cx), Some(Focus::Node(0, 0)));
+    assert!(
+        cx.debug_bounds("overview-pinned").is_some(),
+        "the legend says so"
+    );
+
+    // The pointer leaves for a row elsewhere: the pin still traces.
+    hover(cx, "overview-row-9");
+    assert_eq!(pinned(cx), Some(Focus::Node(0, 0)));
+    draw(cx);
+    assert_eq!(lit_count(&view, cx), 8);
+
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(pinned(cx), None);
+    assert!(cx.debug_bounds("overview-pinned").is_none());
+
+    // Clear lets go too, and so does a second click on the pin.
+    click(cx, "overview-node-0-0");
+    assert_eq!(pinned(cx), Some(Focus::Node(0, 0)));
+    click(cx, crate::overview::PIN_CLEAR_ID);
+    assert_eq!(pinned(cx), None);
+    click(cx, "overview-row-8");
+    assert_eq!(pinned(cx), Some(Focus::Row(8)));
+    click(cx, "overview-row-8");
+    assert_eq!(pinned(cx), None);
+}
+
+#[gpui_kit::test]
+fn a_card_header_click_pins_it_until_escape(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    scroll_to(cx, "overview-card-1");
+    click(cx, "overview-card-1");
+    let pinned = |cx: &mut VisualTestContext| placed(&view, cx, |state| state.pinned.clone());
+    assert_eq!(pinned(cx), Some(crate::overview_model::Focus::Card(1)));
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(pinned(cx), None);
+}
+
+/// Folded profiles open in place and stay open for the session.
+#[gpui_kit::test]
+fn more_profiles_open_in_place(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // Microsoft Edge, no rules yet, shows two of its four profiles.
+    scroll_to(cx, "overview-more-3");
+    assert!(cx.debug_bounds("overview-node-3-2").is_none());
+    click(cx, "overview-more-3");
+    assert!(cx.debug_bounds("overview-node-3-3").is_some());
+    click(cx, "nav-rules");
+    click(cx, "nav-overview");
+    assert!(cx.debug_bounds("overview-node-3-3").is_some(), "still open");
+    assert!(view.read_with(cx, |app, _| {
+        app.overview.expanded.contains("microsoft edge")
+    }));
+}
+
+/// A node with no rules yet offers "+ Add a rule…": Rules' new rule, with
+/// that browser and profile chosen.
+#[gpui_kit::test]
+fn an_idle_node_adds_a_rule_for_its_profile(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // Chrome's Design: no rule names it.
+    scroll_to(cx, "overview-node-0-2");
+    hover(cx, "overview-node-0-2");
+    assert_eq!(
+        placed(&view, cx, |state| state.idle_hover.clone()),
+        Some(crate::overview_model::Focus::Node(0, 2))
+    );
+    click(cx, "overview-node-0-2");
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(screen, Screen::Rules);
+    assert_eq!(selection, Some(Selection::Handler(6)));
+    let rule = view.read_with(cx, |app, _| app.store.edited().rules[6].clone());
+    assert_eq!(
+        (rule.browser.as_str(), rule.profile.as_str()),
+        ("Google Chrome", "Design")
+    );
+}
+
+#[gpui_kit::test]
+fn the_keyboard_traces_and_return_opens_the_rule(cx: &mut TestAppContext) {
+    use crate::overview_model::Focus;
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    cx.simulate_keystrokes("down down");
+    draw(cx);
+    assert_eq!(
+        placed(&view, cx, |state| state.keyed.clone()),
+        Some(Focus::Row(1))
+    );
+    assert_eq!(
+        lit_count(&view, cx),
+        1,
+        "the keyboard traces like the pointer"
+    );
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(
+        (screen, selection),
+        (Screen::Rules, Some(Selection::Handler(1)))
+    );
+}
+
+/// Return on a node with no rules yet does what its click does: adds a
+/// rule for that profile, rather than pinning a node that traces nothing.
+#[gpui_kit::test]
+fn return_on_an_idle_node_adds_a_rule(cx: &mut TestAppContext) {
+    use crate::overview_model::FocusKey;
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    view.update(cx, |app, cx| {
+        app.overview.key(Some(FocusKey::Node(
+            "google chrome".into(),
+            Some("Design".into()),
+        )));
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(lit_count(&view, cx), 0, "it traces nothing");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let (screen, pinned) = view.read_with(cx, |app, _| (app.screen, app.overview.pinned.clone()));
+    assert_eq!((screen, pinned), (Screen::Rules, None));
+    let rule = view.read_with(cx, |app, _| app.store.edited().rules[6].clone());
+    assert_eq!(
+        (rule.browser.as_str(), rule.profile.as_str()),
+        ("Google Chrome", "Design")
+    );
+}
+
+/// A scroll moves the map under a pointer that did not move: the hover
+/// lets go rather than tracing a row that is no longer under it.
+#[gpui_kit::test]
+fn a_scroll_lets_go_of_the_hover(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    scroll_to(cx, "overview-row-1");
+    hover(cx, "overview-row-1");
+    assert!(view.read_with(cx, |app, _| app.overview.hovered.is_some()));
+    let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
+    let event = ScrollWheelEvent {
+        position: row.center(),
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-40.0))),
+        ..Default::default()
+    };
+    cx.update(|window, cx| window.dispatch_event(event.to_platform_input(), cx));
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.hovered.clone()),
+        None
+    );
+    assert_eq!(lit_count(&view, cx), 0);
+}
+
+#[gpui_kit::test]
+fn a_tile_opens_activity_filtered_and_edit_opens_a_rule(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    click(cx, "overview-tile-1");
+    let (screen, filter) = view.read_with(cx, |app, _| (app.screen, app.activity.filter));
+    assert_eq!((screen, filter), (Screen::Activity, Filter::Unrouted));
+
+    click(cx, "nav-overview");
+    scroll_to(cx, "overview-row-3");
+    // A click pins the row; it no longer opens Rules.
+    click(cx, "overview-row-3");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
+    assert_eq!(
+        placed(&view, cx, |state| state.pinned.clone()),
+        Some(crate::overview_model::Focus::Row(3))
+    );
+    click(cx, "overview-row-edit-3");
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(screen, Screen::Rules);
+    assert_eq!(selection, Some(Selection::Handler(3)));
+    assert!(cx.debug_bounds("editor-rail").is_some());
+}
+
+#[gpui_kit::test]
+fn the_callout_lets_pwrroutes_default_take_everything_else_and_undo(cx: &mut TestAppContext) {
+    use pwrroute_engine::Precedence;
+    let (view, cx, path) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    assert!(view.read_with(cx, |app, _| app.described.is_some()));
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    assert_eq!(saved(cx, &path).precedence, Precedence::PwrRoute);
+    draw(cx);
+
+    scroll_to(cx, crate::overview::CALLOUT_UNDO_ID);
+    click(cx, crate::overview::CALLOUT_UNDO_ID);
+    assert_eq!(saved(cx, &path).precedence, Precedence::Config);
+    draw(cx);
+    assert!(
+        cx.debug_bounds(crate::overview::CALLOUT_BUTTON_ID)
+            .is_some()
+    );
+}
+
+#[gpui_kit::test]
+fn the_setup_card_chooses_where_everything_else_goes(cx: &mut TestAppContext) {
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (_view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    assert!(cx.debug_bounds("overview-setup").is_some());
+    click(cx, "overview-setup-choose");
+    // The list is as wide as its field.
+    let field = cx.debug_bounds("overview-setup-choose").expect("the field");
+    let menu = cx.debug_bounds("overview-setup-menu").expect("the list");
+    assert_eq!(
+        (menu.left(), menu.size.width),
+        (field.left(), field.size.width)
+    );
+    // Chrome has profiles: its row opens them in the list's place.
+    click(cx, "overview-setup-choice-0");
+    assert!(cx.debug_bounds("overview-setup-choice-0").is_none());
+    assert!(cx.debug_bounds("overview-setup-profile-2").is_some());
+    assert_eq!(saved(cx, &path).default_browser, "", "nothing chosen yet");
+    click(cx, "overview-setup-profile-1");
+    let file = saved(cx, &path);
+    assert_eq!(
+        (file.default_browser.as_str(), file.default_profile.as_str()),
+        ("Google Chrome", "Personal")
+    );
+    draw(cx);
+    assert!(
+        cx.debug_bounds("overview-setup").is_none(),
+        "nothing left to set up"
+    );
+}
+
+#[gpui_kit::test]
+fn the_setup_card_saves_a_browser_without_profiles_at_once(cx: &mut TestAppContext) {
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (_view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    click(cx, "overview-setup-choose");
+    // Firefox, second in the scan, has no profiles.
+    click(cx, "overview-setup-choice-1");
+    let file = saved(cx, &path);
+    assert_eq!(
+        (file.default_browser.as_str(), file.default_profile.as_str()),
+        ("Firefox", "")
+    );
+}
+
+#[gpui_kit::test]
+fn leaving_overview_forgets_its_fades_and_the_hand_off(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    let handoff =
+        |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.overview.handing_off());
+    let first = handoff(cx).expect("the hand-off plays");
+    // Undo plays a new one, and it is gone once played.
+    scroll_to(cx, crate::overview::CALLOUT_UNDO_ID);
+    click(cx, crate::overview::CALLOUT_UNDO_ID);
+    let undo = handoff(cx).expect("Undo plays it back");
+    assert!(undo > first);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    draw(cx);
+    assert_eq!(handoff(cx), None);
+
+    // Leaving drops what plays or fades, so coming back replays nothing.
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    assert!(handoff(cx).is_some());
+    view.update(cx, |app, _| {
+        app.overview
+            .hover(Some(crate::overview_model::FocusKey::Card(
+                "firefox".into(),
+            )));
+    });
+    click(cx, "nav-rules");
+    assert_eq!(handoff(cx), None);
+    assert!(view.read_with(cx, |app, _| app.overview.fading().is_none()));
+    click(cx, "nav-overview");
+    assert_eq!(handoff(cx), None, "coming back does not replay it");
+}
+
+/// The callout over a store that will not write (the file changed on disk
+/// under an unsaved edit): nothing is written, the callout still offers
+/// the switch with no Undo, and it says why.
+#[gpui_kit::test]
+fn the_callout_says_why_when_the_save_is_refused(cx: &mut TestAppContext) {
+    use pwrroute_engine::Precedence;
+    let (view, cx, path) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    view.update(cx, |app, cx| {
+        app.store.set_enabled(Selection::Handler(0), false);
+        app.refresh(cx);
+    });
+    written_by_someone_else(&path, 2);
+    scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
+    click(cx, crate::overview::CALLOUT_BUTTON_ID);
+    draw(cx);
+    assert_eq!(
+        RulesFile::load(&path).unwrap().precedence,
+        Precedence::Config
+    );
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.precedence()),
+        Precedence::Config
+    );
+    assert!(!view.read_with(cx, |app, _| app.overview.just_overridden));
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.handing_off()),
+        None
+    );
+    assert!(
+        cx.debug_bounds(crate::overview::CALLOUT_BUTTON_ID)
+            .is_some()
+    );
+    assert!(cx.debug_bounds(crate::overview::CALLOUT_UNDO_ID).is_none());
+    assert!(
+        cx.debug_bounds(crate::overview::CALLOUT_REFUSED_ID)
+            .is_some()
+    );
+}
+
+/// The setup card over a rules.json that does not load: the choice writes
+/// nothing, and the card stays with the reason.
+#[gpui_kit::test]
+fn the_setup_card_stays_when_rules_json_does_not_load(cx: &mut TestAppContext) {
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    std::fs::write(&path, "{ not json").unwrap();
+    click(cx, "overview-setup-choose");
+    // Firefox has no profiles: it is saved at once, or would be.
+    click(cx, "overview-setup-choice-1");
+    draw(cx);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    assert!(cx.debug_bounds("overview-setup").is_some());
+    assert!(cx.debug_bounds(crate::overview::SETUP_REFUSED_ID).is_some());
+    assert!(matches!(
+        view.read_with(cx, |app, _| app.overview.refused.clone()),
+        Some(crate::overview::Refused::Setup(reason)) if reason.contains("did not load")
+    ));
+}
+
+/// The Rules list's hits column counts today's links per rule from the
+/// feed, as the Overview's rows do.
+#[gpui_kit::test]
+fn rules_rows_show_todays_hits(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    click(cx, "nav-rules");
+    let hits = cx.update(|_, cx| {
+        let app = view.read(cx);
+        crate::rules_view::todays_hits(app, cx)
+    });
+    let hits: Vec<&str> = hits.iter().map(|hits| hits.as_ref()).collect();
+    assert_eq!(hits[..5], ["214", "88", "57", "402", "9"], "{hits:?}");
+    assert!(hits[5..].iter().all(|hits| *hits == "\u{2014}"), "{hits:?}");
+}
+
+#[test]
+fn the_overview_reads_the_routers_config_trouble() {
+    use crate::overview_model::ConfigTrouble;
+    use crate::router::RoutingSource;
+    let trouble = crate::overview::config_trouble;
+    // Never loaded: the router's fallback, with its load error.
+    let source = RoutingSource {
+        fallback: Some("no config has loaded".into()),
+        error: Some("SyntaxError: Unexpected token\nat line 42".into()),
+        ..RoutingSource::default()
+    };
+    assert_eq!(
+        trouble(source, None),
+        Some(ConfigTrouble::NotLoaded(
+            "SyntaxError: Unexpected token".into()
+        ))
+    );
+    // A reload failed: the last load still routes.
+    let source = RoutingSource {
+        error: Some("SyntaxError: Unexpected token".into()),
+        ..RoutingSource::default()
+    };
+    assert_eq!(
+        trouble(source, None),
+        Some(ConfigTrouble::ReloadFailed(
+            "SyntaxError: Unexpected token".into()
+        ))
+    );
+    // The router routes; only this window could not read the file.
+    assert_eq!(
+        trouble(RoutingSource::default(), Some("It did not load: x")),
+        Some(ConfigTrouble::ReloadFailed("It did not load: x".into()))
+    );
+    assert_eq!(trouble(RoutingSource::default(), None), None);
+}
+
+// Rules and config views (WP-E): the Rules banner's switch "Let PwrRoute's
+// default take everything else", its warnings, Stop using, the overridden
+// defaultBrowser row, and the blank state's ways out.
+mod rules_and_config_views {
+    use std::time::SystemTime;
+
+    use gpui_kit::{TestAppContext, VisualTestContext};
+    use pwrroute_engine::{DefaultHost, Engine, Limits, Precedence, RulesFile};
+
+    use super::{click, draw, fixture_home, fixture_store, open_store, scratch, store_for};
+    use crate::activity_actions::BrowserChoice;
+    use crate::app::Selection;
+    use crate::config_view::{self, ConfigInCharge, DefaultKind, Order};
+    use crate::rules_store::RulesStore;
+    use crate::rules_view::{self, everything_else_name};
+
+    /// A Finicky config written to `dir` from `body`, an object literal.
+    fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let path = dir.join(".finicky.ts");
+        std::fs::write(&path, format!("export default {body};\n")).expect("write the config");
+        path
+    }
+
+    /// What the Rules screen reads in the config at `path`.
+    fn described(path: &std::path::Path) -> ConfigInCharge {
+        let engine = Engine::load(path, std::rc::Rc::new(DefaultHost), Limits::default());
+        ConfigInCharge::new(path, path.parent(), engine.as_ref())
+    }
+
+    fn top(cx: &mut VisualTestContext, selector: &'static str) -> gpui_kit::Pixels {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("no element {selector} on screen"))
+            .top()
+    }
+
+    #[gpui_kit::test]
+    fn the_switch_writes_precedence_and_reorders_the_cards(cx: &mut TestAppContext) {
+        let dir = scratch("precedence");
+        let path = dir.join("rules.json");
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+
+        // Off, what every upgrade sees (5a): the config's handlers, its
+        // defaultBrowser tagged Everything else, then the visual rules.
+        assert_eq!(
+            view.read_with(cx, |app, _| app.store.precedence()),
+            Precedence::Config
+        );
+        assert!(top(cx, "config-handlers") < top(cx, "config-visual"));
+        assert!(cx.debug_bounds("config-default").is_some());
+        assert!(cx.debug_bounds("config-default-struck").is_none());
+        assert!(cx.debug_bounds("config-everything-else").is_none());
+        let (shown, everything_else) = view.read_with(cx, |app, _| {
+            (
+                app.config.clone().expect("the config is in charge"),
+                everything_else_name(&app.store),
+            )
+        });
+        let still = ConfigInCharge {
+            modified: None,
+            ..shown.clone()
+        };
+        let off = view.read_with(cx, |app, _| Order::of(&app.store, &shown));
+        assert_eq!(off, Order::with(false, true, true));
+        assert_eq!(everything_else, "Google Chrome \u{00b7} Personal");
+        assert_eq!(
+            still.banner_sentence(off, &everything_else, SystemTime::now()),
+            "Its rewrites and handlers run first and its defaultBrowser takes everything \
+             else. Your visual rules run after it."
+        );
+        // The visual card (5a): eyebrow and owner sentence, and the tag on
+        // the config's defaultBrowser row.
+        assert_eq!(
+            still.visual_copy(off, &everything_else),
+            (
+                "Run after the config",
+                "~/.finicky.ts's defaultBrowser, Google Chrome, takes everything else.".to_owned()
+            )
+        );
+        assert_eq!(config_view::EVERYTHING_ELSE_TAG, "Everything else");
+        assert!(shown.override_warnings(off).is_empty());
+
+        // On (5b): written at once, without the edit debounce, and the
+        // page reads in the new order.
+        click(cx, config_view::SWITCH_ID);
+        assert_eq!(
+            RulesFile::load(&path).unwrap().precedence,
+            Precedence::PwrRoute
+        );
+        assert!(top(cx, "config-visual") < top(cx, "config-handlers"));
+        assert!(top(cx, "config-handlers") < top(cx, "config-everything-else"));
+        assert!(cx.debug_bounds("config-default").is_none());
+        assert!(cx.debug_bounds("config-default-struck").is_some());
+        let flips = view.read_with(cx, |app, _| app.config.as_ref().map(|c| c.flips));
+        assert_eq!(flips, Some(1));
+        let on = view.read_with(cx, |app, _| Order::of(&app.store, &shown));
+        assert_eq!(on, Order::with(true, true, true));
+        assert_eq!(
+            still.banner_sentence(on, &everything_else, SystemTime::now()),
+            "Your rules run first, then its handlers. PwrRoute's default, Google Chrome \
+             \u{00b7} Personal, takes everything else."
+        );
+        // The visual card (5b), the struck row's note and the Everything
+        // else row's tag.
+        assert_eq!(
+            still.visual_copy(on, &everything_else),
+            (
+                "Run before the config's handlers",
+                "They run before the config's handlers.".to_owned()
+            )
+        );
+        assert_eq!(
+            config_view::STRUCK_NOTE,
+            "not used: PwrRoute's default takes everything else"
+        );
+        assert_eq!(config_view::PWRROUTE_DEFAULT_TAG, "PwrRoute's default");
+
+        // Off again: the field leaves the file, as the Go host wrote it.
+        click(cx, config_view::SWITCH_ID);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("precedence"), "{text}");
+        assert!(top(cx, "config-handlers") < top(cx, "config-visual"));
+        assert!(cx.debug_bounds("config-default").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn the_switch_warns_about_a_function_a_null_and_a_catch_all(cx: &mut TestAppContext) {
+        let dir = scratch("override-warnings");
+        let function = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: (url) => url.host.endsWith("example.org") ? "Firefox" : "Safari",
+                handlers: [{ match: "chat.example.com/*", browser: "Firefox" }],
+            }"#,
+        );
+        let on = Order::with(true, true, true);
+        let off = Order::with(false, true, true);
+        let config = described(&function);
+        assert_eq!(config.default_kind, DefaultKind::Function);
+        assert_eq!(
+            config.override_warnings(on),
+            ["Its defaultBrowser function will no longer run."]
+        );
+        // Off, the function still runs: nothing to warn about.
+        assert!(config.override_warnings(off).is_empty());
+        assert_eq!(
+            config.owner_sentence(off, "Safari"),
+            format!(
+                "{}'s defaultBrowser function picks where everything else goes.",
+                config.path
+            )
+        );
+
+        let null = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: null,
+                handlers: [{ match: "chat.example.com/*", browser: "Firefox" }],
+            }"#,
+        );
+        let config = described(&null);
+        assert_eq!(config.default_kind, DefaultKind::NotOpened);
+        assert_eq!(
+            config.override_warnings(on),
+            ["Unmatched links will now open instead of being dropped."]
+        );
+        assert!(config.override_warnings(off).is_empty());
+
+        let catch_all = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: "Safari",
+                handlers: [
+                    { match: "chat.example.com/*", browser: "Firefox" },
+                    { match: ["docs.example.com/*", "*"], browser: "Firefox" },
+                    { match: "*", browser: "Safari" },
+                ],
+            }"#,
+        );
+        let config = described(&catch_all);
+        assert_eq!(config.catch_all, Some(1));
+        // A catch-all is so either way of the switch.
+        for order in [on, off] {
+            assert_eq!(
+                config.override_warnings(order),
+                ["Config handler 2 matches every link, so PwrRoute's default never applies."]
+            );
+        }
+
+        // Off, only the catch-all shows; on, the function's line stacks
+        // above it.
+        let both = write_config(
+            &dir,
+            r#"{
+                defaultBrowser: () => "Safari",
+                handlers: [{ match: /.*/, browser: "Firefox" }],
+            }"#,
+        );
+        let (_view, cx) = open_store(cx, Some(both), fixture_store(&dir));
+        assert!(cx.debug_bounds("config-warning-0").is_some());
+        assert!(cx.debug_bounds("config-warning-1").is_none());
+        click(cx, config_view::SWITCH_ID);
+        assert!(cx.debug_bounds("config-warning-1").is_some());
+        assert!(cx.debug_bounds("config-warning-2").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn a_config_that_does_not_load_has_no_warnings_and_pwrroute_takes_the_rest(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = scratch("override-broken");
+        let config = fixture_home().join("missing.finicky.ts");
+        let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+        let shown = view
+            .read_with(cx, |app, _| app.config.clone())
+            .expect("the config is in charge");
+        let order = view.read_with(cx, |app, _| Order::of(&app.store, &shown));
+        assert!(order.pwrroute_default);
+        assert!(shown.override_warnings(order).is_empty());
+        // The banner agrees with the router, whichever way the switch is:
+        // a config that never loaded leaves every link to the fallback
+        // (`rules.json`'s default), with no rules running.
+        for rules_first in [false, true] {
+            let order = Order::with(rules_first, true, false);
+            let sentence = shown.banner_sentence(order, "Google Chrome", SystemTime::now());
+            assert!(
+                sentence.starts_with(
+                    "Until it loads, every link opens in PwrRoute's default, Google Chrome. \
+                     It did not load:"
+                ),
+                "{sentence}"
+            );
+            assert_eq!(
+                shown
+                    .visual_copy(order, "Google Chrome \u{00b7} Personal")
+                    .1,
+                "They wait for it: every link opens in PwrRoute's default, Google Chrome \
+                 \u{00b7} Personal, until ~/missing.finicky.ts loads."
+            );
+            // A failed reload: the last load still routes.
+            let stale = order.stale(true);
+            let sentence = shown.banner_sentence(stale, "Google Chrome", SystemTime::now());
+            assert!(
+                sentence.starts_with(
+                    "It didn't reload, so links still route with the version that last \
+                     loaded. It did not load:"
+                ),
+                "{sentence}"
+            );
+            assert_eq!(
+                shown.owner_sentence(stale, "Google Chrome"),
+                "They route with the version of ~/missing.finicky.ts that last loaded."
+            );
+        }
+        // No handlers to strike; the row PwrRoute's default takes is shown.
+        assert!(cx.debug_bounds("config-everything-else").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn stop_using_turns_the_config_off_and_shows_the_visual_rules(cx: &mut TestAppContext) {
+        let dir = scratch("stop-using");
+        let settings = crate::settings_store::SettingsStore::load(Some(dir.clone()));
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(&dir));
+        assert!(cx.debug_bounds("config-handlers").is_some());
+
+        click(cx, config_view::STOP_ID);
+        let saved = crate::settings_store::Settings::load(&dir).unwrap();
+        assert!(saved.source.visual_only);
+        // Its "Found …" notice does not come back.
+        assert_eq!(saved.source.dismissed, [config]);
+        assert!(view.read_with(cx, |app, _| app.config.is_none()));
+        draw(cx);
+        assert!(cx.debug_bounds("config-handlers").is_none());
+        assert!(cx.debug_bounds("handler-0").is_some());
+        assert!(cx.debug_bounds("import-found").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// First run's Don't use it while the main window is open: the real
+    /// `set_source_and_show` turns the config off and shows the window the
+    /// visual rules.
+    #[gpui_kit::test]
+    fn dont_use_it_with_the_main_window_open_shows_the_visual_rules(cx: &mut TestAppContext) {
+        let dir = scratch("dont-use-it-open");
+        let settings = crate::settings_store::SettingsStore::load(Some(dir.clone()));
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(&dir));
+        assert!(cx.debug_bounds("config-handlers").is_some());
+
+        let hooks = crate::onboarding::hooks_with(
+            Some(dir.clone()),
+            Some(dir.join("rules.json")),
+            Some(config),
+            std::rc::Rc::new(crate::importer_view::set_source_and_show),
+            std::rc::Rc::new(|_, _| {}),
+        );
+        // From outside the main window, as first run's own window calls it.
+        cx.cx.update(|cx| {
+            (hooks.on_import)(
+                crate::first_run::ImportChoice::DontUse,
+                std::rc::Rc::new(|_, _| {}),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        draw(cx);
+        assert!(view.read_with(cx, |app, _| app.config.is_none()));
+        assert!(cx.debug_bounds("config-handlers").is_none());
+        assert!(cx.debug_bounds("handler-0").is_some());
+        let saved = crate::settings_store::Settings::load(&dir).unwrap();
+        assert!(saved.source.visual_only);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn the_blank_state_chooses_a_browser_from_a_list(cx: &mut TestAppContext) {
+        let dir = scratch("blank-browser");
+        let path = dir.join("rules.json");
+        let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+        view.update(cx, |app, _| {
+            app.browsers = vec![
+                BrowserChoice {
+                    name: "Firefox".into(),
+                    profiles: Vec::new(),
+                },
+                BrowserChoice {
+                    name: "Google Chrome".into(),
+                    profiles: vec!["Personal".into(), "Work".into()],
+                },
+            ];
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("blank-browser-0").is_none());
+        click(cx, rules_view::BLANK_BROWSER_ID);
+        assert!(cx.debug_bounds("blank-browser-0").is_some());
+        // The button closes what it opened.
+        click(cx, rules_view::BLANK_BROWSER_ID);
+        assert!(cx.debug_bounds("blank-browser-0").is_none());
+
+        click(cx, rules_view::BLANK_BROWSER_ID);
+        click(cx, "blank-browser-1");
+        // Written at once: the blank gives way to the empty cards.
+        let file = RulesFile::load(&path).unwrap();
+        assert_eq!(file.default_browser, "Google Chrome");
+        assert_eq!(file.default_profile, "");
+        assert!(cx.debug_bounds("rules-blank").is_none());
+        assert!(cx.debug_bounds("empty-add-handler").is_some());
+        assert_eq!(
+            view.read_with(cx, |app, _| everything_else_name(&app.store)),
+            "Google Chrome"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn the_blank_state_opens_settings_on_configuration(cx: &mut TestAppContext) {
+        cx.update(crate::settings::install);
+        let dir = scratch("blank-settings");
+        let (_view, cx) = open_store(cx, None, RulesStore::load(Some(dir.join("rules.json"))));
+        click(cx, rules_view::BLANK_SETTINGS_ID);
+        cx.run_until_parked();
+        let panes: Vec<crate::settings::Pane> = cx.update(|_, cx| {
+            cx.windows()
+                .into_iter()
+                .filter_map(|window| window.downcast::<crate::settings::SettingsWindow>())
+                .filter_map(|window| window.read(cx).ok().map(|view| view.pane))
+                .collect()
+        });
+        assert_eq!(panes, [crate::settings::Pane::Configuration]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn without_a_rules_json_default_the_switch_leaves_the_configs_default(cx: &mut TestAppContext) {
+        let dir = scratch("override-no-default");
+        let path = dir.join("rules.json");
+        let file = RulesFile {
+            default_browser: String::new(),
+            default_profile: String::new(),
+            ..crate::fixtures::rules_file()
+        };
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config), store_for(&dir, &file));
+
+        click(cx, config_view::SWITCH_ID);
+        assert_eq!(
+            RulesFile::load(&path).unwrap().precedence,
+            Precedence::PwrRoute
+        );
+        let (shown, order) = view.read_with(cx, |app, _| {
+            let shown = app.config.clone().expect("the config is in charge");
+            let order = Order::of(&app.store, &shown);
+            (shown, order)
+        });
+        assert_eq!(order, Order::with(true, false, true));
+        assert!(order.needs_default && !order.pwrroute_default);
+        // The visual rules still run first, but the config's default stays:
+        // its row is not struck, and there is no Everything else row.
+        assert!(top(cx, "config-visual") < top(cx, "config-handlers"));
+        assert!(cx.debug_bounds("config-default").is_some());
+        assert!(cx.debug_bounds("config-default-struck").is_none());
+        assert!(cx.debug_bounds("config-everything-else").is_none());
+        assert_eq!(
+            shown.override_warnings(order),
+            ["Pick a default browser for PwrRoute to take everything else."]
+        );
+        assert!(cx.debug_bounds("config-warning-0").is_some());
+        let still = ConfigInCharge {
+            modified: None,
+            ..shown.clone()
+        };
+        assert_eq!(
+            still.banner_sentence(order, "Safari", SystemTime::now()),
+            "Your rules run first, then its handlers. Its defaultBrowser still takes \
+             everything else."
+        );
+
+        // A default naming PwrRoute is no default either: the router would
+        // refuse it as a loop.
+        for itself in ["PwrRoute", "com.pwrdrvr.pwrroute"] {
+            let file = RulesFile {
+                default_browser: itself.into(),
+                precedence: Precedence::PwrRoute,
+                ..crate::fixtures::rules_file()
+            };
+            let store = store_for(&dir, &file);
+            assert_eq!(
+                Order::of(&store, &shown),
+                Order::with(true, false, true),
+                "{itself}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn a_refused_save_leaves_the_switch_where_the_router_has_it(cx: &mut TestAppContext) {
+        // No configuration directory: nothing can be written.
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config.clone()), RulesStore::load(None));
+        click(cx, config_view::SWITCH_ID);
+        let (precedence, flips) = view.read_with(cx, |app, _| {
+            (
+                app.store.precedence(),
+                app.config.as_ref().map(|config| config.flips),
+            )
+        });
+        assert_eq!(precedence, Precedence::Config);
+        assert_eq!(flips, Some(0));
+        assert!(top(cx, "config-handlers") < top(cx, "config-visual"));
+        assert!(cx.debug_bounds("config-default-struck").is_none());
+        // The banner says why, under the switch.
+        assert!(cx.debug_bounds("config-warning-0").is_some());
+
+        // The file changed on disk under an unsaved edit.
+        let dir = scratch("override-refused");
+        let path = dir.join("rules.json");
+        let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+        view.update(cx, |app, cx| {
+            app.store.set_enabled(Selection::Handler(0), false);
+            app.refresh(cx);
+        });
+        super::written_by_someone_else(&path, 2);
+        click(cx, config_view::SWITCH_ID);
+        assert_eq!(
+            view.read_with(cx, |app, _| app.store.precedence()),
+            Precedence::Config
+        );
+        assert_eq!(
+            RulesFile::load(&path).unwrap().precedence,
+            Precedence::Config
+        );
+        assert!(cx.debug_bounds("config-default-struck").is_none());
+        assert!(cx.debug_bounds("config-warning-0").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The write itself fails (the folder is read-only): the switch goes
+        // back to the file's order, and a later save does not write it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = scratch("override-write-fails");
+            let path = dir.join("rules.json");
+            let (view, cx) = open_store(cx, Some(fixture_home().join(".finicky.ts")), {
+                fixture_store(&dir)
+            });
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            click(cx, config_view::SWITCH_ID);
+            let (precedence, flips, refused) = view.read_with(cx, |app, _| {
+                let config = app.config.as_ref().unwrap();
+                (app.store.precedence(), config.flips, config.refused.clone())
+            });
+            assert_eq!(precedence, Precedence::Config);
+            assert_eq!(flips, 0);
+            assert!(refused.is_some());
+            assert!(cx.debug_bounds("config-warning-0").is_some());
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            view.update(cx, |app, cx| app.save_now(cx));
+            assert_eq!(
+                RulesFile::load(&path).unwrap().precedence,
+                Precedence::Config
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_switch_keeps_the_selection(cx: &mut TestAppContext) {
+        let dir = scratch("override-selection");
+        let config = fixture_home().join(".finicky.ts");
+        let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+        view.update(cx, |app, cx| {
+            app.visual_rules_expanded = true;
+            app.selection = None;
+            cx.notify();
+        });
+        draw(cx);
+        // Nothing selected stays so: the editor does not open on a row.
+        click(cx, config_view::SWITCH_ID);
+        assert_eq!(view.read_with(cx, |app, _| app.selection), None);
+        view.update(cx, |app, cx| {
+            app.selection = Some(Selection::Handler(0));
+            cx.notify();
+        });
+        draw(cx);
+        click(cx, config_view::SWITCH_ID);
+        assert_eq!(
+            view.read_with(cx, |app, _| app.selection),
+            Some(Selection::Handler(0))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn everything_else_names_a_bundle_id_by_its_app() {
+        let dir = scratch("override-bundle-id");
+        let file = RulesFile {
+            default_browser: "com.google.Chrome".into(),
+            default_profile: "Personal".into(),
+            ..crate::fixtures::rules_file()
+        };
+        let store = store_for(&dir, &file);
+        assert_eq!(
+            everything_else_name(&store),
+            "Google Chrome \u{00b7} Personal"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

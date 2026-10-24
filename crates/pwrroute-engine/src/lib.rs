@@ -60,8 +60,8 @@ use rquickjs::{
 use serde::{Deserialize, Serialize};
 
 pub use describe::{
-    BrowserSpec, Description, FixedBrowser, FunctionSpec, HandlerRule, MatcherSpec, RewriteRule,
-    UrlSpec,
+    BrowserSpec, Description, FixedBrowser, FunctionSpec, HandlerRule, HostnameSpec, MatcherSpec,
+    RewriteRule, UrlSpec,
 };
 pub use host::{
     ConsoleLine, ConsoleLog, DefaultHost, Host, LogLevel, ModifierKeys, PowerInfo, SystemInfo,
@@ -72,8 +72,8 @@ pub use import::{Review, Reviewed, SourceLines, Suggested, Verdict, Visual};
 pub use native::NativeHost;
 pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
 pub use rules::{
-    Expectation, FALLBACK_BROWSER, Place, PrivacySetting, Problem, Rewrite, RewriteAction,
-    RewriteExample, RouteTest, Rule, RulesFile, RulesOptions,
+    Expectation, FALLBACK_BROWSER, Place, Precedence, PrivacySetting, Problem, Rewrite,
+    RewriteAction, RewriteExample, RouteTest, Rule, RulesFile, RulesOptions,
 };
 pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
 pub use suggest::{Suggestion, suggest_rule};
@@ -227,10 +227,20 @@ pub enum AppType {
 }
 
 /// What an [`Engine`] is built from: a JS or TS config, `rules.json`, or
-/// both. With both, the config's rewrites and handlers run first and it owns
-/// the default browser and options; the rules' rewrites and handlers follow
-/// its own, as the Go host appended them. With neither, the default browser
-/// is [`FALLBACK_BROWSER`].
+/// both. With both, the config's rewrites run first, then the rules'; who
+/// goes first after that is `rules.json`'s `precedence` ([`Precedence`]):
+///
+/// - absent or `config` (the Go host's order): the config's handlers, then
+///   the rules' (appended, as the Go host appended them), then the config's
+///   `defaultBrowser`;
+/// - `pwrroute`: the rules' handlers, then the config's, then the rules'
+///   `defaultBrowser`/`defaultProfile` instead of the config's
+///   ([`RulesFile::owns_default`]; an empty default leaves the config's).
+///
+/// The config keeps its options either way. A trace says who decided: a
+/// handler step's [`Source`], and the [`Stage::Default`] step's source is
+/// [`Source::Rules`] when the rules' default took the link. With neither
+/// file, the default browser is [`FALLBACK_BROWSER`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Sources {
     pub config: Option<PathBuf>,
@@ -599,6 +609,10 @@ fn install_globals(ctx: &Ctx<'_>, host: &Rc<dyn Host>, console: &ConsoleLog) -> 
     }
     install_host_functions(ctx, &finicky, host)?;
     globals.set("finicky", finicky)?;
+    // So `describe()` can show what a `matchHostnames` function matches.
+    ctx.eval::<(), _>("__pwrroute.rememberHostnames(finicky)")
+        .catch(ctx)
+        .map_err(|e| js_error("wrapping finicky.matchHostnames", &e))?;
     Ok(())
 }
 

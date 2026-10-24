@@ -1,0 +1,61 @@
+{
+  "defaultBrowser": "Microsoft Edge",
+  "defaultProfile": "Research and Development Team",
+  "rewrites": [
+    {
+      "match": "http://*.example.com/*",
+      "actions": [{ "setScheme": "https" }]
+    }
+  ],
+  "rules": [
+    {
+      "match": "tickets.example.com/*",
+      "browser": "Microsoft Edge",
+      "profile": "Research and Development Team"
+    },
+    {
+      "match": ["git.example.com/*", "*.git.example.net/*"],
+      "browser": "Microsoft Edge",
+      "profile": "Research and Development Team"
+    },
+    {
+      "match": "docs.example.com/spec/*",
+      "browser": "Microsoft Edge",
+      "profile": "Research and Development Team"
+    },
+    {
+      "match": ["ci.example.com/*", "build.example.com/*"],
+      "browser": "Microsoft Edge",
+      "profile": "Research and Development Team"
+    },
+    {
+      "match": "*.example.com/team/*",
+      "browser": "Microsoft Edge",
+      "profile": "Research and Development Team"
+    },
+    {
+      "match": ["dashboards.example.net/*", "metrics.example.net/*"],
+      "browser": "Microsoft Edge",
+      "profile": "Research and Development Team"
+    },
+    {
+      "match": "staging.example.com/*",
+      "browser": "Microsoft Edge",
+      "profile": "Research and Development Team"
+    },
+    {
+      "match": ["design.example.com/*", "*.design.example.com/*"],
+      "browser": "Google Chrome",
+      "profile": "Design"
+    },
+    {
+      "match": "social.example.com/*",
+      "browser": "Google Chrome",
+      "profile": "Personal"
+    },
+    {
+      "match": ["video.example.com/*", "*.video.example.net/*"],
+      "browser": "Firefox"
+    }
+  ]
+}

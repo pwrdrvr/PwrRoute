@@ -50,7 +50,7 @@ pub use launcher::{DryRunLauncher, Launcher};
 pub use link::{Link, LinkError, MAX_URL_LEN, OpenerInfo, Source, normalize_url};
 pub use recent::{RecentDispatches, Retention};
 pub use trace::{
-    DispatchId, DispatchRecord, DispatchTiming, Matched, Outcome, Privacy, PrivacyExt, Step,
+    DispatchId, DispatchRecord, DispatchTiming, Matched, Outcome, Owner, Privacy, PrivacyExt, Step,
     Timings, WITHHELD, host_only,
 };
 

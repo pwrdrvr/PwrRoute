@@ -9,7 +9,9 @@ use gpui_kit::{
 };
 
 use crate::app::{PwrRoute, Screen};
+use crate::default_browser::DefaultState;
 use crate::e2e;
+use crate::overview_model::{ConfigTrouble, State, Status, plural};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{ButtonKind, button, key_cap, status_chip};
 
@@ -27,50 +29,134 @@ pub const BRAND_X: f32 = 96.0;
 pub const STRIP_HEIGHT: f32 = 40.0;
 
 /// The strip's status chips for what is on screen.
-fn strip_chips(app: &PwrRoute) -> Vec<Div> {
-    let rules = || {
-        status_chip(
-            format!(
-                "rules.json \u{00b7} {} rewrites \u{00b7} {} handlers",
-                app.rewrites.len(),
-                app.handlers.len()
-            ),
-            theme::status_ok(),
-        )
-    };
-    let config = |path: &str| {
-        if config_fell_back() {
-            status_chip(
-                format!("{path} \u{00b7} did not load"),
-                theme::status_error(),
-            )
-        } else {
-            status_chip(
-                format!("{path} \u{00b7} in charge"),
-                theme::status_warning(),
-            )
-        }
-    };
+fn strip_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
     match (app.screen, &app.config) {
-        (Screen::Rules | Screen::TestLink, Some(in_charge)) => vec![config(&in_charge.path)],
-        (Screen::Rules, None) => vec![rules(), crate::default_browser::chip()],
-        (Screen::TestLink, None) => vec![rules()],
+        (Screen::Overview, _) => overview_chips(app, status),
+        // The config's chip, as Overview draws it (design 5a/5b).
+        (Screen::Rules | Screen::TestLink, Some(_)) => vec![source_chip(app, status)],
+        (Screen::Rules, None) => vec![source_chip(app, status), crate::default_browser::chip()],
+        (Screen::TestLink, None) => vec![source_chip(app, status)],
         (Screen::Activity, _) => vec![status_chip(app.activity.today.label(), theme::status_ok())],
     }
 }
 
-/// The config the window shows never loaded, so nothing is in charge and
-/// every link goes to the fallback browser: the chips must not call it in
-/// charge, or the last good config, since there is none.
-fn config_fell_back() -> bool {
-    crate::router::routing_source().fallback.is_some()
+/// What the source chip reads from: the config in charge by its shown
+/// path, the router's word on it, the saved order, and `rules.json`.
+#[derive(Clone, Copy, Debug)]
+pub struct Source<'a> {
+    pub config: Option<&'a str>,
+    pub trouble: Option<&'a ConfigTrouble>,
+    /// `rules.json`'s `precedence` is `"pwrroute"`.
+    pub rules_first: bool,
+    /// `rules.json` exists.
+    pub exists: bool,
+    pub rewrites: usize,
+    pub rules: usize,
+}
+
+/// Where the rules come from, and the chip's tone. A config in charge is
+/// the accent, not a warning: warning only when its last reload failed,
+/// and the error tone when it never loaded.
+pub fn source_label(source: Source<'_>) -> (String, gpui_kit::Hsla) {
+    match source.config {
+        Some(path) if matches!(source.trouble, Some(ConfigTrouble::NotLoaded(_))) => (
+            format!("{path} \u{00b7} didn't load"),
+            theme::status_error(),
+        ),
+        Some(path) if source.trouble.is_some() => (
+            format!("{path} \u{00b7} didn't reload"),
+            theme::status_warning(),
+        ),
+        Some(path) if source.rules_first => {
+            (format!("{path} \u{00b7} after your rules"), theme::accent())
+        }
+        Some(path) => (format!("{path} \u{00b7} runs first"), theme::accent()),
+        None if !source.exists => ("no rules.json yet".to_owned(), theme::status_suspended()),
+        None if source.rewrites == 0 && source.rules == 0 => (
+            "rules.json \u{00b7} no rules yet".to_owned(),
+            theme::status_ok(),
+        ),
+        None => (
+            format!(
+                "rules.json \u{00b7} {} \u{00b7} {}",
+                plural(source.rewrites, "rewrite"),
+                plural(source.rules, "rule")
+            ),
+            theme::status_ok(),
+        ),
+    }
+}
+
+/// [`source_label`]'s chip over the window. The order is the store's, which
+/// only ever holds what was written (a refused or failed write is put
+/// back).
+fn source_chip(app: &PwrRoute, status: &Status) -> Div {
+    let (label, tone) = source_label(Source {
+        config: app.config.as_ref().map(|config| config.path.as_str()),
+        trouble: status.config_error.as_ref(),
+        rules_first: !app.store.precedence().is_config(),
+        exists: app.store.exists(),
+        rewrites: app.rewrites.len(),
+        rules: app.handlers.len(),
+    });
+    status_chip(label, tone)
+}
+
+/// Overview's chips: where the rules come from, then whether links reach
+/// PwrRoute, in the words of `TrayModel::chip()` (paused / default browser
+/// / not default), so the tray and the window agree.
+fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
+    let source = source_chip(app, status);
+    let state = if status.paused.is_some() {
+        status_chip("paused", theme::status_warning())
+    } else {
+        match status.default {
+            DefaultState::PwrRoute => status_chip("default browser", theme::status_ok()),
+            DefaultState::Other(_) => status_chip("not default", theme::status_warning()),
+            DefaultState::Unknown => status_chip("default unknown", theme::status_suspended()),
+        }
+    };
+    vec![source, state]
+}
+
+/// The rail foot's first line: the routing state, in its tone.
+pub fn routing_line(status: &Status) -> (gpui_kit::Hsla, String) {
+    match status.state() {
+        State::ConfigError => (
+            theme::status_error(),
+            "routing \u{00b7} config didn't load".to_owned(),
+        ),
+        State::ConfigStale => (
+            theme::status_warning(),
+            "routing \u{00b7} config didn't reload".to_owned(),
+        ),
+        State::Paused => (
+            theme::status_warning(),
+            format!(
+                "paused \u{00b7} {}",
+                status
+                    .paused
+                    .as_ref()
+                    .map_or("", |pause| pause.name.as_str())
+            ),
+        ),
+        State::NotDefault => (
+            theme::status_warning(),
+            "not the default browser".to_owned(),
+        ),
+        State::Unknown => (
+            theme::status_suspended(),
+            "can't tell the default browser".to_owned(),
+        ),
+        State::Routing => (theme::status_ok(), "routing".to_owned()),
+    }
 }
 
 /// `.strip`: the brand, the breadcrumb and the status chips.
 ///
 /// The traffic lights are AppKit's own, placed by the window's
 /// `TitlebarOptions` (see `main`), so the strip only leaves room for them.
-pub fn title_strip(app: &PwrRoute) -> Div {
+pub fn title_strip(app: &PwrRoute, status: &Status) -> Div {
     strip()
         .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
         .child(text(
@@ -80,7 +166,7 @@ pub fn title_strip(app: &PwrRoute) -> Div {
             theme::text_secondary(),
         ))
         .child(div().flex_1())
-        .children(strip_chips(app))
+        .children(strip_chips(app, status))
 }
 
 /// `.strip` with its `.brand`: the mark and the wordmark, after the
@@ -187,6 +273,7 @@ fn section(
     trailing: Option<AnyElement>,
 ) -> Stateful<Div> {
     let (id, icon_path) = match screen {
+        Screen::Overview => ("nav-overview", "pwrroute/map.svg"),
         Screen::Rules => ("nav-rules", "pwrroute/rules.svg"),
         Screen::TestLink => ("nav-test", "pwrroute/test.svg"),
         Screen::Activity => ("nav-activity", "pwrroute/activity.svg"),
@@ -223,81 +310,82 @@ fn changed_actions(cx: &mut Context<'_, PwrRoute>) -> Div {
         )
 }
 
-/// `.rail`: the sections, Settings, and the router's status at the foot.
-pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
+/// The rail foot's second line: what was last read or written. A config
+/// in charge that loaded says when it was (re)loaded; else `rules.json`
+/// when it was saved. Anything the store has to say about an edit
+/// (unsaved, saving, a failed save, a change on disk) wins.
+pub fn foot_label(app: &PwrRoute, status: &Status) -> String {
+    use crate::rules_store::{Status as Store, clock};
+    match (app.store.status(), &app.config) {
+        (Store::Saved { .. }, Some(config))
+            if config.problem.is_none() && status.config_error.is_none() =>
+        {
+            // The router reloads the file soon after it changes; this
+            // window read it when it opened, or when the source changed.
+            let reloaded = config.modified.map_or(app.config_loaded, |modified| {
+                modified.max(app.config_loaded)
+            });
+            format!("reloaded {}", clock(reloaded))
+        }
+        (Store::Saved { at: Some(at) }, _) => format!("rules.json \u{00b7} saved {}", clock(*at)),
+        _ => app.store.status_label(),
+    }
+}
+
+/// `.rail`: the sections, Settings, and the routing state at the foot.
+pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>) -> Div {
     let count = |label: String| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
-    let rules_trailing = if app.config.is_some() {
-        // `.wdot`: the config in charge, not the visual rules, is routing.
-        div()
-            .ml_auto()
-            .mr(px(6.0))
-            .child(theme::dot(theme::status_warning()))
-            .into_any_element()
-    } else {
-        mono(
-            (app.rewrites.len() + app.handlers.len()).to_string(),
-            10.5,
-            600.0,
-            theme::text_subtle(),
+    // Rewrites plus rules plus the config's, across both sources; a config
+    // that did not load is a warning dot instead.
+    let rules_count = app.rewrites.len()
+        + app.handlers.len()
+        + app
+            .config
+            .as_ref()
+            .map_or(0, |config| config.rewrites.len() + config.handlers.len());
+    let rules_trailing = if app.config.is_some() && status.config_error.is_some() {
+        Some(
+            div()
+                .ml_auto()
+                .mr(px(6.0))
+                .child(theme::dot(theme::status_warning()))
+                .into_any_element(),
         )
-        .into_any_element()
+    } else {
+        (rules_count > 0).then(|| count(rules_count.to_string()))
     };
-    let foot = if app.config.is_some() {
-        let (dot, line) = if config_fell_back() {
-            (
-                theme::status_error(),
-                "config did not load \u{00b7} fallback browser",
-            )
-        } else {
-            (theme::status_warning(), "last good config active")
-        };
-        div().child(
+    let (dot, line) = routing_line(status);
+    let foot = div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(6.0))
                 .child(theme::dot(dot))
+                // `.rail-foot .st` loses to the later `.st` rule in the
+                // stylesheet, so this line is sans 11px.
                 .child(text(line, 11.0, 500.0, theme::text_secondary())),
         )
-    } else {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(theme::dot(theme::status_ok()))
-                    // `.rail-foot .st` loses to the later `.st` rule in
-                    // the stylesheet, so this line is sans 11px.
-                    // The first launch is the router, so the pid is this
-                    // process's.
-                    .child(text(
-                        format!("router \u{00b7} running \u{00b7} pid {}", std::process::id()),
-                        11.0,
-                        500.0,
-                        theme::text_secondary(),
-                    )),
-            )
-            .child(
-                div()
-                    .font_family(theme::mono_family(500.0))
-                    .font_weight(theme::weight(500.0))
-                    .text_size(px(10.5))
-                    .line_height(px(14.7))
-                    .text_color(if app.store.changed_on_disk() {
-                        theme::status_error()
-                    } else {
-                        theme::text_subtle()
-                    })
-                    .child(app.store.status_label()),
-            )
-            .children(app.store.changed_on_disk().then(|| changed_actions(cx)))
-    };
+        .child(
+            div()
+                .font_family(theme::mono_family(500.0))
+                .font_weight(theme::weight(500.0))
+                .text_size(px(10.5))
+                .line_height(px(14.7))
+                .text_color(if app.store.changed_on_disk() {
+                    theme::status_error()
+                } else {
+                    theme::text_subtle()
+                })
+                .child(foot_label(app, status)),
+        )
+        .children(app.store.changed_on_disk().then(|| changed_actions(cx)));
     div()
         .on_children_prepainted(e2e::regions(&[
+            "rail.overview",
             "rail.rules",
             "rail.test",
             "rail.activity",
@@ -316,7 +404,8 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
         .bg(theme::bg_sidebar())
         .border_r_1()
         .border_color(theme::border_subtle())
-        .child(section(app, cx, Screen::Rules, Some(rules_trailing)))
+        .child(section(app, cx, Screen::Overview, None))
+        .child(section(app, cx, Screen::Rules, rules_trailing))
         .child(section(app, cx, Screen::TestLink, None))
         .child(section(
             app,
@@ -342,4 +431,134 @@ pub fn nav_rail(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
             .on_click(|_, _, cx| crate::settings::open(cx, None)),
         )
         .child(div().mt_auto().pt(px(10.0)).px(px(8.0)).child(foot))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::overview_model::Pause;
+
+    /// The rail foot names each routing state in its own words and tone.
+    #[test]
+    fn routing_line_names_each_state() {
+        let with = |change: &dyn Fn(&mut Status)| {
+            let mut status = Status::routing();
+            change(&mut status);
+            routing_line(&status)
+        };
+        assert_eq!(with(&|_| {}), (theme::status_ok(), "routing".to_owned()));
+        assert_eq!(
+            with(&|status| status.default = DefaultState::Unknown),
+            (
+                theme::status_suspended(),
+                "can't tell the default browser".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| status.default = DefaultState::Other("Safari".into())),
+            (
+                theme::status_warning(),
+                "not the default browser".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| {
+                status.paused = Some(Pause {
+                    name: "Google Chrome".into(),
+                    display: "Google Chrome \u{00b7} Personal".into(),
+                });
+            }),
+            (
+                theme::status_warning(),
+                "paused \u{00b7} Google Chrome".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| {
+                status.config_error = Some(ConfigTrouble::ReloadFailed("x".into()));
+            }),
+            (
+                theme::status_warning(),
+                "routing \u{00b7} config didn't reload".to_owned()
+            )
+        );
+        assert_eq!(
+            with(&|status| {
+                status.config_error = Some(ConfigTrouble::NotLoaded("x".into()));
+            }),
+            (
+                theme::status_error(),
+                "routing \u{00b7} config didn't load".to_owned()
+            )
+        );
+    }
+
+    /// The source chip follows the router's word on the config and the
+    /// order as written; without a config, what rules.json holds.
+    #[test]
+    fn the_source_chip_follows_the_router_and_the_saved_precedence() {
+        let source = Source {
+            config: Some("~/.finicky.ts"),
+            trouble: None,
+            rules_first: false,
+            exists: true,
+            rewrites: 1,
+            rules: 3,
+        };
+        let label = |source: Source<'_>| source_label(source).0;
+        assert_eq!(label(source), "~/.finicky.ts \u{00b7} runs first");
+        assert_eq!(
+            label(Source {
+                rules_first: true,
+                ..source
+            }),
+            "~/.finicky.ts \u{00b7} after your rules"
+        );
+        let stale = ConfigTrouble::ReloadFailed("x".into());
+        assert_eq!(
+            source_label(Source {
+                trouble: Some(&stale),
+                rules_first: true,
+                ..source
+            }),
+            (
+                "~/.finicky.ts \u{00b7} didn't reload".to_owned(),
+                theme::status_warning()
+            )
+        );
+        let broken = ConfigTrouble::NotLoaded("x".into());
+        assert_eq!(
+            source_label(Source {
+                trouble: Some(&broken),
+                ..source
+            }),
+            (
+                "~/.finicky.ts \u{00b7} didn't load".to_owned(),
+                theme::status_error()
+            )
+        );
+        let alone = Source {
+            config: None,
+            ..source
+        };
+        assert_eq!(
+            label(alone),
+            "rules.json \u{00b7} 1 rewrite \u{00b7} 3 rules"
+        );
+        assert_eq!(
+            label(Source {
+                rewrites: 0,
+                rules: 0,
+                ..alone
+            }),
+            "rules.json \u{00b7} no rules yet"
+        );
+        assert_eq!(
+            label(Source {
+                exists: false,
+                ..alone
+            }),
+            "no rules.json yet"
+        );
+    }
 }

@@ -51,6 +51,8 @@ const MAX_EXTRA_URLS: usize = 50;
 
 const INSTRUCTIONS: &str = "PwrRoute is the OS default browser and routes each link to a browser and profile by rules. \
 Use pwrroute_resolve to see where a link would go and why; it never opens anything. \
+Every trace names who decided: a rules.json rule or rewrite (`source: rules`, `index` counting rules.json's lists), a Finicky config's handler or rewrite (`source: config`, counting the config's), or whose default browser took a link nothing claimed, PwrRoute's (rules.json's defaultBrowser) or the config's. \
+With a Finicky config in charge its handlers run before rules.json's rules and its defaultBrowser takes the rest, unless rules.json says \"precedence\": \"pwrroute\": then rules.json's rules run first and its defaultBrowser takes everything else. \
 pwrroute_open dispatches a link through the router as a click would, and is recorded in Activity against this agent. \
 pwrroute_activity lists recent dispatches; its `retention` says where they are kept and for how long, each entry's `privacy` says how much of the link it keeps, and `filter: \"unrouted\"` finds the links no rule chose. \
 Read the rules with pwrroute_rules_list; pwrroute_suggest_rule proposes narrow patterns for a link and what else they would catch; \
@@ -100,6 +102,10 @@ struct RulesApplyInput {
     base_revision: String,
     /// A JSON Merge Patch (RFC 7396) applied to the `rules` object from
     /// `pwrroute_rules_list`. Lists are replaced whole; `null` removes a key.
+    /// `"precedence": "pwrroute"` runs these rules before a Finicky
+    /// config's handlers and lets `defaultBrowser` take everything else;
+    /// absent (or `"config"`), the config's handlers run before these rules
+    /// and its `defaultBrowser` takes what neither matched.
     /// A `browser` (a rule's or `defaultBrowser`) is an app name, a bundle
     /// id as `pwrroute_browsers` lists them, or a `.app` path (`~/` allowed);
     /// `profile` is a profile name from the same listing.
@@ -119,8 +125,9 @@ struct RulesApplyInput {
 enum ActivityFilter {
     #[default]
     All,
-    /// No rule chose the browser: the default or the fallback did. These
-    /// are the links a new rule is for.
+    /// No rule or handler chose the browser: a default (PwrRoute's or the
+    /// config's) or the fallback did. These are the links a new rule is
+    /// for.
     Unrouted,
     Failed,
     /// A rewrite changed the URL.
@@ -673,6 +680,21 @@ async fn rules_apply(b: Backends, input: RulesApplyInput) -> Reply {
     let dry_run = input.dry_run;
     type Noted<T> = Result<T, (RulesError, Option<&'static str>)>;
     let result = tokio::task::spawn_blocking(move || -> Noted<(Value, Option<&'static str>)> {
+        // The file's loader reads any other precedence as the config's
+        // order; from an agent, a misspelling is refused rather than
+        // written as a change that changes nothing.
+        match input.patch.get("precedence") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(word)) if word == "config" || word == "pwrroute" => {}
+            Some(_) => {
+                return Err((
+                    RulesError::Invalid(
+                        "precedence must be \"pwrroute\" or \"config\"".to_owned(),
+                    ),
+                    None,
+                ));
+            }
+        }
         let current = b.rules.read().map_err(|e| (RulesError::Other(e), None))?;
         let mut rules = current.rules;
         merge_patch(&mut rules, &Value::Object(input.patch));

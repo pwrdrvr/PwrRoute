@@ -203,6 +203,74 @@ pub struct Configuration {
     /// How the file stands: "Loaded · edited 5 min ago", "No rules.json
     /// yet", or why it did not load.
     pub rules_status: SharedString,
+    /// Who takes the links nothing claims, while a Finicky config is in
+    /// charge (Overview and Setup 5d). `None` while visual rules are:
+    /// `rules.json` is then the whole config and its default takes them.
+    pub everything_else: Option<EverythingElse>,
+}
+
+/// Whose default browser takes the links no handler or rule claims:
+/// `rules.json`'s `precedence`, in the reader's words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultOwner {
+    /// The config's own `defaultBrowser`, after its handlers and then the
+    /// visual rules: Finicky's order, and `precedence`'s absence.
+    Config,
+    /// `rules.json`'s default, with the visual rules first, then the
+    /// config's handlers.
+    PwrRoute,
+}
+
+/// Settings › Configuration's Everything else field: the segmented control,
+/// what each answer means, and `rules.json`'s default browser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EverythingElse {
+    pub owner: DefaultOwner,
+    /// The config's answer: "~/.finicky.ts's default · Safari", or the
+    /// first part alone when its default is a function or `null`.
+    pub config_label: SharedString,
+    /// What the config's answer means, under the control.
+    pub config_detail: SharedString,
+    /// What PwrRoute's answer means: "Your rules run first, then
+    /// ~/.finicky.ts's handlers. Links nothing claims go here instead of
+    /// Safari."
+    pub pwrroute_detail: SharedString,
+    /// What PwrRoute's default changes, from the config's description
+    /// ("Its defaultBrowser function will no longer run."): shown only
+    /// while PwrRoute's default is chosen.
+    pub warnings: Vec<SharedString>,
+    /// What the browser select offers: the scan less hidden apps, and the
+    /// app `rules.json` names when the scan did not find it.
+    pub browsers: Vec<DefaultChoice>,
+    /// `rules.json`'s `defaultBrowser`, as an index into `browsers`;
+    /// `None` when it names none.
+    pub browser: Option<usize>,
+    /// `rules.json`'s `defaultProfile`; `None` is the browser's own.
+    pub profile: Option<SharedString>,
+    /// Why the last change was not saved, or why none can be.
+    pub problem: Option<SharedString>,
+}
+
+impl EverythingElse {
+    /// The chosen browser, when there is one.
+    pub fn chosen(&self) -> Option<&DefaultChoice> {
+        self.browser.and_then(|index| self.browsers.get(index))
+    }
+}
+
+/// One browser the Everything else select offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultChoice {
+    /// What `rules.json`'s `defaultBrowser` gets: the bundle id on macOS,
+    /// the name elsewhere, as first run writes it.
+    pub value: SharedString,
+    /// The name the reader knows, never a bundle id when one is known.
+    pub name: SharedString,
+    /// Two letters for the `.bi` badge.
+    pub badge: SharedString,
+    /// Its profiles by the names the browser shows; empty: no profile
+    /// select.
+    pub profiles: Vec<SharedString>,
 }
 
 #[derive(Clone, Debug)]
@@ -292,8 +360,8 @@ pub struct Privacy {
     pub journal_files: Option<JournalFiles>,
     /// Why the journal's last write failed, when it is on and did.
     pub journal_error: Option<SharedString>,
-    /// The rules that keep less than full, for the confirm sheet: "Handler
-    /// 9 keeps host only and handler 10 keeps nothing". `None` when none.
+    /// The rules that keep less than full, for the confirm sheet: "Rule 9
+    /// keeps host only and rule 10 keeps nothing". `None` when none.
     pub rules_keep_less: Option<SharedString>,
     /// The data directory exists: settings can be saved and the journal
     /// can be turned on.
@@ -481,6 +549,15 @@ pub enum SettingsRequest {
     NewCustomRole,
     OpenActivity,
     SetRulesSource(RulesSource),
+    /// Configuration › Everything else: whose default takes the links
+    /// nothing claims, written as `rules.json`'s `precedence`.
+    SetDefaultOwner(DefaultOwner),
+    /// Configuration › Everything else: `rules.json`'s `defaultBrowser`
+    /// and `defaultProfile` ("" for the browser's own profile).
+    SetDefaultBrowser {
+        browser: SharedString,
+        profile: SharedString,
+    },
     /// Open the importer on the Finicky config (Finicky Importer 1a).
     ReviewImport,
     RevealRules,

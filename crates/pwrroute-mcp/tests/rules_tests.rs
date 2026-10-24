@@ -1,7 +1,7 @@
 //! The route-test tools over the link: `pwrroute_rules_test`,
 //! `pwrroute_suggest_rule`, `pwrroute_rules_apply`'s refusal of a change
-//! that fails a saved example or test, and what `pwrroute_activity` says at
-//! each privacy level.
+//! that fails a saved example or test, its `precedence`, and what
+//! `pwrroute_activity` says at each privacy level.
 
 mod support;
 
@@ -191,6 +191,71 @@ async fn apply_refuses_a_change_that_fails_a_saved_test_unless_forced() {
     );
     let serialized = serde_json::to_string(&records).unwrap();
     assert!(!serialized.contains("example.org"), "{serialized}");
+    client.cancel().await.unwrap();
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn apply_writes_precedence_and_refuses_unknown_values() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Editor)).await;
+    let client = h.client("test-agent").await;
+    let apply = |args: Value| call(&client, "pwrroute_rules_apply", args);
+
+    // A dry run reports it and writes nothing.
+    let dry = apply(json!({
+        "baseRevision": "1",
+        "patch": { "precedence": "pwrroute" },
+        "dryRun": true
+    }))
+    .await;
+    assert_eq!(dry.is_error, Some(false), "{}", text(&dry));
+    assert_eq!(dry.structured_content.unwrap()["written"], false);
+    assert_eq!(h.rules.read_revision(), "1", "a dry run writes nothing");
+
+    // For real: written, and rules_list shows it.
+    let written = apply(json!({
+        "baseRevision": "1",
+        "patch": { "precedence": "pwrroute" }
+    }))
+    .await;
+    assert_eq!(written.is_error, Some(false), "{}", text(&written));
+    let written = written.structured_content.unwrap();
+    assert_eq!(written["written"], true);
+    assert_eq!(written["revision"], "2");
+    let listed = call(&client, "pwrroute_rules_list", json!({})).await;
+    let listed = listed.structured_content.unwrap();
+    assert_eq!(listed["rules"]["precedence"], "pwrroute", "{listed}");
+
+    // A misspelling, or a value of another type, is refused, not written
+    // as the config's order.
+    for wrong in [json!("PwrRoute"), json!(true), json!("")] {
+        let refused = apply(json!({
+            "baseRevision": "2",
+            "patch": { "precedence": wrong }
+        }))
+        .await;
+        assert_eq!(refused.is_error, Some(true), "{wrong}");
+        let message = text(&refused);
+        assert!(message.starts_with("invalid_rules"), "{wrong}: {message}");
+        assert!(message.contains("precedence"), "{message}");
+    }
+    assert_eq!(h.rules.read_revision(), "2", "nothing more was written");
+
+    // "config" (or null) puts the config's order back.
+    let back = apply(json!({
+        "baseRevision": "2",
+        "patch": { "precedence": null }
+    }))
+    .await;
+    assert_eq!(back.is_error, Some(false), "{}", text(&back));
+    let listed = call(&client, "pwrroute_rules_list", json!({})).await;
+    let listed = listed.structured_content.unwrap();
+    assert!(
+        listed["rules"]
+            .get("precedence")
+            .is_none_or(|p| p != "pwrroute"),
+        "{listed}"
+    );
     client.cancel().await.unwrap();
     h.finish().await;
 }

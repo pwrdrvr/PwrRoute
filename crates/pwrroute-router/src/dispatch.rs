@@ -13,7 +13,7 @@ use std::{
 use anyhow::Result;
 use pwrroute_engine::{
     AppType, Browser, Engine, HttpNetwork, Link as EngineLink, Network, Opener, ShortLinks, Source,
-    Stage, Step as TraceStep, Trace,
+    Stage, Trace,
 };
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
     launcher::Launcher,
     link::{Link, normalize_url},
     recent::{RecentDispatches, Retention},
-    trace::{DispatchId, DispatchRecord, Matched, Outcome, Privacy, Step, Timings},
+    trace::{DispatchId, DispatchRecord, Matched, Outcome, Owner, Privacy, Step, Timings},
 };
 
 /// Where links go when no config is loaded, the config sends a link back
@@ -77,6 +77,7 @@ pub struct Resolved {
     /// [`Step::Rewrite`] with a rule number for each rewrite, then one
     /// [`Step::Matched`]. Left empty, the router derives what it can from the
     /// result: a rewrite step when the URL changed, and `Matched::Unreported`.
+    /// `impl Resolver for Engine` fills it from the trace (`rule_steps`).
     pub rule_steps: Vec<Step>,
     /// How much of the link the record may keep: the tightest level of the
     /// rules that routed it, as the engine's `Browser::privacy` carries it.
@@ -101,24 +102,39 @@ impl Resolver for Engine {
 }
 
 /// The router's rule steps from the engine's trace: each rewrite that ran,
-/// then what chose the browser. Rule numbers index the config's own lists;
-/// `rules.json` entries, which follow them, are traced without a number
-/// (`Step` cannot say which list a number belongs to).
+/// then what chose the browser, named by the list it came from, so a
+/// record says who decided without comparing browsers:
+///
+/// - a JS config handler is [`Matched::Handler`] and a `rules.json` handler
+///   is [`Matched::Rule`], each by its own place (the engine numbers
+///   `rules.json` rules by file position, disabled ones counted), whichever
+///   order `rules.json`'s `precedence` ran them in;
+/// - a default is [`Matched::Default`] with its owner from the trace step's
+///   source: the config's `defaultBrowser` is [`Owner::Config`], and
+///   `rules.json`'s (no config in charge, or owning everything else under
+///   `"precedence": "pwrroute"`) is [`Owner::PwrRoute`].
+///
+/// A rewrite's rule number is the config's only: [`Step::Rewrite`] cannot
+/// say which list a number belongs to, so a `rules.json` rewrite has none.
 fn rule_steps(trace: &Trace) -> Vec<Step> {
-    let numbered = |s: &TraceStep| (s.source == Source::Config).then_some(s.index);
     let mut steps: Vec<Step> = trace
         .rewrites_applied()
         .filter_map(|s| {
             Some(Step::Rewrite {
-                rule: numbered(s),
+                rule: (s.source == Source::Config).then_some(s.index),
                 url: s.rewritten_to.clone()?,
             })
         })
         .collect();
     let by = match trace.winner() {
-        Some(s) if s.stage == Stage::Default => Matched::Default,
-        Some(s) => numbered(s).map_or(Matched::Unreported, |index| Matched::Handler { index }),
         None => Matched::Unreported,
+        Some(s) => match (s.stage, s.source) {
+            (Stage::Default, source) => Matched::Default {
+                owner: Some(Owner::from(source)),
+            },
+            (_, Source::Config) => Matched::Handler { index: s.index },
+            (_, Source::Rules) => Matched::Rule { index: s.index },
+        },
     };
     steps.push(Step::Matched { by });
     steps
@@ -989,15 +1005,19 @@ impl Worker {
     }
 }
 
-/// The numbered handler the trace says chose the browser, for
-/// [`Step::Paused`]: `None` when the default did, when nothing was in
-/// charge, or when a `rules.json` handler did (the router does not number
-/// those).
+/// The config handler the trace says chose the browser, for
+/// [`Step::Paused`]'s `skipped`, which numbers the config's handlers only
+/// (records journaled before `rules.json` rules were numbered read the
+/// same). `None` when the default chose it, when nothing was in charge, or
+/// when a `rules.json` rule did: that rule is the record's own
+/// [`Matched::Rule`], just before the pause, so a reader names it from
+/// there ("paused · skipped rule 2").
 fn skipped_handler(steps: &[Step]) -> Option<usize> {
     steps.iter().find_map(|step| match step {
-        Step::Matched {
-            by: Matched::Handler { index },
-        } => Some(*index),
+        Step::Matched { by } => match by {
+            Matched::Handler { index } => Some(*index),
+            Matched::Rule { .. } | Matched::Default { .. } | Matched::Unreported => None,
+        },
         _ => None,
     })
 }

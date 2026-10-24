@@ -13,8 +13,9 @@ use std::{
 use anyhow::{Result, bail};
 use pwrroute_engine::{
     AppType, BrowserSpec, ConsoleLine, ConsoleLog, DefaultHost, Engine, Expectation, FixedBrowser,
-    Limits, Link, LogLevel, Matcher, MatcherSpec, Method, NativeHost, Network, Opener, Reply,
-    Rewrite, RewriteAction, RouteTest, Rule, RulesFile, Source, Sources, Stage, UrlSpec,
+    HostnameSpec, Limits, Link, LogLevel, Matcher, MatcherSpec, Method, NativeHost, Network,
+    Opener, Precedence, Privacy, Reply, Rewrite, RewriteAction, RouteTest, Rule, RulesFile, Source,
+    Sources, Stage, TestSource, UrlSpec,
 };
 
 fn configs() -> PathBuf {
@@ -911,4 +912,506 @@ fn a_description_leaves_out_rules_json() {
         .unwrap()
         .unwrap();
     assert_eq!(d.handlers.len(), 2);
+}
+
+// Precedence: `"precedence": "pwrroute"` puts rules.json's handlers before a
+// config's and gives rules.json's default everything else. The Go host never
+// had it; the absent field keeps its order (the tests above and
+// `finicky_compat` hold that).
+
+/// `rules` with `"precedence": "pwrroute"`.
+fn pwrroute(rules: RulesFile) -> RulesFile {
+    RulesFile {
+        precedence: Precedence::PwrRoute,
+        ..rules
+    }
+}
+
+/// A config with example.com handlers and the given `defaultBrowser`
+/// expression, written to a temp file for the caller to load and remove.
+fn precedence_config(name: &str, default_browser: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "pwrroute-features-precedence-{name}-{}.js",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        format!(
+            r#"export default {{
+  defaultBrowser: {default_browser},
+  handlers: [
+    {{ match: "https://both.example.com/*", browser: "Firefox" }},
+    {{ match: "https://config.example.com/*", browser: "Safari" }},
+    {{ match: "https://null.example.com/*", browser: null }},
+  ],
+}};"#
+        ),
+    )
+    .unwrap();
+    path
+}
+
+fn load_with(config: &Path, rules: RulesFile) -> Engine {
+    Engine::from_sources(
+        &Sources {
+            config: Some(config.to_path_buf()),
+            rules,
+        },
+        Rc::new(DefaultHost),
+        Limits::default(),
+    )
+    .unwrap()
+}
+
+/// [`precedence_config`] loaded with `rules`, its file already gone.
+fn precedence_engine(name: &str, default_browser: &str, rules: RulesFile) -> Engine {
+    let path = precedence_config(name, default_browser);
+    let e = load_with(&path, rules);
+    std::fs::remove_file(&path).unwrap();
+    e
+}
+
+/// `default_browser` "Vivaldi" with a rule for both.example.com.
+fn vivaldi_with_both() -> RulesFile {
+    RulesFile {
+        default_browser: "Vivaldi".into(),
+        rules: vec![rule(&["https://both.example.com/*"], "Arc")],
+        ..RulesFile::default()
+    }
+}
+
+fn winner_of(trace: &pwrroute_engine::Trace) -> (Stage, Source, usize) {
+    let w = trace.winner().expect("a winner");
+    (w.stage, w.source, w.index)
+}
+
+#[test]
+fn pwrroute_precedence_runs_rules_json_handlers_before_the_configs() {
+    let link = Link::new("https://both.example.com/x");
+    // The Go order: the config's handler matches first.
+    let go = precedence_engine("go-order", "\"Safari\"", vivaldi_with_both());
+    let trace = go.trace(&link, None).unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Config, 0));
+    assert_eq!(trace.resolution.browser.name, "Firefox");
+
+    // PwrRoute first: rules.json's rule is the first step and wins.
+    let first = precedence_engine("rules-first", "\"Safari\"", pwrroute(vivaldi_with_both()));
+    let trace = first.trace(&link, None).unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Rules, 0));
+    assert_eq!(
+        (trace.steps[0].source, trace.steps.len()),
+        (Source::Rules, 1),
+        "{:?}",
+        trace.steps
+    );
+    assert_eq!(trace.resolution.browser.name, "Arc");
+}
+
+#[test]
+fn pwrroute_default_takes_everything_else() {
+    let rules = pwrroute(RulesFile {
+        default_browser: "Vivaldi".into(),
+        default_profile: "Work".into(),
+        ..RulesFile::default()
+    });
+    let e = engine(Some("legacy-commonjs.js"), rules);
+    let trace = e
+        .trace(&Link::new("https://unmatched.example/"), None)
+        .unwrap();
+    let last = trace.steps.last().unwrap();
+    assert_eq!(
+        (last.stage, last.source, last.won),
+        (Stage::Default, Source::Rules, true)
+    );
+    // The config's handlers ran first, and none matched.
+    let before: Vec<_> = trace.steps[..trace.steps.len() - 1]
+        .iter()
+        .map(|s| (s.stage, s.source, s.index, s.matched))
+        .collect();
+    assert_eq!(
+        before,
+        [
+            (Stage::Handler, Source::Config, 0, false),
+            (Stage::Handler, Source::Config, 1, false)
+        ]
+    );
+    let browser = &trace.resolution.browser;
+    assert_eq!(
+        (browser.name.as_str(), browser.profile.as_str()),
+        ("Vivaldi", "Work")
+    );
+    // The config still describes its own default; the window marks it as
+    // not used.
+    let described = e.describe().unwrap().unwrap();
+    assert_eq!(
+        described.default_browser,
+        fixed("Safari", AppType::AppName, "")
+    );
+}
+
+#[test]
+fn a_match_hostnames_function_is_described_by_its_list() {
+    let path = std::env::temp_dir().join(format!(
+        "pwrroute-features-hostnames-{}.js",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        r#"export default {
+  defaultBrowser: "Safari",
+  handlers: [
+    { match: finicky.matchHostnames(["tickets.example.com", /^docs\.example\.org$/]), browser: "Firefox" },
+    { match: finicky.matchDomains("old.example.net"), browser: "Firefox" },
+    { match: (url) => url.host === "plain.example.com", browser: "Firefox" },
+  ],
+};"#,
+    )
+    .unwrap();
+    let e = load_with(&path, RulesFile::default());
+    std::fs::remove_file(&path).unwrap();
+    let d = e.describe().unwrap().unwrap();
+    let hostnames = |i: usize| match &d.handlers[i].matchers[0] {
+        MatcherSpec::Function(function) => function.hostnames.clone(),
+        other => panic!("a function matcher: {other:?}"),
+    };
+    assert_eq!(
+        hostnames(0),
+        Some(vec![
+            HostnameSpec::Hostname("tickets.example.com".into()),
+            HostnameSpec::Regex("/^docs\\.example\\.org$/".into()),
+        ])
+    );
+    assert_eq!(
+        hostnames(1),
+        Some(vec![HostnameSpec::Hostname("old.example.net".into())])
+    );
+    assert_eq!(hostnames(2), None);
+    // Matching is the API's own: the wrapper hands back its function.
+    let browser = |url: &str| e.resolve(url, None).unwrap().browser.name;
+    assert_eq!(browser("https://tickets.example.com/a"), "Firefox");
+    assert_eq!(browser("https://docs.example.org/b"), "Firefox");
+    assert_eq!(browser("https://old.example.net/"), "Firefox");
+    assert_eq!(browser("https://sub.tickets.example.com/"), "Safari");
+}
+
+#[test]
+fn a_config_handler_hit_still_wins_under_pwrroute() {
+    let e = precedence_engine("config-hit", "\"Safari\"", pwrroute(vivaldi_with_both()));
+    // Its browser is the config's default, and Finicky still decided.
+    let trace = e
+        .trace(&Link::new("https://config.example.com/a"), None)
+        .unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Config, 1));
+    assert_eq!(trace.resolution.browser.name, "Safari");
+    // `browser: null` is a decision too: not opened.
+    let trace = e
+        .trace(&Link::new("https://null.example.com/a"), None)
+        .unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Config, 2));
+    assert_eq!(trace.resolution.browser.app_type, AppType::None);
+}
+
+#[test]
+fn a_config_matcher_that_throws_ends_at_pwrroutes_default() {
+    let rules = pwrroute(RulesFile {
+        default_browser: "Vivaldi".into(),
+        ..RulesFile::default()
+    });
+    let trace = engine(Some("functions.js"), rules)
+        .trace(&Link::new("https://handler-boom.example/"), None)
+        .unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Default, Source::Rules, 0));
+    assert_eq!(trace.resolution.browser.name, "Vivaldi");
+    assert_eq!(
+        trace.resolution.error.as_deref(),
+        Some("handler matcher threw")
+    );
+}
+
+#[test]
+fn a_config_handler_whose_browser_fails_ends_at_pwrroutes_default() {
+    let rules = pwrroute(RulesFile {
+        default_browser: "Vivaldi".into(),
+        ..RulesFile::default()
+    });
+    let trace = engine(Some("functions.js"), rules)
+        .trace(&Link::new("https://undefined.example/"), None)
+        .unwrap();
+    let winners: Vec<_> = trace.steps.iter().filter(|s| s.won).collect();
+    assert_eq!(winners.len(), 1, "{:?}", trace.steps);
+    assert_eq!(
+        (winners[0].stage, winners[0].source),
+        (Stage::Default, Source::Rules)
+    );
+    assert_eq!(trace.resolution.browser.name, "Vivaldi");
+    let failed = trace
+        .steps
+        .iter()
+        .find(|s| s.stage == Stage::Handler && s.matched)
+        .unwrap();
+    assert_eq!((failed.source, failed.index), (Source::Config, 4));
+    assert_eq!(failed.error, trace.resolution.error);
+}
+
+#[test]
+fn an_empty_or_self_rules_json_default_keeps_the_configs() {
+    for default_browser in ["", "  ", "PwrRoute", "com.pwrdrvr.pwrroute"] {
+        let rules = pwrroute(RulesFile {
+            default_browser: default_browser.into(),
+            ..RulesFile::default()
+        });
+        assert!(!rules.owns_default(), "{default_browser:?}");
+        let trace = engine(Some("legacy-commonjs.js"), rules.clone())
+            .trace(&Link::new("https://unmatched.example/"), None)
+            .unwrap();
+        assert_eq!(
+            winner_of(&trace),
+            (Stage::Default, Source::Config, 0),
+            "{default_browser:?}"
+        );
+        assert_eq!(trace.resolution.browser.name, "Safari");
+        assert!(
+            !rules.problems().is_empty(),
+            "the editor flags {default_browser:?}"
+        );
+    }
+    let empty = pwrroute(RulesFile::default());
+    assert_eq!(
+        empty.problems()[0].message,
+        "Pick a default browser for PwrRoute to take everything else."
+    );
+}
+
+#[test]
+fn rewrites_still_run_the_configs_first_under_pwrroute() {
+    // stress.ts upgrades http to https; rules.json's rewrite sees the
+    // upgraded URL, and its handler then runs before the config's.
+    let rules = pwrroute(RulesFile {
+        default_browser: "Vivaldi".into(),
+        rewrites: vec![rewrite(
+            &["https://example.com/*"],
+            vec![RewriteAction::ReplacePath("/after-config".into())],
+        )],
+        rules: vec![rule(&["https://example.com/after-config"], "Arc")],
+        ..RulesFile::default()
+    });
+    let trace = engine(Some("stress.ts"), rules)
+        .trace(&Link::new("http://example.com/insecure"), None)
+        .unwrap();
+    let order: Vec<_> = trace.steps.iter().map(|s| (s.stage, s.source)).collect();
+    let rewrites = order.iter().filter(|(s, _)| *s == Stage::Rewrite).count();
+    assert_eq!(rewrites, 6, "every rewrite runs: {order:?}");
+    assert_eq!(order[4], (Stage::Rewrite, Source::Config));
+    assert_eq!(order[5], (Stage::Rewrite, Source::Rules));
+    assert_eq!(order[6], (Stage::Handler, Source::Rules));
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Rules, 0));
+    assert_eq!(
+        trace.resolution.browser.url,
+        "https://example.com/after-config"
+    );
+    assert_eq!(trace.resolution.browser.name, "Arc");
+}
+
+#[test]
+fn a_trace_under_pwrroute_numbers_each_list_by_its_own_places() {
+    let rules = pwrroute(RulesFile {
+        default_browser: "Vivaldi".into(),
+        rules: vec![
+            rule(&["https://a.example.com/*"], "Firefox"),
+            Rule {
+                enabled: false,
+                ..rule(&["*"], "Safari")
+            },
+            rule(&["https://b.example.com/*"], "Arc"),
+        ],
+        ..RulesFile::default()
+    });
+    let e = engine(Some("legacy-commonjs.js"), rules);
+    let trace = e.trace(&Link::new("https://c.example.com/"), None).unwrap();
+    let steps: Vec<_> = trace
+        .steps
+        .iter()
+        .map(|s| (s.stage, s.source, s.index))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (Stage::Handler, Source::Rules, 0),
+            (Stage::Handler, Source::Rules, 2),
+            (Stage::Handler, Source::Config, 0),
+            (Stage::Handler, Source::Config, 1),
+            (Stage::Default, Source::Rules, 0),
+        ]
+    );
+    // Each step describes its own matchers.
+    assert_eq!(
+        trace.steps[1].matchers,
+        [Matcher::Wildcard("https://b.example.com/*".into())]
+    );
+    assert_eq!(
+        trace.steps[3].matchers,
+        [Matcher::Regex("/linear\\.app/".into())]
+    );
+    let trace = e
+        .trace(&Link::new("https://b.example.com/x"), None)
+        .unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Rules, 2));
+}
+
+#[test]
+fn a_null_config_default_is_replaced_and_a_function_default_never_runs() {
+    let unmatched = Link::new("https://unmatched.example.com/");
+    let rules = || RulesFile {
+        default_browser: "Vivaldi".into(),
+        ..RulesFile::default()
+    };
+    // `null`: unmatched links stayed unopened; PwrRoute's default opens them.
+    let go = precedence_engine("null-go", "null", rules());
+    assert_eq!(
+        go.resolve_link(&unmatched, None).unwrap().browser.app_type,
+        AppType::None
+    );
+    let owned = precedence_engine("null-owned", "null", pwrroute(rules()));
+    let r = owned.resolve_link(&unmatched, None).unwrap();
+    assert_eq!(
+        (r.browser.name.as_str(), r.browser.app_type),
+        ("Vivaldi", AppType::AppName)
+    );
+
+    // A function default prints when it runs; replaced, it never does.
+    let function = r#"(url) => { console.log("default ran"); return "Safari"; }"#;
+    let go = precedence_engine("fn-go", function, rules());
+    let trace = go.trace(&unmatched, None).unwrap();
+    assert_eq!(trace.resolution.browser.name, "Safari");
+    assert_eq!(trace.console.len(), 1, "{:?}", trace.console);
+    let owned = precedence_engine("fn-owned", function, pwrroute(rules()));
+    let trace = owned.trace(&unmatched, None).unwrap();
+    assert_eq!(trace.resolution.browser.name, "Vivaldi");
+    assert!(trace.console.is_empty(), "{:?}", trace.console);
+    assert_eq!(winner_of(&trace), (Stage::Default, Source::Rules, 0));
+}
+
+#[test]
+fn the_plain_run_decides_as_the_traced_one_under_pwrroute() {
+    let rules = pwrroute(RulesFile {
+        default_browser: "Vivaldi".into(),
+        default_profile: "Work".into(),
+        ..vivaldi_with_both()
+    });
+    let e = precedence_engine("plain", "\"Safari\"", rules);
+    for url in [
+        "https://both.example.com/x",
+        "https://config.example.com/x",
+        "https://null.example.com/x",
+        "https://unmatched.example.com/x",
+    ] {
+        let link = Link::new(url);
+        let plain = e.resolve_plain(&link, None).unwrap();
+        let traced = e.resolve_link(&link, None).unwrap();
+        let identity = |r: &pwrroute_engine::Resolution| {
+            let b = &r.browser;
+            (
+                b.name.clone(),
+                b.app_type,
+                b.profile.clone(),
+                b.url.clone(),
+                r.error.clone(),
+            )
+        };
+        assert_eq!(identity(&plain), identity(&traced), "{url}");
+    }
+}
+
+#[test]
+fn privacy_comes_from_a_winning_rule_and_pwrroutes_default_keeps_everything() {
+    let rules = pwrroute(RulesFile {
+        default_browser: "Vivaldi".into(),
+        rules: vec![Rule {
+            private: true,
+            privacy: Some(Privacy::Host.into()),
+            ..rule(&["https://both.example.com/*"], "Arc")
+        }],
+        ..RulesFile::default()
+    });
+    let e = precedence_engine("privacy", "\"Safari\"", rules);
+    let private = e.resolve("https://both.example.com/x", None).unwrap();
+    assert_eq!(
+        (private.browser.privacy, private.browser.private),
+        (Privacy::Host, true)
+    );
+    let default = e.resolve("https://unmatched.example.com/", None).unwrap();
+    assert_eq!(default.browser.name, "Vivaldi");
+    assert_eq!(
+        (default.browser.privacy, default.browser.private),
+        (Privacy::Full, false)
+    );
+}
+
+#[test]
+fn a_proposal_is_tested_under_its_own_precedence() {
+    let expects = |browser: &str| RouteTest {
+        url: "https://both.example.com/x".into(),
+        opener: None,
+        expect: Expectation {
+            browser: browser.into(),
+            ..Expectation::default()
+        },
+    };
+    let unmatched = |browser: &str| RouteTest {
+        url: "https://unmatched.example.com/".into(),
+        ..expects(browser)
+    };
+    let saved = RulesFile {
+        tests: vec![expects("Firefox"), unmatched("Safari")],
+        ..vivaldi_with_both()
+    };
+    // A proposal loads the config again: the file stays until the end.
+    let config = precedence_config("proposal", "\"Safari\"");
+    let e = load_with(&config, saved.clone());
+    let report = e.test_rules(None).unwrap();
+    assert!(report.is_ok(), "{report:?}");
+
+    // The same tests under the proposal's precedence: both fail, each to
+    // its new owner.
+    let flipped = pwrroute(saved.clone());
+    let report = e.test_rules(Some(&flipped)).unwrap();
+    assert_eq!((report.total, report.passed), (2, 0), "{report:?}");
+    let actual: Vec<&str> = report.failures.iter().map(|f| f.actual.as_str()).collect();
+    assert_eq!(
+        actual,
+        [
+            "Arc with https://both.example.com/x",
+            "Vivaldi with https://unmatched.example.com/"
+        ]
+    );
+    // A rule's example says whose handler took it instead.
+    let example = RulesFile {
+        rules: vec![Rule {
+            examples: vec!["https://both.example.com/x".into()],
+            ..rule(&["https://both.example.com/*"], "Arc")
+        }],
+        ..saved.clone()
+    };
+    let report = e.test_rules(Some(&example)).unwrap();
+    assert_eq!(
+        report.failures[0].actual,
+        "the config's handler 1: Firefox with https://both.example.com/x"
+    );
+    // Rules first, the example is the rule's own (only the two tests fail).
+    let report = e.test_rules(Some(&pwrroute(example))).unwrap();
+    assert_eq!((report.total, report.passed), (3, 1), "{report:?}");
+    assert!(
+        report
+            .failures
+            .iter()
+            .all(|f| !matches!(f.source, TestSource::RuleExample { .. })),
+        "{report:?}"
+    );
+    // A proposal whose tests expect the new owners passes.
+    let moved = pwrroute(RulesFile {
+        tests: vec![expects("Arc"), unmatched("Vivaldi")],
+        ..saved
+    });
+    assert!(e.test_rules(Some(&moved)).unwrap().is_ok());
+    std::fs::remove_file(&config).unwrap();
 }

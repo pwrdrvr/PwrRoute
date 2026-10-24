@@ -7,6 +7,12 @@ var __pwrroute = (function (api) {
   var finalConfig = null; // what the config (or rules.json alone) produced
   var json = { handlers: [], rewrite: [] }; // rules.json, as Finicky objects
   var jsonOnly = false;
+  // With a JS config in charge and "precedence": "pwrroute": rules.json's
+  // handlers run before the config's, and, when rules.json names a usable
+  // default (`ownDefault`), it takes everything else instead of the
+  // config's defaultBrowser. Rewrites keep the config's first either way.
+  var rulesFirst = false;
+  var ownDefault = null; // { browser: spec } when rules.json owns the default
   var described = { handlers: [], rewrite: [] }; // matchers of the JSON rules
 
   function sameApp(names, opener) {
@@ -91,7 +97,38 @@ var __pwrroute = (function (api) {
       text = null;
     }
     if (text !== null && /\{\s*\[native code\]\s*\}\s*$/.test(text)) text = null;
-    return { name: fn.name || "", source: text };
+    var described = { name: fn.name || "", source: text };
+    var hostnames = describeHostnames(fn);
+    if (hostnames) described.hostnames = hostnames;
+    return described;
+  }
+
+  // finicky.matchHostnames (and the deprecated matchDomains, which calls
+  // it) returns a function whose source is the API's, not the list it was
+  // given. The wrappers remember each list by the function the API
+  // returned, unchanged, so describe() can show the hostnames.
+  var hostnameLists = typeof WeakMap === "function" ? new WeakMap() : null;
+
+  function rememberHostnames(finicky) {
+    if (!hostnameLists || !finicky) return;
+    ["matchHostnames", "matchDomains"].forEach(function (key) {
+      var original = finicky[key];
+      if (typeof original !== "function") return;
+      finicky[key] = function (matchers) {
+        var fn = original.apply(this, arguments);
+        if (typeof fn === "function") hostnameLists.set(fn, [].concat(matchers));
+        return fn;
+      };
+    });
+  }
+
+  function describeHostnames(fn) {
+    var list = hostnameLists && hostnameLists.get(fn);
+    if (!list) return null;
+    return list.map(function (entry) {
+      if (entry instanceof RegExp) return { regex: String(entry) };
+      return { hostname: String(entry) };
+    });
   }
 
   function describeMatcher(match) {
@@ -142,13 +179,18 @@ var __pwrroute = (function (api) {
   }
 
   // The config openUrl sees. With a JS config, rules.json's handlers come
-  // after the config's own, exactly as the Go host's resolver appended them.
+  // after the config's own, exactly as the Go host's resolver appended them,
+  // or before them under rulesFirst; rules.json's default replaces the
+  // config's (fixed, null or a function) when it owns it. Rewrites always
+  // run the config's first.
   function config() {
     if (jsonOnly) return finalConfig;
+    var own = finalConfig.handlers || [];
     var extra = {
-      handlers: (finalConfig.handlers || []).concat(json.handlers),
+      handlers: rulesFirst ? json.handlers.concat(own) : own.concat(json.handlers),
     };
     if (json.rewrite.length) extra.rewrite = (finalConfig.rewrite || []).concat(json.rewrite);
+    if (ownDefault) extra.defaultBrowser = ownDefault.browser;
     return Object.assign({}, finalConfig, extra);
   }
 
@@ -172,7 +214,14 @@ var __pwrroute = (function (api) {
           handlers: (finalConfig.handlers || []).length,
         };
 
+    // Which list an entry of the merged config came from, and its place
+    // there. Under rulesFirst rules.json's handlers lead.
     function origin(kind, index) {
+      if (kind === "handlers" && rulesFirst) {
+        var lead = json.handlers.length;
+        if (index < lead) return { source: "rules", index: index };
+        return { source: "config", index: index - lead };
+      }
       if (index < counts[kind]) return { source: "config", index: index };
       return { source: "rules", index: index - counts[kind] };
     }
@@ -261,7 +310,8 @@ var __pwrroute = (function (api) {
     traced.defaultBrowser = wrapBrowser(cfg.defaultBrowser, function (url) {
       steps.push({
         stage: "default",
-        source: jsonOnly ? "rules" : "config",
+        // rules.json's default when it is the whole config or owns it.
+        source: jsonOnly || ownDefault ? "rules" : "config",
         index: 0,
         matchers: [],
         url: url.href,
@@ -338,7 +388,7 @@ var __pwrroute = (function (api) {
 
   return {
     // Called once at load. `rules` is RulesFile::plan(); `base` is set when
-    // rules.json is the whole config.
+    // rules.json is the whole config, and then its precedence is moot.
     setup: function (rules, base) {
       json = {
         handlers: rules.handlers.map(handler),
@@ -357,6 +407,9 @@ var __pwrroute = (function (api) {
         base.handlers = json.handlers;
         if (json.rewrite.length) base.rewrite = json.rewrite;
         self.finickyConfig = { default: base };
+      } else {
+        rulesFirst = !!rules.rulesFirst;
+        if (rules.defaultBrowser !== undefined) ownDefault = { browser: rules.defaultBrowser };
       }
     },
     // Called once finalConfig exists.
@@ -366,6 +419,7 @@ var __pwrroute = (function (api) {
     config: config,
     trace: trace,
     describe: description,
+    rememberHostnames: rememberHostnames,
     matches: matches,
     probe: probe,
     // `options.urlShorteners` as the config set it: null when it did not,

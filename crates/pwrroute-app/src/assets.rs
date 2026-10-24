@@ -47,6 +47,22 @@ const ICONS: &[(&str, &[u8])] = &[
         "pwrroute/grip.svg",
         include_bytes!("../assets/icons/grip.svg"),
     ),
+    (
+        "pwrroute/map.svg",
+        include_bytes!("../assets/icons/map.svg"),
+    ),
+    (
+        "pwrroute/wand.svg",
+        include_bytes!("../assets/icons/wand.svg"),
+    ),
+    (
+        "pwrroute/pause.svg",
+        include_bytes!("../assets/icons/pause.svg"),
+    ),
+    (
+        "pwrroute/alert.svg",
+        include_bytes!("../assets/icons/alert.svg"),
+    ),
 ];
 
 const FONTS: &[&[u8]] = &[

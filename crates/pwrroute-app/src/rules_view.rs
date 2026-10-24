@@ -10,19 +10,20 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Context, Div, ElementId, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div, px, svg,
+    App, Context, Div, ElementId, Global, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    deferred, div, px, svg,
 };
 use pwrroute_engine::{Source, Stage, Step, TestFailure, TestSource, discovery};
 
 use crate::app::{PwrRoute, Selection};
 use crate::config_view::display_path;
 use crate::rules_model::{Destination, Matcher, RowBadge, Rule};
-use crate::rules_store::clock;
+use crate::rules_store::{RulesStore, clock};
 use crate::theme::{self, mono, text, tracked};
 use crate::widgets::{
     ButtonKind, Tone, action_tag, add_button, app_tag, badge, badge_for, button, chip, fn_tag,
-    one_line, paragraph, regex_tag, tag, toned_chip,
+    menu_card, menu_row, one_line, paragraph, profiles_hint, regex_tag, tag, toned_chip,
 };
 
 /// Widths of a row's fixed columns. The design lays rows out as the grid
@@ -71,12 +72,12 @@ pub(crate) fn example_mark(passed: Option<bool>) -> Div {
         .child(mono(label, 8.0, 700.0, color))
 }
 
-/// A winning step as the strip and the chips name it: "handler 2",
-/// "config handler 1", "the default".
+/// A winning step as the strip and the chips name it, in Activity's words:
+/// "rule 2" (`rules.json`'s), "config handler 1", "the default".
 pub(crate) fn winner_label(step: &Step) -> String {
     match (step.stage, step.source) {
         (Stage::Default, _) => "the default".into(),
-        (Stage::Handler, Source::Rules) => format!("handler {}", step.index + 1),
+        (Stage::Handler, Source::Rules) => format!("rule {}", step.index + 1),
         (Stage::Handler, Source::Config) => format!("config handler {}", step.index + 1),
         (Stage::Rewrite, Source::Rules) => format!("rewrite {}", step.index + 1),
         (Stage::Rewrite, Source::Config) => format!("config rewrite {}", step.index + 1),
@@ -263,6 +264,11 @@ pub(crate) struct RowState {
     pub last: bool,
     /// `.rr.ro`: a Finicky config's row, which cannot be moved or edited.
     pub read_only: bool,
+    /// `.rr.ovr`'s destination: struck through in subtle text, for a
+    /// config's `defaultBrowser` that PwrRoute's default overrides.
+    pub struck: bool,
+    /// `.rr.ee`: the Everything else row, its ∞ in the accent.
+    pub everything_else: bool,
 }
 
 /// `.rr`: grip, index, matchers, arrow, destination, hits, menu.
@@ -350,17 +356,24 @@ pub(crate) fn rule_row(
                     )
                 })))
         })
-        .child(dim(div().w(px(column::INDEX)).flex_none().child(mono(
-            index.to_owned(),
-            10.5,
-            600.0,
-            // `.rr.bad .idx`
-            if not_saved {
-                theme::danger_text()
+        .child(dim(div().w(px(column::INDEX)).flex_none().child(
+            if state.everything_else {
+                // `.rr.ee .idx`
+                mono(index.to_owned(), 13.0, 600.0, theme::accent_bright())
             } else {
-                theme::text_subtle()
+                mono(
+                    index.to_owned(),
+                    10.5,
+                    600.0,
+                    // `.rr.bad .idx`
+                    if not_saved {
+                        theme::danger_text()
+                    } else {
+                        theme::text_subtle()
+                    },
+                )
             },
-        ))))
+        )))
         .child(dim(matchers))
         .child(dim(div().w(px(column::ARROW)).flex_none().child(mono(
             "\u{2192}",
@@ -372,6 +385,8 @@ pub(crate) fn rule_row(
             .w(px(destination_width))
             .flex_none()
             .min_w_0()
+            // `.rr .strike`: subtle is the primary text at 54%.
+            .when(state.struck, |cell| cell.line_through().opacity(0.54))
             .child(destination(&rule.destination))))
         .when(!state.read_only, |row| {
             // `.hits`, or `.badge` for a rule whose edit is not saved.
@@ -459,8 +474,33 @@ pub(crate) fn chip_in(label: impl Into<SharedString>, tone: ChipTone) -> Div {
         .text_color(foreground)
 }
 
-/// The count chip of a card: "7 handlers · 1 off · 1 draft", or in red
-/// when an edit is not saved.
+/// The rules list's hits column: today's links for each `rules.json`
+/// rule, from the feed. After a failed reload the router numbers rules as
+/// they last loaded, so there is no count to trust then.
+pub fn todays_hits(app: &PwrRoute, cx: &App) -> Vec<SharedString> {
+    let stale = matches!(
+        crate::overview::status(app, cx).config_error,
+        Some(crate::overview_model::ConfigTrouble::ReloadFailed(_))
+    );
+    let tally = crate::activity::feed(cx)
+        .filter(|_| !stale)
+        .map(|feed| feed.read(cx).tally(std::time::SystemTime::now()));
+    app.handlers
+        .iter()
+        .enumerate()
+        .map(|(index, handler)| {
+            crate::rules_model::hits_label(
+                handler.rule.badge,
+                tally
+                    .as_ref()
+                    .map(|tally| tally.rule(crate::activity::HitKey::Rule(index))),
+            )
+        })
+        .collect()
+}
+
+/// The count chip of a card: "7 rules · 1 off · 1 draft", or in red
+/// when an edit is not saved. `noun` is singular.
 fn count_chip(rules: &[&Rule], noun: &str) -> Div {
     let off = rules.iter().filter(|r| !r.enabled).count();
     let drafts = rules.iter().filter(|r| r.badge == RowBadge::Draft).count();
@@ -471,7 +511,7 @@ fn count_chip(rules: &[&Rule], noun: &str) -> Div {
     if not_saved > 0 {
         return chip_in(format!("{not_saved} not saved"), ChipTone::Bad);
     }
-    let mut parts = vec![format!("{} {noun}", rules.len())];
+    let mut parts = vec![crate::overview_model::plural(rules.len(), noun)];
     if off > 0 {
         parts.push(format!("{off} off"));
     }
@@ -517,23 +557,32 @@ fn pane_heading_with(eyebrow: &str, title: &'static str, help: Option<String>) -
         })
 }
 
+/// Where Everything else goes as the screens say it: "Google Chrome ·
+/// Personal", or the browser alone when the file names no profile. A
+/// bundle id (first run writes one on macOS) is shown by its app's name.
+pub(crate) fn everything_else_name(store: &RulesStore) -> String {
+    let (_, name) = store.default_browser();
+    let name = crate::default_browser::browser_name(&name);
+    match store.everything_else().destination {
+        Destination::Browser {
+            profile: Some(profile),
+            ..
+        } => format!("{name} \u{00b7} {profile}"),
+        _ => name.to_string(),
+    }
+}
+
 /// `.pane-head`: what this screen is, and the add buttons. With no rules
 /// the help says where every link goes instead.
 fn heading(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
     let help = if app.store.is_empty() {
-        let (_, name) = app.store.default_browser();
-        let profile = app.store.everything_else();
-        let target = match profile.destination {
-            Destination::Browser {
-                profile: Some(profile),
-                ..
-            } => format!("{name} \u{00b7} {profile}"),
-            _ => name.to_string(),
-        };
-        format!("Every link opens in {target} until a rule says otherwise.")
+        format!(
+            "Every link opens in {} until a rule says otherwise.",
+            everything_else_name(&app.store)
+        )
     } else {
-        "Rewrites run in order and every match applies. Then the first matching handler \
-         opens the link. Anything left goes to the default."
+        "Rewrites run in order and every match applies. Then the first matching rule \
+         opens the link. Anything left goes to Everything else."
             .into()
     };
     div()
@@ -553,7 +602,7 @@ fn heading(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                         .on_click(cx.listener(|this, _, window, cx| this.add_rewrite(window, cx))),
                 )
                 .child(
-                    add_button("Add handler", true)
+                    add_button("Add rule", true)
                         .id("add-handler")
                         .debug_selector(|| "add-handler".into())
                         .on_click(cx.listener(|this, _, window, cx| this.add_handler(window, cx))),
@@ -619,7 +668,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
     let rewrites = card().child(card_header_with(
         "Step 1 \u{00b7} run in order \u{00b7} every match applies",
         "Rewrites",
-        count_chip(&rewrite_rules, "rewrites"),
+        count_chip(&rewrite_rules, "rewrite"),
     ));
     let rewrites = if app.rewrites.is_empty() {
         rewrites.child(empty_card(
@@ -649,7 +698,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                     selected: app.selection == Some(Selection::Rewrite(index)),
                     // The examples row carries the border when there is one.
                     last: last || examples.is_some(),
-                    read_only: false,
+                    ..RowState::default()
                 };
                 card.child(
                     rule_row(
@@ -672,13 +721,13 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
     let handler_rules: Vec<&Rule> = app.handlers.iter().map(|h| &h.rule).collect();
     let handlers = card().child(card_header_with(
         "Step 2 \u{00b7} first match wins",
-        "Handlers",
-        count_chip(&handler_rules, "handlers"),
+        "Rules",
+        count_chip(&handler_rules, "rule"),
     ));
     let handlers = if app.handlers.is_empty() {
         handlers.child(empty_card(
-            "No handlers",
-            "A handler sends matching links to a browser, a profile or an app. The first one \
+            "No rules",
+            "A rule sends matching links to a browser, a profile or an app. The first one \
              that matches wins, so specific rules go above general ones.",
             div()
                 .flex()
@@ -693,28 +742,33 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                     500.0,
                     theme::text_secondary(),
                 )),
-            button("Add handler", ButtonKind::Primary, true)
+            button("Add rule", ButtonKind::Primary, true)
                 .id("empty-add-handler")
                 .debug_selector(|| "empty-add-handler".into())
                 .on_click(cx.listener(|this, _, window, cx| this.add_handler(window, cx))),
         ))
     } else {
+        let hits = todays_hits(app, cx);
         app.handlers
             .iter()
             .enumerate()
             .fold(handlers, |card, (index, handler)| {
+                let mut rule = handler.rule.clone();
+                if let Some(hits) = hits.get(index) {
+                    rule.hits = hits.clone();
+                }
                 let last = index + 1 == app.handlers.len();
                 let examples = examples_row(app, Selection::Handler(index), last);
                 let state = RowState {
                     selected: app.selection == Some(Selection::Handler(index)),
                     last: last || examples.is_some(),
-                    read_only: false,
+                    ..RowState::default()
                 };
                 card.child(
                     rule_row(
                         ElementId::named_usize("handler", index),
                         &format!("{:02}", index + 1),
-                        &handler.rule,
+                        &rule,
                         state,
                         None,
                     )
@@ -739,7 +793,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                 .iter()
                 .enumerate()
                 .filter(|(_, h)| h.rule.badge == RowBadge::NotSaved)
-                .map(|(i, _)| format!("Handler {}", i + 1)),
+                .map(|(i, _)| format!("Rule {}", i + 1)),
         )
         .collect();
     let handlers = handlers.when(!not_saved.is_empty(), |card| {
@@ -773,11 +827,11 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
         .child(handlers)
 }
 
-/// What a failure's input is an example or test of: "example of handler 3",
+/// What a failure's input is an example or test of: "example of rule 3",
 /// "test 2", "example of rewrite 1".
 fn source_label(source: TestSource) -> String {
     match source {
-        TestSource::RuleExample { rule, .. } => format!("example of handler {}", rule + 1),
+        TestSource::RuleExample { rule, .. } => format!("example of rule {}", rule + 1),
         TestSource::RewriteExample { rewrite, .. } => format!("example of rewrite {}", rewrite + 1),
         TestSource::Test { test } => format!("test {}", test + 1),
     }
@@ -835,7 +889,7 @@ fn failure_row(index: usize, failure: &TestFailure, cx: &mut Context<'_, PwrRout
                 ))
             })
         }
-        None => value("no handler".into()),
+        None => value("no rule".into()),
     };
     let edit = failure
         .winner
@@ -844,7 +898,7 @@ fn failure_row(index: usize, failure: &TestFailure, cx: &mut Context<'_, PwrRout
         .map(|step| {
             let handler = step.index;
             button(
-                format!("Edit handler {}", handler + 1),
+                format!("Edit rule {}", handler + 1),
                 ButtonKind::Default,
                 true,
             )
@@ -1179,12 +1233,120 @@ impl PwrRoute {
     }
 }
 
+/// The blank state's "Open Settings › Configuration".
+pub const BLANK_SETTINGS_ID: &str = "blank-open-configuration";
+/// The blank state's "Choose browser…".
+pub const BLANK_BROWSER_ID: &str = "blank-choose-browser";
+
+/// Whether the blank state's browser list is open. The window keeps no
+/// field for a screen it shows only until the first file exists, so the
+/// app keeps it. `was_open` is the list's state when the mouse went down:
+/// a press outside the list closes it first, and the button's click that
+/// follows must not open it again.
+#[derive(Default)]
+struct BlankPicker {
+    open: bool,
+    was_open: bool,
+}
+
+impl Global for BlankPicker {}
+
+fn picker_open(cx: &App) -> bool {
+    cx.try_global::<BlankPicker>()
+        .is_some_and(|picker| picker.open)
+}
+
+fn set_picker_open(open: bool, cx: &mut App) {
+    cx.default_global::<BlankPicker>().open = open;
+}
+
+impl PwrRoute {
+    /// The blank state's browser list: `rules.json` gets `browser` as its
+    /// default browser (its own default profile) and is written at once,
+    /// so the screen turns to the empty cards.
+    pub fn choose_everything_else(&mut self, browser: &str, cx: &mut Context<'_, Self>) {
+        set_picker_open(false, cx);
+        let mut file = self.store.edited();
+        file.default_browser = browser.to_owned();
+        file.default_profile = String::new();
+        self.store.replace_all(file);
+        self.refresh(cx);
+        self.save_now(cx);
+    }
+}
+
+/// "Choose browser…" and the list it opens: the scanned browsers, less
+/// the hidden ones (`PwrRoute::browsers`), each with its profiles as the
+/// hint (design: Popovers and Overflow 1a).
+fn browser_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let open = picker_open(cx);
+    let menu = app.browsers.iter().enumerate().fold(
+        menu_card("blank-browser-menu")
+            .absolute()
+            .top(px(34.0))
+            .right_0()
+            .w(px(260.0))
+            .on_mouse_down_out(cx.listener(|_, _, _, cx| {
+                set_picker_open(false, cx);
+                cx.notify();
+            })),
+        |menu, (index, choice)| {
+            let name = choice.name.clone();
+            menu.child(
+                menu_row(
+                    ElementId::named_usize("blank-browser", index),
+                    Some(badge_for(&choice.name)),
+                    choice.name.clone(),
+                    profiles_hint(&choice.profiles).map(SharedString::from),
+                )
+                .debug_selector(move || format!("blank-browser-{index}"))
+                .hover(|row| row.bg(theme::bg_hover()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.choose_everything_else(&name, cx);
+                })),
+            )
+        },
+    );
+    let menu = if app.browsers.is_empty() {
+        menu.child(div().px(px(8.0)).py(px(6.0)).child(paragraph(
+            "No browsers found. Settings \u{203a} Browsers can look again.",
+            11.0,
+            16.0,
+            theme::text_muted(),
+        )))
+    } else {
+        menu
+    };
+    div()
+        .relative()
+        .flex_none()
+        .child(
+            button("Choose browser\u{2026}", ButtonKind::Primary, true)
+                .id(BLANK_BROWSER_ID)
+                .debug_selector(|| BLANK_BROWSER_ID.into())
+                // Capture runs in paint order: before the deferred list's
+                // press-outside handler closes it.
+                .capture_any_mouse_down(|_, _, cx| {
+                    let open = picker_open(cx);
+                    cx.default_global::<BlankPicker>().was_open = open;
+                })
+                .on_click(cx.listener(|_, _, _, cx| {
+                    let was_open = cx.default_global::<BlankPicker>().was_open;
+                    set_picker_open(!was_open, cx);
+                    cx.notify();
+                })),
+        )
+        .when(open, |picker| picker.child(deferred(menu)))
+}
+
 /// `.blank`: nothing to route by. No `rules.json` and no Finicky config,
 /// the state after Later on first run: three ways out, and where a config
 /// was looked for.
 fn nothing_to_route_by(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
     let (_, fallback) = app.store.default_browser();
-    let choice = |primary: bool, title: &'static str, what: &'static str, action: Div| {
+    let fallback = crate::default_browser::browser_name(&fallback);
+    let stays = format!("The default stays {fallback} until you change it.");
+    let choice = |primary: bool, title: &'static str, what: &str, action: Div| {
         div()
             .flex()
             .items_center()
@@ -1212,7 +1374,7 @@ fn nothing_to_route_by(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                     .flex_col()
                     .gap(px(3.0))
                     .child(text(title, 12.5, 600.0, theme::text_primary()).line_height(px(16.25)))
-                    .child(paragraph(what, 11.0, 16.0, theme::text_muted())),
+                    .child(paragraph(what.to_owned(), 11.0, 16.0, theme::text_muted())),
             )
             .child(action)
     };
@@ -1295,27 +1457,41 @@ fn nothing_to_route_by(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
-                        // Choosing a browser and a config file wait for the
-                        // browser picker and the file dialog.
                         .child(choice(
                             true,
                             "Choose where links go",
                             "Creates rules.json with a default browser. Add rules afterwards, \
                              or never.",
-                            button("Choose browser\u{2026}", ButtonKind::Primary, true),
+                            browser_picker(app, cx),
                         ))
                         .child(choice(
                             false,
                             "Use a Finicky config",
                             "Any .js or .ts in Finicky v4 shape. It runs as written.",
-                            button("Choose file\u{2026}", ButtonKind::Default, true),
+                            div().child(
+                                button(
+                                    "Open Settings \u{203a} Configuration",
+                                    ButtonKind::Default,
+                                    true,
+                                )
+                                .id(BLANK_SETTINGS_ID)
+                                .debug_selector(|| BLANK_SETTINGS_ID.into())
+                                .on_click(|_, _, cx| {
+                                    cx.defer(|cx| {
+                                        crate::settings::open(
+                                            cx,
+                                            Some(crate::settings::Pane::Configuration),
+                                        );
+                                    });
+                                }),
+                            ),
                         ))
                         .child(choice(
                             false,
-                            "Start with a handler",
-                            "The default stays Safari until you change it.",
+                            "Start with a rule",
+                            &stays,
                             div().child(
-                                button("Add handler", ButtonKind::Default, true)
+                                button("Add rule", ButtonKind::Default, true)
                                     .id("blank-add-handler")
                                     .debug_selector(|| "blank-add-handler".into())
                                     .on_click(cx.listener(|this, _, window, cx| {

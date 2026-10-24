@@ -249,7 +249,10 @@ fn opener_named(spec: &str) -> Opener {
 fn describe_winner(trace: &Trace) -> String {
     let where_ = match trace.winner() {
         Some(step) => match (step.stage, step.source) {
-            (Stage::Default, _) => "the default browser".to_owned(),
+            // rules.json's default is PwrRoute's: alone, or owning it
+            // under `"precedence": "pwrroute"`.
+            (Stage::Default, Source::Rules) => "PwrRoute's default browser".to_owned(),
+            (Stage::Default, Source::Config) => "the config's default browser".to_owned(),
             (_, Source::Rules) => format!("rule {}", step.index + 1),
             (_, Source::Config) => format!("the config's handler {}", step.index + 1),
         },
@@ -331,6 +334,56 @@ mod tests {
             "Firefox with https://example.com/a?b=1"
         );
         assert_eq!(with_profile.to_string(), "Firefox (Work)");
+    }
+
+    #[test]
+    fn a_winner_is_named_by_who_decided() {
+        let step = |stage, source, index| Step {
+            stage,
+            source,
+            index,
+            matchers: Vec::new(),
+            url: "https://a.example.com/".into(),
+            matched: true,
+            pattern: None,
+            rewritten_to: None,
+            won: true,
+            error: None,
+        };
+        let trace = |winner: Option<Step>| Trace {
+            url: "https://a.example.com/".into(),
+            original_url: "https://a.example.com/".into(),
+            steps: winner.into_iter().collect(),
+            resolution: crate::Resolution {
+                browser: browser("Vivaldi", "", "https://a.example.com/"),
+                error: None,
+            },
+            console: Vec::new(),
+        };
+        let named = |winner| {
+            describe_winner(&trace(winner))
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert_eq!(
+            named(Some(step(Stage::Default, Source::Rules, 0))),
+            "PwrRoute's default browser"
+        );
+        assert_eq!(
+            named(Some(step(Stage::Default, Source::Config, 0))),
+            "the config's default browser"
+        );
+        assert_eq!(
+            named(Some(step(Stage::Handler, Source::Rules, 2))),
+            "rule 3"
+        );
+        assert_eq!(
+            named(Some(step(Stage::Handler, Source::Config, 0))),
+            "the config's handler 1"
+        );
+        assert_eq!(named(None), "no handler");
     }
 
     #[test]

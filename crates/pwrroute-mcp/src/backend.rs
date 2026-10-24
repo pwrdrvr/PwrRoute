@@ -73,11 +73,39 @@ pub struct TraceStep {
     /// The rule's position in its list, when the source can say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
-    /// What the rule matched or did, as the Rules view words it.
+    /// What the rule matched or did, as the Rules view words it, naming
+    /// who decided: "rules.json rule 3 matched …", "config handler 2
+    /// matched …", "… PwrRoute's default", "… ~/.finicky.ts's default" (the
+    /// config in charge by its path, or "the config's default").
     pub summary: String,
     /// The URL after this step, for a rewrite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Whose list the rule is in (and so what `index` counts), or whose
+    /// default browser took the link. Absent when the record does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<StepSource>,
+}
+
+/// Who a [`TraceStep`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum StepSource {
+    /// The Finicky config: its `rewrite` and `handlers` lists, or its
+    /// `defaultBrowser`.
+    Config,
+    /// `rules.json`, PwrRoute's own: its `rewrites` and `rules` lists, or
+    /// its `defaultBrowser` (PwrRoute's default).
+    Rules,
+}
+
+impl From<pwrroute_engine::Source> for StepSource {
+    fn from(source: pwrroute_engine::Source) -> Self {
+        match source {
+            pwrroute_engine::Source::Config => Self::Config,
+            pwrroute_engine::Source::Rules => Self::Rules,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -224,9 +252,12 @@ pub struct RulesSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum RulesSource {
-    /// `rules.json`, editable. A Finicky config, when one is found, runs
-    /// first and owns the default browser; `rules.json`'s rewrites and
-    /// handlers follow its own.
+    /// `rules.json`, editable. A Finicky config, when one is found, keeps
+    /// its own order by default: its rewrites, then `rules.json`'s; its
+    /// handlers, then `rules.json`'s rules; and its `defaultBrowser` takes
+    /// the rest. With `"precedence": "pwrroute"` in `rules.json`, its rules
+    /// run before the config's handlers and its `defaultBrowser`
+    /// (PwrRoute's default) takes everything else.
     Visual,
     /// A Finicky `.js`/`.ts` config alone: `rules.json` is not in use and
     /// cannot be changed from here meanwhile.
@@ -358,6 +389,7 @@ mod tests {
                 index: Some(0),
                 summary: "rewrite".to_owned(),
                 url: Some(url.to_owned()),
+                source: Some(StepSource::Rules),
             }],
             browser: Browser {
                 name: "Firefox".to_owned(),

@@ -509,6 +509,7 @@ fn state(cx: &mut App) -> Value {
 /// The rail section on screen, as `e2e/CONTRACT.md` names it.
 fn section(screen: Screen) -> &'static str {
     match screen {
+        Screen::Overview => "overview",
         Screen::Rules => "rules",
         Screen::TestLink => "test",
         Screen::Activity => "activity",

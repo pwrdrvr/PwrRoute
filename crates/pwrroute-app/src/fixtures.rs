@@ -144,7 +144,9 @@ pub fn activity() -> Vec<DispatchRecord> {
         steps: vec![
             Step::Received { url: url.into() },
             Step::Matched {
-                by: handler.map_or(Matched::Default, |index| Matched::Handler { index }),
+                by: handler.map_or(Matched::Default { owner: None }, |index| Matched::Handler {
+                    index,
+                }),
             },
             Step::Browser { browser },
             Step::Launched { dry_run: false },
@@ -271,6 +273,560 @@ pub fn activity() -> Vec<DispatchRecord> {
             7,
         ),
     ]
+}
+
+// --- Attribution (WP-B) -----------------------------------------------------
+
+/// Contrived records, newest first, that show who routed each link: a
+/// `rules.json` rule, a rewrite then a rule, the config's handler,
+/// PwrRoute's default, the config's default, a pause over a rule and the
+/// fallback. Every host is example.com's. For the `screens` example and
+/// tests; nothing here reaches the window.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn attribution_activity() -> Vec<DispatchRecord> {
+    use pwrroute_router::Owner;
+
+    let now = SystemTime::now();
+    let browser = |name: &str, profile: &str, url: &str| Browser {
+        name: name.into(),
+        app_type: AppType::AppName,
+        url: url.into(),
+        profile: profile.into(),
+        args: Vec::new(),
+        open_in_background: None,
+        private: false,
+        privacy: pwrroute_engine::Privacy::Full,
+    };
+    // `before` runs between receipt and the match (rewrites); `after`
+    // between the match and the browser (a pause, a fallback).
+    let record = |id: u64,
+                  secs_ago: u64,
+                  url: &str,
+                  from: &str,
+                  before: Vec<Step>,
+                  by: Option<Matched>,
+                  after: Vec<Step>,
+                  opened: Browser,
+                  total_ms: u64| {
+        let mut steps = vec![Step::Received { url: url.into() }];
+        steps.extend(before);
+        steps.extend(by.map(|by| Step::Matched { by }));
+        steps.extend(after);
+        steps.push(Step::Browser {
+            browser: opened.clone(),
+        });
+        steps.push(Step::Launched { dry_run: false });
+        DispatchRecord {
+            id: DispatchId(id),
+            received_at: ago(now, secs_ago),
+            privacy: Privacy::Full,
+            link: Link::new(url, Source::AppleEvent).with_opener((!from.is_empty()).then(|| {
+                OpenerInfo {
+                    name: from.into(),
+                    ..OpenerInfo::default()
+                }
+            })),
+            forwarded: false,
+            final_url: Some(opened.url.clone()),
+            browser: Some(opened),
+            steps,
+            outcome: Outcome::Opened,
+            timings: Timings {
+                queue_us: 40,
+                resolve_us: 600,
+                launch_us: total_ms * 1_000 - 700,
+                total_us: total_ms * 1_000,
+            },
+        }
+    };
+    let docs = "https://docs.example.com/design/overview";
+    let tracked = "https://go.example.com/launch?utm_source=mail";
+    let clean = "https://go.example.com/launch";
+    let tickets = "https://tickets.example.com/browse/PR-12";
+    let news = "https://news.example.com/today";
+    let shop = "https://shop.example.com/cart";
+    let chat = "https://chat.example.com/room/7";
+    let wiki = "https://wiki.example.com/start";
+    vec![
+        record(
+            71,
+            8,
+            docs,
+            "Slack",
+            Vec::new(),
+            Some(Matched::Rule { index: 2 }),
+            Vec::new(),
+            browser("Google Chrome", "Work", docs),
+            4,
+        ),
+        record(
+            72,
+            40,
+            tracked,
+            "Mail",
+            vec![Step::Rewrite {
+                rule: None,
+                url: clean.into(),
+            }],
+            Some(Matched::Rule { index: 0 }),
+            Vec::new(),
+            browser("Firefox", "", clean),
+            5,
+        ),
+        record(
+            73,
+            95,
+            tickets,
+            "Slack",
+            Vec::new(),
+            Some(Matched::Handler { index: 1 }),
+            Vec::new(),
+            browser("Firefox", "default-release", tickets),
+            6,
+        ),
+        record(
+            74,
+            160,
+            news,
+            "Messages",
+            Vec::new(),
+            Some(Matched::Default {
+                owner: Some(Owner::PwrRoute),
+            }),
+            Vec::new(),
+            browser("Google Chrome", "Personal", news),
+            4,
+        ),
+        record(
+            75,
+            230,
+            shop,
+            "Mail",
+            Vec::new(),
+            Some(Matched::Default {
+                owner: Some(Owner::Config),
+            }),
+            Vec::new(),
+            browser("Safari", "", shop),
+            3,
+        ),
+        record(
+            76,
+            410,
+            chat,
+            "",
+            Vec::new(),
+            Some(Matched::Rule { index: 1 }),
+            vec![Step::Paused { skipped: None }],
+            browser("Google Chrome", "Personal", chat),
+            4,
+        ),
+        record(
+            77,
+            620,
+            wiki,
+            "Notes",
+            Vec::new(),
+            None,
+            vec![Step::Fallback {
+                reason: "no config is selected".into(),
+            }],
+            browser("Safari", "", wiki),
+            3,
+        ),
+    ]
+}
+
+// Overview (WP-D) ----------------------------------------------------------
+//
+// The Overview design's examples (`design/PwrRoute Overview and Setup.dc.html`):
+// example.com, .org and .net hosts only, real browser names, made-up counts.
+
+/// The Overview's visual rules (1a): three rewrites and six rules across
+/// Chrome's two profiles, Firefox and Arc, rule 6 switched off, and Google
+/// Chrome · Personal taking everything else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_rules() -> RulesFile {
+    serde_json::from_str(include_str!("../fixtures/overview/rules.json"))
+        .expect("fixtures/overview/rules.json is a valid rules.json")
+}
+
+/// The visual rules beside the Overview's Finicky config (2a): one rewrite
+/// and three rules.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config_rules() -> RulesFile {
+    serde_json::from_str(include_str!("../fixtures/overview/config-rules.json"))
+        .expect("fixtures/overview/config-rules.json is a valid rules.json")
+}
+
+/// The Overview's Finicky config (2a): two rewrites, five handlers, Safari
+/// as its defaultBrowser.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/overview/finicky.ts")
+}
+
+/// The wide map's config: eight inline handlers into one Edge profile,
+/// seven of them arrows Finicky names "match" and one a
+/// `finicky.matchHostnames` list.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_handlers_config() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/overview/handlers.ts")
+}
+
+/// The browsers the Overview's scan finds: Orion, which the config names,
+/// is not among them. Chrome and Edge have profiles the rules never name,
+/// so the map shows idle nodes and Edge folds two of its four.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_browsers() -> Vec<crate::overview_model::Installed> {
+    // Chromium names each profile's directory "Default", "Profile 1", …
+    let app = |name: &str, bundle_id: &str, profiles: &[&str]| crate::overview_model::Installed {
+        name: name.into(),
+        bundle_id: Some(bundle_id.into()),
+        profiles: profiles.iter().map(|p| (*p).to_owned()).collect(),
+        directories: (0..profiles.len())
+            .map(|i| {
+                if i == 0 {
+                    "Default".to_owned()
+                } else {
+                    format!("Profile {i}")
+                }
+            })
+            .collect(),
+        hidden: false,
+    };
+    vec![
+        app(
+            "Google Chrome",
+            "com.google.Chrome",
+            &["Personal", "Work", "Design"],
+        ),
+        app("Firefox", "org.mozilla.firefox", &[]),
+        app("Arc", "company.thebrowser.Browser", &[]),
+        app("Safari", "com.apple.Safari", &[]),
+        app(
+            "Microsoft Edge",
+            "com.microsoft.edgemac",
+            &[
+                "Research and Development Team",
+                "Personal",
+                "Testing",
+                "Travel",
+            ],
+        ),
+    ]
+}
+
+/// One kind of link in a made-up day: what took it, where it opened
+/// (browser, profile), and how many.
+pub type DayPart = (Matched, Option<(&'static str, &'static str)>, u64);
+
+/// A made-up day of dispatches for the Overview's counts, newest first:
+/// `parts` in order, the first `rewritten` of them rewritten and the last
+/// `failed` failed to launch. Every URL is example.com's.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_day(parts: &[DayPart], rewritten: u64, failed: u64) -> Vec<DispatchRecord> {
+    let now = SystemTime::now();
+    let url = "https://www.example.com/";
+    let total: u64 = parts.iter().map(|(_, _, n)| n).sum();
+    let mut records = Vec::new();
+    let mut id = 0;
+    for (matched, opened, n) in parts {
+        for _ in 0..*n {
+            id += 1;
+            let browser = opened.map(|(name, profile)| Browser {
+                name: name.into(),
+                app_type: AppType::AppName,
+                url: url.into(),
+                profile: profile.into(),
+                args: Vec::new(),
+                open_in_background: None,
+                private: false,
+                privacy: pwrroute_engine::Privacy::Full,
+            });
+            let fails = id > total - failed;
+            let mut steps = vec![Step::Received { url: url.into() }];
+            if id <= rewritten {
+                steps.push(Step::Rewrite {
+                    rule: Some(0),
+                    url: url.into(),
+                });
+            }
+            steps.push(Step::Matched { by: *matched });
+            if let Some(browser) = &browser {
+                steps.push(Step::Browser {
+                    browser: browser.clone(),
+                });
+            }
+            steps.push(if fails {
+                Step::LaunchFailed {
+                    message: "not found".into(),
+                }
+            } else {
+                Step::Launched { dry_run: false }
+            });
+            records.push(DispatchRecord {
+                id: DispatchId(id),
+                received_at: ago(now, (total - id) % 900),
+                privacy: Privacy::Full,
+                link: Link::new(url, Source::AppleEvent),
+                forwarded: false,
+                final_url: Some(url.into()),
+                browser,
+                steps,
+                outcome: if fails {
+                    Outcome::Failed
+                } else {
+                    Outcome::Opened
+                },
+                timings: Timings {
+                    queue_us: 40,
+                    resolve_us: 600,
+                    launch_us: 3_000,
+                    total_us: 3_640,
+                },
+            });
+        }
+    }
+    records.reverse();
+    records
+}
+
+/// Design 1e's rules: seven rules and Everything else into one profile,
+/// Microsoft Edge · Research and Development Team, and three elsewhere.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_fanin_rules() -> RulesFile {
+    serde_json::from_str(include_str!("../fixtures/overview/fanin-rules.json"))
+        .expect("fixtures/overview/fanin-rules.json is a valid rules.json")
+}
+
+/// The day over [`overview_fanin_rules`]: 724 links, 380 to Everything
+/// else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_fanin_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    let rnd = Some(("Microsoft Edge", "Research and Development Team"));
+    overview_day(
+        &[
+            (rule(0), rnd, 120),
+            (rule(1), rnd, 64),
+            (rule(2), rnd, 41),
+            (rule(3), rnd, 33),
+            (rule(4), rnd, 12),
+            (rule(5), rnd, 8),
+            (rule(6), rnd, 5),
+            (rule(7), Some(("Google Chrome", "Design")), 31),
+            (rule(8), Some(("Google Chrome", "Personal")), 22),
+            (rule(9), Some(("Firefox", "")), 8),
+            (pwrroute, rnd, 380),
+        ],
+        412,
+        0,
+    )
+}
+
+/// 1a's day over [`overview_rules`]: 1,412 links, 642 to Everything else,
+/// 1,108 rewritten.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_rules_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[
+            (rule(0), Some(("Google Chrome", "Work")), 214),
+            (rule(1), Some(("Google Chrome", "Work")), 88),
+            (rule(2), Some(("Firefox", "")), 57),
+            (rule(3), Some(("Arc", "")), 402),
+            (rule(4), Some(("Firefox", "")), 9),
+            (pwrroute, Some(("Google Chrome", "Personal")), 642),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 2a's day with the Overview's config in charge: 1,412 links, 627 to its
+/// defaultBrowser, Safari.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config_day() -> Vec<DispatchRecord> {
+    let handler = |index| Matched::Handler { index };
+    let rule = |index| Matched::Rule { index };
+    let config = Matched::Default {
+        owner: Some(pwrroute_router::Owner::Config),
+    };
+    overview_day(
+        &[
+            (handler(0), Some(("Firefox", "")), 57),
+            (handler(1), Some(("Google Chrome", "Work")), 88),
+            (handler(2), Some(("Google Chrome", "Work")), 214),
+            (handler(3), None, 9),
+            (rule(0), Some(("Arc", "")), 402),
+            (rule(1), Some(("Google Chrome", "Personal")), 12),
+            (rule(2), Some(("Safari", "")), 3),
+            (config, Some(("Safari", "")), 627),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 2b's day: [`overview_config_day`] with PwrRoute's default taking what
+/// the config's handlers leave, in Google Chrome · Personal: Chrome 941,
+/// Safari 3.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_override_day() -> Vec<DispatchRecord> {
+    let handler = |index| Matched::Handler { index };
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[
+            (rule(0), Some(("Arc", "")), 402),
+            (rule(1), Some(("Google Chrome", "Personal")), 12),
+            (rule(2), Some(("Safari", "")), 3),
+            (handler(0), Some(("Firefox", "")), 57),
+            (handler(1), Some(("Google Chrome", "Work")), 88),
+            (handler(2), Some(("Google Chrome", "Work")), 214),
+            (handler(3), None, 9),
+            (pwrroute, Some(("Google Chrome", "Personal")), 627),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 3a and 3b's visual rules: [`overview_rules`]' first four.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_paused_rules() -> RulesFile {
+    let mut rules = overview_rules();
+    rules.rules.truncate(4);
+    rules
+}
+
+/// 3a's day over [`overview_paused_rules`]: 1,403 links, 642 to
+/// Everything else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_paused_day() -> Vec<DispatchRecord> {
+    let rule = |index| Matched::Rule { index };
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[
+            (rule(0), Some(("Google Chrome", "Work")), 214),
+            (rule(1), Some(("Google Chrome", "Work")), 88),
+            (rule(2), Some(("Firefox", "")), 57),
+            (rule(3), Some(("Arc", "")), 402),
+            (pwrroute, Some(("Google Chrome", "Personal")), 642),
+        ],
+        1_108,
+        0,
+    )
+}
+
+/// 3c's day, the config never loading: the router's fallback took all 212
+/// links, in Google Chrome · Personal, and two failed. Nothing ran a rule
+/// or a rewrite.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_config_error_day() -> Vec<DispatchRecord> {
+    let pwrroute = Matched::Default {
+        owner: Some(pwrroute_router::Owner::PwrRoute),
+    };
+    overview_day(
+        &[(pwrroute, Some(("Google Chrome", "Personal")), 212)],
+        0,
+        2,
+    )
+}
+
+/// 3d's day: 23 links, every one to Safari.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_nothing_day() -> Vec<DispatchRecord> {
+    overview_day(
+        &[(
+            Matched::Default {
+                owner: Some(pwrroute_router::Owner::PwrRoute),
+            },
+            Some(("Safari", "")),
+            23,
+        )],
+        0,
+        0,
+    )
+}
+
+/// Design 3f's day: rules.json names only a default, Google Chrome ·
+/// Personal, and today's 23 links all went there.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn overview_default_only_day() -> Vec<DispatchRecord> {
+    overview_day(
+        &[(
+            Matched::Default {
+                owner: Some(pwrroute_router::Owner::PwrRoute),
+            },
+            Some(("Google Chrome", "Personal")),
+            23,
+        )],
+        0,
+        0,
+    )
 }
 
 #[cfg(test)]

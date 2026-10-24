@@ -1,0 +1,49 @@
+{
+  "defaultBrowser": "Google Chrome",
+  "defaultProfile": "Personal",
+  "rewrites": [
+    {
+      "match": "http://*.example.com/*",
+      "actions": [{ "setScheme": "https" }]
+    },
+    {
+      "match": "*",
+      "actions": [{ "dropQuery": ["utm_*"] }]
+    },
+    {
+      "match": "links.example.org/*",
+      "actions": [{ "setHost": "example.org" }]
+    }
+  ],
+  "rules": [
+    {
+      "match": ["*.docs.example.com/*", "docs.example.org/*"],
+      "browser": "Google Chrome",
+      "profile": "Work"
+    },
+    {
+      "match": "chat.example.com/*",
+      "browser": "Google Chrome",
+      "profile": "Work"
+    },
+    {
+      "match": "*",
+      "browser": "Firefox",
+      "opener": ["Slack"]
+    },
+    {
+      "match": ["localhost:*", "127.0.0.1:*", "*.localhost/*"],
+      "browser": "Arc"
+    },
+    {
+      "match": ["news.example.org/*", "forum.example.org/*"],
+      "browser": "Firefox"
+    },
+    {
+      "match": "billing.example.com/*",
+      "browser": "Google Chrome",
+      "profile": "Personal",
+      "enabled": false
+    }
+  ]
+}

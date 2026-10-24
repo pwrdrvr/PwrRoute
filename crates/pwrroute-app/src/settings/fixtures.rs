@@ -99,7 +99,7 @@ pub fn privacy() -> Privacy {
             since: "2026-10-14".into(),
         }),
         journal_error: None,
-        rules_keep_less: Some("Handler 9 keeps host only and handler 10 keeps nothing".into()),
+        rules_keep_less: Some("Rule 9 keeps host only and rule 10 keeps nothing".into()),
         can_save: true,
     }
 }
@@ -244,7 +244,7 @@ pub fn configuration() -> Configuration {
     Configuration {
         active: RulesSource::Visual,
         can_switch: true,
-        visual_summary: "rules.json \u{00b7} 3 rewrites \u{00b7} 7 handlers".into(),
+        visual_summary: "rules.json \u{00b7} 3 rewrites \u{00b7} 7 rules".into(),
         finicky: Some(FinickyConfig {
             path: "~/.finicky.ts".into(),
             summary: "~/.finicky.ts \u{00b7} 2 rewrites \u{00b7} 6 handlers".into(),
@@ -318,6 +318,7 @@ pub fn configuration() -> Configuration {
             .collect(),
         rules_path: "~/Library/Application Support/PwrRoute/rules.json".into(),
         rules_status: "Loaded \u{00b7} edited 12 min ago.".into(),
+        everything_else: None,
     }
 }
 
@@ -438,4 +439,98 @@ pub fn browsers() -> Browsers {
             ),
         ],
     }
+}
+
+// Settings Everything else (WP-F)
+
+use super::model::{DefaultChoice, DefaultOwner, EverythingElse};
+
+/// Overview and Setup 5d: `~/.finicky.ts` in charge, and PwrRoute's
+/// default, Google Chrome · Personal, takes everything else.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "for the window's tests and the screens example")
+)]
+pub fn configuration_everything_else() -> Configuration {
+    let chrome = DefaultChoice {
+        value: "com.google.Chrome".into(),
+        name: "Google Chrome".into(),
+        badge: "Ch".into(),
+        profiles: vec!["Personal".into(), "Work".into()],
+    };
+    let safari = DefaultChoice {
+        value: "com.apple.Safari".into(),
+        name: "Safari".into(),
+        badge: "Sf".into(),
+        profiles: Vec::new(),
+    };
+    let firefox = DefaultChoice {
+        value: "org.mozilla.firefox".into(),
+        name: "Firefox".into(),
+        badge: "Ff".into(),
+        profiles: vec!["default-release".into()],
+    };
+    Configuration {
+        active: RulesSource::Finicky,
+        can_switch: true,
+        visual_summary: "rules.json \u{00b7} 1 rewrite \u{00b7} 3 rules".into(),
+        finicky: Some(FinickyConfig {
+            path: "~/.finicky.ts".into(),
+            summary: "~/.finicky.ts \u{00b7} 5 handlers".into(),
+            found: "Found at ~/.finicky.ts; its rewrites run first, then your rules, then its \
+                    handlers. Edited 4 min ago."
+                .into(),
+        }),
+        import: None,
+        everything_else: Some(EverythingElse {
+            owner: DefaultOwner::PwrRoute,
+            config_label: "~/.finicky.ts's default \u{00b7} Safari".into(),
+            config_detail: "~/.finicky.ts's defaultBrowser handles links its handlers don't \
+                            claim. The browser below still catches config errors, browsers \
+                            that can't open, and every link while paused."
+                .into(),
+            pwrroute_detail: "Your rules run first, then ~/.finicky.ts's handlers. Links \
+                              nothing claims go here instead of Safari."
+                .into(),
+            warnings: Vec::new(),
+            browsers: vec![chrome, safari, firefox],
+            browser: Some(0),
+            profile: Some("Personal".into()),
+            problem: None,
+        }),
+        ..configuration()
+    }
+}
+
+/// [`configuration_everything_else`] over a config whose default is a
+/// function and whose handler 5 matches every link (design 5c's warnings).
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "for the window's tests and the screens example")
+)]
+pub fn configuration_everything_else_warnings() -> Configuration {
+    let mut configuration = configuration_everything_else();
+    if let Some(field) = configuration.everything_else.as_mut() {
+        field.config_label = "~/.finicky.ts's default".into();
+        field.pwrroute_detail =
+            "Your rules run first, then ~/.finicky.ts's handlers. Links nothing claims go here."
+                .into();
+        field.warnings = vec![
+            "Its defaultBrowser function will no longer run.".into(),
+            "Config handler 5 matches every link, so PwrRoute's default never applies.".into(),
+        ];
+    }
+    configuration
+}
+
+/// [`configuration_everything_else`] after a change that was not saved:
+/// the error line under the selects.
+#[cfg_attr(not(test), allow(dead_code, reason = "for the screens example"))]
+pub fn configuration_everything_else_not_saved() -> Configuration {
+    let mut configuration = configuration_everything_else();
+    if let Some(field) = configuration.everything_else.as_mut() {
+        field.problem =
+            Some("Not saved: rules.json did not load, so it is not overwritten.".into());
+    }
+    configuration
 }

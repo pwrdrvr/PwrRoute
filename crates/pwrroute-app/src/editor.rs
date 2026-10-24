@@ -620,7 +620,7 @@ fn open_in_section(
         .child(labeled_row("Keep", keep_control))
         .children(problems_under(&handler.problems, Under::Keep))
         .child(paragraph(
-            "What Activity and the journal remember about links this handler takes. A \
+            "What Activity and the journal remember about links this rule takes. A \
              private window keeps host only unless set here.",
             10.5,
             15.75,
@@ -736,7 +736,7 @@ fn examples_section(
             (
                 "Examples \u{00b7} must resolve here",
                 rows,
-                "Saved to rules.json as this handler's example. Run tests checks it still \
+                "Saved to rules.json as this rule's example. Run tests checks it still \
                  resolves here; a rule that takes it later fails the run.",
             )
         }
@@ -1266,7 +1266,7 @@ pub fn rail(
         Selection::Handler(index) => match app.handlers.get(index) {
             Some(handler) => {
                 let draft = handler.rule.badge == RowBadge::Draft;
-                let what = if draft { "New handler" } else { "Handler" };
+                let what = if draft { "New rule" } else { "Rule" };
                 frame
                     .child(header(
                         &format!("{what} \u{00b7} {} of {}", index + 1, app.handlers.len()),
@@ -1289,7 +1289,7 @@ pub fn rail(
                         if draft {
                             "Discard draft"
                         } else {
-                            "Delete handler"
+                            "Delete rule"
                         },
                         draft,
                         app.store.rail_label(selection),

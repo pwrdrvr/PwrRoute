@@ -22,6 +22,24 @@ fn region(state: &Value, name: &str) -> (f64, f64, f64, f64) {
         .unwrap_or_else(|| panic!("region {name} was not painted: {state:#}"))
 }
 
+/// Every launch lands on Overview: shows Rules and selects its first
+/// handler with the keyboard (Down selects the rewrite first, then steps),
+/// and returns the state once the editor is drawn.
+fn open_rules(app: &App) -> Value {
+    app.click("rail.rules").unwrap();
+    app.wait_for("the Rules list", pwrroute_e2e::WAIT, |s| {
+        (s["main"]["section"] == "rules").then_some(())
+    })
+    .unwrap();
+    app.keys("down down").unwrap();
+    app.wait_for("the first handler selected", pwrroute_e2e::WAIT, |s| {
+        (s["main"]["rules"]["selection"] == serde_json::json!({ "kind": "handler", "index": 0 })
+            && s["main"]["regions"]["editor"].is_object())
+        .then(|| s.clone())
+    })
+    .unwrap()
+}
+
 fn main_window(state: &Value) -> &Value {
     state["windows"]
         .as_array()
@@ -56,7 +74,7 @@ fn launches_and_draws_the_title_strip() {
     let (brand_x, brand_y, brand_w, brand_h) = region(&state, "titleStrip.brand");
     assert_eq!(brand_x, BRAND_X);
     assert!(brand_w > 0.0 && brand_y >= 0.0 && brand_y + brand_h <= STRIP_HEIGHT);
-    // The breadcrumb and the Rules screen's two status chips are laid out
+    // The breadcrumb and the Overview's two status chips are laid out
     // after it, in order.
     let (crumb_x, ..) = region(&state, "titleStrip.breadcrumb");
     let (chip1_x, _, chip1_w, _) = region(&state, "titleStrip.chip1");
@@ -65,13 +83,14 @@ fn launches_and_draws_the_title_strip() {
     assert!(chip1_x + chip1_w <= chip2_x);
     assert!(chip2_x + chip2_w <= viewport_width);
 
-    // Rail, rules list and editor fill the body under the strip.
+    // Rail and the Overview fill the body under the strip: every launch
+    // lands on Overview, with no editor.
     let (rail_x, rail_y, rail_w, _) = region(&state, "rail");
     assert_eq!((rail_x, rail_y, rail_w), (0.0, STRIP_HEIGHT, RAIL_WIDTH));
-    let (pane_x, ..) = region(&state, "pane");
-    let (editor_x, _, editor_w, _) = region(&state, "editor");
-    assert!(pane_x == RAIL_WIDTH && pane_x < editor_x);
-    assert_eq!(editor_x + editor_w, viewport_width);
+    let (pane_x, _, pane_w, _) = region(&state, "pane");
+    assert_eq!(pane_x, RAIL_WIDTH);
+    assert_eq!(pane_x + pane_w, viewport_width);
+    assert!(state["main"]["regions"]["editor"].is_null(), "{state:#}");
 
     // The router came up in dry run with no Finicky config, so the window
     // shows the rules.json the harness seeded in the test's empty home
@@ -84,9 +103,10 @@ fn launches_and_draws_the_title_strip() {
         (Some(1), Some(5)),
         "{rules}"
     );
-    assert_eq!(state["main"]["section"], "rules");
+    assert_eq!(state["main"]["section"], "overview");
     assert_eq!(state["main"]["configInCharge"], false);
-    assert_eq!(state["main"]["editing"], true);
+    assert_eq!(state["main"]["editing"], false);
+    assert_eq!(rules["selection"], Value::Null, "nothing selected yet");
 
     // And the OS agrees: it lists a window titled PwrRoute of that size for
     // this process.
@@ -132,6 +152,7 @@ fn rail_items_are_laid_out_in_order() {
     let app = harness.launch().unwrap();
     let state = app.wait_for_main_window().unwrap();
     let items = [
+        "rail.overview",
         "rail.rules",
         "rail.test",
         "rail.activity",
@@ -153,7 +174,8 @@ fn rail_items_are_laid_out_in_order() {
 fn clicking_the_enabled_switch_toggles_the_handler() {
     let harness = harness!("clicking_the_enabled_switch_toggles_the_handler");
     let app = harness.launch().unwrap();
-    let state = app.wait_for_main_window().unwrap();
+    app.wait_for_main_window().unwrap();
+    let state = open_rules(&app);
     let enabled = state["main"]["rules"]["selectionEnabled"]
         .as_bool()
         .expect("a selected handler");
@@ -173,17 +195,19 @@ fn clicking_the_enabled_switch_toggles_the_handler() {
 }
 
 /// A click on a rail item shows its section (CONTRACT.md, "Rail
-/// navigation"). The editor is drawn on the Rules screen only.
+/// navigation"). The window lands on Overview; Rules opens as a list, with
+/// no editor until a rule is selected.
 #[test]
 fn rail_navigation_switches_sections() {
     let harness = harness!("rail_navigation_switches_sections");
     let app = harness.launch().unwrap();
     let state = app.wait_for_main_window().unwrap();
-    assert_eq!(state["main"]["section"], "rules");
+    assert_eq!(state["main"]["section"], "overview");
     for (item, section) in [
         ("rail.activity", "activity"),
         ("rail.test", "test"),
         ("rail.rules", "rules"),
+        ("rail.overview", "overview"),
     ] {
         app.click(item).unwrap();
         // The section changes at once; the regions on the next frame.
@@ -192,8 +216,9 @@ fn rail_navigation_switches_sections() {
             pwrroute_e2e::WAIT,
             |s| {
                 (s["main"]["section"] == section
-                    && s["main"]["regions"]["editor"].is_object() == (section == "rules"))
-                    .then_some(())
+                    && s["main"]["regions"]["pane"].is_object()
+                    && s["main"]["regions"]["editor"].is_null())
+                .then_some(())
             },
         )
         .unwrap();
@@ -205,7 +230,8 @@ fn rail_navigation_switches_sections() {
 fn arrow_keys_move_the_rule_selection() {
     let harness = harness!("arrow_keys_move_the_rule_selection");
     let app = harness.launch().unwrap();
-    let state = app.wait_for_main_window().unwrap();
+    app.wait_for_main_window().unwrap();
+    let state = open_rules(&app);
     let rules = &state["main"]["rules"];
     assert_eq!(rules["selection"]["kind"], "handler", "{rules}");
     let start = rules["selection"]["index"].as_u64().unwrap();
