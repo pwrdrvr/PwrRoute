@@ -1,6 +1,7 @@
 //! The AppKit calls GPUI does not make for us: the Dock icon (the
 //! activation policy), the screen under the menu bar item, the screen
-//! under the mouse, and resizing the tray dropdown from its bottom edge.
+//! under the mouse, resizing the tray dropdown from its bottom edge, and
+//! keeping the agent approval panel up while PwrRoute is in the background.
 //!
 //! GPUI sets `NSApplicationActivationPolicyRegular` when the app finishes
 //! launching and never changes it, so a resident router would keep a Dock
@@ -141,10 +142,11 @@ pub fn set_dropdown_height(height: f32) -> bool {
         return false;
     };
     let windows = NSApplication::sharedApplication(mtm).windows();
-    let Some(panel) = windows
-        .iter()
-        .find(|window| window.level() == POPUP_LEVEL && window.isVisible())
-    else {
+    // The approval panel is at the same level; it has a title, the
+    // dropdown none.
+    let Some(panel) = windows.iter().find(|window| {
+        window.level() == POPUP_LEVEL && window.isVisible() && window.title().length() == 0
+    }) else {
         return false;
     };
     let Some(content) = panel.contentView() else {
@@ -160,6 +162,24 @@ pub fn set_dropdown_height(height: f32) -> bool {
     frame.size.height += delta;
     panel.setFrame_display(frame, true);
     panel.invalidateShadow();
+    true
+}
+
+/// Keeps the pop-up panels titled `title` (the agent approval prompts) on
+/// screen while PwrRoute is in the background. They open over the app an
+/// agent runs in, with PwrRoute inactive; a panel hides when its app
+/// deactivates unless told otherwise, so a visit to PwrRoute's own window
+/// would hide a prompt still waiting for its answer. `false` off the main
+/// thread.
+pub fn keep_shown_while_inactive(title: &str) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    for window in NSApplication::sharedApplication(mtm).windows().iter() {
+        if window.level() == POPUP_LEVEL && window.title().to_string() == title {
+            window.setHidesOnDeactivate(false);
+        }
+    }
     true
 }
 

@@ -695,6 +695,9 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
 /// so it stays a normal window.
 #[cfg(target_os = "macos")]
 const PROMPT_KIND: WindowKind = WindowKind::PopUp;
+/// The prompt's title; on macOS it also tells the panel apart from the
+/// tray dropdown, which is at the same level and has none.
+const PROMPT_TITLE: &str = "PwrRoute";
 #[cfg(not(target_os = "macos"))]
 const PROMPT_KIND: WindowKind = WindowKind::Normal;
 
@@ -708,7 +711,7 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: display,
             titlebar: Some(TitlebarOptions {
-                title: Some("PwrRoute".into()),
+                title: Some(PROMPT_TITLE.into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(
                     px(crate::TRAFFIC_LIGHTS.0),
@@ -718,8 +721,6 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
             app_id: Some("pwrroute".to_owned()),
             window_min_size: Some(size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1))),
             kind: PROMPT_KIND,
-            focus: true,
-            show: true,
             ..Default::default()
         },
         |_, cx| cx.new(|cx| ApprovalWindow::new(request, reply, cx)),
@@ -727,6 +728,8 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     match opened {
         Ok(window) => {
             log::info!("approval window open for agent {client:?}");
+            #[cfg(target_os = "macos")]
+            crate::macos::keep_shown_while_inactive(PROMPT_TITLE);
             let _ = window.update(cx, |this, window, cx| window.focus(&this.focus, cx));
             // Off macOS the window is a normal one and needs the app in
             // front; on macOS the panel shows without it, and an activation
