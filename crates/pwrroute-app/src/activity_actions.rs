@@ -813,6 +813,12 @@ impl PwrRoute {
         let key = sheet.key;
         let test = sheet.test();
         let index = self.store.insert_rule(at, rule);
+        // A draft at or below the new rule moved down one.
+        if let Some((draft, _)) = &mut self.draft_from
+            && *draft >= index
+        {
+            *draft += 1;
+        }
         let kept = match test {
             Some(test) => {
                 let number = self.store.add_test(test);
@@ -1369,8 +1375,8 @@ fn pattern_field(
         }))
 }
 
-/// The profile picker's first choice: the browser's own default, written
-/// as no profile.
+/// The profile picker's first choice, by position: the browser's own
+/// default, written as no profile.
 const DEFAULT_PROFILE: &str = "Default profile";
 
 /// A picker: the current value in a box, and while open its menu.
@@ -1417,11 +1423,9 @@ fn picker(
                                     sheet.browser = chosen;
                                 }
                                 Picking::Profile => {
-                                    sheet.profile = if chosen == DEFAULT_PROFILE {
-                                        String::new()
-                                    } else {
-                                        chosen
-                                    };
+                                    // The first row is the browser's own
+                                    // default, whatever a profile is called.
+                                    sheet.profile = if index == 0 { String::new() } else { chosen };
                                 }
                                 Picking::None => {}
                             }

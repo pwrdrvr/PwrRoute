@@ -347,8 +347,9 @@ their own modules.
 - **Every way to start a rule ends in one editor (`editor.rs`,
   `rule_pickers.rs`; design: Rule Editor Pickers).** Rules' Add rule (also
   under a config, where it opens the folded visual rules), the Overview's
-  "+ Rule" and "+ Rule for …", and Test a link's "Add a rule…" all add a
-  draft handler and select it; `PwrRoute::draft_from` gives the draft its
+  "+ Rule" and "+ Rule for …", and Test a link's "Add a rule…" (its pattern
+  suggested from the URL the rules saw, after rewrites: `TestLink::rule_start`)
+  all add a draft handler and select it; `PwrRoute::draft_from` gives the draft its
   note (where it came from, and `config_hint`'s line beside a config).
   Activity's sheet is the one other form, with the same rule: no browser
   is chosen for the person, and Add waits for one. Open in and Profile are
@@ -356,7 +357,9 @@ their own modules.
   the rules name, dimmed when the scan ran and found nothing), each with a
   way out to a typed value ("Other app…", "Profile by name or folder…")
   that `Rail::browser_typed` / `profile_typed` keep across rebuilds of the
-  same rule's rail. A value the scan cannot match is never rewritten: it
+  same rule's rail (`rebuild_rail_kept`, only after adding or removing a
+  field; a delete, insert or reload can put another rule at the index, so
+  those rebuild fresh). A value the scan cannot match is never rewritten: it
   shows as written with a warning. Choosing another browser clears a
   profile it does not have. "Missing" needs `PwrRoute::installed` to be
   non-empty, as on the Overview. The private switch reads in the browser's

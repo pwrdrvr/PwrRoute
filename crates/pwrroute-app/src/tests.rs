@@ -4309,7 +4309,12 @@ fn test_a_link_adds_a_rule_for_the_link(cx: &mut TestAppContext) {
     click(cx, "nav-test");
     type_sample(cx);
     click(cx, "test-add-rule");
-    let expected = pwrroute_engine::suggest_rule(fixtures::TEST_URL).candidates[0].clone();
+    // The fixture rewrites x.com to xcancel.com before any rule runs: the
+    // pattern is for the URL the rules see, or the rule would never match.
+    let expected = pwrroute_engine::suggest_rule("https://xcancel.com/pwrdrvr/status/1842?s=20")
+        .candidates[0]
+        .clone();
+    assert!(expected.starts_with("xcancel.com/"), "{expected}");
     let (screen, selection, handler, sample, selected) = view.read_with(cx, |app, _| {
         let rail = app.rail.as_ref().expect("the editor");
         (
@@ -4327,4 +4332,62 @@ fn test_a_link_adds_a_rule_for_the_link(cx: &mut TestAppContext) {
     assert_eq!(sample, (fixtures::TEST_URL.to_owned(), true));
     assert!(selected, "typing replaces the suggestion");
     assert!(cx.debug_bounds("draft-note").is_some());
+    // Given a browser, the draft takes the tested link.
+    click(cx, "browser");
+    click(cx, "browser-other");
+    cx.simulate_input("Firefox");
+    draw(cx);
+    let result = view.read_with(cx, |app, _| app.rail.as_ref().unwrap().try_result.clone());
+    assert!(
+        matches!(
+            result,
+            Some(crate::try_it::TryResult::Text {
+                verdict: crate::try_it::Verdict::Takes,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
+/// A Try it link typed on one rule never follows the selection to the
+/// rule that takes its place when that rule is deleted.
+#[gpui_kit::test]
+fn a_deleted_rules_try_it_link_stays_with_it(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    click(cx, "try-sample");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("https://meet.google.com/typed-here");
+    draw(cx);
+    click(cx, "rail-delete");
+    let (selection, sample, edited) = view.read_with(cx, |app, _| {
+        let rail = app.rail.as_ref().expect("the editor");
+        (app.selection, rail.sample.text.clone(), rail.sample_edited)
+    });
+    assert_eq!(selection, Some(Selection::Handler(0)));
+    assert!(!edited);
+    assert_ne!(sample, "https://meet.google.com/typed-here");
+}
+
+/// A scanned browser whose profiles the scan could not read still lets
+/// a profile be named.
+#[gpui_kit::test]
+fn a_browser_without_readable_profiles_still_takes_a_named_one(cx: &mut TestAppContext) {
+    let dir = scratch("pickers-no-profiles");
+    let (view, cx) = open_with_scan(cx, &dir);
+    click(cx, "add-handler");
+    // Firefox, second on this Mac, with no profiles in the scan.
+    click(cx, "browser");
+    click(cx, "browser-choice-1");
+    assert!(cx.debug_bounds("profile-none-found").is_some());
+    click(cx, "profile");
+    assert!(cx.debug_bounds("profile-choice-0").is_some());
+    click(cx, "profile-other");
+    cx.simulate_input("default-release");
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[7].profile.clone()),
+        "default-release"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

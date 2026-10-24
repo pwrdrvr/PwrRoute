@@ -86,6 +86,26 @@ struct Run {
     trace: Trace,
     opener: Option<OpenerChoice>,
     took: Duration,
+    /// The narrowest pattern `suggest_rule` offers for the URL the rules
+    /// saw, for Add a rule…; `None` for text no pattern can match.
+    suggested: Option<String>,
+}
+
+/// The URL a rule sees in `trace`: after short-link expansion and every
+/// rewrite, which is what a handler's patterns are matched against.
+fn rules_url(trace: &Trace) -> &str {
+    trace
+        .steps
+        .iter()
+        .find(|step| step.stage == pwrroute_engine::Stage::Handler)
+        .map(|step| step.url.as_str())
+        .or_else(|| {
+            trace
+                .rewrites_applied()
+                .filter_map(|step| step.rewritten_to.as_deref())
+                .last()
+        })
+        .unwrap_or(&trace.url)
 }
 
 /// The screen's state.
@@ -230,10 +250,15 @@ impl TestLink {
         let started = Instant::now();
         match self.trace(&url, engine_opener.as_ref()) {
             Ok(trace) => {
+                let suggested = pwrroute_engine::suggest_rule(rules_url(&trace))
+                    .candidates
+                    .into_iter()
+                    .next();
                 self.run = Some(Run {
                     trace,
                     opener,
                     took: started.elapsed(),
+                    suggested,
                 });
                 self.redraw();
             }
@@ -360,6 +385,14 @@ impl TestLink {
     pub fn set_unfold(&mut self, unfold: bool) {
         self.unfold = unfold;
         self.redraw();
+    }
+
+    /// Add a rule…'s start, from the last run: the pattern suggested for
+    /// the URL the rules saw (after rewrites), and the link as tested for
+    /// Try it. `None` without a run or a pattern.
+    pub fn rule_start(&self) -> Option<(String, String)> {
+        let run = self.run.as_ref()?;
+        Some((run.suggested.clone()?, run.trace.original_url.clone()))
     }
 
     /// The trace was run at least once.
@@ -668,14 +701,7 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
                 cx.notify();
             }))
     };
-    let heading = |title: &'static str| {
-        div().px(px(8.0)).pt(px(8.0)).pb(px(3.0)).child(text(
-            title,
-            10.0,
-            600.0,
-            theme::text_subtle(),
-        ))
-    };
+    let heading = crate::widgets::menu_heading;
     let (named, examples): (Vec<_>, Vec<_>) = choices
         .iter()
         .enumerate()
@@ -818,12 +844,9 @@ fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>)
         ),
         (None, false) => None,
     };
-    // A rule for this link, from its suggested pattern: only for text a
-    // pattern can match.
-    let add_rule = (!pwrroute_engine::suggest_rule(&app.test.url.text)
-        .candidates
-        .is_empty())
-    .then(|| {
+    // A rule for this link, from the pattern suggested when it ran: only
+    // for text a pattern can match.
+    let add_rule = app.test.rule_start().is_some().then(|| {
         button("Add a rule\u{2026}", ButtonKind::Default, false)
             .id("test-add-rule")
             .debug_selector(|| "test-add-rule".into())

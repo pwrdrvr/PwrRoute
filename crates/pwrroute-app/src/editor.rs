@@ -775,24 +775,13 @@ fn picker_box(
 }
 
 /// A picker that has nothing to offer yet: its reason in a dimmed box.
-fn disabled_box(
-    selector: &'static str,
-    reason: impl Into<SharedString>,
-    hint: Option<&str>,
-) -> Stateful<Div> {
+fn disabled_box(selector: &'static str, reason: impl Into<SharedString>) -> Stateful<Div> {
     input_box()
         .id(selector)
         .debug_selector(move || selector.into())
         .w_full()
         .opacity(0.55)
         .child(crate::widgets::field_label(reason, theme::text_muted()))
-        .when_some(hint.map(str::to_owned), |input, hint| {
-            input.child(
-                div()
-                    .ml_auto()
-                    .child(text(hint, 10.5, 400.0, theme::text_subtle())),
-            )
-        })
         .child(caret())
 }
 
@@ -824,10 +813,11 @@ fn app_label(name: &str, color: gpui_kit::Hsla) -> Div {
         .child(crate::widgets::field_label(name.to_owned(), color))
 }
 
-/// The scan's browsers are known: the Overview's rule, an empty scan
-/// draws nothing as missing.
-fn scanned(app: &PwrRoute) -> bool {
-    !app.installed.is_empty()
+/// The scan's browsers are known: it ran (so finding none is an answer),
+/// or the window was handed a scan, as a test or screenshot does. Before
+/// then nothing is drawn as missing.
+fn scanned(app: &PwrRoute, cx: &App) -> bool {
+    !app.installed.is_empty() || crate::browser_scan::has_run(cx)
 }
 
 /// Open in: the browsers on this machine and the apps the rules name,
@@ -862,7 +852,7 @@ fn browser_control(
     }
     let value = handler.browser.trim();
     let missing =
-        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app));
+        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
     let content = if value.is_empty() {
         crate::widgets::field_label("Choose a browser or app", theme::text_subtle())
     } else {
@@ -880,7 +870,7 @@ fn browser_control(
         &app.browsers,
         &app.installed,
         &app.handlers,
-        scanned(app),
+        scanned(app, cx),
     );
     let mut menu = rail_menu("browser-menu", cx);
     let mut index = 0;
@@ -902,7 +892,7 @@ fn browser_control(
     };
     if picker.detected.is_empty() {
         menu = menu.child(div().px(px(8.0)).py(px(8.0)).child(paragraph(
-            if scanned(app) {
+            if scanned(app, cx) {
                 "No browsers found. Rescan in Settings \u{203a} Browsers, or name one."
             } else {
                 "No browsers to list yet. Name one below."
@@ -975,7 +965,7 @@ fn profile_control(
         match crate::rule_pickers::profiles_of(&handler.browser, &app.browsers, &app.installed) {
             Profiles::NoBrowser => {
                 return (
-                    div().child(disabled_box("profile", "Choose a browser first", None)),
+                    div().child(disabled_box("profile", "Choose a browser first")),
                     None,
                 );
             }
@@ -994,6 +984,24 @@ fn profile_control(
         )
         .into_any_element()
     });
+    // The scan read no profiles: the list is the default and the way to
+    // name one, and the note says why it is short.
+    let note = note.or_else(|| {
+        (entries.is_empty() && value.is_empty()).then(|| {
+            div()
+                .id("profile-none-found")
+                .debug_selector(|| "profile-none-found".into())
+                .child(paragraph(
+                    format!(
+                        "{browser} has no profiles PwrRoute can read; it opens its own default \
+                         unless you name one."
+                    ),
+                    10.5,
+                    15.75,
+                ))
+                .into_any_element()
+        })
+    });
     if rail.profile_typed {
         let back = list_link(
             "profile-list",
@@ -1001,25 +1009,6 @@ fn profile_control(
             cx,
         );
         return (typed(rail, Some(back), window, cx), note);
-    }
-    if entries.is_empty() && value.is_empty() {
-        return (
-            div().child(disabled_box(
-                "profile",
-                "Default profile",
-                Some("none found"),
-            )),
-            Some(
-                paragraph(
-                    format!(
-                        "{browser} has no profiles PwrRoute can read; it opens its own default."
-                    ),
-                    10.5,
-                    15.75,
-                )
-                .into_any_element(),
-            ),
-        );
     }
     let content = match (value.is_empty(), found) {
         (true, _) => crate::widgets::field_label("Default profile", theme::text_primary()),
@@ -1084,7 +1073,7 @@ fn open_in_section(
     let value = handler.browser.trim();
     let shown = crate::default_browser::browser_name(value);
     let missing =
-        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app));
+        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
     let detected = !value.is_empty()
         && (app
             .browsers
@@ -1460,7 +1449,7 @@ impl PwrRoute {
             rail.menu = None;
         }
         self.refresh(cx);
-        self.rebuild_rail(cx);
+        self.rebuild_rail_kept(cx);
         window.focus(&self.focus, cx);
     }
 
