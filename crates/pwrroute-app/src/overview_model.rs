@@ -3549,8 +3549,15 @@ mod tests {
             ..World::new(RulesFile::default(), Vec::new())
         };
         let map = world.build().map;
-        // By path, the catalog's Safari, which has no private window.
-        assert!(map.rows[0].target.not_private(), "{:?}", map.rows[0].target);
+        // By path, the catalog's Safari on macOS, which has no private
+        // window. Elsewhere the launcher reads it as this platform's path
+        // and knows no browser there, so the flag goes as written.
+        let by_path = &map.rows[0].target;
+        if cfg!(target_os = "macos") {
+            assert!(by_path.not_private(), "{by_path:?}");
+        } else {
+            assert!(by_path.private_window(), "{by_path:?}");
+        }
         // By that name, nothing the catalog knows: the flag goes as written.
         assert!(
             map.rows[1].target.private_window(),
