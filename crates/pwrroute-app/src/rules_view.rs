@@ -735,7 +735,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                 .gap(px(6.0))
                 .child(tag("*.atlassian.net/*"))
                 .child(arrow())
-                .child(badge("Ch"))
+                .child(badge(badge_for("Google Chrome")))
                 .child(text(
                     "Google Chrome \u{00b7} Work",
                     10.5,

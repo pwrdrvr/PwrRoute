@@ -3,8 +3,13 @@
 //! comparing with the design and for PR screenshots.
 //!
 //! ```text
-//! cargo run -p pwrroute-app --example screens -- OUT_DIR
+//! cargo run -p pwrroute-app --example screens -- OUT_DIR [--app-icons]
 //! ```
+//!
+//! The badges are letters, so every machine draws the same PNGs.
+//! `--app-icons` draws the apps' own icons instead, from what this Mac has
+//! installed (`app_icons.rs`): an app the fixtures name that is not
+//! installed keeps its letters.
 //!
 //! macOS only: the headless renderer is Metal, and GPUI's Mac platform must
 //! be created on the main thread, which a libtest test never runs on. The
@@ -24,6 +29,9 @@ mod activity_actions;
 #[cfg(target_os = "macos")]
 #[path = "../src/app.rs"]
 mod app;
+#[cfg(target_os = "macos")]
+#[path = "../src/app_icons.rs"]
+mod app_icons;
 #[cfg(target_os = "macos")]
 #[path = "../src/assets.rs"]
 mod assets;
@@ -180,6 +188,30 @@ const TRAFFIC_LIGHTS: (f32, f32) = (16.0, 13.0);
 #[path = "../src/widgets.rs"]
 mod widgets;
 
+/// `--app-icons`: draw the apps' own icons, not their letters.
+#[cfg(target_os = "macos")]
+static APP_ICONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Each window's fonts, and the apps' icons when asked for.
+#[cfg(target_os = "macos")]
+fn setup(cx: &mut gpui_kit::App) {
+    assets::load_fonts(cx);
+    if APP_ICONS.load(std::sync::atomic::Ordering::Relaxed) {
+        app_icons::install(cx);
+    }
+}
+
+/// How many frames to draw before the capture: icons load off the UI
+/// thread, a few at a time.
+#[cfg(target_os = "macos")]
+fn draws() -> usize {
+    if APP_ICONS.load(std::sync::atomic::Ordering::Relaxed) {
+        10
+    } else {
+        3
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn main() {
     use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -191,8 +223,15 @@ fn main() {
     /// The window's default size, as `main` opens it.
     const WINDOW_SIZE: (f32, f32) = (1240.0, 820.0);
 
-    let Some(dir) = std::env::args_os().nth(1).map(PathBuf::from) else {
-        eprintln!("usage: screens OUT_DIR");
+    let (flags, dirs): (Vec<_>, Vec<_>) = std::env::args_os()
+        .skip(1)
+        .partition(|arg| arg.to_string_lossy().starts_with("--"));
+    APP_ICONS.store(
+        flags.iter().any(|flag| flag == "--app-icons"),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let Some(dir) = dirs.into_iter().next().map(PathBuf::from) else {
+        eprintln!("usage: screens OUT_DIR [--app-icons]");
         std::process::exit(2);
     };
     std::fs::create_dir_all(&dir).expect("create the output directory");
@@ -206,7 +245,7 @@ fn main() {
             Arc::new(assets::Assets),
             gpui_kit::platform::current_headless_renderer,
         );
-        cx.update(|cx| assets::load_fonts(cx));
+        cx.update(setup);
         let home = home.clone();
         // The design's rules, as if read from the real file.
         let store = rules_store::RulesStore::from_file(
@@ -227,7 +266,7 @@ fn main() {
         .expect("prepare the window");
         // Icons load as assets: draw until they have arrived.
         cx.allow_parking();
-        for _ in 0..3 {
+        for _ in 0..draws() {
             cx.run_until_parked();
             cx.update_window(handle.into(), |_, window, cx| {
                 window.refresh();
@@ -468,7 +507,7 @@ fn main() {
             Arc::new(assets::Assets),
             gpui_kit::platform::current_headless_renderer,
         );
-        cx.update(|cx| assets::load_fonts(cx));
+        cx.update(setup);
         let height = cx.update(|cx| {
             tray::dropdown::fitted_height(&model, &cx.text_system().clone(), px(f32::MAX))
         });
@@ -487,7 +526,7 @@ fn main() {
             })
             .expect("open a headless window");
         cx.allow_parking();
-        for _ in 0..3 {
+        for _ in 0..draws() {
             cx.run_until_parked();
             cx.update_window(handle.into(), |_, window, cx| {
                 window.refresh();
@@ -629,7 +668,7 @@ fn main() {
             );
             // Motion at its end state: the shot is of where it settles.
             cx.update(|cx| {
-                assets::load_fonts(cx);
+                setup(cx);
                 cx.set_reduce_motion(true);
             });
             let handle = cx
@@ -642,7 +681,7 @@ fn main() {
                 })
                 .expect("open a headless window");
             cx.allow_parking();
-            for _ in 0..3 {
+            for _ in 0..draws() {
                 cx.run_until_parked();
                 cx.update_window(handle.into(), |_, window, cx| {
                     window.refresh();
@@ -676,7 +715,7 @@ fn main() {
             Arc::new(assets::Assets),
             gpui_kit::platform::current_headless_renderer,
         );
-        cx.update(|cx| assets::load_fonts(cx));
+        cx.update(setup);
         let existing = pwrroute_engine::RulesFile {
             default_browser: "Google Chrome".into(),
             rules: vec![
@@ -711,7 +750,7 @@ fn main() {
             })
             .expect("open a headless window");
         cx.allow_parking();
-        for _ in 0..3 {
+        for _ in 0..draws() {
             cx.run_until_parked();
             cx.update_window(handle.into(), |_, window, cx| {
                 window.refresh();
@@ -746,7 +785,7 @@ fn main() {
             gpui_kit::platform::current_headless_renderer,
         );
         cx.update(|cx| {
-            assets::load_fonts(cx);
+            setup(cx);
             settings::install(cx);
         });
         let handle = cx
@@ -763,7 +802,7 @@ fn main() {
             })
             .expect("open a headless window");
         cx.allow_parking();
-        for _ in 0..3 {
+        for _ in 0..draws() {
             cx.run_until_parked();
             cx.update_window(handle.into(), |_, window, cx| {
                 window.refresh();
@@ -1016,7 +1055,7 @@ fn main() {
             );
             // Motion at its end state: the shot is of where it settles.
             cx.update(|cx| {
-                assets::load_fonts(cx);
+                setup(cx);
                 cx.set_reduce_motion(true);
             });
             let handle = cx
@@ -1029,7 +1068,7 @@ fn main() {
                 })
                 .expect("open a headless window");
             cx.allow_parking();
-            for _ in 0..3 {
+            for _ in 0..draws() {
                 cx.run_until_parked();
                 cx.update_window(handle.into(), |_, window, cx| {
                     window.refresh();
@@ -1277,7 +1316,7 @@ fn main() {
                 gpui_kit::platform::current_headless_renderer,
             );
             cx.update(|cx| {
-                assets::load_fonts(cx);
+                setup(cx);
                 cx.set_reduce_motion(true);
                 if let Some(day) = shot.day {
                     activity::install_feed(activity::Feed::from_records(day()), cx);
@@ -1317,7 +1356,7 @@ fn main() {
             })
             .expect("prepare the window");
             cx.allow_parking();
-            for _ in 0..3 {
+            for _ in 0..draws() {
                 cx.run_until_parked();
                 cx.update_window(handle.into(), |_, window, cx| {
                     window.refresh();
@@ -1451,7 +1490,7 @@ fn main() {
             gpui_kit::platform::current_headless_renderer,
         );
         cx.update(|cx| {
-            assets::load_fonts(cx);
+            setup(cx);
             settings::install(cx);
         });
         let handle = cx
@@ -1467,7 +1506,7 @@ fn main() {
             })
             .expect("open a headless window");
         cx.allow_parking();
-        for _ in 0..3 {
+        for _ in 0..draws() {
             cx.run_until_parked();
             cx.update_window(handle.into(), |_, window, cx| {
                 window.refresh();

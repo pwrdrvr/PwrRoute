@@ -300,6 +300,20 @@ their own modules.
   the window to the card. Names come from the catalog or the installed
   app, never a bundle id: `BrowserLabel::name` is what the reader sees and
   `BrowserLabel::app` what the router is told.
+- **Apps are drawn by `widgets::badge` (`app_icons.rs`).** `badge_for`
+  makes an `AppBadge`: the letters and the app (a name, bundle id or path).
+  `badge` (and `icon_or` for the larger boxes: Settings' 20px, the
+  Overview card's 28px, Test a link's 44px) draws the app's icon as Finder
+  shows it, 4px larger than the box and centered so the layout is the
+  same, else the letters; a plain string is a fixed label that never
+  becomes one (`NOT_OPENED_BADGE`), and a target drawn as not installed
+  uses `without_icon`. Models carry the `AppBadge`, never its letters
+  alone. Icons load through GPUI's asset cache on the background executor
+  (`pwrroute_os::app_bundle`, `app_icon_png`), at the window's pixel size,
+  and only once `app_icons::install` ran (`main`): tests draw letters, and
+  the `screens` example too unless given `--app-icons`.
+  `browser_scan::rescan` drops them (`app_icons::forget`). Windows and
+  Linux have no icon yet.
 - **Menus and select lists use `widgets::menu_card` and `menu_row`**
   (design: Popovers and Overflow 1a-1d). A select's list is as wide as its
   field (`.absolute().left_0().right_0()`), never narrower, and scrolls

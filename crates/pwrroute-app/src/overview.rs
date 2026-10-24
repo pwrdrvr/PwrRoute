@@ -2383,7 +2383,7 @@ fn target_column(target: &Target) -> Div {
             theme::text_secondary(),
         )),
         Target::Ghost { badge: b, name, .. } => to
-            .child(badge(b.clone()).border_dashed())
+            .child(badge(b.without_icon()).border_dashed())
             .child(label(name.clone(), theme::text_subtle()))
             .child(mono("not installed", 10.0, 500.0, theme::warn_text())),
         Target::Unset => to.child(text("Choose a browser", 11.5, 500.0, theme::text_subtle())),
@@ -2710,48 +2710,60 @@ fn also_header(note_text: String) -> Div {
         .child(note(note_text))
 }
 
-/// A card's 28px badge.
+/// A card's 28px badge: the browser's icon, else its letters in the box.
 fn card_badge(card: &Card, lit: bool) -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(28.0))
-        .rounded(px(7.0))
-        .border_1()
-        .map(|b| match card.kind {
-            CardKind::Function => b
-                .bg(theme::accent_soft())
-                .border_color(theme::transparent())
-                .child(text("\u{0192}", 14.0, 700.0, theme::accent_bright())),
-            CardKind::Ghost => b
-                .border_dashed()
-                .border_color(theme::border_strong())
-                .child(mono(card.badge.clone(), 11.0, 700.0, theme::text_subtle())),
-            _ if lit => b
-                .border_color(theme::accent_border())
-                .bg(theme::bg_hover_strong())
-                .child(mono(
-                    card.badge.clone(),
-                    11.0,
-                    700.0,
+    let frame = || {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(28.0))
+            .rounded(px(7.0))
+            .border_1()
+    };
+    match card.kind {
+        CardKind::Function => frame()
+            .bg(theme::accent_soft())
+            .border_color(theme::transparent())
+            .child(text("\u{0192}", 14.0, 700.0, theme::accent_bright())),
+        CardKind::Ghost => frame()
+            .border_dashed()
+            .border_color(theme::border_strong())
+            .child(mono(
+                card.badge.letters().clone(),
+                11.0,
+                700.0,
+                theme::text_subtle(),
+            )),
+        _ => {
+            let (border, background, color) = if lit {
+                (
+                    theme::accent_border(),
+                    theme::bg_hover_strong(),
                     theme::accent_bright(),
-                )),
-            _ if card.unused => b
-                .border_color(theme::border_default())
-                .bg(theme::transparent())
-                .child(mono(card.badge.clone(), 11.0, 700.0, theme::text_subtle())),
-            _ => b
-                .border_color(theme::border_strong())
-                .bg(theme::bg_app())
-                .child(mono(
-                    card.badge.clone(),
-                    11.0,
-                    700.0,
+                )
+            } else if card.unused {
+                (
+                    theme::border_default(),
+                    theme::transparent(),
+                    theme::text_subtle(),
+                )
+            } else {
+                (
+                    theme::border_strong(),
+                    theme::bg_app(),
                     theme::text_secondary(),
-                )),
-        })
+                )
+            };
+            crate::widgets::icon_or(&card.badge, 28.0, move |letters| {
+                frame()
+                    .border_color(border)
+                    .bg(background)
+                    .child(mono(letters, 11.0, 700.0, color))
+            })
+        }
+    }
 }
 
 /// A card's frame for its state: traced by its header (the full lit

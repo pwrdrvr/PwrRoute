@@ -41,13 +41,14 @@ use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, mono, text};
 use crate::trace_view::{Chip, StepBody, StepState, TraceStep, TraceView, UrlMark, UrlPart};
 use crate::widgets::{
-    ButtonKind, action_tag, app_tag, badge, badge_for, button, caret, input_box, paragraph, tag,
+    AppBadge, ButtonKind, action_tag, app_tag, badge, badge_for, button, caret, input_box,
+    paragraph, tag,
 };
 
 /// An app the picker offers as the link's sender.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenerChoice {
-    pub badge: SharedString,
+    pub badge: AppBadge,
     pub name: SharedString,
     pub bundle_id: SharedString,
 }
@@ -55,7 +56,7 @@ pub struct OpenerChoice {
 impl From<fixtures::Opener> for OpenerChoice {
     fn from(app: fixtures::Opener) -> Self {
         Self {
-            badge: app.badge.into(),
+            badge: AppBadge::new(app.badge, app.bundle_id),
             name: app.name.into(),
             bundle_id: app.bundle_id.into(),
         }
@@ -825,24 +826,23 @@ fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>)
                 .gap(px(14.0))
                 .py(px(14.0))
                 .px(px(16.0))
-                .child(
-                    div()
-                        .size(px(44.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(theme::border_strong())
-                        .bg(theme::bg_elevated())
-                        .child(mono(
-                            view.result.badge.clone(),
-                            13.0,
-                            700.0,
-                            theme::text_secondary(),
-                        )),
-                )
+                .child(crate::widgets::icon_or(
+                    &view.result.badge,
+                    44.0,
+                    |letters| {
+                        div()
+                            .size(px(44.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(10.0))
+                            .border_1()
+                            .border_color(theme::border_strong())
+                            .bg(theme::bg_elevated())
+                            .child(mono(letters, 13.0, 700.0, theme::text_secondary()))
+                    },
+                ))
                 .child(
                     div()
                         .flex_1()

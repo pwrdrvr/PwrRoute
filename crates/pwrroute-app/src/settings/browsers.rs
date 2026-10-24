@@ -210,10 +210,14 @@ fn app_row(
         .gap(px(12.0))
         .py(px(10.0))
         .px(px(16.0))
-        .child(dim(div()
-            .w(px(22.0))
-            .flex_none()
-            .child(badge(app.badge.clone()))))
+        .child(dim(div().w(px(22.0)).flex_none().child(badge(
+            if app.usage == Usage::NotInstalled {
+                // Never an icon beside "not installed".
+                app.badge.without_icon()
+            } else {
+                app.badge.clone()
+            },
+        ))))
         .child(dim(div()
             .flex_1()
             .min_w_0()

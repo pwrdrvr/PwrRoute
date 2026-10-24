@@ -349,7 +349,7 @@ impl RulesStore {
     }
 
     /// The default browser's badge and name.
-    pub fn default_browser(&self) -> (gpui_kit::SharedString, gpui_kit::SharedString) {
+    pub fn default_browser(&self) -> (crate::widgets::AppBadge, gpui_kit::SharedString) {
         rules_model::default_browser(&self.base)
     }
 
@@ -1361,7 +1361,7 @@ mod tests {
         assert!(store.is_empty() && !store.exists());
         assert_eq!(store.rewrite_count() + store.handler_count(), 0);
         let (badge, name) = store.default_browser();
-        assert_eq!((badge.as_ref(), name.as_ref()), ("Sf", "Safari"));
+        assert_eq!((badge.letters().as_ref(), name.as_ref()), ("Sf", "Safari"));
         let named = RulesStore::from_file(
             None,
             RulesFile {

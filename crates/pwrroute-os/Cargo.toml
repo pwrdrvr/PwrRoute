@@ -23,6 +23,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSAppleEventDescriptor",
     "NSAppleEventManager",
     "NSBundle",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
     "NSString",
     "NSURL",
     # AEKeyword, for reading the sender's pid off the Apple Event.
@@ -32,8 +35,17 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "libc",
     "NSRunningApplication",
-    # URLForApplicationWithBundleIdentifier, for a handler's display name.
+    # URLForApplicationWithBundleIdentifier, for a handler's display name,
+    # and iconForFile:, for an app's icon.
     "NSWorkspace",
+    # Rendering that icon to a PNG.
+    "NSBitmapImageRep",
+    "NSColorSpace",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "objc2-core-graphics",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
     "std",

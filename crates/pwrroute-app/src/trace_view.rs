@@ -10,7 +10,7 @@ use std::time::Duration;
 use pwrroute_engine::{AppType, Matcher, RewriteAction, RulesFile, Source, Stage, Step, Trace};
 
 use crate::test_link::OpenerChoice;
-use crate::widgets::{NOT_OPENED, NOT_OPENED_BADGE, badge_for};
+use crate::widgets::{AppBadge, NOT_OPENED, NOT_OPENED_BADGE, badge_for};
 
 /// A resolution, step by step.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,7 +68,7 @@ pub enum Chip {
     /// `.tag.act`: a rewrite action.
     Action(String, String),
     /// `.tag.app`: an app or browser with its badge.
-    App(String, String),
+    App(AppBadge, String),
     /// `.tag`
     Plain(String),
 }
@@ -92,7 +92,7 @@ pub enum UrlMark {
 /// `.res`: where the link opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraceResult {
-    pub badge: String,
+    pub badge: AppBadge,
     pub title: String,
     pub url: String,
     /// A matcher or rewrite threw; the result is the default browser.
@@ -171,10 +171,10 @@ impl TraceView {
         let browser = &trace.resolution.browser;
         let mut chips = Vec::new();
         let (badge, title) = if browser.app_type == AppType::None {
-            (NOT_OPENED_BADGE.to_owned(), NOT_OPENED.to_owned())
+            (AppBadge::from(NOT_OPENED_BADGE), NOT_OPENED.to_owned())
         } else {
             let name = browser.name.clone();
-            chips.push(Chip::App(badge_for(&name).to_string(), name.clone()));
+            chips.push(Chip::App(badge_for(&name), name.clone()));
             if !browser.profile.is_empty() {
                 chips.push(Chip::Plain(format!("profile {}", browser.profile)));
             }
@@ -191,7 +191,7 @@ impl TraceView {
             } else {
                 format!("{name} \u{00b7} {}", browser.profile)
             };
-            (badge_for(&name).to_string(), title)
+            (badge_for(&name), title)
         };
         steps.push(TraceStep {
             number: None,
@@ -379,7 +379,7 @@ fn engine_step(
                 (Some(_), Some(app)) => (
                     format!("sent from {} \u{00b7} first match", app.name),
                     StepBody::Chips(
-                        vec![Chip::App(app.badge.to_string(), app.name.to_string())],
+                        vec![Chip::App(app.badge.clone(), app.name.to_string())],
                         Some(match &pattern {
                             Some(p) => format!("matched the opener; pattern {p} matched the URL"),
                             None => "matched the opener and the URL".into(),

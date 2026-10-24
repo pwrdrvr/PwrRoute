@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- App icons - On macOS, browsers and apps show their own icons, as Finder draws them, where they had a two-letter badge: the Overview's rules and destination cards, Rules, Activity, Test a link, Add a rule, first run, Settings › Browsers and Configuration, and the tray dropdown. Icons are read in the background and cached, and Settings › Browsers' Rescan reads them again. An app that is not installed keeps its letters, as do Windows and Linux for now.
+
 ## v0.1.0 - 2026-10-23
 
 - Overview - The window now opens on Overview: whether links are routing (or paused, not reaching PwrRoute, or held up by a config that did not load or reload), a setup card for what is left, today's links, Everything else, rewrites and failures, and a map of every rule in the order it runs with a curve to the browser and profile it opens. Hovering a row or a card lights its routes, a click pins them, and rows open their rule in Rules. Rules opens as a list with nothing selected.

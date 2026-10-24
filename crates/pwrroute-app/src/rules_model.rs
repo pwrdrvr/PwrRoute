@@ -9,7 +9,7 @@
 use gpui_kit::SharedString;
 use pwrroute_engine::{self as engine, Privacy, PrivacySetting, RewriteAction, RewriteExample};
 
-use crate::widgets::badge_for;
+use crate::widgets::{AppBadge, badge_for};
 
 /// One piece of a rule's match column.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,10 +21,7 @@ pub enum Matcher {
     /// Connective text: "with query", "sent from", "and".
     Label(&'static str),
     /// The app that handed the link to the OS.
-    App {
-        badge: SharedString,
-        name: SharedString,
-    },
+    App { badge: AppBadge, name: SharedString },
     /// A JS function, by its source: only in a Finicky config.
     Function(SharedString),
     /// The rule is switched off.
@@ -48,7 +45,7 @@ pub enum Destination {
     Rewrite(Vec<Change>),
     /// A browser, with its two-letter badge and an optional profile.
     Browser {
-        badge: SharedString,
+        badge: AppBadge,
         name: SharedString,
         profile: Option<SharedString>,
     },
@@ -265,7 +262,7 @@ pub fn everything_else(file: &engine::RulesFile) -> Rule {
 }
 
 /// The default browser's badge and name as the screen says them.
-pub fn default_browser(file: &engine::RulesFile) -> (SharedString, SharedString) {
+pub fn default_browser(file: &engine::RulesFile) -> (AppBadge, SharedString) {
     if file.default_browser.trim().is_empty() {
         // The engine's fallback for a file that names none, by its name.
         let fallback = engine::FALLBACK_BROWSER;
@@ -439,7 +436,7 @@ mod tests {
             [
                 Matcher::Label("sent from"),
                 Matcher::App {
-                    badge: "Sl".into(),
+                    badge: badge_for("com.tinyspeck.slackmacgap"),
                     name: "com.tinyspeck.slackmacgap".into()
                 },
                 Matcher::Label("and"),
@@ -450,7 +447,7 @@ mod tests {
         assert_eq!(
             row.rule.destination,
             Destination::Browser {
-                badge: "Ff".into(),
+                badge: badge_for("Firefox"),
                 name: "Firefox".into(),
                 profile: Some("default-release".into()),
             }
@@ -565,7 +562,7 @@ mod tests {
         assert_eq!(
             everything_else(&empty).destination,
             Destination::Browser {
-                badge: "Sf".into(),
+                badge: badge_for(engine::FALLBACK_BROWSER),
                 name: "Safari".into(),
                 profile: None
             }
@@ -578,7 +575,7 @@ mod tests {
         assert_eq!(
             everything_else(&file).destination,
             Destination::Browser {
-                badge: "Ch".into(),
+                badge: badge_for("Google Chrome"),
                 name: "Google Chrome".into(),
                 profile: Some("Personal".into())
             }

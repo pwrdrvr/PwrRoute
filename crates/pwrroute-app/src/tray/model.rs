@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 use pwrroute_router::{DispatchRecord, Matched, Outcome, Owner, Step};
 
 use crate::activity::{Feed, thousands};
-use crate::widgets::badge_for;
+use crate::widgets::{AppBadge, badge_for};
 
 /// How many recent links the dropdown lists.
 pub const RECENT_LIMIT: usize = 3;
@@ -34,8 +34,8 @@ pub enum Routing {
 /// A browser and profile, as the dropdown names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BrowserLabel {
-    /// The two-letter `.bi` badge.
-    pub badge: String,
+    /// The `.bi` badge: the app's icon, or two letters.
+    pub badge: AppBadge,
     /// The name the reader knows ("Microsoft Edge"), never a bundle id when
     /// a name is known.
     pub name: String,
@@ -46,9 +46,11 @@ pub struct BrowserLabel {
 }
 
 impl BrowserLabel {
-    pub fn new(badge: &str, name: &str, profile: Option<&str>) -> Self {
+    /// A badge of bare letters names the app by `name`, so it draws the
+    /// app's icon too.
+    pub fn new(badge: impl Into<AppBadge>, name: &str, profile: Option<&str>) -> Self {
         Self {
-            badge: badge.to_owned(),
+            badge: badge.into().or_app(name),
             name: name.to_owned(),
             profile: profile.map(str::to_owned),
             app: None,
@@ -187,7 +189,7 @@ impl Recent {
         }
         // A rule may name the browser by bundle id: show its name.
         let label = BrowserLabel::new(
-            &badge_for(&browser.name),
+            badge_for(&browser.name),
             &crate::default_browser::browser_name(&browser.name),
             (!browser.profile.is_empty()).then_some(browser.profile.as_str()),
         )

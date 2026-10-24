@@ -9,6 +9,8 @@
 
 use gpui_kit::SharedString;
 
+use crate::widgets::AppBadge;
+
 pub use crate::default_browser::DefaultState;
 pub use crate::settings_store::JournalLevel;
 
@@ -266,8 +268,8 @@ pub struct DefaultChoice {
     pub value: SharedString,
     /// The name the reader knows, never a bundle id when one is known.
     pub name: SharedString,
-    /// Two letters for the `.bi` badge.
-    pub badge: SharedString,
+    /// The `.bi` badge: the app's icon, or two letters.
+    pub badge: AppBadge,
     /// Its profiles by the names the browser shows; empty: no profile
     /// select.
     pub profiles: Vec<SharedString>,
@@ -403,8 +405,8 @@ pub struct BrowserApp {
     /// The bundle id, ProgID or desktop file id: stable across scans.
     pub id: SharedString,
     pub name: SharedString,
-    /// Two letters for the `.bi` badge.
-    pub badge: SharedString,
+    /// The `.bi` badge: the app's icon, or two letters.
+    pub badge: AppBadge,
     /// "com.google.Chrome · /Applications/Google Chrome.app".
     pub location: SharedString,
     pub profiles: Vec<SharedString>,

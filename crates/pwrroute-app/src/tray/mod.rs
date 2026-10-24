@@ -268,7 +268,7 @@ fn config_default(path: &Path) -> Option<BrowserLabel> {
 /// app's, else the id as written. First run saves a bundle id.
 fn label(browser: &str, profile: &str) -> BrowserLabel {
     BrowserLabel::new(
-        &badge_for(browser),
+        badge_for(browser),
         &default_browser::browser_name(browser),
         Some(profile).filter(|profile| !profile.is_empty()),
     )
@@ -527,14 +527,19 @@ mod target_tests {
         let target = pause_target(Some(&rules("Google Chrome", "Personal")), None, &mut cache);
         assert_eq!(
             target,
-            BrowserLabel::new("Ch", "Google Chrome", Some("Personal"))
+            BrowserLabel::new(
+                badge_for("Google Chrome"),
+                "Google Chrome",
+                Some("Personal")
+            )
         );
         // A bundle id, as first run saves it: named for the reader, and
         // the router still gets the id.
         let bundle = pause_target(Some(&rules("com.google.Chrome", "")), None, &mut cache);
         assert_eq!(
             bundle,
-            BrowserLabel::new("Ch", "Google Chrome", None).for_app("com.google.Chrome")
+            BrowserLabel::new(badge_for("com.google.Chrome"), "Google Chrome", None)
+                .for_app("com.google.Chrome")
         );
         assert_eq!(target_of(&bundle).browser, "com.google.Chrome");
         // Named in rules.json, the config is not consulted at all.
@@ -584,7 +589,10 @@ mod target_tests {
         let config = write_config(dir.path(), r#"{ name: "Firefox", profile: "Work" }"#, at);
         let mut cache = ConfigDefault::default();
         let target = pause_target(Some(&rules("", "")), Some(&config), &mut cache);
-        assert_eq!(target, BrowserLabel::new("Ff", "Firefox", Some("Work")));
+        assert_eq!(
+            target,
+            BrowserLabel::new(badge_for("Firefox"), "Firefox", Some("Work"))
+        );
         assert_eq!(cache.config.as_deref(), Some(config.as_path()));
 
         // Unchanged, the config is not evaluated again: the cached label
@@ -596,7 +604,7 @@ mod target_tests {
         // Changed, it is.
         write_config(dir.path(), r#""Arc""#, at + Duration::from_secs(60));
         let changed = pause_target(None, Some(&config), &mut cache);
-        assert_eq!(changed, BrowserLabel::new("Ar", "Arc", None));
+        assert_eq!(changed, BrowserLabel::new(badge_for("Arc"), "Arc", None));
     }
 
     #[test]
@@ -623,7 +631,11 @@ mod target_tests {
 
     #[test]
     fn the_target_is_what_the_router_is_told() {
-        let target = target_of(&BrowserLabel::new("Ch", "Google Chrome", Some("Personal")));
+        let target = target_of(&BrowserLabel::new(
+            badge_for("Google Chrome"),
+            "Google Chrome",
+            Some("Personal"),
+        ));
         assert_eq!(
             target,
             PauseTarget {
@@ -635,7 +647,11 @@ mod target_tests {
         // And back, for the dropdown while paused.
         assert_eq!(
             label(&target.browser, &target.profile),
-            BrowserLabel::new("Ch", "Google Chrome", Some("Personal"))
+            BrowserLabel::new(
+                badge_for("Google Chrome"),
+                "Google Chrome",
+                Some("Personal")
+            )
         );
     }
 }

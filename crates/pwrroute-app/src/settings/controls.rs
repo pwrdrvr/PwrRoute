@@ -15,7 +15,7 @@ use gpui_kit::{
 use super::model::Status;
 use super::style::{self, ch, para};
 use crate::theme::{self, mono, text, tracked};
-use crate::widgets::tag_frame;
+use crate::widgets::{AppBadge, icon_or, tag_frame};
 
 /// `.btn` and its modifiers.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -244,18 +244,20 @@ pub fn fn_tag() -> Div {
         .child(mono("fn", 10.5, 500.0, theme::accent_bright()))
 }
 
-/// `.bi` at the Browsers list's 20px size.
-pub fn badge(label: impl Into<SharedString>) -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(20.0))
-        .rounded(px(5.0))
-        .border_1()
-        .border_color(theme::border_strong())
-        .child(mono(label, 9.0, 700.0, theme::text_muted()))
+/// `.bi` at the Browsers list's 20px size: the app's icon, else its letters.
+pub fn badge(label: impl Into<AppBadge>) -> Div {
+    icon_or(&label.into(), 20.0, |letters| {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(20.0))
+            .rounded(px(5.0))
+            .border_1()
+            .border_color(theme::border_strong())
+            .child(mono(letters, 9.0, 700.0, theme::text_muted()))
+    })
 }
 
 /// `.note`.

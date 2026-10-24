@@ -110,8 +110,27 @@ pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
     })
 }
 
-/// Reads the machine again: Settings' Rescan.
+/// Whether the scan has run, so [`location_of`] can answer.
+pub fn has_run(cx: &App) -> bool {
+    cx.try_global::<ScanGlobal>()
+        .is_some_and(|global| global.apps.is_some())
+}
+
+/// Where the scan found the app `value` names, when it has already run;
+/// never starts one, so it never reads the disk.
+pub fn location_of(value: &str, cx: &App) -> Option<PathBuf> {
+    cx.try_global::<ScanGlobal>()?
+        .apps
+        .as_ref()?
+        .iter()
+        .find(|app| app.is_named(value))
+        .map(|app| app.location.clone())
+}
+
+/// Reads the machine again: Settings' Rescan and first run's Look again.
+/// The apps' icons are read again too.
 pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
+    crate::app_icons::forget(cx);
     if !cx.has_global::<ScanGlobal>() {
         return scan(&Env::system());
     }
