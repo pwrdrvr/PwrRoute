@@ -353,6 +353,30 @@ fn the_browsers_pane_hides_an_app_and_rescans(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_release_channel_tiles_pick_a_slot_and_a_switch_back_restarts(cx: &mut TestAppContext) {
+    use super::model::Slot;
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Updates.nav_id());
+    for slot in Slot::ALL {
+        assert!(visible(cx, updates::slot_id(slot)), "{slot}");
+    }
+    click(cx, updates::slot_id(Slot::BETA_PRERELEASE));
+    assert_eq!(
+        *requests.borrow(),
+        [SettingsRequest::SetUpdateSlot(Slot::BETA_PRERELEASE)]
+    );
+    // An older release downloaded for the slot picked: Restart to switch.
+    view.update(cx, |view, cx| {
+        view.model.updates.state = UpdateState::SwitchReady("0.1.9".into());
+        cx.notify();
+    });
+    draw(cx);
+    assert!(visible(cx, updates::RESTART_ID));
+    click(cx, updates::RESTART_ID);
+    assert_eq!(requests.borrow()[1], SettingsRequest::RestartToUpdate);
+}
+
+#[gpui_kit::test]
 fn the_updates_pane_checks_now_and_restarts_into_a_download(cx: &mut TestAppContext) {
     let (view, cx, requests) = settings(cx, |_| {});
     click(cx, Pane::Updates.nav_id());

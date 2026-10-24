@@ -114,8 +114,25 @@ Cutting a release: bump `version` in `[workspace.package]` of the root
 the `vX.Y.Z` tag. `cargo xtask release-check --tag vX.Y.Z` verifies the tag,
 version and changelog section before anything is built. No release is created
 until macOS, Windows and both Linux jobs succeed. Releases are born as GitHub
-Pre-releases; promote to Latest manually after validation. Release tags are
-protected by the "Protect v* release tags" ruleset (signed tags only).
+Pre-releases; promote to Latest manually after validation
+(`gh release edit vX.Y.Z --latest --prerelease=false`, suffix-free tags only).
+Release tags are protected by the "Protect v* release tags" ruleset (signed
+tags only).
+
+The tag decides which release channel slot a release lands in (the app's
+Settings › Updates; `crates/pwrroute-app/src/update_channel.rs`), as in
+PwrSnap, PwrGit and PwrAgnt:
+
+| Slot | Tag | |
+|---|---|---|
+| Stable · Latest | `v0.1.0`, promoted | The default. Keeps the previous promoted release until the next one is promoted. |
+| Stable · Prerelease | `v0.1.1` not yet promoted, `v0.1.1-rc.1`, `v0.1.1-prerelease.1` | Candidates for the stable line. |
+| Beta · Latest | `v0.2.0-beta.3` | Beta builds off main. |
+| Beta · Prerelease | `v0.2.0-alpha.7` | Newest alpha off main. |
+
+Every suffixed tag stays a Pre-release. A beta or alpha counts for the Beta
+train only while its version is ahead of the promoted release; once that
+version is promoted, Beta falls back to it.
 
 | Platform | Built on | Assets |
 |---|---|---|
@@ -164,15 +181,23 @@ then rerun `scripts/release/velopack-notices.sh` for the license notices.
 `scripts/release/vpk-pack-windows.ps1` holds the Windows `vpk pack` flags,
 shared by `windows-sign` and the preview.
 
-- **Feed.** Each release carries `releases.<channel>.json` (`win`, `osx`).
-  The app lists the ten newest GitHub releases, merges their feeds and
-  downloads a package from whichever release has it, so a release uploads
-  only its own version's packages. Before packing, each sign job fetches the
-  newest published full package (`vpk download github --pre`) so `vpk` can
-  write a delta against it; the first release packs full only.
-- **Prereleases.** An install whose version (Velopack's `sq.version`) has a
-  prerelease suffix follows GitHub Pre-releases; a stable install sees only
-  releases promoted out of Pre-release.
+- **Feed.** Each release carries `releases.<channel>.json` (`win`, `osx`)
+  and its own packages. The app reads the release list from GitHub's API
+  (`github_releases.rs`; paging until it has seen GitHub's latest release),
+  picks the release of the slot in force, and points Velopack's HTTP source
+  at that release's download directory, so it installs exactly that version.
+  Before packing, each sign job fetches the newest published full package
+  (`vpk download github --pre`) so `vpk` can write a delta against it; a
+  delta applies when the install is that previous version, and otherwise
+  Velopack downloads the full package. The first release packs full only.
+- **Release channel.** An install follows the slot its version implies (no
+  suffix: Stable · Latest; `-rc`: Stable · Prerelease; `-beta`: Beta ·
+  Latest; `-alpha`: Beta · Prerelease) until a slot is picked in Settings ›
+  Updates (`settings.json`'s `updates`). Automatic checks only move forward.
+  Check now may download an older release for the slot picked; that one
+  installs only from Restart to switch, never on quit. A download is
+  recorded with its slot (`updates.json` in the data directory) and is
+  neither shown nor installed after another slot is picked.
 - **Private repository.** The app reads releases without a token, so updates
   need the repository (or a release mirror) to be public. Until then a check
   fails with HTTP 404.

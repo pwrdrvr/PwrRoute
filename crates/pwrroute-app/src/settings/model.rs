@@ -13,6 +13,7 @@ use crate::widgets::AppBadge;
 
 pub use crate::default_browser::DefaultState;
 pub use crate::settings_store::JournalLevel;
+pub use crate::update_channel::Slot;
 
 /// Everything the Settings window draws.
 #[derive(Clone, Debug)]
@@ -431,12 +432,13 @@ pub enum Usage {
 
 // ---- Updates --------------------------------------------------------------
 
-/// Settings › Updates: this copy, and what the updater last said.
+/// Settings › Updates: this copy, the release channel it follows, and
+/// what the updater last said.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
     /// "0.1.0".
     pub version: SharedString,
-    /// "stable" or "prerelease": which releases this copy follows.
+    /// "Stable · Latest": the release channel slot this copy follows.
     pub channel: SharedString,
     /// Where this copy came from: "Installed by Velopack", "A development
     /// build", "Installed from a package".
@@ -444,6 +446,23 @@ pub struct Updates {
     pub state: UpdateState,
     /// "Today 08:13", or `None` while no check has finished.
     pub last_checked: Option<SharedString>,
+    /// The release channel's four slots, in [`Slot::ALL`]'s order.
+    pub slots: Vec<SlotTile>,
+    /// The slot follows the installed build: nothing was picked yet.
+    pub inferred: bool,
+}
+
+/// One tile of the release channel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotTile {
+    pub slot: Slot,
+    /// "v0.1.0": the slot's release, when one is known.
+    pub release: Option<SharedString>,
+    /// What the slot is, or why it shows no release.
+    pub note: SharedString,
+    pub selected: bool,
+    /// The slot's release is this copy's version.
+    pub installed: bool,
 }
 
 /// What the updater last said, for the state row and its chip.
@@ -456,6 +475,11 @@ pub enum UpdateState {
     UpToDate,
     /// `version` is downloaded; a restart installs it.
     Ready(SharedString),
+    /// `version`, older than this copy, is downloaded for the slot picked;
+    /// Restart to switch installs it.
+    SwitchReady(SharedString),
+    /// The slot has no release published yet.
+    NothingPublished,
     /// Why the last check failed; routing is unaffected.
     Failed(SharedString),
     /// This copy cannot update itself, and the text says who does.
@@ -578,6 +602,8 @@ pub enum SettingsRequest {
     CheckForUpdates,
     /// Updates: install the downloaded release and start again.
     RestartToUpdate,
+    /// Updates: follow this release channel slot from now on.
+    SetUpdateSlot(Slot),
     /// About: show `THIRD_PARTY_LICENSES` in the file manager.
     RevealThirdPartyNotices,
     /// About: open this copy's `CHANGELOG.md`.
