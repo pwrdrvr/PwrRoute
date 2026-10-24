@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+## v0.2.0 - 2026-10-24
+
 - App icons - On macOS, browsers and apps show their own icons, as Finder draws them, where they had a two-letter badge: the Overview's rules and destination cards, Rules, Activity, Test a link, Add a rule, first run, Settings › Browsers and Configuration, and the tray dropdown. Icons are read in the background and cached, and Settings › Browsers' Rescan reads them again. An app that is not installed keeps its letters, as do Windows and Linux for now.
+- Overview routes and private windows - The Overview's spare width now goes to the routes between rules and destinations, where it went to an empty rule column. Browsers with a private mode end with a private-window node in their own word (Incognito, InPrivate, Private window): `rules.json` rules with `"private": true`, config handlers whose browser arguments open a private window and a private default route to it, and today's counts land on it only when a private window opened. A private rule to a browser with no private mode is tagged "not private". The precedence callout names both defaults by profile and window when they are the same browser.
+- Release channel - Settings › Updates has a Release channel card: Stable or Beta, Latest or Prerelease. A copy follows the slot its version implies (a final release Stable · Latest, `-rc` Stable · Prerelease, `-beta` Beta · Latest, `-alpha` Beta · Prerelease) until you pick one, and the pick is saved in `settings.json`. Each slot updates to its highest release by version, read from the release list, so a final release no longer waits for a later one to be promoted. Automatic checks only move forward; Check now can download an older release for the picked slot, which installs only from Restart to switch.
 
 ## v0.1.0 - 2026-10-23
 
