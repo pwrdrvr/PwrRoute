@@ -51,6 +51,10 @@ pub const ACTIVATION_GRACE: Duration = Duration::from_secs(5);
 /// chip and cheap enough for a LaunchServices or registry read.
 pub const RECHECK_EVERY: Duration = Duration::from_secs(60);
 
+/// A read of the OS's default browser this slow is logged: it runs on the
+/// main thread, which a link activating the window waits on.
+const SLOW_READ: Duration = Duration::from_millis(50);
+
 /// Who the OS hands web links to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DefaultState {
@@ -237,7 +241,15 @@ impl Registrar {
     /// an unchanged answer then means the request was refused, and the
     /// window stops waiting.
     fn refresh(&mut self, settled: bool, cx: &mut Context<'_, Self>) {
+        let started = std::time::Instant::now();
         let state = self.os.read();
+        let took = started.elapsed();
+        if took >= SLOW_READ {
+            log::warn!(
+                "reading the default browser took {}ms on the main thread",
+                took.as_millis()
+            );
+        }
         if state != self.state {
             self.state = state;
             self.pending = None;

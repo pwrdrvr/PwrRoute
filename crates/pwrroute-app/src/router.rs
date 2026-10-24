@@ -676,6 +676,18 @@ impl Launcher for BrowserLauncher {
             for note in &plan.notes {
                 log::warn!("{}", describe_note(note));
             }
+            // A hand-off's browser brings itself forward, which macOS 14
+            // allows only once the active app gives way. When a link
+            // activated PwrRoute, that is PwrRoute: give way, or the person
+            // watches PwrRoute's window until macOS relents.
+            if let Some(id) = &plan.hand_off_to {
+                let started = std::time::Instant::now();
+                let passed = pwrroute_os::pass_front_to(id);
+                log::debug!(
+                    "passed the front to {id}: {passed} ({:.1}ms)",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
         }
         Ok(())
     }

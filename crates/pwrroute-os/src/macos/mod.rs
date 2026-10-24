@@ -11,7 +11,8 @@ pub use window_order::top_window_owner;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use objc2_app_kit::{NSRunningApplication, NSWorkspace};
+use objc2::rc::autoreleasepool;
+use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
 use pwrroute_router::OpenerInfo;
 
@@ -90,6 +91,45 @@ pub fn open_settings() -> Result<()> {
         .spawn()
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
+}
+
+/// Hands the front to the running app with `bundle_id`, when this app is
+/// the active one: macOS 14's cooperative
+/// activation lets an app bring itself forward only when the active app
+/// gives way, and a browser that takes a link from a second instance
+/// (`open -g -n`, a Chromium profile hand-off) brings itself forward. Called
+/// from any thread: `NSRunningApplication` is thread-safe, unlike
+/// `NSApp.yieldActivation`, and the main thread may be the one busy.
+/// `false` when nothing was asked: an older macOS, this app not active, or
+/// no app with `bundle_id` running.
+pub fn pass_front_to(bundle_id: &str) -> bool {
+    if !objc2::available!(macos = 14.0) {
+        return false;
+    }
+    autoreleasepool(|_| {
+        let me = NSRunningApplication::currentApplication();
+        if !me.isActive() {
+            return false;
+        }
+        // A hand-off's `-n` starts a second instance that only passes the
+        // link on and quits: the front goes to the one that was there first.
+        let Some(target) = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(bundle_id),
+        )
+        .iter()
+        .filter(|running| !running.isTerminated())
+        .min_by(|a, b| launched_at(a).total_cmp(&launched_at(b))) else {
+            return false;
+        };
+        target.activateFromApplication_options(&me, NSApplicationActivationOptions::empty())
+    })
+}
+
+/// When `app` was launched, in seconds since 1970; the earliest possible for
+/// an app LaunchServices didn't launch, which has no launch date.
+fn launched_at(app: &NSRunningApplication) -> f64 {
+    app.launchDate()
+        .map_or(f64::NEG_INFINITY, |date| date.timeIntervalSince1970())
 }
 
 /// Whether an app with `bundle_id` is running, as AppKit's running

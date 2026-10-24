@@ -24,6 +24,13 @@ browser registration on macOS, Windows and Linux, and apps' icons (macOS).
   current from any thread even while the app's main thread is busy (which
   is what the app's hand-off log measures). Owner pids and layers need no
   Screen Recording permission; never read window titles there.
+- **`pass_front_to` is for a hand-off launch only** (`open -g -n`, a
+  Chromium profile): macOS 14's cooperative activation lets the running
+  browser bring itself forward only when the active app gives way. It
+  activates the instance with the earliest launch date, never the
+  short-lived `-n` one, and does nothing unless PwrRoute is the active app.
+  It takes a bundle id: the launcher's `Plan::hand_off_to` names the copy,
+  and says when the link is not meant for the background.
 - **App icons (`app_bundle`, `app_icon_png`) read the disk.** Callers run
   them off the UI thread and cache the result; the app's `app_icons.rs`
   does. Windows and Linux return `None` until they have an implementation.
