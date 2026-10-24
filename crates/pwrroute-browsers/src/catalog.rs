@@ -45,6 +45,10 @@ pub struct BrowserInfo {
     /// `--inprivate`; Arc and Dia take none.
     #[serde(default)]
     private_flag: Option<PrivateFlag>,
+    /// What the browser's own menus call a private window, where it is not
+    /// the flag's word (Brave, Vivaldi and Opera say "Private window").
+    #[serde(default)]
+    private_label: Option<String>,
     pub macos: Option<MacOs>,
     pub windows: Option<Windows>,
     pub linux: Option<Linux>,
@@ -101,6 +105,17 @@ impl PrivateFlag {
             Self::Incognito => Some("--incognito"),
             Self::InPrivate => Some("--inprivate"),
             Self::PrivateWindow => Some("--private-window"),
+            Self::None => Option::None,
+        }
+    }
+
+    /// What browsers with this flag call a private window: "Incognito",
+    /// "InPrivate", "Private window".
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Incognito => Some("Incognito"),
+            Self::InPrivate => Some("InPrivate"),
+            Self::PrivateWindow => Some("Private window"),
             Self::None => Option::None,
         }
     }
@@ -276,6 +291,15 @@ impl BrowserInfo {
             BrowserEngine::Firefox => PrivateFlag::PrivateWindow,
             BrowserEngine::WebKit => PrivateFlag::None,
         })
+    }
+
+    /// What this browser calls a private window ("Incognito", "InPrivate",
+    /// "Private window"), or `None` when it cannot open one from the
+    /// command line.
+    pub fn private_label(&self) -> Option<&str> {
+        let flag = self.private_flag();
+        flag.label()?;
+        self.private_label.as_deref().or(flag.label())
     }
 
     /// Whether the catalog has anything for `platform`.

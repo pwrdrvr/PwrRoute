@@ -217,12 +217,8 @@ impl Launcher {
         }
         let expanded = expand_home(browser, &self.env);
         let browser = expanded.as_ref();
-        let catalog = Catalog::builtin();
         let platform = self.env.platform();
-        let entry = match browser.app_type {
-            AppType::Path => catalog.find_by_path(platform, Path::new(&browser.name)),
-            _ => catalog.find(&browser.name),
-        };
+        let entry = catalog_entry(&browser.name, browser.app_type, platform);
         let mut notes = Vec::new();
         let mut flags = self.profile_args(entry, &browser.profile, &mut notes);
         if browser.private
@@ -407,6 +403,48 @@ impl Launcher {
                 .or_else(|| Some((env.which(&browser.name)?, extra.clone()))),
         };
         command.ok_or_else(|| not_installed(browser))
+    }
+}
+
+/// The catalog entry the launcher opens a browser with: a `.app` path by
+/// its file, anything else by name, alias or bundle id.
+pub fn catalog_entry(
+    name: &str,
+    app_type: AppType,
+    platform: Platform,
+) -> Option<&'static BrowserInfo> {
+    let catalog = Catalog::builtin();
+    match app_type {
+        AppType::Path => catalog.find_by_path(platform, Path::new(name)),
+        _ => catalog.find(name),
+    }
+}
+
+/// What a browser asked to open privately ([`Browser::private`]) opens, by
+/// the window's name: the catalog's ("Incognito", "InPrivate", "Private
+/// window") when it knows the browser, else the word for a private flag
+/// its `args` carry, which reach it as written. `None` when a normal
+/// window opens: the catalog's browser has no private mode (Safari, Arc;
+/// its flag in `args` is ignored), or one it does not know was given none.
+pub fn private_window(
+    name: &str,
+    app_type: AppType,
+    args: &[String],
+    platform: Platform,
+) -> Option<&'static str> {
+    match catalog_entry(name, app_type, platform) {
+        Some(entry) => entry.private_label(),
+        None => {
+            let flag = args
+                .iter()
+                .find_map(|arg| pwrroute_engine::private_flag_name(arg))?;
+            match flag {
+                "incognito" => PrivateFlag::Incognito,
+                "inprivate" => PrivateFlag::InPrivate,
+                _ => PrivateFlag::PrivateWindow,
+            }
+            .label()
+        }
     }
 }
 
@@ -985,5 +1023,52 @@ mod tests {
         };
         let err = spawn(&plan).unwrap_err();
         assert!(matches!(err, LaunchError::Spawn { .. }), "{err}");
+    }
+
+    /// A private window opens by the launcher's lookup: the catalog's word
+    /// for a browser it knows, none for one without a private mode, and a
+    /// flag in `args` only for a browser it does not know.
+    #[test]
+    fn private_window_follows_the_launchers_lookup() {
+        let mac = Platform::MacOs;
+        let none: &[String] = &[];
+        let flag = |arg: &str| vec![arg.to_owned()];
+        let at = |name: &str, app_type: AppType, args: &[String]| {
+            private_window(name, app_type, args, mac)
+        };
+        assert_eq!(
+            at("Google Chrome", AppType::AppName, none),
+            Some("Incognito")
+        );
+        assert_eq!(
+            at("com.microsoft.edgemac", AppType::BundleId, none),
+            Some("InPrivate")
+        );
+        assert_eq!(
+            at("/Applications/Firefox.app", AppType::Path, none),
+            Some("Private window")
+        );
+        assert_eq!(
+            at("Safari", AppType::AppName, &flag("--private-window")),
+            None
+        );
+        assert_eq!(at("Nightly Build", AppType::AppName, none), None);
+        assert_eq!(
+            at("Nightly Build", AppType::AppName, &flag("-InPrivate")),
+            Some("InPrivate")
+        );
+        // A path the engine reads as an app name is looked up by name.
+        assert_eq!(
+            at(
+                "Apps/Google Chrome.app",
+                AppType::AppName,
+                &flag("--incognito")
+            ),
+            Some("Incognito")
+        );
+        assert_eq!(
+            at("/Applications/Google Chrome.app", AppType::AppName, none),
+            None
+        );
     }
 }

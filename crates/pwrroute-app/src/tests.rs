@@ -3016,6 +3016,100 @@ fn an_idle_node_adds_a_rule_for_its_profile(cx: &mut TestAppContext) {
     );
 }
 
+/// Rule 5 opens a private Firefox window: hovering Firefox's private
+/// node lights its route, which ends there and not at the profile.
+#[gpui_kit::test]
+fn hovering_a_private_window_lights_its_routes(cx: &mut TestAppContext) {
+    use crate::overview_model::{Focus, FocusKey};
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // At rest every enabled rule still has its route.
+    assert_eq!(painted(&view, cx).len(), 6);
+    scroll_to(cx, "overview-node-2-1");
+    hover(cx, "overview-node-2-1");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.hovered.clone()),
+        Some(FocusKey::Private("firefox".into()))
+    );
+    assert_eq!(
+        placed(&view, cx, |state| state.hovered.clone()),
+        Some(Focus::Node(2, 1))
+    );
+    let node = cx
+        .debug_bounds("overview-node-2-1")
+        .expect("Firefox's private window");
+    let lit: Vec<_> = painted(&view, cx)
+        .into_iter()
+        .filter(|route| route.lit)
+        .collect();
+    assert_eq!(lit.len(), 1, "rule 5 alone: {lit:?}");
+    assert!((lit[0].to.x - node.left()).abs() < px(12.0));
+    assert!((lit[0].to.y - node.center().y).abs() < px(15.0));
+    // The private node sits under the profile, apart from it.
+    let profile = cx
+        .debug_bounds("overview-node-2-0")
+        .expect("Firefox's default profile");
+    assert!(node.top() >= profile.bottom() + px(4.0));
+}
+
+/// An idle private-window node offers "+ Add a rule…": Rules' new rule
+/// with that browser, no profile, and a private window on.
+#[gpui_kit::test]
+fn an_idle_private_window_adds_a_private_rule(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // Chrome's Incognito, after its three profiles.
+    scroll_to(cx, "overview-node-0-3");
+    hover(cx, "overview-node-0-3");
+    assert_eq!(
+        placed(&view, cx, |state| state.idle_hover.clone()),
+        Some(crate::overview_model::Focus::Node(0, 3))
+    );
+    assert_eq!(lit_count(&view, cx), 0, "an idle node traces nothing");
+    click(cx, "overview-node-0-3");
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(screen, Screen::Rules);
+    assert_eq!(selection, Some(Selection::Handler(6)));
+    let rule = view.read_with(cx, |app, _| app.store.edited().rules[6].clone());
+    assert_eq!(
+        (rule.browser.as_str(), rule.profile.as_str(), rule.private),
+        ("Google Chrome", "", true)
+    );
+}
+
+/// The keyboard reaches a card's private window after its profiles, and
+/// Return on an idle one adds a private rule as its click does.
+#[gpui_kit::test]
+fn return_on_an_idle_private_window_adds_a_private_rule(cx: &mut TestAppContext) {
+    use crate::overview_model::FocusKey;
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    view.update(cx, |app, _| {
+        app.overview
+            .key(Some(FocusKey::Private("microsoft edge".into())));
+    });
+    draw(cx);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    let rule = view.read_with(cx, |app, _| app.store.edited().rules[6].clone());
+    assert_eq!(
+        (rule.browser.as_str(), rule.profile.as_str(), rule.private),
+        ("Microsoft Edge", "", true)
+    );
+}
+
 #[gpui_kit::test]
 fn the_keyboard_traces_and_return_opens_the_rule(cx: &mut TestAppContext) {
     use crate::overview_model::Focus;
@@ -3077,9 +3171,11 @@ fn return_on_an_idle_node_adds_a_rule(cx: &mut TestAppContext) {
 }
 
 /// A scroll moves the map under a pointer that did not move: the hover
-/// lets go rather than tracing a row that is no longer under it.
+/// lets go rather than tracing a row that is no longer under it (GPUI may
+/// then report the row that now is).
 #[gpui_kit::test]
 fn a_scroll_lets_go_of_the_hover(cx: &mut TestAppContext) {
+    use crate::overview_model::{FocusKey, RowSource};
     let (view, cx, _) = open_overview(
         cx,
         None,
@@ -3097,11 +3193,17 @@ fn a_scroll_lets_go_of_the_hover(cx: &mut TestAppContext) {
     };
     cx.update(|window, cx| window.dispatch_event(event.to_platform_input(), cx));
     draw(cx);
-    assert_eq!(
-        view.read_with(cx, |app, _| app.overview.hovered.clone()),
-        None
+    let moved = cx.debug_bounds("overview-row-1").expect("rule 2's row");
+    assert!(moved.top() < row.top(), "the pane scrolled");
+    let hovered = view.read_with(cx, |app, _| app.overview.hovered.clone());
+    assert_ne!(hovered, Some(FocusKey::Row(RowSource::Rule(1))));
+    assert!(
+        painted(&view, cx)
+            .iter()
+            .filter(|route| route.lit)
+            .all(|route| (route.from.y - moved.center().y).abs() > px(1.0)),
+        "rule 2's route is not traced"
     );
-    assert_eq!(lit_count(&view, cx), 0);
 }
 
 #[gpui_kit::test]

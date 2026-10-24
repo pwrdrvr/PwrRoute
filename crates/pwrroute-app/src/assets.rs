@@ -63,6 +63,10 @@ const ICONS: &[(&str, &[u8])] = &[
         "pwrroute/alert.svg",
         include_bytes!("../assets/icons/alert.svg"),
     ),
+    (
+        "pwrroute/mask.svg",
+        include_bytes!("../assets/icons/mask.svg"),
+    ),
 ];
 
 const FONTS: &[&[u8]] = &[

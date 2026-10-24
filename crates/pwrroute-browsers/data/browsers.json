@@ -421,6 +421,7 @@
       "id": "brave",
       "name": "Brave Browser",
       "engine": "chromium",
+      "private_label": "Private window",
       "finicky": true,
       "macos": {
         "bundle_id": "com.brave.Browser",
@@ -457,7 +458,8 @@
         "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/install_static/chromium_install_modes.h",
         "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/common/chrome_constants.cc",
         "https://github.com/microsoft/winget-pkgs/tree/master/manifests/b/Brave/Brave",
-        "https://formulae.brew.sh/api/cask/brave-browser.json"
+        "https://formulae.brew.sh/api/cask/brave-browser.json",
+        "https://support.brave.app/hc/en-us/articles/39269576876685-How-do-I-customize-the-toolbar-in-Brave"
       ],
       "notes": "The Flatpak (com.brave.Browser) shares the native desktop id. /usr/bin/brave-browser is shared by every channel's package. Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
     },
@@ -465,6 +467,7 @@
       "id": "brave-beta",
       "name": "Brave Browser Beta",
       "engine": "chromium",
+      "private_label": "Private window",
       "macos": {
         "bundle_id": "com.brave.Browser.beta",
         "app_name": "Brave Browser Beta",
@@ -498,7 +501,8 @@
         "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/install_static/chromium_install_modes.h",
         "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/common/chrome_constants.cc",
         "https://github.com/microsoft/winget-pkgs/tree/master/manifests/b/Brave/Brave",
-        "https://formulae.brew.sh/api/cask/brave-browser@beta.json"
+        "https://formulae.brew.sh/api/cask/brave-browser@beta.json",
+        "https://support.brave.app/hc/en-us/articles/39269576876685-How-do-I-customize-the-toolbar-in-Brave"
       ],
       "notes": "Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
     },
@@ -506,6 +510,7 @@
       "id": "brave-nightly",
       "name": "Brave Browser Nightly",
       "engine": "chromium",
+      "private_label": "Private window",
       "finicky": true,
       "macos": {
         "bundle_id": "com.brave.Browser.nightly",
@@ -541,7 +546,8 @@
         "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/install_static/chromium_install_modes.h",
         "https://github.com/brave/brave-core/blob/master/chromium_src/chrome/common/chrome_constants.cc",
         "https://github.com/microsoft/winget-pkgs/tree/master/manifests/b/Brave/Brave",
-        "https://formulae.brew.sh/api/cask/brave-browser@nightly.json"
+        "https://formulae.brew.sh/api/cask/brave-browser@nightly.json",
+        "https://support.brave.app/hc/en-us/articles/39269576876685-How-do-I-customize-the-toolbar-in-Brave"
       ],
       "notes": "Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
     },
@@ -549,6 +555,7 @@
       "id": "vivaldi",
       "name": "Vivaldi",
       "engine": "chromium",
+      "private_label": "Private window",
       "finicky": true,
       "macos": {
         "bundle_id": "com.vivaldi.Vivaldi",
@@ -586,7 +593,8 @@
         "https://github.com/microsoft/winget-pkgs/tree/master/manifests/v/Vivaldi/Vivaldi",
         "https://help.vivaldi.com/desktop/install-vivaldi-for-snap/",
         "https://github.com/J-U-B/OPSI-dfn_vivaldi",
-        "https://forum.vivaldi.net/post/189636"
+        "https://forum.vivaldi.net/post/189636",
+        "https://help.vivaldi.com/desktop/privacy/private-windows/"
       ],
       "notes": "The ProgID comes from a deployment script and a forum post, not Vivaldi. Windows per-user installs that do not own the plain registration append '.<suffix>' to the ProgID; it still matches."
     },
@@ -594,6 +602,7 @@
       "id": "vivaldi-snapshot",
       "name": "Vivaldi Snapshot",
       "engine": "chromium",
+      "private_label": "Private window",
       "macos": {
         "bundle_id": "com.vivaldi.Vivaldi.snapshot",
         "app_name": "Vivaldi Snapshot",
@@ -615,7 +624,8 @@
       "sources": [
         "https://formulae.brew.sh/api/cask/vivaldi@snapshot.json",
         "https://help.vivaldi.com/desktop/install-update/standalone-version-of-vivaldi/",
-        "https://vivaldi.com/blog/snapshot-vs-stable/"
+        "https://vivaldi.com/blog/snapshot-vs-stable/",
+        "https://help.vivaldi.com/desktop/privacy/private-windows/"
       ],
       "notes": "No Windows entry: Snapshot replaces stable in the same directory unless installed standalone, wherever the user chose."
     },
@@ -623,6 +633,7 @@
       "id": "opera",
       "name": "Opera",
       "engine": "chromium",
+      "private_label": "Private window",
       "finicky": true,
       "macos": {
         "bundle_id": "com.operasoftware.Opera",
@@ -656,7 +667,8 @@
         "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
         "https://github.com/microsoft/winget-pkgs/tree/master/manifests/o/Opera/Opera",
         "https://appcatalog.cloud/apps/opera",
-        "https://forums.opera.com/post/1646"
+        "https://forums.opera.com/post/1646",
+        "https://help.opera.com/en/latest/security-and-privacy/"
       ],
       "notes": "Finicky passes --profile-directory to it; Opera does not document the flag (its forums describe --user-data-dir per profile). Windows keeps Opera's data in Roaming; the per-user install path and the Linux profile directory are Opera's defaults, not verified against Opera documentation."
     },
@@ -664,6 +676,7 @@
       "id": "opera-gx",
       "name": "Opera GX",
       "engine": "chromium",
+      "private_label": "Private window",
       "finicky": true,
       "macos": {
         "bundle_id": "com.operasoftware.OperaGX",
@@ -699,7 +712,8 @@
         "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
         "https://github.com/microsoft/winget-pkgs/tree/master/manifests/o/Opera/OperaGX",
         "https://rpm.opera.com/",
-        "https://flathub.org/apps/com.opera.opera-gx"
+        "https://flathub.org/apps/com.opera.opera-gx",
+        "https://help.opera.com/en/latest/security-and-privacy/"
       ],
       "notes": "Finicky passes --profile-directory to it; Opera does not document the flag (its forums describe --user-data-dir per profile). The Windows install path and native Linux profile directory are unverified."
     },

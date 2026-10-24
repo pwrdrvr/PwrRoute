@@ -32,6 +32,11 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   engine's `Browser` asks for it (`pwrroute_engine::Browser::private`, set
   from `rules[].private` or a known private flag in a JS config's args); a
   browser without one gets `Note::PrivateUnsupported` and still opens.
+  `private_window` says what such a request opens, by the launcher's own
+  lookup (`catalog_entry`); the app's Overview and its Activity counts
+  use it rather than reading the catalog themselves. `private_label` names the window as the browser's menu does (the flag's
+  word unless an entry, with a source, says otherwise: Brave, Vivaldi and
+  Opera say "Private window"); the Overview draws it.
 - **Running browsers are asked, not detected.** `Launcher::with_running`
   takes a bundle-id check (the app passes `pwrroute_os::app_is_running`);
   this crate never calls AppKit. With it, a macOS `-n` launch of a running
