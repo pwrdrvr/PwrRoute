@@ -53,6 +53,16 @@ and Windows).
   does (`SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK`, premultiplied BGRA made
   straight RGBA in `icon_pixels.rs`, which is plain code tested on every
   platform). Linux returns `None` until it has an implementation.
+- **`start_link_helper(replace_stale)` replaces a helper left from before an
+  update.** Velopack restarts only the app, so a helper started earlier runs
+  its deleted binary and still gets every link. `link_helper.rs` holds the
+  pure decision: stale when its executable is gone, or when it is this app's
+  helper and launched before the bundled executable was created (updates
+  extract new files). Stale ones get AppKit's quit, then `forceTerminate`
+  after 2 s, on a background thread, and the bundled helper starts as a new
+  instance. The app calls it only while the helper is the default browser,
+  and passes `false` when a helper launched it with links; that helper exits
+  by itself after its next job.
 - Names (`BUNDLE_ID`, `LINK_HELPER_ID`, `LINK_HELPER_PATH`, `PROG_ID`,
   `DESKTOP_ID`) must match `packaging/` and xtask; a test reads those files
   to hold them together.

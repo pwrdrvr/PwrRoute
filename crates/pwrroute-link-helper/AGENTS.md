@@ -21,6 +21,15 @@ router.
   from `pwrroute_os::current_opener()`, through `instance::Client` at
   `pwrroute_os::router_dir()`, on one worker thread so they keep their order.
   The helper stays resident; a later link skips the process launch.
+- **It exits once its executable is gone** (`replaced.rs`). An update swaps
+  the whole `PwrRoute.app` (Velopack renames the new bundle over the old one
+  and deletes it) and restarts only the app; the Trash moves it. The helper
+  notes its executable's dev and inode at start and looks again after each
+  job and every 30 s while idle (after a move to the Trash macOS can no
+  longer find the bundle id, so no link would come): once the path names
+  another file or none, it forwards what is queued and exits, so the next
+  link starts the helper installed now. The app also
+  replaces a stale helper when it starts (`pwrroute_os::start_link_helper`).
 - **A link is never lost.** No router answering means PwrRoute is not
   running or is stuck: the helper launches `PwrRoute.app` (found from its
   own bundle path) with NSWorkspace, `activates = false` and a new instance,
