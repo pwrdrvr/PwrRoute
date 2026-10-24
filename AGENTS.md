@@ -154,6 +154,10 @@ signing secrets are documented in `.github/workflows/README.md`.
 
 ## Pull Requests
 
+- **Don't edit `CHANGELOG.md` in feature or fix PRs.** Every open PR that
+  adds a bullet conflicts with every other one. Put the user-facing summary in
+  the PR description; the release-prep PR (`chore(release): vX.Y.Z`) writes
+  the version's section from the PRs merged since the last tag.
 - Prefer before/after screenshots on PRs that change visible UI, with 100%
   contrived fixture data. URLs are private data: never put real browsing
   history, Activity entries or traces in a screenshot.
