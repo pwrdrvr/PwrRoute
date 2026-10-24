@@ -149,10 +149,19 @@ mod tests {
         assert!(matches!(super::model().state, UpdateState::NotUpdatable(_)));
     }
 
+    /// A fixed local time, so "Today" never depends on when the test runs.
+    fn local(hour: u32, minute: u32, second: u32) -> DateTime<Local> {
+        use chrono::TimeZone;
+        Local
+            .with_ymd_and_hms(2026, 10, 23, hour, minute, second)
+            .single()
+            .expect("an unambiguous local time")
+    }
+
     #[test]
     fn the_last_outcome_becomes_the_state_and_the_time() {
-        let now = Local::now();
-        let at = |ago: Duration| SystemTime::now() - ago;
+        let now = local(12, 0, 0);
+        let at = |ago: Duration| SystemTime::from(now) - ago;
         let state = |checking, last| State { checking, last };
 
         let model = build(&velopack(), &state(true, None), now);
@@ -170,8 +179,7 @@ mod tests {
             now,
         );
         assert_eq!(model.state, UpdateState::UpToDate);
-        let checked = model.last_checked.unwrap();
-        assert!(checked.starts_with("Today "), "{checked}");
+        assert_eq!(model.last_checked.unwrap(), "Today 11:59");
 
         let model = build(
             &velopack(),
@@ -210,5 +218,19 @@ mod tests {
             now,
         );
         assert_eq!(model.channel, "prerelease");
+    }
+
+    /// A check a minute before midnight is yesterday's, not "Today", once
+    /// the day has turned.
+    #[test]
+    fn a_check_before_midnight_is_dated_after_it() {
+        let now = local(0, 0, 30);
+        let checked = SystemTime::from(now) - Duration::from_secs(60);
+        let state = State {
+            checking: false,
+            last: Some((checked, Outcome::UpToDate("0.2.0".into()))),
+        };
+        let model = build(&velopack(), &state, now);
+        assert_eq!(model.last_checked.unwrap(), "2026-10-22 23:59");
     }
 }
