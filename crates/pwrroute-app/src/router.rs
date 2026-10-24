@@ -677,8 +677,13 @@ impl Launcher for BrowserLauncher {
                 log::warn!("{}", describe_note(note));
             }
             if passes_the_front(browser, &plan.args) {
+                let started = std::time::Instant::now();
                 let passed = pwrroute_os::pass_front_to(&browser.name);
-                log::debug!("passed the front to {:?}: {passed}", browser.name);
+                log::debug!(
+                    "passed the front to {:?}: {passed} ({:.1}ms)",
+                    browser.name,
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
             }
         }
         Ok(())

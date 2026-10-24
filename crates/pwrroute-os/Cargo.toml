@@ -24,6 +24,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSAppleEventManager",
     "NSBundle",
     "NSData",
+    # NSRunningApplication's launch date, to tell a browser from its
+    # hand-off instance.
+    "NSDate",
     "NSDictionary",
     "NSGeometry",
     "NSString",

@@ -114,13 +114,25 @@ pub fn pass_front_to(app: &str) -> bool {
         let Some(id) = bundle_id_for(app) else {
             return false;
         };
-        let running =
-            NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(&id));
-        let Some(target) = running.firstObject() else {
+        // A hand-off's `-n` starts a second instance that only passes the
+        // link on and quits: the front goes to the one that was there first.
+        let Some(target) =
+            NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(&id))
+                .iter()
+                .filter(|running| !running.isTerminated())
+                .min_by(|a, b| launched_at(a).total_cmp(&launched_at(b)))
+        else {
             return false;
         };
         target.activateFromApplication_options(&me, NSApplicationActivationOptions::empty())
     })
+}
+
+/// When `app` was launched, in seconds since 1970; the earliest possible for
+/// an app LaunchServices didn't launch, which has no launch date.
+fn launched_at(app: &NSRunningApplication) -> f64 {
+    app.launchDate()
+        .map_or(f64::NEG_INFINITY, |date| date.timeIntervalSince1970())
 }
 
 /// The bundle id of `app`: itself when an app with that id is running,
