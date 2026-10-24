@@ -236,6 +236,17 @@ fn a_long_recent_detail_stays_inside_the_card(cx: &mut TestAppContext) {
     assert!(age.right() <= card.right(), "{age:?} in {card:?}");
 }
 
+/// An earlier build's registration is the default: the row stays, and the
+/// card still fits it.
+#[gpui_kit::test]
+fn a_legacy_default_keeps_the_make_default_row(cx: &mut TestAppContext) {
+    let mut legacy = TrayModel::fixture(SystemTime::now());
+    legacy.default_is_legacy = true;
+    let mut opened = open(legacy, cx);
+    assert!(opened.cx.debug_bounds(MAKE_DEFAULT_ID).is_some(), "the row");
+    assert_card_fits(&mut opened);
+}
+
 #[gpui_kit::test]
 fn the_pause_row_pauses_the_router_and_the_card_still_fits(cx: &mut TestAppContext) {
     // A real router with no config, as `install` would hold it; the

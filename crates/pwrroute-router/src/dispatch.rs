@@ -1078,8 +1078,9 @@ fn same_url(a: &str, b: &str) -> bool {
     a == b || matches!((url::Url::parse(a), url::Url::parse(b)), (Ok(a), Ok(b)) if a == b)
 }
 
-/// Whether a browser is PwrRoute, by name, bundle id or path. Routing a link
-/// there would bounce it straight back.
+/// Whether a browser is PwrRoute, by name, bundle id or path: the app, or
+/// its macOS link helper (`com.pwrdrvr.pwrroute.links`, nested in
+/// `PwrRoute.app`). Routing a link there would bounce it straight back.
 fn is_self(browser: &Browser) -> bool {
     is_self_name(&browser.name)
 }

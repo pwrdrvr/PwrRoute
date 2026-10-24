@@ -364,7 +364,7 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
         rules: facts.rules,
         current_default: match &facts.handler {
             DefaultState::Other(_) => Some(facts.handler.current_name()),
-            DefaultState::PwrRoute | DefaultState::Unknown => None,
+            DefaultState::PwrRoute | DefaultState::PwrRouteLegacy | DefaultState::Unknown => None,
         },
         is_default: facts.handler.is_default(),
         ..FirstRunModel::default()

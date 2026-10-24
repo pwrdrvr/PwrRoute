@@ -56,6 +56,11 @@ pub const RECHECK_EVERY: Duration = Duration::from_secs(60);
 pub enum DefaultState {
     /// PwrRoute handles `http` and `https`.
     PwrRoute,
+    /// PwrRoute handles them through the app's own bundle id, as
+    /// v0.1.0-rc.1 registered it on macOS, so every link activates the app
+    /// before the browser comes forward. Links still reach PwrRoute; asking
+    /// again ([`request`]) moves the default to the windowless link helper.
+    PwrRouteLegacy,
     /// Another app does, by the name the reader knows ("Google Chrome"),
     /// or by the id the OS gave when the catalog does not know it.
     Other(SharedString),
@@ -71,27 +76,33 @@ impl DefaultState {
             return Self::Unknown;
         };
         if status.is_default {
-            return Self::PwrRoute;
+            return if status.legacy {
+                Self::PwrRouteLegacy
+            } else {
+                Self::PwrRoute
+            };
         }
         // Windows can have the two schemes on different apps ("1 of 2
         // done"); name the one that is not PwrRoute yet.
-        let ours = |id: &String| {
-            id.eq_ignore_ascii_case(pwrroute_os::BUNDLE_ID)
-                || id.eq_ignore_ascii_case(pwrroute_os::PROG_ID)
-                || id.eq_ignore_ascii_case(pwrroute_os::DESKTOP_ID)
-        };
         match [&status.http, &status.https]
             .into_iter()
             .flatten()
-            .find(|id| !ours(id))
+            .find(|id| !pwrroute_os::is_pwrroute_handler(id))
         {
             Some(id) => Self::Other(handler_name(id, app_name).into()),
             None => Self::Unknown,
         }
     }
 
+    /// Links reach PwrRoute, by either registration.
     pub fn is_default(&self) -> bool {
-        *self == Self::PwrRoute
+        matches!(self, Self::PwrRoute | Self::PwrRouteLegacy)
+    }
+
+    /// PwrRoute is the default, but through the app itself: worth one more
+    /// "Make default browser" for faster links.
+    pub fn is_legacy(&self) -> bool {
+        *self == Self::PwrRouteLegacy
     }
 
     /// The browser links open in today, for a sentence: "Google Chrome",
@@ -99,7 +110,9 @@ impl DefaultState {
     pub fn current_name(&self) -> String {
         match self {
             Self::Other(name) => name.to_string(),
-            Self::PwrRoute | Self::Unknown => "your current browser".to_owned(),
+            Self::PwrRoute | Self::PwrRouteLegacy | Self::Unknown => {
+                "your current browser".to_owned()
+            }
         }
     }
 }
@@ -464,7 +477,9 @@ pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
                 }
                 registrar.update(cx, |registrar, cx| registrar.poll(tick == ticks, cx));
                 let registrar = registrar.read(cx);
-                registrar.state.is_default() || !registrar.waiting()
+                // The goal is the helper: a legacy default asked again is
+                // still waiting for it.
+                registrar.state == DefaultState::PwrRoute || !registrar.waiting()
             });
             if done {
                 break;
@@ -487,7 +502,9 @@ pub fn open_settings(cx: &mut App) -> anyhow::Result<()> {
 /// The strip chip on the Rules screen: whether links reach PwrRoute at all.
 pub fn chip() -> Div {
     let (label, dot) = match snapshot() {
-        DefaultState::PwrRoute => ("default browser".to_owned(), theme::status_ok()),
+        DefaultState::PwrRoute | DefaultState::PwrRouteLegacy => {
+            ("default browser".to_owned(), theme::status_ok())
+        }
         DefaultState::Other(name) => (format!("{name} is default"), theme::status_warning()),
         DefaultState::Unknown => (
             "default browser unknown".to_owned(),
@@ -529,13 +546,92 @@ mod tests {
 
     use super::*;
 
+    /// What macOS reports, as `pwrroute_os` reads it: the link helper's id
+    /// is the default, the app's own id a legacy one.
     fn status(http: Option<&str>, https: Option<&str>) -> DefaultStatus {
-        let ours = |id: Option<&str>| id.is_some_and(|id| id == pwrroute_os::BUNDLE_ID);
+        let ours = |id: Option<&str>| {
+            id.is_some_and(|id| id == pwrroute_os::LINK_HELPER_ID || id == pwrroute_os::BUNDLE_ID)
+        };
+        let is_default = ours(http) && ours(https);
         DefaultStatus {
-            is_default: ours(http) && ours(https),
+            is_default,
+            legacy: is_default && [http, https].contains(&Some(pwrroute_os::BUNDLE_ID)),
             http: http.map(str::to_owned),
             https: https.map(str::to_owned),
         }
+    }
+
+    fn helper() -> DefaultStatus {
+        status(
+            Some(pwrroute_os::LINK_HELPER_ID),
+            Some(pwrroute_os::LINK_HELPER_ID),
+        )
+    }
+
+    fn legacy() -> DefaultStatus {
+        status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID))
+    }
+
+    #[test]
+    fn the_apps_own_registration_is_a_legacy_default() {
+        let none: &AppName = &|_| None;
+        let state = DefaultState::from_status(Some(&legacy()), none);
+        assert_eq!(state, DefaultState::PwrRouteLegacy);
+        assert!(state.is_default() && state.is_legacy());
+        let state = DefaultState::from_status(Some(&helper()), none);
+        assert_eq!(state, DefaultState::PwrRoute);
+        assert!(state.is_default() && !state.is_legacy());
+        // Half moved, with another browser on the other scheme: that
+        // browser names the state, not PwrRoute's own ids.
+        assert_eq!(
+            DefaultState::from_status(
+                Some(&status(
+                    Some(pwrroute_os::BUNDLE_ID),
+                    Some("com.apple.Safari")
+                )),
+                none
+            ),
+            DefaultState::Other("Safari".into())
+        );
+        assert_eq!(
+            DefaultState::from_status(Some(&status(Some(pwrroute_os::LINK_HELPER_ID), None)), none),
+            DefaultState::Unknown
+        );
+    }
+
+    /// A legacy default asked again: the poll keeps waiting for the helper
+    /// rather than stopping at "already the default", and settles when
+    /// macOS reports it.
+    #[gpui_kit::test]
+    fn asking_again_from_a_legacy_default_waits_for_the_helper(cx: &mut TestAppContext) {
+        let os_status = Rc::new(RefCell::new(Some(legacy())));
+        let requests = Rc::new(Cell::new(0));
+        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), requests.clone()), cx));
+        let waiting = |cx: &mut TestAppContext| registrar.read_with(cx, |r, _| r.waiting());
+        assert_eq!(cx.update(|cx| state(cx)), DefaultState::PwrRouteLegacy);
+
+        cx.update(|cx| request(cx).unwrap());
+        assert_eq!(requests.get(), 1);
+        tick(cx);
+        tick(cx);
+        assert!(waiting(cx), "still the app's id: not done");
+        *os_status.borrow_mut() = Some(helper());
+        tick(cx);
+        assert!(!waiting(cx));
+        assert_eq!(cx.update(|cx| state(cx)), DefaultState::PwrRoute);
+        assert!(!registrar.read_with(cx, |r, _| r.kept));
+
+        // Refused: a minute on, it settles, still the default, with no
+        // "is still the default" note about another browser.
+        *os_status.borrow_mut() = Some(legacy());
+        cx.update(|cx| refresh(false, cx));
+        cx.update(|cx| request(cx).unwrap());
+        for _ in 0..POLL_FOR.as_secs() {
+            tick(cx);
+        }
+        assert!(!waiting(cx));
+        assert_eq!(cx.update(|cx| super::card(cx)).note, None);
+        assert_eq!(cx.update(|cx| state(cx)), DefaultState::PwrRouteLegacy);
     }
 
     #[test]
@@ -557,20 +653,14 @@ mod tests {
             DefaultState::Other("Google Chrome".into())
         );
         assert_eq!(
-            DefaultState::from_status(
-                Some(&status(
-                    Some(pwrroute_os::BUNDLE_ID),
-                    Some(pwrroute_os::BUNDLE_ID)
-                )),
-                none
-            ),
+            DefaultState::from_status(Some(&helper()), none),
             DefaultState::PwrRoute
         );
         // Half done: the scheme that is not ours yet names the state.
         assert_eq!(
             DefaultState::from_status(
                 Some(&status(
-                    Some(pwrroute_os::BUNDLE_ID),
+                    Some(pwrroute_os::LINK_HELPER_ID),
                     Some("org.mozilla.firefox")
                 )),
                 none
@@ -655,10 +745,7 @@ mod tests {
 
         // Asked again, and this time the OS agreed.
         cx.update(|cx| request(cx).unwrap());
-        *os_status.borrow_mut() = Some(status(
-            Some(pwrroute_os::BUNDLE_ID),
-            Some(pwrroute_os::BUNDLE_ID),
-        ));
+        *os_status.borrow_mut() = Some(helper());
         cx.update(|cx| refresh(false, cx));
         assert_eq!(card(cx).state, DefaultState::PwrRoute);
         assert_eq!(card(cx).note, None);
@@ -670,7 +757,7 @@ mod tests {
     /// registrar hears of it.
     #[gpui_kit::test]
     fn losing_the_default_is_noticed_without_a_window(cx: &mut TestAppContext) {
-        let ours = || status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID));
+        let ours = helper;
         let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
         let os_status = Rc::new(RefCell::new(Some(ours())));
         let requests = Rc::new(Cell::new(0));
@@ -725,7 +812,7 @@ mod tests {
     #[gpui_kit::test]
     fn the_poll_reads_the_answer_back_once_a_second_for_a_minute(cx: &mut TestAppContext) {
         let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
-        let ours = || status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID));
+        let ours = helper;
         let os_status = Rc::new(RefCell::new(Some(chrome())));
         let requests = Rc::new(Cell::new(0));
         let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), requests.clone()), cx));
@@ -791,7 +878,7 @@ mod tests {
             Some(if reads.get() <= stale.get() {
                 status(Some("com.google.Chrome"), Some("com.google.Chrome"))
             } else {
-                status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID))
+                helper()
             })
         });
         os

@@ -2,14 +2,21 @@
 //! the OS knows about.
 //!
 //! - **Link receipt.** macOS hands links over as `kAEGetURL` Apple Events,
-//!   which GPUI turns into its open-URLs callback; [`current_opener`] reads
-//!   the sending app off the event being handled. Windows (a ProgID command
-//!   line) and Linux (a `.desktop` `Exec=pwrroute %u`) pass links in argv,
-//!   which [`links_from_args`] picks out.
+//!   to the windowless link helper (`crates/pwrroute-link-helper`) once
+//!   PwrRoute is the default, or to the app itself, whose GPUI turns them
+//!   into its open-URLs callback; [`current_opener`] reads the sending app
+//!   off the event being handled. When the helper has to launch the app, it
+//!   passes the event's links and opener on the command line
+//!   ([`apple_event_launch_args`], read back by [`link_origin_from_args`]).
+//!   Windows (a ProgID command line) and Linux (a `.desktop` `Exec=pwrroute
+//!   %u`) pass links in argv, which [`links_from_args`] picks out.
 //! - **Registration.** [`register_browser`] makes the OS list PwrRoute as a
 //!   browser and [`unregister_browser`] takes it off, for installers.
 //!   [`set_default_browser`] asks the OS to make PwrRoute the default, which
-//!   always ends in the OS's own consent: a prompt or the Settings page.
+//!   always ends in the OS's own consent: a prompt or the Settings page. On
+//!   macOS the handler is the link helper ([`LINK_HELPER_ID`]); the app's own
+//!   id, which earlier builds registered, still counts as the default and is
+//!   reported as [`DefaultStatus::legacy`].
 //!   [`open_default_apps_settings`] only shows that page.
 //!   Nothing calls any of them at launch, and tests never do.
 //! - **Paths.** [`router_dir`] is where the router's lock and socket live.
@@ -22,17 +29,21 @@
 //! (the LaunchServices calls) and `macos::app_icon` (two AppKit calls).
 
 mod args;
+// The app's side of the helper's lifecycle; called on macOS only.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod link_helper;
 #[cfg(target_os = "macos")]
 mod macos;
 mod paths;
 mod registration;
 
-pub use args::links_from_args;
+pub use args::{apple_event_launch_args, link_origin_from_args, links_from_args};
 pub use paths::{data_dir, router_dir};
 pub use registration::{
-    BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, PROG_ID, REGISTERED_NAME,
-    app_display_name, default_browser_status, open_default_apps_settings, register_browser,
-    set_default_browser, unregister_browser,
+    BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, LINK_HELPER_ID, LINK_HELPER_PATH,
+    LINK_HELPER_STARTED_BY_APP, PROG_ID, REGISTERED_NAME, app_display_name, default_browser_status,
+    is_pwrroute_handler, open_default_apps_settings, register_browser, set_default_browser,
+    unregister_browser,
 };
 // Plans the platform code applies, public so they can be checked anywhere.
 pub use registration::{RegistryValue, desktop_entry, windows_registry_values};
@@ -86,11 +97,30 @@ pub fn app_is_running(bundle_id: &str) -> bool {
     }
 }
 
+/// Starts the link helper nested in this app's bundle, in the background and
+/// with [`LINK_HELPER_STARTED_BY_APP`], unless it is running already: the
+/// first link after PwrRoute starts then reaches a helper that is up,
+/// instead of waiting for it to launch. Nothing happens off macOS, outside
+/// a bundle (`cargo run`) or in a bundle without the helper.
+///
+/// With `replace_stale`, a running helper left from before an update (or
+/// from a copy of PwrRoute that is gone) is asked to quit, on a background
+/// thread, and this bundle's helper is started in its place. Pass `false`
+/// when the helper launched this app with links: it may still be waiting
+/// for this app's socket with more, and exits by itself once replaced.
+pub fn start_link_helper(replace_stale: bool) {
+    #[cfg(target_os = "macos")]
+    macos::start_link_helper(replace_stale);
+    #[cfg(not(target_os = "macos"))]
+    let _ = replace_stale;
+}
+
 /// The app that sent the link being handled right now, when the OS says.
 ///
-/// On macOS call it from GPUI's open-URLs callback: AppKit is handling the
-/// `kAEGetURL` event then, and the event carries the sender's pid. Elsewhere
-/// the OS does not say, and this is `None`.
+/// On macOS call it from GPUI's open-URLs callback, or the link helper's
+/// `application:openURLs:`: AppKit is handling the `kAEGetURL` event then,
+/// and the event carries the sender's pid. Elsewhere the OS does not say,
+/// and this is `None`.
 pub fn current_opener() -> Option<OpenerInfo> {
     #[cfg(target_os = "macos")]
     {

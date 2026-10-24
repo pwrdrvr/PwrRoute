@@ -307,6 +307,9 @@ pub struct TrayModel {
     pub routing: Routing,
     /// PwrRoute is the OS default browser.
     pub is_default_browser: bool,
+    /// It is, through the app's own id (an earlier build's registration):
+    /// the Make default row stays, worded for faster links.
+    pub default_is_legacy: bool,
     /// Where links go while paused: the target in force, or where a pause
     /// would send them now (`tray::pause_target`).
     pub pause_target: BrowserLabel,
@@ -349,6 +352,7 @@ impl TrayModel {
         Self {
             routing: Routing::Active,
             is_default_browser: true,
+            default_is_legacy: false,
             pause_target: chrome(Some("Personal")),
             recents: recents.into_iter().flatten().collect(),
             links_today: 1412,
@@ -362,6 +366,7 @@ impl TrayModel {
         Self {
             routing: Routing::Active,
             is_default_browser: false,
+            default_is_legacy: false,
             pause_target,
             recents: Vec::new(),
             links_today: 0,
@@ -430,9 +435,20 @@ impl TrayModel {
 
     /// "Make default browser…" sits under the commands while another app
     /// has the default: links are not reaching PwrRoute, and this is the
-    /// surface a windowless router shows. Pausing does not hide it.
+    /// surface a windowless router shows. Pausing does not hide it. It also
+    /// stays, as [`Self::make_default_label`] words it, while an earlier
+    /// build's registration is the default.
     pub fn shows_make_default_row(&self) -> bool {
-        !self.is_default_browser
+        !self.is_default_browser || self.default_is_legacy
+    }
+
+    /// The Make default row's words.
+    pub fn make_default_label(&self) -> &'static str {
+        if self.is_default_browser && self.default_is_legacy {
+            "Make default for faster links\u{2026}"
+        } else {
+            "Make default browser\u{2026}"
+        }
     }
 
     /// The line under "Pause routing".
@@ -605,6 +621,23 @@ mod tests {
         model.is_default_browser = true;
         assert_eq!(model.chip(), HeaderChip::Default);
         assert!(!model.shows_make_default_row());
+    }
+
+    #[test]
+    fn a_legacy_default_keeps_the_row_for_faster_links() {
+        let mut model = TrayModel::fixture(now());
+        model.default_is_legacy = true;
+        // Links reach PwrRoute: the chip says default.
+        assert_eq!(model.chip(), HeaderChip::Default);
+        assert!(model.shows_make_default_row());
+        assert_eq!(
+            model.make_default_label(),
+            "Make default for faster links\u{2026}"
+        );
+        model.default_is_legacy = false;
+        assert!(!model.shows_make_default_row());
+        model.is_default_browser = false;
+        assert_eq!(model.make_default_label(), "Make default browser\u{2026}");
     }
 
     #[test]

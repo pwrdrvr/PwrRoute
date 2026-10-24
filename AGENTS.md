@@ -23,6 +23,11 @@ router resolves every link, opens it through `pwrroute-browsers`' launcher
   See its `AGENTS.md`.
 - `crates/pwrroute-os` — link receipt and default-browser registration per
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
+- `crates/pwrroute-link-helper` — `pwrroute-links`, the windowless macOS
+  app nested in `PwrRoute.app` that is the `http`/`https` handler and
+  forwards each link to the running router, so a link never activates the
+  app with the windows. Its delegate class is its only `unsafe`. See its
+  `AGENTS.md`.
 - `crates/pwrroute-mcp` — the MCP server for local agents, served by the
   running app and reached through `pwrroute mcp`. See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It hosts the
@@ -114,8 +119,12 @@ The first launch becomes the router and stays running with its windows
 closed; a later launch forwards its links (or asks for the window) and exits.
 Quit from the app menu, or kill the process, to stop it.
 
-PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in`,
-`packaging/linux/pwrroute.desktop`), so the OS can offer it as a browser.
+PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in` and
+the link helper's `LinkHelper.Info.plist.in`, `packaging/linux/pwrroute.desktop`),
+so the OS can offer it as a browser. On macOS "Make default browser" makes
+the link helper the handler; the app keeps its own declaration so a default
+registered before the helper (v0.1.0-rc.1) keeps working, reported as a
+legacy registration.
 Becoming the default is an explicit action in the app; never change the
 default browser on a developer machine as a side effect of a test or launch,
 and never call `pwrroute_os::set_default_browser` or `register_browser` from
@@ -125,7 +134,10 @@ throwaway CI runners (`e2e/AGENTS.md`).
 ## Packaging & releases
 
 `cargo xtask bundle [--universal] [--sign IDENTITY] [--notarize]` builds the
-macOS app, zip and DMG, ad hoc signed unless an identity is given.
+macOS app, zip and DMG, ad hoc signed unless an identity is given. The link
+helper is nested at `Contents/Helpers/PwrRoute.app` and signed before the app,
+never with `codesign --deep`; release.yml signs it the same way before `vpk
+pack`.
 `cargo xtask package-linux` builds the tar.gz and .deb. The app icon is
 `packaging/icon/PwrRoute.svg`, the design mark on the Pwr family's tile;
 `scripts/release/make-icns.sh` renders it into the committed Icon Composer

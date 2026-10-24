@@ -1,0 +1,51 @@
+[package]
+name = "pwrroute-link-helper"
+description = "PwrRoute's windowless macOS link helper: the http and https handler, which forwards each link to the running app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "pwrroute-links"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The router's socket client and wire types, and the OS edge's opener and
+# launch arguments: the same code a second launch of the app forwards with.
+# Neither the engine nor GPUI runs here; the linker drops what is not called.
+pwrroute-os = { workspace = true }
+pwrroute-router = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# An NSApplication with no windows, its delegate, and NSWorkspace to launch
+# the app in the background. Safe bindings except the delegate class itself
+# (`src/macos.rs`).
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "NSApplication",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSBundle",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSNotification",
+    "NSObject",
+    "NSString",
+    "NSURL",
+    "NSValue",
+] }

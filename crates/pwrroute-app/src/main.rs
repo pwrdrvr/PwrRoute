@@ -201,6 +201,12 @@ fn main() -> ExitCode {
             on_request: Rc::new(|request, _, cx| settings_live::handle_request(request, cx)),
         });
         updater::install(cx);
+        // macOS: the windowless link helper is the http/https handler; have
+        // it up before the first link instead of launching it for that link,
+        // and replace one left running from before an update. Not when a
+        // helper launched this app with links: it may still be waiting for
+        // this app's socket with more, and it exits by itself once replaced.
+        pwrroute_os::start_link_helper(!resident.launched_with_links);
         if let Some(hook) = e2e_hook {
             e2e::attach(hook, cx);
         } else {

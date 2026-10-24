@@ -6,14 +6,22 @@ mod launch_services;
 
 pub use app_icon::{bundle_path as installed_app_bundle, icon_png as app_icon_png};
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant, SystemTime},
+};
 
 use anyhow::{Result, bail};
-use objc2_app_kit::{NSRunningApplication, NSWorkspace};
-use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
+use objc2_app_kit::{NSRunningApplication, NSWorkspace, NSWorkspaceOpenConfiguration};
+use objc2_foundation::{NSAppleEventManager, NSArray, NSBundle, NSString, NSURL};
 use pwrroute_router::OpenerInfo;
 
-use crate::registration::{BUNDLE_ID, DefaultRequest, DefaultStatus};
+use crate::link_helper::{RunningHelper, helper_is_stale};
+use crate::registration::{
+    BUNDLE_ID, DefaultRequest, DefaultStatus, LINK_HELPER_ID, LINK_HELPER_PATH,
+    LINK_HELPER_STARTED_BY_APP, macos_status,
+};
 
 /// `keySenderPIDAttr` ('spid'): the pid of the process that sent the event.
 const KEY_SENDER_PID: u32 = u32::from_be_bytes(*b"spid");
@@ -62,8 +70,26 @@ fn app_bundle() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The link helper nested in `app` (`Contents/Helpers/PwrRoute.app`), when
+/// it is there and is the helper: `None` for a bundle built before it, or
+/// one put together by hand.
+fn link_helper(app: &Path) -> Option<PathBuf> {
+    let path = app.join(LINK_HELPER_PATH);
+    let bundle = NSBundle::bundleWithPath(&NSString::from_str(&path.to_string_lossy()))?;
+    let id = bundle.bundleIdentifier()?.to_string();
+    (id == LINK_HELPER_ID).then_some(path)
+}
+
+/// Lists the app and its link helper with LaunchServices. The helper is
+/// registered by its own URL: LaunchServices need not have scanned a bundle
+/// nested in another before it can be made a handler.
 pub fn register() -> Result<()> {
-    launch_services::register(&app_bundle()?)
+    let app = app_bundle()?;
+    launch_services::register(&app)?;
+    if let Some(helper) = link_helper(&app) {
+        launch_services::register(&helper)?;
+    }
+    Ok(())
 }
 
 /// LaunchServices forgets a bundle once it is deleted, and there is no
@@ -73,10 +99,24 @@ pub fn unregister() -> Result<()> {
     Ok(())
 }
 
+/// Asks for the link helper to handle `http` and `https`. The helper, not
+/// the app, so that a link never activates the process with the windows:
+/// LaunchServices activates whichever app it hands a link to.
 pub fn set_default() -> Result<DefaultRequest> {
-    app_bundle()?;
+    let app = app_bundle()?;
+    let Some(helper) = link_helper(&app) else {
+        bail!(
+            "this PwrRoute.app has no link helper at {LINK_HELPER_PATH}; build it with `cargo \
+             xtask bundle`"
+        );
+    };
+    // LaunchServices hands a scheme only to a bundle id it knows. A DMG
+    // install never runs the updater's register hook, and LaunchServices
+    // need not have scanned a bundle nested in another: register the helper
+    // by its URL first, or the request names an id macOS has never seen.
+    launch_services::register(&helper)?;
     for scheme in ["http", "https"] {
-        launch_services::set_default_handler(scheme, BUNDLE_ID)?;
+        launch_services::set_default_handler(scheme, LINK_HELPER_ID)?;
     }
     Ok(DefaultRequest::Prompted)
 }
@@ -126,15 +166,137 @@ pub fn app_display_name(bundle_id: &str) -> Option<String> {
 }
 
 pub fn status() -> Result<DefaultStatus> {
-    let http = launch_services::default_handler("http");
-    let https = launch_services::default_handler("https");
-    let ours = |h: &Option<String>| {
-        h.as_deref()
-            .is_some_and(|h| h.eq_ignore_ascii_case(BUNDLE_ID))
+    Ok(macos_status(
+        launch_services::default_handler("http"),
+        launch_services::default_handler("https"),
+    ))
+}
+
+/// How long a stale helper gets to quit before it is killed.
+const HELPER_QUIT_WAIT: Duration = Duration::from_secs(2);
+
+/// [`crate::start_link_helper`] on macOS.
+pub fn start_link_helper(replace_stale: bool) {
+    let bundle = NSBundle::mainBundle().bundlePath().to_string();
+    let helper = Path::new(&bundle).join(LINK_HELPER_PATH);
+    if !helper.join("Contents/Info.plist").is_file() {
+        return;
+    }
+    let running = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+        &NSString::from_str(LINK_HELPER_ID),
+    );
+    if running.count() == 0 {
+        open_link_helper(&helper, false);
+        return;
+    }
+    if !replace_stale {
+        return;
+    }
+    let executable = link_helper_executable(&helper);
+    let bundled = executable
+        .as_deref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.created().ok());
+    let mut stale = Vec::new();
+    let mut current = false;
+    for app in running.iter() {
+        let path = app
+            .executableURL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()));
+        let seen = RunningHelper {
+            ours: path.is_some() && same_file_path(path.as_deref(), executable.as_deref()),
+            on_disk: path.as_deref().is_none_or(Path::exists),
+            launched: app
+                .launchDate()
+                .map(|date| since_epoch(date.timeIntervalSince1970())),
+        };
+        if helper_is_stale(seen, bundled) {
+            stale.push(app.processIdentifier());
+        } else {
+            current = true;
+        }
+    }
+    if stale.is_empty() {
+        return;
+    }
+    // Waiting for a quit must not hold up the app's launch.
+    let _ = thread::Builder::new()
+        .name("pwrroute-link-helper-replace".into())
+        .spawn(move || replace_link_helpers(&stale, &helper, !current));
+}
+
+/// Asks each stale helper to quit (AppKit's quit event, queued behind any
+/// link it is still being sent), kills those still running after
+/// [`HELPER_QUIT_WAIT`], then starts `helper` unless a current one runs.
+fn replace_link_helpers(stale: &[i32], helper: &Path, start: bool) {
+    let alive = |pid: i32| {
+        NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .is_some_and(|app| !app.isTerminated())
     };
-    Ok(DefaultStatus {
-        is_default: ours(&http) && ours(&https),
-        http,
-        https,
-    })
+    for &pid in stale {
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            app.terminate();
+        }
+    }
+    let deadline = Instant::now() + HELPER_QUIT_WAIT;
+    while stale.iter().any(|&pid| alive(pid)) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    for &pid in stale {
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            app.forceTerminate();
+        }
+    }
+    if start {
+        // A new instance: LaunchServices must not hand this to a stale
+        // helper that is still on its way out.
+        open_link_helper(helper, true);
+    }
+}
+
+/// Opens the helper at `helper` in the background, as the app starts it.
+fn open_link_helper(helper: &Path, new_instance: bool) {
+    let url =
+        NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&helper.to_string_lossy()), true);
+    let configuration = NSWorkspaceOpenConfiguration::configuration();
+    configuration.setActivates(false);
+    configuration.setAddsToRecentItems(false);
+    configuration.setCreatesNewApplicationInstance(new_instance);
+    configuration.setArguments(&NSArray::from_retained_slice(&[NSString::from_str(
+        LINK_HELPER_STARTED_BY_APP,
+    )]));
+    // Fire and forget: a helper that does not start is started by the
+    // first link instead, as before.
+    NSWorkspace::sharedWorkspace().openApplicationAtURL_configuration_completionHandler(
+        &url,
+        &configuration,
+        None,
+    );
+}
+
+/// The executable of the helper bundle at `helper`, as its Info.plist names
+/// it.
+fn link_helper_executable(helper: &Path) -> Option<PathBuf> {
+    let bundle = NSBundle::bundleWithPath(&NSString::from_str(&helper.to_string_lossy()))?;
+    Some(PathBuf::from(bundle.executablePath()?.to_string()))
+}
+
+/// Whether two paths name the same place, resolving symlinks where they
+/// exist (`/var` and `/private/var`).
+fn same_file_path(a: Option<&Path>, b: Option<&Path>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    let resolve = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    a == b || resolve(a) == resolve(b)
+}
+
+/// A time as seconds since 1970, as `NSDate` gives it.
+fn since_epoch(seconds: f64) -> SystemTime {
+    if seconds >= 0.0 {
+        SystemTime::UNIX_EPOCH + Duration::from_secs_f64(seconds)
+    } else {
+        SystemTime::UNIX_EPOCH
+    }
 }

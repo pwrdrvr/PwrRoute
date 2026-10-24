@@ -6048,6 +6048,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pwrroute-link-helper"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "pwrroute-os",
+ "pwrroute-router",
+]
+
+[[package]]
 name = "pwrroute-mcp"
 version = "0.1.0"
 dependencies = [
@@ -6078,6 +6090,7 @@ dependencies = [
  "objc2-core-services",
  "objc2-foundation 0.3.2",
  "pwrroute-router",
+ "serde_json",
  "windows-registry 0.6.1",
 ]
 

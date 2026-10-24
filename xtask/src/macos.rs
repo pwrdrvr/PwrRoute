@@ -74,21 +74,35 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
     let out = built.join("bundle");
     fs::create_dir_all(&out)?;
 
-    let (binary, arch) = if options.universal {
+    let (binaries, arch) = if options.universal {
         for triple in TARGETS {
             build(&root, Some(triple))?;
         }
-        let universal = out.join("pwrroute-universal");
-        let mut lipo = Command::new("lipo");
-        lipo.arg("-create").arg("-output").arg(&universal);
-        for triple in TARGETS {
-            lipo.arg(built.join(triple).join("release/pwrroute"));
-        }
-        run(&mut lipo)?;
-        (universal, "universal")
+        let lipo = |name: &str| -> Result<PathBuf> {
+            let output = out.join(format!("{name}-universal"));
+            let mut lipo = Command::new("lipo");
+            lipo.arg("-create").arg("-output").arg(&output);
+            for triple in TARGETS {
+                lipo.arg(built.join(triple).join("release").join(name));
+            }
+            run(&mut lipo)?;
+            Ok(output)
+        };
+        let binaries = Binaries {
+            app: lipo(APP_EXE)?,
+            helper: lipo(HELPER_EXE)?,
+        };
+        (binaries, "universal")
     } else {
         build(&root, None)?;
-        (built.join("release/pwrroute"), std::env::consts::ARCH)
+        let release = built.join("release");
+        (
+            Binaries {
+                app: release.join(APP_EXE),
+                helper: release.join(HELPER_EXE),
+            },
+            std::env::consts::ARCH,
+        )
     };
 
     let app = out.join("PwrRoute.app");
@@ -97,48 +111,49 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
         // signature.
         fs::remove_dir_all(&app)?;
     }
-    let contents = app.join("Contents");
-    fs::create_dir_all(contents.join("MacOS"))?;
-    fs::create_dir_all(contents.join("Resources"))?;
-    fs::copy(&binary, contents.join("MacOS/pwrroute"))?;
-    let resources = contents.join("Resources");
-    for file in ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"] {
-        fs::copy(root.join(file), resources.join(file))?;
-    }
-    let mut plist = read(&root.join("packaging/macos/Info.plist.in"))?
-        .replace("@SHORT_VERSION@", short_version(&version));
+    let short = short_version(&version);
+    let plist = read(&root.join(APP_PLIST))?.replace("@SHORT_VERSION@", short);
     let minimum = plist_string(&plist, "LSMinimumSystemVersion")
         .context("Info.plist has no LSMinimumSystemVersion")?
         .to_owned();
-    match icon_catalog(
+    let icon = match icon_catalog(
         &root.join(ICON_PACKAGE),
         &out.join("icon-catalog"),
         &minimum,
     ) {
-        Ok(compiled) => {
-            for file in [ASSET_CATALOG, &format!("{APP_ICON}.icns")] {
-                fs::copy(compiled.join(file), resources.join(file))?;
-            }
-        }
+        Ok(compiled) => Icon::Catalog(compiled),
         Err(err) if !options.require_icon_catalog => {
             eprintln!(
                 "warning: bundling the legacy {LEGACY_ICNS} without an asset catalog: {err:#}\n\
                  warning: macOS 26 redraws a bare .icns itself; release builds pass \
                  --require-icon-catalog and need Xcode 26 or newer"
             );
-            fs::copy(
-                root.join(LEGACY_ICNS),
-                resources.join(format!("{APP_ICON}.icns")),
-            )?;
-            plist = without_key(&plist, "CFBundleIconName");
+            Icon::Legacy(root.join(LEGACY_ICNS))
         }
         Err(err) => return Err(err.context("--require-icon-catalog: no asset catalog")),
+    };
+    let contents = app.join("Contents");
+    lay_out(&contents, &binaries.app, APP_EXE, &plist, &icon)?;
+    let resources = contents.join("Resources");
+    for file in ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"] {
+        fs::copy(root.join(file), resources.join(file))?;
     }
-    fs::write(contents.join("Info.plist"), plist)?;
-    run(Command::new("plutil")
-        .arg("-lint")
-        .arg(contents.join("Info.plist")))?;
-    check_icon(&contents, options.require_icon_catalog)?;
+    let helper_plist = read(&root.join(HELPER_PLIST))?.replace("@SHORT_VERSION@", short);
+    check_helper_plist(&helper_plist)?;
+    let helper = app.join(LINK_HELPER_PATH);
+    lay_out(
+        &helper.join("Contents"),
+        &binaries.helper,
+        HELPER_EXE,
+        &helper_plist,
+        &icon,
+    )?;
+    for contents in [&contents, &helper.join("Contents")] {
+        run(Command::new("plutil")
+            .arg("-lint")
+            .arg(contents.join("Info.plist")))?;
+        check_icon(contents, options.require_icon_catalog)?;
+    }
 
     sign(&app, options.identity.as_deref())?;
     if options.app_only {
@@ -173,12 +188,120 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
 fn build(root: &Path, target: Option<&str>) -> Result<()> {
     let mut cargo = Command::new("cargo");
     cargo
-        .args(["build", "--release", "--locked", "-p", "pwrroute-app"])
+        .args([
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "pwrroute-app",
+            "-p",
+            "pwrroute-link-helper",
+        ])
         .current_dir(root);
     if let Some(target) = target {
         cargo.args(["--target", target]);
     }
     run(&mut cargo)
+}
+
+/// The app's executable and its Info.plist template.
+const APP_EXE: &str = "pwrroute";
+const APP_PLIST: &str = "packaging/macos/Info.plist.in";
+
+/// The link helper: its executable (`crates/pwrroute-link-helper`), its
+/// Info.plist template, its bundle id, and where it is nested. Contents/Helpers
+/// is the place Apple's code signing guide ("Placing Content in a Bundle")
+/// gives helper apps and tools; Contents/Library/LoginItems is for apps the
+/// system starts at login, which this is not. Codesign treats both as nested
+/// code, so the helper is signed on its own and sealed into the app's
+/// signature. `pwrroute_os::LINK_HELPER_PATH` must say the same (its tests
+/// read this file).
+const HELPER_EXE: &str = "pwrroute-links";
+const HELPER_PLIST: &str = "packaging/macos/LinkHelper.Info.plist.in";
+const HELPER_ID: &str = "com.pwrdrvr.pwrroute.links";
+const LINK_HELPER_PATH: &str = "Contents/Helpers/PwrRoute.app";
+
+/// The two release binaries a bundle is made of.
+struct Binaries {
+    app: PathBuf,
+    helper: PathBuf,
+}
+
+/// The icon both bundles carry: actool's output, or the legacy .icns.
+enum Icon {
+    /// The directory holding Assets.car and Icon.icns.
+    Catalog(PathBuf),
+    /// The .icns to copy in as Icon.icns, with CFBundleIconName dropped.
+    Legacy(PathBuf),
+}
+
+/// One bundle's `Contents`: the executable as `MacOS/<exe>`, the Info.plist
+/// (without CFBundleIconName for a legacy icon) and the icon in Resources.
+fn lay_out(contents: &Path, binary: &Path, exe: &str, plist: &str, icon: &Icon) -> Result<()> {
+    let resources = contents.join("Resources");
+    fs::create_dir_all(contents.join("MacOS"))?;
+    fs::create_dir_all(&resources)?;
+    fs::copy(binary, contents.join("MacOS").join(exe))
+        .with_context(|| binary.display().to_string())?;
+    let plist = match icon {
+        Icon::Catalog(compiled) => {
+            for file in [ASSET_CATALOG, &format!("{APP_ICON}.icns")] {
+                fs::copy(compiled.join(file), resources.join(file))?;
+            }
+            plist.to_owned()
+        }
+        Icon::Legacy(icns) => {
+            fs::copy(icns, resources.join(format!("{APP_ICON}.icns")))?;
+            without_key(plist, "CFBundleIconName")
+        }
+    };
+    ensure!(
+        plist_string(&plist, "CFBundleExecutable") == Some(exe),
+        "Info.plist's CFBundleExecutable is not {exe}"
+    );
+    fs::write(contents.join("Info.plist"), plist)?;
+    Ok(())
+}
+
+/// What the helper's Info.plist must say: its own id, PwrRoute's names (the
+/// default-browser dialog and System Settings show them), no Dock icon, and
+/// both web schemes.
+fn check_helper_plist(plist: &str) -> Result<()> {
+    for (key, want) in [
+        ("CFBundleIdentifier", HELPER_ID),
+        ("CFBundleName", "PwrRoute"),
+        ("CFBundleDisplayName", "PwrRoute"),
+        ("CFBundleExecutable", HELPER_EXE),
+        ("CFBundlePackageType", "APPL"),
+    ] {
+        ensure!(
+            plist_string(plist, key) == Some(want),
+            "the link helper's Info.plist does not set {key} to {want}"
+        );
+    }
+    ensure!(
+        plist_true(plist, "LSUIElement"),
+        "the link helper's Info.plist does not set LSUIElement"
+    );
+    let (_, url_types) = plist
+        .split_once("<key>CFBundleURLTypes</key>")
+        .context("the link helper's Info.plist has no CFBundleURLTypes")?;
+    // Up to the next top-level key, which is indented one tab.
+    let url_types = url_types.split("\n\t<key>").next().unwrap_or(url_types);
+    for scheme in ["http", "https"] {
+        ensure!(
+            url_types.contains(&format!("<string>{scheme}</string>")),
+            "the link helper's Info.plist does not declare {scheme}"
+        );
+    }
+    Ok(())
+}
+
+/// `<key>KEY</key>` followed by `<true/>`.
+fn plist_true(plist: &str, key: &str) -> bool {
+    plist
+        .split_once(&format!("<key>{key}</key>"))
+        .is_some_and(|(_, after)| after.trim_start().starts_with("<true/>"))
 }
 
 /// `0.0.1-alpha.0` becomes `0.0.1`: macOS wants three numbers.
@@ -379,7 +502,23 @@ fn without_key(plist: &str, key: &str) -> String {
     kept.join("\n") + if plist.ends_with('\n') { "\n" } else { "" }
 }
 
+/// Signs inside out, never with `--deep`: the link helper first, as code of
+/// its own, then the app, whose signature seals the helper's. A bundle
+/// without a helper (`cargo xtask e2e`'s) is just the app.
 pub(crate) fn sign(app: &Path, identity: Option<&str>) -> Result<()> {
+    let helper = app.join(LINK_HELPER_PATH);
+    if helper.exists() {
+        sign_code(&helper, identity)?;
+    }
+    sign_code(app, identity)?;
+    // Verifying deep is fine: it checks each nested signature, it signs
+    // nothing.
+    run(Command::new("codesign")
+        .args(["--verify", "--deep", "--strict", "--verbose=2"])
+        .arg(app))
+}
+
+fn sign_code(bundle: &Path, identity: Option<&str>) -> Result<()> {
     let mut codesign = Command::new("codesign");
     codesign.arg("--force");
     match identity {
@@ -389,10 +528,7 @@ pub(crate) fn sign(app: &Path, identity: Option<&str>) -> Result<()> {
         }
         None => codesign.args(["--sign", "-"]),
     };
-    run(codesign.arg(app))?;
-    run(Command::new("codesign")
-        .args(["--verify", "--strict", "--verbose=2"])
-        .arg(app))
+    run(codesign.arg(bundle))
 }
 
 fn archive(app: &Path, zip: &Path) -> Result<()> {
@@ -696,6 +832,103 @@ mod tests {
         );
         fs::write(&plist, "<dict></dict>").unwrap();
         assert!(check_icon(&contents, false).is_err(), "the keys are gone");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The helper's template says what the default-browser dialog, the Dock
+    /// and LaunchServices need; a slip in any of them is caught here.
+    #[test]
+    fn the_helper_plist_is_a_windowless_web_handler_named_pwrroute() {
+        let template = read(&root().join(HELPER_PLIST)).unwrap();
+        check_helper_plist(&template).unwrap();
+        assert_eq!(plist_string(&template, "CFBundleIconName"), Some(APP_ICON));
+        assert_eq!(plist_string(&template, "CFBundleIconFile"), Some(APP_ICON));
+        // The same minimum macOS as the app it lives in.
+        let app = read(&root().join(APP_PLIST)).unwrap();
+        assert_eq!(
+            plist_string(&template, "LSMinimumSystemVersion"),
+            plist_string(&app, "LSMinimumSystemVersion")
+        );
+        // The app keeps its own handler, which earlier registrations name.
+        assert!(app.contains("<string>https</string>"));
+
+        let broken = [
+            template.replace(HELPER_ID, "com.pwrdrvr.pwrroute"),
+            template.replace(
+                "<key>CFBundleDisplayName</key>\n\t<string>PwrRoute</string>",
+                "<key>CFBundleDisplayName</key>\n\t<string>PwrRoute Links</string>",
+            ),
+            template.replace("<key>LSUIElement</key>\n\t<true/>", ""),
+            template.replace("\t\t\t\t<string>https</string>\n", ""),
+            template.replace(
+                "<string>pwrroute-links</string>",
+                "<string>pwrroute</string>",
+            ),
+        ];
+        for plist in broken {
+            assert_ne!(plist, template, "the replacement must apply");
+            assert!(check_helper_plist(&plist).is_err());
+        }
+    }
+
+    /// The app with its helper nested at Contents/Helpers, each with its
+    /// executable, Info.plist and icon: what `bundle` signs.
+    #[test]
+    fn the_helper_is_nested_as_a_bundle_of_its_own() {
+        let dir = env::temp_dir().join(format!("pwrroute-nest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("binary");
+        fs::write(&binary, b"\xcf\xfa\xed\xfe").unwrap();
+        let icon = Icon::Legacy(root().join(LEGACY_ICNS));
+        let app = dir.join("PwrRoute.app");
+        let app_plist = read(&root().join(APP_PLIST)).unwrap();
+        lay_out(&app.join("Contents"), &binary, APP_EXE, &app_plist, &icon).unwrap();
+        let helper_plist = read(&root().join(HELPER_PLIST)).unwrap();
+        let helper = app.join(LINK_HELPER_PATH);
+        lay_out(
+            &helper.join("Contents"),
+            &binary,
+            HELPER_EXE,
+            &helper_plist,
+            &icon,
+        )
+        .unwrap();
+
+        assert_eq!(
+            helper,
+            app.join("Contents").join("Helpers").join("PwrRoute.app")
+        );
+        for file in [
+            "Contents/MacOS/pwrroute",
+            "Contents/Info.plist",
+            "Contents/Resources/Icon.icns",
+            "Contents/Helpers/PwrRoute.app/Contents/MacOS/pwrroute-links",
+            "Contents/Helpers/PwrRoute.app/Contents/Info.plist",
+            "Contents/Helpers/PwrRoute.app/Contents/Resources/Icon.icns",
+        ] {
+            assert!(app.join(file).is_file(), "{file}");
+        }
+        let written = read(&helper.join("Contents/Info.plist")).unwrap();
+        check_helper_plist(&written).unwrap();
+        assert_eq!(
+            plist_string(&written, "CFBundleIconName"),
+            None,
+            "legacy icon"
+        );
+        check_icon(&helper.join("Contents"), false).unwrap();
+        check_icon(&app.join("Contents"), false).unwrap();
+        // Executables only where each Info.plist says.
+        assert!(
+            lay_out(
+                &dir.join("x/Contents"),
+                &binary,
+                "other",
+                &helper_plist,
+                &icon
+            )
+            .is_err()
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

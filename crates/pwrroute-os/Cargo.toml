@@ -15,6 +15,8 @@ workspace = true
 pwrroute-router = { workspace = true }
 anyhow = { workspace = true }
 dirs = "6"
+# The opener the link helper passes on a launch's command line.
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -22,8 +24,12 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSAppleEventDescriptor",
     "NSAppleEventManager",
+    # The link helper's start argument (start_link_helper).
+    "NSArray",
     "NSBundle",
     "NSData",
+    # A running helper's launch date (start_link_helper).
+    "NSDate",
     "NSDictionary",
     "NSGeometry",
     "NSString",
@@ -35,9 +41,11 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "libc",
     "NSRunningApplication",
-    # URLForApplicationWithBundleIdentifier, for a handler's display name,
-    # and iconForFile:, for an app's icon.
+    # URLForApplicationWithBundleIdentifier, for a handler's display name;
+    # iconForFile:, for an app's icon; openApplicationAtURL (whose completion
+    # handler needs block2), to start the link helper.
     "NSWorkspace",
+    "block2",
     # Rendering that icon to a PNG.
     "NSBitmapImageRep",
     "NSColorSpace",
