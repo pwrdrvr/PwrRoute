@@ -9,6 +9,9 @@
 //! router over its socket, as a second launch of the app does, and stays
 //! resident for the next one. When no router answers it launches the app
 //! in the background with the links on its command line ([`forward`]).
+//! Once an update or a move to the Trash takes its executable away, it
+//! finishes what is queued and exits, so the next link starts the helper
+//! that is there now ([`replaced`]).
 //!
 //! It never logs a link. It holds no engine and no window.
 //!
@@ -20,6 +23,8 @@
 mod forward;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod replaced;
 
 use std::process::ExitCode;
 

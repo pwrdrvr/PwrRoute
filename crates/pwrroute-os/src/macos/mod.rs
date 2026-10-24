@@ -6,13 +6,18 @@ mod launch_services;
 
 pub use app_icon::{bundle_path as installed_app_bundle, icon_png as app_icon_png};
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant, SystemTime},
+};
 
 use anyhow::{Result, bail};
 use objc2_app_kit::{NSRunningApplication, NSWorkspace, NSWorkspaceOpenConfiguration};
 use objc2_foundation::{NSAppleEventManager, NSArray, NSBundle, NSString, NSURL};
 use pwrroute_router::OpenerInfo;
 
+use crate::link_helper::{RunningHelper, helper_is_stale};
 use crate::registration::{
     BUNDLE_ID, DefaultRequest, DefaultStatus, LINK_HELPER_ID, LINK_HELPER_PATH,
     LINK_HELPER_STARTED_BY_APP, macos_status,
@@ -167,21 +172,97 @@ pub fn status() -> Result<DefaultStatus> {
     ))
 }
 
+/// How long a stale helper gets to quit before it is killed.
+const HELPER_QUIT_WAIT: Duration = Duration::from_secs(2);
+
 /// [`crate::start_link_helper`] on macOS.
-pub fn start_link_helper() {
-    if app_is_running(LINK_HELPER_ID) {
-        return;
-    }
+pub fn start_link_helper(replace_stale: bool) {
     let bundle = NSBundle::mainBundle().bundlePath().to_string();
     let helper = Path::new(&bundle).join(LINK_HELPER_PATH);
     if !helper.join("Contents/Info.plist").is_file() {
         return;
     }
+    let running = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+        &NSString::from_str(LINK_HELPER_ID),
+    );
+    if running.count() == 0 {
+        open_link_helper(&helper, false);
+        return;
+    }
+    if !replace_stale {
+        return;
+    }
+    let executable = link_helper_executable(&helper);
+    let bundled = executable
+        .as_deref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.created().ok());
+    let mut stale = Vec::new();
+    let mut current = false;
+    for app in running.iter() {
+        let path = app
+            .executableURL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()));
+        let seen = RunningHelper {
+            ours: path.is_some() && same_file_path(path.as_deref(), executable.as_deref()),
+            on_disk: path.as_deref().is_none_or(Path::exists),
+            launched: app
+                .launchDate()
+                .map(|date| since_epoch(date.timeIntervalSince1970())),
+        };
+        if helper_is_stale(seen, bundled) {
+            stale.push(app.processIdentifier());
+        } else {
+            current = true;
+        }
+    }
+    if stale.is_empty() {
+        return;
+    }
+    // Waiting for a quit must not hold up the app's launch.
+    let _ = thread::Builder::new()
+        .name("pwrroute-link-helper-replace".into())
+        .spawn(move || replace_link_helpers(&stale, &helper, !current));
+}
+
+/// Asks each stale helper to quit (AppKit's quit event, queued behind any
+/// link it is still being sent), kills those still running after
+/// [`HELPER_QUIT_WAIT`], then starts `helper` unless a current one runs.
+fn replace_link_helpers(stale: &[i32], helper: &Path, start: bool) {
+    let alive = |pid: i32| {
+        NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .is_some_and(|app| !app.isTerminated())
+    };
+    for &pid in stale {
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            app.terminate();
+        }
+    }
+    let deadline = Instant::now() + HELPER_QUIT_WAIT;
+    while stale.iter().any(|&pid| alive(pid)) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    for &pid in stale {
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            app.forceTerminate();
+        }
+    }
+    if start {
+        // A new instance: LaunchServices must not hand this to a stale
+        // helper that is still on its way out.
+        open_link_helper(helper, true);
+    }
+}
+
+/// Opens the helper at `helper` in the background, as the app starts it.
+fn open_link_helper(helper: &Path, new_instance: bool) {
     let url =
         NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&helper.to_string_lossy()), true);
     let configuration = NSWorkspaceOpenConfiguration::configuration();
     configuration.setActivates(false);
     configuration.setAddsToRecentItems(false);
+    configuration.setCreatesNewApplicationInstance(new_instance);
     configuration.setArguments(&NSArray::from_retained_slice(&[NSString::from_str(
         LINK_HELPER_STARTED_BY_APP,
     )]));
@@ -192,4 +273,30 @@ pub fn start_link_helper() {
         &configuration,
         None,
     );
+}
+
+/// The executable of the helper bundle at `helper`, as its Info.plist names
+/// it.
+fn link_helper_executable(helper: &Path) -> Option<PathBuf> {
+    let bundle = NSBundle::bundleWithPath(&NSString::from_str(&helper.to_string_lossy()))?;
+    Some(PathBuf::from(bundle.executablePath()?.to_string()))
+}
+
+/// Whether two paths name the same place, resolving symlinks where they
+/// exist (`/var` and `/private/var`).
+fn same_file_path(a: Option<&Path>, b: Option<&Path>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    let resolve = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    a == b || resolve(a) == resolve(b)
+}
+
+/// A time as seconds since 1970, as `NSDate` gives it.
+fn since_epoch(seconds: f64) -> SystemTime {
+    if seconds >= 0.0 {
+        SystemTime::UNIX_EPOCH + Duration::from_secs_f64(seconds)
+    } else {
+        SystemTime::UNIX_EPOCH
+    }
 }

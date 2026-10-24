@@ -14,7 +14,7 @@ use std::{
     process::Command,
     sync::{
         Arc, Mutex, PoisonError,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     thread,
     time::{Duration, Instant},
@@ -36,7 +36,10 @@ use objc2_foundation::{
 };
 use pwrroute_router::Link;
 
-use crate::forward::{self, Apps, Forwarder, Outcome, SocketRouter};
+use crate::{
+    forward::{self, Apps, Forwarder, Outcome, SocketRouter},
+    replaced::SelfWatch,
+};
 
 /// How long a launch by hand waits for a link before it counts as a request
 /// for the window. The app waits as long (`LINK_GRACE`, 250 ms); the helper
@@ -165,18 +168,33 @@ fn is_default_launch(notification: &NSNotification) -> bool {
         .is_some_and(|value| value.boolValue())
 }
 
-/// Runs the helper until it is killed or the session ends.
+/// Runs the helper until it is killed, the session ends, or its executable
+/// is replaced or removed (`work`).
 pub fn run() {
     let mtm = MainThreadMarker::new().expect("the helper starts on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     // LSUIElement says the same; set here too, so a bare binary run by hand
     // never shows in the Dock either.
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    let helper = PathBuf::from(NSBundle::mainBundle().bundlePath().to_string());
+    let bundle = NSBundle::mainBundle();
+    let helper = PathBuf::from(bundle.bundlePath().to_string());
+    // Noted before the first request, so an update that lands while the
+    // helper runs reads as one.
+    let watch = SelfWatch::new(
+        bundle
+            .executablePath()
+            .map(|path| PathBuf::from(path.to_string())),
+    );
     let (jobs, queue) = mpsc::channel();
     thread::Builder::new()
         .name("pwrroute-links".into())
-        .spawn(move || work(&queue, Workspace::new(forward::main_app_for(&helper))))
+        .spawn(move || {
+            work(
+                &queue,
+                Workspace::new(forward::main_app_for(&helper)),
+                &watch,
+            )
+        })
         .expect("start the helper's worker thread");
     let delegate = Delegate::new(
         mtm,
@@ -189,25 +207,48 @@ pub fn run() {
     app.run();
 }
 
+/// How often an idle helper checks whether its executable is still there.
+/// A helper whose app was moved to the Trash gets no more links (macOS can
+/// no longer find its bundle id), so only this ends it before logout.
+const IDLE_CHECK: Duration = Duration::from_secs(30);
+
 /// Forwards each job in turn. Off the main thread, so a slow router or
 /// launch never holds up the next Apple Event; one thread, so links keep
-/// their order.
-fn work(queue: &Receiver<Job>, apps: Workspace) {
+/// their order. After each job, and every [`IDLE_CHECK`] while idle, if an
+/// update or a move took the helper's executable away, forwards what is
+/// already queued and exits: the next link then starts the helper that is
+/// installed now.
+fn work(queue: &Receiver<Job>, apps: Workspace, watch: &SelfWatch) {
     let mut forwarder = Forwarder::new(SocketRouter::new(pwrroute_os::router_dir()), apps);
-    for job in queue {
-        let outcome = match job {
-            Job::Open(links) => forwarder.open(links, Instant::now()),
-            Job::Activate => forwarder.activate(Instant::now()),
-        };
-        // Fixed words only: never a link.
-        match outcome {
-            Outcome::Forwarded => {}
-            Outcome::Launched => eprintln!("pwrroute-links: no router answered; launched PwrRoute"),
-            Outcome::LastResort => eprintln!(
-                "pwrroute-links: PwrRoute could not be launched; opened the link in Safari"
-            ),
-            Outcome::Failed => eprintln!("pwrroute-links: could not hand the request on"),
+    loop {
+        match queue.recv_timeout(IDLE_CHECK) {
+            Ok(job) => run_job(&mut forwarder, job),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
         }
+        if watch.replaced() {
+            while let Ok(job) = queue.try_recv() {
+                run_job(&mut forwarder, job);
+            }
+            eprintln!("pwrroute-links: this helper was replaced or removed; exiting");
+            std::process::exit(0);
+        }
+    }
+}
+
+fn run_job(forwarder: &mut Forwarder<SocketRouter, Workspace>, job: Job) {
+    let outcome = match job {
+        Job::Open(links) => forwarder.open(links, Instant::now()),
+        Job::Activate => forwarder.activate(Instant::now()),
+    };
+    // Fixed words only: never a link.
+    match outcome {
+        Outcome::Forwarded => {}
+        Outcome::Launched => eprintln!("pwrroute-links: no router answered; launched PwrRoute"),
+        Outcome::LastResort => {
+            eprintln!("pwrroute-links: PwrRoute could not be launched; opened the link in Safari")
+        }
+        Outcome::Failed => eprintln!("pwrroute-links: could not hand the request on"),
     }
 }
 

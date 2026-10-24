@@ -29,6 +29,9 @@
 //! (the LaunchServices calls) and `macos::app_icon` (two AppKit calls).
 
 mod args;
+// The app's side of the helper's lifecycle; called on macOS only.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod link_helper;
 #[cfg(target_os = "macos")]
 mod macos;
 mod paths;
@@ -99,9 +102,17 @@ pub fn app_is_running(bundle_id: &str) -> bool {
 /// first link after PwrRoute starts then reaches a helper that is up,
 /// instead of waiting for it to launch. Nothing happens off macOS, outside
 /// a bundle (`cargo run`) or in a bundle without the helper.
-pub fn start_link_helper() {
+///
+/// With `replace_stale`, a running helper left from before an update (or
+/// from a copy of PwrRoute that is gone) is asked to quit, on a background
+/// thread, and this bundle's helper is started in its place. Pass `false`
+/// when the helper launched this app with links: it may still be waiting
+/// for this app's socket with more, and exits by itself once replaced.
+pub fn start_link_helper(replace_stale: bool) {
     #[cfg(target_os = "macos")]
-    macos::start_link_helper();
+    macos::start_link_helper(replace_stale);
+    #[cfg(not(target_os = "macos"))]
+    let _ = replace_stale;
 }
 
 /// The app that sent the link being handled right now, when the OS says.

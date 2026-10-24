@@ -28,6 +28,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSArray",
     "NSBundle",
     "NSData",
+    # A running helper's launch date (start_link_helper).
+    "NSDate",
     "NSDictionary",
     "NSGeometry",
     "NSString",
