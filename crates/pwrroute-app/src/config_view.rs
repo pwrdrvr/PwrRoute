@@ -1044,7 +1044,22 @@ pub fn pane(
     } else {
         (None, Some(visual))
     };
+    // Rules you add here are visual rules, wherever they run.
+    let help = if rules_first {
+        format!(
+            "{} is read-only here. Rules you add are visual rules in rules.json, and they run \
+             before its handlers.",
+            config.path
+        )
+    } else {
+        format!(
+            "{} runs first and is read-only here. Rules you add are visual rules in \
+             rules.json: they run after it.",
+            config.path
+        )
+    };
     pane_frame("config-pane")
+        .child(crate::rules_view::heading_with(app, Some(help), cx))
         .children(crate::importer_view::rules_banners(app, cx))
         .child(banner(app, config, order, cx))
         .children(rewrites)

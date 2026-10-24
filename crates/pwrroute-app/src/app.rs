@@ -87,6 +87,9 @@ pub struct PwrRoute {
     pub config: Option<ConfigInCharge>,
     /// 1b's folded visual rules are open.
     pub visual_rules_expanded: bool,
+    /// The draft handler a surface other than Rules started, for the
+    /// note above its fields: its index and where it came from.
+    pub draft_from: Option<(usize, crate::editor::DraftFrom)>,
     pub test: TestLink,
     pub activity: Activity,
     /// Activity's row actions: the Add a rule sheet and what the last
@@ -187,6 +190,7 @@ impl PwrRoute {
             home,
             config: in_charge,
             visual_rules_expanded: false,
+            draft_from: None,
             activity: Activity::new(cx),
             actions: Actions::default(),
             browsers: Vec::new(),
@@ -486,11 +490,28 @@ impl PwrRoute {
 
     /// The selected rule's editor, fresh from the store, and its Try it.
     pub(crate) fn rebuild_rail(&mut self, cx: &mut Context<'_, Self>) {
+        self.rail = None;
+        self.rebuild_rail_kept(cx);
+    }
+
+    /// The same, after an edit that added or removed one of the selected
+    /// rule's fields: what the person chose to type (Open in, Profile, a
+    /// Try it link) stays. Only for the rule the rail was built for; a
+    /// delete, an insert or a reload can put another rule at its index, so
+    /// those use [`Self::rebuild_rail`].
+    pub(crate) fn rebuild_rail_kept(&mut self, cx: &mut Context<'_, Self>) {
+        let old = self.rail.take();
         self.rail = match self.selection {
             Some(Selection::Handler(i)) => self.handlers.get(i).map(|h| Rail::for_handler(h, cx)),
             Some(Selection::Rewrite(i)) => self.rewrites.get(i).map(|r| Rail::for_rewrite(r, cx)),
             None => None,
         };
+        if let Some(rail) = &mut self.rail {
+            rail.of = self.selection;
+            if let Some(old) = old.filter(|old| old.of == self.selection) {
+                rail.keep_from(old);
+            }
+        }
         self.try_it();
     }
 
@@ -622,6 +643,9 @@ impl PwrRoute {
     /// A new, empty rewrite at the end of its list, selected, with its
     /// first pattern ready to type.
     pub fn add_rewrite(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // Under a config the visual rules are folded: open them, so the
+        // new row is on screen beside its editor.
+        self.visual_rules_expanded = true;
         let index = self.store.add_rewrite();
         self.selection = Some(Selection::Rewrite(index));
         self.refresh(cx);
@@ -632,11 +656,45 @@ impl PwrRoute {
     /// A new, empty handler just above Everything else, selected, with its
     /// first pattern ready to type.
     pub fn add_handler(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.visual_rules_expanded = true;
+        self.draft_from = None;
         let index = self.store.add_handler();
         self.selection = Some(Selection::Handler(index));
         self.refresh(cx);
         self.rebuild_rail(cx);
         self.add_pattern(window, cx);
+    }
+
+    /// Test a link's "Add a rule…": a new handler on Rules whose first
+    /// pattern is the narrowest `suggest_rule` offers for the tested link,
+    /// selected so typing replaces it, and Try it holding the link (design:
+    /// Rule Editor Pickers 5a, 5b). Nothing else is preset: the browser is
+    /// the person's to choose.
+    pub fn add_rule_from_test(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // From the last run, not the field: rules match the URL after the
+        // rewrites, and the field may have changed since.
+        let Some((pattern, url)) = self.test.rule_start() else {
+            return;
+        };
+        self.navigate(Screen::Rules, window, cx);
+        self.add_handler(window, cx);
+        let Some(Selection::Handler(h)) = self.selection else {
+            return;
+        };
+        self.store.set_pattern(Selection::Handler(h), 0, &pattern);
+        self.refresh(cx);
+        self.rebuild_rail_kept(cx);
+        if let Some(rail) = &mut self.rail {
+            if let Some(field) = rail.patterns.first_mut() {
+                field.selected = !field.text.is_empty();
+            }
+            rail.sample.set(url);
+            rail.sample_edited = true;
+        }
+        self.try_it();
+        self.focus_field(window, cx, |rail| rail.patterns.first());
+        self.draft_from = Some((h, crate::editor::DraftFrom::TestLink));
+        cx.notify();
     }
 
     /// Removes the selected rule; the row that takes its place is selected.
@@ -645,6 +703,14 @@ impl PwrRoute {
             return;
         };
         self.store.delete(selection);
+        // The draft a note belongs to: gone with it, or up one below it.
+        if let Selection::Handler(deleted) = selection {
+            self.draft_from = match self.draft_from {
+                Some((draft, _)) if draft == deleted => None,
+                Some((draft, from)) if draft > deleted => Some((draft - 1, from)),
+                kept => kept,
+            };
+        }
         // The row that took its place, or the last of its list.
         let (len, make): (usize, fn(usize) -> Selection) = match selection {
             Selection::Rewrite(_) => (self.store.rewrite_count(), Selection::Rewrite),
@@ -676,7 +742,7 @@ impl PwrRoute {
         };
         self.store.add_pattern(selection);
         self.refresh(cx);
-        self.rebuild_rail(cx);
+        self.rebuild_rail_kept(cx);
         self.focus_field(window, cx, |rail| rail.patterns.last());
     }
 
@@ -691,7 +757,7 @@ impl PwrRoute {
         };
         self.store.remove_pattern(selection, index);
         self.refresh(cx);
-        self.rebuild_rail(cx);
+        self.rebuild_rail_kept(cx);
         window.focus(&self.focus, cx);
     }
 
@@ -702,7 +768,7 @@ impl PwrRoute {
         };
         self.store.add_opener(h);
         self.refresh(cx);
-        self.rebuild_rail(cx);
+        self.rebuild_rail_kept(cx);
         self.focus_field(window, cx, |rail| rail.openers.last());
     }
 
@@ -712,7 +778,7 @@ impl PwrRoute {
         };
         self.store.remove_opener(h, index);
         self.refresh(cx);
-        self.rebuild_rail(cx);
+        self.rebuild_rail_kept(cx);
         window.focus(&self.focus, cx);
     }
 
@@ -723,7 +789,7 @@ impl PwrRoute {
         };
         self.store.add_action(r);
         self.refresh(cx);
-        self.rebuild_rail(cx);
+        self.rebuild_rail_kept(cx);
         self.focus_field(window, cx, |rail| rail.values.last());
     }
 
@@ -733,7 +799,7 @@ impl PwrRoute {
         };
         self.store.remove_action(r, index);
         self.refresh(cx);
-        self.rebuild_rail(cx);
+        self.rebuild_rail_kept(cx);
         window.focus(&self.focus, cx);
     }
 

@@ -21,9 +21,7 @@ use pwrroute_engine::{Privacy, TestSource};
 
 use crate::app::{PwrRoute, Selection};
 use crate::e2e;
-use crate::rules_model::{
-    Destination, Handler, KEEP_LEVELS, KINDS, Rewrite, RowBadge, Rule, kind_of,
-};
+use crate::rules_model::{Handler, KEEP_LEVELS, KINDS, Rewrite, RowBadge, Rule, kind_of};
 use crate::rules_view::{ChipTone, chip_in, example_mark, winner_label};
 use crate::text_field::{Edit, TextField};
 use crate::theme::{self, mono, text, tracked};
@@ -73,7 +71,28 @@ pub struct Rail {
     /// The menu that was open when a kind box was pressed; see
     /// `test_link`'s opener picker.
     was_picking: Option<usize>,
+    /// Which of Open in's pickers (or "+ app"'s menu) is open.
+    pub menu: Option<RailMenu>,
+    /// The one that was open when a picker's box was pressed, as
+    /// `was_picking`.
+    was_menu: Option<RailMenu>,
+    /// "Other app…" was chosen: Open in is a text field until "Choose from
+    /// the list". Kept across rebuilds of the same rule's rail.
+    pub browser_typed: bool,
+    /// The same for Profile ("Profile by name or folder…").
+    pub profile_typed: bool,
+    /// The rule this rail was built for, so a rebuild for the same rule
+    /// keeps what the person chose to type.
+    pub(crate) of: Option<Selection>,
     pub try_result: Option<TryResult>,
+}
+
+/// The rail's menus: Open in, Profile, and "+ app" under Sent from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RailMenu {
+    Browser,
+    Profile,
+    Opener,
 }
 
 impl Rail {
@@ -90,6 +109,11 @@ impl Rail {
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
+            menu: None,
+            was_menu: None,
+            browser_typed: false,
+            profile_typed: false,
+            of: None,
             try_result: None,
         }
     }
@@ -112,7 +136,23 @@ impl Rail {
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
+            menu: None,
+            was_menu: None,
+            browser_typed: false,
+            profile_typed: false,
+            of: None,
             try_result: None,
+        }
+    }
+
+    /// Takes what the person chose on `old`, the rail this one replaces for
+    /// the same rule: typed Open in and Profile, and a link typed in Try it.
+    pub(crate) fn keep_from(&mut self, old: Rail) {
+        self.browser_typed = old.browser_typed;
+        self.profile_typed = old.profile_typed;
+        if old.sample_edited {
+            self.sample = old.sample;
+            self.sample_edited = true;
         }
     }
 
@@ -170,12 +210,12 @@ fn section_title(title: &str) -> Div {
 }
 
 /// `.lab`.
-fn label(content: &'static str) -> Div {
+fn label(content: impl Into<SharedString>) -> Div {
     text(content, 11.0, 600.0, theme::text_secondary()).line_height(px(14.3))
 }
 
 /// `.lrow`: a label on the left, its control on the right.
-fn labeled_row(content: &'static str, control: impl IntoElement) -> Div {
+fn labeled_row(content: impl Into<SharedString>, control: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()
@@ -212,6 +252,34 @@ fn problem(message: &str) -> Div {
             10.5,
             15.2,
             theme::danger_text(),
+        ))
+}
+
+/// `.warn-t`: what the rule asks for that this machine does not have. Not
+/// a problem: the rule saves and runs, and the router falls back.
+fn warning(selector: &'static str, message: impl Into<SharedString>) -> Stateful<Div> {
+    div()
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .flex()
+        .items_start()
+        .gap(px(6.0))
+        .child(
+            div()
+                .flex_none()
+                .size(px(14.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::warn_soft())
+                .child(mono("!", 9.0, 700.0, theme::warn_text())),
+        )
+        .child(crate::widgets::paragraph(
+            message,
+            10.5,
+            15.2,
+            theme::warn_text(),
         ))
 }
 
@@ -502,6 +570,7 @@ fn pattern_list(
 }
 
 fn match_section(
+    app: &PwrRoute,
     handler: &Handler,
     rail: &Rail,
     window: &Window,
@@ -528,74 +597,514 @@ fn match_section(
                 cx,
             ))
         });
+    let sent_from = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(10.0))
+        .mt(px(6.0))
+        .child(label("Sent from"))
+        .when(rail.openers.is_empty(), |row| {
+            row.child(
+                div()
+                    .id("opener-any")
+                    .debug_selector(|| "opener-any".into())
+                    .child(text("Any app", 11.0, 500.0, theme::text_muted())),
+            )
+        });
     section()
         .child(section_title("Match"))
         .children(pattern_list(rail, &handler.problems, window, cx))
-        .child(label("Sent from").mt(px(6.0)))
+        .child(sent_from)
         .when(!rail.openers.is_empty(), |section| section.child(openers))
         .children(problems_under(&handler.problems, Under::Openers))
-        .child(add_button(
-            "opener-add",
-            "+ app",
-            None,
-            |this, window, cx| this.add_opener(window, cx),
-            cx,
-        ))
+        .child(opener_add(app, rail, cx))
         .child(paragraph(
-            "Optional. Leave empty to match a link from any app. The app that handed the link \
-             to the OS, by name or bundle id.",
+            "The app that handed the link to the OS, by name or bundle id. With none, the \
+             rule takes links from any app.",
             10.5,
             15.75,
         ))
 }
 
-fn open_in_section(
+/// "+ app": the apps other rules name, then any app by name. With no app
+/// named anywhere it adds the field at once.
+fn opener_add(app: &PwrRoute, rail: &Rail, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let Some(Selection::Handler(h)) = app.selection else {
+        return div();
+    };
+    let named = crate::rule_pickers::named_openers(&app.handlers, h);
+    if named.is_empty() {
+        return div().flex().child(add_button(
+            "opener-add",
+            "+ app",
+            None,
+            |this, window, cx| this.add_opener(window, cx),
+            cx,
+        ));
+    }
+    let rows = named
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let shown = crate::default_browser::browser_name(&name);
+            let chosen = name.clone();
+            let hint = (shown != name).then(|| SharedString::from(name.clone()));
+            choice_row(
+                format!("opener-choice-{i}"),
+                Some(crate::widgets::badge_for(&shown)),
+                shown,
+                hint,
+                false,
+                false,
+                cx.listener(move |this, _, window, cx| this.choose_opener(&chosen, window, cx)),
+            )
+        })
+        .collect::<Vec<_>>();
+    let menu = floating_menu("opener-menu", cx)
+        .w(px(260.0))
+        .child(crate::widgets::menu_heading("Named in your rules"))
+        .children(rows)
+        .child(crate::widgets::menu_divider())
+        .child(other_row(
+            "opener-other",
+            "Other app by name or bundle id\u{2026}",
+            cx.listener(|this, _, window, cx| this.add_opener(window, cx)),
+        ));
+    div()
+        .relative()
+        .flex()
+        .child(
+            add_button(
+                "opener-add",
+                "+ app",
+                None,
+                |this, _, cx| this.toggle_rail_menu(RailMenu::Opener, cx),
+                cx,
+            )
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.note_rail_menu())),
+        )
+        .when(rail.menu == Some(RailMenu::Opener), |add| {
+            add.child(deferred(menu))
+        })
+}
+
+/// A rail picker's list: under its box and as wide as it, closed by a
+/// press anywhere else.
+fn rail_menu(id: &'static str, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
+    floating_menu(id, cx).right_0()
+}
+
+/// A rail menu placed under its control at the left; the caller sets its
+/// width.
+fn floating_menu(id: &'static str, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
+    crate::widgets::menu_card(id)
+        .debug_selector(move || id.into())
+        .absolute()
+        .top(px(34.0))
+        .left_0()
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            if let Some(rail) = &mut this.rail {
+                rail.menu = None;
+            }
+            cx.notify();
+        }))
+}
+
+type OnClick = Box<dyn Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// One choice in a rail picker's list.
+fn choice_row(
+    selector: String,
+    badge_label: Option<crate::widgets::AppBadge>,
+    label: impl Into<SharedString>,
+    hint: Option<SharedString>,
+    selected: bool,
+    dim: bool,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let id: SharedString = selector.into();
+    let on_click: OnClick = Box::new(on_click);
+    crate::widgets::menu_row(ElementId::Name(id.clone()), badge_label, label, hint)
+        .debug_selector(move || id.to_string())
+        .when(selected, |row| row.bg(theme::bg_row_active()))
+        .when(dim, |row| row.opacity(0.6))
+        .hover(|row| row.bg(theme::bg_hover()))
+        .on_click(on_click)
+}
+
+/// The list's way out to a typed value ("Other app…").
+fn other_row(
+    id: &'static str,
+    label: &'static str,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .px(px(8.0))
+        .py(px(6.0))
+        .rounded(px(5.0))
+        .cursor_pointer()
+        .hover(|row| row.bg(theme::bg_hover()))
+        .child(text(label, 11.5, 500.0, theme::text_muted()))
+        .on_click(on_click)
+}
+
+/// A picker's box: the value as it reads, and the caret. A press toggles
+/// `menu`.
+fn picker_box(
+    selector: &'static str,
+    menu: RailMenu,
+    content: Div,
+    warn: bool,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Stateful<Div> {
+    input_box()
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .w_full()
+        .cursor_pointer()
+        .when(warn, |input| input.border_color(theme::status_warning()))
+        .child(content)
+        .child(caret())
+        // Capture runs in paint order: before the deferred menu's
+        // press-outside handler closes it.
+        .capture_any_mouse_down(cx.listener(|this, _, _, _| this.note_rail_menu()))
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_rail_menu(menu, cx)))
+}
+
+/// A picker that has nothing to offer yet: its reason in a dimmed box.
+fn disabled_box(selector: &'static str, reason: impl Into<SharedString>) -> Stateful<Div> {
+    input_box()
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .w_full()
+        .opacity(0.55)
+        .child(crate::widgets::field_label(reason, theme::text_muted()))
+        .child(caret())
+}
+
+/// "Choose from the list": back from a typed value to the picker.
+fn list_link(
+    selector: &'static str,
+    on_click: impl Fn(&mut PwrRoute, &mut Window, &mut Context<'_, PwrRoute>) + 'static,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    div().child(
+        div()
+            .id(selector)
+            .debug_selector(move || selector.into())
+            .cursor_pointer()
+            .px(px(2.0))
+            .child(text("\u{2190} list", 10.5, 500.0, theme::accent()))
+            .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx))),
+    )
+}
+
+/// The value as a picker's box shows it: the app's badge and its name.
+fn app_label(name: &str, color: gpui_kit::Hsla) -> Div {
+    div()
+        .flex()
+        .min_w_0()
+        .items_center()
+        .gap(px(8.0))
+        .child(badge(crate::widgets::badge_for(name)))
+        .child(crate::widgets::field_label(name.to_owned(), color))
+}
+
+/// The scan's browsers are known: it ran (so finding none is an answer),
+/// or the window was handed a scan, as a test or screenshot does. Before
+/// then nothing is drawn as missing.
+fn scanned(app: &PwrRoute, cx: &App) -> bool {
+    !app.installed.is_empty() || crate::browser_scan::has_run(cx)
+}
+
+/// Open in: the browsers on this machine and the apps the rules name,
+/// with "Other app…" for anything else (design: Rule Editor Pickers 3a).
+fn browser_control(
+    app: &PwrRoute,
     handler: &Handler,
     rail: &Rail,
     window: &Window,
     cx: &mut Context<'_, PwrRoute>,
 ) -> Div {
-    let browser_badge = match &handler.rule.destination {
-        Destination::Browser { badge, .. } => Some(badge.clone()),
-        _ => None,
-    };
-    let browser = div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .when_some(browser_badge, |row, label| row.child(badge(label)))
-        .child(editable(
+    let error = handler.problems.iter().any(|m| under(m) == Under::Browser);
+    if rail.browser_typed {
+        let back = list_link(
+            "browser-list",
+            |this, window, cx| this.list_browser(window, cx),
+            cx,
+        );
+        return div().child(editable(
             rail,
             Field::Browser,
             "browser".into(),
             Look {
                 mono: false,
-                placeholder: "Choose a browser or app",
-                error: handler.problems.iter().any(|m| under(m) == Under::Browser),
+                placeholder: "App name, bundle id or path",
+                error,
             },
-            None,
+            Some(back),
             window,
             cx,
         ));
-    let profile = div().w(px(190.0)).flex_none().child(editable(
-        rail,
-        Field::Profile,
-        "profile".into(),
-        Look {
-            mono: false,
-            placeholder: "Default",
-            error: false,
-        },
-        None,
-        window,
-        cx,
+    }
+    let value = handler.browser.trim();
+    let missing =
+        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
+    let content = if value.is_empty() {
+        crate::widgets::field_label("Choose a browser or app", theme::text_subtle())
+    } else {
+        let shown = crate::default_browser::browser_name(value);
+        app_label(
+            &shown,
+            if missing {
+                theme::text_muted()
+            } else {
+                theme::text_primary()
+            },
+        )
+    };
+    let picker = crate::rule_pickers::BrowserMenu::build(
+        &app.browsers,
+        &app.installed,
+        &app.handlers,
+        scanned(app, cx),
+    );
+    let mut menu = rail_menu("browser-menu", cx);
+    let mut index = 0;
+    let mut row = |entry: &crate::rule_pickers::BrowserEntry, cx: &mut Context<'_, PwrRoute>| {
+        let chosen = entry.name.clone();
+        let selected = entry.name.eq_ignore_ascii_case(value);
+        let shown = crate::default_browser::browser_name(&entry.name);
+        let row = choice_row(
+            format!("browser-choice-{index}"),
+            Some(crate::widgets::badge_for(&shown)),
+            shown,
+            entry.hint.clone().map(Into::into),
+            selected,
+            entry.missing,
+            cx.listener(move |this, _, _, cx| this.choose_browser(&chosen, cx)),
+        );
+        index += 1;
+        row
+    };
+    if picker.detected.is_empty() {
+        menu = menu.child(div().px(px(8.0)).py(px(8.0)).child(paragraph(
+            if scanned(app, cx) {
+                "No browsers found. Rescan in Settings \u{203a} Browsers, or name one."
+            } else {
+                "No browsers to list yet. Name one below."
+            },
+            10.5,
+            15.2,
+        )));
+    } else {
+        menu = menu.child(crate::widgets::menu_heading("On this Mac"));
+        for entry in &picker.detected {
+            menu = menu.child(row(entry, cx));
+        }
+    }
+    if !picker.named.is_empty() {
+        menu = menu.child(crate::widgets::menu_heading("Named in your rules"));
+        for entry in &picker.named {
+            menu = menu.child(row(entry, cx));
+        }
+    }
+    let menu = menu.child(crate::widgets::menu_divider()).child(other_row(
+        "browser-other",
+        "Other app by name, bundle id or path\u{2026}",
+        cx.listener(|this, _, window, cx| this.type_browser(window, cx)),
     ));
+    div()
+        .relative()
+        .w_full()
+        .child(picker_box(
+            "browser",
+            RailMenu::Browser,
+            content,
+            error || missing,
+            cx,
+        ))
+        .when(rail.menu == Some(RailMenu::Browser), |picker| {
+            picker.child(deferred(menu))
+        })
+}
+
+/// Profile: the chosen browser's profiles from the scan, "Default
+/// profile" first, and a way to name one by its folder (design 3b to 3d).
+/// An app the scan does not know gets the plain field.
+fn profile_control(
+    app: &PwrRoute,
+    handler: &Handler,
+    rail: &Rail,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> (Div, Option<AnyElement>) {
+    use crate::rule_pickers::Profiles;
+    let value = handler.profile.trim();
+    let browser = crate::default_browser::browser_name(handler.browser.trim());
+    let typed =
+        |rail: &Rail, back: Option<Div>, window: &Window, cx: &mut Context<'_, PwrRoute>| {
+            div().child(editable(
+                rail,
+                Field::Profile,
+                "profile".into(),
+                Look {
+                    mono: false,
+                    placeholder: "Default profile",
+                    error: false,
+                },
+                back,
+                window,
+                cx,
+            ))
+        };
+    let entries =
+        match crate::rule_pickers::profiles_of(&handler.browser, &app.browsers, &app.installed) {
+            Profiles::NoBrowser => {
+                return (
+                    div().child(disabled_box("profile", "Choose a browser first")),
+                    None,
+                );
+            }
+            Profiles::Unknown => return (typed(rail, None, window, cx), None),
+            Profiles::Known(entries) => entries,
+        };
+    let found = entries.iter().find(|entry| entry.is(value));
+    let unknown = !value.is_empty() && found.is_none();
+    let note = unknown.then(|| {
+        warning(
+            "profile-warning",
+            format!(
+                "{browser} has no profile named {value} on this Mac. Choose one, or keep it \
+                 for another machine."
+            ),
+        )
+        .into_any_element()
+    });
+    // The scan read no profiles: the list is the default and the way to
+    // name one, and the note says why it is short.
+    let note = note.or_else(|| {
+        (entries.is_empty() && value.is_empty()).then(|| {
+            div()
+                .id("profile-none-found")
+                .debug_selector(|| "profile-none-found".into())
+                .child(paragraph(
+                    format!(
+                        "{browser} has no profiles PwrRoute can read; it opens its own default \
+                         unless you name one."
+                    ),
+                    10.5,
+                    15.75,
+                ))
+                .into_any_element()
+        })
+    });
+    if rail.profile_typed {
+        let back = list_link(
+            "profile-list",
+            |this, window, cx| this.list_profile(window, cx),
+            cx,
+        );
+        return (typed(rail, Some(back), window, cx), note);
+    }
+    let content = match (value.is_empty(), found) {
+        (true, _) => crate::widgets::field_label("Default profile", theme::text_primary()),
+        (false, Some(entry)) => {
+            crate::widgets::field_label(entry.name.clone(), theme::text_primary())
+        }
+        (false, None) => crate::widgets::field_label(value.to_owned(), theme::text_muted()),
+    };
+    let default_row = choice_row(
+        "profile-choice-0".into(),
+        None,
+        "Default profile",
+        Some(format!("{browser} decides").into()),
+        value.is_empty(),
+        false,
+        cx.listener(|this, _, _, cx| this.choose_profile("", cx)),
+    );
+    let menu = entries.iter().enumerate().fold(
+        rail_menu("profile-menu", cx).child(default_row),
+        |menu, (i, entry)| {
+            let chosen = entry.name.clone();
+            menu.child(choice_row(
+                format!("profile-choice-{}", i + 1),
+                None,
+                entry.name.clone(),
+                entry.directory.clone().map(Into::into),
+                found == Some(entry),
+                false,
+                cx.listener(move |this, _, _, cx| this.choose_profile(&chosen, cx)),
+            ))
+        },
+    );
+    let menu = menu.child(crate::widgets::menu_divider()).child(other_row(
+        "profile-other",
+        "Profile by name or folder\u{2026}",
+        cx.listener(|this, _, window, cx| this.type_profile(window, cx)),
+    ));
+    let control = div()
+        .relative()
+        .w_full()
+        .child(picker_box(
+            "profile",
+            RailMenu::Profile,
+            content,
+            unknown,
+            cx,
+        ))
+        .when(rail.menu == Some(RailMenu::Profile), |picker| {
+            picker.child(deferred(menu))
+        });
+    (control, note)
+}
+
+fn open_in_section(
+    app: &PwrRoute,
+    handler: &Handler,
+    rail: &Rail,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    use crate::rule_pickers::PrivateMode;
+    let value = handler.browser.trim();
+    let shown = crate::default_browser::browser_name(value);
+    let missing =
+        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
+    let detected = !value.is_empty()
+        && (app
+            .browsers
+            .iter()
+            .any(|b| b.name.eq_ignore_ascii_case(value))
+            || crate::rule_pickers::installed_named(value, &app.installed).is_some());
+    let (profile, profile_note) = profile_control(app, handler, rail, window, cx);
+    let (private_label, private_enabled, private_note) =
+        match crate::rule_pickers::private_mode(value, detected) {
+            PrivateMode::Window(phrase) => (format!("Open in {phrase}"), true, None),
+            PrivateMode::Unknown => ("Open in a private window".to_owned(), true, None),
+            PrivateMode::Unsupported => (
+                "Open in a private window".to_owned(),
+                // Already on: it can still be switched off.
+                handler.private,
+                Some(format!(
+                    "{shown} can't open a private window from a link. The rule opens a normal \
+                     one."
+                )),
+            ),
+        };
     let private = div()
         .id("handler-private")
         .debug_selector(|| "handler-private".into())
-        .cursor_pointer()
-        .child(switch(handler.private))
-        .on_click(cx.listener(|this, _, _, cx| this.toggle_private(cx)));
+        .when(private_enabled, |switch| {
+            switch
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_private(cx)))
+        })
+        .when(!private_enabled, |switch| switch.opacity(0.45))
+        .child(switch(handler.private));
     let keep = handler.keep();
     let keep_control = KEEP_LEVELS.iter().fold(segmented(), |seg, (level, label)| {
         let level = *level;
@@ -608,36 +1117,30 @@ fn open_in_section(
     });
     section()
         .child(section_title("Open in"))
-        .child(browser)
+        .child(browser_control(app, handler, rail, window, cx))
         .children(problems_under(&handler.problems, Under::Browser))
-        .child(paragraph(
-            "A browser or app by name, bundle id or path.",
-            10.5,
-            15.75,
-        ))
-        .child(labeled_row("Profile", profile))
-        .child(labeled_row("Open in a private window", private).mt(px(4.0)))
-        .child(labeled_row("Keep", keep_control))
+        .when(missing, |section| {
+            section.child(warning(
+                "browser-warning",
+                format!(
+                    "{shown} isn't installed here. Links this rule takes go to the fallback \
+                     browser."
+                ),
+            ))
+        })
+        .child(label("Profile").mt(px(4.0)))
+        .child(profile)
+        .children(profile_note)
+        .child(labeled_row(private_label, private).mt(px(4.0)))
+        .children(private_note.map(|note| paragraph(note, 10.5, 15.75)))
+        .child(labeled_row("Activity keeps", keep_control))
         .children(problems_under(&handler.problems, Under::Keep))
         .child(paragraph(
-            "What Activity and the journal remember about links this rule takes. A \
-             private window keeps host only unless set here.",
+            "What Activity and the journal remember about links this rule opens. A private \
+             window keeps host only unless set here.",
             10.5,
             15.75,
         ))
-        // rules.json has no field for these yet; drawn as the design shows
-        // them, not wired.
-        .child(labeled_row("Open in background", switch(false)).opacity(0.5))
-        .child(
-            labeled_row(
-                "Extra arguments",
-                input_box()
-                    .w(px(190.0))
-                    .flex_none()
-                    .child(mono("--new-window", 12.0, 500.0, theme::text_subtle())),
-            )
-            .opacity(0.5),
-        )
 }
 
 /// A Keep level as an element id and selector suffix.
@@ -736,7 +1239,7 @@ fn examples_section(
             (
                 "Examples \u{00b7} must resolve here",
                 rows,
-                "Saved to rules.json as this rule's example. Run tests checks it still \
+                "Return adds it to rules.json with the rule. Run tests checks it still \
                  resolves here; a rule that takes it later fails the run.",
             )
         }
@@ -762,7 +1265,7 @@ fn examples_section(
             (
                 "Examples \u{00b7} what each becomes",
                 rows,
-                "Saved to rules.json as this rewrite's example: the URL and what it must \
+                "Return adds it to rules.json with the rewrite: the URL and what it must \
                  become. Run tests checks it on every save.",
             )
         }
@@ -795,23 +1298,161 @@ fn examples_section(
             cx,
         )
     });
+    let empty = match selection {
+        Selection::Handler(_) => {
+            "No examples yet. Add a link this rule must open; every save checks it still \
+             lands here."
+        }
+        Selection::Rewrite(_) => {
+            "No examples yet. Add a link and what it must become; every save checks it."
+        }
+    };
     section()
         .child(section_title(title))
-        .when(!rows.is_empty(), |section| {
-            section.child(div().flex().flex_col().gap(px(5.0)).children(rows))
+        .map(|section| {
+            if rows.is_empty() {
+                section.child(
+                    div()
+                        .id("examples-empty")
+                        .debug_selector(|| "examples-empty".into())
+                        .child(paragraph(empty, 10.5, 15.75)),
+                )
+            } else {
+                section.child(div().flex().flex_col().gap(px(5.0)).children(rows))
+            }
         })
         .children(problems_under(problems, Under::Examples))
         .child(add)
         .children(becomes)
-        .child(paragraph(
-            "Return adds the link. It is written to rules.json with the rule.",
-            10.5,
-            15.75,
-        ))
         .child(paragraph(help, 10.5, 15.75))
 }
 
 impl PwrRoute {
+    /// A press on a picker's box: which menu was open, before the menu's
+    /// press-outside handler closes it.
+    fn note_rail_menu(&mut self) {
+        if let Some(rail) = &mut self.rail {
+            rail.was_menu = rail.menu;
+        }
+    }
+
+    /// Opens `menu`, or closes it when it was the one open.
+    pub fn toggle_rail_menu(&mut self, menu: RailMenu, cx: &mut Context<'_, Self>) {
+        if let Some(rail) = &mut self.rail {
+            rail.menu = if rail.was_menu == Some(menu) {
+                None
+            } else {
+                Some(menu)
+            };
+            rail.was_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// Open in's choice: the selected handler opens in `name`. A profile
+    /// the new browser does not have is cleared, since it named the old
+    /// one's.
+    pub fn choose_browser(&mut self, name: &str, cx: &mut Context<'_, Self>) {
+        let Some(Selection::Handler(h)) = self.selection else {
+            return;
+        };
+        let Some(handler) = self.handlers.get(h) else {
+            return;
+        };
+        let changed = !handler.browser.trim().eq_ignore_ascii_case(name);
+        let profile = handler.profile.trim().to_owned();
+        self.store.set_browser(h, name);
+        let keeps_profile =
+            match crate::rule_pickers::profiles_of(name, &self.browsers, &self.installed) {
+                crate::rule_pickers::Profiles::Known(entries) => {
+                    entries.iter().any(|entry| entry.is(&profile))
+                }
+                _ => !changed,
+            };
+        let clear = !profile.is_empty() && changed && !keeps_profile;
+        if clear {
+            self.store.set_profile(h, "");
+        }
+        if let Some(rail) = &mut self.rail {
+            rail.browser.set(name);
+            if clear {
+                rail.profile.set("");
+            }
+            rail.menu = None;
+            rail.browser_typed = false;
+            rail.profile_typed = false;
+        }
+        self.refresh(cx);
+    }
+
+    /// "Other app…": Open in becomes a text field, focused.
+    pub fn type_browser(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if let Some(rail) = &mut self.rail {
+            rail.menu = None;
+            rail.browser_typed = true;
+            window.focus(&rail.browser.focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// Back from the typed Open in to the picker; what was typed stays.
+    pub fn list_browser(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if let Some(rail) = &mut self.rail {
+            rail.browser_typed = false;
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Profile's choice; "" is the browser's own default.
+    pub fn choose_profile(&mut self, name: &str, cx: &mut Context<'_, Self>) {
+        let Some(Selection::Handler(h)) = self.selection else {
+            return;
+        };
+        self.store.set_profile(h, name);
+        if let Some(rail) = &mut self.rail {
+            rail.profile.set(name);
+            rail.menu = None;
+            rail.profile_typed = false;
+        }
+        self.refresh(cx);
+    }
+
+    /// "Profile by name or folder…": Profile becomes a text field.
+    pub fn type_profile(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if let Some(rail) = &mut self.rail {
+            rail.menu = None;
+            rail.profile_typed = true;
+            window.focus(&rail.profile.focus, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn list_profile(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if let Some(rail) = &mut self.rail {
+            rail.profile_typed = false;
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// "+ app"'s choice: the selected handler also requires links from
+    /// `name`, an app another rule names.
+    pub fn choose_opener(&mut self, name: &str, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(Selection::Handler(h)) = self.selection else {
+            return;
+        };
+        if let Some(i) = self.store.add_opener(h) {
+            self.store.set_opener(h, i, name);
+        }
+        if let Some(rail) = &mut self.rail {
+            rail.menu = None;
+        }
+        self.refresh(cx);
+        self.rebuild_rail_kept(cx);
+        window.focus(&self.focus, cx);
+    }
+
     /// Switches the selected handler's private window on or off.
     pub fn toggle_private(&mut self, cx: &mut Context<'_, Self>) {
         if let Some(Selection::Handler(h)) = self.selection
@@ -1240,6 +1881,64 @@ fn rail_end(what: &'static str, draft: bool, note: String, cx: &mut Context<'_, 
         )
 }
 
+/// Where a new rule came from and where it runs, above its fields while
+/// it is a draft (design: Rule Editor Pickers 1b, 2e, 5b).
+fn draft_note(app: &PwrRoute, index: usize, draft: bool) -> Option<Stateful<Div>> {
+    if !draft {
+        return None;
+    }
+    let mut lines: Vec<String> = Vec::new();
+    match app.draft_from {
+        Some((at, DraftFrom::Overview)) if at == index => lines.push(
+            "From the Overview: the browser and profile are set. Add the links this rule \
+             should take."
+                .to_owned(),
+        ),
+        Some((at, DraftFrom::TestLink)) if at == index => lines.push(
+            "From Test a link: the pattern is suggested from the link, and Try it holds it."
+                .to_owned(),
+        ),
+        _ => {}
+    }
+    if let Some(config) = &app.config {
+        lines.push(crate::activity_actions::config_hint(
+            &config.path,
+            app.rules_first(),
+        ));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .id("draft-note")
+            .debug_selector(|| "draft-note".into())
+            .mx(px(16.0))
+            .mt(px(12.0))
+            .py(px(8.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
+            .bg(theme::bg_row_active())
+            .border_1()
+            .border_color(theme::border_faint())
+            .child(crate::widgets::paragraph(
+                lines.join(" "),
+                10.5,
+                15.75,
+                theme::text_secondary(),
+            )),
+    )
+}
+
+/// Where a draft came from, for its note.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DraftFrom {
+    /// A card's "+ Rule" or a profile's "+ Rule for …".
+    Overview,
+    /// Test a link's "Add a rule…".
+    TestLink,
+}
+
 /// `.rrail`.
 pub fn rail(
     app: &PwrRoute,
@@ -1274,8 +1973,9 @@ pub fn rail(
                         &handler.rule,
                         cx,
                     ))
-                    .child(match_section(handler, rail, window, cx))
-                    .child(open_in_section(handler, rail, window, cx))
+                    .children(draft_note(app, index, draft))
+                    .child(match_section(app, handler, rail, window, cx))
+                    .child(open_in_section(app, handler, rail, window, cx))
                     .child(examples_section(
                         app,
                         selection,

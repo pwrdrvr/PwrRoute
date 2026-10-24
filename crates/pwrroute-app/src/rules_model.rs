@@ -211,7 +211,7 @@ pub fn privacy_chip(private: bool, level: Privacy) -> Option<String> {
 
 /// The Keep control's three choices, in order, with their labels.
 pub const KEEP_LEVELS: [(Privacy, &str); 3] = [
-    (Privacy::Full, "Full"),
+    (Privacy::Full, "Full link"),
     (Privacy::Host, "Host only"),
     (Privacy::None, "Nothing"),
 ];

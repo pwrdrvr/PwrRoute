@@ -38,6 +38,7 @@ mod overview;
 mod overview_model;
 mod placement;
 mod router;
+mod rule_pickers;
 mod rules_model;
 mod rules_store;
 mod rules_view;

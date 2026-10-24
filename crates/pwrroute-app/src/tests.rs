@@ -685,7 +685,10 @@ fn editing_a_handler_writes_the_file(cx: &mut TestAppContext) {
     click(cx, "profile");
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("Personal");
+    // "+ app" offers the app another rule names, then any app by name.
     click(cx, "opener-add");
+    assert!(cx.debug_bounds("opener-choice-0").is_some());
+    click(cx, "opener-other");
     cx.simulate_input("com.apple.mail");
     draw(cx);
     let file = saved(cx, &path);
@@ -696,7 +699,9 @@ fn editing_a_handler_writes_the_file(cx: &mut TestAppContext) {
 
     // Clearing the browser is a problem: the row says so, the file keeps
     // the saved browser, and Test a link routes by the saved version.
+    // Open in is a picker; "Other app…" makes it a field.
     click(cx, "browser");
+    click(cx, "browser-other");
     cx.simulate_keystrokes("cmd-a backspace");
     draw(cx);
     assert_eq!(handler(cx).rule.badge, RowBadge::NotSaved);
@@ -745,6 +750,7 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
     );
     // Try it says the draft would take its sample once it is complete.
     click(cx, "browser");
+    click(cx, "browser-other");
     cx.simulate_input("Firefox");
     draw(cx);
     assert_eq!(handler(cx).rule.badge, RowBadge::None);
@@ -1672,6 +1678,12 @@ fn open_activity<'a>(
     (view, cx)
 }
 
+/// Picks the sheet's first browser: the sheet chooses none for the person.
+fn choose_sheet_browser(cx: &mut VisualTestContext) {
+    click(cx, "add-rule-browser");
+    click(cx, "add-rule-browser-choice-0");
+}
+
 /// What the open sheet says stops its rule from taking the link.
 fn sheet_problem(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> Option<String> {
     view.read_with(cx, |app, _| {
@@ -1700,6 +1712,7 @@ fn a_rule_added_beside_a_config_shows_under_its_visual_rules(cx: &mut TestAppCon
     // it, so a visual rule at the top does.
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
+    choose_sheet_browser(cx);
     click(cx, "add-rule-position-top");
     click(cx, "add-rule-save");
     assert!(cx.debug_bounds("add-rule-sheet").is_none());
@@ -1728,6 +1741,7 @@ fn a_rule_an_earlier_rule_shadows_is_flagged_before_it_is_added(cx: &mut TestApp
     let (view, cx) = open_activity(cx, &dir, None);
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
+    choose_sheet_browser(cx);
     // At the top, a pattern that misses the link: handler 2 still takes
     // it, but not first, so the sheet says the rule does not match.
     click(cx, "add-rule-position-top");
@@ -1777,6 +1791,7 @@ fn a_rule_the_config_takes_first_says_so_and_adds_only_on_a_second_click(cx: &mu
     // from Slack, before any visual rule.
     click(cx, "activity-row-0");
     click(cx, "activity-add-rule-0");
+    choose_sheet_browser(cx);
     click(cx, "add-rule-position-top");
     click(cx, "add-rule-save");
     assert!(cx.debug_bounds("add-rule-sheet").is_some());
@@ -1805,11 +1820,13 @@ fn the_same_rule_is_never_added_twice(cx: &mut TestAppContext) {
     let (view, cx) = open_activity(cx, &dir, None);
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
+    choose_sheet_browser(cx);
     click(cx, "add-rule-position-top");
     click(cx, "add-rule-save");
     assert_eq!(saved(cx, &path).rules.len(), 8);
     // The same rule again, from the row's menu.
     click(cx, "activity-add-rule-menu-4");
+    choose_sheet_browser(cx);
     click(cx, "add-rule-position-top");
     click(cx, "add-rule-save");
     assert!(cx.debug_bounds("add-rule-sheet").is_some());
@@ -1885,6 +1902,7 @@ fn activity_saves_examples_and_tests_and_refuses_a_host_only_record(cx: &mut Tes
     // Add anyway still adds it.
     click(cx, "activity-row-1");
     click(cx, "activity-add-rule-1");
+    choose_sheet_browser(cx);
     let needs_js = view.read_with(cx, |app, _| {
         app.actions.sheet.as_ref().unwrap().needs_js.clone()
     });
@@ -2515,6 +2533,7 @@ fn add_rule_under_pwrroute_blames_the_pattern_not_the_configs_order(cx: &mut Tes
     // what the sheet says, not the config's order.
     click(cx, "activity-row-0");
     click(cx, "activity-add-rule-0");
+    choose_sheet_browser(cx);
     click(cx, "add-rule-position-top");
     click(cx, "add-rule-pattern");
     cx.simulate_keystrokes("cmd-a backspace");
@@ -2728,6 +2747,7 @@ fn the_add_rule_sheet_follows_the_precedence(cx: &mut TestAppContext) {
     };
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
+    choose_sheet_browser(cx);
     assert_eq!(sheet(cx), (false, Some("~/.finicky.ts".to_owned())));
     click(cx, "add-rule-cancel");
 
@@ -2736,6 +2756,7 @@ fn the_add_rule_sheet_follows_the_precedence(cx: &mut TestAppContext) {
             .set_precedence(pwrroute_engine::Precedence::PwrRoute);
     });
     click(cx, "activity-add-rule-4");
+    choose_sheet_browser(cx);
     assert_eq!(sheet(cx), (true, Some("~/.finicky.ts".to_owned())));
     click(cx, "add-rule-position-top");
     click(cx, "add-rule-save");
@@ -2988,7 +3009,7 @@ fn more_profiles_open_in_place(cx: &mut TestAppContext) {
     }));
 }
 
-/// A node with no rules yet offers "+ Add a rule…": Rules' new rule, with
+/// A node with no rules yet offers "+ Rule for …": Rules' new rule, with
 /// that browser and profile chosen.
 #[gpui_kit::test]
 fn an_idle_node_adds_a_rule_for_its_profile(cx: &mut TestAppContext) {
@@ -3056,7 +3077,7 @@ fn hovering_a_private_window_lights_its_routes(cx: &mut TestAppContext) {
     assert!(node.top() >= profile.bottom() + px(4.0));
 }
 
-/// An idle private-window node offers "+ Add a rule…": Rules' new rule
+/// An idle private-window node offers "+ Rule for …": Rules' new rule
 /// with that browser, no profile, and a private window on.
 #[gpui_kit::test]
 fn an_idle_private_window_adds_a_private_rule(cx: &mut TestAppContext) {
@@ -4065,4 +4086,308 @@ mod rules_and_config_views {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+// --- the rule editor's pickers and the ways to start a rule ------------
+
+/// A window over the fixture rules with the Overview's contrived scan:
+/// Chrome, Firefox, Arc, Safari and Edge with made-up profiles.
+fn open_with_scan<'a>(
+    cx: &'a mut TestAppContext,
+    dir: &Path,
+) -> (Entity<PwrRoute>, &'a mut VisualTestContext) {
+    let (view, cx) = open_store(cx, None, fixture_store(dir));
+    view.update(cx, |app, _| {
+        app.installed = fixtures::overview_browsers();
+        app.browsers = app
+            .installed
+            .iter()
+            .map(|app| crate::activity_actions::BrowserChoice {
+                name: app.name.clone(),
+                profiles: app.profiles.clone(),
+            })
+            .collect();
+    });
+    draw(cx);
+    (view, cx)
+}
+
+/// Open in and Profile are pickers over the scan, with a way out to a
+/// typed value; changing the browser drops a profile it does not have
+/// (design: Rule Editor Pickers 3a to 3d).
+#[gpui_kit::test]
+fn open_in_and_profile_pick_from_the_scan(cx: &mut TestAppContext) {
+    let dir = scratch("pickers");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_with_scan(cx, &dir);
+    let rule = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let h = &app.handlers[0];
+            (h.browser.clone(), h.profile.clone())
+        })
+    };
+    assert_eq!(rule(cx), ("Google Chrome".into(), "Work".into()));
+
+    // The list: this Mac's five browsers first; the menu closes on a pick.
+    click(cx, "browser");
+    assert!(cx.debug_bounds("browser-menu").is_some());
+    for i in 0..5 {
+        assert!(
+            cx.debug_bounds(format!("browser-choice-{i}").leak())
+                .is_some()
+        );
+    }
+    assert!(cx.debug_bounds("browser-other").is_some());
+    // Edge has no "Work": the profile goes with the old browser.
+    click(cx, "browser-choice-4");
+    assert!(cx.debug_bounds("browser-menu").is_none());
+    assert_eq!(rule(cx), ("Microsoft Edge".into(), String::new()));
+
+    // Edge's profiles, after its own default.
+    click(cx, "profile");
+    assert!(cx.debug_bounds("profile-menu").is_some());
+    assert!(cx.debug_bounds("profile-choice-4").is_some());
+    assert!(cx.debug_bounds("profile-choice-5").is_none());
+    click(cx, "profile-choice-4");
+    assert_eq!(rule(cx), ("Microsoft Edge".into(), "Travel".into()));
+    let file = saved(cx, &path);
+    assert_eq!(
+        (
+            file.rules[0].browser.as_str(),
+            file.rules[0].profile.as_str()
+        ),
+        ("Microsoft Edge", "Travel")
+    );
+    click(cx, "profile");
+    click(cx, "profile-choice-0");
+    assert_eq!(rule(cx), ("Microsoft Edge".into(), String::new()));
+
+    // A profile by folder: Chrome's "Profile 2" is Design, so it is no
+    // warning; a folder Chrome lacks is.
+    click(cx, "browser");
+    click(cx, "browser-choice-0");
+    click(cx, "profile");
+    click(cx, "profile-other");
+    cx.simulate_input("Profile 2");
+    draw(cx);
+    assert_eq!(rule(cx).1, "Profile 2");
+    click(cx, "profile-list");
+    assert!(cx.debug_bounds("profile-warning").is_none());
+    click(cx, "profile");
+    click(cx, "profile-other");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("Profile 9");
+    draw(cx);
+    assert!(cx.debug_bounds("profile-warning").is_some());
+
+    // Any other app by name: typed, and drawn as not installed here. Its
+    // profile is a plain field, since the scan knows nothing of it.
+    click(cx, "browser");
+    click(cx, "browser-other");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("Example Viewer");
+    draw(cx);
+    assert_eq!(rule(cx).0, "Example Viewer");
+    assert!(cx.debug_bounds("browser-warning").is_some());
+    // Back to the list, which now names it under the rules' apps.
+    click(cx, "browser-list");
+    click(cx, "browser");
+    assert!(
+        cx.debug_bounds("browser-choice-5").is_some(),
+        "Example Viewer, named"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A new rule's Profile waits for its browser, and a browser that can't
+/// open a private window from a link says so instead of offering it.
+#[gpui_kit::test]
+fn a_new_rules_profile_waits_for_its_browser(cx: &mut TestAppContext) {
+    let dir = scratch("pickers-new");
+    let (view, cx) = open_with_scan(cx, &dir);
+    click(cx, "add-handler");
+    let h = 7;
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(h))
+    );
+    // No browser: Profile is a reason, not a list.
+    click(cx, "profile");
+    assert!(cx.debug_bounds("profile-menu").is_none());
+    // The editor's Examples start empty, and say what one is for.
+    assert!(cx.debug_bounds("examples-empty").is_some());
+    // Safari (fourth on this Mac) opens no private window from a link.
+    click(cx, "browser");
+    click(cx, "browser-choice-3");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[h].browser.clone()),
+        "Safari"
+    );
+    click(cx, "handler-private");
+    assert!(!view.read_with(cx, |app, _| app.handlers[h].private));
+    // Chrome does.
+    click(cx, "browser");
+    click(cx, "browser-choice-0");
+    click(cx, "handler-private");
+    assert!(view.read_with(cx, |app, _| app.handlers[h].private));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// "+ app" offers the apps other rules name before any app by name.
+#[gpui_kit::test]
+fn plus_app_offers_the_apps_the_rules_name(cx: &mut TestAppContext) {
+    let dir = scratch("pickers-opener");
+    let (view, cx) = open_with_scan(cx, &dir);
+    assert!(cx.debug_bounds("opener-any").is_some());
+    click(cx, "opener-add");
+    click(cx, "opener-choice-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[0].openers.clone()),
+        ["com.tinyspeck.slackmacgap"]
+    );
+    assert!(cx.debug_bounds("opener-any").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Under a config, Rules still has Add rule: the visual rules open with
+/// the draft selected, and the rail says where it runs (design 1a, 1b).
+#[gpui_kit::test]
+fn rules_under_a_config_have_add_rule(cx: &mut TestAppContext) {
+    let (view, cx) = open_with(cx, Some(fixture_home().join(".finicky.ts")));
+    assert!(!view.read_with(cx, |app, _| app.visual_rules_expanded));
+    assert!(cx.debug_bounds("config-handlers").is_some());
+    click(cx, "add-handler");
+    assert!(view.read_with(cx, |app, _| app.visual_rules_expanded));
+    let (selection, editing) = view.read_with(cx, |app, _| (app.selection, app.editing()));
+    assert_eq!(selection, Some(Selection::Handler(7)));
+    assert!(editing);
+    assert!(cx.debug_bounds("editor-rail").is_some());
+    assert!(cx.debug_bounds("draft-note").is_some());
+}
+
+/// A card's "+ Rule" is the browser's, with no profile; a profile's own
+/// is on its node (design 2a to 2e).
+#[gpui_kit::test]
+fn an_overview_card_adds_a_rule_for_its_browser(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // Microsoft Edge, no rules yet, shows it at rest.
+    scroll_to(cx, "overview-card-add-3");
+    click(cx, "overview-card-add-3");
+    let (screen, selection) = view.read_with(cx, |app, _| (app.screen, app.selection));
+    assert_eq!(screen, Screen::Rules);
+    assert_eq!(selection, Some(Selection::Handler(6)));
+    let rule = view.read_with(cx, |app, _| app.store.edited().rules[6].clone());
+    assert_eq!(
+        (rule.browser.as_str(), rule.profile.as_str()),
+        ("Microsoft Edge", "")
+    );
+    assert!(cx.debug_bounds("draft-note").is_some());
+    // Not the card's pin: the click was the button's.
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.pinned.clone()),
+        None
+    );
+    // A card that routes links shows it under the pointer, so its counts
+    // keep their room at rest.
+    click(cx, "nav-overview");
+    assert!(cx.debug_bounds("overview-card-add-0").is_none());
+    hover(cx, "overview-card-0");
+    assert!(cx.debug_bounds("overview-card-add-0").is_some());
+}
+
+/// Test a link's "Add a rule…": the suggested pattern, selected, and Try
+/// it holding the tested link; the browser is left to choose (design 5a,
+/// 5b).
+#[gpui_kit::test]
+fn test_a_link_adds_a_rule_for_the_link(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    click(cx, "nav-test");
+    type_sample(cx);
+    click(cx, "test-add-rule");
+    // The fixture rewrites x.com to xcancel.com before any rule runs: the
+    // pattern is for the URL the rules see, or the rule would never match.
+    let expected = pwrroute_engine::suggest_rule("https://xcancel.com/pwrdrvr/status/1842?s=20")
+        .candidates[0]
+        .clone();
+    assert!(expected.starts_with("xcancel.com/"), "{expected}");
+    let (screen, selection, handler, sample, selected) = view.read_with(cx, |app, _| {
+        let rail = app.rail.as_ref().expect("the editor");
+        (
+            app.screen,
+            app.selection,
+            app.handlers[7].clone(),
+            (rail.sample.text.clone(), rail.sample_edited),
+            rail.patterns[0].selected,
+        )
+    });
+    assert_eq!(screen, Screen::Rules);
+    assert_eq!(selection, Some(Selection::Handler(7)));
+    assert_eq!(handler.patterns, [expected]);
+    assert_eq!(handler.browser, "");
+    assert_eq!(sample, (fixtures::TEST_URL.to_owned(), true));
+    assert!(selected, "typing replaces the suggestion");
+    assert!(cx.debug_bounds("draft-note").is_some());
+    // Given a browser, the draft takes the tested link.
+    click(cx, "browser");
+    click(cx, "browser-other");
+    cx.simulate_input("Firefox");
+    draw(cx);
+    let result = view.read_with(cx, |app, _| app.rail.as_ref().unwrap().try_result.clone());
+    assert!(
+        matches!(
+            result,
+            Some(crate::try_it::TryResult::Text {
+                verdict: crate::try_it::Verdict::Takes,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
+/// A Try it link typed on one rule never follows the selection to the
+/// rule that takes its place when that rule is deleted.
+#[gpui_kit::test]
+fn a_deleted_rules_try_it_link_stays_with_it(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    click(cx, "try-sample");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("https://meet.google.com/typed-here");
+    draw(cx);
+    click(cx, "rail-delete");
+    let (selection, sample, edited) = view.read_with(cx, |app, _| {
+        let rail = app.rail.as_ref().expect("the editor");
+        (app.selection, rail.sample.text.clone(), rail.sample_edited)
+    });
+    assert_eq!(selection, Some(Selection::Handler(0)));
+    assert!(!edited);
+    assert_ne!(sample, "https://meet.google.com/typed-here");
+}
+
+/// A scanned browser whose profiles the scan could not read still lets
+/// a profile be named.
+#[gpui_kit::test]
+fn a_browser_without_readable_profiles_still_takes_a_named_one(cx: &mut TestAppContext) {
+    let dir = scratch("pickers-no-profiles");
+    let (view, cx) = open_with_scan(cx, &dir);
+    click(cx, "add-handler");
+    // Firefox, second on this Mac, with no profiles in the scan.
+    click(cx, "browser");
+    click(cx, "browser-choice-1");
+    assert!(cx.debug_bounds("profile-none-found").is_some());
+    click(cx, "profile");
+    assert!(cx.debug_bounds("profile-choice-0").is_some());
+    click(cx, "profile-other");
+    cx.simulate_input("default-release");
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[7].profile.clone()),
+        "default-release"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
