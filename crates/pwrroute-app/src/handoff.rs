@@ -71,8 +71,7 @@ pub fn watch(id: DispatchId, received: Instant, router: HandleSlot) {
                 thread::sleep(EVERY);
             }
             let Some(router) = router.get() else { return };
-            let retention = router.retention();
-            if retention.memory.count == 0 && retention.journal.is_none() {
+            if !router.retention().keeps_links() {
                 return;
             }
             // The browser can be on top before the dispatch thread has
@@ -145,8 +144,11 @@ impl Track {
         false
     }
 
+    /// Slow: the browser landed after [`SLOW_HANDOFF`], or the window order
+    /// changed (PwrRoute came forward) and nothing landed. A top window that
+    /// never changed is not slow: the link opened behind it or in it.
     fn slow(&self) -> bool {
-        self.timed_out
+        (self.timed_out && self.changes.len() > 1)
             || self
                 .changes
                 .last()
@@ -168,7 +170,12 @@ impl Track {
             }
         }
         let mut line = format!("link {} hand-off: {}", id.0, parts.join(", "));
-        if self.timed_out {
+        if self.timed_out && self.changes.len() == 1 {
+            line.push_str(&format!(
+                "; the top window did not change in {}ms",
+                WATCH_FOR.as_millis()
+            ));
+        } else if self.timed_out {
             line.push_str(&format!(
                 "; no other app's window on top after {}ms",
                 WATCH_FOR.as_millis()
@@ -238,6 +245,18 @@ mod tests {
         assert_eq!(
             track.line(DispatchId(7), false),
             "link 7 hand-off: com.example.chat at receipt, PwrRoute +15ms; no other app's window on top after 3000ms"
+        );
+    }
+
+    #[test]
+    fn a_top_window_that_never_changes_is_not_slow() {
+        let mut track = Track::default();
+        track.see(ms(1), app("com.example.browser"));
+        assert!(track.see(WATCH_FOR, app("com.example.browser")));
+        assert!(!track.slow());
+        assert_eq!(
+            track.line(DispatchId(9), false),
+            "link 9 hand-off: com.example.browser at receipt; the top window did not change in 3000ms"
         );
     }
 }

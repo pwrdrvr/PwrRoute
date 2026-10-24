@@ -8,6 +8,7 @@
 
 #![allow(unsafe_code)]
 
+use objc2::rc::autoreleasepool;
 use objc2_app_kit::NSRunningApplication;
 use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
 use objc2_core_graphics::{
@@ -20,7 +21,14 @@ use crate::WindowOwner;
 /// The owner of the frontmost visible window in the normal layer (0): the
 /// window a person sees on top. Menu bar, Dock and overlay windows sit in
 /// other layers and are skipped, as are fully transparent windows.
+///
+/// Called from a plain thread, many times a second while a link is
+/// watched, so its AppKit objects are released in a pool of its own.
 pub fn top_window_owner() -> Option<WindowOwner> {
+    autoreleasepool(|_| top_window_owner_in_pool())
+}
+
+fn top_window_owner_in_pool() -> Option<WindowOwner> {
     let list = CGWindowListCopyWindowInfo(
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements,
         kCGNullWindowID,

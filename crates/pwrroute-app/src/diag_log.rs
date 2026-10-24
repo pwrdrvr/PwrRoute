@@ -15,6 +15,7 @@
 //! together stay under twice that.
 
 use std::{
+    cell::Cell,
     fs::{self, File, OpenOptions},
     io::{self, IsTerminal as _, Write as _},
     path::{Path, PathBuf},
@@ -30,6 +31,12 @@ const FILE: &str = "main.log";
 const OLD_FILE: &str = "main.old.log";
 
 static PATH: OnceLock<PathBuf> = OnceLock::new();
+
+thread_local! {
+    /// This thread is inside [`Logger::log`], holding its lock: a panic
+    /// there must not log again (the panic hook would wait on that lock).
+    static LOGGING: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Where the log is being written, once [`install`] found a directory.
 pub fn path() -> Option<&'static Path> {
@@ -64,7 +71,9 @@ pub fn install() {
     log::set_max_level(level.max(LevelFilter::Info));
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        log::error!(target: "pwrroute", "panic: {info}");
+        if !LOGGING.get() {
+            log::error!(target: "pwrroute", "panic: {info}");
+        }
         previous(info);
     }));
 }
@@ -96,6 +105,7 @@ impl Log for Logger {
         if self.echo {
             let _ = io::stderr().write_all(line.as_bytes());
         }
+        LOGGING.set(true);
         if let Some(file) = self
             .file
             .lock()
@@ -104,6 +114,7 @@ impl Log for Logger {
         {
             file.write(&line);
         }
+        LOGGING.set(false);
     }
 
     fn flush(&self) {}
@@ -130,43 +141,80 @@ fn format_line(time: &str, level: Level, target: &str, message: &str) -> String 
 
 /// `main.log`, appended to, and moved to `main.old.log` when it grows past
 /// [`MAX_BYTES`].
+///
+/// Other PwrRoute processes write it too (a second launch, Velopack's hooks,
+/// a copy the link helper starts), and any of them can rotate it. So each
+/// write goes by the file at the path, not by what this process last saw:
+/// when the path names another file (rotated elsewhere), this one reopens
+/// it, and the size checked is the file's own.
 struct LogFile {
     path: PathBuf,
     file: File,
-    len: u64,
 }
 
 impl LogFile {
     fn open(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         let path = dir.join(FILE);
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let len = file.metadata()?.len();
-        let mut log = Self { path, file, len };
-        if log.len >= MAX_BYTES {
+        let file = open_append(&path)?;
+        let mut log = Self { path, file };
+        if log.file.metadata()?.len() >= MAX_BYTES {
             log.rotate()?;
         }
         Ok(log)
     }
 
     fn write(&mut self, line: &str) {
-        if self.len + line.len() as u64 > MAX_BYTES && self.rotate().is_err() {
+        if !self.still_at_path() {
+            match open_append(&self.path) {
+                Ok(file) => self.file = file,
+                Err(_) => return,
+            }
+        }
+        let len = self.file.metadata().map_or(0, |m| m.len());
+        if len + line.len() as u64 > MAX_BYTES && self.rotate().is_err() {
             return;
         }
-        if self.file.write_all(line.as_bytes()).is_ok() {
-            self.len += line.len() as u64;
+        let _ = self.file.write_all(line.as_bytes());
+    }
+
+    /// The path still names the file this process has open.
+    fn still_at_path(&self) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            match (fs::metadata(&self.path), self.file.metadata()) {
+                (Ok(at_path), Ok(open)) => {
+                    at_path.dev() == open.dev() && at_path.ino() == open.ino()
+                }
+                _ => false,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows cannot rename a file another process holds open.
+            self.path.exists()
         }
     }
 
     fn rotate(&mut self) -> io::Result<()> {
         fs::rename(&self.path, self.path.with_file_name(OLD_FILE))?;
-        self.file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        self.len = 0;
+        self.file = open_append(&self.path)?;
         Ok(())
     }
+}
+
+/// Appends to `path`, creating it readable by this user only, as the
+/// activity journal is: it names the apps links came from and went to.
+fn open_append(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 #[cfg(test)]
@@ -233,5 +281,40 @@ mod tests {
             fs::read_to_string(dir.path().join(FILE)).unwrap(),
             "after\n"
         );
+    }
+
+    #[test]
+    fn a_rotation_by_another_process_is_followed_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ours = LogFile::open(dir.path()).unwrap();
+        ours.write("ours 1\n");
+        // Another process rotates, then writes the new main.log.
+        let mut theirs = LogFile::open(dir.path()).unwrap();
+        theirs.rotate().unwrap();
+        theirs.write("theirs\n");
+
+        ours.write("ours 2\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join(FILE)).unwrap(),
+            "theirs\nours 2\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(OLD_FILE)).unwrap(),
+            "ours 1\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_log_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = LogFile::open(dir.path()).unwrap();
+        log.write("x\n");
+        let mode = fs::metadata(dir.path().join(FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

@@ -320,6 +320,14 @@ pub struct RetentionInfo {
     pub description: String,
 }
 
+impl RetentionInfo {
+    /// Links are kept somewhere, in memory or the journal. While they are
+    /// not, nothing about them is logged either.
+    pub fn keeps_links(&self) -> bool {
+        keeps_links(self.memory, self.journal.as_ref())
+    }
+}
+
 /// What the router is running on, for status displays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouterStatus {
