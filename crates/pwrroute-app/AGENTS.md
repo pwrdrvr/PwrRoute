@@ -97,13 +97,15 @@ their own modules.
   folded into "+N more profiles" (`OverviewState::expanded`, by card key,
   for the session). A browser whose catalog entry can open a private
   window (`BrowserInfo::private_label`: "Incognito", "InPrivate", "Private
-  window"; looked up by the name as written, as the launcher does, never
-  by the scan's bundle id) ends its card with one private-window node, after the fold,
+  window"; decided by `pwrroute_browsers::private_window`, the launcher's
+  own lookup by the name as written and its `AppType`, never by the
+  scan's bundle id) ends its card with one private-window node, after the fold,
   never folded or counted in it (`Card::visible`, `FocusKey::Private`):
   a `"private": true` rule, a handler or `defaultBrowser` whose `args`
   carry a private flag (`pwrroute_engine::is_private_flag`) routes there
-  whatever profile it names, and today's private links (`Tally` keys on
-  `Browser::private`) count there; a browser without one keeps the route
+  whatever profile it names, and today's private links count there
+  (`Tally` keys on `Browser::private` where `private_window` says one
+  opened); a browser without one keeps the route
   on its profile and the row says "not private", except that a config's
   private flag to a browser the catalog does not know goes to it as
   written, so that card gets a private node by the flag's word. The columns stop at
@@ -127,7 +129,9 @@ their own modules.
   its hostnames (`FunctionSpec::hostnames`, from the engine). An idle
   node's "+ Add a rule…" (its click, or Return) is
   `PwrRoute::add_rule_for`, with a private window on for a private-window
-  node. The callout names both defaults as the map names a node (by
+  node; it writes the card's name, so a private node whose word came only
+  from a route naming the browser another way does not offer it
+  (`Node::addable`). The callout names both defaults as the map names a node (by
   profile when the browser is the same) and says so plainly when they
   are the same browser and profile. The setup card writes
   `defaultBrowser`/`defaultProfile`, and the callout writes `precedence`

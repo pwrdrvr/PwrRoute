@@ -31,5 +31,5 @@ pub use catalog::{
 };
 pub use detect::{InstalledBrowser, detect_installed};
 pub use env::{Env, Platform};
-pub use launch::{LaunchError, LaunchOptions, Launcher, Note, Plan};
+pub use launch::{LaunchError, LaunchOptions, Launcher, Note, Plan, catalog_entry, private_window};
 pub use profiles::{Profile, list_profiles};

@@ -198,13 +198,19 @@ impl Tally {
             }
         }
         if let Some(browser) = &record.browser {
+            // Asked for a private window, and one opened: a browser with no
+            // private mode opened a normal one.
+            let private = browser.private
+                && pwrroute_browsers::private_window(
+                    &browser.name,
+                    browser.app_type,
+                    &browser.args,
+                    pwrroute_browsers::Platform::current(),
+                )
+                .is_some();
             *self
                 .browsers
-                .entry((
-                    browser.name.clone(),
-                    browser.profile.clone(),
-                    browser.private,
-                ))
+                .entry((browser.name.clone(), browser.profile.clone(), private))
                 .or_default() += 1;
         }
     }
@@ -215,8 +221,8 @@ impl Tally {
     }
 
     /// Today's links per browser (as the router named it), profile (empty
-    /// for the browser's own default) and whether a private window was
-    /// asked for.
+    /// for the browser's own default) and whether they opened in a private
+    /// window (asked for, and the browser has one: `private_window`).
     pub fn browsers(&self) -> impl Iterator<Item = (&str, &str, bool, u64)> {
         self.browsers
             .iter()

@@ -73,7 +73,7 @@ pub use native::NativeHost;
 pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
 pub use rules::{
     Expectation, FALLBACK_BROWSER, Place, Precedence, PrivacySetting, Problem, Rewrite,
-    RewriteAction, RewriteExample, RouteTest, Rule, RulesFile, RulesOptions,
+    RewriteAction, RewriteExample, RouteTest, Rule, RulesFile, RulesOptions, app_type_of,
 };
 pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
 pub use suggest::{Suggestion, suggest_rule};
@@ -206,16 +206,23 @@ impl Privacy {
 const PRIVATE_FLAGS: [&str; 4] = ["incognito", "inprivate", "private-window", "private"];
 
 /// Whether a config's browser argument asks for a private window (see
-/// [`PRIVATE_FLAGS`]): the engine marks such a result [`Browser::private`],
-/// and the window draws its route to the browser's private-window node.
+/// [`PRIVATE_FLAGS`]): the engine marks such a result [`Browser::private`].
 pub fn is_private_flag(arg: &str) -> bool {
+    private_flag_name(arg).is_some()
+}
+
+/// The private flag a browser argument is, as [`PRIVATE_FLAGS`] spells it
+/// (`"-InPrivate"`: `"inprivate"`), or `None` when it is no private flag.
+pub fn private_flag_name(arg: &str) -> Option<&'static str> {
     let arg = arg.trim();
     if !arg.starts_with('-') {
-        return false;
+        return None;
     }
     let flag = arg.trim_start_matches('-');
     let flag = flag.split_once('=').map_or(flag, |(name, _)| name);
-    PRIVATE_FLAGS.iter().any(|f| flag.eq_ignore_ascii_case(f))
+    PRIVATE_FLAGS
+        .into_iter()
+        .find(|f| flag.eq_ignore_ascii_case(f))
 }
 
 /// How [`Browser::name`] identifies the app.
@@ -819,6 +826,12 @@ mod tests {
         ] {
             assert!(!is_private_flag(not), "{not}");
         }
+        assert_eq!(private_flag_name("-InPrivate"), Some("inprivate"));
+        assert_eq!(
+            private_flag_name("--private-window=1"),
+            Some("private-window")
+        );
+        assert_eq!(private_flag_name("--new-window"), None);
     }
 
     #[test]

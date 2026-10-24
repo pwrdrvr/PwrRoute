@@ -629,6 +629,16 @@ fn browser_spec(browser: &str, profile: &str) -> Value {
     }
 }
 
+/// How the engine hands a `rules.json` browser string to the launcher
+/// ([`app_type`]): an app name, a bundle id or a `.app` path.
+pub fn app_type_of(app: &str) -> crate::AppType {
+    match app_type(app) {
+        "bundleId" => crate::AppType::BundleId,
+        "path" => crate::AppType::Path,
+        _ => crate::AppType::AppName,
+    }
+}
+
 /// How Finicky reads a browser string (`autodetectAppStringType` in its
 /// configuration API): letters, digits and spaces are an app name; letters,
 /// digits, `.` and `-` a bundle id; `/x/y.app`, optionally after `~`, a

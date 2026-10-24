@@ -443,7 +443,7 @@ impl PwrRoute {
                         let source = map.rows[row].source;
                         self.open_rule(source, window, cx);
                     }
-                    Some(Focus::Node(card, node)) if map.cards[card].nodes[node].unused => {
+                    Some(Focus::Node(card, node)) if map.cards[card].nodes[node].addable => {
                         let browser = map.cards[card].name.clone();
                         let node = &map.cards[card].nodes[node];
                         let profile = node.profile.clone().unwrap_or_default();
@@ -1426,7 +1426,7 @@ fn map(
                     .cards
                     .get(card)
                     .and_then(|c| c.nodes.get(node))
-                    .is_some_and(|n| n.unused) =>
+                    .is_some_and(|n| n.addable) =>
             {
                 Some((card, node))
             }
@@ -3102,7 +3102,7 @@ fn node_row(
     };
     let lit = trace.lit.node(card_index, index);
     let pinned = trace.pinned == Some(focus);
-    let adding = node.unused && trace.idle_hover == Some((card_index, index));
+    let adding = node.addable && trace.idle_hover == Some((card_index, index));
     let fan = trace.lit.fan(card_index, index);
     let port_style = if node.unused {
         PortStyle::Empty
@@ -3228,7 +3228,7 @@ fn node_row(
                 ))
             })
             .child(port(false, fan, port_style));
-    let element = if node.unused {
+    let element = if node.addable {
         let browser = card.name.clone();
         let profile = node.profile.clone().unwrap_or_default();
         element

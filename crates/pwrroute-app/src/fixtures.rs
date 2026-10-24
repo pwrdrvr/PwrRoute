@@ -688,7 +688,11 @@ pub fn overview_fanin_day() -> Vec<DispatchRecord> {
 
 /// `records` with the links `rule` routed opened in a private window, as
 /// the engine marks a `"private": true` rule's result.
-fn in_private(mut records: Vec<DispatchRecord>, rule: usize) -> Vec<DispatchRecord> {
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn in_private(mut records: Vec<DispatchRecord>, rule: usize) -> Vec<DispatchRecord> {
     for record in &mut records {
         let routed = record.steps.iter().any(
             |step| matches!(step, Step::Matched { by: Matched::Rule { index } } if *index == rule),
