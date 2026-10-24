@@ -382,6 +382,11 @@ impl Engine {
         self.config.as_deref()
     }
 
+    /// The `rules.json` this engine was built from (empty when it had none).
+    pub fn rules(&self) -> &RulesFile {
+        &self.rules
+    }
+
     /// The config file and every file it imported, so a watcher can reload
     /// when any of them changes.
     pub fn dependencies(&self) -> Vec<PathBuf> {

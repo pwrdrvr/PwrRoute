@@ -110,10 +110,15 @@ pub struct Pause {
 /// The config in charge is in trouble, as the router reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfigTrouble {
-    /// It has never loaded (the router's `fallback`): nothing it or
-    /// `rules.json` says runs, and every link opens in the fallback browser
-    /// until it loads. The first line of why.
+    /// It has not loaded (the router's `config_not_loaded`): the router
+    /// leaves it out, so `rules.json`'s rules and rewrites run alone and
+    /// PwrRoute's default takes the rest until it loads. The first line of
+    /// why.
     NotLoaded(String),
+    /// It has not loaded and nothing else did either (the router's
+    /// `fallback`): nothing it or `rules.json` says runs, and every link
+    /// opens in the fallback browser. The first line of why.
+    NothingLoaded(String),
     /// A reload failed (the router's `error` alone): the last version that
     /// loaded still routes, with `rules.json`. The first line of why.
     ReloadFailed(String),
@@ -122,7 +127,9 @@ pub enum ConfigTrouble {
 impl ConfigTrouble {
     pub fn message(&self) -> &str {
         match self {
-            Self::NotLoaded(message) | Self::ReloadFailed(message) => message,
+            Self::NotLoaded(message)
+            | Self::NothingLoaded(message)
+            | Self::ReloadFailed(message) => message,
         }
     }
 }
@@ -155,7 +162,7 @@ impl Status {
     pub fn state(&self) -> State {
         if let Some(trouble) = &self.config_error {
             match trouble {
-                ConfigTrouble::NotLoaded(_) => State::ConfigError,
+                ConfigTrouble::NotLoaded(_) | ConfigTrouble::NothingLoaded(_) => State::ConfigError,
                 ConfigTrouble::ReloadFailed(_) => State::ConfigStale,
             }
         } else if self.paused.is_some() {
@@ -173,7 +180,8 @@ impl Status {
 /// The routing state, as the hero, the strip chip and the rail foot say it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
-    /// The config never loaded: every link goes to the fallback browser.
+    /// The config never loaded: rules.json routes without it (or, when it
+    /// has nothing either, every link goes to the fallback browser).
     ConfigError,
     /// Its last reload failed: the version that loaded before still runs.
     ConfigStale,
@@ -398,8 +406,8 @@ pub struct Row {
     /// The node its route ends at.
     pub node: Option<NodeRef>,
     pub enabled: bool,
-    /// Nothing runs it: the config never loaded, and the router's
-    /// stand-in engine holds no rules. Drawn faded.
+    /// Nothing runs it: neither the config nor rules.json loaded, and the
+    /// router's stand-in engine holds no rules. Drawn faded.
     pub idle: bool,
     /// Today's links, when there are any and counts are shown.
     pub count: Option<u64>,
@@ -1782,9 +1790,11 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 .then(|| ConfigTrouble::ReloadFailed("It did not load here.".to_owned()))
         })
     });
-    // Never loaded: neither the config nor rules.json runs, and every link
-    // goes to the fallback browser.
-    let not_loaded = matches!(trouble, Some(ConfigTrouble::NotLoaded(_)));
+    // Never loaded: the router leaves the config out and routes with
+    // rules.json alone, or, when nothing loaded at all, sends every link
+    // to the fallback browser.
+    let nothing_runs = matches!(trouble, Some(ConfigTrouble::NothingLoaded(_)));
+    let not_loaded = nothing_runs || matches!(trouble, Some(ConfigTrouble::NotLoaded(_)));
     // A failed reload: the router routes with the files as they last
     // loaded, config and rules.json together, so neither the order nor a
     // rule's number on screen need be the one it uses (an edit since then
@@ -1849,8 +1859,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 note: String::new(),
             });
             items.push(Item::Error {
-                title: if not_loaded {
+                title: if nothing_runs {
                     format!("{} didn't load: nothing runs until it does", config.shown)
+                } else if not_loaded {
+                    format!("{} didn't load: links skip it", config.shown)
                 } else {
                     format!(
                         "{} didn't reload: the last version that loaded still runs",
@@ -1897,9 +1909,12 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         }
         if config.is_some() {
             items.push(Item::Header {
-                label: if not_loaded {
+                label: if nothing_runs {
                     // The router's fallback engine holds no rules.
                     "Your rules \u{00b7} not running".to_owned()
+                } else if not_loaded {
+                    // The router routes with rules.json alone.
+                    "Your rules \u{00b7} run without it".to_owned()
                 } else if stale {
                     "Your rules \u{00b7} as last loaded".to_owned()
                 } else if rules_first {
@@ -1926,8 +1941,8 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                 target,
                 node: None,
                 enabled: rule.enabled,
-                idle: not_loaded,
-                count: (!ghost && rule.enabled && !not_loaded && !stale)
+                idle: nothing_runs,
+                count: (!ghost && rule.enabled && !nothing_runs && !stale)
                     .then(|| count_of(HitKey::Rule(index)))
                     .flatten(),
                 tooltip: format!("rule {}", index + 1),
@@ -2283,7 +2298,9 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     let also = (spare_count > 0)
         .then(|| format!("{} \u{00b7} no rules yet", plural(spare_count, "browser")));
 
-    let rewrites = if not_loaded {
+    // The config's rewrites run only once it loads (its description is
+    // left out until then); rules.json's run whenever it does.
+    let rewrites = if nothing_runs {
         0
     } else {
         description.map_or(0, |d| d.rewrites.len()) + rules.rewrites.len()
@@ -2381,16 +2398,23 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     };
     let quiet_action = |action: Action| (setup.is_none()).then_some(action);
     let hero = match state {
-        // The router's fallback engine routes nothing: every link opens in
-        // the fallback browser (design 3c drew rules still running, which
-        // the router does not do).
+        // The router leaves the config out: the rules still run, and
+        // PwrRoute's default takes the rest (design 3c). With no rules
+        // running, or nothing loaded at all, every link opens there.
         State::ConfigError => Hero {
             state,
             tone: Tone::Danger,
             sentence: format!("{shown} didn't load."),
-            detail: vec![format!(
-                "Every link opens in {pwrroute_display} until it loads."
-            )],
+            detail: vec![
+                if !nothing_runs && rules.rules.iter().any(|rule| rule.enabled) {
+                    format!(
+                        "Your rules still run. Everything else goes to {pwrroute_display} \
+                         until it loads."
+                    )
+                } else {
+                    format!("Every link opens in {pwrroute_display} until it loads.")
+                },
+            ],
             action: Some(Action::ShowError),
         },
         // The last version that loaded still runs; the error is here, and
@@ -3136,11 +3160,11 @@ mod tests {
         assert!(lit.routes.iter().all(|route| !route.running));
         assert!(lit.any_not_running());
 
-        // The config never loaded: rules.json's rows do not run, while
-        // Everything else (the fallback) does.
+        // Nothing loaded, rules.json included: rules.json's rows do not
+        // run, while Everything else (the fallback) does.
         let mut world = World::config();
         world.config = Some(None);
-        world.status.config_error = Some(ConfigTrouble::NotLoaded("x".into()));
+        world.status.config_error = Some(ConfigTrouble::NothingLoaded("x".into()));
         let lit = world.build().map.lit(None);
         for route in &lit.routes {
             assert_eq!(
@@ -3149,6 +3173,24 @@ mod tests {
                 "{route:?}"
             );
         }
+
+        // The config never loaded but rules.json did: the router runs its
+        // rows without the config, so every enabled, installed one runs.
+        world.status.config_error = Some(ConfigTrouble::NotLoaded("x".into()));
+        let map = world.build().map;
+        let lit = map.lit(None);
+        for route in &lit.routes {
+            let expected = match route.from {
+                End::Row(row) => map.rows[row].enabled && !map.rows[row].target.ghost(),
+                _ => true,
+            };
+            assert_eq!(route.running, expected, "{route:?}");
+        }
+        assert!(
+            lit.routes
+                .iter()
+                .any(|route| matches!(route.from, End::Row(_)) && route.running)
+        );
 
         // A browser that is not installed: its route is not running.
         let map = World::config().build().map;
@@ -3535,9 +3577,9 @@ mod tests {
     }
 
     #[test]
-    fn config_error_3c_sends_every_link_to_the_fallback_until_it_loads() {
-        // The router's fallback engine routes nothing: not the config, not
-        // rules.json's rules or rewrites.
+    fn config_error_3c_runs_the_rules_without_the_config_until_it_loads() {
+        // The router leaves the config out and routes with rules.json
+        // alone: its rules run, and PwrRoute's default takes the rest.
         let mut world = World::config();
         world.config = Some(None);
         world.day = fixtures::overview_config_error_day();
@@ -3550,7 +3592,10 @@ mod tests {
         assert_eq!(overview.hero.sentence, "~/.finicky.ts didn't load.");
         assert_eq!(
             overview.hero.detail,
-            ["Every link opens in Google Chrome \u{b7} Personal until it loads."]
+            [
+                "Your rules still run. Everything else goes to Google Chrome \u{b7} Personal \
+                 until it loads."
+            ]
         );
         assert_eq!(overview.hero.action, Some(Action::ShowError));
         assert_eq!(overview.tiles[0].count, 212);
@@ -3560,8 +3605,58 @@ mod tests {
         assert!(map.items.iter().any(|item| matches!(
             item,
             Item::Error { title, detail }
-                if title == "~/.finicky.ts didn't load: nothing runs until it does"
+                if title == "~/.finicky.ts didn't load: links skip it"
                     && detail.starts_with("SyntaxError")
+        )));
+        assert_eq!(
+            headers(&map),
+            [
+                ("~/.finicky.ts \u{b7} not running", ""),
+                ("Your rules \u{b7} run without it", "3 rules"),
+            ]
+        );
+        assert_eq!(map.rows.len(), 3, "only the visual rules");
+        assert_eq!(
+            map.rows.iter().map(|row| row.count).collect::<Vec<_>>(),
+            [Some(66), Some(12), Some(3)]
+        );
+        assert!(map.rows.iter().all(|row| !row.idle));
+        assert!(map.cards.iter().all(|card| !card.idle));
+        assert_eq!(map.everything_else.owner, "PwrRoute's default");
+        assert_eq!(map.everything_else.count, Some(131));
+        assert_eq!(map.cards[0].name, "Google Chrome");
+
+        // No rule enabled: every link opens in PwrRoute's default.
+        for rule in &mut world.rules.rules {
+            rule.enabled = false;
+        }
+        assert_eq!(
+            world.build().hero.detail,
+            ["Every link opens in Google Chrome \u{b7} Personal until it loads."]
+        );
+    }
+
+    #[test]
+    fn nothing_loaded_sends_every_link_to_the_fallback() {
+        // Neither the config nor rules.json loaded: the router's stand-in
+        // engine routes nothing, not even rules.json's rules or rewrites.
+        let mut world = World::config();
+        world.config = Some(None);
+        world.day = fixtures::overview_config_error_day();
+        world.status.config_error = Some(ConfigTrouble::NothingLoaded(
+            "SyntaxError: Unexpected token \u{b7} line 42".into(),
+        ));
+        let overview = world.build();
+        assert_eq!(overview.hero.state, State::ConfigError);
+        assert_eq!(
+            overview.hero.detail,
+            ["Every link opens in Google Chrome \u{b7} Personal until it loads."]
+        );
+        let map = overview.map;
+        assert!(map.items.iter().any(|item| matches!(
+            item,
+            Item::Error { title, .. }
+                if title == "~/.finicky.ts didn't load: nothing runs until it does"
         )));
         assert_eq!(
             headers(&map),
@@ -3570,7 +3665,6 @@ mod tests {
                 ("Your rules \u{b7} not running", "3 rules"),
             ]
         );
-        assert_eq!(map.rows.len(), 3, "only the visual rules");
         assert!(map.rows.iter().all(|row| row.count.is_none()));
         // Nothing runs them: the rows, and the cards only they feed, fade.
         assert!(map.rows.iter().all(|row| row.idle));
@@ -3584,9 +3678,6 @@ mod tests {
         }
         assert!(map.cards.iter().any(|card| card.idle));
         assert_eq!(map.rewrites, None, "no rewrite runs either");
-        assert_eq!(map.everything_else.owner, "PwrRoute's default");
-        assert_eq!(map.everything_else.count, Some(212));
-        assert_eq!(map.cards[0].name, "Google Chrome");
     }
 
     #[test]
@@ -3752,6 +3843,8 @@ mod tests {
         status.config_error = Some(ConfigTrouble::ReloadFailed("x".into()));
         assert_eq!(status.state(), State::ConfigStale);
         status.config_error = Some(ConfigTrouble::NotLoaded("x".into()));
+        assert_eq!(status.state(), State::ConfigError);
+        status.config_error = Some(ConfigTrouble::NothingLoaded("x".into()));
         assert_eq!(status.state(), State::ConfigError);
     }
 

@@ -393,9 +393,9 @@ impl FirstRunModel {
     }
 
     /// The config is kept in charge and loads. A broken config kept in
-    /// charge runs only once it loads, so until then the window speaks of
-    /// the Everything else browser alone: no owner choice, no config in
-    /// the done help.
+    /// charge runs only once it loads; until then the router runs your
+    /// rules without it, so the window speaks of them and the Everything
+    /// else browser alone: no owner choice, no config in the done help.
     pub fn config_runs(&self) -> bool {
         self.config_in_charge()
             && self
@@ -424,11 +424,16 @@ impl FirstRunModel {
         }
         let sources = match &self.finicky {
             Some(config) if self.config_runs() => format!("{} and your rules", config.path),
-            // Kept but broken: the router runs neither it nor the rules
-            // and sends every link to the Everything else browser.
+            // Kept but broken: the router leaves it out and runs the rules
+            // alone, sending the rest to the Everything else browser.
             Some(config) if self.config_in_charge() => {
+                let opens = if self.rules == 0 {
+                    "Every link opens"
+                } else {
+                    "Your rules run; everything else opens"
+                };
                 return format!(
-                    "Every link opens in {} until {} loads. {}",
+                    "{opens} in {} until {} loads. {}",
                     self.fallback_name(),
                     config.path,
                     tray_line()
@@ -459,7 +464,8 @@ impl FirstRunModel {
                 )
             }
             Some(ImportChoice::KeepFile) if config.error.is_some() => format!(
-                "PwrRoute uses {path} once it loads. Until then links go to the browser below."
+                "PwrRoute uses {path} once it loads. Until then your rules run without it, and \
+                 everything else goes to the browser below."
             ),
             Some(ImportChoice::KeepFile) => {
                 format!("{path} stays in charge. Edit it as you do now; PwrRoute reloads it.")
@@ -469,7 +475,8 @@ impl FirstRunModel {
             ),
             None if config.error.is_some() => format!(
                 "Found {path}, but it doesn't load. Keep it and PwrRoute uses it once it loads; \
-                 until then links go to the browser you pick in the next step."
+                 until then your rules run without it, and everything else goes to the browser \
+                 you pick in the next step."
             ),
             None if config.importable == 0 => format!(
                 "Found {path}: {}. They use JavaScript that visual rules can't hold, so \
@@ -526,8 +533,9 @@ impl FirstRunModel {
                 }
             },
             Some(config) if self.config_in_charge() => format!(
-                "Until {} loads, every link opens here: neither it nor your rules run. It also \
-                 takes links whose browser can't open, and every link while routing is paused.",
+                "Until {} loads, your rules run without it and links they don't claim open \
+                 here. It also takes links whose browser can't open, and every link while \
+                 routing is paused.",
                 config.path
             ),
             _ => "Links no rule claims open here. It also takes links whose browser can't open, \
@@ -704,9 +712,15 @@ impl FirstRunModel {
             ];
         };
         if config.error.is_some() {
-            // Nothing has loaded, so the router runs neither the config nor
-            // the rules: every link goes to the Everything else browser.
+            // It has not loaded, so the router leaves it out: the rules
+            // run alone and the Everything else browser takes the rest.
             return vec![
+                WhereLine {
+                    done: self.rules > 0,
+                    subject: "Your rules".to_owned(),
+                    rest: format!(" run without it \u{00b7} {rules}"),
+                    browser: None,
+                },
                 WhereLine {
                     done: false,
                     subject: config.path.clone(),
@@ -714,13 +728,6 @@ impl FirstRunModel {
                     browser: None,
                 },
                 WhereLine {
-                    done: false,
-                    subject: "Your rules".to_owned(),
-                    rest: format!(" wait for it \u{00b7} {rules}"),
-                    browser: None,
-                },
-                WhereLine {
-                    subject: "Every link".to_owned(),
                     rest: " \u{2192}".to_owned(),
                     ..everything_else
                 },
@@ -2466,7 +2473,8 @@ mod tests {
         assert_eq!(
             broken.config_detail(),
             "Found ~/.finicky.ts, but it doesn't load. Keep it and PwrRoute uses it once it \
-             loads; until then links go to the browser you pick in the next step."
+             loads; until then your rules run without it, and everything else goes to the \
+             browser you pick in the next step."
         );
     }
 
@@ -2617,25 +2625,29 @@ mod tests {
             ))
         );
 
-        // Kept while it does not load: the router runs neither it nor the
-        // rules, so the Everything else browser takes every link until it
-        // does, under either order.
+        // Kept while it does not load: the router leaves it out and runs
+        // the rules alone, and the Everything else browser takes the rest
+        // until it loads, under either order.
         for precedence in [Precedence::Config, Precedence::PwrRoute] {
             let mut broken = model.clone();
             broken.precedence = precedence;
             broken.finicky.as_mut().unwrap().error = Some("SyntaxError: x".to_owned());
             let lines = broken.where_links_go();
             assert_eq!(
-                (lines[0].done, lines[0].rest.as_str()),
-                (false, " runs once it loads")
+                (
+                    lines[0].subject.as_str(),
+                    lines[0].done,
+                    lines[0].rest.as_str()
+                ),
+                ("Your rules", false, " run without it \u{00b7} none yet")
             );
             assert_eq!(
                 (lines[1].done, lines[1].rest.as_str()),
-                (false, " wait for it \u{00b7} none yet")
+                (false, " runs once it loads")
             );
             assert_eq!(
                 (lines[2].subject.as_str(), lines[2].rest.as_str()),
-                ("Every link", " \u{2192}")
+                ("Everything else", " \u{2192}")
             );
             assert_eq!(
                 lines[2].browser,
@@ -3249,7 +3261,7 @@ mod tests {
 
     /// 4c kept: until the config loads, Everything else speaks of its
     /// browser alone (no owner choice, no defaultBrowser), and the done
-    /// help leaves the config out.
+    /// help says the rules run without the config.
     #[gpui_kit::test]
     fn a_broken_config_kept_in_charge_claims_nothing(cx: &mut TestAppContext) {
         let mut model = FirstRunModel::fixture();
@@ -3265,7 +3277,7 @@ mod tests {
         assert!(
             model
                 .everything_else_detail()
-                .starts_with("Until ~/.finicky.ts loads, every link opens here")
+                .starts_with("Until ~/.finicky.ts loads, your rules run without it")
         );
         assert_eq!(model.everything_else_result(), "Safari");
         model.is_default = true;
@@ -3274,6 +3286,15 @@ mod tests {
             model
                 .help()
                 .starts_with("Every link opens in Safari until ~/.finicky.ts loads."),
+            "{}",
+            model.help()
+        );
+        // With rules, they run meanwhile.
+        model.rules = 2;
+        assert!(
+            model.help().starts_with(
+                "Your rules run; everything else opens in Safari until ~/.finicky.ts loads."
+            ),
             "{}",
             model.help()
         );

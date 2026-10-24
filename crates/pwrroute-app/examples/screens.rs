@@ -256,6 +256,28 @@ fn main() {
     shoot("app-1b", Some(config.clone()), &|app, window, cx| {
         app.navigate(Screen::Rules, window, cx);
     });
+    // A config that never loaded, on Rules: the banner and the visual card
+    // say what the router does until it loads.
+    shoot(
+        "app-1b-config-error",
+        Some(home.join("missing.finicky.ts")),
+        &|app, window, cx| {
+            if let Some(config) = &mut app.config {
+                // The fixture's error, not this machine's path.
+                config.path = "~/.finicky.ts".into();
+                config.problem = Some(
+                    "It did not load: SyntaxError: Unexpected token '}' \u{00b7} line 42".into(),
+                );
+            }
+            app.overview.status = Some(overview_model::Status {
+                config_error: Some(overview_model::ConfigTrouble::NotLoaded(
+                    "SyntaxError: Unexpected token '}' \u{00b7} line 42".into(),
+                )),
+                ..overview_model::Status::routing()
+            });
+            app.navigate(Screen::Rules, window, cx);
+        },
+    );
     shoot("app-2a", None, &|app, window, cx| {
         // The design's example; the window itself starts empty.
         app.test.url.set(fixtures::TEST_URL);
@@ -936,6 +958,14 @@ fn main() {
                 ..pwrroute_default.clone()
             }
         };
+        // 4g with the broken config kept: the rules run without it.
+        let done_broken = FirstRunModel {
+            is_default: true,
+            rules: 3,
+            finicky: broken.finicky.clone(),
+            fallback: chrome_personal(),
+            ..kept.clone()
+        };
         // 4h: no browsers found.
         let no_browsers = FirstRunModel {
             browsers: Vec::new(),
@@ -975,6 +1005,7 @@ fn main() {
             ),
             ("first-run-done-summary", done, Picking::None),
             ("first-run-done-imported", done_imported, Picking::None),
+            ("first-run-done-broken", done_broken, Picking::None),
             ("first-run-no-browsers", no_browsers, Picking::None),
             ("first-run-default-failed", refused, Picking::None),
         ] {

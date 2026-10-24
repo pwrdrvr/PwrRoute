@@ -262,7 +262,9 @@ impl TestLink {
             // The OS answers the config's finicky.* calls, as it does for
             // the router; the run's console output comes back in the trace.
             let host = Rc::new(NativeHost::new());
-            match Engine::from_sources(&sources, host, Limits::default()) {
+            // A config the router left out (it has not loaded) is left
+            // out here too: rules.json alone, as links route.
+            match crate::router::engine_as_routed(&sources, host, Limits::default()) {
                 Ok(engine) => {
                     self.loaded = stamps(&engine);
                     self.engine = Some(engine);

@@ -96,6 +96,12 @@ crate docs map the modules.
   `src/native/macos.rs` and `src/native/windows.rs` allow it, for FFI, with a
   safety comment on each block. `src/native/mod.rs` documents what each OS
   can answer.
+- **A failed load keeps what routes.** `Reloader` keeps the last engine
+  that loaded when a reload fails, except for a config no engine has held
+  yet (never loaded, or broken when it appeared): that one is left out and
+  `rules.json` alone is swapped in (`Status::config` is `None`, `error`
+  says why), so the visual rules keep routing and an edit to them applies.
+  Only when `rules.json` fails too does the empty stand-in engine stay.
 - **Never watch a directory.** Discovery and reload check exact paths only;
   on macOS a directory watch can open protected folders and prompt the user.
 - oxc's enum transform needs `SemanticBuilder::with_enum_eval(true)`; without

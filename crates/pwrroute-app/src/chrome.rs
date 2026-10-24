@@ -59,10 +59,17 @@ pub struct Source<'a> {
 /// and the error tone when it never loaded.
 pub fn source_label(source: Source<'_>) -> (String, gpui_kit::Hsla) {
     match source.config {
-        Some(path) if matches!(source.trouble, Some(ConfigTrouble::NotLoaded(_))) => (
-            format!("{path} \u{00b7} didn't load"),
-            theme::status_error(),
-        ),
+        Some(path)
+            if matches!(
+                source.trouble,
+                Some(ConfigTrouble::NotLoaded(_) | ConfigTrouble::NothingLoaded(_))
+            ) =>
+        {
+            (
+                format!("{path} \u{00b7} didn't load"),
+                theme::status_error(),
+            )
+        }
         Some(path) if source.trouble.is_some() => (
             format!("{path} \u{00b7} didn't reload"),
             theme::status_warning(),

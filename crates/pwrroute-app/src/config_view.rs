@@ -88,8 +88,13 @@ pub struct Order {
     /// The config did not load here, but the router has a version that
     /// loaded before (its reload failed): links still route with that
     /// version. Otherwise a config that does not load has never loaded, and
-    /// the router sends every link to PwrRoute's default until it does.
+    /// the router leaves it out: your rules run without it and PwrRoute's
+    /// default takes everything else until it does.
     pub stale: bool,
+    /// Nothing loaded at all, `rules.json` included (the Overview's
+    /// [`crate::overview_model::ConfigTrouble::NothingLoaded`]): the router
+    /// sends every link to PwrRoute's default, and the rules wait too.
+    pub nothing_runs: bool,
 }
 
 impl Order {
@@ -111,6 +116,7 @@ impl Order {
             pwrroute_default: !loaded || (rules_first && own),
             needs_default: loaded && rules_first && !own,
             stale: false,
+            nothing_runs: false,
         }
     }
 
@@ -118,6 +124,22 @@ impl Order {
     /// (`stale`, the Overview's [`crate::overview_model::ConfigTrouble::ReloadFailed`]).
     pub fn stale(self, stale: bool) -> Self {
         Self { stale, ..self }
+    }
+
+    /// This order, with nothing loaded at all (`nothing_runs`).
+    pub fn nothing_runs(self, nothing_runs: bool) -> Self {
+        Self {
+            nothing_runs,
+            ..self
+        }
+    }
+
+    /// The order the router reports for the config: [`Self::stale`] after
+    /// a failed reload, [`Self::nothing_runs`] when nothing loaded.
+    pub fn trouble(self, trouble: Option<&crate::overview_model::ConfigTrouble>) -> Self {
+        use crate::overview_model::ConfigTrouble;
+        self.stale(matches!(trouble, Some(ConfigTrouble::ReloadFailed(_))))
+            .nothing_runs(matches!(trouble, Some(ConfigTrouble::NothingLoaded(_))))
     }
 }
 
@@ -274,11 +296,18 @@ impl ConfigInCharge {
             // A reload failed: the router keeps the last engine that
             // loaded, config and rules together.
             "It didn't reload, so links still route with the version that last loaded.".to_owned()
-        } else if self.problem.is_some() {
+        } else if self.problem.is_some() && order.nothing_runs {
             // Nothing has loaded: the router runs neither the config nor
             // `rules.json`'s rules and sends every link to the fallback,
             // `rules.json`'s default, whichever way the switch is set.
             format!("Until it loads, every link opens in PwrRoute's default, {everything_else}.")
+        } else if self.problem.is_some() {
+            // It never loaded: the router leaves it out and routes with
+            // `rules.json` alone, whichever way the switch is set.
+            format!(
+                "Until it loads, your rules run without it and PwrRoute's default, \
+                 {everything_else}, takes everything else."
+            )
         } else if order.rules_first && order.pwrroute_default {
             format!(
                 "Your rules run first, then its handlers. PwrRoute's default, \
@@ -308,6 +337,11 @@ impl ConfigInCharge {
             "Run after the config"
         };
         if self.problem.is_some() {
+            let eyebrow = if order.stale || order.nothing_runs {
+                eyebrow
+            } else {
+                "Run without the config"
+            };
             return (eyebrow, self.owner_sentence(order, everything_else));
         }
         if order.rules_first {
@@ -331,10 +365,15 @@ impl ConfigInCharge {
         if self.problem.is_some() {
             return if order.stale {
                 format!("They route with the version of {path} that last loaded.")
-            } else {
+            } else if order.nothing_runs {
                 format!(
                     "They wait for it: every link opens in PwrRoute's default, \
                      {everything_else}, until {path} loads."
+                )
+            } else {
+                format!(
+                    "They run without it until {path} loads, and PwrRoute's default, \
+                     {everything_else}, takes everything else."
                 )
             };
         }
@@ -658,7 +697,8 @@ fn banner(
             has_own_default(&app.store.written().default_browser),
             config.problem.is_none(),
         )
-        .stale(order.stale);
+        .stale(order.stale)
+        .nothing_runs(order.nothing_runs);
         div()
             .relative()
             .child(sentence(order).with_animation(
@@ -790,13 +830,12 @@ pub fn pane(
     config: &ConfigInCharge,
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl IntoElement + use<> {
-    // A config this window cannot read either never loaded (every link
-    // goes to the fallback) or failed a reload (its last load still
-    // routes); the router says which, as on the Overview.
-    let order = Order::of(&app.store, config).stale(matches!(
-        crate::overview::status(app, cx).config_error,
-        Some(crate::overview_model::ConfigTrouble::ReloadFailed(_))
-    ));
+    // A config this window cannot read either never loaded (the rules run
+    // without it, or nothing runs when nothing loaded) or failed a reload
+    // (its last load still routes); the router says which, as on the
+    // Overview.
+    let order = Order::of(&app.store, config)
+        .trouble(crate::overview::status(app, cx).config_error.as_ref());
     let rules_first = order.rules_first;
     let read_only = |last| RowState {
         last,

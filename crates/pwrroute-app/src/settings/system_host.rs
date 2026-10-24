@@ -113,15 +113,24 @@ fn routing(source: &RoutingSource, home: Option<&Path>) -> String {
         .map(|path| display_path(path, home));
     let mut sentence = match (&source.fallback, &config, source.rules.is_some()) {
         (Some(why), _, _) => format!("Every link goes to the fallback browser: {why}."),
+        (None, Some(config), true) if source.config_not_loaded => {
+            format!("{config} has not loaded, so rules.json routes alone until it does.")
+        }
         (None, Some(config), true) => format!("{config} runs first; rules.json follows it."),
         (None, Some(config), false) => format!("{config} is the whole config."),
         (None, None, true) => "rules.json is the whole config.".to_owned(),
         (None, None, false) => "Nothing has loaded yet.".to_owned(),
     };
-    if let Some(error) = &source.error {
-        sentence.push_str(&format!(
+    match &source.error {
+        // The fallback's reason is this error already.
+        Some(_) if source.fallback.is_some() => {}
+        Some(error) if source.config_not_loaded => {
+            sentence.push_str(&format!(" It did not load: {error}."));
+        }
+        Some(error) => sentence.push_str(&format!(
             " The last reload failed: {error}. The previous load stays in charge."
-        ));
+        )),
+        None => {}
     }
     sentence
 }
@@ -281,6 +290,7 @@ mod tests {
             source: RoutingSource {
                 config: None,
                 rules: Some(PathBuf::from("rules.json")),
+                config_not_loaded: false,
                 fallback: None,
                 error: None,
             },
@@ -345,6 +355,7 @@ mod tests {
                 RoutingSource {
                     config,
                     rules: rules.then(|| PathBuf::from("rules.json")),
+                    config_not_loaded: false,
                     fallback: fallback.map(str::to_owned),
                     error: error.map(str::to_owned),
                 }
@@ -372,6 +383,23 @@ mod tests {
         assert_eq!(
             routing(&RoutingSource::default(), home),
             "Nothing has loaded yet."
+        );
+
+        // A config that never loaded: rules.json routes alone, or, with no
+        // rules.json, nothing does.
+        let config_never = Some(PathBuf::from("/Users/someone/.finicky.ts"));
+        let not_loaded = |rules: bool, fallback: Option<&str>| RoutingSource {
+            config_not_loaded: true,
+            ..source(config_never.clone(), rules, fallback, Some("SyntaxError"))
+        };
+        assert_eq!(
+            routing(&not_loaded(true, None), home),
+            "~/.finicky.ts has not loaded, so rules.json routes alone until it does. It did \
+             not load: SyntaxError."
+        );
+        assert_eq!(
+            routing(&not_loaded(false, Some("SyntaxError")), home),
+            "Every link goes to the fallback browser: SyntaxError."
         );
     }
 
