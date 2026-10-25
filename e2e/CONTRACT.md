@@ -37,7 +37,7 @@ One request per connection, one line of JSON each way. Every answer carries
 
 | Request | Answer |
 |---|---|
-| `{"cmd":"ping"}` | `{}` |
+| `{"cmd":"ping"}` | `{"startup":[{"stage":"main","ms":0},…]}`: the startup stages reached so far (below). |
 | `{"cmd":"state"}` | See below. |
 | `{"cmd":"key","keys":"down cmd-q"}` | Keystrokes in GPUI's syntax, dispatched to the main window with `Window::dispatch_keystroke`, so key bindings and the focused view's handlers run as for a real key press. |
 | `{"cmd":"click","region":"rail.activity"}` | A left mouse down and up at the center of a painted region, through `Window::dispatch_event`: hit testing and click handlers run as for a real click. |
@@ -51,6 +51,24 @@ first and act once the answer is written, so a quit never ends the process
 before the client has its answer; requests still apply in order. A connection that sends
 nothing for 10 s is dropped (not on Windows, whose named pipes have no
 timeouts).
+
+Startup stages, each with its time in ms from the top of `main`, once,
+in the order reached: `main`; `router` (the router runs and this socket
+listens); `gpui` (GPUI's platform is up); `launched` (`run`'s setup
+begins); `window` (the main window's platform window and renderer exist,
+its view is being built); `opened` (`open_window` returned); `serving` (the
+UI thread serves this hook: setup done, event loop running); `painted` (the
+main window's first frame). The order differs by OS: macOS opens the window
+after a short wait for a launching link, so `serving` comes before `window`
+there. The app also writes each stage to its log, which goes to stderr as
+well as `main.log` while the hook is on, so the harness's `app.log` has it.
+
+The harness waits for `painted` with `ping` before it asks for `state`
+(`App::wait_for_first_paint`): until then the UI thread is still starting,
+which on a fresh CI machine's first launch has taken from a second to more
+than half a minute, and a `state` sent meanwhile only waits behind it. A
+launch that never paints fails naming its last stage; `startup.json` in the
+test's artifacts records the stages and when the socket answered.
 
 `state`:
 

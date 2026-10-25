@@ -68,6 +68,10 @@ mod e2e {
     }
 
     pub fn frame(_: &Window) {}
+
+    pub fn requested() -> bool {
+        false
+    }
 }
 /// New windows on the primary display: the example's windows render
 /// offscreen, so it skips the real rule, which follows the pointer.

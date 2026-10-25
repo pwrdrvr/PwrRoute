@@ -5,7 +5,8 @@
 //! updater and GPUI's warnings land in one file. A Finder or LaunchServices
 //! launch has no terminal, and stderr goes nowhere; this is what is left
 //! when a link was slow or an update failed. When stderr is a terminal (a
-//! dev run), each line is echoed there too.
+//! dev run), or the E2E harness launched the app and keeps its stderr, each
+//! line is echoed there too.
 //!
 //! Never a URL: the dispatch thread's lines come from
 //! `DispatchRecord::log_line`, and per-link lines are written only while
@@ -63,7 +64,9 @@ pub fn install() {
     let logger = Logger {
         own: level,
         file: Mutex::new(file),
-        echo: io::stderr().is_terminal(),
+        // Also under the E2E hook: the harness keeps stderr as the test's
+        // `app.log`.
+        echo: io::stderr().is_terminal() || crate::e2e::requested(),
     };
     if log::set_boxed_logger(Box::new(logger)).is_err() {
         return;

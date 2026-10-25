@@ -14,8 +14,9 @@ cargo xtask e2e --pending           # also the #[ignore]d scenarios
 cargo xtask e2e --screenshots       # window-only PNGs into the artifacts
 ```
 
-Artifacts (each test's `app.log`, state dumps on failure, screenshots) land
-in `target/e2e-artifacts/<test>/`. On macOS the binary is wrapped in an ad hoc
+Artifacts (each test's `app.log`, which has the app's own log, its
+`startup.json`, state dumps on failure, screenshots) land in
+`target/e2e-artifacts/<test>/`. On macOS the binary is wrapped in an ad hoc
 signed `target/e2e/PwrRoute.app`. Both follow `CARGO_TARGET_DIR` when it is
 set. Without `cargo xtask e2e` (plain
 `cargo test`, `cargo xtask test`) every test here returns at once.

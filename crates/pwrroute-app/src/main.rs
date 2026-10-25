@@ -128,6 +128,8 @@ fn main() -> ExitCode {
     }
     // Before Velopack's hooks, so an install or update that fails says why.
     diag_log::install();
+    // Under the E2E hook, where startup got to (`e2e/CONTRACT.md`).
+    e2e::startup("main");
     // First: Velopack's install, update and uninstall hooks run here and
     // exit, before this process could take the router lock.
     updater::run_startup_hooks();
@@ -149,6 +151,7 @@ fn main() -> ExitCode {
     };
     let handle = resident.handle();
     let e2e_hook = e2e::start(handle.clone());
+    e2e::startup("router");
     // `--first-run` forces the window; otherwise it opens once, on the first
     // launch that is for the window rather than a link, until it is done or
     // closed. Not on its own under the E2E hook: the suite drives the main
@@ -167,6 +170,7 @@ fn main() -> ExitCode {
         // The router owns dispatch, so the process outlives its windows. A
         // second launch, the Dock icon or the tray brings the window back.
         .with_quit_mode(QuitMode::Explicit);
+    e2e::startup("gpui");
     let seen = last_link.clone();
     app.on_open_urls(move |urls| {
         seen.mark();
@@ -184,6 +188,7 @@ fn main() -> ExitCode {
         .detach();
     });
     app.run(move |cx| {
+        e2e::startup("launched");
         assets::load_fonts(cx);
         app_menu::install(cx);
         dock::install(cx);
@@ -464,6 +469,7 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
                 ..Default::default()
             },
             |window, cx| {
+                e2e::startup("window");
                 // The strip's default-browser chip follows the OS's answer.
                 default_browser::watch(window, cx);
                 let view = cx.new(PwrRoute::new);
@@ -473,6 +479,7 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
             },
         )
         .expect("open the PwrRoute window");
+    e2e::startup("opened");
     // The window owns the keyboard from the first frame: Overview's Esc,
     // and the Rules list's arrows once the reader goes there.
     let _ = window.update(cx, |this, window, cx| {

@@ -54,6 +54,10 @@ const CONFIG_ENV: &str = "PWRROUTE_E2E_CONFIG";
 /// How long the app may take to answer on its socket after launch. A cold
 /// start under CI load, with a debug build, is slow.
 pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the app may take to paint its main window's first frame, once
+/// its socket answers. Waited out through `ping`, which never needs the UI
+/// thread; see [`App::wait_for_main_window`].
+pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 /// The default for [`App::wait_for`].
 pub const WAIT: Duration = Duration::from_secs(10);
 /// Where the app serves local agents (`pwrroute_mcp::link::ENDPOINT_ENV`).
@@ -182,6 +186,8 @@ impl Harness {
             router_dir: None,
             shots: AtomicU32::new(0),
             attached: true,
+            launched: Instant::now(),
+            answered: Some(Duration::ZERO),
         })
     }
 }
@@ -248,6 +254,10 @@ pub struct App {
     shots: AtomicU32,
     /// Started by the OS, not by this harness: quit it rather than kill it.
     attached: bool,
+    /// When this harness spawned it, or attached to it.
+    launched: Instant,
+    /// When its socket first answered, after `launched`.
+    answered: Option<Duration>,
 }
 
 impl App {
@@ -338,6 +348,7 @@ impl App {
         let child = command
             .spawn()
             .with_context(|| format!("launch {}", harness.executable.display()))?;
+        let launched = Instant::now();
         let pid = child.id();
         let mut app = Self {
             harness,
@@ -350,6 +361,8 @@ impl App {
             router_dir,
             shots: AtomicU32::new(0),
             attached: false,
+            launched,
+            answered: None,
         };
         app.wait_for_socket()?;
         Ok(app)
@@ -377,6 +390,7 @@ impl App {
                         answer["pid"] == self.pid,
                         "another process answered on the socket: {answer}"
                     );
+                    self.answered = Some(self.launched.elapsed());
                     return Ok(());
                 }
                 Err(e) if Instant::now() >= deadline => {
@@ -459,11 +473,16 @@ impl App {
 
     /// Waits for the main window to open and paint, and returns its state.
     ///
+    /// First the app's startup, through `ping` ([`wait_for_first_paint`](
+    /// Self::wait_for_first_paint)), then the window's state from the UI
+    /// thread, which by then is serving the hook.
+    ///
     /// A launch from a test starts in the background, where another window
     /// may cover it, so a main window the platform reports hidden is brought
     /// forward once, as the Dock icon would. Hidden alone does not fail the
     /// wait: macOS reports a covered window hidden and GPUI still draws it.
     pub fn wait_for_main_window(&self) -> Result<Value> {
+        self.wait_for_first_paint()?;
         let state = self.wait_for("the main window to paint", LAUNCH_TIMEOUT, |state| {
             let painted = state["main"]["frames"].as_u64().unwrap_or(0) > 0
                 && state["main"]["regions"]["titleStrip"].is_object();
@@ -484,6 +503,59 @@ impl App {
                 );
                 self.state()
             }
+        }
+    }
+
+    /// The startup stages the app has reached (`ping`, CONTRACT.md), each
+    /// `{"stage": …, "ms": …}` from the top of its `main`.
+    pub fn startup(&self) -> Result<Vec<Value>> {
+        let answer = self.call(&json!({ "cmd": "ping" }))?;
+        Ok(answer["startup"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Waits until the app reports its main window's first frame, asking
+    /// with `ping`, which is answered off the UI thread.
+    ///
+    /// Until then the UI thread is still starting: GPUI's platform, the
+    /// window's renderer, the first layout. On a fresh CI machine that takes
+    /// anywhere from a second to most of a minute (the first launch only),
+    /// and a `state` sent meanwhile only queues behind it. So startup gets
+    /// its own budget, [`STARTUP_TIMEOUT`], and a stall says which stage it
+    /// stopped at; once the window has painted, a UI thread that does not
+    /// answer is a hang and fails on the usual timeouts.
+    ///
+    /// Where the time went is saved as `startup.json` in the artifacts.
+    pub fn wait_for_first_paint(&self) -> Result<()> {
+        let deadline = Instant::now() + STARTUP_TIMEOUT;
+        loop {
+            let stages = self
+                .startup()
+                .context("waiting for the main window's first frame")?;
+            let painted = stages.iter().any(|s| s["stage"] == "painted");
+            if painted || Instant::now() >= deadline {
+                let report = json!({
+                    "socketMs": self.answered.map(|d| d.as_millis() as u64),
+                    "waitedMs": self.launched.elapsed().as_millis() as u64,
+                    "stages": stages,
+                });
+                let _ = fs::write(
+                    self.harness.artifacts.join("startup.json"),
+                    serde_json::to_string_pretty(&report)?,
+                );
+                if painted {
+                    return Ok(());
+                }
+                self.screenshot("startup-timeout");
+                let last = stages
+                    .last()
+                    .map_or_else(|| "none".to_owned(), |s| s["stage"].to_string());
+                bail!(
+                    "the main window had not painted {STARTUP_TIMEOUT:?} after the socket answered; \
+                     the last startup stage reached was {last}: {report}; see {}",
+                    self.harness.artifacts.join("app.log").display()
+                );
+            }
+            thread::sleep(Duration::from_millis(100));
         }
     }
 

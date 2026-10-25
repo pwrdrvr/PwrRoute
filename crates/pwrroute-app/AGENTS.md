@@ -191,8 +191,9 @@ their own modules.
   `diag_log::install` (top of `main`) sends PwrRoute's lines, Velopack's and
   GPUI's warnings to `main.log` in `pwrroute_os::log_dir()`
   (`~/Library/Logs/PwrRoute`), rotated to `main.old.log` past 1 MB, and
-  echoes to stderr only when stderr is a terminal. A launched app has no
-  terminal, so a message on stderr is lost. `PWRROUTE_LOG=debug` raises
+  echoes to stderr only when stderr is a terminal or the E2E harness
+  launched it (`e2e::requested`: stderr is the test's `app.log`). A
+  launched app has no terminal, so a message on stderr is lost. `PWRROUTE_LOG=debug` raises
   PwrRoute's level. `eprintln!` stays only for the `pwrroute rules` CLI and
   `pwrroute mcp`, whose stderr is someone's terminal or MCP client.
   **Never log a URL, a host, a window title or error text that can quote
