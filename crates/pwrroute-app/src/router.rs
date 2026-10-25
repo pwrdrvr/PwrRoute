@@ -698,7 +698,7 @@ impl Launcher for BrowserLauncher {
         };
         let line = format!(
             "hand-off {} in {:.1}ms; yield: {yielded}",
-            launched.delivery.describe(),
+            launched.delivery,
             started.elapsed().as_secs_f64() * 1000.0,
         );
         match launched.delivery {

@@ -110,14 +110,14 @@ pub enum Delivery {
     CommandAfter(SocketError),
 }
 
-impl Delivery {
-    /// A few words for a log line. Never the URL.
-    pub fn describe(&self) -> String {
+/// A few words for a log line. Never the URL.
+impl fmt::Display for Delivery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Socket => "over the browser's singleton socket".to_owned(),
-            Self::Command => "by command".to_owned(),
+            Self::Socket => f.write_str("over the browser's singleton socket"),
+            Self::Command => f.write_str("by command"),
             Self::CommandAfter(why) => {
-                format!("by command, after the singleton socket failed ({why})")
+                write!(f, "by command, after the singleton socket failed ({why})")
             }
         }
     }
@@ -366,7 +366,9 @@ impl Launcher {
             return None;
         }
         let user_data_dir = entry.profile_dir(&self.env)?;
-        let mut argv = vec![macos_program(browser, entry)];
+        // `hands_off` found the browser by its macOS entry, so it has one.
+        let app_name = &entry.macos.as_ref()?.app_name;
+        let mut argv = vec![macos_program(browser, app_name)];
         argv.extend(flags.unwrap_or_default().iter().cloned());
         argv.extend(browser_args(browser));
         let handoff = SocketHandOff {
@@ -675,20 +677,14 @@ fn macos_plan(
 /// The program a socket hand-off names first, as a second instance's own
 /// command line would: the bundle's executable. Chromium reads it only as
 /// the program's name and never runs it, so it is not looked up on disk.
-fn macos_program(browser: &Browser, entry: &BrowserInfo) -> String {
-    let app_name = entry.macos.as_ref().map(|m| m.app_name.as_str());
-    let bundle = match (browser.app_type, app_name) {
-        (AppType::Path, _) => PathBuf::from(&browser.name),
-        (_, Some(name)) => PathBuf::from(format!("/Applications/{name}.app")),
-        (_, None) => PathBuf::from(&browser.name),
+fn macos_program(browser: &Browser, app_name: &str) -> String {
+    let bundle = match browser.app_type {
+        AppType::Path => PathBuf::from(&browser.name),
+        _ => PathBuf::from(format!("/Applications/{app_name}.app")),
     };
-    let executable = app_name
-        .map(str::to_owned)
-        .or_else(|| Some(bundle.file_stem()?.to_string_lossy().into_owned()))
-        .unwrap_or_default();
     bundle
         .join("Contents/MacOS")
-        .join(executable)
+        .join(app_name)
         .to_string_lossy()
         .into_owned()
 }

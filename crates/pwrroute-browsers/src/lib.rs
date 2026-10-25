@@ -38,4 +38,4 @@ pub use launch::{
     private_window,
 };
 pub use profiles::{Profile, list_profiles};
-pub use singleton::{SOCKET_BUDGET, SocketError, SocketHandOff};
+pub use singleton::{SocketError, SocketHandOff};

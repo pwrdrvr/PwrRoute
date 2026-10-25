@@ -38,7 +38,7 @@ use std::time::Instant;
 /// How long a hand-off may take, connect to `ACK`, before the caller falls
 /// back. Chromium's own client waits 20 s; a browser that is that slow to
 /// answer is better reached by `open`.
-pub const SOCKET_BUDGET: Duration = Duration::from_secs(1);
+pub(crate) const SOCKET_BUDGET: Duration = Duration::from_secs(1);
 
 /// The longest message Chromium reads (`kMaxMessageLength`); it drops the
 /// rest. Ours must be shorter.
@@ -91,7 +91,8 @@ pub enum SocketError {
     Connect(io::ErrorKind),
     Write(io::ErrorKind),
     Read(io::ErrorKind),
-    /// No reply within [`SOCKET_BUDGET`].
+    /// The time budget ran out, writing the message or waiting for the
+    /// reply.
     NoReply,
     /// The browser closed the socket without a reply.
     Closed,
@@ -118,7 +119,7 @@ impl fmt::Display for SocketError {
             Self::Connect(kind) => write!(f, "connect: {kind}"),
             Self::Write(kind) => write!(f, "write: {kind}"),
             Self::Read(kind) => write!(f, "read: {kind}"),
-            Self::NoReply => write!(f, "no reply in {}ms", SOCKET_BUDGET.as_millis()),
+            Self::NoReply => f.write_str("the browser did not answer in time"),
             Self::Closed => f.write_str("the browser closed the socket without a reply"),
             Self::ShuttingDown => f.write_str("the browser is shutting down"),
             Self::Unexpected => f.write_str("an unexpected reply"),
