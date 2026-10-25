@@ -6012,6 +6012,7 @@ version = "0.2.2"
 dependencies = [
  "pwrroute-engine",
  "roxmltree 0.21.1",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -6074,6 +6075,7 @@ version = "0.2.2"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
+ "dispatch2",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",

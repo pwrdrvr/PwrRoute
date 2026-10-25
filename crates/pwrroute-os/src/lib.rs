@@ -46,19 +46,34 @@ use std::path::{Path, PathBuf};
 
 use pwrroute_router::OpenerInfo;
 
-/// Hands the front to the running app with `bundle_id` when this app is
-/// the active one, as macOS 14's cooperative activation asks of an app that
-/// opens another. Any thread. `false` when nothing was asked: off macOS,
-/// before macOS 14, this app not active, or no app with `bundle_id` running.
-pub fn pass_front_to(bundle_id: &str) -> bool {
+/// What [`yield_front_to`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Yield {
+    /// This app yielded to the other.
+    Yielded,
+    /// The main thread was busy: the yield is queued and lands when it
+    /// gets there.
+    Queued,
+    /// This app is not the active one, so it has nothing to yield.
+    NotActive,
+    /// Off macOS, or before macOS 14 (no cooperative activation).
+    Unsupported,
+}
+
+/// Lets the running app with `bundle_id` bring itself forward when this app
+/// is the active one, as macOS 14's cooperative activation asks of an app
+/// that hands another a link: the browser then raises the window the link
+/// opened in. Any thread; off the main thread it waits up to `wait` for the
+/// main queue to run the yield, and never longer.
+pub fn yield_front_to(bundle_id: &str, wait: std::time::Duration) -> Yield {
     #[cfg(target_os = "macos")]
     {
-        macos::pass_front_to(bundle_id)
+        macos::yield_front_to(bundle_id, wait)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = bundle_id;
-        false
+        let _ = (bundle_id, wait);
+        Yield::Unsupported
     }
 }
 

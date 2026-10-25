@@ -8,15 +8,23 @@ mod window_order;
 pub use app_icon::{bundle_path as installed_app_bundle, icon_png as app_icon_png};
 pub use window_order::top_window_owner;
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc,
+    time::Duration,
+};
 
 use anyhow::{Result, bail};
-use objc2::rc::autoreleasepool;
-use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
+use dispatch2::DispatchQueue;
+use objc2::{MainThreadMarker, rc::autoreleasepool};
+use objc2_app_kit::{NSApplication, NSRunningApplication, NSWorkspace};
 use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
 use pwrroute_router::OpenerInfo;
 
-use crate::registration::{BUNDLE_ID, DefaultRequest, DefaultStatus};
+use crate::{
+    Yield,
+    registration::{BUNDLE_ID, DefaultRequest, DefaultStatus},
+};
 
 /// `keySenderPIDAttr` ('spid'): the pid of the process that sent the event.
 const KEY_SENDER_PID: u32 = u32::from_be_bytes(*b"spid");
@@ -93,43 +101,48 @@ pub fn open_settings() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
 }
 
-/// Hands the front to the running app with `bundle_id`, when this app is
-/// the active one: macOS 14's cooperative
-/// activation lets an app bring itself forward only when the active app
-/// gives way, and a browser that takes a link from a second instance
-/// (`open -g -n`, a Chromium profile hand-off) brings itself forward. Called
-/// from any thread: `NSRunningApplication` is thread-safe, unlike
-/// `NSApp.yieldActivation`, and the main thread may be the one busy.
-/// `false` when nothing was asked: an older macOS, this app not active, or
-/// no app with `bundle_id` running.
-pub fn pass_front_to(bundle_id: &str) -> bool {
+/// Lets the app with `bundle_id` bring itself forward, when this app is the
+/// active one: macOS 14's cooperative activation lets an app activate
+/// itself only once the active app yields to it. A browser that takes a
+/// link from the singleton socket, or from a `-n` instance, activates the
+/// window it opened the tab in, which is the one to bring forward; this
+/// app activating the browser instead would raise whichever window was
+/// last in front.
+///
+/// `yieldActivation` is an `NSApplication` call, so it runs on the main
+/// queue. From another thread this waits up to `wait` for it, so that the
+/// yield comes before the hand-off when the main thread is free; a busy one
+/// gets the yield queued and the caller goes on.
+pub fn yield_front_to(bundle_id: &str, wait: Duration) -> Yield {
     if !objc2::available!(macos = 14.0) {
-        return false;
+        return Yield::Unsupported;
     }
-    autoreleasepool(|_| {
-        let me = NSRunningApplication::currentApplication();
-        if !me.isActive() {
-            return false;
+    let active = autoreleasepool(|_| NSRunningApplication::currentApplication().isActive());
+    if !active {
+        return Yield::NotActive;
+    }
+    let id = bundle_id.to_owned();
+    let give_way = move |mtm: MainThreadMarker| {
+        autoreleasepool(|_| {
+            NSApplication::sharedApplication(mtm)
+                .yieldActivationToApplicationWithBundleIdentifier(&NSString::from_str(&id));
+        });
+    };
+    if let Some(mtm) = MainThreadMarker::new() {
+        give_way(mtm);
+        return Yield::Yielded;
+    }
+    let (done, yielded) = mpsc::sync_channel(1);
+    DispatchQueue::main().exec_async(move || {
+        if let Some(mtm) = MainThreadMarker::new() {
+            give_way(mtm);
         }
-        // A hand-off's `-n` starts a second instance that only passes the
-        // link on and quits: the front goes to the one that was there first.
-        let Some(target) = NSRunningApplication::runningApplicationsWithBundleIdentifier(
-            &NSString::from_str(bundle_id),
-        )
-        .iter()
-        .filter(|running| !running.isTerminated())
-        .min_by(|a, b| launched_at(a).total_cmp(&launched_at(b))) else {
-            return false;
-        };
-        target.activateFromApplication_options(&me, NSApplicationActivationOptions::empty())
-    })
-}
-
-/// When `app` was launched, in seconds since 1970; the earliest possible for
-/// an app LaunchServices didn't launch, which has no launch date.
-fn launched_at(app: &NSRunningApplication) -> f64 {
-    app.launchDate()
-        .map_or(f64::NEG_INFINITY, |date| date.timeIntervalSince1970())
+        let _ = done.send(());
+    });
+    match yielded.recv_timeout(wait) {
+        Ok(()) => Yield::Yielded,
+        Err(_) => Yield::Queued,
+    }
 }
 
 /// Whether an app with `bundle_id` is running, as AppKit's running

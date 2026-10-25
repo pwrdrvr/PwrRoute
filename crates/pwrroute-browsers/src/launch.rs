@@ -7,6 +7,13 @@
 //! unless it starts a new instance (which then hands the URL to the running
 //! one). A path that starts with `~/` is expanded with the [`Env`]'s home.
 //!
+//! That new instance is a whole second copy of the browser, started only to
+//! pass its command line to the running one over Chromium's singleton
+//! socket. For a running Chromium browser the plan also carries that
+//! command line ([`Plan::socket`]), and [`Launcher::run`] writes it to the
+//! socket itself ([`crate::singleton`]), running `open` only when that
+//! fails.
+//!
 //! Windows and Linux run the browser's executable directly, never "the
 //! default browser": that is PwrRoute, and the link would loop back.
 
@@ -28,6 +35,7 @@ use crate::{
     env::{Env, Platform},
     profiles::{self, ProfileMatch},
     registry,
+    singleton::{self, SOCKET_BUDGET, SocketError, SocketHandOff},
 };
 
 /// How long `open` may take on macOS before the launch is reported failed.
@@ -74,7 +82,45 @@ pub struct Plan {
     /// and since macOS 14 it may only once the active app gives way, so
     /// the launching app should. `None` for every other launch.
     pub hand_off_to: Option<String>,
+    /// The singleton-socket hand-off, tried before `program`: `Some(Ok)`
+    /// for a running Chromium browser whose socket passed every check that
+    /// does not connect, `Some(Err)` with why not when it is running but
+    /// its socket did not, `None` for every other launch.
+    pub socket: Option<Result<SocketHandOff, SocketError>>,
     platform: Platform,
+}
+
+/// A launch that ran: the plan, and which way the link went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Launched {
+    pub plan: Plan,
+    pub delivery: Delivery,
+}
+
+/// Which way a launched link went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Delivery {
+    /// Over the running browser's singleton socket; `program` never ran.
+    Socket,
+    /// `program` ran; no socket hand-off was planned.
+    Command,
+    /// `program` ran because the socket hand-off failed, for this reason.
+    CommandAfter(SocketError),
+}
+
+impl Delivery {
+    /// A few words for a log line. Never the URL.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Socket => "over the browser's singleton socket".to_owned(),
+            Self::Command => "by command".to_owned(),
+            Self::CommandAfter(why) => {
+                format!("by command, after the singleton socket failed ({why})")
+            }
+        }
+    }
 }
 
 /// Something about a launch worth logging: the URL still opens.
@@ -236,12 +282,16 @@ impl Launcher {
             .open_in_background
             .unwrap_or(self.options.background_by_default);
         let mut hand_off_to = None;
+        let mut socket = None;
         let plan = match platform {
             Platform::MacOs => {
                 let running = self.hands_off(browser, entry);
                 let uses_args = flags.is_some() || !browser.args.is_empty();
-                if uses_args && !background {
-                    hand_off_to.clone_from(&running);
+                if uses_args && running.is_some() {
+                    if !background {
+                        hand_off_to.clone_from(&running);
+                    }
+                    socket = entry.and_then(|e| self.socket_plan(browser, e, flags.as_deref()));
                 }
                 macos_plan(browser, background, running.is_some(), flags)
             }
@@ -263,19 +313,72 @@ impl Launcher {
             args,
             notes,
             hand_off_to,
+            socket,
             platform,
         }))
     }
 
-    /// Runs [`Launcher::plan`]'s command and returns it. On macOS this waits
-    /// for `open` (which returns once the app has the URL) so its errors are
-    /// reported; elsewhere the browser is started and left running.
-    pub fn launch(&self, browser: &Browser) -> Result<Option<Plan>, LaunchError> {
+    /// [`Launcher::plan`], then [`Launcher::run`].
+    pub fn launch(&self, browser: &Browser) -> Result<Option<Launched>, LaunchError> {
         let Some(plan) = self.plan(browser)? else {
             return Ok(None);
         };
-        spawn(&plan)?;
-        Ok(Some(plan))
+        self.run(plan).map(Some)
+    }
+
+    /// Runs a plan: the socket hand-off when it has one (waiting up to
+    /// [`SOCKET_BUDGET`] for the browser's `ACK`), else, or when that fails,
+    /// its command. On macOS this waits for `open` (which returns once the
+    /// app has the URL) so its errors are reported; elsewhere the browser
+    /// is started and left running.
+    pub fn run(&self, plan: Plan) -> Result<Launched, LaunchError> {
+        let delivery = match &plan.socket {
+            Some(Ok(handoff)) => match singleton::send(handoff, SOCKET_BUDGET) {
+                Ok(()) => Delivery::Socket,
+                Err(why) => Delivery::CommandAfter(why),
+            },
+            Some(Err(why)) => Delivery::CommandAfter(why.clone()),
+            None => Delivery::Command,
+        };
+        if delivery != Delivery::Socket {
+            spawn(&plan)?;
+        }
+        Ok(Launched { plan, delivery })
+    }
+
+    /// The singleton-socket hand-off for a running Chromium `browser`: its
+    /// user data dir and the command line `open -n --args` would pass, or
+    /// `None` when that command line is not one the socket can carry (a
+    /// config's `open` options before its own `--args`, or another
+    /// `--user-data-dir`, whose browser listens on another socket).
+    fn socket_plan(
+        &self,
+        browser: &Browser,
+        entry: &BrowserInfo,
+        flags: Option<&[String]>,
+    ) -> Option<Result<SocketHandOff, SocketError>> {
+        let own_open_options = browser.args.iter().any(|a| a == "--args");
+        let other_data_dir = browser
+            .args
+            .iter()
+            .any(|a| a == "--user-data-dir" || a.starts_with("--user-data-dir="));
+        if own_open_options || other_data_dir {
+            return None;
+        }
+        let user_data_dir = entry.profile_dir(&self.env)?;
+        let mut argv = vec![macos_program(browser, entry)];
+        argv.extend(flags.unwrap_or_default().iter().cloned());
+        argv.extend(browser_args(browser));
+        let handoff = SocketHandOff {
+            user_data_dir,
+            argv,
+            temp_dir: self
+                .env
+                .var("TMPDIR")
+                .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from),
+            uid: singleton::current_uid(),
+        };
+        Some(singleton::locate(&handoff).map(|_| handoff))
     }
 
     /// The bundle id of the copy a `-n` launch of `browser` only hands the
@@ -569,6 +672,27 @@ fn macos_plan(
     (PathBuf::from("/usr/bin/open"), args)
 }
 
+/// The program a socket hand-off names first, as a second instance's own
+/// command line would: the bundle's executable. Chromium reads it only as
+/// the program's name and never runs it, so it is not looked up on disk.
+fn macos_program(browser: &Browser, entry: &BrowserInfo) -> String {
+    let app_name = entry.macos.as_ref().map(|m| m.app_name.as_str());
+    let bundle = match (browser.app_type, app_name) {
+        (AppType::Path, _) => PathBuf::from(&browser.name),
+        (_, Some(name)) => PathBuf::from(format!("/Applications/{name}.app")),
+        (_, None) => PathBuf::from(&browser.name),
+    };
+    let executable = app_name
+        .map(str::to_owned)
+        .or_else(|| Some(bundle.file_stem()?.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    bundle
+        .join("Contents/MacOS")
+        .join(executable)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn not_installed(browser: &Browser) -> LaunchError {
     LaunchError::NotInstalled {
         name: browser.name.clone(),
@@ -653,6 +777,7 @@ mod tests {
                 .to_vec(),
             notes: Vec::new(),
             hand_off_to: None,
+            socket: None,
             platform: Platform::MacOs,
         }
     }
@@ -680,6 +805,7 @@ mod tests {
             ],
             notes: Vec::new(),
             hand_off_to: None,
+            socket: None,
             platform: Platform::Windows,
         };
         assert_eq!(
@@ -884,6 +1010,161 @@ mod tests {
         );
     }
 
+    /// A fixture Mac whose Chrome is running with a singleton socket, the
+    /// launcher told so, and `open` swapped for the fake one.
+    #[cfg(unix)]
+    fn running_chrome() -> (crate::singleton::fake::Fake, Launcher) {
+        let fake =
+            crate::singleton::fake::Fake::new("home/Library/Application Support/Google/Chrome");
+        std::fs::write(
+            fake.data.join("Local State"),
+            include_str!("../tests/fixtures/chromium-local-state.json"),
+        )
+        .unwrap();
+        let mut env = Env::fixture(Platform::MacOs, fake.root());
+        env.set_var("TMPDIR", fake.temp.to_string_lossy().into_owned());
+        let launcher = Launcher::with_env(env, LaunchOptions::default())
+            .with_running(|id| id == "com.google.Chrome" || id == "org.mozilla.firefox");
+        (fake, launcher)
+    }
+
+    /// `plan` with its command replaced by the fake `open`, so a fallback
+    /// never starts anything real.
+    #[cfg(unix)]
+    fn with_fake_open(mut plan: Plan, outcome: &str) -> Plan {
+        let fake = fake_open_plan(outcome);
+        plan.program = fake.program;
+        plan.args = fake.args;
+        plan
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_running_chromium_browser_gets_the_link_over_its_socket() {
+        let (mut fake, launcher) = running_chrome();
+        let mut b = browser("Google Chrome", AppType::AppName);
+        b.profile = "Personal".into();
+        let plan = launcher.plan(&b).unwrap().unwrap();
+        // The dry run says which way: the socket, with `open` behind it.
+        let Some(Ok(handoff)) = &plan.socket else {
+            panic!("expected a socket hand-off, got {:?}", plan.socket);
+        };
+        assert_eq!(handoff.user_data_dir, fake.data);
+        assert_eq!(
+            handoff.argv,
+            [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "--profile-directory=Profile 1",
+                URL
+            ]
+        );
+        assert_eq!(
+            args(&plan),
+            [
+                "-a",
+                "Google Chrome",
+                "-g",
+                "-n",
+                "--args",
+                "--profile-directory=Profile 1",
+                URL
+            ]
+        );
+        assert_eq!(plan.hand_off_to.as_deref(), Some("com.google.Chrome"));
+
+        let got = fake.serve(Some(b"ACK"));
+        let expected = crate::singleton::encode("/", &handoff.argv).unwrap();
+        // The fake `open` fails: had it run, `run` would say so.
+        let launched = launcher.run(with_fake_open(plan, "fail")).unwrap();
+        assert_eq!(launched.delivery, Delivery::Socket);
+        assert_eq!(got.recv().unwrap(), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_socket_hand_off_falls_back_to_open() {
+        let (mut fake, launcher) = running_chrome();
+        let b = Browser {
+            private: true,
+            ..browser("Google Chrome", AppType::AppName)
+        };
+        let _got = fake.serve(Some(b"SHUTDOWN"));
+        let plan = launcher.plan(&b).unwrap().unwrap();
+        assert!(matches!(plan.socket, Some(Ok(_))));
+        let launched = launcher.run(with_fake_open(plan, "ok")).unwrap();
+        assert_eq!(
+            launched.delivery,
+            Delivery::CommandAfter(SocketError::ShuttingDown)
+        );
+        // And `open`'s own failure is still the launch's.
+        let (mut fake, launcher) = running_chrome();
+        let _got = fake.serve(Some(b"SHUTDOWN"));
+        let plan = launcher.plan(&b).unwrap().unwrap();
+        assert!(matches!(
+            launcher.run(with_fake_open(plan, "fail")),
+            Err(LaunchError::Failed { .. })
+        ));
+
+        // A socket that fails its checks at planning is never connected to.
+        let (fake, launcher) = running_chrome();
+        std::fs::remove_file(fake.sock_dir.join("SingletonCookie")).unwrap();
+        let plan = launcher.plan(&b).unwrap().unwrap();
+        assert_eq!(plan.socket, Some(Err(SocketError::CookieMismatch)));
+        let launched = launcher.run(with_fake_open(plan, "ok")).unwrap();
+        assert_eq!(
+            launched.delivery,
+            Delivery::CommandAfter(SocketError::CookieMismatch)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_is_planned_only_for_what_it_can_carry() {
+        let (_fake, launcher) = running_chrome();
+        let socket_of = |b: &Browser| launcher.plan(b).unwrap().unwrap().socket;
+        let chrome = browser("Google Chrome", AppType::AppName);
+        // A plain link starts no second instance: nothing to hand off.
+        assert_eq!(socket_of(&chrome), None);
+        // By bundle id, in the background, with a config's own arguments.
+        let mut by_id = browser("com.google.Chrome", AppType::BundleId);
+        by_id.private = true;
+        by_id.open_in_background = Some(true);
+        let plan = launcher.plan(&by_id).unwrap().unwrap();
+        assert_eq!(plan.hand_off_to, None, "the background yields nothing");
+        let Some(Ok(handoff)) = plan.socket else {
+            panic!("expected a socket hand-off");
+        };
+        assert_eq!(
+            handoff.argv,
+            [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "--incognito",
+                URL
+            ]
+        );
+        let mut own_args = chrome.clone();
+        own_args.args = ["--new-window", URL].map(String::from).to_vec();
+        let Some(Ok(handoff)) = socket_of(&own_args) else {
+            panic!("expected a socket hand-off");
+        };
+        assert_eq!(&handoff.argv[1..], ["--new-window", URL]);
+        // `open` options of the config's own, or another user data dir:
+        // only `open` gets those right.
+        own_args.args = ["-F", "--args", URL].map(String::from).to_vec();
+        assert_eq!(socket_of(&own_args), None);
+        own_args.args = ["--user-data-dir=/tmp/x", URL].map(String::from).to_vec();
+        assert_eq!(socket_of(&own_args), None);
+        // Firefox is no Chromium; a Chrome that is not running has no socket.
+        let firefox = Browser {
+            private: true,
+            ..browser("Firefox", AppType::AppName)
+        };
+        assert_eq!(socket_of(&firefox), None);
+        let idle = Launcher::with_env(launcher.env().clone(), LaunchOptions::default())
+            .with_running(|_| false);
+        assert_eq!(idle.plan(&by_id).unwrap().unwrap().socket, None);
+    }
+
     #[test]
     fn private_flag_is_not_added_twice() {
         let (_dir, launcher) = fixture(Platform::MacOs, &[]);
@@ -1047,6 +1328,7 @@ mod tests {
             args: Vec::new(),
             notes: Vec::new(),
             hand_off_to: None,
+            socket: None,
             platform: Platform::Linux,
         };
         let err = spawn(&plan).unwrap_err();

@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-use pwrroute_browsers::{Env, LaunchError, LaunchOptions, Note};
+use pwrroute_browsers::{Delivery, Env, LaunchError, LaunchOptions, Note};
 use pwrroute_engine::{
     ConfigChoice, Engine, Host, Limits, NativeHost, Reloader, RulesFile, ShortLinks, Sources,
     Status, Watcher,
@@ -672,26 +672,49 @@ impl BrowserLauncher {
 
 impl Launcher for BrowserLauncher {
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()> {
-        if let Some(plan) = self.inner.launch(browser).map_err(launch_error)? {
-            for note in &plan.notes {
-                log::warn!("{}", describe_note(note));
-            }
-            // A hand-off's browser brings itself forward, which macOS 14
-            // allows only once the active app gives way. When a link
-            // activated PwrRoute, that is PwrRoute: give way, or the person
-            // watches PwrRoute's window until macOS relents.
-            if let Some(id) = &plan.hand_off_to {
-                let started = std::time::Instant::now();
-                let passed = pwrroute_os::pass_front_to(id);
-                log::debug!(
-                    "passed the front to {id}: {passed} ({:.1}ms)",
-                    started.elapsed().as_secs_f64() * 1000.0
-                );
-            }
+        let Some(plan) = self.inner.plan(browser).map_err(launch_error)? else {
+            return Ok(());
+        };
+        for note in &plan.notes {
+            log::warn!("{}", describe_note(note));
+        }
+        // A hand-off's browser brings forward the window it opened the tab
+        // in, which macOS 14 allows only once the active app gives way.
+        // When a link activated PwrRoute, that is PwrRoute: give way before
+        // the browser hears of the link, or the person watches PwrRoute's
+        // window until macOS relents.
+        let started = std::time::Instant::now();
+        let yielded = plan
+            .hand_off_to
+            .as_deref()
+            .map(|id| pwrroute_os::yield_front_to(id, YIELD_WAIT));
+        let yield_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let launched = self.inner.run(plan).map_err(launch_error)?;
+        // The way and the times: no URL, and no browser, which a rule's
+        // `privacy: none` keeps out of every per-link line.
+        let yielded = match yielded {
+            Some(y) => format!("{y:?} in {yield_ms:.1}ms"),
+            None => "none".to_owned(),
+        };
+        let line = format!(
+            "hand-off {} in {:.1}ms; yield: {yielded}",
+            launched.delivery.describe(),
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+        match launched.delivery {
+            Delivery::CommandAfter(_) => log::warn!("{line}"),
+            Delivery::Socket => log::debug!("{line}"),
+            _ if launched.plan.hand_off_to.is_some() => log::debug!("{line}"),
+            _ => {}
         }
         Ok(())
     }
 }
+
+/// How long the dispatch thread waits for the main thread to yield to the
+/// browser before handing it the link anyway. The yield must come first
+/// to count, but a busy main thread must not hold the link up.
+const YIELD_WAIT: std::time::Duration = std::time::Duration::from_millis(25);
 
 /// Only the error's `Display`: `LaunchError::Failed` also carries `open`'s
 /// stderr, which may quote the URL, and `anyhow`'s `Debug` would print it.

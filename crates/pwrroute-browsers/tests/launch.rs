@@ -7,7 +7,7 @@ mod common;
 use std::{fs, path::PathBuf, time::Duration};
 
 use common::{Fixture, LOCAL_STATE, PROFILES_INI, URL, browser, strings};
-use pwrroute_browsers::{LaunchError, LaunchOptions, Launcher, Note, Plan, Platform};
+use pwrroute_browsers::{Delivery, LaunchError, LaunchOptions, Launcher, Note, Plan, Platform};
 use pwrroute_engine::{AppType, Browser};
 
 fn plan(fx: &Fixture, b: &Browser) -> Plan {
@@ -580,8 +580,9 @@ fn launch_spawns_the_plan() {
         url.into(),
     ];
     let launcher = Launcher::with_env(fx.env.clone(), LaunchOptions::default());
-    let plan = launcher.launch(&b).unwrap().unwrap();
-    assert_eq!(plan.program, exe);
+    let launched = launcher.launch(&b).unwrap().unwrap();
+    assert_eq!(launched.plan.program, exe);
+    assert_eq!(launched.delivery, Delivery::Command);
 
     let mut recorded = None;
     for _ in 0..500 {

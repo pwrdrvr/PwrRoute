@@ -42,8 +42,20 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   this crate never calls AppKit. With it, a macOS `-n` launch of a running
   Chromium browser adds `-g` so the hand-off instance does not take focus,
   and `Plan::hand_off_to` names the running copy unless the link (or the
-  config's default) asked for the background: the app gives that copy the
-  front. Tests pass a closure.
+  config's default) asked for the background: the app yields to that copy
+  so it may raise its own window. Tests pass a closure.
+- **A running Chromium browser gets the link over its singleton socket**
+  (`src/singleton.rs`, Chromium's `process_singleton_posix.cc` protocol),
+  not by starting a second copy with `open -n`, which costs seconds cold.
+  `Plan::socket` is the planned hand-off (`Some(Err)` says why not, so the
+  dry run says which way a link goes); `Launcher::run` tries it within
+  `SOCKET_BUDGET` and runs the `open` plan on any failure, and `Launched`'s
+  `Delivery` says which way it went. Only the user data dir from
+  `profile_dir`, a socket and directory owned by this uid under `$TMPDIR`,
+  and matching cookies pass. A config's `open` options (before its own
+  `--args`) or `--user-data-dir` keep `open`. Tests serve a fake socket
+  (`singleton::fake`); a test that `run`s a plan swaps its program for the
+  fake `open` first, so a fallback never starts anything.
 - **No `unsafe`.** Registry access goes through `windows-registry`'s safe
   API, confined to `src/registry.rs`. macOS detection reads XML
   `Info.plist`s rather than calling Launch Services.

@@ -11,7 +11,8 @@
 //! - [`Launcher`]: turns the engine's [`pwrroute_engine::Browser`] into a
 //!   command ([`Launcher::plan`], the dry run) and runs it
 //!   ([`Launcher::launch`]), adding the browser's private-window flag when
-//!   the rule asked for one.
+//!   the rule asked for one. A running Chromium browser gets the link over
+//!   its singleton socket ([`SocketHandOff`]), with `open` as the fallback.
 //!
 //! Everything that reads the machine takes an [`Env`], so tests run against
 //! fixture trees for any platform on any host. Nothing here writes to disk,
@@ -25,11 +26,16 @@ mod launch;
 mod plist;
 mod profiles;
 mod registry;
+mod singleton;
 
 pub use catalog::{
     BrowserEngine, BrowserInfo, Catalog, Linux, MacOs, PrivateFlag, ProfileFlag, Windows,
 };
 pub use detect::{InstalledBrowser, detect_installed};
 pub use env::{Env, Platform};
-pub use launch::{LaunchError, LaunchOptions, Launcher, Note, Plan, catalog_entry, private_window};
+pub use launch::{
+    Delivery, LaunchError, LaunchOptions, Launched, Launcher, Note, Plan, catalog_entry,
+    private_window,
+};
 pub use profiles::{Profile, list_profiles};
+pub use singleton::{SOCKET_BUDGET, SocketError, SocketHandOff};

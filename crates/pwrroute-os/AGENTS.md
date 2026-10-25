@@ -24,13 +24,18 @@ browser registration on macOS, Windows and Linux, and apps' icons (macOS).
   current from any thread even while the app's main thread is busy (which
   is what the app's hand-off log measures). Owner pids and layers need no
   Screen Recording permission; never read window titles there.
-- **`pass_front_to` is for a hand-off launch only** (`open -g -n`, a
-  Chromium profile): macOS 14's cooperative activation lets the running
-  browser bring itself forward only when the active app gives way. It
-  activates the instance with the earliest launch date, never the
-  short-lived `-n` one, and does nothing unless PwrRoute is the active app.
-  It takes a bundle id: the launcher's `Plan::hand_off_to` names the copy,
-  and says when the link is not meant for the background.
+- **`yield_front_to` is for a hand-off launch only** (a Chromium profile
+  over the singleton socket or `open -g -n`): macOS 14's cooperative
+  activation lets the running browser bring itself forward only when the
+  active app yields. It yields (`NSApplication.yieldActivation`), never
+  activates: the browser raises the window it opened the tab in, where
+  activating it would raise whichever window was last in front. It does
+  nothing unless PwrRoute is the active app. `NSApplication` is
+  main-thread only, so off the main thread it queues the call on the main
+  queue and waits a bounded time for it (the caller passes the budget;
+  the yield must land before the browser hears of the link). It takes a
+  bundle id: the launcher's `Plan::hand_off_to` names the copy, and is
+  `None` when the link is meant for the background.
 - **App icons (`app_bundle`, `app_icon_png`) read the disk.** Callers run
   them off the UI thread and cache the result; the app's `app_icons.rs`
   does. Windows and Linux return `None` until they have an implementation.
