@@ -270,6 +270,9 @@ pub struct Tail {
     /// The file read, so a rotation is noticed even after the new file grew
     /// past the old offset.
     identity: Option<u64>,
+    /// `main.log` was not there at the last full read: read everything
+    /// again once it is (Windows has no inode to tell a new file by).
+    missing: bool,
 }
 
 /// What a poll found.
@@ -289,6 +292,7 @@ impl Tail {
             offset: 0,
             pending: String::new(),
             identity: None,
+            missing: false,
         }
     }
 
@@ -306,10 +310,12 @@ impl Tail {
         match File::open(&self.path) {
             Ok(mut file) => {
                 self.identity = identity(&file.metadata()?);
+                self.missing = false;
                 file.read_to_end(&mut current)?;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound && !old.is_empty() => {
                 self.identity = None;
+                self.missing = true;
             }
             Err(error) => return Err(error),
         }
@@ -327,7 +333,7 @@ impl Tail {
     pub fn poll(&mut self) -> io::Result<Read> {
         let metadata = std::fs::metadata(&self.path)?;
         let len = metadata.len();
-        if len < self.offset || identity(&metadata) != self.identity {
+        if self.missing || len < self.offset || identity(&metadata) != self.identity {
             return self.read_all().map(Read::All);
         }
         if len == self.offset {
