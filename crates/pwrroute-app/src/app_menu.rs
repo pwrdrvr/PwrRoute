@@ -5,12 +5,14 @@
 //! PwrSuite Claude Design project: "Menu Standard - Suite Review" and its
 //! "Views Slot" addendum): [App] · File · Edit · View · Window · Help.
 //! [`menus`] is a pure template for either platform so the tests can hold
-//! both to the standard; only macOS draws it today (Windows and Linux have
-//! no global menu bar, and the in-window strip is not built yet).
+//! both to the standard. macOS installs it as the global menu bar; Windows
+//! and Linux have none, so the title strip draws the same template there
+//! (`menu_bar.rs`).
 
 use gpui_kit::{App, KeyBinding, Keystroke, Menu, MenuItem, SystemMenuType};
 
 use crate::app::Screen;
+use crate::chrome::Chrome;
 use crate::{help, settings, updater};
 
 pub use menu_actions::*;
@@ -56,6 +58,9 @@ mod menu_actions {
             ShowRules,
             ShowTestLink,
             ShowActivity,
+            /// Alt or F10 off macOS: put the keyboard on the strip's menu
+            /// bar, or take it off again (`menu_bar.rs`).
+            FocusMenuBar,
         ]
     );
 }
@@ -91,8 +96,16 @@ pub fn quit(cx: &mut App) {
     cx.quit();
 }
 
-/// Install the menus and shortcuts.
+/// Install the menus and shortcuts for this OS.
 pub fn install(cx: &mut App) {
+    install_for(Chrome::host(), cx);
+}
+
+/// Install the menus and shortcuts as `chrome` has them. Tests and the
+/// `screens` example pass Windows or Linux on a Mac to draw that strip,
+/// with its Ctrl shortcuts.
+pub fn install_for(chrome: Chrome, cx: &mut App) {
+    crate::chrome::set(chrome, cx);
     cx.on_action(|_: &Quit, cx| quit(cx));
     // ⌘, or Ctrl+, and the Settings window's control bindings.
     settings::install(cx);
@@ -101,7 +114,13 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &CheckForUpdates, _| {
         updater::check_in_background(updater::Trigger::Menu);
     });
-    cx.on_action(|_: &About, cx| settings::open(cx, Some(settings::Pane::About)));
+    // About and View's rows update a window that may be the one the action
+    // was dispatched in, so they wait for that dispatch to finish (as
+    // `in_front_window` does): GPUI still holds it, and an update fails
+    // without a word.
+    cx.on_action(|_: &About, cx| {
+        cx.defer(|cx| settings::open(cx, Some(settings::Pane::About)));
+    });
     cx.on_action(|_: &ImportFinickyConfig, cx| crate::importer_view::prompt_for_config(cx));
     cx.on_action(|_: &CloseWindow, cx| {
         in_front_window(cx, |window, _| window.remove_window());
@@ -114,12 +133,15 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &Copy, cx| replay("c", cx));
     cx.on_action(|_: &Paste, cx| replay("v", cx));
     cx.on_action(|_: &SelectAll, cx| replay("a", cx));
-    cx.on_action(|_: &ShowOverview, cx| crate::tray::show_screen(Screen::Overview, cx));
-    cx.on_action(|_: &ShowRules, cx| crate::tray::show_screen(Screen::Rules, cx));
-    cx.on_action(|_: &ShowTestLink, cx| crate::tray::show_screen(Screen::TestLink, cx));
-    cx.on_action(|_: &ShowActivity, cx| crate::tray::show_screen(Screen::Activity, cx));
+    let show = |screen: Screen, cx: &mut App| {
+        cx.defer(move |cx| crate::tray::show_screen(screen, cx));
+    };
+    cx.on_action(move |_: &ShowOverview, cx| show(Screen::Overview, cx));
+    cx.on_action(move |_: &ShowRules, cx| show(Screen::Rules, cx));
+    cx.on_action(move |_: &ShowTestLink, cx| show(Screen::TestLink, cx));
+    cx.on_action(move |_: &ShowActivity, cx| show(Screen::Activity, cx));
 
-    let platform = Platform::current();
+    let platform = chrome.menus();
     let modifier = match platform {
         Platform::Mac => "cmd",
         Platform::Other => "ctrl",
@@ -143,6 +165,15 @@ pub fn install(cx: &mut App) {
             KeyBinding::new("alt-cmd-h", HideOthers, None),
         ]);
         cx.set_menus(menus(platform));
+    } else {
+        // Settings' own binding is the host's; this one is the strip's.
+        // A lone Alt is GPUI's modifier-only keystroke: pressed and
+        // released with nothing else.
+        cx.bind_keys([
+            KeyBinding::new(&key(","), settings::OpenSettings, None),
+            KeyBinding::new("alt", FocusMenuBar, None),
+        ]);
+        crate::menu_bar::install(cx);
     }
 }
 

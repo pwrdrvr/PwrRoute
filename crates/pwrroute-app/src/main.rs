@@ -40,6 +40,7 @@ mod logs_window;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
+mod menu_bar;
 mod onboarding;
 mod overview;
 mod overview_model;

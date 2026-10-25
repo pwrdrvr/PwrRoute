@@ -4443,3 +4443,283 @@ fn close_window_closes_the_window_in_front(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert!(cx.update(|cx| cx.windows().is_empty()));
 }
+
+// --- the Windows and Linux strip's menu bar ----------------------------------
+
+/// The window, with the menus and shortcuts as Windows has them: the strip
+/// draws its menu bar on this Mac too.
+fn open_with_strip(cx: &mut TestAppContext) -> (Entity<PwrRoute>, &mut VisualTestContext) {
+    cx.update(|cx| crate::app_menu::install_for(crate::chrome::Chrome::Windows, cx));
+    let (view, vcx) = open(cx);
+    vcx.update(|window, _| window.activate_window());
+    vcx.run_until_parked();
+    draw(vcx);
+    (view, vcx)
+}
+
+fn bar_state(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> crate::menu_bar::State {
+    let bar = view.read_with(cx, |app, _| app.menu_bar.clone());
+    bar.read_with(cx, |bar, _| bar.state)
+}
+
+fn screen(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> Screen {
+    view.read_with(cx, |app, _| app.screen)
+}
+
+/// Keys, then the frame they leave.
+fn keys(cx: &mut VisualTestContext, keys: &str) {
+    cx.simulate_keystrokes(keys);
+    cx.run_until_parked();
+    draw(cx);
+}
+
+/// macOS has the system's menu bar: its strip draws none.
+#[gpui_kit::test]
+fn the_mac_strip_has_no_menu_bar(cx: &mut TestAppContext) {
+    cx.update(|cx| crate::app_menu::install_for(crate::chrome::Chrome::Mac, cx));
+    let (_, cx) = open(cx);
+    assert!(cx.debug_bounds("menu-bar").is_none());
+    assert!(cx.debug_bounds("caption-close").is_none());
+}
+
+/// Windows draws the template's titles after the brand, and its own
+/// caption buttons on the right.
+#[gpui_kit::test]
+fn the_windows_strip_draws_the_template_and_the_caption_buttons(cx: &mut TestAppContext) {
+    let (_, cx) = open_with_strip(cx);
+    let titles = ["file", "edit", "view", "window", "help"].map(|name| {
+        cx.debug_bounds(Box::leak(format!("menu-title-{name}").into_boxed_str()))
+            .unwrap_or_else(|| panic!("no {name} title"))
+    });
+    for pair in titles.windows(2) {
+        assert!(pair[0].right() <= pair[1].left(), "{titles:?}");
+    }
+    // Inside the strip, after the brand at x=16.
+    assert!(titles[0].left() > px(crate::chrome::OTHER_BRAND_X + 40.0));
+    assert!(titles.iter().all(|title| title.bottom() <= px(41.0)));
+    let width = cx.update(|window, _| window.viewport_size().width);
+    let close = cx.debug_bounds("caption-close").expect("the close button");
+    assert_eq!(close.right(), width);
+    assert_eq!(close.size.width, px(crate::chrome::CAPTION_WIDTH));
+    let minimize = cx.debug_bounds("caption-minimize").expect("minimize");
+    assert!(minimize.right() <= cx.debug_bounds("caption-maximize").unwrap().left());
+}
+
+/// A click opens a title's menu; a row runs its action and closes it.
+#[gpui_kit::test]
+fn a_menu_row_runs_its_action(cx: &mut TestAppContext) {
+    let (view, cx) = open_with_strip(cx);
+    assert!(cx.debug_bounds("menu-card-view").is_none());
+    click(cx, "menu-title-view");
+    let card = cx.debug_bounds("menu-card-view").expect("View's menu");
+    // Under the strip, below its title.
+    assert!(card.top() >= px(41.0));
+    click(cx, "menu-row-view-activity");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(screen(&view, cx), Screen::Activity);
+    assert!(cx.debug_bounds("menu-card-view").is_none());
+    assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
+}
+
+/// With a menu open the pointer switches menus by hovering, a second press
+/// on the open title closes it, and a press elsewhere lets go.
+#[gpui_kit::test]
+fn hovering_across_titles_switches_menus(cx: &mut TestAppContext) {
+    let (view, cx) = open_with_strip(cx);
+    // At rest, hovering opens nothing.
+    hover(cx, "menu-title-edit");
+    draw(cx);
+    assert!(cx.debug_bounds("menu-card-edit").is_none());
+    click(cx, "menu-title-file");
+    assert!(cx.debug_bounds("menu-card-file").is_some());
+    hover(cx, "menu-title-help");
+    draw(cx);
+    assert!(cx.debug_bounds("menu-card-file").is_none());
+    assert!(cx.debug_bounds("menu-card-help").is_some());
+    click(cx, "menu-title-help");
+    assert!(cx.debug_bounds("menu-card-help").is_none());
+    // A press in the pane closes an open menu.
+    click(cx, "menu-title-window");
+    assert!(cx.debug_bounds("menu-card-window").is_some());
+    let pane = cx.debug_bounds(ROOT_ID).expect("the window");
+    cx.simulate_click(
+        point(pane.center().x, pane.bottom() - px(40.0)),
+        Modifiers::default(),
+    );
+    draw(cx);
+    assert!(cx.debug_bounds("menu-card-window").is_none());
+    assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
+}
+
+/// Alt puts the keyboard on File; the arrows walk to a row and Enter runs
+/// it. F10 does what Alt does, and Escape steps back out.
+#[gpui_kit::test]
+fn alt_and_the_arrows_reach_a_row(cx: &mut TestAppContext) {
+    let (view, cx) = open_with_strip(cx);
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::Overview, window, cx);
+    });
+    keys(cx, "alt");
+    let state = bar_state(&view, cx);
+    assert_eq!(
+        (state.title, state.open, state.keyboard),
+        (Some(0), false, true)
+    );
+    assert!(cx.debug_bounds("menu-card-file").is_none());
+    // File, Edit, View; Down opens it on Overview, then Rules.
+    keys(cx, "right right down down");
+    assert!(cx.debug_bounds("menu-card-view").is_some());
+    assert_eq!(bar_state(&view, cx).row, Some(1));
+    keys(cx, "enter");
+    assert_eq!(screen(&view, cx), Screen::Rules);
+    assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
+
+    keys(cx, "f10");
+    assert_eq!(bar_state(&view, cx).title, Some(0));
+    keys(cx, "down");
+    assert!(cx.debug_bounds("menu-card-file").is_some());
+    keys(cx, "escape");
+    assert!(cx.debug_bounds("menu-card-file").is_none());
+    assert_eq!(bar_state(&view, cx).title, Some(0));
+    keys(cx, "escape");
+    assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
+    // At rest the keys are the window's again: Alt+letter for no title
+    // and plain arrows leave the bar alone.
+    keys(cx, "down alt-z");
+    assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
+}
+
+/// Edit's rows, from the pointer or the keyboard, still replay their key
+/// into the field that has focus: the bar never takes it.
+#[gpui_kit::test]
+fn edit_rows_on_the_strip_reach_the_focused_field(cx: &mut TestAppContext) {
+    let (view, cx) = open_with_strip(cx);
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::TestLink, window, cx);
+    });
+    draw(cx);
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    let url = |view: &Entity<PwrRoute>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| app.test.url.text.clone())
+    };
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "https://example.com/a".to_owned(),
+        ));
+    });
+    click(cx, "menu-title-edit");
+    click(cx, "menu-row-edit-paste");
+    cx.run_until_parked();
+    assert_eq!(url(&view, cx), "https://example.com/a");
+
+    // Alt+E opens Edit on Cut; Select All is two rows past Paste's
+    // separator.
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "https://example.com/b".to_owned(),
+        ));
+    });
+    keys(cx, "alt-e down down down enter");
+    cx.run_until_parked();
+    keys(cx, "alt-e down down enter");
+    cx.run_until_parked();
+    assert_eq!(url(&view, cx), "https://example.com/b");
+}
+
+/// Each row shows the keymap's shortcut, in Windows' words.
+#[gpui_kit::test]
+fn strip_rows_show_the_keymaps_shortcuts(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::app_menu::install_for(crate::chrome::Chrome::Windows, cx);
+        let menus = crate::menu_bar::strip_menus(None, cx);
+        let shortcut = |menu: &str, row: &str| {
+            menus
+                .iter()
+                .find(|m| m.name == menu)
+                .and_then(|m| {
+                    m.rows.iter().find_map(|r| match r {
+                        crate::menu_bar::Row::Action {
+                            label, shortcut, ..
+                        } if label == row => Some(shortcut.clone()),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_else(|| panic!("no {menu} › {row}"))
+                .map(|shortcut| shortcut.to_string())
+        };
+        assert_eq!(
+            shortcut("File", "Settings\u{2026}").as_deref(),
+            Some("Ctrl+,")
+        );
+        assert_eq!(shortcut("File", "Close Window").as_deref(), Some("Ctrl+W"));
+        assert_eq!(shortcut("File", "Quit").as_deref(), Some("Ctrl+Q"));
+        assert_eq!(shortcut("Edit", "Paste").as_deref(), Some("Ctrl+V"));
+        assert_eq!(shortcut("Window", "Minimize").as_deref(), Some("Ctrl+M"));
+        assert_eq!(shortcut("Help", "About PwrRoute"), None);
+    });
+}
+
+/// Window lists the windows with a strip after Minimize, this one checked;
+/// a row brings its window forward.
+#[gpui_kit::test]
+fn the_window_menu_lists_the_open_windows(cx: &mut TestAppContext) {
+    let (_, main) = open_with_strip(cx);
+    let main_handle = main.update(|window, _| window.window_handle());
+    let (_, other) = cx.add_window_view(|_, cx| crate::logs_window::LogsWindow::new(None, cx));
+    draw(other);
+    other.update(|window, _| window.activate_window());
+    other.run_until_parked();
+    draw(other);
+    click(other, "menu-title-window");
+    assert!(other.debug_bounds("menu-row-window-minimize").is_some());
+    assert!(other.debug_bounds("menu-row-window-pwrroute").is_some());
+    assert!(other.debug_bounds("menu-row-window-logs").is_some());
+    click(other, "menu-row-window-pwrroute");
+    other.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.active_window()), Some(main_handle));
+}
+
+/// View's rows open their screen in the window in front, from the menu
+/// bar (macOS) as from the strip: the action arrives inside that window's
+/// own dispatch.
+#[gpui_kit::test]
+fn view_rows_open_their_screen_in_the_window_in_front(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let (view, cx) = open(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.dispatch_action(crate::app_menu::ShowActivity);
+    cx.run_until_parked();
+    assert_eq!(screen(&view, cx), Screen::Activity);
+    cx.dispatch_action(crate::app_menu::ShowOverview);
+    cx.run_until_parked();
+    assert_eq!(screen(&view, cx), Screen::Overview);
+}
+
+/// Help › Changelog from the Changelog window's own strip brings that
+/// window forward; it never opens a second.
+#[gpui_kit::test]
+fn a_help_window_chosen_from_itself_stays_one_window(cx: &mut TestAppContext) {
+    cx.update(|cx| crate::app_menu::install_for(crate::chrome::Chrome::Linux, cx));
+    cx.update(|cx| crate::assets::load_fonts(cx));
+    let (_, doc) = cx.add_window_view(|_, cx| {
+        crate::doc_window::DocWindow::new(crate::doc_window::Doc::Changelog, cx)
+    });
+    doc.update(|window, _| window.activate_window());
+    doc.run_until_parked();
+    draw(doc);
+    // Linux: the menu bar, and the desktop's own caption buttons.
+    assert!(doc.debug_bounds("caption-close").is_none());
+    click(doc, "menu-title-help");
+    click(doc, "menu-row-help-changelog");
+    doc.run_until_parked();
+    let docs = cx.update(|cx| {
+        cx.windows()
+            .iter()
+            .filter(|window| window.downcast::<crate::doc_window::DocWindow>().is_some())
+            .count()
+    });
+    assert_eq!(docs, 1);
+}

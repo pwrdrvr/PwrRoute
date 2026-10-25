@@ -34,15 +34,16 @@ use std::rc::Rc;
 use gpui_kit::base::{Button, TestSupportExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, FocusHandle,
-    Global, HighlightStyle, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
+    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
+    FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
+    Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 
 use self::controls::{Heading, Kind, button, card, separated};
 use self::model::{SettingsModel, SettingsRequest};
-use crate::theme::{self, icon, mono, text};
+use crate::menu_bar::MenuBar;
+use crate::theme::{self, mono, text};
 
 pub use settings_actions::OpenSettings;
 
@@ -198,7 +199,9 @@ impl Global for OpenWindow {}
 /// bindings (the select's arrow keys, Escape).
 pub fn install(cx: &mut App) {
     gpui_kit::base::init(cx);
-    cx.on_action(|_: &OpenSettings, cx| open(cx, None));
+    // Deferred: from inside Settings, the window is still held by the
+    // dispatch, so bringing it forward would fail and open a second one.
+    cx.on_action(|_: &OpenSettings, cx| cx.defer(|cx| open(cx, None)));
     cx.bind_keys([KeyBinding::new(SHORTCUT, OpenSettings, None)]);
 }
 
@@ -287,6 +290,7 @@ pub fn update(cx: &mut App, edit: impl FnOnce(&mut SettingsModel)) {
 /// The Settings window's view.
 pub struct SettingsWindow {
     pub focus: FocusHandle,
+    menu_bar: Entity<MenuBar>,
     pub pane: Pane,
     pub model: SettingsModel,
     /// Cards folded shut, by id. A reading position, not a preference, so
@@ -312,6 +316,7 @@ impl SettingsWindow {
         let configuration = configuration::State::new(cx);
         Self {
             focus: cx.focus_handle(),
+            menu_bar: MenuBar::entity("Settings", cx),
             // General is not drawn yet; Browsers is the first pane that is.
             pane: Pane::Browsers,
             model,
@@ -534,43 +539,8 @@ fn placeholder(pane: Pane) -> Div {
 }
 
 /// `.strip`: the family title strip, with "Settings" as its crumb.
-fn title_strip() -> Div {
-    let wordmark = StyledText::new("PwrRoute").with_highlights([(
-        3..8,
-        HighlightStyle {
-            color: Some(theme::accent()),
-            ..Default::default()
-        },
-    )]);
-    div()
-        .h(px(crate::chrome::STRIP_HEIGHT + 1.0))
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap(px(12.0))
-        .pl(px(crate::chrome::BRAND_X))
-        .pr(px(16.0))
-        .bg(theme::bg_titlebar())
-        .border_b_1()
-        .border_color(theme::border_subtle())
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap(px(8.0))
-                .child(icon("pwrroute/mark.svg", 20.0, theme::accent()))
-                .child(
-                    div()
-                        .font_family(theme::SANS)
-                        .font_weight(theme::weight(700.0))
-                        .text_size(px(17.0))
-                        .line_height(px(17.0))
-                        .text_color(theme::text_primary())
-                        .whitespace_nowrap()
-                        .child(wordmark),
-                ),
-        )
+fn title_strip(menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
+    crate::chrome::strip(menu_bar, window, cx)
         .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
         .child(text("Settings", 13.0, 500.0, theme::text_secondary()))
 }
@@ -589,7 +559,7 @@ impl Render for SettingsWindow {
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
-            .child(title_strip())
+            .child(title_strip(&self.menu_bar, window, cx))
             .child(
                 div().flex_1().min_h_0().flex().child(self.nav(cx)).child(
                     div()

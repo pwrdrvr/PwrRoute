@@ -24,8 +24,8 @@ use std::time::SystemTime;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, Global, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Stateful,
+    App, AppContext as _, Bounds, ClickEvent, Context, Div, ElementId, Entity, FocusHandle, Global,
+    Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
     WindowHandle, WindowOptions, div, point, px, size,
 };
@@ -37,6 +37,7 @@ use crate::config_view::display_path;
 use crate::importer::{
     Charge, ImportModel, Item, Kind, Label, Placement, SourceChoice, Step, same_file,
 };
+use crate::menu_bar::MenuBar;
 use crate::rules_store::{RulesStore, clock};
 use crate::rules_view::{RowState, card, rule_row};
 use crate::settings_store::{self, SourceSettings};
@@ -278,6 +279,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
 pub struct Importer {
     pub model: ImportModel,
     pub focus: FocusHandle,
+    menu_bar: Entity<MenuBar>,
     /// First run opened it and waits to hear how it is left. Taken by
     /// Import; still here when the window goes, which is a cancel.
     from_first_run: Option<FromFirstRun>,
@@ -294,6 +296,7 @@ impl Importer {
         Self {
             model,
             focus: cx.focus_handle(),
+            menu_bar: MenuBar::entity("Import Finicky Config", cx),
             from_first_run: None,
         }
     }
@@ -872,8 +875,8 @@ fn stepper(model: &ImportModel) -> Div {
 }
 
 /// The strip: brand, "Import ~/.finicky.ts" and the stepper.
-fn title_strip(model: &ImportModel) -> Div {
-    crate::chrome::strip()
+fn title_strip(model: &ImportModel, menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
+    crate::chrome::strip(menu_bar, window, cx)
         .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
         .child(text(
             format!("Import {}", model.shown),
@@ -1883,7 +1886,7 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
 }
 
 impl Render for Importer {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let model = self.model.clone();
         let body = match (&model.problem, model.step) {
             (Some(problem_text), _) => problem(&model, problem_text, cx).into_any_element(),
@@ -1908,7 +1911,7 @@ impl Render for Importer {
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
-            .child(title_strip(&model))
+            .child(title_strip(&model, &self.menu_bar, window, cx))
             .child(
                 div()
                     .flex_1()

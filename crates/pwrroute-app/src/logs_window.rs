@@ -23,11 +23,11 @@ use std::time::Duration;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, AnyView, App, ClipboardItem, Context, FocusHandle, Font, HighlightStyle, Hsla,
-    InteractiveElement as _, IntoElement, KeyDownEvent, LineFragment, ListAlignment, ListOffset,
-    ListState, MouseButton, MouseDownEvent, ParentElement as _, Render, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement as _, Styled as _, StyledText, Window, WindowHandle,
-    deferred, div, list, px,
+    AnyElement, AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Font, HighlightStyle,
+    Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, LineFragment, ListAlignment,
+    ListOffset, ListState, MouseButton, MouseDownEvent, ParentElement as _, Render,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
+    Window, WindowHandle, deferred, div, list, px,
 };
 
 use crate::aux_window::{self, Frame};
@@ -35,6 +35,7 @@ use crate::log_view::{
     CONTEXT_CHOICES, Level, LogView, Read, Row, RowKey, SearchMode, Shown, Tail, file_name,
     thousands,
 };
+use crate::menu_bar::MenuBar;
 use crate::settings_store::{LogLevels, LogsSettings};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, icon, mono, text};
@@ -135,6 +136,7 @@ pub struct LogsWindow {
     /// they came from.
     list_keys: Vec<RowKey>,
     list_generation: Option<u64>,
+    menu_bar: Entity<MenuBar>,
     /// New lines scroll into view.
     pub live: bool,
     /// Lines and errors that came in while paused.
@@ -191,6 +193,7 @@ impl LogsWindow {
             list: ListState::new(0, ListAlignment::Top, px(240.0)),
             list_keys: Vec::new(),
             list_generation: None,
+            menu_bar: MenuBar::entity("Logs", cx),
             live: true,
             new_lines: 0,
             new_errors: 0,
@@ -865,7 +868,7 @@ impl Render for LogsWindow {
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
-            .child(aux_window::strip("Logs"))
+            .child(aux_window::strip("Logs", &self.menu_bar, window, cx))
             .child(
                 div()
                     .flex_1()

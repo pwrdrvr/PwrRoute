@@ -12,12 +12,13 @@ use std::rc::Rc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, ClipboardItem, Context, FocusHandle, HighlightStyle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    StyledText, UniformListScrollHandle, Window, WindowHandle, div, px, uniform_list,
+    App, ClipboardItem, Context, Entity, FocusHandle, HighlightStyle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledText, UniformListScrollHandle, Window, WindowHandle, div, px, uniform_list,
 };
 
 use crate::aux_window::{self, Frame};
+use crate::menu_bar::MenuBar;
 use crate::theme::{self, mono, text};
 use crate::widgets::{ButtonKind, button, chip};
 
@@ -92,6 +93,7 @@ pub struct DocWindow {
     pub doc: Doc,
     body: Body,
     focus: FocusHandle,
+    menu_bar: Entity<MenuBar>,
     copied: bool,
 }
 
@@ -119,6 +121,7 @@ impl DocWindow {
             doc,
             body,
             focus: cx.focus_handle(),
+            menu_bar: MenuBar::entity(doc.title(), cx),
             copied: false,
         }
     }
@@ -131,9 +134,9 @@ impl DocWindow {
 }
 
 impl Render for DocWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let copy_label = if self.copied { "Copied" } else { "Copy" };
-        let strip = aux_window::strip(self.doc.title()).child(
+        let strip = aux_window::strip(self.doc.title(), &self.menu_bar, window, cx).child(
             div()
                 .id(COPY_ID)
                 .debug_selector(|| COPY_ID.into())

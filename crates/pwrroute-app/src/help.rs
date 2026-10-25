@@ -67,14 +67,18 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &ReportIssue, cx| open_link(&issue_url(), cx));
     cx.on_action(|_: &ReportVulnerability, cx| open_link(&vulnerability_url(), cx));
     cx.on_action(|_: &ViewSource, cx| open_link(REPOSITORY, cx));
-    cx.on_action(|_: &OpenChangelog, cx| doc_window::open(doc_window::Doc::Changelog, cx));
-    cx.on_action(|_: &ViewLicense, cx| doc_window::open(doc_window::Doc::License, cx));
-    cx.on_action(|_: &ThirdPartyNotices, cx| {
-        doc_window::open(doc_window::Doc::ThirdPartyNotices, cx);
+    // The windows wait for the dispatch to finish: chosen from inside the
+    // window it would bring forward (the strip off macOS), GPUI still holds
+    // it, so it could be neither read nor raised and a second would open.
+    let doc = |doc: doc_window::Doc, cx: &mut App| cx.defer(move |cx| doc_window::open(doc, cx));
+    cx.on_action(move |_: &OpenChangelog, cx| doc(doc_window::Doc::Changelog, cx));
+    cx.on_action(move |_: &ViewLicense, cx| doc(doc_window::Doc::License, cx));
+    cx.on_action(move |_: &ThirdPartyNotices, cx| {
+        doc(doc_window::Doc::ThirdPartyNotices, cx);
     });
-    cx.on_action(|_: &OpenLogs, cx| logs_window::open(cx));
+    cx.on_action(|_: &OpenLogs, cx| cx.defer(logs_window::open));
     cx.on_action(|_: &CopyDiagnostics, cx| copy_diagnostics(cx));
-    cx.on_action(|_: &ReplayOnboarding, cx| crate::onboarding::open(cx));
+    cx.on_action(|_: &ReplayOnboarding, cx| cx.defer(crate::onboarding::open));
 }
 
 /// Opens one of PwrRoute's own pages: through the router, so the rules

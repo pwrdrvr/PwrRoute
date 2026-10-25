@@ -87,6 +87,24 @@ const ICONS: &[(&str, &[u8])] = &[
         "pwrroute/close.svg",
         include_bytes!("../assets/icons/close.svg"),
     ),
+    // The Windows strip's caption buttons (design: Windows and Linux
+    // Chrome 1a), drawn by `chrome::captions`.
+    (
+        "pwrroute/caption-minimize.svg",
+        include_bytes!("../assets/icons/caption-minimize.svg"),
+    ),
+    (
+        "pwrroute/caption-maximize.svg",
+        include_bytes!("../assets/icons/caption-maximize.svg"),
+    ),
+    (
+        "pwrroute/caption-restore.svg",
+        include_bytes!("../assets/icons/caption-restore.svg"),
+    ),
+    (
+        "pwrroute/caption-close.svg",
+        include_bytes!("../assets/icons/caption-close.svg"),
+    ),
 ];
 
 const FONTS: &[&[u8]] = &[

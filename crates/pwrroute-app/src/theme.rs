@@ -105,6 +105,9 @@ tokens! {
     warn_soft = hex_alpha(0xd99a3d, 0.14);
     warn_text = hex(0xe8c890);
     transparent = hex_alpha(0x000000, 0.0);
+    /// Windows' own close-button hover, under a white glyph: the caption
+    /// buttons are the OS's, so they keep its colours.
+    caption_close = hex(0xc42b1c);
     /// `.strip-chip.off`'s dot: not routing.
     status_suspended = hex(0x6b6660);
     /// The menu bar dropdown's fill: `.tray`'s rgba(16,16,16,0.98), made

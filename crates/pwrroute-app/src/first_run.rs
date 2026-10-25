@@ -23,16 +23,16 @@ use std::time::Duration;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationExt as _, App, AppContext as _, Bounds, BoxShadow, ClickEvent, Context,
-    DisplayId, Div, FocusHandle, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, PathBuilder, Render, Rgba, SharedString, Stateful,
+    DisplayId, Div, Entity, FocusHandle, HighlightStyle, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, PathBuilder, Render, Rgba, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, StyledText, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowOptions, anchored, canvas, deferred, div, point, px, size,
 };
 use pwrroute_engine::Precedence;
 use serde::{Deserialize, Serialize};
 
-use crate::chrome::{BRAND_X, STRIP_HEIGHT};
 use crate::default_browser::DefaultState;
+use crate::menu_bar::MenuBar;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::tray::model::BrowserLabel;
 use crate::widgets::{
@@ -946,6 +946,7 @@ pub struct FirstRun {
     pub model: FirstRunModel,
     hooks: FirstRunHooks,
     pub focus: FocusHandle,
+    menu_bar: Entity<MenuBar>,
     /// The Everything else browser list, or the chosen browser's profile
     /// list, is open.
     pub picking: Picking,
@@ -961,6 +962,7 @@ impl FirstRun {
             model,
             hooks,
             focus: cx.focus_handle(),
+            menu_bar: MenuBar::entity("Set up PwrRoute", cx),
             picking: Picking::None,
             was_picking: Picking::None,
         }
@@ -1188,7 +1190,7 @@ impl FirstRun {
 }
 
 impl Render for FirstRun {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let model = &self.model;
         let complete = model.complete();
         let steps = model.steps();
@@ -1247,7 +1249,7 @@ impl Render for FirstRun {
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
-            .child(strip(model.routing()))
+            .child(strip(model.routing(), &self.menu_bar, window, cx))
             .child(
                 div()
                     .id("first-run-body")
@@ -1423,14 +1425,7 @@ fn spinner(color: Hsla) -> impl IntoElement {
 
 /// `.strip` for this window: the brand and whether links route yet. The
 /// chip's dot fades from grey to green over 200ms when routing starts.
-fn strip(routing: bool) -> Div {
-    let wordmark = StyledText::new("PwrRoute").with_highlights([(
-        3..8,
-        HighlightStyle {
-            color: Some(theme::accent()),
-            ..Default::default()
-        },
-    )]);
+fn strip(routing: bool, menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
     let label = if routing {
         "routing"
     } else {
@@ -1447,27 +1442,7 @@ fn strip(routing: bool) -> Div {
     } else {
         theme::dot(theme::status_suspended()).into_any_element()
     };
-    div()
-        .h(px(STRIP_HEIGHT + 1.0))
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap(px(12.0))
-        .pl(px(BRAND_X))
-        .pr(px(16.0))
-        .bg(theme::bg_titlebar())
-        .border_b_1()
-        .border_color(theme::border_subtle())
-        .child(icon("pwrroute/mark.svg", 20.0, theme::accent()))
-        .child(
-            div()
-                .font_family(theme::SANS)
-                .font_weight(theme::weight(700.0))
-                .text_size(px(17.0))
-                .line_height(px(17.0))
-                .whitespace_nowrap()
-                .child(wordmark),
-        )
+    crate::chrome::strip(menu_bar, window, cx)
         .child(div().flex_1())
         .child(
             div()
