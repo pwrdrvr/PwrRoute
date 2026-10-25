@@ -166,13 +166,14 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
         ]);
         cx.set_menus(menus(platform));
     } else {
-        // Settings' own binding is the host's; this one is the strip's.
         // A lone Alt is GPUI's modifier-only keystroke: pressed and
         // released with nothing else.
-        cx.bind_keys([
-            KeyBinding::new(&key(","), settings::OpenSettings, None),
-            KeyBinding::new("alt", FocusMenuBar, None),
-        ]);
+        cx.bind_keys([KeyBinding::new("alt", FocusMenuBar, None)]);
+        // Settings binds the host's shortcut; drawing another OS's strip
+        // (tests, `screens`) needs that OS's.
+        if chrome != Chrome::host() {
+            cx.bind_keys([KeyBinding::new(&key(","), settings::OpenSettings, None)]);
+        }
         crate::menu_bar::install(cx);
     }
 }

@@ -255,11 +255,13 @@ their own modules.
   data with its own tests. **Bring a window forward with
   `menu_bar::bring_forward`, never `activate_window` directly:** on Windows
   GPUI taps Alt itself (`SendInput`) to take the foreground, and the bar
-  ignores a lone Alt for `FAKE_ALT_WINDOW` after `bring_forward` so that tap
-  never lights File. On Windows GPUI hides the OS title bar, so the
+  ignores a lone Alt for `FAKE_ALT_WINDOW` after `bring_forward`, and after
+  a window becomes active (Alt+Tab back in re-reports a held Alt), so neither
+  lights File; nor does releasing an Alt that clicked. On Windows GPUI hides the OS title bar, so the
   strip is the drag area and draws minimize, maximize/restore and close as
   `WindowControlArea`s (Windows presses them; titles and buttons `occlude`
-  the drag area). Linux keeps the desktop's server-side title bar and its
+  the drag area, and so must anything clickable a window adds to its strip,
+  or Windows takes the press for a drag). Linux keeps the desktop's server-side title bar and its
   buttons; the design's frameless GNOME strip (1b) is not built yet.
   `app_menu::install_for(Chrome::Windows | Linux)` draws that strip and
   installs the Ctrl keymap on a Mac, for the window tests and `screens`.

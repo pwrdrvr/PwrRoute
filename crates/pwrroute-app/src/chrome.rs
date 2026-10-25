@@ -325,7 +325,8 @@ pub fn strip(menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
         .border_color(theme::border_subtle())
         // GPUI hides Windows' title bar, so the strip is where the window
         // is dragged from (and double-clicked to maximize). The menu
-        // titles and the caption buttons occlude it.
+        // titles, the caption buttons and any child a caller adds that
+        // takes a click (`.occlude()`) block it.
         .when(chrome == Chrome::Windows, |strip| {
             strip
                 .window_control_area(WindowControlArea::Drag)

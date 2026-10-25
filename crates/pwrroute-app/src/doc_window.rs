@@ -140,6 +140,9 @@ impl Render for DocWindow {
             div()
                 .id(COPY_ID)
                 .debug_selector(|| COPY_ID.into())
+                // On Windows the strip is the drag area: a press here must
+                // be the button's.
+                .occlude()
                 .child(button(copy_label, ButtonKind::Default, true))
                 .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
         );

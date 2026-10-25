@@ -4453,6 +4453,9 @@ fn open_with_strip(cx: &mut TestAppContext) -> (Entity<PwrRoute>, &mut VisualTes
     let (view, vcx) = open(cx);
     vcx.update(|window, _| window.activate_window());
     vcx.run_until_parked();
+    // Past the Alt that comes with becoming active.
+    vcx.executor()
+        .advance_clock(crate::menu_bar::FAKE_ALT_WINDOW);
     draw(vcx);
     (view, vcx)
 }
@@ -4734,6 +4737,22 @@ fn the_alt_that_brings_a_window_forward_is_not_the_users(cx: &mut TestAppContext
     assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
     cx.executor()
         .advance_clock(crate::menu_bar::FAKE_ALT_WINDOW);
+    keys(cx, "alt");
+    assert_eq!(bar_state(&view, cx).title, Some(0));
+}
+
+/// Alt held for a click is not a lone Alt: releasing it leaves the bar at
+/// rest. A tap of Alt after a key still works.
+#[gpui_kit::test]
+fn an_alt_click_is_not_a_lone_alt(cx: &mut TestAppContext) {
+    let (view, cx) = open_with_strip(cx);
+    let pane = cx.debug_bounds(ROOT_ID).expect("the window");
+    cx.simulate_click(
+        point(pane.center().x, pane.bottom() - px(40.0)),
+        Modifiers::alt(),
+    );
+    keys(cx, "alt");
+    assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
     keys(cx, "alt");
     assert_eq!(bar_state(&view, cx).title, Some(0));
 }

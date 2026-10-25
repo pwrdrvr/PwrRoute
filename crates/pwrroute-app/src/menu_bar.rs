@@ -487,9 +487,16 @@ impl Global for BroughtForward {}
 /// so Windows lets the window take the foreground), and that tap must not
 /// read as the user's Alt and put the keyboard on File.
 pub fn bring_forward(window: &mut Window, cx: &mut App) {
+    note_brought_forward(cx);
+    window.activate_window();
+}
+
+/// Starts [`FAKE_ALT_WINDOW`]: on a call to `bring_forward`, and whenever a
+/// window becomes active, since activation re-reports a held Alt (Alt+Tab
+/// back in) and its release would read as a lone Alt.
+fn note_brought_forward(cx: &mut App) {
     let now = cx.background_executor().now();
     cx.set_global(BroughtForward(now));
-    window.activate_window();
 }
 
 /// A lone Alt now is GPUI's tap from [`bring_forward`].
@@ -515,15 +522,18 @@ pub fn install(cx: &mut App) {
     })
     .detach();
     cx.on_action(|_: &app_menu::FocusMenuBar, cx| {
-        if alt_is_gpuis(cx) {
-            return;
-        }
         let Some(bar) = cx.active_window().and_then(|window| bar_for(window, cx)) else {
             return;
         };
+        let gpuis = alt_is_gpuis(cx);
         bar.update(cx, |bar, cx| {
-            bar.state = bar.state.toggled();
-            cx.notify();
+            // An Alt that clicked is not a lone Alt, though GPUI counts only
+            // keys as using it.
+            let clicked = std::mem::take(&mut bar.alt_clicked);
+            if !gpuis && !clicked {
+                bar.state = bar.state.toggled();
+                cx.notify();
+            }
         });
     });
 }
@@ -537,6 +547,8 @@ pub struct MenuBar {
     /// The titles' bounds as last painted: a press there is the title's,
     /// not a press outside the open menu.
     titles: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// A press with Alt held since the last key: its release is not Alt's.
+    alt_clicked: bool,
     window: Option<AnyWindowHandle>,
     _activation: Option<Subscription>,
 }
@@ -547,6 +559,7 @@ impl MenuBar {
             name: name.into(),
             state: State::default(),
             titles: Rc::default(),
+            alt_clicked: false,
             window: None,
             _activation: None,
         }
@@ -572,7 +585,9 @@ impl MenuBar {
         bars.0.retain(|(_, bar, _)| bar.upgrade().is_some());
         bars.0.push((handle, me, name));
         self._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() {
+            if window.is_window_active() {
+                note_brought_forward(cx);
+            } else {
                 this.rest(cx);
             }
         }));
@@ -600,6 +615,11 @@ impl MenuBar {
         cx: &mut Context<'_, Self>,
     ) -> bool {
         let key = Key::of(keystroke);
+        // A key after the click uses Alt up as GPUI sees it; a modifier
+        // alone (a simulated lone Alt) does not.
+        if key != Key::Modifier {
+            self.alt_clicked = false;
+        }
         // At rest only F10 and Alt+letter are the bar's: skip building the
         // menus for every other key typed.
         if self.state.title.is_none() && !matches!(key, Key::F10 | Key::Alt(_)) {
@@ -639,10 +659,12 @@ impl MenuBar {
         }
     }
 
+    /// A title, with its menu's `rows` when it is the open one.
     fn title(
         &self,
         index: usize,
-        menu: StripMenu,
+        name: &SharedString,
+        rows: Option<Vec<Row>>,
         max_height: f32,
         cx: &mut Context<'_, Self>,
     ) -> impl IntoElement {
@@ -650,12 +672,12 @@ impl MenuBar {
         let held = state.title == Some(index);
         let open = held && state.open;
         let ring = held && state.keyboard && !state.open;
-        let slug = slug(&menu.name);
+        let slug = slug(name);
         let label = {
-            let text = StyledText::new(menu.name.clone());
+            let text = StyledText::new(name.clone());
             // Alt's letters, underlined while the keyboard has the bar.
             if state.keyboard && state.title.is_some() {
-                let first = menu.name.chars().next().map_or(0, char::len_utf8);
+                let first = name.chars().next().map_or(0, char::len_utf8);
                 text.with_highlights([(
                     0..first,
                     HighlightStyle {
@@ -701,7 +723,8 @@ impl MenuBar {
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.alt_clicked |= event.modifiers.alt;
                     let state = this.state.title_down(index);
                     this.set(state, cx);
                 }),
@@ -713,8 +736,8 @@ impl MenuBar {
                 }
             }))
             .child(label)
-            .when(open, |title| {
-                title.child(deferred(self.card(index, &slug, menu, max_height, cx)))
+            .when_some(rows.filter(|_| open), |title, rows| {
+                title.child(deferred(self.card(index, &slug, rows, max_height, cx)))
             })
     }
 
@@ -722,22 +745,30 @@ impl MenuBar {
         &self,
         index: usize,
         slug: &str,
-        menu: StripMenu,
+        rows: Vec<Row>,
         max_height: f32,
         cx: &mut Context<'_, Self>,
     ) -> impl IntoElement {
         let lit = self.state.row;
         let titles = self.titles.clone();
         let card_id = format!("menu-card-{slug}");
-        let rows = menu.rows.into_iter().enumerate().map(|(row, item)| {
-            let (label, hint) = match item {
+        let rows = rows.into_iter().enumerate().map(|(row, item)| {
+            // A window's row keeps its window: the list can change before
+            // the click, and the row's index would then name another.
+            let (label, hint, target) = match item {
                 Row::Separator => return menu_divider().into_any_element(),
                 Row::Action {
                     label, shortcut, ..
-                } => (label, shortcut),
-                Row::Window { label, current, .. } => {
-                    (label, current.then(|| SharedString::from("\u{2713}")))
-                }
+                } => (label, shortcut, None),
+                Row::Window {
+                    label,
+                    current,
+                    window,
+                } => (
+                    label,
+                    current.then(|| SharedString::from("\u{2713}")),
+                    Some(window),
+                ),
             };
             let row_id = format!("menu-row-{slug}-{}", self::slug(&label));
             menu_row(("menu-row", index * 1000 + row), None, label, hint)
@@ -754,8 +785,14 @@ impl MenuBar {
                         this.set(state, cx);
                     }
                 }))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.run(index, row, window, cx);
+                .on_click(cx.listener(move |this, _, window, cx| match target {
+                    Some(target) => {
+                        this.rest(cx);
+                        cx.defer(move |cx| {
+                            let _ = target.update(cx, |_, window, cx| bring_forward(window, cx));
+                        });
+                    }
+                    None => this.run(index, row, window, cx),
                 }))
                 .into_any_element()
         });
@@ -788,12 +825,24 @@ impl Render for MenuBar {
         let max_height =
             (f32::from(window.viewport_size().height) - crate::chrome::STRIP_HEIGHT - 11.0)
                 .max(120.0);
-        let menus = strip_menus(self.window, cx);
+        // Only the open menu's rows are built (shortcuts, Window's list);
+        // the rest of the time the bar is five words.
+        let mut open = self
+            .state
+            .title
+            .filter(|_| self.state.open)
+            .and_then(|title| strip_menus(self.window, cx).into_iter().nth(title));
         let titles = self.titles.clone();
-        let items: Vec<_> = menus
+        let items: Vec<_> = app_menu::menus(Platform::Other)
             .into_iter()
             .enumerate()
-            .map(|(index, menu)| self.title(index, menu, max_height, cx).into_any_element())
+            .map(|(index, menu)| {
+                let rows = open
+                    .take_if(|_| self.state.title == Some(index))
+                    .map(|menu| menu.rows);
+                self.title(index, &menu.name, rows, max_height, cx)
+                    .into_any_element()
+            })
             .collect();
         div()
             .on_children_prepainted(move |bounds, window, cx| {
@@ -806,7 +855,8 @@ impl Render for MenuBar {
             .flex_none()
             .items_center()
             .gap(px(1.0))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                this.alt_clicked |= event.modifiers.alt;
                 // Alt or F10 with no menu open: a press anywhere else lets
                 // go. An open menu's card decides for itself.
                 if this.state.title.is_some() && !this.state.open {
@@ -1022,6 +1072,17 @@ mod tests {
         assert_eq!(label("ctrl-shift-n"), "Ctrl+Shift+N");
         assert_eq!(label("f10"), "F10");
         assert_eq!(label("escape"), "Esc");
+    }
+
+    /// The titles' E2E regions are positional: they name the template's
+    /// menus in its order.
+    #[test]
+    fn title_regions_follow_the_template() {
+        let expected: Vec<String> = app_menu::menus(Platform::Other)
+            .iter()
+            .map(|menu| format!("menuBar.{}", slug(&menu.name)))
+            .collect();
+        assert_eq!(TITLE_REGIONS, expected);
     }
 
     #[test]
