@@ -402,7 +402,8 @@ their own modules.
   word (`overview_model::private_term`) and is off-limits for a scanned
   browser without one.
 - **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
-  Settings or first-run window is open (`Regular`) and goes when the last closes
+  Settings, first-run or one of Help's windows (`DocWindow`, `LogsWindow`)
+  is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays
   `unsafe`-free.
 - **First run never touches the OS.** `FirstRunHooks` decides what its

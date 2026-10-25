@@ -1,6 +1,7 @@
 //! The Dock icon follows the windows: shown while the main, Settings,
-//! first-run or one of Help's windows is open, gone when the last one closes, so the resident
-//! router lives in the menu bar alone. As PwrSnap does with its Library.
+//! first-run or one of Help's windows is open, gone when the last one
+//! closes, so the resident router lives in the menu bar alone. As PwrSnap
+//! does with its Library.
 //!
 //! The tray dropdown is not a window people switch to and never shows it.
 //! Off macOS this tracks nothing: Windows and Linux have no Dock.

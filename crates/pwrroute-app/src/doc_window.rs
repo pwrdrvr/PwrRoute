@@ -267,6 +267,13 @@ pub fn changelog(markdown: &str, version: &str) -> Vec<Block> {
             });
         } else if trimmed.starts_with("# ") {
             flush(&mut paragraph, &mut blocks);
+        } else if trimmed.starts_with("###") {
+            // A subsection ("### Fixed"): its words in bold, as a line.
+            flush(&mut paragraph, &mut blocks);
+            blocks.push(Block::Paragraph(vec![Span {
+                text: trimmed.trim_start_matches('#').trim().to_owned(),
+                style: Inline::Bold,
+            }]));
         } else if let Some(item) = trimmed
             .strip_prefix("- ")
             .or_else(|| trimmed.strip_prefix("* "))
@@ -498,7 +505,7 @@ mod tests {
         let blocks = changelog(
             "# Changelog\n\n## Unreleased\n\n## v0.2.2 - 2026-10-24\n\n- Browser hand-off - \
              Gives the `front` away.\n  Continued here.\n- Plain bullet with **bold**\n\n\
-             Important: a note.\n\n## v0.2.1 - 2026-10-23\n\n- Rules - One.\n",
+             Important: a note.\n\n### Fixed\n\n## v0.2.1 - 2026-10-23\n\n- Rules - One.\n",
             "0.2.2",
         );
         assert_eq!(
@@ -540,6 +547,10 @@ mod tests {
                 Block::Paragraph(vec![Span {
                     text: "Important: a note.".into(),
                     style: Inline::Plain
+                }]),
+                Block::Paragraph(vec![Span {
+                    text: "Fixed".into(),
+                    style: Inline::Bold
                 }]),
                 Block::Version {
                     name: "v0.2.1".into(),

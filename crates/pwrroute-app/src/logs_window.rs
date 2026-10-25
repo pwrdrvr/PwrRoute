@@ -15,7 +15,7 @@ use gpui_kit::{
     App, ClipboardItem, Context, FocusHandle, HighlightStyle, Hsla, InteractiveElement as _,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Render,
     ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
-    UniformListScrollHandle, Window, WindowHandle, div, px, rgb, uniform_list,
+    UniformListScrollHandle, Window, WindowHandle, div, px, uniform_list,
 };
 
 use crate::aux_window::{self, Frame};
@@ -169,14 +169,11 @@ impl LogsWindow {
             }
             Read::More(text) => {
                 let before = self.view.lines.len() + self.view.first_number;
-                self.view.append(&text);
+                let errors = self.view.append(&text);
                 if !self.live {
                     let added = (self.view.lines.len() + self.view.first_number) - before;
                     self.new_lines += added;
-                    self.new_errors += text
-                        .lines()
-                        .filter(|line| crate::log_view::LogLine::parse(line).level == Level::Error)
-                        .count();
+                    self.new_errors += errors;
                 }
             }
         }
@@ -263,7 +260,7 @@ impl LogsWindow {
             out.push('\n');
         }
         for &index in &indexes {
-            out.push_str(&self.view.lines[index].raw());
+            out.push_str(self.view.lines[index].raw());
             out.push('\n');
         }
         cx.write_to_clipboard(ClipboardItem::new_string(out));
@@ -367,6 +364,10 @@ impl LogsWindow {
 
     fn scrolled(&mut self, event: &ScrollWheelEvent, cx: &mut Context<'_, Self>) {
         let delta = event.delta.pixel_delta(px(ROW_HEIGHT)).y;
+        // A list that fits has nowhere to scroll back from.
+        if !self.scroll.is_scrollable() {
+            return;
+        }
         if delta > px(0.0) && self.live {
             // Scrolled up: stop following.
             self.live = false;
@@ -382,16 +383,6 @@ impl LogsWindow {
 }
 
 // ---- Drawing --------------------------------------------------------------
-
-fn teal() -> Hsla {
-    rgb(0x7fcfc4).into()
-}
-
-fn wash(color: u32, alpha: f32) -> Hsla {
-    let mut color: Hsla = rgb(color).into();
-    color.a = alpha;
-    color
-}
 
 fn level_color(level: Level) -> Hsla {
     match level {
@@ -560,29 +551,26 @@ impl LogsWindow {
             .selected()
             .is_some_and(|(low, high)| (low..=high).contains(&number));
         let background = if selected {
-            Some(wash(0xff8a1f, 0.10))
+            Some(theme::log_selected())
         } else {
             match line.level {
-                Level::Error => Some(wash(0xb94232, 0.075)),
-                Level::Warn => Some(wash(0xd99a3d, 0.045)),
+                Level::Error => Some(theme::log_error_row()),
+                Level::Warn => Some(theme::log_warn_row()),
                 _ => None,
             }
         };
-        let raw = line.raw();
+        let raw = line.raw().clone();
         let mut highlights = Vec::new();
         if !line.time.is_empty() {
-            let time_end = line.time.len();
             highlights.push((
-                0..time_end,
+                0..line.time.len(),
                 HighlightStyle {
                     color: Some(theme::info_text()),
                     ..Default::default()
                 },
             ));
-            let level_start = time_end + 1;
-            let level_end = level_start + line.level_text.len();
             highlights.push((
-                level_start..level_end,
+                line.level_range.clone(),
                 HighlightStyle {
                     color: Some(level_color(line.level)),
                     font_weight: matches!(line.level, Level::Error | Level::Warn)
@@ -590,12 +578,11 @@ impl LogsWindow {
                     ..Default::default()
                 },
             ));
-            if !line.target.is_empty() {
-                let target_start = level_end + 1;
+            if let Some(target) = line.target_range.clone() {
                 highlights.push((
-                    target_start..target_start + line.target.len(),
+                    target,
                     HighlightStyle {
-                        color: Some(teal()),
+                        color: Some(theme::log_target()),
                         ..Default::default()
                     },
                 ));
@@ -622,6 +609,7 @@ impl LogsWindow {
             .child(
                 div()
                     .id(("log-number", number))
+                    .debug_selector(move || format!("log-number-{number}"))
                     .w(px(GUTTER))
                     .h_full()
                     .flex()
@@ -639,7 +627,10 @@ impl LogsWindow {
                     .child(mono(number.to_string(), 11.0, 400.0, number_color))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            // The lines take the keys now: ⌘C, ⌘A and Esc
+                            // are the selection's, not the search field's.
+                            window.focus(&this.focus, cx);
                             this.click_number(number, event.modifiers.shift, cx);
                         }),
                     ),
@@ -1001,6 +992,30 @@ mod tests {
         });
         let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
         assert_eq!(copied.as_deref(), Some(format!("{LINE}\n").as_str()));
+    }
+
+    /// The search field has focus when the window opens; a click in the
+    /// gutter hands the keys to the lines, so ⌘A and ⌘C copy them.
+    #[gpui_kit::test]
+    fn keys_reach_the_selection_after_a_gutter_click(cx: &mut TestAppContext) {
+        let (_dir, _path, view, cx) = open(cx, &format!("{LINE}\n{ERROR}\n"));
+        view.update_in(cx, |logs, window, cx| {
+            logs.include_diagnostics = false;
+            window.focus(&logs.search.focus, cx);
+        });
+        let gutter = cx.debug_bounds("log-number-2").expect("line 2's number");
+        cx.simulate_click(gutter.center(), Modifiers::default());
+        cx.simulate_keystrokes("cmd-c");
+        let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(copied.as_deref(), Some(format!("{ERROR}\n").as_str()));
+        cx.simulate_keystrokes("cmd-a cmd-c");
+        let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(
+            copied.as_deref(),
+            Some(format!("{LINE}\n{ERROR}\n").as_str())
+        );
+        cx.simulate_keystrokes("escape");
+        assert_eq!(view.read_with(cx, |logs, _| logs.selection), None);
     }
 
     #[gpui_kit::test]

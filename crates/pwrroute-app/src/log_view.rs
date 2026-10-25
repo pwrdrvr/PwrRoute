@@ -8,6 +8,7 @@
 //! only what was appended; a file that shrank was rotated, and is read
 //! again from the top.
 
+use gpui_kit::SharedString;
 use std::{
     fs::File,
     io::{self, Read as _, Seek as _, SeekFrom},
@@ -56,10 +57,17 @@ impl Level {
 pub struct LogLine {
     pub time: String,
     pub level: Level,
-    /// The level as written ("WARN "), padded as in the file.
-    pub level_text: String,
+    /// Where the level word is in the line, in bytes.
+    pub level_range: std::ops::Range<usize>,
+    /// Where the target is, when the line names one.
+    pub target_range: Option<std::ops::Range<usize>>,
     pub target: String,
     pub message: String,
+    /// The line as the file has it, kept so Copy is byte-exact and a row
+    /// draws without rebuilding it.
+    raw: SharedString,
+    /// `raw` in lowercase, for the search.
+    lower: String,
 }
 
 impl LogLine {
@@ -69,49 +77,50 @@ impl LogLine {
             if !time.as_bytes().first()?.is_ascii_digit() {
                 return None;
             }
+            // Byte offsets into `line` of a slice of it.
+            let at = |part: &str| part.as_ptr() as usize - line.as_ptr() as usize;
             let rest_trimmed = rest.trim_start();
             let (word, after) = rest_trimmed.split_once(' ')?;
             let level = Level::parse(word)?;
             let after = after.trim_start();
             let (target, message) = after.split_once(": ").unwrap_or(("", after));
+            let level_start = at(word);
+            let target_start = at(after);
             Some(Self {
                 time: time.to_owned(),
                 level,
-                level_text: format!("{word:<5}"),
+                level_range: level_start..level_start + word.len(),
+                target_range: (!target.is_empty())
+                    .then(|| target_start..target_start + target.len()),
                 target: target.to_owned(),
                 message: message.to_owned(),
+                raw: SharedString::default(),
+                lower: String::new(),
             })
         })();
-        parsed.unwrap_or_else(|| Self {
+        let mut parsed = parsed.unwrap_or_else(|| Self {
             time: String::new(),
             level: Level::Info,
-            level_text: String::new(),
+            level_range: 0..0,
+            target_range: None,
             target: String::new(),
             message: line.to_owned(),
-        })
+            raw: SharedString::default(),
+            lower: String::new(),
+        });
+        parsed.lower = line.to_lowercase();
+        parsed.raw = SharedString::from(line.to_owned());
+        parsed
     }
 
     /// The line as the file has it.
-    pub fn raw(&self) -> String {
-        if self.time.is_empty() {
-            return self.message.clone();
-        }
-        if self.target.is_empty() {
-            return format!("{} {} {}", self.time, self.level_text, self.message);
-        }
-        format!(
-            "{} {} {}: {}",
-            self.time, self.level_text, self.target, self.message
-        )
+    pub fn raw(&self) -> &SharedString {
+        &self.raw
     }
 
     /// Case-insensitive: every word of `query` is somewhere in the line.
     pub fn matches(&self, words: &[String]) -> bool {
-        if words.is_empty() {
-            return true;
-        }
-        let haystack = self.raw().to_lowercase();
-        words.iter().all(|word| haystack.contains(word.as_str()))
+        words.iter().all(|word| self.lower.contains(word.as_str()))
     }
 }
 
@@ -130,6 +139,8 @@ pub struct LogView {
     query_words: Vec<String>,
     /// Indexes into `lines` that pass the filter.
     visible: Vec<usize>,
+    /// Lines kept at each level, kept as lines come and go.
+    counts: [usize; 4],
 }
 
 impl Default for LogView {
@@ -142,6 +153,7 @@ impl Default for LogView {
             levels: [true, true, true, false],
             query_words: Vec::new(),
             visible: Vec::new(),
+            counts: [0; 4],
         }
     }
 }
@@ -150,25 +162,32 @@ impl LogView {
     /// Starts over with `text`, as read from the files.
     pub fn replace(&mut self, text: &str) {
         self.lines.clear();
+        self.counts = [0; 4];
         self.first_number = 1;
         self.truncated = false;
         self.append(text);
     }
 
     /// Adds complete lines, dropping the oldest past [`MAX_LINES`].
-    pub fn append(&mut self, text: &str) {
-        self.lines.extend(
-            text.lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(LogLine::parse),
-        );
+    /// Returns how many of the added lines are errors.
+    pub fn append(&mut self, text: &str) -> usize {
+        let mut errors = 0;
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            let line = LogLine::parse(line);
+            self.counts[line.level as usize] += 1;
+            errors += usize::from(line.level == Level::Error);
+            self.lines.push(line);
+        }
         if self.lines.len() > MAX_LINES {
             let drop = self.lines.len() - MAX_LINES;
-            self.lines.drain(..drop);
+            for line in self.lines.drain(..drop) {
+                self.counts[line.level as usize] -= 1;
+            }
             self.first_number += drop;
             self.truncated = true;
         }
         self.refilter();
+        errors
     }
 
     pub fn set_query(&mut self, query: &str) {
@@ -207,7 +226,7 @@ impl LogView {
 
     /// Lines at `level` among all kept, whatever the filter.
     pub fn count(&self, level: Level) -> usize {
-        self.lines.iter().filter(|line| line.level == level).count()
+        self.counts[level as usize]
     }
 
     /// "1,204 lines", or "12 of 1,204 lines shown" while filtered.
@@ -278,13 +297,22 @@ impl Tail {
         self.path.with_file_name("main.old.log")
     }
 
-    /// The whole history: `main.old.log`, then `main.log`.
+    /// The whole history: `main.old.log`, then `main.log`. A `main.log`
+    /// not there yet (just rotated, nothing written since) is empty; the
+    /// next poll that finds it reads everything again.
     pub fn read_all(&mut self) -> io::Result<String> {
         let old = std::fs::read(self.old_path()).unwrap_or_default();
         let mut current = Vec::new();
-        let mut file = File::open(&self.path)?;
-        self.identity = identity(&file.metadata()?);
-        file.read_to_end(&mut current)?;
+        match File::open(&self.path) {
+            Ok(mut file) => {
+                self.identity = identity(&file.metadata()?);
+                file.read_to_end(&mut current)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !old.is_empty() => {
+                self.identity = None;
+            }
+            Err(error) => return Err(error),
+        }
         self.offset = current.len() as u64;
         let mut text = String::from_utf8_lossy(&old).into_owned();
         if !text.is_empty() && !text.ends_with('\n') {
@@ -370,17 +398,21 @@ mod tests {
         let line = LogLine::parse(INFO);
         assert_eq!(line.time, "2026-10-24T07:31:02.123-04:00");
         assert_eq!(line.level, Level::Info);
-        assert_eq!(line.level_text, "INFO ");
+        assert_eq!(&INFO[line.level_range.clone()], "INFO");
+        assert_eq!(
+            line.target_range.clone().map(|range| &INFO[range]),
+            Some("pwrroute::link")
+        );
         assert_eq!(line.target, "pwrroute::link");
         assert_eq!(line.message, "link 42 outcome=opened");
-        assert_eq!(line.raw(), INFO);
+        assert_eq!(line.raw().as_ref(), INFO);
         assert_eq!(LogLine::parse(WARN).level, Level::Warn);
-        assert_eq!(LogLine::parse(WARN).raw(), WARN);
+        assert_eq!(LogLine::parse(WARN).raw().as_ref(), WARN);
 
         let odd = LogLine::parse("  at some continuation");
         assert_eq!(odd.level, Level::Info);
         assert_eq!(odd.message, "  at some continuation");
-        assert_eq!(odd.raw(), "  at some continuation");
+        assert_eq!(odd.raw().as_ref(), "  at some continuation");
         assert_eq!(
             LogLine::parse("2026-10-24T07:31:02 TRACE gpui: x").level,
             Level::Debug
@@ -449,6 +481,37 @@ mod tests {
             tail.poll().unwrap(),
             Read::All("one\ntwo\nthree\nfour\n".to_owned())
         );
+    }
+
+    #[test]
+    fn counts_follow_the_lines_kept() {
+        let mut view = LogView::default();
+        assert_eq!(view.append(&format!("{INFO}\n{WARN}\n")), 0);
+        let error = "2026-10-24T07:31:05.000-04:00 ERROR pwrroute::link: failed";
+        assert_eq!(view.append(&format!("{error}\n")), 1);
+        assert_eq!(view.count(Level::Error), 1);
+        assert_eq!(view.count(Level::Warn), 1);
+        let more: String = (0..MAX_LINES)
+            .map(|n| format!("2026-10-24T07:31:06 INFO  pwrroute: line {n}\n"))
+            .collect();
+        view.append(&more);
+        assert_eq!(view.count(Level::Error), 0);
+        assert_eq!(view.count(Level::Warn), 0);
+        assert_eq!(view.count(Level::Info), MAX_LINES);
+    }
+
+    #[test]
+    fn just_after_a_rotation_the_old_file_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.log");
+        std::fs::write(dir.path().join("main.old.log"), "old\n").unwrap();
+        let mut tail = Tail::new(path.clone());
+        assert_eq!(tail.read_all().unwrap(), "old\n");
+        std::fs::write(&path, "new\n").unwrap();
+        assert_eq!(tail.poll().unwrap(), Read::All("old\nnew\n".to_owned()));
+        // With neither file, it is an error the window shows.
+        let mut none = Tail::new(dir.path().join("nothing/main.log"));
+        assert!(none.read_all().is_err());
     }
 
     #[test]

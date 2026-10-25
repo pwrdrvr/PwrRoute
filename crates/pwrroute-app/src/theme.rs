@@ -111,6 +111,12 @@ tokens! {
     /// opaque. In the transparent popup window the 0.98 fill let the window
     /// behind it show through visibly.
     bg_popover = hex(0x101010);
+    /// Help › Logs (PwrAgent's "Log Viewer Workflows UX Review"): a line's
+    /// target, a selected line, and the warning and error rows' washes.
+    log_target = hex(0x7fcfc4);
+    log_selected = hex_alpha(0xff8a1f, 0.10);
+    log_warn_row = hex_alpha(0xd99a3d, 0.045);
+    log_error_row = hex_alpha(0xb94232, 0.075);
 }
 
 /// A single-line run of sans text: CSS `font: <weight> <size>/1`.
