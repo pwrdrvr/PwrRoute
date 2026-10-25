@@ -510,8 +510,10 @@ pub struct Diagnostics {
     pub dry_run: bool,
     /// The MCP endpoint and whether it listens.
     pub agents: SharedString,
-    /// Where messages go: there is no log file today.
+    /// Where the diagnostic log is, or why there is none.
     pub log: SharedString,
+    /// There is a log file, so Help › Logs has something to show.
+    pub log_exists: bool,
 }
 
 impl Diagnostics {
@@ -540,12 +542,8 @@ pub struct About {
     pub build: SharedString,
     /// The license line: "MIT. Includes code from Finicky, …".
     pub license: SharedString,
-    /// `THIRD_PARTY_LICENSES` ships with this copy and can be revealed.
-    pub has_third_party_notices: bool,
-    /// `CHANGELOG.md` ships with this copy and can be opened.
-    pub has_release_notes: bool,
-    /// Where to find the project: each a label and the address as text,
-    /// never a link the window opens.
+    /// Where to find the project: each a label and the address as text.
+    /// Help's rows open them; here they are words to copy.
     pub links: Vec<(SharedString, SharedString)>,
 }
 
@@ -604,10 +602,14 @@ pub enum SettingsRequest {
     RestartToUpdate,
     /// Updates: follow this release channel slot from now on.
     SetUpdateSlot(Slot),
-    /// About: show `THIRD_PARTY_LICENSES` in the file manager.
-    RevealThirdPartyNotices,
-    /// About: open this copy's `CHANGELOG.md`.
-    OpenReleaseNotes,
+    /// About: Help's Changelog window.
+    OpenChangelog,
+    /// About: Help's License window.
+    OpenLicense,
+    /// About: Help's Third-Party Notices window.
+    OpenThirdPartyNotices,
+    /// Diagnostics: Help's Logs window.
+    OpenLogs,
     /// Privacy: keep the last `count` links for at most `hours`.
     SetRetention {
         count: usize,

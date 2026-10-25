@@ -1,5 +1,6 @@
-//! About: the version, the license and where the project lives, as plain
-//! text. The window opens no link: addresses are words to copy.
+//! About: the version, the license and where the project lives. Its
+//! buttons open Help's windows (Changelog, License, Third-Party Notices);
+//! the addresses are words to copy, which Help's rows open.
 
 use gpui_kit::{Context, Div, IntoElement, ParentElement as _, Styled as _, div, px};
 
@@ -11,7 +12,8 @@ use super::model::SettingsRequest;
 use crate::theme::{self, mono, text};
 
 pub const NOTICES_ID: &str = "about-third-party";
-pub const NOTES_ID: &str = "about-release-notes";
+pub const LICENSE_ID: &str = "about-license";
+pub const CHANGELOG_ID: &str = "about-changelog";
 
 pub fn pane(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> Div {
     div()
@@ -45,30 +47,24 @@ fn version_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
             [
                 field_help(about.license.clone()).into_any_element(),
                 row_actions()
-                    .child(
-                        button_when(
-                            NOTICES_ID,
-                            "Third-party notices",
-                            Kind::Default,
-                            true,
-                            about.has_third_party_notices,
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.request(SettingsRequest::RevealThirdPartyNotices, window, cx);
-                        })),
-                    )
-                    .child(
-                        button_when(
-                            NOTES_ID,
-                            "Release notes",
-                            Kind::Default,
-                            true,
-                            about.has_release_notes,
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.request(SettingsRequest::OpenReleaseNotes, window, cx);
-                        })),
-                    )
+                    .child(about_button(
+                        LICENSE_ID,
+                        "View license",
+                        SettingsRequest::OpenLicense,
+                        cx,
+                    ))
+                    .child(about_button(
+                        NOTICES_ID,
+                        "Third-party notices",
+                        SettingsRequest::OpenThirdPartyNotices,
+                        cx,
+                    ))
+                    .child(about_button(
+                        CHANGELOG_ID,
+                        "Changelog",
+                        SettingsRequest::OpenChangelog,
+                        cx,
+                    ))
                     .into_any_element(),
             ],
         ),
@@ -80,6 +76,19 @@ fn version_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
         rows,
         cx,
     )
+}
+
+fn about_button(
+    id: &'static str,
+    label: &'static str,
+    request: SettingsRequest,
+    cx: &mut Context<'_, SettingsWindow>,
+) -> impl IntoElement {
+    button_when(id, label, Kind::Default, true, true).on_click(cx.listener(
+        move |this, _, window, cx| {
+            this.request(request.clone(), window, cx);
+        },
+    ))
 }
 
 fn project_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
@@ -107,7 +116,8 @@ fn project_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
     this.disclosure(
         "about-project",
         heading("On GitHub", "Project").description(super::controls::card_description(
-            "Addresses to type or copy; PwrRoute opens no page itself.",
+            "Addresses to copy. Help \u{203a} View Source and Report an Issue\u{2026} open them in the \
+             browser your rules pick.",
         )),
         None,
         rows,

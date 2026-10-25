@@ -16,6 +16,7 @@ mod app;
 mod app_icons;
 mod app_menu;
 mod assets;
+mod aux_window;
 #[cfg(target_os = "windows")]
 mod browser_registration;
 mod browser_scan;
@@ -23,6 +24,7 @@ mod chrome;
 mod config_view;
 mod default_browser;
 mod diag_log;
+mod doc_window;
 mod dock;
 mod e2e;
 mod editor;
@@ -30,8 +32,11 @@ mod first_run;
 mod fixtures;
 mod github_releases;
 mod handoff;
+mod help;
 mod importer;
 mod importer_view;
+mod log_view;
+mod logs_window;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;

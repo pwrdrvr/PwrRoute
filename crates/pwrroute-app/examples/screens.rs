@@ -181,8 +181,27 @@ fn dropdown_closed(_: &mut gpui_kit::App) {}
 fn run(_: TrayCommand, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
+#[path = "../src/aux_window.rs"]
+mod aux_window;
+#[cfg(target_os = "macos")]
 #[path = "../src/diag_log.rs"]
 mod diag_log;
+#[cfg(target_os = "macos")]
+#[path = "../src/doc_window.rs"]
+mod doc_window;
+#[cfg(target_os = "macos")]
+#[path = "../src/log_view.rs"]
+mod log_view;
+#[cfg(target_os = "macos")]
+#[path = "../src/logs_window.rs"]
+mod logs_window;
+/// The Logs window's Copy header: contrived, as everything drawn here.
+#[cfg(target_os = "macos")]
+mod help {
+    pub fn diagnostics_report(_: &mut gpui_kit::App) -> String {
+        "PwrRoute 0.2.0 \u{00b7} release \u{00b7} arm64\n".to_owned()
+    }
+}
 #[cfg(target_os = "macos")]
 #[path = "../src/github_releases.rs"]
 mod github_releases;
@@ -897,6 +916,106 @@ fn main() {
         let image = cx
             .capture_screenshot(handle.into())
             .expect("render with Metal");
+        let path = dir.join(format!("{name}.png"));
+        image.save(&path).expect("write the PNG");
+        println!("{}", path.display());
+    }
+
+    // Help's windows: the documents as compiled in, and the Logs window
+    // over a contrived log (no real link, host or app list), plain, with a
+    // selection, and searched.
+    let scratch = std::env::temp_dir().join("pwrroute-screens-logs");
+    std::fs::create_dir_all(&scratch).expect("a scratch folder");
+    let log = scratch.join("main.log");
+    std::fs::write(&log, FIXTURE_LOG).expect("write the fixture log");
+    let _ = std::fs::remove_file(scratch.join("main.old.log"));
+    enum Help {
+        Doc(doc_window::Doc),
+        Logs {
+            selection: Option<(usize, usize)>,
+            query: &'static str,
+        },
+    }
+    for (name, which, (width, height)) in [
+        (
+            "help-changelog",
+            Help::Doc(doc_window::Doc::Changelog),
+            (920.0, 760.0),
+        ),
+        (
+            "help-license",
+            Help::Doc(doc_window::Doc::License),
+            (920.0, 760.0),
+        ),
+        (
+            "help-notices",
+            Help::Doc(doc_window::Doc::ThirdPartyNotices),
+            (920.0, 760.0),
+        ),
+        (
+            "help-logs",
+            Help::Logs {
+                selection: None,
+                query: "",
+            },
+            (1040.0, 760.0),
+        ),
+        (
+            "help-logs-selected",
+            Help::Logs {
+                selection: Some((9, 12)),
+                query: "",
+            },
+            (1040.0, 760.0),
+        ),
+        (
+            "help-logs-search",
+            Help::Logs {
+                selection: None,
+                query: "outcome",
+            },
+            (1040.0, 760.0),
+        ),
+    ] {
+        let mut cx = HeadlessAppContext::with_platform(
+            gpui_kit::platform::current_platform(true).text_system(),
+            Arc::new(assets::Assets),
+            gpui_kit::platform::current_headless_renderer,
+        );
+        cx.update(setup);
+        let window_size = size(px(width), px(height));
+        let handle: gpui_kit::AnyWindowHandle = match which {
+            Help::Doc(doc) => cx
+                .open_window(window_size, move |_, cx| {
+                    cx.new(|cx| doc_window::DocWindow::new(doc, cx))
+                })
+                .expect("open a headless window")
+                .into(),
+            Help::Logs { selection, query } => {
+                let log = log.clone();
+                cx.open_window(window_size, move |_, cx| {
+                    cx.new(|cx| {
+                        let mut view = logs_window::LogsWindow::new(Some(log), cx);
+                        view.selection = selection;
+                        view.set_query_for_screens(query);
+                        view
+                    })
+                })
+                .expect("open a headless window")
+                .into()
+            }
+        };
+        cx.allow_parking();
+        for _ in 0..draws() {
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .expect("draw");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let image = cx.capture_screenshot(handle).expect("render with Metal");
         let path = dir.join(format!("{name}.png"));
         image.save(&path).expect("write the PNG");
         println!("{}", path.display());
@@ -1652,6 +1771,28 @@ fn main() {
         println!("{}", path.display());
     }
 }
+
+/// A contrived `main.log` for the Logs window: example apps and made-up
+/// rule numbers, never a link.
+#[cfg(target_os = "macos")]
+const FIXTURE_LOG: &str = "\
+2026-10-24T09:12:01.004-04:00 INFO  pwrroute: PwrRoute 0.2.0 starting (release, arm64)
+2026-10-24T09:12:01.031-04:00 INFO  pwrroute::router: router listening on ~/Library/Application Support/PwrRoute/router.sock
+2026-10-24T09:12:01.044-04:00 INFO  pwrroute::router: routing with ~/.finicky.ts then rules.json (7 handlers, 3 rewrites)
+2026-10-24T09:12:01.102-04:00 INFO  pwrroute::mcp: local agents listening on ~/Library/Application Support/PwrRoute/mcp.sock
+2026-10-24T09:12:01.240-04:00 INFO  velopack::manager: checking for updates (Stable \u{00b7} Latest)
+2026-10-24T09:12:02.511-04:00 INFO  velopack::manager: no update: 0.2.0 is the newest
+2026-10-24T09:14:37.880-04:00 INFO  pwrroute::link: link 1 source=apple_event outcome=opened from=com.example.chat browser=\"Example Browser\" profile=\"Work\" rule=\"rule 2\" resolve=3ms launch=41ms
+2026-10-24T09:14:38.090-04:00 INFO  pwrroute::link: link 1 hand-off: com.example.chat at receipt, PwrRoute +18ms, com.example.browser +206ms
+2026-10-24T09:15:02.417-04:00 WARN  pwrroute::default_browser: reading the default browser took 68ms on the main thread
+2026-10-24T09:16:10.002-04:00 INFO  pwrroute::link: link 2 source=apple_event outcome=opened from=com.example.mail browser=\"Example Browser\" profile=\"Personal\" rule=\"config handler 4\" resolve=2ms launch=38ms
+2026-10-24T09:16:10.230-04:00 INFO  pwrroute::link: link 2 hand-off: com.example.mail at receipt, com.example.browser +221ms
+2026-10-24T09:17:44.519-04:00 INFO  pwrroute::link: link 3 source=apple_event outcome=fallback from=com.example.editor browser=\"Other Browser\" rule=\"default\" resolve=2ms launch=55ms
+2026-10-24T09:17:44.520-04:00 ERROR pwrroute::link: link 3 could not open \"Missing Browser\": no such app; opened the fallback browser
+2026-10-24T09:18:03.771-04:00 INFO  pwrroute::router: rules.json changed; reloaded in 4ms
+2026-10-24T09:19:20.118-04:00 INFO  pwrroute::link: link 4 source=api outcome=opened from=agent browser=\"Example Browser\" profile=\"Work\" rule=\"rule 5\" resolve=6ms launch=40ms
+2026-10-24T09:20:00.000-04:00 INFO  pwrroute::default_browser: PwrRoute is the default browser
+";
 
 #[cfg(not(target_os = "macos"))]
 fn main() {

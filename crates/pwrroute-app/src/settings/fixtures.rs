@@ -85,7 +85,8 @@ pub fn diagnostics() -> Diagnostics {
         routing: "~/.finicky.ts runs first; rules.json follows it.".into(),
         dry_run: false,
         agents: "Listening on ~/Library/Application Support/PwrRoute/mcp.sock".into(),
-        log: "No log file. Messages go to the terminal that launched PwrRoute, if any.".into(),
+        log: "~/Library/Logs/PwrRoute/main.log".into(),
+        log_exists: true,
     }
 }
 
@@ -97,8 +98,6 @@ pub fn about() -> About {
         license: "MIT. Includes code from Finicky, copyright John Sterling, under the MIT \
                   license; see LICENSE."
             .into(),
-        has_third_party_notices: true,
-        has_release_notes: true,
         links: vec![
             ("Source".into(), "github.com/pwrdrvr/PwrRoute".into()),
             (
