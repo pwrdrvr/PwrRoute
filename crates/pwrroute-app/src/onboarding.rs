@@ -584,6 +584,15 @@ impl gpui_kit::Global for Open {}
 /// and PwrRoute is not the default, and whenever the window comes to the
 /// front), and closing the window, however, marks first run done.
 pub fn open(cx: &mut App) {
+    // Help › Replay Onboarding… while it is open brings it forward.
+    if let Some(open) = cx.try_global::<Open>().map(|open| open.window)
+        && open
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok()
+    {
+        cx.activate(true);
+        return;
+    }
     let facts = Facts::probe(cx);
     let model = model(&facts, std::env::home_dir().as_deref());
     let window = match first_run::open(model, hooks(), cx) {

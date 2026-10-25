@@ -12,6 +12,7 @@ use super::model::SettingsRequest;
 use super::{SettingsWindow, request_button};
 
 pub const OPEN_DATA_ID: &str = "diagnostics-open-data";
+pub const OPEN_LOGS_ID: &str = "diagnostics-open-logs";
 
 /// The Copy button's slot in the window's copied state, past the connect
 /// commands' indexes; its element id follows from it.
@@ -71,8 +72,26 @@ fn this_copy_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -
         ),
         field(
             "Log",
-            None,
-            [field_help(diagnostics.log.clone()).into_any_element()],
+            Some(field_sub(
+                "Timings and outcomes, never a link. Help \u{203a} Logs follows it live.",
+            )),
+            [
+                command_box(std::slice::from_ref(&diagnostics.log), None).into_any_element(),
+                row_actions()
+                    .child(
+                        button_when(
+                            OPEN_LOGS_ID,
+                            "Open Logs",
+                            Kind::Default,
+                            true,
+                            diagnostics.log_exists,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.request(SettingsRequest::OpenLogs, window, cx);
+                        })),
+                    )
+                    .into_any_element(),
+            ],
         ),
     ];
     this.disclosure(

@@ -4391,3 +4391,55 @@ fn a_browser_without_readable_profiles_still_takes_a_named_one(cx: &mut TestAppC
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Edit › Paste does what ⌘V does in the focused field, and ⌘V itself still
+/// reaches the field with the Edit menu's shortcuts installed.
+#[gpui_kit::test]
+fn edit_menu_rows_reach_the_focused_text_field(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let (view, cx) = open(cx);
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::TestLink, window, cx);
+    });
+    draw(cx);
+    click(cx, "test-url");
+    cx.simulate_keystrokes("cmd-a backspace");
+    let url = |view: &Entity<PwrRoute>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| app.test.url.text.clone())
+    };
+    assert_eq!(url(&view, cx), "");
+
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "https://example.com/a".to_owned(),
+        ));
+    });
+    cx.simulate_keystrokes("cmd-v");
+    assert_eq!(url(&view, cx), "https://example.com/a");
+
+    // The menu's rows go to the window in front.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| cx.active_window().is_some()));
+    cx.dispatch_action(crate::app_menu::SelectAll);
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "https://example.com/b".to_owned(),
+        ));
+    });
+    cx.dispatch_action(crate::app_menu::Paste);
+    cx.run_until_parked();
+    assert_eq!(url(&view, cx), "https://example.com/b");
+}
+
+/// File › Close Window closes the window in front.
+#[gpui_kit::test]
+fn close_window_closes_the_window_in_front(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let (_, vcx) = open(cx);
+    vcx.update(|window, _| window.activate_window());
+    vcx.run_until_parked();
+    vcx.dispatch_action(crate::app_menu::CloseWindow);
+    vcx.run_until_parked();
+    assert!(cx.update(|cx| cx.windows().is_empty()));
+}

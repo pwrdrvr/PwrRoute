@@ -1,7 +1,8 @@
 //! The producers behind Settings › Diagnostics and About: the version and
 //! build compiled in, the OS, the data directory, the router's socket and
-//! what it routes with, the MCP door, and the notices that ship beside the
-//! executable. Paths and states only: nothing here can carry a link.
+//! what it routes with, the MCP door and the diagnostic log. About's
+//! buttons open Help's windows. Paths and states only: nothing here can
+//! carry a link.
 
 use std::{
     fs,
@@ -34,6 +35,8 @@ pub struct Facts {
     pub dry_run: bool,
     /// The MCP door as Local agents reports it.
     pub agents: Option<(Listener, SharedString)>,
+    /// The diagnostic log, when `diag_log` found a folder for it.
+    pub log: Option<PathBuf>,
 }
 
 /// The Diagnostics pane as things stand. `agents` is the Local agents
@@ -59,6 +62,7 @@ fn facts(cx: &App) -> Facts {
         source: router::routing_source(),
         dry_run,
         agents: None,
+        log: crate::diag_log::path().map(Path::to_path_buf),
     }
 }
 
@@ -101,7 +105,19 @@ pub fn build_diagnostics(facts: &Facts) -> Diagnostics {
         routing: routing(&facts.source, home).into(),
         dry_run: facts.dry_run,
         agents: agents.into(),
-        log: "No log file. Messages go to the terminal that launched PwrRoute, if any.".into(),
+        log: facts
+            .log
+            .as_deref()
+            .map_or_else(
+                || {
+                    "No log file: the OS gave no log folder. Messages go to the terminal that \
+                     launched PwrRoute, if any."
+                        .to_owned()
+                },
+                shown,
+            )
+            .into(),
+        log_exists: facts.log.as_deref().is_some_and(Path::exists),
     }
 }
 
@@ -198,20 +214,10 @@ pub fn os_release_name(text: &str) -> Option<String> {
 
 /// The About pane for this copy.
 pub fn about() -> About {
-    build_about(
-        shipped_file("THIRD_PARTY_LICENSES").is_some(),
-        shipped_file("CHANGELOG.md").is_some(),
-    )
-}
-
-/// The model from its parts.
-pub fn build_about(has_third_party_notices: bool, has_release_notes: bool) -> About {
     About {
         version: env!("CARGO_PKG_VERSION").into(),
         build: format!("{} build for {}", build_kind(), std::env::consts::ARCH).into(),
         license: LICENSE.into(),
-        has_third_party_notices,
-        has_release_notes,
         links: vec![
             ("Source".into(), "github.com/pwrdrvr/PwrRoute".into()),
             (
@@ -223,34 +229,14 @@ pub fn build_about(has_third_party_notices: bool, has_release_notes: bool) -> Ab
     }
 }
 
-/// A file that ships with this copy: in the macOS bundle's `Resources`
-/// (`cargo xtask bundle` copies LICENSE, THIRD_PARTY_LICENSES and
-/// CHANGELOG.md there), beside the executable, or, for a build from a
-/// checkout, in the repository.
-fn shipped_file(name: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let exe_dir = exe.parent()?;
-    let candidates = [
-        exe_dir.join("../Resources").join(name),
-        exe_dir.join(name),
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(name),
-    ];
-    candidates.into_iter().find(|path| path.is_file())
-}
-
 /// The Settings requests this module answers. `false` for any other.
 pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
+    use crate::doc_window::{self, Doc};
     match request {
-        SettingsRequest::RevealThirdPartyNotices => match shipped_file("THIRD_PARTY_LICENSES") {
-            Some(path) => cx.reveal_path(&path),
-            None => log::warn!("settings: THIRD_PARTY_LICENSES is not beside this copy"),
-        },
-        SettingsRequest::OpenReleaseNotes => match shipped_file("CHANGELOG.md") {
-            Some(path) => cx.open_with_system(&path),
-            None => log::warn!("settings: CHANGELOG.md is not beside this copy"),
-        },
+        SettingsRequest::OpenChangelog => doc_window::open(Doc::Changelog, cx),
+        SettingsRequest::OpenLicense => doc_window::open(Doc::License, cx),
+        SettingsRequest::OpenThirdPartyNotices => doc_window::open(Doc::ThirdPartyNotices, cx),
+        SettingsRequest::OpenLogs => crate::logs_window::open(cx),
         _ => return false,
     }
     true
@@ -299,6 +285,9 @@ mod tests {
                 Listener::Listening,
                 "~/Library/Application Support/PwrRoute/mcp.sock".into(),
             )),
+            log: Some(PathBuf::from(
+                "/Users/someone/Library/Logs/PwrRoute/main.log",
+            )),
         }
     }
 
@@ -328,6 +317,8 @@ mod tests {
             "Listening on ~/Library/Application Support/PwrRoute/mcp.sock"
         );
         assert!(!model.dry_run);
+        assert_eq!(model.log, "~/Library/Logs/PwrRoute/main.log");
+        assert!(!model.log_exists);
         for text in [
             &model.version,
             &model.os,
@@ -451,7 +442,7 @@ mod tests {
 
     #[test]
     fn about_shows_the_version_and_the_license_without_a_url() {
-        let model = build_about(true, false);
+        let model = about();
         assert_eq!(model.version, env!("CARGO_PKG_VERSION"));
         assert!(
             model
@@ -459,16 +450,11 @@ mod tests {
                 .ends_with(&format!("build for {}", std::env::consts::ARCH))
         );
         assert!(model.license.contains("Finicky"));
-        assert!(model.has_third_party_notices);
-        assert!(!model.has_release_notes);
         assert_eq!(model.links.len(), 3);
         for (label, address) in &model.links {
             no_url(label);
             no_url(address);
             assert!(address.starts_with("github.com/pwrdrvr/PwrRoute"));
         }
-        // From a checkout, the repository's notices are found.
-        assert!(about().has_third_party_notices);
-        assert!(about().has_release_notes);
     }
 }

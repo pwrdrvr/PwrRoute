@@ -452,27 +452,35 @@ fn the_diagnostics_pane_copies_the_report_and_opens_the_data_folder(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-fn the_about_pane_reveals_the_notices_it_ships(cx: &mut TestAppContext) {
-    let (view, cx, requests) = settings(cx, |_| {});
+fn the_about_pane_opens_helps_documents(cx: &mut TestAppContext) {
+    let (_, cx, requests) = settings(cx, |_| {});
     click(cx, Pane::About.nav_id());
+    click(cx, about::LICENSE_ID);
     click(cx, about::NOTICES_ID);
-    click(cx, about::NOTES_ID);
+    click(cx, about::CHANGELOG_ID);
     assert_eq!(
         *requests.borrow(),
         [
-            SettingsRequest::RevealThirdPartyNotices,
-            SettingsRequest::OpenReleaseNotes,
+            SettingsRequest::OpenLicense,
+            SettingsRequest::OpenThirdPartyNotices,
+            SettingsRequest::OpenChangelog,
         ]
     );
+}
+
+#[gpui_kit::test]
+fn diagnostics_opens_the_logs_while_there_is_a_log(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Diagnostics.nav_id());
+    click(cx, diagnostics::OPEN_LOGS_ID);
+    assert_eq!(*requests.borrow(), [SettingsRequest::OpenLogs]);
     view.update(cx, |view, cx| {
-        view.model.about.has_third_party_notices = false;
-        view.model.about.has_release_notes = false;
+        view.model.diagnostics.log_exists = false;
         cx.notify();
     });
     draw(cx);
-    click(cx, about::NOTICES_ID);
-    click(cx, about::NOTES_ID);
-    assert_eq!(requests.borrow().len(), 2);
+    click(cx, diagnostics::OPEN_LOGS_ID);
+    assert_eq!(requests.borrow().len(), 1);
 }
 
 #[gpui_kit::test]

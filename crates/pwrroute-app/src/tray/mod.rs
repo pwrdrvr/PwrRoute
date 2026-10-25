@@ -431,11 +431,12 @@ fn dropdown_closed(cx: &mut App) {
     }
 }
 
-/// Do what a row or menu item says. About opens the main window: there is
-/// no About panel yet.
+/// Do what a row or menu item says. About is Settings › About, as the app
+/// menu's About PwrRoute is (the family's decision A).
 pub fn run(command: TrayCommand, cx: &mut App) {
     match command {
-        TrayCommand::OpenMain | TrayCommand::About => crate::show_main_window(cx),
+        TrayCommand::OpenMain => crate::show_main_window(cx),
+        TrayCommand::About => crate::settings::open(cx, Some(crate::settings::Pane::About)),
         TrayCommand::Settings => crate::settings::open(cx, None),
         TrayCommand::Rules => show_screen(Screen::Rules, cx),
         TrayCommand::TestLink => show_screen(Screen::TestLink, cx),

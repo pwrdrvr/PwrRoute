@@ -187,6 +187,28 @@ their own modules.
   `pwrroute_rules_apply` the audit reports as written. Never write the
   file around the store from the app; agents and editors go through the
   check instead.
+- **Menus follow PwrSuite menus v1 (`app_menu.rs`, `help.rs`).** The
+  standard is the PwrSuite Claude Design project's "Menu Standard - Suite
+  Review" and its "Views Slot" addendum: [PwrRoute] · File · Edit · View ·
+  Window · Help, with About and Check for Updates… atop the macOS app
+  menu, View opening with the screens, and Help in its fixed order (Settings
+  in File and About last in Help off macOS). `app_menu::menus` is a pure
+  template per `Platform` and its tests hold both to the order; only macOS
+  installs it (no in-window strip on Windows/Linux yet). No Website row
+  (PwrRoute has none) and no Reload/zoom rows (a GPUI window has neither).
+  Edit's rows replay ⌘X/⌘C/⌘V/⌘A into the window in front: the text
+  fields read raw keys, so those bindings live in `MENU_ONLY`, a context no
+  element has, and never steal a key. A global action that touches a
+  window goes through `in_front_window`, which defers: GPUI still holds the
+  window an action was dispatched in. About (menu and tray) is Settings ›
+  About. Help's links go through the router as an `Api` link (else
+  `open_url`), so the rules pick the browser. Changelog, View License and
+  Third-Party Notices are `doc_window.rs`, from files compiled in with
+  `include_str!` (they work offline, on every platform); Logs is
+  `logs_window.rs` over `log_view.rs`, which reads `main.old.log` and
+  `main.log`, keeps the newest 5,000 lines and polls for appends and
+  rotation. Help's windows share `aux_window.rs` (one of each, "Help ›"
+  crumb) and keep the Dock icon (`dock.rs`).
 - **Log with the `log` macros, never `eprintln!` (`diag_log.rs`).**
   `diag_log::install` (top of `main`) sends PwrRoute's lines, Velopack's and
   GPUI's warnings to `main.log` in `pwrroute_os::log_dir()`
@@ -381,7 +403,8 @@ their own modules.
   word (`overview_model::private_term`) and is off-limits for a scanned
   browser without one.
 - **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
-  Settings or first-run window is open (`Regular`) and goes when the last closes
+  Settings, first-run or one of Help's windows (`DocWindow`, `LogsWindow`)
+  is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays
   `unsafe`-free.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
