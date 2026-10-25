@@ -4729,7 +4729,7 @@ fn a_help_window_chosen_from_itself_stays_one_window(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_alt_that_brings_a_window_forward_is_not_the_users(cx: &mut TestAppContext) {
     let (view, cx) = open_with_strip(cx);
-    cx.update(|window, cx| crate::menu_bar::bring_forward(window, cx));
+    cx.update(crate::menu_bar::bring_forward);
     keys(cx, "alt");
     assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
     cx.executor()
