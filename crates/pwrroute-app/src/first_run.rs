@@ -1134,7 +1134,9 @@ impl FirstRun {
                 .is_ok()
             {
                 cx.defer(move |cx| {
-                    let _ = handle.update(cx, |_, window, _| window.activate_window());
+                    let _ = handle.update(cx, |_, window, cx| {
+                        crate::menu_bar::bring_forward(window, cx);
+                    });
                 });
             }
         })

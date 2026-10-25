@@ -27,7 +27,9 @@ pub fn activate<V: 'static>(existing: Option<WindowHandle<V>>, cx: &mut App) -> 
         return false;
     };
     let shown = handle
-        .update(cx, |_, window, _| window.activate_window())
+        .update(cx, |_, window, cx| {
+            crate::menu_bar::bring_forward(window, cx)
+        })
         .is_ok();
     if shown {
         cx.activate(true);

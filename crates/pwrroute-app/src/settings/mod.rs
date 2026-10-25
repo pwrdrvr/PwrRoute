@@ -213,7 +213,7 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
             if let Some(pane) = pane {
                 view.show(pane, cx);
             }
-            window.activate_window();
+            crate::menu_bar::bring_forward(window, cx);
         });
         if shown.is_ok() {
             cx.activate(true);

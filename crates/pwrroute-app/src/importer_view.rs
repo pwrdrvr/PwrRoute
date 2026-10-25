@@ -230,7 +230,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
             if let Some(earlier) = std::mem::replace(&mut this.from_first_run, from_first_run) {
                 cx.defer(move |cx| (earlier.on_done)(ImportOutcome::Cancelled, cx));
             }
-            window.activate_window();
+            crate::menu_bar::bring_forward(window, cx);
             cx.notify();
         });
         cx.activate(true);

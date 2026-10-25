@@ -4723,3 +4723,17 @@ fn a_help_window_chosen_from_itself_stays_one_window(cx: &mut TestAppContext) {
     });
     assert_eq!(docs, 1);
 }
+
+/// On Windows GPUI taps Alt itself to bring a window forward: that Alt is
+/// not the user's and leaves the bar at rest. A real one later still works.
+#[gpui_kit::test]
+fn the_alt_that_brings_a_window_forward_is_not_the_users(cx: &mut TestAppContext) {
+    let (view, cx) = open_with_strip(cx);
+    cx.update(|window, cx| crate::menu_bar::bring_forward(window, cx));
+    keys(cx, "alt");
+    assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
+    cx.executor()
+        .advance_clock(crate::menu_bar::FAKE_ALT_WINDOW);
+    keys(cx, "alt");
+    assert_eq!(bar_state(&view, cx).title, Some(0));
+}

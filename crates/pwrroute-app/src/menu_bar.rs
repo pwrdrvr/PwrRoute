@@ -16,6 +16,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -472,6 +473,35 @@ fn open_windows(cx: &App) -> Vec<(AnyWindowHandle, SharedString)> {
         .collect()
 }
 
+/// How long after PwrRoute brings a window forward a lone Alt is taken for
+/// GPUI's, not the user's (see [`bring_forward`]).
+pub const FAKE_ALT_WINDOW: Duration = Duration::from_millis(600);
+
+/// When PwrRoute last brought a window forward.
+struct BroughtForward(Instant);
+
+impl Global for BroughtForward {}
+
+/// Brings `window` forward. Every PwrRoute call that does goes through
+/// here: on Windows GPUI's `activate_window` taps Alt itself (`SendInput`,
+/// so Windows lets the window take the foreground), and that tap must not
+/// read as the user's Alt and put the keyboard on File.
+pub fn bring_forward(window: &mut Window, cx: &mut App) {
+    let now = cx.background_executor().now();
+    cx.set_global(BroughtForward(now));
+    window.activate_window();
+}
+
+/// A lone Alt now is GPUI's tap from [`bring_forward`].
+fn alt_is_gpuis(cx: &App) -> bool {
+    cx.try_global::<BroughtForward>().is_some_and(|brought| {
+        cx.background_executor()
+            .now()
+            .saturating_duration_since(brought.0)
+            < FAKE_ALT_WINDOW
+    })
+}
+
 /// Off macOS: the keys (`menu_bar` takes them before anything else) and
 /// Alt's action.
 pub fn install(cx: &mut App) {
@@ -485,6 +515,9 @@ pub fn install(cx: &mut App) {
     })
     .detach();
     cx.on_action(|_: &app_menu::FocusMenuBar, cx| {
+        if alt_is_gpuis(cx) {
+            return;
+        }
         let Some(bar) = cx.active_window().and_then(|window| bar_for(window, cx)) else {
             return;
         };
@@ -600,7 +633,7 @@ impl MenuBar {
         match menu.rows.swap_remove(row) {
             Row::Action { action, .. } => window.dispatch_action(action, cx),
             Row::Window { window: target, .. } => cx.defer(move |cx| {
-                let _ = target.update(cx, |_, window, _| window.activate_window());
+                let _ = target.update(cx, |_, window, cx| bring_forward(window, cx));
             }),
             Row::Separator => {}
         }

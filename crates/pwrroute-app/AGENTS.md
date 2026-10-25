@@ -252,7 +252,11 @@ their own modules.
   the field: F10 or a lone Alt (a binding, `FocusMenuBar`) takes the
   keyboard, Alt+letter opens a menu, arrows/Enter/Esc walk it, and a
   shortcut lets go and runs. The keyboard model is `menu_bar::State`, plain
-  data with its own tests. On Windows GPUI hides the OS title bar, so the
+  data with its own tests. **Bring a window forward with
+  `menu_bar::bring_forward`, never `activate_window` directly:** on Windows
+  GPUI taps Alt itself (`SendInput`) to take the foreground, and the bar
+  ignores a lone Alt for `FAKE_ALT_WINDOW` after `bring_forward` so that tap
+  never lights File. On Windows GPUI hides the OS title bar, so the
   strip is the drag area and draws minimize, maximize/restore and close as
   `WindowControlArea`s (Windows presses them; titles and buttons `occlude`
   the drag area). Linux keeps the desktop's server-side title bar and its
