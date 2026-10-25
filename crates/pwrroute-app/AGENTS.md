@@ -164,15 +164,16 @@ their own modules.
   (`OverviewState::leave`) drops its fades and the callout's hand-off.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
-  (`activity.keep`, `activity.journal`, `activity.journalDays`) and the
-  hidden browsers (`browsers.hidden`); an absent file is the defaults, and
+  (`activity.keep`, `activity.journal`, `activity.journalDays`), the
+  hidden browsers (`browsers.hidden`) and the Logs window's view
+  (`logs`, below); an absent file is the defaults, and
   a bad one is reported and ignored. `router.rs`
   reads it before the router spawns, so `Options::retention` and
   `Options::journal` (`<data dir>/journal`) are in force from the first
   link; `settings_store::install` then makes the same store and the
   router's handle the globals Settings › Privacy edits, saving first and
   applying through `set_retention` / `set_journal`. The file carries
-  numbers and a level, never a link.
+  numbers, switches and a level, never a link or a log line.
 - **The Rules screen follows `rules.json`'s other writers.** The store
   (`rules_store.rs`) stamps the bytes it last read or wrote, and
   `RulesStore::check_disk` compares the file to them: changed with nothing
@@ -209,6 +210,28 @@ their own modules.
   `main.log`, keeps the newest 5,000 lines and polls for appends and
   rotation. Help's windows share `aux_window.rs` (one of each, "Help ›"
   crumb) and keep the Dock icon (`dock.rs`).
+- **The Logs window (`logs_window.rs`, `log_view.rs`; design: PwrAgent's
+  "Log Viewer Workflows UX Review").** `LogView::rows` is the model: the
+  lines the levels let through, and with a query in Filter mode only the
+  matches, `context` lines around each and a `Row::Gap` per hidden run
+  (a click opens it); Highlight keeps every line; the mark is a
+  `Row::Mark` after the line it was dropped on, in the view only. The
+  view is a GPUI `list`, not `uniform_list`: `sync_list` diffs
+  `RowKey`s (by line number, which outlives lines dropped from the
+  front) and splices only what changed, so measured rows keep their
+  height at 5,000 lines. GPUI text has no hanging indent, so Wrap cuts a
+  line into rows itself (`LogsWindow::segments`, GPUI's `LineWrapper`)
+  and draws continuations 2ch in; with Wrap off each row is one line and
+  the text scrolls sideways under a fixed gutter (`h_offset`). The
+  current match (`LogView::active`, a line number) moves with Enter /
+  Shift-Enter and the field's chevrons; Esc returns to it among all the
+  lines. A selection that ends on the newest line grows with new lines.
+  Wrap, Filter/Highlight, Context, Include diagnostics and the Error,
+  Warning and Info levels are `settings.json`'s `logs`
+  (`settings_store::LogsSettings`); Debug is never stored, nor the
+  query. Below `NARROW_BELOW` Wrap and Mark keep icons and tooltips;
+  `FRAME.min` holds the toolbar's one row. Window tests drive it
+  through `debug_selector`s; the `screens` example draws `help-logs*`.
 - **Log with the `log` macros, never `eprintln!` (`diag_log.rs`).**
   `diag_log::install` (top of `main`) sends PwrRoute's lines, Velopack's and
   GPUI's warnings to `main.log` in `pwrroute_os::log_dir()`

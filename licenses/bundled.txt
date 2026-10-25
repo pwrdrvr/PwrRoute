@@ -30,7 +30,8 @@ them. Edit licenses/bundled.txt when one changes.
   ship.
 - Line icons in pwrroute-app (crates/pwrroute-app/assets/icons) drawn from
   Lucide's, by way of the design canvas: map, activity (Lucide's history),
-  rules (route), wand and alert among them. ISC | https://lucide.dev
+  rules (route), wand, alert, and the Logs window's wrap (wrap-text),
+  bookmark, chevrons and close among them. ISC | https://lucide.dev
 
 core-js@3.49.0 (MIT)
 -----------------------------------------------------------

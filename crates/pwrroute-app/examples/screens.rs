@@ -935,10 +935,8 @@ fn main() {
     let _ = std::fs::remove_file(scratch.join("main.old.log"));
     enum Help {
         Doc(doc_window::Doc),
-        Logs {
-            selection: Option<(usize, usize)>,
-            query: &'static str,
-        },
+        /// The Logs window over the fixture log, then this.
+        Logs(fn(&mut logs_window::LogsWindow)),
     }
     for (name, which, (width, height)) in [
         (
@@ -956,29 +954,61 @@ fn main() {
             Help::Doc(doc_window::Doc::ThirdPartyNotices),
             (920.0, 760.0),
         ),
+        // Wrap is on by default: the long link lines read in full.
+        ("help-logs", Help::Logs(|_| {}), (1040.0, 760.0)),
+        // Off, they run past the edge and scroll sideways.
         (
-            "help-logs",
-            Help::Logs {
-                selection: None,
-                query: "",
-            },
+            "help-logs-nowrap",
+            Help::Logs(|logs| logs.wrap = false),
             (1040.0, 760.0),
         ),
         (
             "help-logs-selected",
-            Help::Logs {
-                selection: Some((9, 12)),
-                query: "",
-            },
+            Help::Logs(|logs| logs.selection = Some((9, 12))),
             (1040.0, 760.0),
         ),
+        // Filter: the matches, gap rows for what is hidden, "1 of 4 lines"
+        // and the status bar's keys.
         (
             "help-logs-search",
-            Help::Logs {
-                selection: None,
-                query: "outcome",
-            },
+            Help::Logs(|logs| logs.set_query_for_screens("outcome")),
             (1040.0, 760.0),
+        ),
+        // Context ±1 around the one error, stepped to.
+        (
+            "help-logs-context",
+            Help::Logs(|logs| {
+                logs.view.set_context(1);
+                logs.set_query_for_screens("could not");
+            }),
+            (1040.0, 760.0),
+        ),
+        // Highlight keeps every line; the current match is solid.
+        (
+            "help-logs-highlight",
+            Help::Logs(|logs| {
+                logs.view.set_mode(log_view::SearchMode::Highlight);
+                logs.set_query_for_screens("hand-off");
+                logs.view.step(true);
+            }),
+            (1040.0, 760.0),
+        ),
+        // A mark, the lines logged after it, and Select since mark.
+        (
+            "help-logs-mark",
+            Help::Logs(|logs| {
+                logs.set_mark_for_screens("09:20:04");
+                logs.view.append(FIXTURE_LOG_AFTER_MARK);
+                logs.selection = logs.view.since_mark();
+            }),
+            (1040.0, 760.0),
+        ),
+        // Narrow: Wrap and Mark keep their icons and tooltips, here at the
+        // window's least width with Context showing.
+        (
+            "help-logs-narrow",
+            Help::Logs(|logs| logs.set_query_for_screens("outcome")),
+            (880.0, 640.0),
         ),
     ] {
         let mut cx = HeadlessAppContext::with_platform(
@@ -995,13 +1025,12 @@ fn main() {
                 })
                 .expect("open a headless window")
                 .into(),
-            Help::Logs { selection, query } => {
+            Help::Logs(prepare) => {
                 let log = log.clone();
                 cx.open_window(window_size, move |_, cx| {
                     cx.new(|cx| {
                         let mut view = logs_window::LogsWindow::new(Some(log), cx);
-                        view.selection = selection;
-                        view.set_query_for_screens(query);
+                        prepare(&mut view);
                         view
                     })
                 })
@@ -1796,6 +1825,14 @@ const FIXTURE_LOG: &str = "\
 2026-10-24T09:18:03.771-04:00 INFO  pwrroute::router: rules.json changed; reloaded in 4ms
 2026-10-24T09:19:20.118-04:00 INFO  pwrroute::link: link 4 source=api outcome=opened from=agent browser=\"Example Browser\" profile=\"Work\" rule=\"rule 5\" resolve=6ms launch=40ms
 2026-10-24T09:20:00.000-04:00 INFO  pwrroute::default_browser: PwrRoute is the default browser
+";
+
+/// What the fixture logs after the mark in `help-logs-mark`: contrived.
+#[cfg(target_os = "macos")]
+const FIXTURE_LOG_AFTER_MARK: &str = "\
+2026-10-24T09:20:11.204-04:00 INFO  pwrroute::router: rules.json changed; reloaded in 3ms
+2026-10-24T09:20:15.880-04:00 INFO  pwrroute::link: link 5 source=apple_event outcome=opened from=com.example.chat browser=\"Example Browser\" profile=\"Work\" rule=\"rule 6\" resolve=2ms launch=39ms
+2026-10-24T09:20:16.002-04:00 WARN  pwrroute::handoff: link 5 hand-off: com.example.browser took 1,240ms to come forward
 ";
 
 #[cfg(not(target_os = "macos"))]

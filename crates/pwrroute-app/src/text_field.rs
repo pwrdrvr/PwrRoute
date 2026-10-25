@@ -146,6 +146,19 @@ pub fn field(
     leading: Option<AnyElement>,
     window: &Window,
 ) -> Stateful<Div> {
+    field_with(id, field, look, leading, None, window)
+}
+
+/// [`field`] with content after the text, at the box's right edge (a
+/// search's match count and its steps).
+pub fn field_with(
+    id: &'static str,
+    field: &TextField,
+    look: Look,
+    leading: Option<AnyElement>,
+    trailing: Option<AnyElement>,
+    window: &Window,
+) -> Stateful<Div> {
     let focused = field.focus.is_focused(window);
     let (family, weight, size) = if look.mono {
         (theme::mono_family(500.0), 500.0, 12.0)
@@ -188,6 +201,16 @@ pub fn field(
     inner = inner.child(content);
     if !field.text.is_empty() && focused && !field.selected {
         inner = inner.child(caret_bar().ml(px(-8.0)));
+    }
+    if let Some(trailing) = trailing {
+        inner = inner.child(
+            div()
+                .ml_auto()
+                .flex()
+                .flex_none()
+                .items_center()
+                .child(trailing),
+        );
     }
     let boxed = if focused { focus_ring(inner) } else { inner };
     div()

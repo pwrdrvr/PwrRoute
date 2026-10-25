@@ -67,6 +67,26 @@ const ICONS: &[(&str, &[u8])] = &[
         "pwrroute/mask.svg",
         include_bytes!("../assets/icons/mask.svg"),
     ),
+    (
+        "pwrroute/wrap.svg",
+        include_bytes!("../assets/icons/wrap.svg"),
+    ),
+    (
+        "pwrroute/bookmark.svg",
+        include_bytes!("../assets/icons/bookmark.svg"),
+    ),
+    (
+        "pwrroute/chevron-up.svg",
+        include_bytes!("../assets/icons/chevron-up.svg"),
+    ),
+    (
+        "pwrroute/chevron-down.svg",
+        include_bytes!("../assets/icons/chevron-down.svg"),
+    ),
+    (
+        "pwrroute/close.svg",
+        include_bytes!("../assets/icons/close.svg"),
+    ),
 ];
 
 const FONTS: &[&[u8]] = &[
