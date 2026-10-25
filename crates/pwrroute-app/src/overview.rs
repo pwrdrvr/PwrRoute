@@ -633,7 +633,7 @@ impl Render for Tip {
     }
 }
 
-fn tip(
+pub(crate) fn tip(
     label: impl Into<SharedString>,
     source: Option<String>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {

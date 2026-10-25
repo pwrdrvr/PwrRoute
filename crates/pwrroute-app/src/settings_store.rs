@@ -3,8 +3,9 @@
 //! journal (Settings › Privacy), the browsers hidden from the pickers
 //! (Settings › Browsers), the rules source the importer's Choose source
 //! picked, with the config notices dismissed (`source`), and the release
-//! channel picked in Settings › Updates (`updates`); other panes join as
-//! their producers land.
+//! channel picked in Settings › Updates (`updates`) and the Logs window's
+//! view (`logs`: Wrap, Filter or Highlight, Context, Include diagnostics
+//! and the levels); other panes join as their producers land.
 //!
 //! [`Settings::load`] reads the file (absent means the defaults) and
 //! [`Settings::save`] writes it through a sibling file and a rename, like
@@ -25,6 +26,7 @@ use gpui_kit::{App, AppContext as _, Entity, Global};
 use pwrroute_router::{JournalConfig, JournalMode, Retention, RouterHandle};
 use serde::{Deserialize, Serialize};
 
+use crate::log_view::{CONTEXT_CHOICES, SearchMode};
 use crate::update_channel::UpdateSettings;
 
 /// The file in `pwrroute_os::data_dir()`.
@@ -51,6 +53,71 @@ pub struct Settings {
     /// installed build, as before this field existed.
     #[serde(skip_serializing_if = "UpdateSettings::is_default")]
     pub updates: UpdateSettings,
+    /// Help › Logs' view. Left out while it is the design's default.
+    #[serde(skip_serializing_if = "LogsSettings::is_default")]
+    pub logs: LogsSettings,
+}
+
+/// What the Logs window remembers. Never a line, a search or a link: the
+/// search text stays in the window. Debug is not kept either; every window
+/// opens without it, as the family's viewer does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LogsSettings {
+    /// Long lines wrap with a hanging indent; off, they scroll sideways.
+    pub wrap: bool,
+    pub search_mode: SearchMode,
+    /// Lines kept on each side of a match in Filter mode: 0, 1, 3 or 5.
+    pub context_lines: usize,
+    /// Copy starts with the diagnostics block.
+    pub include_diagnostics: bool,
+    pub levels: LogLevels,
+}
+
+impl Default for LogsSettings {
+    fn default() -> Self {
+        Self {
+            wrap: true,
+            search_mode: SearchMode::Filter,
+            context_lines: 0,
+            include_diagnostics: true,
+            levels: LogLevels::default(),
+        }
+    }
+}
+
+impl LogsSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The Context choice, snapped to one the window offers.
+    pub fn context(&self) -> usize {
+        CONTEXT_CHOICES
+            .into_iter()
+            .rev()
+            .find(|&choice| choice <= self.context_lines)
+            .unwrap_or(0)
+    }
+}
+
+/// The levels the Logs window shows. Debug has no field on purpose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LogLevels {
+    pub error: bool,
+    pub warning: bool,
+    pub info: bool,
+}
+
+impl Default for LogLevels {
+    fn default() -> Self {
+        Self {
+            error: true,
+            warning: true,
+            info: true,
+        }
+    }
 }
 
 /// Which file the router reads its rules from. The default is Finicky's
@@ -507,5 +574,54 @@ mod tests {
         let result = none.update(|settings| settings.activity.journal_days = 2);
         assert!(result.is_err());
         assert_eq!(none.settings().activity.journal_days, 2);
+    }
+
+    #[test]
+    fn the_logs_view_round_trips_without_debug_or_a_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = SettingsStore::load(Some(dir.path().to_path_buf()));
+        // The defaults write nothing about logs.
+        store
+            .update(|settings| settings.activity.journal_days = 3)
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(!text.contains("logs"), "{text}");
+
+        store
+            .update(|settings| {
+                settings.logs = LogsSettings {
+                    wrap: false,
+                    search_mode: SearchMode::Highlight,
+                    context_lines: 3,
+                    include_diagnostics: false,
+                    levels: LogLevels {
+                        error: true,
+                        warning: false,
+                        info: true,
+                    },
+                };
+            })
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(
+            text.ends_with(
+                "  \"logs\": {\n    \"wrap\": false,\n    \"searchMode\": \"highlight\",\n    \"contextLines\": 3,\n    \"includeDiagnostics\": false,\n    \"levels\": {\n      \"error\": true,\n      \"warning\": false,\n      \"info\": true\n    }\n  }\n}\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("debug"), "{text}");
+        let again = SettingsStore::load(Some(dir.path().to_path_buf()));
+        assert_eq!(again.settings().logs, store.settings().logs);
+
+        // A hand-edited count snaps to a choice; a debug key is ignored.
+        fs::write(
+            Settings::path(dir.path()),
+            r#"{ "logs": { "contextLines": 4, "levels": { "debug": true } } }"#,
+        )
+        .unwrap();
+        let logs = Settings::load(dir.path()).unwrap().logs;
+        assert_eq!(logs.context(), 3);
+        assert_eq!(logs.levels, LogLevels::default());
+        assert!(logs.wrap);
     }
 }
