@@ -14,12 +14,12 @@ use std::{
     collections::BTreeMap,
     io::{self, BufRead as _, BufReader, Write as _},
     sync::{
-        Mutex, PoisonError,
+        Mutex, OnceLock, PoisonError,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gpui_kit::{
@@ -61,6 +61,44 @@ const UI_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// When startup reached each stage, from the first [`startup`] call (top of
+/// `main`), in order. `ping` reports it off the UI thread, so the harness
+/// can tell a launch still starting from a UI thread that stopped answering.
+static STARTUP: Mutex<Vec<(&'static str, Duration)>> = Mutex::new(Vec::new());
+
+/// Whether the harness launched this copy: [`SOCKET_ENV`] is set. Known
+/// before [`start`], for the log's echo and the first startup stages.
+pub fn requested() -> bool {
+    static REQUESTED: OnceLock<bool> = OnceLock::new();
+    *REQUESTED.get_or_init(|| std::env::var_os(SOCKET_ENV).is_some())
+}
+
+/// Notes that startup reached `stage`, once, and logs when. Only while the
+/// harness launched this copy; the stages are `e2e/CONTRACT.md`'s.
+pub fn startup(stage: &'static str) {
+    static CLOCK: OnceLock<Instant> = OnceLock::new();
+    if !requested() {
+        return;
+    }
+    let at = CLOCK.get_or_init(Instant::now).elapsed();
+    let mut stages = STARTUP.lock().unwrap_or_else(PoisonError::into_inner);
+    if stages.iter().any(|(s, _)| *s == stage) {
+        return;
+    }
+    stages.push((stage, at));
+    drop(stages);
+    log::info!(target: "pwrroute::e2e", "startup: {stage} at {} ms", at.as_millis());
+}
+
+/// The stages reached so far, for `ping`.
+fn startup_stages() -> Value {
+    let stages = STARTUP.lock().unwrap_or_else(PoisonError::into_inner);
+    stages
+        .iter()
+        .map(|(stage, at)| json!({ "stage": stage, "ms": at.as_millis() as u64 }))
+        .collect()
+}
 
 /// What the main window has painted, keyed to the window that painted it, so
 /// a closed window's regions never pass for a reopened one's.
@@ -125,6 +163,7 @@ pub fn regions(
 pub fn frame(window: &Window) {
     if ENABLED.load(Ordering::Relaxed) {
         with_painted(window.window_handle().window_id(), |p| p.frames += 1);
+        startup("painted");
     }
 }
 
@@ -189,6 +228,8 @@ pub fn start(router: RouterHandle) -> Option<Hook> {
 /// Serves requests that need the window on the UI thread.
 pub fn attach(hook: Hook, cx: &mut App) {
     cx.spawn(async move |cx| {
+        // Polled once `run`'s setup is done and the event loop is up.
+        startup("serving");
         while let Ok(job) = hook.jobs.recv().await {
             let (answer, then) = cx.update(|cx| on_ui_thread(job.request, cx));
             let _ = job.reply.send(answer);
@@ -272,7 +313,7 @@ fn answer(
 ) -> Value {
     match request {
         // Off the UI thread: these must answer while it is busy.
-        Request::Ping => ok(json!({})),
+        Request::Ping => ok(json!({ "startup": startup_stages() })),
         Request::Dispatches => ok(json!({ "dispatches": router.recent() })),
         // Asked for on its own: it starts OS tools on Linux (xdg-mime).
         Request::Os => ok(os_state()),
