@@ -156,6 +156,10 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A cache saved under a tag is readable by that tag's runs alone,
+          # so it would only take room in the store from main's caches.
+          save-if: false
 
       # Ad hoc signed; vpk re-signs it in the sign job.
       - name: Build PwrRoute.app (universal)
@@ -437,6 +441,10 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A cache saved under a tag is readable by that tag's runs alone,
+          # so it would only take room in the store from main's caches.
+          save-if: false
 
       - name: Build
         run: cargo build --release --locked -p pwrroute-app
@@ -694,6 +702,10 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A cache saved under a tag is readable by that tag's runs alone,
+          # so it would only take room in the store from main's caches.
+          save-if: false
 
       # Linux packages are not signed, matching PwrGit.
       - name: Package DEB and tar.gz
