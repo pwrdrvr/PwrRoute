@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.2.2 - 2026-10-24
+
+- Browser hand-off - On macOS 14 and later, a link to a Chromium browser with a profile (Chrome, Edge, Brave and the like) no longer leaves PwrRoute's window in front for up to two seconds while the browser waits its turn: PwrRoute gives the front to the running browser as it hands the link over. Measured on Chrome, every link came forward within about 220 ms, the first after a few idle minutes included. Links meant for the background, by the rule or by the config's `openInBackground` default, stay in the background.
+- Agent approval - On macOS, the window that asks you to approve a local agent now opens over the terminal or editor the agent runs in, on the current Space, full screen included, and stays up until you answer, even if you switch to PwrRoute and back. Before, it could open behind that app where nobody saw it. Settings › Local agents says to start a new session in the agent after adding PwrRoute, and the diagnostic log notes each approval window it opens.
+
 ## v0.2.1 - 2026-10-24
 
 - Rule editor - Every way to start a rule opens the same editor. The Rules screen has Add rule and Add rewrite under a Finicky config too, Overview's browser cards have "+ Rule" for the browser and "+ Rule for <profile>" for one profile, Test a link has "Add a rule…" with the narrowest pattern for the tested link, and Activity's sheet no longer preselects a browser. Open in and Profile are pickers built from the browsers and profiles on this Mac, with a field for anything else; a browser or profile this Mac doesn't have is kept, with a warning. Changing the browser clears a profile it lacks, and the private-window switch uses the browser's own word.
