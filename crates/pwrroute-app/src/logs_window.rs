@@ -23,11 +23,11 @@ use std::time::Duration;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext as _, ClipboardItem, Context, FocusHandle, Font,
-    HighlightStyle, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, LineFragment,
-    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, ParentElement as _, Render,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
-    Window, WindowHandle, deferred, div, list, px,
+    AnyElement, AnyView, App, ClipboardItem, Context, FocusHandle, Font, HighlightStyle, Hsla,
+    InteractiveElement as _, IntoElement, KeyDownEvent, LineFragment, ListAlignment, ListOffset,
+    ListState, MouseButton, MouseDownEvent, ParentElement as _, Render, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledText, Window, WindowHandle,
+    deferred, div, list, px,
 };
 
 use crate::aux_window::{self, Frame};
@@ -131,8 +131,10 @@ pub struct LogsWindow {
     search: TextField,
     focus: FocusHandle,
     list: ListState,
-    /// The rows the list was last told about.
+    /// The rows the list was last told about, and the model's generation
+    /// they came from.
     list_keys: Vec<RowKey>,
+    list_generation: Option<u64>,
     /// New lines scroll into view.
     pub live: bool,
     /// Lines and errors that came in while paused.
@@ -141,6 +143,10 @@ pub struct LogsWindow {
     /// Selected lines, by number (`LogView::first_number` counting): the
     /// anchor and the other end.
     pub selection: Option<(usize, usize)>,
+    /// The selection's far end moves with new lines: Select since mark,
+    /// or a Shift-click that reached the newest line. A plain click or ⌘A
+    /// stays put.
+    follows_tail: bool,
     pub include_diagnostics: bool,
     /// Long lines wrap; off, they scroll sideways.
     pub wrap: bool,
@@ -184,10 +190,12 @@ impl LogsWindow {
             focus: cx.focus_handle(),
             list: ListState::new(0, ListAlignment::Top, px(240.0)),
             list_keys: Vec::new(),
+            list_generation: None,
             live: true,
             new_lines: 0,
             new_errors: 0,
             selection: None,
+            follows_tail: false,
             include_diagnostics: prefs.include_diagnostics,
             wrap: prefs.wrap,
             h_offset: 0.0,
@@ -272,18 +280,20 @@ impl LogsWindow {
         cx.notify();
     }
 
-    /// A selection that ended on the newest line grows with the lines that
-    /// came after it, so Copy at the end of a repro takes them too.
+    /// A following selection that ended on the newest line grows with the
+    /// lines that came after it, so Copy at the end of a repro takes them
+    /// too.
     fn follow_selection(&mut self, newest_before: Option<usize>) {
-        let (Some((anchor, end)), Some(before), Some(newest)) =
-            (self.selection, newest_before, self.view.newest())
-        else {
+        let (true, Some((anchor, end)), Some(before), Some(newest)) = (
+            self.follows_tail,
+            self.selection,
+            newest_before,
+            self.view.newest(),
+        ) else {
             return;
         };
-        if end == before && end >= anchor {
+        if end == before {
             self.selection = Some((anchor, newest));
-        } else if anchor == before && anchor >= end {
-            self.selection = Some((newest, end));
         }
     }
 
@@ -291,6 +301,11 @@ impl LogsWindow {
     /// from the front, then what differs between the rows both share at
     /// the start and the end. Rows it already measured keep their height.
     fn sync_list(&mut self) {
+        let generation = self.view.generation();
+        if self.list_generation == Some(generation) {
+            return;
+        }
+        self.list_generation = Some(generation);
         let keys: Vec<RowKey> = self
             .view
             .rows()
@@ -301,6 +316,19 @@ impl LogsWindow {
             return;
         }
         let mut old = std::mem::take(&mut self.list_keys);
+        // Paused, the reader stays on the line at the top (or the next one
+        // still shown), whatever was spliced around or under it.
+        let scroll_top = self.list.logical_scroll_top();
+        let top = (!self.live)
+            .then(|| {
+                old.get(scroll_top.item_ix.min(old.len())..)?
+                    .iter()
+                    .find_map(|key| match key {
+                        RowKey::Line { number, .. } => Some(*number),
+                        _ => None,
+                    })
+            })
+            .flatten();
         if let (Some(first), Some(old_first)) = (keys.first(), old.first())
             && first != old_first
             && let Some(dropped) = old.iter().position(|key| key == first)
@@ -323,6 +351,21 @@ impl LogsWindow {
         } else {
             self.list
                 .splice(prefix..old.len() - suffix, keys.len() - prefix - suffix);
+        }
+        if let Some(top) = top
+            && let Some(row) = keys
+                .iter()
+                .position(|key| matches!(key, RowKey::Line { number, .. } if *number >= top))
+        {
+            let same = matches!(keys[row], RowKey::Line { number, .. } if number == top);
+            self.list.scroll_to(ListOffset {
+                item_ix: row,
+                offset_in_item: if same {
+                    scroll_top.offset_in_item
+                } else {
+                    px(0.0)
+                },
+            });
         }
         self.list_keys = keys;
         if self.live {
@@ -513,6 +556,7 @@ impl LogsWindow {
     pub fn select_since_mark(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         if let Some(range) = self.view.since_mark() {
             self.selection = Some(range);
+            self.follows_tail = true;
             window.focus(&self.focus, cx);
             cx.notify();
         }
@@ -561,6 +605,7 @@ impl LogsWindow {
             (Some((anchor, _)), true) => Some((anchor, number)),
             _ => Some((number, number)),
         };
+        self.follows_tail = extend && self.view.newest() == Some(number);
         cx.notify();
     }
 
@@ -569,6 +614,7 @@ impl LogsWindow {
         if let (Some(first), Some(last)) = (visible.first(), visible.last()) {
             let base = self.view.first_number;
             self.selection = Some((base + first, base + last));
+            self.follows_tail = false;
             cx.notify();
         }
     }
@@ -727,9 +773,21 @@ impl LogsWindow {
             // Scrolled up: stop following.
             self.live = false;
             cx.notify();
-        } else if dy < 0.0 && !self.live && !self.view.searching() && self.at_end() {
+        } else if dy < 0.0
+            && !self.live
+            && !self.view.searching()
+            && self.scrollable()
+            && self.at_end()
+        {
+            // Scrolled back down to the end of a list that scrolls; one that
+            // fits stays paused until Live or the pill.
             self.set_live(true, cx);
         }
+    }
+
+    /// Whether the rows are taller than the viewport.
+    fn scrollable(&self) -> bool {
+        self.list.max_offset_for_scrollbar().y > px(0.0)
     }
 
     /// The face the lines are drawn in, for measuring them.
@@ -775,30 +833,19 @@ fn level_color(level: Level) -> Hsla {
     }
 }
 
-/// A plain tooltip: one line of text.
-struct Tip(SharedString);
-
-impl Render for Tip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
-        div()
-            .px(px(8.0))
-            .py(px(5.0))
-            .bg(theme::bg_popover())
-            .border_1()
-            .border_color(theme::border_default())
-            .rounded(px(6.0))
-            .child(text(self.0.clone(), 11.0, 500.0, theme::text_secondary()))
-    }
-}
-
+/// The app's tooltip, one line of text.
 fn tip(label: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    move |_, cx| cx.new(|_| Tip(label.into())).into()
+    crate::overview::tip(label, None)
 }
 
 impl Render for LogsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         // A test or the screens example may change the view directly.
         self.sync_list();
+        // The Context list closes with its select.
+        if self.view.mode != SearchMode::Filter || !self.view.searching() {
+            self.context_open = false;
+        }
         let list_width = f32::from(window.viewport_size().width) - 2.0 * (BODY_PAD + FRAME_BORDER);
         self.text_width = (list_width - GUTTER - TEXT_LEFT - TEXT_RIGHT).max(0.0);
         let font_id = window.text_system().resolve_font(&Self::mono_font());
@@ -975,7 +1022,7 @@ impl LogsWindow {
         let count = self.view.match_count();
         let label = match self.view.active_place() {
             Some(place) if narrow => format!("{place}/{}", thousands(count)),
-            None if narrow => "0/0".to_owned(),
+            None if narrow => "0".to_owned(),
             Some(place) => format!(
                 "{place} of {} {}",
                 thousands(count),
@@ -1743,7 +1790,9 @@ fn clip_highlights(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::{Modifiers, ScrollDelta, TestAppContext, VisualTestContext, point, size};
+    use gpui_kit::{
+        AppContext as _, Modifiers, ScrollDelta, TestAppContext, VisualTestContext, point, size,
+    };
 
     const LINE: &str = "2026-10-24T09:14:37.880-04:00 INFO  pwrroute::link: link 1 outcome=opened";
     const ERROR: &str = "2026-10-24T09:14:38.000-04:00 ERROR pwrroute::link: link 2 failed";
@@ -2141,5 +2190,94 @@ mod tests {
         let clipped = clip_highlights(&[(0..4, style), (6..12, style)], &(5..10));
         let ranges: Vec<_> = clipped.iter().map(|(range, _)| range.clone()).collect();
         assert_eq!(ranges, [Range { start: 1, end: 5 }]);
+    }
+
+    /// Only Select since mark and a Shift-click that reaches the newest
+    /// line follow new lines; a plain click on the newest line stays put.
+    #[gpui_kit::test]
+    fn only_a_following_selection_grows(cx: &mut TestAppContext) {
+        let (_dir, path, view, cx) = open(cx, &format!("{LINE}\n{ERROR}\n"));
+        view.update(cx, |logs, cx| logs.click_number(2, false, cx));
+        append(&path, &format!("{LINE}\n"));
+        tick(cx);
+        assert_eq!(view.read_with(cx, |logs, _| logs.selection), Some((2, 2)));
+        view.update(cx, |logs, cx| logs.select_all(cx));
+        append(&path, &format!("{LINE}\n"));
+        tick(cx);
+        assert_eq!(view.read_with(cx, |logs, _| logs.selection), Some((1, 3)));
+        view.update(cx, |logs, cx| {
+            logs.click_number(1, false, cx);
+            logs.click_number(4, true, cx);
+        });
+        append(&path, &format!("{LINE}\n"));
+        tick(cx);
+        assert_eq!(view.read_with(cx, |logs, _| logs.selection), Some((1, 5)));
+    }
+
+    /// Paused, a change that rebuilds every row keeps the reader on the
+    /// line they were reading.
+    #[gpui_kit::test]
+    fn a_level_toggle_keeps_the_place_while_paused(cx: &mut TestAppContext) {
+        let text: String = (1..=400)
+            .map(|n| {
+                if n % 2 == 0 {
+                    format!("2026-10-24T09:14:38.000-04:00 WARN  pwrroute::link: link {n} slow\n")
+                } else {
+                    format!("2026-10-24T09:14:37.880-04:00 INFO  pwrroute::link: link {n} opened\n")
+                }
+            })
+            .collect();
+        let (_dir, _path, view, cx) = open(cx, &text);
+        view.update(cx, |logs, cx| {
+            logs.set_live(false, cx);
+            let row = logs.view.row_of(201).unwrap();
+            logs.list.scroll_to(ListOffset {
+                item_ix: row,
+                offset_in_item: px(0.0),
+            });
+        });
+        draw(cx);
+        // Info off: line 201 goes; the top is the next line still shown.
+        click(cx, "logs-level-Info");
+        let top = view.read_with(cx, |logs, _| {
+            let row = logs.list.logical_scroll_top().item_ix;
+            logs.view.row_key(logs.view.rows()[row])
+        });
+        assert_eq!(
+            top,
+            RowKey::Line {
+                number: 202,
+                shown: Shown::Plain
+            }
+        );
+    }
+
+    /// A list that fits has nowhere to scroll: a scroll down does not undo
+    /// Pause.
+    #[gpui_kit::test]
+    fn scrolling_a_short_list_keeps_it_paused(cx: &mut TestAppContext) {
+        let (_dir, _path, view, cx) = open(cx, &format!("{LINE}\n{ERROR}\n"));
+        click(cx, LIVE_ID);
+        assert!(!view.read_with(cx, |logs, _| logs.live));
+        let row = cx.debug_bounds("log-row-1").expect("line 1");
+        cx.simulate_event(ScrollWheelEvent {
+            position: row.center(),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-60.0))),
+            ..Default::default()
+        });
+        assert!(!view.read_with(cx, |logs, _| logs.live));
+    }
+
+    /// The Context list does not come back open with its select.
+    #[gpui_kit::test]
+    fn the_context_list_closes_with_its_select(cx: &mut TestAppContext) {
+        let (_dir, _path, view, cx) = open(cx, &twelve());
+        view.update(cx, |logs, _| logs.set_query_for_screens("failed"));
+        click(cx, CONTEXT_ID);
+        assert!(cx.debug_bounds("logs-context-3").is_some());
+        click(cx, HIGHLIGHT_ID);
+        click(cx, FILTER_ID);
+        assert!(cx.debug_bounds(CONTEXT_ID).is_some());
+        assert!(cx.debug_bounds("logs-context-3").is_none());
     }
 }

@@ -101,6 +101,9 @@ pub struct LogLine {
     lower: String,
     /// Characters in `raw`: how wide the line is unwrapped, in a mono face.
     chars: usize,
+    /// It matches the current search: set when the line arrives and when
+    /// the query changes, so a poll searches only the new lines.
+    hit: bool,
 }
 
 impl LogLine {
@@ -130,6 +133,7 @@ impl LogLine {
                 raw: SharedString::default(),
                 lower: String::new(),
                 chars: 0,
+                hit: false,
             })
         })();
         let mut parsed = parsed.unwrap_or_else(|| Self {
@@ -142,6 +146,7 @@ impl LogLine {
             raw: SharedString::default(),
             lower: String::new(),
             chars: 0,
+            hit: false,
         });
         parsed.lower = line.to_lowercase();
         parsed.chars = line.chars().count();
@@ -230,6 +235,8 @@ pub struct LogView {
     widest: usize,
     /// Lines kept at each level, kept as lines come and go.
     counts: [usize; 4],
+    /// Bumped whenever the rows are rebuilt.
+    generation: u64,
 }
 
 impl Default for LogView {
@@ -251,6 +258,7 @@ impl Default for LogView {
             visible: Vec::new(),
             widest: 0,
             counts: [0; 4],
+            generation: 0,
         }
     }
 }
@@ -285,7 +293,8 @@ impl LogView {
     pub fn append(&mut self, text: &str) -> usize {
         let mut errors = 0;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            let line = LogLine::parse(line);
+            let mut line = LogLine::parse(line);
+            line.hit = line.matches(&self.query_words);
             self.counts[line.level as usize] += 1;
             errors += usize::from(line.level == Level::Error);
             self.lines.push(line);
@@ -304,6 +313,9 @@ impl LogView {
 
     pub fn set_query(&mut self, query: &str) {
         self.query_words = query.split_whitespace().map(str::to_lowercase).collect();
+        for line in &mut self.lines {
+            line.hit = line.matches(&self.query_words);
+        }
         self.opened.clear();
         // A new search starts at its first match.
         self.active = None;
@@ -383,7 +395,7 @@ impl LogView {
             shown
                 .iter()
                 .copied()
-                .filter(|&index| self.lines[index].matches(&self.query_words))
+                .filter(|&index| self.lines[index].hit)
                 .collect()
         } else {
             Vec::new()
@@ -432,6 +444,7 @@ impl LogView {
             .max()
             .unwrap_or(0);
         self.rows = rows;
+        self.generation += 1;
         self.keep_active();
     }
 
@@ -498,6 +511,11 @@ impl LogView {
                 .find(|&number| number >= active)
                 .or_else(|| numbers().next_back()),
         };
+    }
+
+    /// Changes whenever [`Self::rows`] may have.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The rows the viewport shows, in order.

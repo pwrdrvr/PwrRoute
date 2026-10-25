@@ -225,7 +225,10 @@ their own modules.
   the text scrolls sideways under a fixed gutter (`h_offset`). The
   current match (`LogView::active`, a line number) moves with Enter /
   Shift-Enter and the field's chevrons; Esc returns to it among all the
-  lines. A selection that ends on the newest line grows with new lines.
+  lines. Select since mark, or a Shift-click that reaches the newest
+  line, grows with new lines (`follows_tail`); a plain click or ⌘A stays
+  put. Paused, `sync_list` keeps the line at the top in place whatever
+  changed around it.
   Wrap, Filter/Highlight, Context, Include diagnostics and the Error,
   Warning and Info levels are `settings.json`'s `logs`
   (`settings_store::LogsSettings`); Debug is never stored, nor the
