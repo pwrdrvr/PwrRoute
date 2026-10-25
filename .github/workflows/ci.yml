@@ -26,6 +26,8 @@ permissions:
   pull-requests: read
 
 env:
+  # release.yml's typecheck and test jobs restore this workflow's cache, so
+  # they copy these variables (part of rust-cache's key); change both.
   CARGO_TERM_COLOR: always
   # One pin for every job and for the cache key prefix below.
   RUST_TOOLCHAIN: "1.97"

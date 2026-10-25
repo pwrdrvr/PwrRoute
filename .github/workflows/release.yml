@@ -26,6 +26,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # One pin for every job; must equal ci.yml's, which is in its cache keys.
+  RUST_TOOLCHAIN: "1.97"
 
 jobs:
   # Stub. PwrGit's equivalent compares Winget and Homebrew with the release
@@ -38,13 +40,24 @@ jobs:
       - name: Not configured yet
         run: echo "::notice::No Winget or Homebrew package exists yet; nothing to audit. See .github/workflows/README.md."
 
-  prepare:
-    name: Check release metadata, lint and test
+  # Lint and test are two jobs, in parallel, as in ci.yml: clippy only checks
+  # (metadata) while the tests compile code, so in one job the workspace is
+  # compiled twice in a row. Each job also restores the cache main's CI saved
+  # for its counterpart there. A tag can read the default branch's caches,
+  # and rust-cache's key is the job id, the installed toolchains and every
+  # CARGO*/RUST* variable, so the job ids (`typecheck`, `test`), the env
+  # below, the toolchain install and the prune step must match ci.yml's.
+  # Without them a tag compiled cold: 30 minutes for v0.2.2.
+  typecheck:
+    name: Check release metadata and lint
     needs: distribution-audit
     runs-on: ubuntu-24.04
-    # A tag ref starts with a cold Rust cache: lint and test compile the
-    # workspace twice from scratch, which took 30 minutes for v0.1.0-rc.1.
+    # Room for a cold run, should main's cache have been evicted.
     timeout-minutes: 60
+    env:
+      # As in ci.yml; part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -58,10 +71,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
 
+      # Before rust-cache: its key hashes every installed toolchain.
+      - name: Keep only the pinned Rust toolchain
+        shell: bash
+        run: ./scripts/ci/prune-rust-toolchains.sh
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
+          # Restore main's cache; a tag's own cache no later run could read.
+          save-if: false
 
       - name: Install cargo-deny and cargo-about
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
@@ -78,12 +100,44 @@ jobs:
       - name: Lint
         run: cargo xtask lint
 
+  test:
+    name: Test
+    needs: distribution-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install GPUI system libraries
+        run: ./scripts/ci/install-linux-deps.sh
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Keep only the pinned Rust toolchain
+        shell: bash
+        run: ./scripts/ci/prune-rust-toolchains.sh
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
+          save-if: false
+
       - name: Test
         run: cargo xtask test
 
   macos-prepare:
     name: Build macOS universal and prepare signing input
-    needs: prepare
+    needs: [typecheck, test]
     runs-on: macos-26
     timeout-minutes: 60
     outputs:
@@ -98,7 +152,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -359,7 +413,7 @@ jobs:
 
   windows-prepare:
     name: Build Windows x64 and prepare signing input
-    needs: prepare
+    needs: [typecheck, test]
     runs-on: windows-2025
     timeout-minutes: 45
     outputs:
@@ -380,7 +434,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -611,7 +665,7 @@ jobs:
   # they are; see README.md beside this file.
   linux:
     name: Package Linux (${{ matrix.arch }})
-    needs: prepare
+    needs: [typecheck, test]
     strategy:
       fail-fast: false
       matrix:
@@ -637,7 +691,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -677,7 +731,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: "1.97"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       # One directory per artifact: merging would let a same-named file from
       # one platform silently replace another's.
