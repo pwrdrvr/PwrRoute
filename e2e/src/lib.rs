@@ -54,9 +54,10 @@ const CONFIG_ENV: &str = "PWRROUTE_E2E_CONFIG";
 /// How long the app may take to answer on its socket after launch. A cold
 /// start under CI load, with a debug build, is slow.
 pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long the app may take to paint its main window's first frame, once
-/// its socket answers. Waited out through `ping`, which never needs the UI
-/// thread; see [`App::wait_for_main_window`].
+/// How long the app may take, once its socket answers, to paint its main
+/// window's first frame and start serving the hook on its UI thread. Waited
+/// out through `ping`, which never needs the UI thread; see
+/// [`App::wait_for_startup`].
 pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 /// The default for [`App::wait_for`].
 pub const WAIT: Duration = Duration::from_secs(10);
@@ -473,8 +474,8 @@ impl App {
 
     /// Waits for the main window to open and paint, and returns its state.
     ///
-    /// First the app's startup, through `ping` ([`wait_for_first_paint`](
-    /// Self::wait_for_first_paint)), then the window's state from the UI
+    /// First the app's startup, through `ping` ([`wait_for_startup`](
+    /// Self::wait_for_startup)), then the window's state from the UI
     /// thread, which by then is serving the hook.
     ///
     /// A launch from a test starts in the background, where another window
@@ -482,7 +483,7 @@ impl App {
     /// forward once, as the Dock icon would. Hidden alone does not fail the
     /// wait: macOS reports a covered window hidden and GPUI still draws it.
     pub fn wait_for_main_window(&self) -> Result<Value> {
-        self.wait_for_first_paint()?;
+        self.wait_for_startup()?;
         let state = self.wait_for("the main window to paint", LAUNCH_TIMEOUT, |state| {
             let painted = state["main"]["frames"].as_u64().unwrap_or(0) > 0
                 && state["main"]["regions"]["titleStrip"].is_object();
@@ -513,8 +514,9 @@ impl App {
         Ok(answer["startup"].as_array().cloned().unwrap_or_default())
     }
 
-    /// Waits until the app reports its main window's first frame, asking
-    /// with `ping`, which is answered off the UI thread.
+    /// Waits until the app reports its main window's first frame and a UI
+    /// thread serving the hook (the `painted` and `serving` stages, in either
+    /// order), asking with `ping`, which is answered off the UI thread.
     ///
     /// Until then the UI thread is still starting: GPUI's platform, the
     /// window's renderer, the first layout. On a fresh CI machine that takes
@@ -525,24 +527,25 @@ impl App {
     /// answer is a hang and fails on the usual timeouts.
     ///
     /// Where the time went is saved as `startup.json` in the artifacts.
-    pub fn wait_for_first_paint(&self) -> Result<()> {
+    pub fn wait_for_startup(&self) -> Result<()> {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         loop {
             let stages = self
                 .startup()
-                .context("waiting for the main window's first frame")?;
-            let painted = stages.iter().any(|s| s["stage"] == "painted");
-            if painted || Instant::now() >= deadline {
+                .context("waiting for the app to finish starting")?;
+            let reached = |stage: &str| stages.iter().any(|s| s["stage"] == stage);
+            let started = reached("painted") && reached("serving");
+            if started || Instant::now() >= deadline {
                 let report = json!({
                     "socketMs": self.answered.map(|d| d.as_millis() as u64),
-                    "waitedMs": self.launched.elapsed().as_millis() as u64,
+                    "sinceLaunchMs": self.launched.elapsed().as_millis() as u64,
                     "stages": stages,
                 });
                 let _ = fs::write(
                     self.harness.artifacts.join("startup.json"),
                     serde_json::to_string_pretty(&report)?,
                 );
-                if painted {
+                if started {
                     return Ok(());
                 }
                 self.screenshot("startup-timeout");
@@ -550,8 +553,9 @@ impl App {
                     .last()
                     .map_or_else(|| "none".to_owned(), |s| s["stage"].to_string());
                 bail!(
-                    "the main window had not painted {STARTUP_TIMEOUT:?} after the socket answered; \
-                     the last startup stage reached was {last}: {report}; see {}",
+                    "the app had not painted its main window and started serving the hook \
+                     {STARTUP_TIMEOUT:?} after the socket answered; the last startup stage \
+                     reached was {last}: {report}; see {}",
                     self.harness.artifacts.join("app.log").display()
                 );
             }

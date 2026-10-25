@@ -63,12 +63,13 @@ after a short wait for a launching link, so `serving` comes before `window`
 there. The app also writes each stage to its log, which goes to stderr as
 well as `main.log` while the hook is on, so the harness's `app.log` has it.
 
-The harness waits for `painted` with `ping` before it asks for `state`
-(`App::wait_for_first_paint`): until then the UI thread is still starting,
-which on a fresh CI machine's first launch has taken from a second to more
-than half a minute, and a `state` sent meanwhile only waits behind it. A
-launch that never paints fails naming its last stage; `startup.json` in the
-test's artifacts records the stages and when the socket answered.
+The harness waits for `painted` and `serving` with `ping` before it asks
+for `state` (`App::wait_for_startup`): until then the UI thread is still
+starting, which on a fresh CI machine's first launch has taken from a
+second to more than half a minute, and a `state` sent meanwhile only waits
+behind it. On Windows the first frame is drawn inside `open_window`, before `serving`. A
+launch that does not get there fails naming its last stage; `startup.json`
+in the test's artifacts records the stages and when the socket answered.
 
 `state`:
 
