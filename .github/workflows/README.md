@@ -158,7 +158,8 @@ runs cargo or installs project dependencies.
 | Job | Environment | Does |
 |---|---|---|
 | `distribution-audit` | — | Stub (see below). |
-| `prepare` | — | `cargo xtask release-check`, `lint`, `test` on Linux. |
+| `typecheck` | — | `cargo xtask release-check` and `lint` on Linux. |
+| `test` | — | `cargo xtask test` on Linux, beside `typecheck`. Both restore main's CI cache, so their job ids, env and toolchain steps match `ci.yml`'s. |
 | `macos-prepare` | — | `cargo xtask bundle --universal --app-only --require-icon-catalog`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, the DMG's `background.png`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
 | `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
 | `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1`, `PwrRoute.ico` and the release notes. |
