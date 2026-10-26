@@ -100,12 +100,7 @@ pub fn set_default() -> Result<DefaultRequest> {
 /// The scheme a request asks for: `https` once `http` is PwrRoute's and
 /// `https` is not, else `http`.
 fn scheme_to_request(status: &DefaultStatus) -> &'static str {
-    let ours = |handler: &Option<String>| {
-        handler
-            .as_deref()
-            .is_some_and(|handler| handler.eq_ignore_ascii_case(BUNDLE_ID))
-    };
-    if ours(&status.http) && !ours(&status.https) {
+    if is_ours(status.http.as_deref()) && !is_ours(status.https.as_deref()) {
         "https"
     } else {
         "http"
@@ -200,15 +195,16 @@ pub fn app_display_name(bundle_id: &str) -> Option<String> {
     })
 }
 
+/// Whether a scheme's handler, as LaunchServices names it, is PwrRoute.
+fn is_ours(handler: Option<&str>) -> bool {
+    handler.is_some_and(|handler| handler.eq_ignore_ascii_case(BUNDLE_ID))
+}
+
 pub fn status() -> Result<DefaultStatus> {
     let http = launch_services::default_handler("http");
     let https = launch_services::default_handler("https");
-    let ours = |h: &Option<String>| {
-        h.as_deref()
-            .is_some_and(|h| h.eq_ignore_ascii_case(BUNDLE_ID))
-    };
     Ok(DefaultStatus {
-        is_default: ours(&http) && ours(&https),
+        is_default: is_ours(http.as_deref()) && is_ours(https.as_deref()),
         http,
         https,
     })
@@ -229,7 +225,8 @@ mod tests {
     #[test]
     fn one_scheme_is_asked_for_and_https_only_when_left_behind() {
         let edge = Some("com.microsoft.edgemac");
-        let ours = Some("com.pwrdrvr.PwrRoute");
+        let upper = BUNDLE_ID.to_ascii_uppercase();
+        let ours = Some(upper.as_str());
         assert_eq!(scheme_to_request(&status(edge, edge)), "http");
         assert_eq!(scheme_to_request(&status(None, None)), "http");
         assert_eq!(scheme_to_request(&status(edge, ours)), "http");
