@@ -66,14 +66,14 @@ fn main() -> Result<()> {
 /// Cheapest first, so a formatting slip fails in a second, not after clippy.
 fn lint() -> Result<()> {
     cargo(&["fmt", "--all", "--", "--check"])?;
-    run(Command::new("node")
-        .args([
-            "--test",
-            "scripts/ci/classify-changes.test.cjs",
-            "scripts/dev/start.test.cjs",
-        ])
-        .current_dir(root()))
-    .context("Node.js is required to test the CI classifier and dev Start action")?;
+    let mut node = Command::new("node");
+    node.args(["--test", "scripts/ci/classify-changes.test.cjs"]);
+    // Start's subprocess mocks require Bash and POSIX executable permissions.
+    if cfg!(unix) {
+        node.arg("scripts/dev/start.test.cjs");
+    }
+    run(node.current_dir(root()))
+        .context("Node.js is required to run the repository's JavaScript tests")?;
     cargo(&[
         "clippy",
         "--workspace",
