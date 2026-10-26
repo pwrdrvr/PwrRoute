@@ -23,7 +23,9 @@ git -C ~/pwrdrvr/PwrRoute fetch origin && git -C ~/pwrdrvr/PwrRoute tag -a vX.Y.
 If main advanced and the user selects the earlier release commit, replace only
 the tag command's `origin/main` target with that verified full commit SHA and
 explain the selected target. If the user wants the later commits included,
-reconcile the changelog and rerun preparation checks for that target first.
+prepare a follow-up release-prep PR with reconciled changelog coverage and
+rerun the preparation checks. Wait for the user to merge it, then treat that
+new release-prep merge commit as the release target throughout verification.
 
 The user's push may print `Bypassed rule violations` about restricted tag
 creation; this has been expected for the user's permitted tag creation. It is
