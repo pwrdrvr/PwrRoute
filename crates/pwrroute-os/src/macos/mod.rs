@@ -84,12 +84,32 @@ pub fn unregister() -> Result<()> {
     Ok(())
 }
 
+/// Asks for one scheme, so macOS shows one prompt: each call puts up its
+/// own "change your default web browser?" dialog (macOS 27 stacks them),
+/// and the answer to `http`'s makes PwrRoute the default web browser,
+/// `https` and `public.html` with it. Only a request that left `https`
+/// behind asks for it, on the next try.
 pub fn set_default() -> Result<DefaultRequest> {
     app_bundle()?;
-    for scheme in ["http", "https"] {
-        launch_services::set_default_handler(scheme, BUNDLE_ID)?;
-    }
+    let status = status()?;
+    let scheme = scheme_to_request(&status);
+    launch_services::set_default_handler(scheme, BUNDLE_ID)?;
     Ok(DefaultRequest::Prompted)
+}
+
+/// The scheme a request asks for: `https` once `http` is PwrRoute's and
+/// `https` is not, else `http`.
+fn scheme_to_request(status: &DefaultStatus) -> &'static str {
+    let ours = |handler: &Option<String>| {
+        handler
+            .as_deref()
+            .is_some_and(|handler| handler.eq_ignore_ascii_case(BUNDLE_ID))
+    };
+    if ours(&status.http) && !ours(&status.https) {
+        "https"
+    } else {
+        "http"
+    }
 }
 
 /// System Settings › Desktop & Dock, which holds "Default web browser".
@@ -192,4 +212,28 @@ pub fn status() -> Result<DefaultStatus> {
         http,
         https,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(http: Option<&str>, https: Option<&str>) -> DefaultStatus {
+        DefaultStatus {
+            is_default: false,
+            http: http.map(str::to_owned),
+            https: https.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn one_scheme_is_asked_for_and_https_only_when_left_behind() {
+        let edge = Some("com.microsoft.edgemac");
+        let ours = Some("com.pwrdrvr.PwrRoute");
+        assert_eq!(scheme_to_request(&status(edge, edge)), "http");
+        assert_eq!(scheme_to_request(&status(None, None)), "http");
+        assert_eq!(scheme_to_request(&status(edge, ours)), "http");
+        assert_eq!(scheme_to_request(&status(ours, edge)), "https");
+        assert_eq!(scheme_to_request(&status(ours, None)), "https");
+    }
 }
