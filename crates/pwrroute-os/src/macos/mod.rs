@@ -16,9 +16,9 @@ use std::{
 
 use anyhow::{Result, bail};
 use dispatch2::DispatchQueue;
-use objc2::{MainThreadMarker, rc::autoreleasepool};
+use objc2::{MainThreadMarker, rc::autoreleasepool, runtime::NSObjectProtocol, sel};
 use objc2_app_kit::{NSApplication, NSRunningApplication, NSWorkspace};
-use objc2_foundation::{NSAppleEventManager, NSBundle, NSString};
+use objc2_foundation::{NSAppleEventManager, NSBundle, NSString, NSURL};
 use pwrroute_router::OpenerInfo;
 
 use crate::{
@@ -90,17 +90,32 @@ pub fn unregister() -> Result<()> {
 /// `https` and `public.html` with it. Only a request that left `https`
 /// behind asks for it, on the next try.
 pub fn set_default() -> Result<DefaultRequest> {
-    app_bundle()?;
-    let status = status()?;
-    let scheme = scheme_to_request(&status);
-    launch_services::set_default_handler(scheme, BUNDLE_ID)?;
+    let bundle = app_bundle()?;
+    let scheme = scheme_to_request(
+        is_current_handler("http", &bundle),
+        is_current_handler("https", &bundle),
+    );
+    let workspace = NSWorkspace::sharedWorkspace();
+    if workspace.respondsToSelector(sel!(
+        setDefaultApplicationAtURL:toOpenURLsWithScheme:completionHandler:
+    )) {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&bundle.to_string_lossy()));
+        workspace.setDefaultApplicationAtURL_toOpenURLsWithScheme_completionHandler(
+            &url,
+            &NSString::from_str(scheme),
+            None,
+        );
+    } else {
+        // macOS 11 predates NSWorkspace's path-specific API.
+        launch_services::set_default_handler(scheme, BUNDLE_ID)?;
+    }
     Ok(DefaultRequest::Prompted)
 }
 
-/// The scheme a request asks for: `https` once `http` is PwrRoute's and
-/// `https` is not, else `http`.
-fn scheme_to_request(status: &DefaultStatus) -> &'static str {
-    if is_ours(status.http.as_deref()) && !is_ours(status.https.as_deref()) {
+/// Ask for `https` once `http` selects this bundle and `https` does not,
+/// otherwise `http`. Copies with the same bundle id can have different paths.
+fn scheme_to_request(http_is_current: bool, https_is_current: bool) -> &'static str {
+    if http_is_current && !https_is_current {
         "https"
     } else {
         "http"
@@ -213,34 +228,67 @@ fn is_ours(handler: Option<&str>) -> bool {
 pub fn status() -> Result<DefaultStatus> {
     let http = launch_services::default_handler("http");
     let https = launch_services::default_handler("https");
+    let mut is_default = is_ours(http.as_deref()) && is_ours(https.as_deref());
+    if is_default && let Ok(bundle) = app_bundle() {
+        is_default = ["http", "https"]
+            .into_iter()
+            .all(|scheme| is_current_handler(scheme, &bundle));
+    }
     Ok(DefaultStatus {
-        is_default: is_ours(http.as_deref()) && is_ours(https.as_deref()),
+        is_default,
         http,
         https,
     })
+}
+
+fn is_current_handler(scheme: &str, bundle: &Path) -> bool {
+    let url = NSURL::URLWithString(&NSString::from_str(&format!("{scheme}://example.com")));
+    let handler =
+        url.and_then(|url| NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url));
+    let path = handler
+        .and_then(|url| url.path())
+        .map(|s| PathBuf::from(s.to_string()));
+    same_bundle(path.as_deref(), bundle)
+}
+
+fn same_bundle(handler: Option<&Path>, current: &Path) -> bool {
+    handler.is_some_and(
+        |handler| match (handler.canonicalize(), current.canonicalize()) {
+            (Ok(handler), Ok(current)) => handler == current,
+            _ => handler == current,
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn status(http: Option<&str>, https: Option<&str>) -> DefaultStatus {
-        DefaultStatus {
-            is_default: false,
-            http: http.map(str::to_owned),
-            https: https.map(str::to_owned),
-        }
+    #[test]
+    fn one_scheme_is_asked_for_and_https_only_when_left_behind() {
+        assert_eq!(scheme_to_request(false, false), "http");
+        assert_eq!(scheme_to_request(false, true), "http");
+        assert_eq!(scheme_to_request(true, false), "https");
+        assert_eq!(scheme_to_request(true, true), "http");
     }
 
     #[test]
-    fn one_scheme_is_asked_for_and_https_only_when_left_behind() {
-        let edge = Some("com.microsoft.edgemac");
-        let upper = BUNDLE_ID.to_ascii_uppercase();
-        let ours = Some(upper.as_str());
-        assert_eq!(scheme_to_request(&status(edge, edge)), "http");
-        assert_eq!(scheme_to_request(&status(None, None)), "http");
-        assert_eq!(scheme_to_request(&status(edge, ours)), "http");
-        assert_eq!(scheme_to_request(&status(ours, edge)), "https");
-        assert_eq!(scheme_to_request(&status(ours, None)), "https");
+    fn an_installed_copy_does_not_make_the_worktree_copy_default() {
+        let worktree = Path::new("/worktrees/feature/target/dev/PwrRoute.app");
+        assert!(same_bundle(Some(worktree), worktree));
+        assert!(!same_bundle(
+            Some(Path::new("/Applications/PwrRoute.app")),
+            worktree
+        ));
+        assert!(!same_bundle(None, worktree));
+        // Even with the same bundle id, a split between copies must ask
+        // for https after http has moved to this checkout.
+        assert_eq!(
+            scheme_to_request(
+                same_bundle(Some(worktree), worktree),
+                same_bundle(Some(Path::new("/Applications/PwrRoute.app")), worktree),
+            ),
+            "https"
+        );
     }
 }

@@ -72,9 +72,15 @@ pub struct Args {
     pub config: Option<PathBuf>,
     /// Open the first-run window (`--first-run`), whatever has run before.
     pub first_run: bool,
+    /// Explicitly request default-browser ownership on startup.
+    pub make_default: bool,
 }
 
 impl Args {
+    pub fn request_default_on_startup(&self, under_e2e: bool) -> bool {
+        self.make_default && !self.dry_run && !under_e2e
+    }
+
     pub fn from_env() -> Self {
         Self::parse(env::args_os().collect()).with_e2e_env(|key| env::var_os(key))
     }
@@ -105,6 +111,7 @@ impl Args {
             match arg {
                 "--dry-run" => args.dry_run = true,
                 "--first-run" => args.first_run = true,
+                "--make-default" => args.make_default = true,
                 "--config" => args.config = rest.next().map(PathBuf::from),
                 _ => {
                     if let Some(path) = arg.strip_prefix("--config=") {
@@ -777,6 +784,16 @@ mod tests {
         assert!(args.links.is_empty() && !args.dry_run && !args.first_run);
 
         assert!(parse(&["pwrroute", "--first-run"]).first_run);
+    }
+
+    #[test]
+    fn startup_default_request_requires_an_explicit_flag_and_a_live_launch() {
+        assert!(!parse(&["pwrroute"]).request_default_on_startup(false));
+        assert!(parse(&["pwrroute", "--make-default"]).request_default_on_startup(false));
+        assert!(
+            !parse(&["pwrroute", "--make-default", "--dry-run"]).request_default_on_startup(false)
+        );
+        assert!(!parse(&["pwrroute", "--make-default"]).request_default_on_startup(true));
     }
 
     fn browser(name: &str, app_type: AppType) -> Browser {

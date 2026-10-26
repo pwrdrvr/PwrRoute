@@ -513,7 +513,8 @@ their own modules.
   (`onboarding::main_window_display`); closing the window only marks it
   done. `default_browser.rs` is the only caller of
   `pwrroute_os::set_default_browser`, from a click (Settings, first run's
-  last step, the tray's "Make default browser…" row); its `Os` struct takes
+  last step, the tray's "Make default browser…" row) or an explicit
+  `--make-default` launch (PwrAgent's Start action); its `Os` struct takes
   fakes, so tests never reach the OS. After a request it re-reads the
   status every second for a minute (`POLL_EVERY`, `POLL_FOR`) and on
   window activation. LaunchServices can still name the old browser just
@@ -526,8 +527,8 @@ their own modules.
   It also re-reads every `RECHECK_EVERY` (a minute) for the life of the
   app and when the tray dropdown opens, so a router with no window
   notices losing the default; the tray chip and its Make default row
-  follow the registrar. Never wire registration into a test or a launch
-  path that runs without a click.
+  follow the registrar. Never wire registration into a test or an ordinary
+  launch. `--make-default` is ignored with `--dry-run` or the E2E hook.
 - **Updates (`updater.rs`).** Velopack's auto-apply at startup is off
   (`STARTUP`): a launch is usually for a link, and applying first would
   drop it. A downloaded package installs from Quit (`app_menu::quit`,

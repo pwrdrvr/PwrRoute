@@ -33,7 +33,8 @@ pub const DESKTOP_ID: &str = "pwrroute.desktop";
 /// Which app handles web links now.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DefaultStatus {
-    /// PwrRoute handles both `http` and `https`.
+    /// PwrRoute handles both `http` and `https`. A bundled macOS app also
+    /// checks that both select its path, rather than another installed copy.
     pub is_default: bool,
     /// The `http` handler as the OS names it: a bundle id, ProgID or desktop
     /// file id.

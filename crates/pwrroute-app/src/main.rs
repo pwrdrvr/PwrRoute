@@ -3,9 +3,8 @@
 //! The first launch becomes the router (see [`router`]) and stays running
 //! with every window closed; later launches hand it their links and exit.
 //! The window draws "Rules with editor" from the design review over contrived
-//! fixture rules. Nothing here makes PwrRoute the default browser: that is an
-//! explicit action, a click in first run or Settings that
-//! [`default_browser`] turns into `pwrroute_os::set_default_browser`.
+//! fixture rules. Default-browser ownership requires an explicit action:
+//! a click in first run or Settings, or `--make-default` (the dev Start action).
 
 // A window, not a console program, when built for Windows.
 #![windows_subsystem = "windows"]
@@ -204,6 +203,12 @@ fn main() -> ExitCode {
         settings_store::install(resident.settings.clone(), Some(resident.handle()), cx);
         tray::install(Some(resident.handle()), cx);
         default_browser::install(default_browser::Os::real(), cx);
+        if args.request_default_on_startup(e2e::requested())
+            && !default_browser::state(cx).is_default()
+            && let Err(error) = default_browser::request(cx)
+        {
+            log::error!("could not request default-browser ownership: {error:#}");
+        }
         tray::follow_default_browser(cx);
         // Local agents: MCP on <data dir>/mcp.sock, beside the router's.
         mcp::install(

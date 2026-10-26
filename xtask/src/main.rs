@@ -26,11 +26,13 @@ usage: cargo xtask <task>
                        the tag, Cargo.toml version and CHANGELOG.md agree;
                        optionally write that version's notes
   bundle [--universal] [--sign IDENTITY] [--notarize] [--app-only]
-         [--require-icon-catalog]
+         [--require-icon-catalog] [--debug]
                        macOS: <target>/bundle/PwrRoute.app, its zip and DMG
                        (--app-only: the app alone, for vpk pack;
                        --require-icon-catalog: fail, not fall back to the
-                       legacy .icns, without Xcode 26's actool)
+                       legacy .icns, without Xcode 26's actool;
+                       --debug --app-only: native debug app at
+                       <workspace>/target/dev/PwrRoute.app, even with a shared target)
   package-linux        Linux: <target>/package/*.tar.gz and *.deb
   e2e [--release] [--pending] [--screenshots] [-- TEST-ARGS]
                        build the app and run the Desktop E2E suite against
@@ -65,9 +67,13 @@ fn main() -> Result<()> {
 fn lint() -> Result<()> {
     cargo(&["fmt", "--all", "--", "--check"])?;
     run(Command::new("node")
-        .args(["--test", "scripts/ci/classify-changes.test.cjs"])
+        .args([
+            "--test",
+            "scripts/ci/classify-changes.test.cjs",
+            "scripts/dev/start.test.cjs",
+        ])
         .current_dir(root()))
-    .context("Node.js is required to test the CI classifier")?;
+    .context("Node.js is required to test the CI classifier and dev Start action")?;
     cargo(&[
         "clippy",
         "--workspace",

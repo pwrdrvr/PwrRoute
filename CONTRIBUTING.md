@@ -27,6 +27,19 @@ cargo run -p pwrroute-app
 On Linux, install GPUI's system libraries first with
 `scripts/ci/install-linux-deps.sh` (Debian and Ubuntu).
 
+On macOS, PwrAgent's **Start** action (from
+`.codex/environments/environment.toml`) runs `bash scripts/dev/start.sh`.
+It builds the debug app, quits the running PwrRoute copy, then bundles and
+launches this checkout's app with `--make-default`. macOS may ask you to
+approve the default-browser change. It uses your usual rules and settings.
+
+The app stays at `<worktree>/target/dev/PwrRoute.app` across rebuilds, even
+when `CARGO_TARGET_DIR` points to a shared build cache. Each worktree has its
+own app path; switching worktrees may require approving another default
+change. To build that bundle without launching or requesting ownership, run
+`cargo xtask bundle --debug --app-only`. A normal launch never requests
+ownership automatically, and `--dry-run` ignores `--make-default`.
+
 ## Repository map
 
 - `crates/pwrroute-app` — the GPUI window, binary `pwrroute`.
@@ -74,8 +87,8 @@ If you skip a broader check, explain why in the pull request.
 - No `unsafe` outside a module that exists for it and says why.
 - Treat URLs as private data. Keep full URLs in memory; logs on disk carry
   timings, never URL contents.
-- Never change the OS default browser except through the explicit action in
-  the app.
+- Change the OS default browser only through an explicit action in the app
+  or a launch with `--make-default` (including PwrAgent's Start action).
 
 ## Releases
 

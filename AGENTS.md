@@ -68,6 +68,7 @@ cargo xtask test                 # every workspace test
 cargo xtask licenses             # regenerate THIRD_PARTY_LICENSES
 cargo xtask e2e                  # build the app, run Desktop E2E against it
 cargo xtask bundle               # macOS: target/bundle/PwrRoute.app, zip, DMG ($CARGO_TARGET_DIR if set)
+bash scripts/dev/start.sh        # macOS: target/dev/PwrRoute.app; requests default ownership
 cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
 cargo run -p pwrroute-app --example screens -- DIR   # macOS: each screen as a PNG
 ```
@@ -118,10 +119,11 @@ Quit from the app menu, or kill the process, to stop it.
 
 PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in`,
 `packaging/linux/pwrroute.desktop`), so the OS can offer it as a browser.
-Becoming the default is an explicit action in the app; never change the
-default browser on a developer machine as a side effect of a test or launch,
-and never call `pwrroute_os::set_default_browser` or `register_browser` from
-one. The one exception is the E2E registration scenarios, which run only on
+Becoming the default requires an explicit app action or `--make-default`
+(PwrAgent's Start action passes it). That flag requests ownership of the
+running bundle's path, so a worktree build can replace `/Applications`.
+It is ignored with `--dry-run` and under the E2E hook. Never request ownership
+from an ordinary launch or test. The E2E registration scenarios run only on
 throwaway CI runners (`e2e/AGENTS.md`).
 
 ## Packaging & releases
