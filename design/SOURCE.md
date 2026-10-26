@@ -115,6 +115,16 @@ the project and re-export here.
   project, then compared by size with the file here. The other canvases,
   `pwrroute.css` and `support.js` are unchanged.
 
+- Updated **2026-10-26**: one canvas added for macOS 27's app data
+  protection (`PwrRoute First Run Profile Access.dc.html`, turn 6): first
+  run's new first step when the scan finds a browser whose profile list is
+  there but may not be read, with a copy of the Files & Folders switches
+  to turn on, Open Files & Folders, Check again and Skip, its partial,
+  still-blocked and skipped states, and the profile select appearing once
+  it is done. Written to the project, then read back and compared by size
+  with the file here. The other canvases, `pwrroute.css` and `support.js`
+  are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -135,7 +145,8 @@ the project and re-export here.
 | `PwrRoute Overview and Setup.dc.html` | Overview, the window's new home (turn 1): hero sentence and state, Today tiles, the route map (rules in evaluation order on the left in a column that widens with the window up to a cap, every installed browser on the right as a card of profile nodes, idle ones under Also installed, private-window nodes; every route drawn dim at rest and traced bright on hover or pin, the live pulse when a link routes, a pinned node, adding a private rule), with the measurements, width table and private-window notes |
 | `PwrRoute Overview States.dc.html` | Overview states (turns 2 and 3): a Finicky config in charge with the Everything else callout and the override on with Undo in place; paused, not the default browser with the setup card, config didn't load, nothing set up yet, default unknown, and a default with no rules while a config is found |
 | `PwrRoute First Run and Everything Else.dc.html` | The revised first run (turn 4: config found and its variants, broken config, no config in two steps, the Everything else segmented control, done, no browsers found, a failed default request) and the Everything else override (turn 5: the Rules banner switch with the overridden defaultBrowser row and its warnings; Settings › Configuration's Everything else row) |
-| `pwrroute.css` | Shared tokens and chrome for all sixteen canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute First Run Profile Access.dc.html` | First run on macOS 27 when a browser's profile list is kept from PwrRoute (turn 6): why, the Files &amp; Folders switches as the user will find them, Open Files &amp; Folders, Check again, Skip, and the profile select once access is on |
+| `pwrroute.css` | Shared tokens and chrome for all seventeen canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.

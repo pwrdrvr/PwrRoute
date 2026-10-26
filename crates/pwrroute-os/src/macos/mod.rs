@@ -116,6 +116,16 @@ pub fn open_settings() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
 }
 
+/// System Settings › Privacy & Security › Files & Folders, where each app's
+/// access to other apps' data is switched on.
+pub fn open_files_and_folders() -> Result<()> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
+}
+
 /// Lets the app with `bundle_id` bring itself forward, when this app is the
 /// active one: macOS 14's cooperative activation lets an app activate
 /// itself only once the active app yields to it. A browser that takes a

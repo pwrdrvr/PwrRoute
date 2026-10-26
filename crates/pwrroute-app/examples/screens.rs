@@ -820,16 +820,19 @@ fn main() {
                     value: "com.google.Chrome".into(),
                     label: BrowserLabel::new("Ch", "Google Chrome", None),
                     profiles: vec!["Personal".into(), "Work".into()],
+                    profiles_blocked: false,
                 },
                 BrowserChoice {
                     value: "org.mozilla.firefox".into(),
                     label: BrowserLabel::new("Ff", "Firefox", None),
                     profiles: vec!["default-release".into()],
+                    profiles_blocked: false,
                 },
                 BrowserChoice {
                     value: "com.apple.Safari".into(),
                     label: BrowserLabel::new("Sf", "Safari", None),
                     profiles: Vec::new(),
+                    profiles_blocked: false,
                 },
             ],
             finicky: Some(FinickyConfig {
@@ -852,6 +855,8 @@ fn main() {
             on_precedence: std::rc::Rc::new(|_, _| Ok(())),
             on_import: std::rc::Rc::new(|_, _, _| {}),
             on_rescan: std::rc::Rc::new(|_| Vec::new()),
+            on_open_access_settings: std::rc::Rc::new(|_| Ok(())),
+            on_reread: std::rc::Rc::new(|_| Vec::new()),
             on_set_default_browser: std::rc::Rc::new(|_| Ok(())),
             on_finish: std::rc::Rc::new(|_, _| {}),
         };
@@ -1244,16 +1249,19 @@ fn main() {
                 value: "com.google.Chrome".into(),
                 label: BrowserLabel::new("Ch", "Google Chrome", None),
                 profiles: vec!["Personal".into(), "Work".into()],
+                profiles_blocked: false,
             },
             BrowserChoice {
                 value: "org.mozilla.firefox".into(),
                 label: BrowserLabel::new("Ff", "Firefox", None),
                 profiles: vec!["default-release".into()],
+                profiles_blocked: false,
             },
             BrowserChoice {
                 value: "com.apple.Safari".into(),
                 label: BrowserLabel::new("Sf", "Safari", None),
                 profiles: Vec::new(),
+                profiles_blocked: false,
             },
         ];
         let config = FinickyConfig {
@@ -1361,11 +1369,49 @@ fn main() {
             default_error: Some("Launch Services returned error -54".into()),
             ..plain.clone()
         };
+        // 6a: macOS kept Chrome's and Firefox's profile lists from
+        // PwrRoute, so the access step comes first.
+        let blocked_browsers: Vec<BrowserChoice> = browsers
+            .iter()
+            .cloned()
+            .map(|mut choice| {
+                if !choice.profiles.is_empty() {
+                    choice.profiles.clear();
+                    choice.profiles_blocked = true;
+                }
+                choice
+            })
+            .collect();
+        let access_blocked = FirstRunModel {
+            browsers: blocked_browsers.clone(),
+            fallback: Some(BrowserLabel::new("Ch", "Google Chrome", None)),
+            access: Some(first_run::ProfileAccess {
+                browsers: browsers[..2].iter().map(|c| c.label.clone()).collect(),
+                ..first_run::ProfileAccess::default()
+            }),
+            ..plain.clone()
+        };
+        // 6b: Chrome turned on, Firefox still off.
+        let access_partial = FirstRunModel {
+            browsers: {
+                let mut some = blocked_browsers;
+                some[0] = browsers[0].clone();
+                some
+            },
+            ..access_blocked.clone()
+        };
+        // 6c: back from System Settings with both on.
+        let access_done = FirstRunModel {
+            browsers: browsers.clone(),
+            ..access_blocked.clone()
+        };
         let hooks = || FirstRunHooks {
             on_fallback: std::rc::Rc::new(|_, _| Ok(())),
             on_precedence: std::rc::Rc::new(|_, _| Ok(())),
             on_import: std::rc::Rc::new(|_, _, _| {}),
             on_rescan: std::rc::Rc::new(|_| Vec::new()),
+            on_open_access_settings: std::rc::Rc::new(|_| Ok(())),
+            on_reread: std::rc::Rc::new(|_| Vec::new()),
             on_set_default_browser: std::rc::Rc::new(|_| Ok(())),
             on_finish: std::rc::Rc::new(|_, _| {}),
         };
@@ -1390,7 +1436,16 @@ fn main() {
             ("first-run-done-broken", done_broken, Picking::None),
             ("first-run-no-browsers", no_browsers, Picking::None),
             ("first-run-default-failed", refused, Picking::None),
+            ("first-run-access-blocked", access_blocked, Picking::None),
+            ("first-run-access-partial", access_partial, Picking::None),
+            ("first-run-access-done", access_done, Picking::None),
         ] {
+            // The access step is tall; its shots show the whole window.
+            let height = if name.starts_with("first-run-access") {
+                860.0
+            } else {
+                600.0
+            };
             let mut cx = HeadlessAppContext::with_platform(
                 gpui_kit::platform::current_platform(true).text_system(),
                 Arc::new(assets::Assets),
@@ -1402,7 +1457,7 @@ fn main() {
                 cx.set_reduce_motion(true);
             });
             let handle = cx
-                .open_window(size(px(680.0), px(600.0)), |_, cx| {
+                .open_window(size(px(680.0), px(height)), |_, cx| {
                     cx.new(|cx| {
                         let mut view = FirstRun::new(model, hooks(), cx);
                         view.picking = picking;

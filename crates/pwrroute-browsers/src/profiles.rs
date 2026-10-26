@@ -3,7 +3,7 @@
 //! argument the browser needs. Ported from Finicky's launcher
 //! (MIT, Copyright (c) 2015-2025 John Sterling).
 
-use std::{fs, path::Path};
+use std::{fs, io, path::PathBuf};
 
 use crate::{
     catalog::{BrowserInfo, ProfileFlag},
@@ -26,17 +26,36 @@ pub struct Profile {
 /// Empty when the browser has no profile flag, nothing is installed, or the
 /// profile index cannot be read.
 pub fn list_profiles(browser: &BrowserInfo, env: &Env) -> Vec<Profile> {
+    read_profiles(browser, env).unwrap_or_default()
+}
+
+/// The profile index is there but this process may not read it: macOS 27
+/// keeps another app's data from an app until the user turns it on in
+/// Privacy & Security › Files & Folders, and the file's `stat` still works.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfilesBlocked {
+    /// The file that could not be read (`Local State`, `profiles.ini`).
+    pub path: PathBuf,
+}
+
+/// [`list_profiles`], telling a profile index that is there but cannot be
+/// read (permission denied) from one that is missing or malformed, which
+/// are `Ok` and empty.
+pub fn read_profiles(browser: &BrowserInfo, env: &Env) -> Result<Vec<Profile>, ProfilesBlocked> {
     let Some(dir) = browser.profile_dir(env) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    match browser.profile_flag() {
-        ProfileFlag::Chromium => read(&dir.join("Local State"))
-            .map(|s| chromium_profiles(&s))
-            .unwrap_or_default(),
-        ProfileFlag::Firefox => read(&dir.join("profiles.ini"))
-            .map(|s| firefox_profiles(&s))
-            .unwrap_or_default(),
-        ProfileFlag::None => Vec::new(),
+    let (path, parse): (_, fn(&str) -> Vec<Profile>) = match browser.profile_flag() {
+        ProfileFlag::Chromium => (dir.join("Local State"), chromium_profiles),
+        ProfileFlag::Firefox => (dir.join("profiles.ini"), firefox_profiles),
+        ProfileFlag::None => return Ok(Vec::new()),
+    };
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(parse(&text)),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            Err(ProfilesBlocked { path })
+        }
+        Err(_) => Ok(Vec::new()),
     }
 }
 
@@ -71,10 +90,6 @@ pub(crate) fn resolve(browser: &BrowserInfo, env: &Env, wanted: &str) -> Profile
         (Some(p), _) => ProfileMatch::Found(vec!["-P".into(), p.name.clone()]),
         (None, _) => ProfileMatch::NotFound(profiles.into_iter().map(|p| p.name).collect()),
     }
-}
-
-fn read(path: &Path) -> Option<String> {
-    fs::read_to_string(path).ok()
 }
 
 /// `profile.info_cache` from a Chromium `Local State`, ordered by

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Fixture, LOCAL_STATE, PROFILES_INI};
-use pwrroute_browsers::{Catalog, Platform, Profile, list_profiles};
+use pwrroute_browsers::{Catalog, Platform, Profile, list_profiles, read_profiles};
 
 fn names(profiles: &[Profile]) -> Vec<(&str, &str, bool)> {
     profiles
@@ -66,6 +66,31 @@ fn firefox_profiles_on_every_platform() {
             "{platform:?}"
         );
     }
+}
+
+/// A profile index that is there but may not be read (macOS 27's app data
+/// protection answers `EPERM`; a mode of 000 gives `EACCES`, the same kind)
+/// is blocked, not empty; a missing one is empty.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_profile_index_is_blocked() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let chrome = Catalog::builtin().find("chrome").unwrap();
+    let fx = Fixture::new(Platform::MacOs);
+    let rel = "home/Library/Application Support/Google/Chrome/Local State";
+    assert_eq!(read_profiles(chrome, &fx.env), Ok(Vec::new()));
+    fx.write(rel, LOCAL_STATE);
+    let path = fx.path(rel);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway; there is nothing to block then.
+    if std::fs::read(&path).is_err() {
+        let blocked = read_profiles(chrome, &fx.env).unwrap_err();
+        assert_eq!(blocked.path, path);
+        assert!(list_profiles(chrome, &fx.env).is_empty());
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(names(&read_profiles(chrome, &fx.env).unwrap()), CHROME);
 }
 
 /// Linux has several candidate directories; the one with a profile index

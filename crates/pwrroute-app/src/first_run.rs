@@ -1,8 +1,10 @@
 //! The first-run window: `design/PwrRoute Overview and Setup.dc.html` turn
 //! 4 (artboards 4a-4i).
 //!
-//! Two or three steps, in the order that makes the last one safe: what to
-//! do with a Finicky config, when one was found; where everything else goes
+//! Two to four steps, in the order that makes the last one safe: on macOS,
+//! letting PwrRoute read the browsers' profile lists when the OS kept one
+//! from it (`design/PwrRoute First Run Profile Access.dc.html`, 6a-6c);
+//! what to do with a Finicky config, when one was found; where everything else goes
 //! (the browser that takes links no rule claims, and for a config kept in
 //! charge, who owns that default); and only then the OS default. This
 //! window never touches the OS or a file itself. Its choices go to
@@ -36,8 +38,8 @@ use crate::menu_bar::MenuBar;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::tray::model::BrowserLabel;
 use crate::widgets::{
-    AppBadge, badge, badge_for, caret, field_label, input_box, menu_card, menu_row, profiles_hint,
-    segment, segmented,
+    AppBadge, badge, badge_for, caret, field_label, icon_or, input_box, menu_card, menu_row,
+    profiles_hint, segment, segmented, switch,
 };
 
 /// The element id of the window's root, for tests and the inspector.
@@ -98,6 +100,26 @@ pub struct BrowserChoice {
     /// Its profiles by the names the browser shows (as Settings › Browsers
     /// lists them), for the profile select. Empty: no select.
     pub profiles: Vec<String>,
+    /// The OS kept its profile list from PwrRoute (macOS 27's Files &
+    /// Folders), so `profiles` is empty for want of access.
+    pub profiles_blocked: bool,
+}
+
+/// The profile-access step (design: First Run Profile Access, 6a-6c): the
+/// browsers whose profile lists macOS kept from PwrRoute when the window
+/// opened. They stay the step's subject as the reader turns them on, so
+/// the step can say which ones it can read now.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileAccess {
+    /// By name and badge, in the scan's order.
+    pub browsers: Vec<BrowserLabel>,
+    /// Skip: the step is done with them still blocked.
+    pub skipped: bool,
+    /// Check again found nothing newly readable (6b): the step says the
+    /// switch may need a fresh launch.
+    pub still_blocked: bool,
+    /// Why System Settings did not open, from the last try.
+    pub open_error: Option<String>,
 }
 
 /// The Everything else choice: a browser, and one of its profiles or its
@@ -135,6 +157,9 @@ pub enum Picking {
 /// Finicky config was found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
+    /// "Let PwrRoute see your browser profiles", on macOS when the OS kept
+    /// a browser's profile list from PwrRoute.
+    Access,
     /// "Bring your Finicky config".
     Config,
     /// "Where should everything else go?"
@@ -220,6 +245,9 @@ pub struct FirstRunModel {
     /// Why the last Everything else choice was not saved (`rules.json`
     /// does not load, say): the step keeps the previous answer.
     pub save_error: Option<String>,
+    /// The profile-access step's subject. `None`: every browser's profile
+    /// list could be read when the window opened, and there is no step.
+    pub access: Option<ProfileAccess>,
 }
 
 impl FirstRunModel {
@@ -235,16 +263,19 @@ impl FirstRunModel {
                     value: "com.google.Chrome".to_owned(),
                     label: BrowserLabel::new("Ch", "Google Chrome", None),
                     profiles: vec!["Personal".to_owned(), "Work".to_owned()],
+                    profiles_blocked: false,
                 },
                 BrowserChoice {
                     value: "org.mozilla.firefox".to_owned(),
                     label: BrowserLabel::new("Ff", "Firefox", None),
                     profiles: vec!["default-release".to_owned()],
+                    profiles_blocked: false,
                 },
                 BrowserChoice {
                     value: "com.apple.Safari".to_owned(),
                     label: BrowserLabel::new("Sf", "Safari", None),
                     profiles: Vec::new(),
+                    profiles_blocked: false,
                 },
             ],
             finicky: Some(FinickyConfig {
@@ -332,10 +363,23 @@ impl FirstRunModel {
     /// OS says PwrRoute is the default.
     pub fn steps(&self) -> Vec<(Step, StepState)> {
         use StepState::{Current, Done, Todo};
-        let mut steps = Vec::with_capacity(3);
+        let mut steps = Vec::with_capacity(4);
         let mut open = true;
+        if let Some(access) = &self.access {
+            let state = if access.skipped || self.still_blocked().is_empty() {
+                Done
+            } else {
+                Current
+            };
+            open = state == Done;
+            steps.push((Step::Access, state));
+        }
         if self.finicky.is_some() {
-            let state = if self.import.is_some() { Done } else { Current };
+            let state = match (open, self.import.is_some()) {
+                (false, _) => Todo,
+                (true, true) => Done,
+                (true, false) => Current,
+            };
             open = state == Done;
             steps.push((Step::Config, state));
         }
@@ -407,12 +451,103 @@ impl FirstRunModel {
     /// The header's title.
     pub fn heading(&self) -> &'static str {
         if self.complete() {
-            "Links are routing."
-        } else if self.finicky.is_some() {
-            "Three steps, then links start routing"
-        } else {
-            "Two steps, then links start routing"
+            return "Links are routing.";
         }
+        match self.steps().len() {
+            4 => "Four steps, then links start routing",
+            3 => "Three steps, then links start routing",
+            _ => "Two steps, then links start routing",
+        }
+    }
+
+    /// The access step's browsers whose profile lists are still kept from
+    /// PwrRoute, by the scan as it now stands. One the scan no longer
+    /// finds is not.
+    pub fn still_blocked(&self) -> Vec<&BrowserLabel> {
+        let Some(access) = &self.access else {
+            return Vec::new();
+        };
+        access
+            .browsers
+            .iter()
+            .filter(|label| {
+                self.browsers
+                    .iter()
+                    .any(|choice| choice.label.name == label.name && choice.profiles_blocked)
+            })
+            .collect()
+    }
+
+    /// How many profiles the scan now lists for the access step's browser
+    /// `name`; `None` while it is still blocked.
+    pub fn access_profiles(&self, name: &str) -> Option<usize> {
+        let choice = self
+            .browsers
+            .iter()
+            .find(|choice| choice.label.name == name)?;
+        (!choice.profiles_blocked).then_some(choice.profiles.len())
+    }
+
+    /// The access step's paragraph (6a-6c).
+    pub fn access_detail(&self) -> String {
+        let Some(access) = &self.access else {
+            return String::new();
+        };
+        let all = names(access.browsers.iter());
+        let blocked = self.still_blocked();
+        if blocked.is_empty() {
+            return format!("PwrRoute can read the profiles of {all}.");
+        }
+        let blocked_names = names(blocked.iter().copied());
+        if access.skipped {
+            return format!(
+                "Skipped. Until you turn {} on in Files & Folders, PwrRoute can't list \
+                 {blocked_names}'s profiles, and a link for one of them opens in whichever \
+                 profile the browser picks.",
+                if blocked.len() == 1 { "it" } else { "them" }
+            );
+        }
+        if blocked.len() < access.browsers.len() {
+            let readable = names(
+                access
+                    .browsers
+                    .iter()
+                    .filter(|label| !blocked.iter().any(|b| b.name == label.name)),
+            );
+            let is = if blocked.len() == 1 { "is" } else { "are" };
+            return format!(
+                "PwrRoute can read {readable}'s profiles now. {blocked_names} {is} still blocked."
+            );
+        }
+        let each = if blocked.len() == 1 {
+            "the browser"
+        } else {
+            "each browser"
+        };
+        format!(
+            "macOS blocked PwrRoute from reading the profile list of {blocked_names}, so the \
+             next step can offer {each} but not its profiles, and a rule that names a profile \
+             opens in whichever one the browser picks. PwrRoute reads one file per browser, the \
+             one that names its profiles, and never your history, cookies or passwords."
+        )
+    }
+
+    /// The warning under the access step: System Settings did not open, or
+    /// Check again found nothing new.
+    pub fn access_warning(&self) -> Option<String> {
+        let access = self.access.as_ref()?;
+        if let Some(error) = &access.open_error {
+            let error = error.trim().trim_end_matches('.');
+            return Some(format!(
+                "System Settings didn't open: {error}. Open Privacy & Security \u{203a} Files & \
+                 Folders yourself."
+            ));
+        }
+        (access.still_blocked && !access.skipped && !self.still_blocked().is_empty()).then(|| {
+            "Still blocked. If the switches are already on, quit PwrRoute from the menu bar and \
+             open it again."
+                .to_owned()
+        })
     }
 
     /// The header's line under the title.
@@ -642,6 +777,19 @@ impl FirstRunModel {
     /// A finished step folded to one line (4g): its short title and result.
     pub fn folded(&self, step: Step) -> (&'static str, String) {
         match step {
+            Step::Access => {
+                let all = self
+                    .access
+                    .as_ref()
+                    .map_or_else(String::new, |access| names(access.browsers.iter()));
+                let blocked = self.still_blocked();
+                let result = if blocked.is_empty() {
+                    format!("PwrRoute can read {all}.")
+                } else {
+                    format!("Skipped: {}.", names(blocked.into_iter()))
+                };
+                ("Browser profiles", result)
+            }
             Step::Config => {
                 let path = self
                     .finicky
@@ -795,6 +943,16 @@ pub fn label_for(browsers: &[BrowserChoice], value: &str, profile: &str) -> Brow
     label
 }
 
+/// Browsers by name for a sentence: "A", "A and B", "A, B and C".
+fn names<'a>(labels: impl Iterator<Item = &'a BrowserLabel>) -> String {
+    let names: Vec<&str> = labels.map(|label| label.name.as_str()).collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// "1 rule", "3 rules".
 pub fn plural(count: usize, one: &str, many: &str) -> String {
     if count == 1 {
@@ -902,6 +1060,14 @@ pub struct FirstRunHooks {
     pub on_import: ImportHook,
     /// "Look again": the browsers on this machine, read again.
     pub on_rescan: Ask<Vec<BrowserChoice>>,
+    /// The access step's "Open Files & Folders": System Settings at the
+    /// pane where PwrRoute is let read a browser's profile list. `Err` is
+    /// why it did not open.
+    pub on_open_access_settings: Ask<Result<(), String>>,
+    /// The access step's re-read, on Check again and whenever the window
+    /// comes to the front: the browsers and their profiles read again,
+    /// without reloading their icons.
+    pub on_reread: Ask<Vec<BrowserChoice>>,
     /// "Set as default browser". Only this asks the OS anything. An error
     /// is the OS refusing the request outright; a refused prompt is not.
     pub on_set_default_browser: Ask<Result<(), String>>,
@@ -1072,6 +1238,44 @@ impl FirstRun {
         cx.notify();
     }
 
+    /// The access step's "Open Files & Folders".
+    fn open_access_settings(&mut self, cx: &mut Context<'_, Self>) {
+        let result = (self.hooks.on_open_access_settings)(cx);
+        if let Some(access) = self.model.access.as_mut() {
+            access.open_error = result.err();
+        }
+        cx.notify();
+    }
+
+    /// Reads the browsers' profiles again while the access step is
+    /// current: on Check again (`asked`), which says so when nothing new
+    /// became readable, and whenever the window comes to the front. Never
+    /// on a timer: each blocked read can post macOS's notice again.
+    pub fn recheck_access(&mut self, asked: bool, cx: &mut Context<'_, Self>) {
+        if self.model.state_of(Step::Access) != StepState::Current {
+            return;
+        }
+        let before = self.model.still_blocked().len();
+        self.model.browsers = (self.hooks.on_reread)(cx);
+        let after = self.model.still_blocked().len();
+        if let Some(access) = self.model.access.as_mut() {
+            if asked {
+                access.still_blocked = after > 0 && after == before;
+            } else if after < before {
+                access.still_blocked = false;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The access step's Skip: done, with the profiles left out.
+    fn skip_access(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(access) = self.model.access.as_mut() {
+            access.skipped = true;
+        }
+        cx.notify();
+    }
+
     /// "Look again": read the machine's browsers again, and pick one when
     /// there is one now.
     fn look_again(&mut self, cx: &mut Context<'_, Self>) {
@@ -1219,6 +1423,12 @@ impl Render for FirstRun {
             let numbered = steps.iter().enumerate().map(|(index, (step, state))| {
                 let number = index + 1;
                 match step {
+                    Step::Access => step_card(
+                        number,
+                        Look::from(*state),
+                        "Let PwrRoute see your browser profiles",
+                        access_body(model, *state, cx),
+                    ),
                     Step::Config => step_card(
                         number,
                         config_look(model, *state),
@@ -1904,6 +2114,165 @@ fn config_body(model: &FirstRunModel, state: StepState, cx: &mut Context<'_, Fir
         body.child(error_line(error))
     })
     .child(row)
+}
+
+/// The profile-access step (6a-6c): why, a copy of what Files & Folders
+/// shows under PwrRoute (each browser's switch as the last read found it),
+/// how to get there, and the three answers.
+fn access_body(model: &FirstRunModel, state: StepState, cx: &mut Context<'_, FirstRun>) -> Div {
+    let body = div().flex().flex_col().gap(px(8.0)).child(
+        paragraph(model.access_detail()).debug_selector(|| "first-run-access-detail".into()),
+    );
+    let Some(access) = model
+        .access
+        .as_ref()
+        .filter(|_| state == StepState::Current)
+    else {
+        return body;
+    };
+    // A subject the re-read no longer finds (hidden, uninstalled) is not
+    // blocked any more, so it has no row.
+    let shown: Vec<&BrowserLabel> = access
+        .browsers
+        .iter()
+        .filter(|label| model.browsers.iter().any(|c| c.label.name == label.name))
+        .collect();
+    let last = shown.len().saturating_sub(1);
+    let rows = shown.into_iter().enumerate().map(|(index, label)| {
+        let profiles = model.access_profiles(&label.name);
+        let status = match profiles {
+            Some(count) => text(
+                format!("\u{2713} {}", plural(count, "profile", "profiles")),
+                10.5,
+                500.0,
+                theme::success_text(),
+            ),
+            None => text("Turn on", 10.5, 600.0, theme::accent_bright()),
+        };
+        settings_row(label.badge.clone(), label.name.clone(), true)
+            .debug_selector(move || format!("first-run-access-{index}"))
+            .when(index == last, |row| row.border_b_0())
+            .when(profiles.is_none(), |row| row.bg(theme::bg_row_active()))
+            .child(status)
+            .child(
+                div()
+                    .rounded_full()
+                    .when(profiles.is_none(), |ring| {
+                        ring.border_2().border_color(theme::accent_border())
+                    })
+                    .child(switch(profiles.is_some())),
+            )
+    });
+    let panel = div()
+        .debug_selector(|| "first-run-access-panel".into())
+        .flex()
+        .flex_col()
+        .border_1()
+        .border_color(theme::border_default())
+        .rounded(px(9.0))
+        .bg(theme::bg_app())
+        .overflow_hidden()
+        .child(
+            div()
+                .py(px(7.0))
+                .px(px(12.0))
+                .border_b_1()
+                .border_color(theme::border_faint())
+                .flex()
+                .child(text(
+                    "System Settings \u{203a} Privacy & Security \u{203a} ",
+                    10.5,
+                    500.0,
+                    theme::text_subtle(),
+                ))
+                .child(text(
+                    "Files & Folders",
+                    10.5,
+                    600.0,
+                    theme::text_secondary(),
+                )),
+        )
+        .child(settings_row(
+            badge_for("PwrRoute"),
+            "PwrRoute".to_owned(),
+            false,
+        ))
+        .children(rows);
+    let how = [
+        "Open Files & Folders in System Settings.",
+        "Click \u{25b8} beside PwrRoute to show its apps.",
+        "Turn on each browser shown above. They start off.",
+    ];
+    let how = div().flex().flex_col().gap(px(3.0)).pl(px(2.0)).children(
+        how.into_iter()
+            .enumerate()
+            .map(|(index, line)| paragraph(format!("{}. {line}", index + 1))),
+    );
+    let actions = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(8.0))
+        .child(
+            button(
+                "first-run-access-open",
+                "Open Files & Folders",
+                Kind::Primary,
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_access_settings(cx))),
+        )
+        .child(
+            button("first-run-access-check", "Check again", Kind::Default)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.recheck_access(true, cx))),
+        )
+        .child(
+            button("first-run-access-skip", "Skip", Kind::Quiet)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skip_access(cx))),
+        );
+    body.child(panel)
+        .child(how)
+        .when_some(model.access_warning(), |body, warning| {
+            body.child(warning_note(warning).debug_selector(|| "first-run-access-warning".into()))
+        })
+        .child(actions)
+}
+
+/// One row of the Files & Folders copy: PwrRoute's own (with the open
+/// disclosure), or one of its apps, indented under it. Its 18px icon is the
+/// app's own, as System Settings draws it.
+fn settings_row(app: AppBadge, name: String, kid: bool) -> Div {
+    let icon = icon_or(&app, 18.0, |letters| {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(18.0))
+            .rounded(px(5.0))
+            .border_1()
+            .border_color(theme::border_strong())
+            .bg(theme::bg_elevated())
+            .child(mono(letters, 8.0, 700.0, theme::text_muted()))
+    });
+    div()
+        .flex()
+        .items_center()
+        .gap(px(9.0))
+        .h(px(34.0))
+        .pr(px(12.0))
+        .pl(px(if kid { 34.0 } else { 12.0 }))
+        .border_b_1()
+        .border_color(theme::border_faint())
+        .when(!kid, |row| {
+            row.child(text("\u{25be}", 9.0, 400.0, theme::text_subtle()).w(px(10.0)))
+        })
+        .child(icon)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(text(name, 12.0, 500.0, theme::text_primary())),
+        )
 }
 
 /// `.errl`: the first line of why the config does not load.
@@ -2676,6 +3045,12 @@ mod tests {
         finishes: Rc<RefCell<Vec<Finish>>>,
         /// Set: the Everything else hooks answer this instead of saving.
         save_fails: Rc<RefCell<Option<String>>>,
+        access_opens: Rc<Cell<usize>>,
+        /// Set: Open Files & Folders answers this.
+        access_open_fails: Rc<RefCell<Option<String>>>,
+        rereads: Rc<Cell<usize>>,
+        /// What the next re-read finds.
+        reread_finds: Rc<RefCell<Vec<BrowserChoice>>>,
     }
 
     fn open(cx: &mut TestAppContext) -> (Entity<FirstRun>, Calls, &mut VisualTestContext) {
@@ -2698,7 +3073,15 @@ mod tests {
             default_fails: Rc::default(),
             finishes: Rc::default(),
             save_fails: Rc::default(),
+            access_opens: Rc::default(),
+            access_open_fails: Rc::default(),
+            rereads: Rc::default(),
+            reread_finds: Rc::new(RefCell::new(model.browsers.clone())),
         };
+        let access_opens = calls.access_opens.clone();
+        let access_open_fails = calls.access_open_fails.clone();
+        let rereads = calls.rereads.clone();
+        let reread_finds = calls.reread_finds.clone();
         let fallbacks = calls.fallbacks.clone();
         let precedences = calls.precedences.clone();
         let imports = calls.imports.clone();
@@ -2732,6 +3115,14 @@ mod tests {
             on_rescan: Rc::new(move |_| {
                 rescans.set(rescans.get() + 1);
                 rescan_finds.borrow().clone()
+            }),
+            on_open_access_settings: Rc::new(move |_| {
+                access_opens.set(access_opens.get() + 1);
+                access_open_fails.borrow().clone().map_or(Ok(()), Err)
+            }),
+            on_reread: Rc::new(move |_| {
+                rereads.set(rereads.get() + 1);
+                reread_finds.borrow().clone()
             }),
             on_set_default_browser: Rc::new(move |_| {
                 defaults.set(defaults.get() + 1);
@@ -3348,6 +3739,158 @@ mod tests {
         assert_eq!(steps(&view, cx), [Done, Current]);
         assert!(cx.debug_bounds("first-run-look-again").is_none());
         assert!(cx.debug_bounds(FALLBACK_ID).is_some());
+    }
+
+    /// `plain()` with Google Chrome's and Firefox's profile lists kept from
+    /// PwrRoute: the access step's subject.
+    fn blocked() -> FirstRunModel {
+        let mut model = plain();
+        for choice in &mut model.browsers[..2] {
+            choice.profiles.clear();
+            choice.profiles_blocked = true;
+        }
+        model.access = Some(ProfileAccess {
+            browsers: model.browsers[..2]
+                .iter()
+                .map(|choice| choice.label.clone())
+                .collect(),
+            ..ProfileAccess::default()
+        });
+        model
+    }
+
+    /// `model`'s browsers with every profile list readable again.
+    fn readable(model: &FirstRunModel) -> Vec<BrowserChoice> {
+        FirstRunModel::fixture()
+            .browsers
+            .into_iter()
+            .filter(|choice| model.browsers.iter().any(|b| b.value == choice.value))
+            .collect()
+    }
+
+    #[test]
+    fn the_access_step_comes_first_and_follows_the_scan() {
+        let mut model = blocked();
+        assert_eq!(states(&model), [Current, Todo, Todo]);
+        assert_eq!(model.heading(), "Three steps, then links start routing");
+        let detail = model.access_detail();
+        assert!(
+            detail.starts_with(
+                "macOS blocked PwrRoute from reading the profile list of Google Chrome and \
+                 Firefox, so the next step can offer each browser but not its profiles"
+            ),
+            "{detail}"
+        );
+        assert!(detail.contains("never your history, cookies or passwords"));
+        assert_eq!(model.access_profiles("Google Chrome"), None);
+        assert_eq!(model.access_warning(), None);
+
+        // With a config too, four steps, and the config waits its turn.
+        let mut with_config = blocked();
+        with_config.finicky = FirstRunModel::fixture().finicky;
+        assert_eq!(states(&with_config), [Current, Todo, Todo, Todo]);
+        assert_eq!(
+            with_config.heading(),
+            "Four steps, then links start routing"
+        );
+
+        // Chrome turned on: its row counts its profiles.
+        model.browsers[0] = FirstRunModel::fixture().browsers[0].clone();
+        assert_eq!(model.access_profiles("Google Chrome"), Some(2));
+        assert_eq!(
+            model.access_detail(),
+            "PwrRoute can read Google Chrome's profiles now. Firefox is still blocked."
+        );
+        assert_eq!(model.state_of(Step::Access), Current);
+
+        // Both: done, and the profiles are the Everything else select's.
+        model.browsers = readable(&model);
+        assert_eq!(states(&model), [Done, Done, Current]);
+        assert_eq!(
+            model.access_detail(),
+            "PwrRoute can read the profiles of Google Chrome and Firefox."
+        );
+        assert_eq!(model.fallback_profiles(), ["Personal", "Work"]);
+        assert_eq!(
+            model.folded(Step::Access),
+            (
+                "Browser profiles",
+                "PwrRoute can read Google Chrome and Firefox.".to_owned()
+            )
+        );
+
+        // Skipped with one still blocked.
+        let mut skipped = blocked();
+        skipped.browsers[0] = FirstRunModel::fixture().browsers[0].clone();
+        skipped.access.as_mut().unwrap().skipped = true;
+        assert_eq!(states(&skipped), [Done, Done, Current]);
+        assert!(
+            skipped
+                .access_detail()
+                .starts_with("Skipped. Until you turn it on in Files & Folders, PwrRoute can't list Firefox's profiles"),
+            "{}",
+            skipped.access_detail()
+        );
+        // Only Firefox was left blocked.
+        assert_eq!(skipped.folded(Step::Access).1, "Skipped: Firefox.");
+
+        // No access step without a subject.
+        assert_eq!(plain().steps().len(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn the_access_step_opens_settings_and_checks_again(cx: &mut TestAppContext) {
+        let model = blocked();
+        let unblocked = readable(&model);
+        let (view, calls, cx) = open_with(cx, model);
+        assert!(cx.debug_bounds("first-run-access-panel").is_some());
+        assert!(cx.debug_bounds("first-run-access-0").is_some());
+        assert!(cx.debug_bounds("first-run-access-1").is_some());
+        // Everything else waits, so its profile select is not drawn.
+        assert!(cx.debug_bounds(PROFILE_ID).is_none());
+
+        click("first-run-access-open", cx);
+        assert_eq!(calls.access_opens.get(), 1);
+        assert!(cx.debug_bounds("first-run-access-warning").is_none());
+
+        // Still blocked: Check again says what may help.
+        click("first-run-access-check", cx);
+        assert_eq!(calls.rereads.get(), 1);
+        assert!(cx.debug_bounds("first-run-access-warning").is_some());
+        assert_eq!(steps(&view, cx), [Current, Todo, Todo]);
+
+        // Back from System Settings with both on: the window's activation
+        // re-reads, the step is done and the profile select appears.
+        *calls.reread_finds.borrow_mut() = unblocked;
+        view.update(cx, |this, cx| this.recheck_access(false, cx));
+        draw(cx);
+        assert_eq!(calls.rereads.get(), 2);
+        assert_eq!(steps(&view, cx), [Done, Done, Current]);
+        assert!(cx.debug_bounds("first-run-access-panel").is_none());
+        assert!(cx.debug_bounds(PROFILE_ID).is_some());
+
+        // Done: activation reads nothing more.
+        view.update(cx, |this, cx| this.recheck_access(false, cx));
+        assert_eq!(calls.rereads.get(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn skip_finishes_the_access_step_and_a_failed_open_says_why(cx: &mut TestAppContext) {
+        let (view, calls, cx) = open_with(cx, blocked());
+        *calls.access_open_fails.borrow_mut() = Some("no System Settings.".to_owned());
+        click("first-run-access-open", cx);
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.access_warning()),
+            Some(
+                "System Settings didn't open: no System Settings. Open Privacy & Security \
+                 \u{203a} Files & Folders yourself."
+                    .to_owned()
+            )
+        );
+        click("first-run-access-skip", cx);
+        assert_eq!(steps(&view, cx), [Done, Done, Current]);
+        assert!(cx.debug_bounds("first-run-access-skip").is_none());
+        assert_eq!(calls.rereads.get(), 0);
     }
 
     /// The body scrolls: at the window's minimum height the footer is still

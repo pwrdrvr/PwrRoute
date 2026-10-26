@@ -22,6 +22,11 @@ behind its own trait; keep the public API in `src/lib.rs` small.
 - **Never open through the default browser.** On Windows and Linux the plan
   runs the browser's own executable or desktop entry. `start`, `xdg-open`
   and `open URL` route to PwrRoute itself once it is the default.
+- **Blocked is not empty.** `read_profiles` says when a profile index is
+  there but the OS refuses the read (permission denied: macOS 27's app data
+  protection, where `stat` still works); `list_profiles` folds that into
+  no profiles, as the launcher wants. Anything that offers profiles to a
+  person should ask `read_profiles`.
 - **URLs are private.** Nothing here logs. `Plan` holds the URL;
   `LaunchError`'s `Display` and `Note`s never do.
 - **Private windows are a catalog fact.** `private_flag` defaults from the

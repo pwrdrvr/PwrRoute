@@ -193,6 +193,7 @@ mod tests {
             location: PathBuf::from(format!("/Applications/{name}.app")),
             profiles: profiles.iter().map(|p| (*p).to_owned()).collect(),
             directories: Vec::new(),
+            profiles_blocked: false,
         }
     }
 

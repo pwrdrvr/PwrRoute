@@ -41,7 +41,7 @@ use crate::app::Screen;
 use crate::default_browser::{self, DefaultState};
 use crate::first_run::{
     self, BrowserChoice, FinickyConfig, FirstRun, FirstRunHooks, FirstRunModel, ImportChoice,
-    ImportOutcome, Imported,
+    ImportOutcome, Imported, ProfileAccess,
 };
 use crate::tray::model::BrowserLabel;
 use crate::widgets::badge_for;
@@ -250,6 +250,10 @@ pub struct Facts {
     /// `rules.json`'s `precedence`.
     pub precedence: Precedence,
     pub state: State,
+    /// The OS has a pane where PwrRoute is let read a browser's profile
+    /// list (macOS's Files & Folders): a browser whose list was kept from
+    /// PwrRoute then gets first run's access step.
+    pub access_pane: bool,
 }
 
 impl Facts {
@@ -273,6 +277,7 @@ impl Facts {
             rules: rules.rules.len(),
             precedence: rules.precedence,
             state,
+            access_pane: cfg!(target_os = "macos"),
         }
     }
 }
@@ -297,6 +302,7 @@ fn choices(
             label: BrowserLabel::new(badge_for(&app.name), &app.name, None),
             value: app.id().to_owned(),
             profiles: app.profiles,
+            profiles_blocked: app.profiles_blocked,
         })
         .collect()
 }
@@ -352,7 +358,18 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
         .state
         .import
         .filter(|choice| *choice == ImportChoice::KeepFile && finicky.is_some());
+    let blocked: Vec<BrowserLabel> = facts
+        .browsers
+        .iter()
+        .filter(|choice| choice.profiles_blocked)
+        .map(|choice| choice.label.clone())
+        .collect();
+    let access = (facts.access_pane && !blocked.is_empty()).then(|| ProfileAccess {
+        browsers: blocked,
+        ..ProfileAccess::default()
+    });
     FirstRunModel {
+        access,
         fallback,
         browsers: facts.browsers.clone(),
         finicky,
@@ -551,6 +568,20 @@ pub fn hooks_with(
             let hidden = hidden(cx);
             choices(crate::browser_scan::rescan(cx), &hidden)
         }),
+        on_open_access_settings: Rc::new(|_| {
+            pwrroute_os::open_files_and_folders_settings().map_err(|error| {
+                log::warn!("first run could not open Files & Folders: {error:#}");
+                format!("{error:#}")
+            })
+        }),
+        // The pickers and Settings read the same scan, so they get the
+        // profiles too.
+        on_reread: Rc::new(|cx| {
+            let hidden = hidden(cx);
+            let apps = crate::browser_scan::reread(cx);
+            crate::browser_scan::refresh_windows(cx);
+            choices(apps, &hidden)
+        }),
         on_set_default_browser: Rc::new(|cx| match default_browser::request(cx) {
             Ok(outcome) => {
                 log::info!("first run asked the OS for the default browser: {outcome:?}");
@@ -607,6 +638,17 @@ pub fn open(cx: &mut App) {
     let _ = window.update(cx, |view, window, cx| {
         view.preselect(cx);
         default_browser::watch(window, cx);
+        // Back from System Settings: read the profiles again. Not on the
+        // window's first activation, which follows the scan it opened with.
+        let left = std::cell::Cell::new(false);
+        cx.observe_window_activation(window, move |view, window, cx| {
+            if !window.is_window_active() {
+                left.set(true);
+            } else if left.replace(false) {
+                view.recheck_access(false, cx);
+            }
+        })
+        .detach();
     });
     let answers = default_browser::registrar(cx).map(|registrar| {
         cx.observe(&registrar, move |registrar, cx| {
@@ -658,6 +700,7 @@ mod tests {
             value: "com.google.Chrome".to_owned(),
             label: BrowserLabel::new("Ch", "Google Chrome", None),
             profiles: vec!["Personal".to_owned(), "Work".to_owned()],
+            profiles_blocked: false,
         }
     }
 
@@ -666,6 +709,7 @@ mod tests {
             value: "com.apple.Safari".to_owned(),
             label: BrowserLabel::new("Sf", "Safari", None),
             profiles: Vec::new(),
+            profiles_blocked: false,
         }
     }
 
@@ -678,6 +722,7 @@ mod tests {
                     value: "org.mozilla.firefox".to_owned(),
                     label: BrowserLabel::new("Ff", "Firefox", None),
                     profiles: vec!["default-release".to_owned()],
+                    profiles_blocked: false,
                 },
                 safari(),
             ],
@@ -695,6 +740,7 @@ mod tests {
             rules: 0,
             precedence: Precedence::Config,
             state: State::default(),
+            access_pane: true,
         }
     }
 
@@ -780,6 +826,28 @@ mod tests {
         let (fallback, picked) = built.preselection().unwrap();
         assert_eq!(fallback.browser, safari());
         assert_eq!(picked, Picked::Config);
+    }
+
+    #[test]
+    fn a_browser_whose_profiles_were_kept_from_pwrroute_gets_the_access_step() {
+        let mut facts = facts();
+        assert_eq!(model(&facts, None).access, None);
+        facts.browsers[1].profiles.clear();
+        facts.browsers[1].profiles_blocked = true;
+        let built = model(&facts, None);
+        let access = built.access.as_ref().expect("an access step");
+        assert_eq!(
+            access
+                .browsers
+                .iter()
+                .map(|label| label.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Firefox"]
+        );
+        assert_eq!(built.steps()[0], (Step::Access, StepState::Current));
+        // Where the OS has no pane to send the reader to, no step.
+        facts.access_pane = false;
+        assert_eq!(model(&facts, None).access, None);
     }
 
     #[test]
@@ -1343,6 +1411,7 @@ mod tests {
             location: PathBuf::from(format!("/Applications/{name}.app")),
             profiles: Vec::new(),
             directories: Vec::new(),
+            profiles_blocked: false,
         };
         let apps = vec![
             app("Firefox", "org.mozilla.firefox"),

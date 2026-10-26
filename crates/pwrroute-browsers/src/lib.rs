@@ -7,7 +7,8 @@
 //!   more.
 //! - [`detect_installed`]: the browsers on this machine.
 //! - [`list_profiles`]: a browser's profiles, from Chromium's `Local State`
-//!   or Firefox's `profiles.ini`.
+//!   or Firefox's `profiles.ini`; [`read_profiles`] also says when the file
+//!   is there but the OS will not let PwrRoute read it.
 //! - [`Launcher`]: turns the engine's [`pwrroute_engine::Browser`] into a
 //!   command ([`Launcher::plan`], the dry run) and runs it
 //!   ([`Launcher::launch`]), adding the browser's private-window flag when
@@ -38,5 +39,5 @@ pub use launch::{
     Delivery, LaunchError, LaunchOptions, Launched, Launcher, Note, Plan, catalog_entry,
     private_window,
 };
-pub use profiles::{Profile, list_profiles};
+pub use profiles::{Profile, ProfilesBlocked, list_profiles, read_profiles};
 pub use singleton::{SocketError, SocketHandOff};

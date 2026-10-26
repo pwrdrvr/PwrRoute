@@ -10,7 +10,9 @@
 //!   browser and [`unregister_browser`] takes it off, for installers.
 //!   [`set_default_browser`] asks the OS to make PwrRoute the default, which
 //!   always ends in the OS's own consent: a prompt or the Settings page.
-//!   [`open_default_apps_settings`] only shows that page.
+//!   [`open_default_apps_settings`] only shows that page, and
+//!   [`open_files_and_folders_settings`] the macOS pane where PwrRoute is
+//!   let read a browser's profile list.
 //!   Nothing calls any of them at launch, and tests never do.
 //! - **Paths.** [`router_dir`] is where the router's lock and socket live;
 //!   [`log_dir`] is where the diagnostic log goes.
@@ -126,6 +128,22 @@ pub fn app_icon_png(bundle: &Path, pixels: u32) -> Option<Vec<u8>> {
     {
         let _ = (bundle, pixels);
         None
+    }
+}
+
+/// Opens System Settings › Privacy & Security › Files & Folders, where the
+/// user lets PwrRoute read other apps' data: from macOS 27 a browser's
+/// profile list is that, and macOS blocks the read until PwrRoute's switch
+/// for the browser is on. Changes nothing itself. macOS only; elsewhere an
+/// error.
+pub fn open_files_and_folders_settings() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::open_files_and_folders()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        anyhow::bail!("Files & Folders is a macOS setting")
     }
 }
 
