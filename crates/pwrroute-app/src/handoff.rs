@@ -6,7 +6,7 @@
 //! main thread cannot hide the delay) and logs each change:
 //!
 //! ```text
-//! link 42 hand-off: com.tinyspeck.slackmacgap at receipt, PwrRoute +12ms, com.microsoft.edgemac +296ms
+//! link 42 hand-off: com.example.chat at first sample +1ms, PwrRoute +12ms, com.example.browser +296ms; samples=20 max_sample_gap=16ms; tab_readiness=unobserved
 //! ```
 //!
 //! It stops when an app other than PwrRoute and the one on top at receipt
@@ -64,7 +64,10 @@ pub fn watch(id: DispatchId, received: Instant, router: HandleSlot) {
                         )
                     }
                 });
-                let Some(owner) = owner else { return };
+                let Some(owner) = owner else {
+                    track.unavailable_at = Some(received.elapsed());
+                    break;
+                };
                 if track.see(received.elapsed(), owner) {
                     break;
                 }
@@ -117,11 +120,18 @@ struct Track {
     /// A third app came to the front: the browser, most likely.
     landed: bool,
     timed_out: bool,
+    samples: u64,
+    last_sample: Duration,
+    max_sample_gap: Duration,
+    unavailable_at: Option<Duration>,
 }
 
 impl Track {
     /// Takes one sample; `true` when the watch is over.
     fn see(&mut self, at: Duration, owner: Owner) -> bool {
+        self.samples += 1;
+        self.max_sample_gap = self.max_sample_gap.max(at.saturating_sub(self.last_sample));
+        self.last_sample = at;
         if self.changes.last().is_none_or(|(_, last)| *last != owner) {
             self.changes.push((at, owner.clone()));
         }
@@ -144,11 +154,15 @@ impl Track {
         false
     }
 
-    /// Slow: the browser landed after [`SLOW_HANDOFF`], or the window order
-    /// changed (PwrRoute came forward) and nothing landed. A top window that
-    /// never changed is not slow: the link opened behind it or in it.
+    /// Slow when another owner appears late, or PwrRoute remains on top.
+    /// An unchanged other app is inconclusive: a tab may open inside it.
     fn slow(&self) -> bool {
-        (self.timed_out && self.changes.len() > 1)
+        (self.timed_out
+            && (self.changes.len() > 1
+                || self
+                    .changes
+                    .last()
+                    .is_some_and(|(_, owner)| *owner == Owner::PwrRoute)))
             || self
                 .changes
                 .last()
@@ -164,24 +178,41 @@ impl Track {
         let mut parts = Vec::with_capacity(self.changes.len());
         for (i, (at, owner)) in self.changes.iter().enumerate() {
             if i == 0 {
-                parts.push(format!("{} at receipt", name(owner)));
+                parts.push(format!(
+                    "{} at first sample +{}ms",
+                    name(owner),
+                    at.as_millis()
+                ));
             } else {
                 parts.push(format!("{} +{}ms", name(owner), at.as_millis()));
             }
         }
+        if parts.is_empty() {
+            parts.push("no window-owner sample".to_owned());
+        }
         let mut line = format!("link {} hand-off: {}", id.0, parts.join(", "));
+        if let Some(at) = self.unavailable_at {
+            line.push_str(&format!(
+                "; window-owner sampling unavailable +{}ms",
+                at.as_millis()
+            ));
+        }
         if self.timed_out && self.changes.len() == 1 {
             line.push_str(&format!(
-                "; the top window did not change in {}ms",
-                WATCH_FOR.as_millis()
+                "; top-window owner unchanged after {}ms",
+                self.last_sample.as_millis()
             ));
         } else if self.timed_out {
             line.push_str(&format!(
                 "; no other app's window on top after {}ms",
-                WATCH_FOR.as_millis()
+                self.last_sample.as_millis()
             ));
         }
-        line
+        format!(
+            "{line}; samples={} max_sample_gap={}ms; tab_readiness=unobserved",
+            self.samples,
+            self.max_sample_gap.as_millis()
+        )
     }
 }
 
@@ -208,11 +239,11 @@ mod tests {
         assert!(!track.slow());
         assert_eq!(
             track.line(DispatchId(42), false),
-            "link 42 hand-off: com.example.chat at receipt, PwrRoute +31ms, com.example.browser +296ms"
+            "link 42 hand-off: com.example.chat at first sample +1ms, PwrRoute +31ms, com.example.browser +296ms; samples=5 max_sample_gap=219ms; tab_readiness=unobserved"
         );
         assert_eq!(
             track.line(DispatchId(42), true),
-            "link 42 hand-off: another app at receipt, PwrRoute +31ms, another app +296ms"
+            "link 42 hand-off: another app at first sample +1ms, PwrRoute +31ms, another app +296ms; samples=5 max_sample_gap=219ms; tab_readiness=unobserved"
         );
     }
 
@@ -244,7 +275,7 @@ mod tests {
         assert!(track.slow());
         assert_eq!(
             track.line(DispatchId(7), false),
-            "link 7 hand-off: com.example.chat at receipt, PwrRoute +15ms; no other app's window on top after 3000ms"
+            "link 7 hand-off: com.example.chat at first sample +1ms, PwrRoute +15ms; no other app's window on top after 3000ms; samples=4 max_sample_gap=2984ms; tab_readiness=unobserved"
         );
     }
 
@@ -256,7 +287,30 @@ mod tests {
         assert!(!track.slow());
         assert_eq!(
             track.line(DispatchId(9), false),
-            "link 9 hand-off: com.example.browser at receipt; the top window did not change in 3000ms"
+            "link 9 hand-off: com.example.browser at first sample +1ms; top-window owner unchanged after 3000ms; samples=2 max_sample_gap=2999ms; tab_readiness=unobserved"
         );
+    }
+
+    #[test]
+    fn pwrroute_remaining_on_top_is_slow_even_without_an_owner_change() {
+        let mut track = Track::default();
+        assert!(!track.see(ms(240), Owner::PwrRoute));
+        assert!(track.see(ms(3_105), Owner::PwrRoute));
+        assert!(track.slow());
+        let line = track.line(DispatchId(10), true);
+        assert!(line.contains("at first sample +240ms"), "{line}");
+        assert!(line.contains("unchanged after 3105ms"), "{line}");
+        assert!(line.contains("tab_readiness=unobserved"), "{line}");
+    }
+
+    #[test]
+    fn unavailable_window_sampling_is_reported() {
+        let track = Track {
+            unavailable_at: Some(ms(17)),
+            ..Track::default()
+        };
+        let line = track.line(DispatchId(11), true);
+        assert!(line.contains("window-owner sampling unavailable +17ms"));
+        assert!(line.contains("samples=0"));
     }
 }

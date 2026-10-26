@@ -36,7 +36,7 @@ pub use catalog::{
 pub use detect::{InstalledBrowser, detect_installed};
 pub use env::{Env, Platform};
 pub use launch::{
-    Delivery, LaunchError, LaunchOptions, Launched, Launcher, Note, Plan, catalog_entry,
+    Delivery, LaunchError, LaunchOptions, Launched, Launcher, Note, Plan, RunEvent, catalog_entry,
     private_window,
 };
 pub use profiles::{Profile, ProfilesBlocked, list_profiles, read_profiles};

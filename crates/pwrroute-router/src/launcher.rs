@@ -13,6 +13,18 @@ use pwrroute_engine::Browser;
 pub trait Launcher: Send + 'static {
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()>;
 
+    /// Reports progress while launching. Messages must contain only fixed
+    /// labels, counts and timings: never URLs, arguments, browser/profile
+    /// names or error text. The router adds the link id and logs at Info,
+    /// only while diagnostic logging and link retention are enabled.
+    fn launch_observed(
+        &mut self,
+        browser: &Browser,
+        _observe: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<()> {
+        self.launch(browser)
+    }
+
     /// True when nothing really opens. Recorded on each dispatch, so Activity
     /// can say so.
     fn is_dry_run(&self) -> bool {
@@ -63,5 +75,13 @@ impl Launcher for Box<dyn Launcher> {
 
     fn is_dry_run(&self) -> bool {
         (**self).is_dry_run()
+    }
+
+    fn launch_observed(
+        &mut self,
+        browser: &Browser,
+        observe: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<()> {
+        (**self).launch_observed(browser, observe)
     }
 }

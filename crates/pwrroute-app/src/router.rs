@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-use pwrroute_browsers::{Delivery, Env, LaunchError, LaunchOptions, Note};
+use pwrroute_browsers::{Env, LaunchError, LaunchOptions, Note};
 use pwrroute_engine::{
     ConfigChoice, Engine, Host, Limits, NativeHost, Reloader, RulesFile, ShortLinks, Sources,
     Status, Watcher,
@@ -672,41 +672,53 @@ impl BrowserLauncher {
 
 impl Launcher for BrowserLauncher {
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()> {
-        let Some(plan) = self.inner.plan(browser).map_err(launch_error)? else {
+        self.launch_observed(browser, &mut |_| {})
+    }
+
+    fn launch_observed(
+        &mut self,
+        browser: &Browser,
+        observe: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<()> {
+        let started = std::time::Instant::now();
+        observe("planning begin");
+        let planned = self.inner.plan(browser);
+        let plan_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let Some(plan) = planned.map_err(|error| {
+            observe(&format!("planning failed after {plan_ms:.1}ms"));
+            launch_error(error)
+        })?
+        else {
+            observe("planning returned no launch");
             return Ok(());
         };
+        observe(&format!(
+            "planned in {plan_ms:.1}ms; {}; profile_requested={} private_requested={} custom_args={}",
+            plan.diagnostic_summary(),
+            !browser.profile.is_empty(),
+            browser.private,
+            browser.args.len(),
+        ));
         for note in &plan.notes {
-            log::warn!("{}", describe_note(note));
+            observe(describe_note(note));
         }
-        // A hand-off's browser brings forward the window it opened the tab
-        // in, which macOS 14 allows only once the active app gives way.
-        // When a link activated PwrRoute, that is PwrRoute: give way before
-        // the browser hears of the link, or the person watches PwrRoute's
-        // window until macOS relents.
         let started = std::time::Instant::now();
-        let yielded = plan
-            .hand_off_to
-            .as_deref()
-            .map(|id| pwrroute_os::yield_front_to(id, YIELD_WAIT));
-        let yield_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let launched = self.inner.run(plan).map_err(launch_error)?;
-        // The way and the times: no URL, and no browser, which a rule's
-        // `privacy: none` keeps out of every per-link line.
-        let yielded = match yielded {
-            Some(y) => format!("{y:?} in {yield_ms:.1}ms"),
-            None => "none".to_owned(),
-        };
-        let line = format!(
-            "hand-off {} in {:.1}ms; yield: {yielded}",
-            launched.delivery,
+        let yielded = plan.hand_off_to.as_deref().map(|id| {
+            observe("yield begin");
+            pwrroute_os::yield_front_to(id, YIELD_WAIT)
+        });
+        observe(&format!(
+            "yield={yielded:?} after {:.1}ms",
             started.elapsed().as_secs_f64() * 1000.0,
-        );
-        match launched.delivery {
-            Delivery::CommandAfter(_) => log::warn!("{line}"),
-            Delivery::Socket => log::debug!("{line}"),
-            _ if launched.plan.hand_off_to.is_some() => log::debug!("{line}"),
-            _ => {}
-        }
+        ));
+        let launched = self
+            .inner
+            .run_observed(plan, &mut |event| observe(&event.to_string()))
+            .map_err(launch_error)?;
+        observe(&format!(
+            "delivery={}; tab_readiness=unobserved",
+            launched.delivery
+        ));
         Ok(())
     }
 }
@@ -722,24 +734,14 @@ fn launch_error(error: LaunchError) -> anyhow::Error {
     anyhow::anyhow!("{error}")
 }
 
-/// A note as one line of stderr. Profile names, never URLs.
-fn describe_note(note: &Note) -> String {
+/// Only fixed labels: a counted-only link must not reveal profile names.
+fn describe_note(note: &Note) -> &'static str {
     match note {
-        Note::ProfileNotFound { profile, available } if available.is_empty() => {
-            format!("profile {profile:?} not found; the browser picks one")
-        }
-        Note::ProfileNotFound { profile, available } => format!(
-            "profile {profile:?} not found; the browser has {}",
-            available.join(", ")
-        ),
-        Note::ProfileUnsupported { profile } => format!(
-            "profile {profile:?} ignored: this browser cannot select a profile from the command line"
-        ),
-        Note::BackgroundUnsupported => {
-            "openInBackground is not possible on this platform; the browser comes to the front"
-                .to_owned()
-        }
-        other => format!("{other:?}"),
+        Note::ProfileNotFound { .. } => "note=profile_not_found; browser_will_choose_profile=true",
+        Note::ProfileUnsupported { .. } => "note=profile_unsupported",
+        Note::BackgroundUnsupported => "note=background_unsupported",
+        Note::PrivateUnsupported { .. } => "note=private_unsupported",
+        _ => "note=unsupported_launch_option",
     }
 }
 
@@ -848,9 +850,10 @@ mod tests {
         let mut with_profile = browser("Safari", AppType::AppName);
         with_profile.profile = "Work".into();
         let plan = launcher.plan(&with_profile).unwrap().expect("a plan");
-        let notes: Vec<String> = plan.notes.iter().map(describe_note).collect();
+        let notes: Vec<_> = plan.notes.iter().map(describe_note).collect();
         assert_eq!(notes.len(), 1);
-        assert!(notes[0].contains("\"Work\""), "{notes:?}");
+        assert_eq!(notes[0], "note=profile_unsupported");
+        assert!(!notes[0].contains("Work"), "{notes:?}");
         assert!(!notes[0].contains("secret"), "{notes:?}");
     }
 

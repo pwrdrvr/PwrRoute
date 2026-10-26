@@ -907,7 +907,7 @@ impl Worker {
                 Mode::Test => Outcome::Tested,
                 Mode::Dispatch => {
                     let launch = Instant::now();
-                    let launched = self.launch(&browser, &mut record.steps);
+                    let launched = self.launch(&browser, &mut record.steps, record.id);
                     record.timings.launch_us = Timings::micros(launch.elapsed());
                     opened = launched.opened;
                     launched.outcome
@@ -1028,14 +1028,14 @@ impl Worker {
     /// the fallback already, in the fallback browser: a rule that names a
     /// browser this machine does not have must not lose the link. The
     /// fallback is tried once; `Failed` means both failed.
-    fn launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Launched {
+    fn launch(&mut self, browser: &Browser, steps: &mut Vec<Step>, id: DispatchId) -> Launched {
         if is_self(browser) {
             steps.push(Step::LaunchFailed {
                 message: "the fallback browser is PwrRoute itself".into(),
             });
             return Launched::failed();
         }
-        if let Ok(outcome) = self.try_launch(browser, steps) {
+        if let Ok(outcome) = self.try_launch(browser, steps, id, 1) {
             return Launched {
                 outcome,
                 opened: None,
@@ -1053,7 +1053,7 @@ impl Worker {
         steps.push(Step::Fallback {
             reason: format!("{} could not be opened", browser.name),
         });
-        match self.try_launch(&fallback, steps) {
+        match self.try_launch(&fallback, steps, id, 2) {
             Ok(outcome) => Launched {
                 outcome,
                 opened: Some(fallback),
@@ -1064,9 +1064,23 @@ impl Worker {
 
     /// One launch, traced: `Launched` on success, `LaunchFailed` with the
     /// launcher's message otherwise.
-    fn try_launch(&mut self, browser: &Browser, steps: &mut Vec<Step>) -> Result<Outcome, ()> {
+    fn try_launch(
+        &mut self,
+        browser: &Browser,
+        steps: &mut Vec<Step>,
+        id: DispatchId,
+        attempt: u8,
+    ) -> Result<Outcome, ()> {
         let dry_run = self.launcher.is_dry_run();
-        match self.launcher.launch(browser) {
+        let kept = self.recent.retention().count > 0 || self.journal.is_some();
+        let result = if self.options.diagnostic_log.is_some() && kept {
+            self.launcher.launch_observed(browser, &mut |detail| {
+                log::info!(target: "pwrroute::link", "link {} launch attempt={attempt}: {detail}", id.0);
+            })
+        } else {
+            self.launcher.launch(browser)
+        };
+        match result {
             Ok(()) => {
                 steps.push(Step::Launched { dry_run });
                 Ok(if dry_run {
