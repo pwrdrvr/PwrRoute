@@ -3,15 +3,21 @@
 //! argument the browser needs. Ported from Finicky's launcher
 //! (MIT, Copyright (c) 2015-2025 John Sterling).
 
-use std::{fs, io, path::PathBuf};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+use serde::{Deserialize, Serialize};
 
 use crate::{
     catalog::{BrowserInfo, ProfileFlag},
     env::Env,
+    profile_cache,
 };
 
 /// One profile as the browser lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     /// The name the user sees and a config names (`profile: "Work"`).
     pub name: String,
@@ -24,9 +30,9 @@ pub struct Profile {
 
 /// The profiles of `browser` on this machine, in the browser's own order.
 /// Empty when the browser has no profile flag, nothing is installed, or the
-/// profile index cannot be read.
+/// profile index cannot be read and no saved metadata is available.
 pub fn list_profiles(browser: &BrowserInfo, env: &Env) -> Vec<Profile> {
-    read_profiles(browser, env).unwrap_or_default()
+    read_profiles(browser, env).unwrap_or_else(|blocked| blocked.cached)
 }
 
 /// The profile index is there but this process may not read it: macOS 27
@@ -36,24 +42,56 @@ pub fn list_profiles(browser: &BrowserInfo, env: &Env) -> Vec<Profile> {
 pub struct ProfilesBlocked {
     /// The file that could not be read (`Local State`, `profiles.ini`).
     pub path: PathBuf,
+    /// Last-successful metadata, if caching was enabled for this browser
+    /// and index path. The live read remains blocked even when this is usable.
+    pub cached: Vec<Profile>,
 }
 
 /// [`list_profiles`], telling a profile index that is there but cannot be
 /// read (permission denied) from one that is missing or malformed, which
 /// are `Ok` and empty.
 pub fn read_profiles(browser: &BrowserInfo, env: &Env) -> Result<Vec<Profile>, ProfilesBlocked> {
+    read_with(browser, env, |path| fs::read_to_string(path))
+}
+
+type ProfileParser = fn(&str) -> Option<Vec<Profile>>;
+
+fn read_with(
+    browser: &BrowserInfo,
+    env: &Env,
+    read: impl FnOnce(&Path) -> io::Result<String>,
+) -> Result<Vec<Profile>, ProfilesBlocked> {
     let Some(dir) = browser.profile_dir(env) else {
         return Ok(Vec::new());
     };
-    let (path, parse): (_, fn(&str) -> Vec<Profile>) = match browser.profile_flag() {
-        ProfileFlag::Chromium => (dir.join("Local State"), chromium_profiles),
-        ProfileFlag::Firefox => (dir.join("profiles.ini"), firefox_profiles),
+    let (path, parse): (_, ProfileParser) = match browser.profile_flag() {
+        ProfileFlag::Chromium => (dir.join("Local State"), parse_chromium),
+        ProfileFlag::Firefox => (dir.join("profiles.ini"), |text| {
+            (!ini_sections(text).is_empty()).then(|| firefox_profiles(text))
+        }),
         ProfileFlag::None => return Ok(Vec::new()),
     };
-    match fs::read_to_string(&path) {
-        Ok(text) => Ok(parse(&text)),
+    match read(&path) {
+        Ok(text) => {
+            let profiles = parse(&text);
+            if let (Some(cache), Some(profiles)) = (env.profile_cache(), &profiles) {
+                // An unwritable cache must never prevent a live profile launch.
+                let _ = profile_cache::remember(cache, &browser.id, &path, profiles);
+            }
+            Ok(profiles.unwrap_or_default())
+        }
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            Err(ProfilesBlocked { path })
+            let cached = env
+                .profile_cache()
+                .map(|cache| profile_cache::read(cache, &browser.id, &path))
+                .unwrap_or_default();
+            Err(ProfilesBlocked { path, cached })
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some(cache) = env.profile_cache() {
+                let _ = profile_cache::remember(cache, &browser.id, &path, &[]);
+            }
+            Ok(Vec::new())
         }
         Err(_) => Ok(Vec::new()),
     }
@@ -63,7 +101,7 @@ pub fn read_profiles(browser: &BrowserInfo, env: &Env) -> Result<Vec<Profile>, P
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProfileMatch {
     /// The arguments that select it.
-    Found(Vec<String>),
+    Found { args: Vec<String>, cached: bool },
     /// The browser has no such profile; these are the names it does have.
     NotFound(Vec<String>),
     /// The browser cannot select a profile from the command line.
@@ -77,31 +115,39 @@ pub(crate) fn resolve(browser: &BrowserInfo, env: &Env, wanted: &str) -> Profile
     if flag == ProfileFlag::None {
         return ProfileMatch::Unsupported;
     }
-    let profiles = list_profiles(browser, env);
+    let (profiles, cached) = match read_profiles(browser, env) {
+        Ok(profiles) => (profiles, false),
+        Err(blocked) => (blocked.cached, true),
+    };
     let found = profiles
         .iter()
         .find(|p| p.name == wanted)
         .or_else(|| profiles.iter().find(|p| p.directory == wanted));
     match (found, flag) {
-        (Some(p), ProfileFlag::Chromium) => {
-            ProfileMatch::Found(vec![format!("--profile-directory={}", p.directory)])
-        }
+        (Some(p), ProfileFlag::Chromium) => ProfileMatch::Found {
+            args: vec![format!("--profile-directory={}", p.directory)],
+            cached,
+        },
         // `-P` takes the profile's name, not its path.
-        (Some(p), _) => ProfileMatch::Found(vec!["-P".into(), p.name.clone()]),
+        (Some(p), _) => ProfileMatch::Found {
+            args: vec!["-P".into(), p.name.clone()],
+            cached,
+        },
         (None, _) => ProfileMatch::NotFound(profiles.into_iter().map(|p| p.name).collect()),
     }
 }
 
 /// `profile.info_cache` from a Chromium `Local State`, ordered by
 /// `profile.profiles_order` when present, then by directory.
-pub(crate) fn chromium_profiles(local_state: &str) -> Vec<Profile> {
-    let Ok(state) = serde_json::from_str::<serde_json::Value>(local_state) else {
-        return Vec::new();
-    };
+#[cfg(test)]
+fn chromium_profiles(local_state: &str) -> Vec<Profile> {
+    parse_chromium(local_state).unwrap_or_default()
+}
+
+fn parse_chromium(local_state: &str) -> Option<Vec<Profile>> {
+    let state: serde_json::Value = serde_json::from_str(local_state).ok()?;
     let profile = &state["profile"];
-    let Some(cache) = profile["info_cache"].as_object() else {
-        return Vec::new();
-    };
+    let cache = profile["info_cache"].as_object()?;
     let last_used = profile["last_used"].as_str();
     let order: Vec<&str> = profile["profiles_order"]
         .as_array()
@@ -131,7 +177,7 @@ pub(crate) fn chromium_profiles(local_state: &str) -> Vec<Profile> {
     {
         p.default = true;
     }
-    profiles
+    Some(profiles)
 }
 
 /// The `[ProfileN]` sections of a Firefox `profiles.ini`, in file order. The
@@ -196,6 +242,164 @@ fn ini_sections(ini: &str) -> Vec<(String, Vec<(String, String)>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Catalog, Platform};
+
+    const WORK: &str = r#"{"profile":{"info_cache":{"Profile 2":{"name":"Work","user_name":"private@example.com"}},"last_used":"Profile 2"},"secret":"not cached"}"#;
+
+    fn denied(_: &Path) -> io::Result<String> {
+        Err(io::ErrorKind::PermissionDenied.into())
+    }
+
+    fn fixture(root: &Path) -> Env {
+        Env::fixture(Platform::MacOs, root).with_profile_cache(root.join("profiles.json"))
+    }
+
+    #[test]
+    fn a_later_process_uses_saved_metadata_only_when_access_is_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        let chrome = Catalog::builtin().find("chrome").unwrap();
+        let first = read_with(chrome, &fixture(dir.path()), |_| Ok(WORK.into())).unwrap();
+        let saved = fs::read_to_string(dir.path().join("profiles.json")).unwrap();
+        assert!(!saved.contains("private@example.com") && !saved.contains("not cached"));
+        let next = fixture(dir.path());
+        assert_eq!(read_with(chrome, &next, denied).unwrap_err().cached, first);
+        assert!(
+            read_with(chrome, &next, |_| Err(io::ErrorKind::Interrupted.into()))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(read_with(chrome, &next, denied).unwrap_err().cached, first);
+    }
+
+    #[test]
+    fn fresh_metadata_replaces_renames_and_removals_without_resurrecting_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fixture(dir.path());
+        let chrome = Catalog::builtin().find("chrome").unwrap();
+        read_with(chrome, &env, |_| Ok(WORK.into())).unwrap();
+        let renamed = read_with(chrome, &env, |_| Ok(WORK.replace("Work", "Travel"))).unwrap();
+        assert_eq!(read_with(chrome, &env, denied).unwrap_err().cached, renamed);
+        read_with(chrome, &env, |_| {
+            Ok(r#"{"profile":{"info_cache":{}}}"#.into())
+        })
+        .unwrap();
+        assert!(
+            read_with(chrome, &env, denied)
+                .unwrap_err()
+                .cached
+                .is_empty()
+        );
+        read_with(chrome, &env, |_| Ok(WORK.into())).unwrap();
+        read_with(chrome, &env, |_| Err(io::ErrorKind::NotFound.into())).unwrap();
+        assert!(
+            read_with(chrome, &env, denied)
+                .unwrap_err()
+                .cached
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn malformed_live_data_does_not_overwrite_the_last_successful_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fixture(dir.path());
+        let chrome = Catalog::builtin().find("chrome").unwrap();
+        let saved = read_with(chrome, &env, |_| Ok(WORK.into())).unwrap();
+        assert!(
+            read_with(chrome, &env, |_| Ok("broken".into()))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(read_with(chrome, &env, denied).unwrap_err().cached, saved);
+    }
+
+    #[test]
+    fn profiles_are_isolated_by_browser_and_index_location() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fixture(dir.path());
+        let chrome = Catalog::builtin().find("chrome").unwrap();
+        read_with(chrome, &env, |_| Ok(WORK.into())).unwrap();
+        let beta = Catalog::builtin().find("chrome-beta").unwrap();
+        assert!(read_with(beta, &env, denied).unwrap_err().cached.is_empty());
+        let elsewhere = Env::fixture(Platform::MacOs, dir.path().join("another-home"))
+            .with_profile_cache(dir.path().join("profiles.json"));
+        assert!(
+            read_with(chrome, &elsewhere, denied)
+                .unwrap_err()
+                .cached
+                .is_empty()
+        );
+        let saved = read_with(beta, &env, |_| Ok(WORK.replace("Work", "Beta"))).unwrap();
+        assert_eq!(read_with(beta, &env, denied).unwrap_err().cached, saved);
+        assert_eq!(
+            read_with(chrome, &env, denied).unwrap_err().cached[0].name,
+            "Work"
+        );
+    }
+
+    #[test]
+    fn firefox_profiles_survive_a_later_blocked_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fixture(dir.path());
+        let firefox = Catalog::builtin().find("firefox").unwrap();
+        let saved = read_with(firefox, &env, |_| {
+            Ok("[Profile0]\nName=Work\nPath=Profiles/work\nDefault=1\n".into())
+        })
+        .unwrap();
+        assert_eq!(
+            read_with(firefox, &fixture(dir.path()), denied)
+                .unwrap_err()
+                .cached,
+            saved
+        );
+    }
+
+    #[test]
+    fn missing_corrupt_and_unwritable_caches_do_not_break_live_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fixture(dir.path());
+        let chrome = Catalog::builtin().find("chrome").unwrap();
+        assert!(
+            read_with(chrome, &env, denied)
+                .unwrap_err()
+                .cached
+                .is_empty()
+        );
+        fs::write(dir.path().join("profiles.json"), "broken").unwrap();
+        assert!(
+            read_with(chrome, &env, denied)
+                .unwrap_err()
+                .cached
+                .is_empty()
+        );
+        let profiles = read_with(chrome, &env, |_| Ok(WORK.into())).unwrap();
+        assert_eq!(
+            read_with(chrome, &env, denied).unwrap_err().cached,
+            profiles
+        );
+        fs::write(dir.path().join("not-a-directory"), "file").unwrap();
+        let unwritable = Env::fixture(Platform::MacOs, dir.path())
+            .with_profile_cache(dir.path().join("not-a-directory/profiles.json"));
+        assert_eq!(
+            read_with(chrome, &unwritable, |_| Ok(WORK.into())).unwrap(),
+            profiles
+        );
+    }
+
+    #[test]
+    fn persistence_is_explicitly_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Env::fixture(Platform::MacOs, dir.path());
+        let chrome = Catalog::builtin().find("chrome").unwrap();
+        read_with(chrome, &env, |_| Ok(WORK.into())).unwrap();
+        assert!(
+            read_with(chrome, &env, denied)
+                .unwrap_err()
+                .cached
+                .is_empty()
+        );
+        assert!(!dir.path().join("profiles.json").exists());
+    }
 
     #[test]
     fn chromium_orders_and_defaults() {

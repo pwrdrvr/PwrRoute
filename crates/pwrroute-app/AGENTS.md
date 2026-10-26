@@ -42,7 +42,13 @@ their own modules.
   Browsers pane read the same scan.
   `settings.json`'s `browsers.hidden` (bundle ids, or names where there is
   none) keeps apps out of the pickers; rules that name a hidden app still
-  resolve. `browser_scan::install_fixture` gives a test a scan; first run
+  resolve. `browser_scan::environment` opts the scan, router launcher and
+  MCP browser listings into `<data dir>/profiles.json`. Successful reads
+  refresh its parsed metadata; blocked reads may populate profiles from it
+  while keeping `profiles_blocked` true. Settings labels those as cached,
+  and launch diagnostics name cached selections. Unit-test environments
+  never opt into the real data directory's cache.
+  `browser_scan::install_fixture` gives a test a scan; first run
   (`onboarding.rs`) reads the same scan, and its "Look again" (no browsers
   found) is a rescan.
 - **Activity is live (`activity.rs`).** `activity::install` mirrors the

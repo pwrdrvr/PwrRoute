@@ -128,6 +128,8 @@ impl fmt::Display for Delivery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Note {
+    /// The live profile index was blocked; saved profile metadata selected it.
+    ProfileCached { profile: String },
     /// The browser has no profile with this name or directory; it opens in
     /// whichever profile it picks. `available` lists the names it has.
     ProfileNotFound {
@@ -427,7 +429,14 @@ impl Launcher {
             return None;
         };
         match profiles::resolve(entry, &self.env, profile) {
-            ProfileMatch::Found(args) => Some(args),
+            ProfileMatch::Found { args, cached } => {
+                if cached {
+                    notes.push(Note::ProfileCached {
+                        profile: profile.to_owned(),
+                    });
+                }
+                Some(args)
+            }
             ProfileMatch::NotFound(available) => {
                 notes.push(Note::ProfileNotFound {
                     profile: profile.to_owned(),

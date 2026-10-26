@@ -653,7 +653,7 @@ pub struct BrowserLauncher {
 impl BrowserLauncher {
     /// A launcher for this machine.
     pub fn new() -> Self {
-        let mut launcher = Self::with_env(Env::system());
+        let mut launcher = Self::with_env(crate::browser_scan::environment());
         // A profile or private launch of a running Chromium browser then
         // hands the link over without the new instance taking focus.
         launcher.inner = launcher.inner.with_running(pwrroute_os::app_is_running);
@@ -683,7 +683,11 @@ impl Launcher for BrowserLauncher {
             return Ok(());
         };
         for note in &plan.notes {
-            log::warn!("{}", describe_note(note));
+            if matches!(note, Note::ProfileCached { .. }) {
+                log::info!("{}", describe_note(note));
+            } else {
+                log::warn!("{}", describe_note(note));
+            }
         }
         // A hand-off's browser brings forward the window it opened the tab
         // in, which macOS 14 allows only once the active app gives way.
@@ -732,6 +736,11 @@ fn launch_error(error: LaunchError) -> anyhow::Error {
 /// A note as one line of stderr. Profile names, never URLs.
 fn describe_note(note: &Note) -> String {
     match note {
+        Note::ProfileCached { profile } => {
+            format!(
+                "profile {profile:?} selected using cached metadata; profile index access is blocked"
+            )
+        }
         Note::ProfileNotFound { profile, available } if available.is_empty() => {
             format!("profile {profile:?} not found; the browser picks one")
         }

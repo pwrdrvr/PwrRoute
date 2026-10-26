@@ -24,9 +24,14 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   and `open URL` route to PwrRoute itself once it is the default.
 - **Blocked is not empty.** `read_profiles` says when a profile index is
   there but the OS refuses the read (permission denied: macOS 27's app data
-  protection, where `stat` still works); `list_profiles` folds that into
-  no profiles, as the launcher wants. Anything that offers profiles to a
-  person should ask `read_profiles`.
+  protection, where `stat` still works). With `Env::with_profile_cache`,
+  successful scans persist only parsed profile names, directories and default
+  markers; a denied read carries the matching saved profiles in
+  `ProfilesBlocked::cached`. `list_profiles` and the launcher can use those,
+  while UI callers keep the blocked flag. Fresh reads always win; missing
+  indexes clear saved profiles, malformed reads retain but do not use the
+  last good snapshot. Cache keys are catalog id plus index path. Fixtures
+  have no cache unless explicitly enabled. Never save raw browser indexes.
 - **URLs are private.** Nothing here logs. `Plan` holds the URL;
   `LaunchError`'s `Display` and `Note`s never do.
 - **Private windows are a catalog fact.** `private_flag` defaults from the

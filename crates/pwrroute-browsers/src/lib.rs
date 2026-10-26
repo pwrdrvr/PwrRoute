@@ -17,8 +17,9 @@
 //!   with `open` as the fallback; other browsers handle their own hand-off.
 //!
 //! Everything that reads the machine takes an [`Env`], so tests run against
-//! fixture trees for any platform on any host. Nothing here writes to disk,
-//! and nothing logs: URLs are private, and only [`Plan`] holds one.
+//! fixture trees for any platform on any host. Profile metadata is persisted
+//! only with [`Env::with_profile_cache`]. Nothing logs: URLs are private,
+//! and only [`Plan`] holds one.
 
 mod catalog;
 mod desktop_entry;
@@ -26,6 +27,7 @@ mod detect;
 mod env;
 mod launch;
 mod plist;
+mod profile_cache;
 mod profiles;
 mod registry;
 mod singleton;

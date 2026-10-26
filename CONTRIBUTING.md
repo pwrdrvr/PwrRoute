@@ -40,6 +40,14 @@ change. To build that bundle without launching or requesting ownership, run
 `cargo xtask bundle --debug --app-only`. A normal launch never requests
 ownership automatically, and `--dry-run` ignores `--make-default`.
 
+Browser-profile scans save names, directory IDs and default markers to
+`profiles.json` in PwrRoute's data folder. Installed and debug builds share
+that file. If a later profile-index read is denied, known profiles remain
+usable from this cache; Settings and launch diagnostics identify cached use.
+The cache requires at least one successful read with this version of the app.
+Rescan refreshes it when access is available; it does not contain raw browser
+indexes, browsing history or credentials. Delete the file to forget it.
+
 ## Repository map
 
 - `crates/pwrroute-app` — the GPUI window, binary `pwrroute`.
