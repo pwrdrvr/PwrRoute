@@ -782,10 +782,11 @@ impl FirstRunModel {
                     .access
                     .as_ref()
                     .map_or_else(String::new, |access| names(access.browsers.iter()));
-                let result = if self.still_blocked().is_empty() {
+                let blocked = self.still_blocked();
+                let result = if blocked.is_empty() {
                     format!("PwrRoute can read {all}.")
                 } else {
-                    format!("Skipped: {all}.")
+                    format!("Skipped: {}.", names(blocked.into_iter()))
                 };
                 ("Browser profiles", result)
             }
@@ -2129,8 +2130,15 @@ fn access_body(model: &FirstRunModel, state: StepState, cx: &mut Context<'_, Fir
     else {
         return body;
     };
-    let last = access.browsers.len().saturating_sub(1);
-    let rows = access.browsers.iter().enumerate().map(|(index, label)| {
+    // A subject the re-read no longer finds (hidden, uninstalled) is not
+    // blocked any more, so it has no row.
+    let shown: Vec<&BrowserLabel> = access
+        .browsers
+        .iter()
+        .filter(|label| model.browsers.iter().any(|c| c.label.name == label.name))
+        .collect();
+    let last = shown.len().saturating_sub(1);
+    let rows = shown.into_iter().enumerate().map(|(index, label)| {
         let profiles = model.access_profiles(&label.name);
         let status = match profiles {
             Some(count) => text(
@@ -2184,7 +2192,11 @@ fn access_body(model: &FirstRunModel, state: StepState, cx: &mut Context<'_, Fir
                     theme::text_secondary(),
                 )),
         )
-        .child(settings_row(badge_for("PwrRoute"), "PwrRoute".to_owned(), false).child(div()))
+        .child(settings_row(
+            badge_for("PwrRoute"),
+            "PwrRoute".to_owned(),
+            false,
+        ))
         .children(rows);
     let how = [
         "Open Files & Folders in System Settings.",
@@ -3819,17 +3831,15 @@ mod tests {
             "{}",
             skipped.access_detail()
         );
-        assert_eq!(
-            skipped.folded(Step::Access).1,
-            "Skipped: Google Chrome and Firefox."
-        );
+        // Only Firefox was left blocked.
+        assert_eq!(skipped.folded(Step::Access).1, "Skipped: Firefox.");
 
         // No access step without a subject.
         assert_eq!(plain().steps().len(), 2);
     }
 
     #[gpui_kit::test]
-    fn the_access_step_opens_settings_checks_again_and_skips(cx: &mut TestAppContext) {
+    fn the_access_step_opens_settings_and_checks_again(cx: &mut TestAppContext) {
         let model = blocked();
         let unblocked = readable(&model);
         let (view, calls, cx) = open_with(cx, model);
