@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.5.0 - 2026-10-26
+
+- Browser profiles - After a successful scan, PwrRoute remembers browser profile names, directory identifiers and default choices in its data folder. If macOS later blocks access to a browser's profile file, PwrRoute can still list and open the matching saved profiles; Settings labels them as cached and keeps the blocked-access status visible. A fresh readable file takes precedence, a missing file clears its saved profiles, and a malformed file does not replace the last good snapshot. The cache contains profile metadata, never the raw browser index or browsing history. It needs at least one successful scan with this version; profiles read by older versions were not saved.
+- Start a rule from a link - Suggested patterns now use the URL after rewrites, which is the URL the rules match, while Try it keeps the original link and runs it through those rewrites. A rule started from a rewritten link therefore matches where the link actually went. Suggestion chips appear only while the rule is a draft, so they cannot overwrite a saved rule or another rule that takes its place in the list.
+- Hand-off diagnostics - Help › Logs now shows browser hand-off stages at the normal logging level: planning, the delivery method and fallback reason, activation yield, and separate socket and command timings. The stages share a dispatch ID and attempt number, making retries and stalls easier to follow. Window observations report sampling delays and warn when PwrRoute stays in front through the timeout. Launcher completion is distinguished from a browser tab being ready, which PwrRoute does not observe. Progress lines contain labels, counts and timings, without link addresses, command arguments, browser or profile names, and follow the diagnostic-log and Activity-retention settings.
+
 ## v0.4.0 - 2026-10-26
 
 - Profile access - First run on macOS now names browsers whose profile files macOS has blocked and shows how to turn on their access under Privacy & Security › Files & Folders › PwrRoute. Open Files & Folders goes to that pane; Check again and returning from System Settings read the profiles again, so the Everything else profile picker appears without a relaunch when access takes effect. Each browser shows its progress, Skip continues without profiles, and a grant that has not taken effect says that a quit and reopen may be needed. The step explains that PwrRoute reads a file to list profiles, never history, cookies or passwords; browsers that are missing or have no profiles do not trigger it.
