@@ -2673,7 +2673,7 @@ fn everything_else_row(
 }
 
 fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let last = crate::start_from::recent_links(cx).into_iter().next();
+    let last = crate::start_from::last_link(cx);
     div()
         .debug_selector(|| "overview-empty".into())
         .flex()
@@ -2722,7 +2722,7 @@ fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     this.navigate(Screen::Rules, window, cx);
-                                    this.add_handler_from(last.url.clone(), window, cx);
+                                    this.add_handler_from(last.start(), window, cx);
                                 })),
                         )
                         .child(

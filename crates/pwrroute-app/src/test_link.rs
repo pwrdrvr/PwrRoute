@@ -388,11 +388,17 @@ impl TestLink {
     }
 
     /// Add a rule…'s start, from the last run: the pattern suggested for
-    /// the URL the rules saw (after rewrites), and the link as tested for
-    /// Try it. `None` without a run or a pattern.
-    pub fn rule_start(&self) -> Option<(String, String)> {
+    /// the URL the rules saw (after rewrites), and the link, as tested for
+    /// Try it and as the rules saw it. `None` without a run or a pattern.
+    pub fn rule_start(&self) -> Option<(String, crate::start_from::StartLink)> {
         let run = self.run.as_ref()?;
-        Some((run.suggested.clone()?, run.trace.original_url.clone()))
+        Some((
+            run.suggested.clone()?,
+            crate::start_from::StartLink {
+                url: run.trace.original_url.clone(),
+                seen: rules_url(&run.trace).to_owned(),
+            },
+        ))
     }
 
     /// The trace was run at least once.

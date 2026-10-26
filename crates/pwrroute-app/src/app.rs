@@ -95,7 +95,7 @@ pub struct PwrRoute {
     pub draft_from: Option<(usize, crate::editor::DraftFrom)>,
     /// The link the draft handler at this index started from, for Start
     /// from (`start_from.rs`); `None` once cleared, or with no link.
-    pub draft_link: Option<(usize, Option<String>)>,
+    pub draft_link: Option<(usize, Option<crate::start_from::StartLink>)>,
     pub test: TestLink,
     pub activity: Activity,
     /// Activity's row actions: the Add a rule sheet and what the last
@@ -673,12 +673,12 @@ impl PwrRoute {
     /// this link".
     pub fn add_handler_from(
         &mut self,
-        url: String,
+        link: crate::start_from::StartLink,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         self.add_blank_handler(window, cx);
-        self.start_from(url, window, cx);
+        self.start_from(link, window, cx);
     }
 
     /// A new, empty handler just above Everything else, selected, with its
@@ -702,7 +702,7 @@ impl PwrRoute {
     pub fn add_rule_from_test(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         // From the last run, not the field: rules match the URL after the
         // rewrites, and the field may have changed since.
-        let Some((pattern, url)) = self.test.rule_start() else {
+        let Some((pattern, link)) = self.test.rule_start() else {
             return;
         };
         self.navigate(Screen::Rules, window, cx);
@@ -710,7 +710,8 @@ impl PwrRoute {
         let Some(Selection::Handler(h)) = self.selection else {
             return;
         };
-        self.draft_link = Some((h, Some(url.clone())));
+        let url = link.url.clone();
+        self.draft_link = Some((h, Some(link)));
         self.store.set_pattern(Selection::Handler(h), 0, &pattern);
         self.refresh(cx);
         self.rebuild_rail_kept(cx);
@@ -727,24 +728,43 @@ impl PwrRoute {
         cx.notify();
     }
 
+    /// The draft's note and start link after the handler at `deleted` went:
+    /// gone with it, or up one below it.
+    fn drafts_after_delete(&mut self, deleted: usize) {
+        fn shift<T>(draft: Option<(usize, T)>, deleted: usize) -> Option<(usize, T)> {
+            match draft {
+                Some((at, _)) if at == deleted => None,
+                Some((at, value)) if at > deleted => Some((at - 1, value)),
+                kept => kept,
+            }
+        }
+        self.draft_from = shift(self.draft_from.take(), deleted);
+        self.draft_link = shift(self.draft_link.take(), deleted);
+    }
+
+    /// The same after a handler was inserted at `index`: a draft at or below
+    /// it moved down one.
+    pub(crate) fn drafts_after_insert(&mut self, index: usize) {
+        if let Some((draft, _)) = &mut self.draft_from
+            && *draft >= index
+        {
+            *draft += 1;
+        }
+        if let Some((draft, _)) = &mut self.draft_link
+            && *draft >= index
+        {
+            *draft += 1;
+        }
+    }
+
     /// Removes the selected rule; the row that takes its place is selected.
     pub fn delete_selected(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(selection) = self.selection else {
             return;
         };
         self.store.delete(selection);
-        // The draft a note belongs to: gone with it, or up one below it.
         if let Selection::Handler(deleted) = selection {
-            self.draft_from = match self.draft_from {
-                Some((draft, _)) if draft == deleted => None,
-                Some((draft, from)) if draft > deleted => Some((draft - 1, from)),
-                kept => kept,
-            };
-            self.draft_link = match self.draft_link.take() {
-                Some((draft, _)) if draft == deleted => None,
-                Some((draft, link)) if draft > deleted => Some((draft - 1, link)),
-                kept => kept,
-            };
+            self.drafts_after_delete(deleted);
         }
         // The row that took its place, or the last of its list.
         let (len, make): (usize, fn(usize) -> Selection) = match selection {

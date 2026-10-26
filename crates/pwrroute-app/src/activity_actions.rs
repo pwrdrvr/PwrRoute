@@ -491,7 +491,7 @@ fn clock(at: SystemTime) -> String {
 }
 
 /// "Google Chrome · Personal", or the browser alone.
-fn opened_label(record: &DispatchRecord) -> String {
+pub(crate) fn opened_label(record: &DispatchRecord) -> String {
     match &record.browser {
         Some(browser) if browser.profile.is_empty() => browser.name.clone(),
         Some(browser) => format!("{} \u{00b7} {}", browser.name, browser.profile),
@@ -814,16 +814,7 @@ impl PwrRoute {
         let test = sheet.test();
         let index = self.store.insert_rule(at, rule);
         // A draft at or below the new rule moved down one.
-        if let Some((draft, _)) = &mut self.draft_from
-            && *draft >= index
-        {
-            *draft += 1;
-        }
-        if let Some((draft, _)) = &mut self.draft_link
-            && *draft >= index
-        {
-            *draft += 1;
-        }
+        self.drafts_after_insert(index);
         let kept = match test {
             Some(test) => {
                 let number = self.store.add_test(test);

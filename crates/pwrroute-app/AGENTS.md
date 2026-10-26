@@ -459,10 +459,17 @@ their own modules.
   newest first, one per URL), or Test a link's, puts its narrowest
   `suggest_rule` pattern in the first field, selected, and the link in Try
   it; `PwrRoute::draft_link` keeps which link, by the draft's index like
-  `draft_from`. The Overview's "+ Rule" offers the links but fills in
-  nothing: its browser is set, so a pattern would save the rule unasked.
-  The rail's Start from picker (drafts only) lists the recent
-  links, the wider suggestions are chips under the pattern, and Clear goes
+  `draft_from` (`drafts_after_delete` / `drafts_after_insert` move both).
+  A `StartLink` is the URL as opened, for Try it, and the URL the
+  handlers saw after the rewrites (the record's `final_url`, Test a link's
+  `rules_url`), which the patterns come from: a rule written for the
+  pre-rewrite host would never match. The chips show only while the rule
+  is a draft. Start from's rows are the one exception to `menu_row`: the
+  URL is the label and gives way before its time and destination. The
+  Overview's "+ Rule" offers the links but fills in nothing: its browser
+  is set, so a pattern would save the rule unasked. The rail's Start from
+  picker (drafts only) lists the recent links, the wider suggestions are
+  chips under the pattern, and Clear goes
   back to a blank rule. The Overview's first-rule prompt names the last
   link, with "Blank rule" for `add_blank_handler`. The link stays in
   memory: Try it is never written. Open in and Profile are pickers over
