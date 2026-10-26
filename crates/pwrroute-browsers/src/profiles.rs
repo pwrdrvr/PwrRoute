@@ -66,9 +66,7 @@ fn read_with(
     };
     let (path, parse): (_, ProfileParser) = match browser.profile_flag() {
         ProfileFlag::Chromium => (dir.join("Local State"), parse_chromium),
-        ProfileFlag::Firefox => (dir.join("profiles.ini"), |text| {
-            (!ini_sections(text).is_empty()).then(|| firefox_profiles(text))
-        }),
+        ProfileFlag::Firefox => (dir.join("profiles.ini"), parse_firefox),
         ProfileFlag::None => return Ok(Vec::new()),
     };
     match read(&path) {
@@ -183,11 +181,20 @@ fn parse_chromium(local_state: &str) -> Option<Vec<Profile>> {
 /// The `[ProfileN]` sections of a Firefox `profiles.ini`, in file order. The
 /// default is the `[Install…]` section's `Default=` path when there is one
 /// (Firefox 67+), else the profile marked `Default=1`.
-pub(crate) fn firefox_profiles(ini: &str) -> Vec<Profile> {
+#[cfg(test)]
+fn firefox_profiles(ini: &str) -> Vec<Profile> {
+    parse_firefox(ini).unwrap_or_default()
+}
+
+fn parse_firefox(ini: &str) -> Option<Vec<Profile>> {
+    let sections = ini_sections(ini)?;
+    if sections.is_empty() {
+        return None;
+    }
     let mut profiles = Vec::new();
     let mut install_defaults = Vec::new();
     let mut legacy_default = None;
-    for (section, entries) in ini_sections(ini) {
+    for (section, entries) in sections {
         let get = |key: &str| {
             entries
                 .iter()
@@ -196,10 +203,10 @@ pub(crate) fn firefox_profiles(ini: &str) -> Vec<Profile> {
         };
         if section.starts_with("Install") {
             install_defaults.extend(get("Default"));
-        } else if section.starts_with("Profile")
-            && let Some(name) = get("Name")
-        {
-            let directory = get("Path").unwrap_or_default();
+        } else if section.starts_with("Profile") {
+            // A truncated profile must not replace a previously complete scan.
+            let name = get("Name").filter(|value| !value.is_empty())?;
+            let directory = get("Path").filter(|value| !value.is_empty())?;
             if get("Default").as_deref() == Some("1") {
                 legacy_default = Some(directory.clone());
             }
@@ -217,26 +224,36 @@ pub(crate) fn firefox_profiles(ini: &str) -> Vec<Profile> {
             install_defaults.contains(&p.directory)
         };
     }
-    profiles
+    Some(profiles)
 }
 
+type IniSection = (String, Vec<(String, String)>);
+
 /// A minimal INI reader: `[section]`, `key=value`, `;`/`#` comments.
-fn ini_sections(ini: &str) -> Vec<(String, Vec<(String, String)>)> {
-    let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
+/// Invalid syntax fails the whole read rather than returning partial metadata.
+fn ini_sections(ini: &str) -> Option<Vec<IniSection>> {
+    let mut sections: Vec<IniSection> = Vec::new();
     for line in ini.lines() {
-        let line = line.trim().trim_start_matches('\u{feff}');
+        let line = line.trim().trim_start_matches('\u{feff}').trim_start();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            sections.push((name.trim().to_owned(), Vec::new()));
-        } else if let (Some((key, value)), Some((_, entries))) =
-            (line.split_once('='), sections.last_mut())
-        {
+        if line.starts_with('[') {
+            let name = line.strip_prefix('[')?.strip_suffix(']')?.trim();
+            if name.is_empty() || name.chars().any(|c| matches!(c, '[' | ']')) {
+                return None;
+            }
+            sections.push((name.to_owned(), Vec::new()));
+        } else {
+            let (key, value) = line.split_once('=')?;
+            if key.trim().is_empty() {
+                return None;
+            }
+            let (_, entries) = sections.last_mut()?;
             entries.push((key.trim().to_owned(), value.trim().to_owned()));
         }
     }
-    sections
+    Some(sections)
 }
 
 #[cfg(test)]
@@ -355,6 +372,71 @@ mod tests {
     }
 
     #[test]
+    fn malformed_firefox_indexes_preserve_the_saved_profiles() {
+        const VALID: &str = "[Profile0]\nName=Work\nPath=Profiles/work\nDefault=1\n";
+        for malformed in [
+            "[Profile0]\nthis is invalid INI",
+            "[Profile0]\nName=Work",
+            "[Profile0]\nName=\nPath=Profiles/work",
+            "[Profile0]\nName=Work\nPath=",
+            "[General]\nVersion=2\ninvalid line",
+            "[Profile0\nName=Work\nPath=Profiles/work",
+            "[]\nName=Work\nPath=Profiles/work",
+            "[General]\n=invalid",
+            "orphan=value\n[General]\nVersion=2",
+            "[Profile0]\nName=Work\nPath=Profiles/work\n[Profile1]\nName=Travel",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let env = fixture(dir.path());
+            let firefox = Catalog::builtin().find("firefox").unwrap();
+            let saved = read_with(firefox, &env, |_| Ok(VALID.into())).unwrap();
+            let snapshot = fs::read(dir.path().join("profiles.json")).unwrap();
+            assert!(
+                read_with(firefox, &env, |_| Ok(malformed.into()))
+                    .unwrap()
+                    .is_empty(),
+                "{malformed}"
+            );
+            assert_eq!(
+                fs::read(dir.path().join("profiles.json")).unwrap(),
+                snapshot,
+                "{malformed}"
+            );
+            assert_eq!(
+                read_with(firefox, &fixture(dir.path()), denied)
+                    .unwrap_err()
+                    .cached,
+                saved,
+                "{malformed}"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_firefox_profile_removal_clears_the_saved_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fixture(dir.path());
+        let firefox = Catalog::builtin().find("firefox").unwrap();
+        read_with(firefox, &env, |_| {
+            Ok("[Profile0]\nName=Work\nPath=Profiles/work\n".into())
+        })
+        .unwrap();
+        assert!(
+            read_with(firefox, &env, |_| Ok(
+                "[General]\nStartWithLastProfile=1\nVersion=2\n".into()
+            ))
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            read_with(firefox, &env, denied)
+                .unwrap_err()
+                .cached
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn missing_corrupt_and_unwritable_caches_do_not_break_live_reads() {
         let dir = tempfile::tempdir().unwrap();
         let env = fixture(dir.path());
@@ -454,5 +536,20 @@ mod tests {
     fn firefox_legacy_default() {
         let p = firefox_profiles("[Profile0]\nName=default\nPath=x.default\nDefault=1\n");
         assert!(p[0].default);
+    }
+
+    #[test]
+    fn firefox_accepts_comments_bom_crlf_and_equals_in_values() {
+        let profiles = firefox_profiles(
+            "\u{feff} ; comment\r\n[General]\r\nVersion=2\r\n# comment\r\n[Profile0]\r\nName=Work=Development\r\nPath=Profiles/work\r\nDefault=1\r\n",
+        );
+        assert_eq!(
+            profiles,
+            [Profile {
+                name: "Work=Development".into(),
+                directory: "Profiles/work".into(),
+                default: true
+            }]
+        );
     }
 }
