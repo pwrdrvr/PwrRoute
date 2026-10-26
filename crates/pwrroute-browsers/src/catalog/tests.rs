@@ -70,6 +70,27 @@ fn every_entry_has_a_platform_and_sources() {
     }
 }
 
+#[test]
+fn singleton_protocols_are_explicit_and_sourced() {
+    for b in catalog().browsers() {
+        if let Some(SingletonProtocol::Chromium) = b.singleton_protocol {
+            assert_eq!(b.engine, BrowserEngine::Chromium, "{}", b.id);
+            assert!(b.macos.is_some(), "{}", b.id);
+            assert!(
+                b.sources
+                    .iter()
+                    .any(|s| s.ends_with("/process_singleton_posix.cc")),
+                "{}: no singleton protocol source",
+                b.id
+            );
+        }
+    }
+    // Being a Chromium browser does not establish wire compatibility.
+    for id in ["edge", "edge-beta", "edge-dev", "edge-canary", "brave"] {
+        assert_eq!(catalog().find(id).unwrap().singleton_protocol, None, "{id}");
+    }
+}
+
 /// Every identifier a config can use finds its own entry, so no entry
 /// shadows another (Chrome's ids vs Chrome Beta's, Firefox's vs its
 /// Developer Edition's).

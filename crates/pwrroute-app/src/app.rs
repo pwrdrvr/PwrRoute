@@ -93,6 +93,9 @@ pub struct PwrRoute {
     /// The draft handler a surface other than Rules started, for the
     /// note above its fields: its index and where it came from.
     pub draft_from: Option<(usize, crate::editor::DraftFrom)>,
+    /// The link the draft handler at this index started from, for Start
+    /// from (`start_from.rs`); `None` once cleared, or with no link.
+    pub draft_link: Option<(usize, Option<String>)>,
     pub test: TestLink,
     pub activity: Activity,
     /// Activity's row actions: the Add a rule sheet and what the last
@@ -195,6 +198,7 @@ impl PwrRoute {
             config: in_charge,
             visual_rules_expanded: false,
             draft_from: None,
+            draft_link: None,
             activity: Activity::new(cx),
             actions: Actions::default(),
             browsers: Vec::new(),
@@ -520,7 +524,7 @@ impl PwrRoute {
     }
 
     /// Runs the rail's sample through the edited rules.
-    fn try_it(&mut self) {
+    pub(crate) fn try_it(&mut self) {
         let Some(selection) = self.selection else {
             return;
         };
@@ -657,12 +661,33 @@ impl PwrRoute {
         self.add_pattern(window, cx);
     }
 
+    /// A new handler just above Everything else, selected, started from
+    /// the last link the person opened (design: Rule From a Link 1a), or
+    /// blank with its first pattern ready to type when there is none.
+    pub fn add_handler(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.add_blank_handler(window, cx);
+        self.start_from_last(window, cx);
+    }
+
+    /// A new handler started from `url`: the Overview's "Add a rule for
+    /// this link".
+    pub fn add_handler_from(
+        &mut self,
+        url: String,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.add_blank_handler(window, cx);
+        self.start_from(url, window, cx);
+    }
+
     /// A new, empty handler just above Everything else, selected, with its
     /// first pattern ready to type.
-    pub fn add_handler(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+    pub fn add_blank_handler(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         self.visual_rules_expanded = true;
         self.draft_from = None;
         let index = self.store.add_handler();
+        self.draft_link = Some((index, None));
         self.selection = Some(Selection::Handler(index));
         self.refresh(cx);
         self.rebuild_rail(cx);
@@ -681,10 +706,11 @@ impl PwrRoute {
             return;
         };
         self.navigate(Screen::Rules, window, cx);
-        self.add_handler(window, cx);
+        self.add_blank_handler(window, cx);
         let Some(Selection::Handler(h)) = self.selection else {
             return;
         };
+        self.draft_link = Some((h, Some(url.clone())));
         self.store.set_pattern(Selection::Handler(h), 0, &pattern);
         self.refresh(cx);
         self.rebuild_rail_kept(cx);
@@ -712,6 +738,11 @@ impl PwrRoute {
             self.draft_from = match self.draft_from {
                 Some((draft, _)) if draft == deleted => None,
                 Some((draft, from)) if draft > deleted => Some((draft - 1, from)),
+                kept => kept,
+            };
+            self.draft_link = match self.draft_link.take() {
+                Some((draft, _)) if draft == deleted => None,
+                Some((draft, link)) if draft > deleted => Some((draft - 1, link)),
                 kept => kept,
             };
         }
@@ -827,7 +858,7 @@ impl PwrRoute {
         self.refresh(cx);
     }
 
-    fn focus_field(
+    pub(crate) fn focus_field(
         &mut self,
         window: &mut Window,
         cx: &mut Context<'_, Self>,

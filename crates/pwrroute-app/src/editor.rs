@@ -87,9 +87,11 @@ pub struct Rail {
     pub try_result: Option<TryResult>,
 }
 
-/// The rail's menus: Open in, Profile, and "+ app" under Sent from.
+/// The rail's menus: Start from, Open in, Profile, and "+ app" under Sent
+/// from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RailMenu {
+    StartFrom,
     Browser,
     Profile,
     Opener,
@@ -612,9 +614,26 @@ fn match_section(
                     .child(text("Any app", 11.0, 500.0, theme::text_muted())),
             )
         });
+    let suggested = match app.selection {
+        Some(Selection::Handler(index)) => crate::start_from::suggestions(
+            app,
+            index,
+            rail.patterns
+                .first()
+                .map_or("", |field| field.text.as_str()),
+            cx,
+        ),
+        _ => None,
+    };
+    // The suggestions sit under the fields, above "+ pattern".
+    let mut patterns = pattern_list(rail, &handler.problems, window, cx);
+    if let Some(suggested) = suggested {
+        let at = patterns.len().saturating_sub(1);
+        patterns.insert(at, suggested.into_any_element());
+    }
     section()
         .child(section_title("Match"))
-        .children(pattern_list(rail, &handler.problems, window, cx))
+        .children(patterns)
         .child(sent_from)
         .when(!rail.openers.is_empty(), |section| section.child(openers))
         .children(problems_under(&handler.problems, Under::Openers))
@@ -1330,7 +1349,7 @@ fn examples_section(
 impl PwrRoute {
     /// A press on a picker's box: which menu was open, before the menu's
     /// press-outside handler closes it.
-    fn note_rail_menu(&mut self) {
+    pub(crate) fn note_rail_menu(&mut self) {
         if let Some(rail) = &mut self.rail {
             rail.was_menu = rail.menu;
         }
@@ -1974,6 +1993,9 @@ pub fn rail(
                         cx,
                     ))
                     .children(draft_note(app, index, draft))
+                    .when(draft, |frame| {
+                        frame.child(crate::start_from::section(app, index, cx))
+                    })
                     .child(match_section(app, handler, rail, window, cx))
                     .child(open_in_section(app, handler, rail, window, cx))
                     .child(examples_section(

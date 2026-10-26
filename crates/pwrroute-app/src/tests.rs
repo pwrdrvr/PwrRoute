@@ -111,15 +111,19 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 /// Scrolls the pane under `selector` until the element is inside the window,
 /// the way a wheel does; a click below the fold reaches nothing.
 fn scroll_to(cx: &mut VisualTestContext, selector: &'static str) {
+    let mut last = None;
     for _ in 0..20 {
         let bounds = cx
             .debug_bounds(selector)
             .unwrap_or_else(|| panic!("no element {selector} on screen"));
         let height = cx.update(|window, _| window.viewport_size().height);
         let below = bounds.bottom() + px(24.0) - height;
-        if below <= px(0.0) {
+        // In view, or as far as its pane scrolls with the whole of it
+        // inside the window (the last row of a pane that ends there).
+        if below <= px(0.0) || (last == Some(bounds) && bounds.bottom() <= height) {
             return;
         }
+        last = Some(bounds);
         let event = ScrollWheelEvent {
             position: point(bounds.center().x, height / 2.0),
             delta: ScrollDelta::Pixels(point(px(0.0), -below)),
@@ -822,6 +826,7 @@ fn with_nothing_to_route_by_the_pane_offers_a_first_handler(cx: &mut TestAppCont
 
     // Discarding the draft leaves two empty cards, not the blank: the file
     // exists now.
+    scroll_to(cx, "rail-delete");
     click(cx, "rail-delete");
     assert!(cx.debug_bounds("rules-blank").is_none());
     assert!(cx.debug_bounds("empty-add-handler").is_some());
@@ -4286,6 +4291,8 @@ fn an_overview_card_adds_a_rule_for_its_browser(cx: &mut TestAppContext) {
         (rule.browser.as_str(), rule.profile.as_str()),
         ("Microsoft Edge", "")
     );
+    // No pattern from a link: with the browser set it would save at once.
+    assert_eq!(rule.patterns, [""]);
     assert!(cx.debug_bounds("draft-note").is_some());
     // Not the card's pin: the click was the button's.
     assert_eq!(
@@ -4755,4 +4762,142 @@ fn an_alt_click_is_not_a_lone_alt(cx: &mut TestAppContext) {
     assert_eq!(bar_state(&view, cx), crate::menu_bar::State::default());
     keys(cx, "alt");
     assert_eq!(bar_state(&view, cx).title, Some(0));
+}
+
+/// Links the router opened, newest first, each kept with its full URL and
+/// opened in Microsoft Edge.
+fn opened_links(urls: &[&str]) -> Vec<DispatchRecord> {
+    let template = fixtures::activity()
+        .into_iter()
+        .find(|record| record.browser.is_some())
+        .expect("a fixture record that opened");
+    urls.iter()
+        .enumerate()
+        .map(|(at, url)| {
+            let mut record = template.clone();
+            record.id = DispatchId(100 - at as u64);
+            record.privacy = Privacy::Full;
+            record.link = Link::new(*url, Source::AppleEvent);
+            record.steps = vec![Step::Received {
+                url: (*url).to_owned(),
+            }];
+            record.outcome = Outcome::Opened;
+            if let Some(browser) = &mut record.browser {
+                "Microsoft Edge".clone_into(&mut browser.name);
+                browser.profile.clear();
+            }
+            record
+        })
+        .collect()
+}
+
+#[gpui_kit::test]
+fn a_new_rule_starts_from_the_last_link(cx: &mut TestAppContext) {
+    let dir = scratch("start-from");
+    let path = dir.join("rules.json");
+    cx.update(|cx| {
+        activity::install_feed(
+            Feed::from_records(opened_links(&[
+                "https://git.example.com/acme/widgets/pull/128",
+                "https://docs.example.com/guides/setup",
+            ])),
+            cx,
+        )
+    });
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "add-handler");
+    let handler = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.handlers[7].clone());
+    let sample = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| app.rail.as_ref().unwrap().sample.text.clone())
+    };
+    // The draft starts from the last link: its narrowest pattern, selected,
+    // and the link in Try it.
+    assert_eq!(handler(cx).rule.badge, RowBadge::Draft);
+    assert_eq!(handler(cx).patterns, ["git.example.com/acme/*"]);
+    assert!(view.read_with(cx, |app, _| app.rail.as_ref().unwrap().patterns[0].selected));
+    assert_eq!(sample(cx), "https://git.example.com/acme/widgets/pull/128");
+    assert!(cx.debug_bounds("start-from").is_some());
+    assert!(cx.debug_bounds("start-suggestions").is_some());
+
+    // The wider suggestion.
+    click(cx, "start-suggestion-1");
+    assert_eq!(handler(cx).patterns, ["git.example.com/*"]);
+
+    // Another recent link replaces the pattern and Try it.
+    click(cx, "start-box");
+    assert!(cx.debug_bounds("start-menu").is_some());
+    click(cx, "start-link-1");
+    assert!(cx.debug_bounds("start-menu").is_none());
+    assert_eq!(handler(cx).patterns, ["docs.example.com/guides/*"]);
+    assert_eq!(sample(cx), "https://docs.example.com/guides/setup");
+
+    // Typing replaces the selected suggestion.
+    cx.simulate_input("notion.so/*");
+    draw(cx);
+    assert_eq!(handler(cx).patterns, ["notion.so/*"]);
+
+    // Clear goes back to a blank rule; the picker stays.
+    click(cx, "start-clear");
+    assert_eq!(handler(cx).patterns, [""]);
+    assert_eq!(handler(cx).title, "New rule");
+    assert_ne!(sample(cx), "https://docs.example.com/guides/setup");
+    assert!(cx.debug_bounds("start-suggestions").is_none());
+    assert!(cx.debug_bounds("start-box").is_some());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.draft_link.clone()),
+        Some((7, None))
+    );
+    // No link reached the file: the draft has no browser.
+    let file = saved(cx, &path);
+    assert_eq!(file.rules.len(), 7);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn with_no_links_a_new_rule_starts_blank(cx: &mut TestAppContext) {
+    let dir = scratch("start-blank");
+    cx.update(|cx| activity::install_feed(Feed::from_records(Vec::new()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "add-handler");
+    let handler = view.read_with(cx, |app, _| app.handlers[7].clone());
+    assert_eq!(handler.patterns, [""]);
+    assert!(cx.debug_bounds("start-from").is_some());
+    assert!(cx.debug_bounds("start-suggestions").is_none());
+    assert!(cx.debug_bounds("start-clear").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn the_first_rule_prompt_names_the_last_link(cx: &mut TestAppContext) {
+    let dir = scratch("first-rule-link");
+    let path = dir.join("rules.json");
+    cx.update(|cx| {
+        activity::install_feed(
+            Feed::from_records(opened_links(&[
+                "https://git.example.com/acme/widgets/pull/128",
+            ])),
+            cx,
+        )
+    });
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path)));
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::Overview, window, cx)
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("overview-last-link").is_some());
+    click(cx, "overview-add-rule");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Rules);
+    let patterns = view.read_with(cx, |app, _| app.handlers[0].patterns.clone());
+    assert_eq!(patterns, ["git.example.com/acme/*"]);
+
+    // Blank rule keeps the old path.
+    view.update_in(cx, |app, window, cx| {
+        app.delete_selected(window, cx);
+        app.navigate(Screen::Overview, window, cx);
+    });
+    draw(cx);
+    click(cx, "overview-blank-rule");
+    let patterns = view.read_with(cx, |app, _| app.handlers[0].patterns.clone());
+    assert_eq!(patterns, [""]);
+    let _ = std::fs::remove_dir_all(dir);
 }

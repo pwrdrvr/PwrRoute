@@ -447,8 +447,20 @@ their own modules.
   all add a draft handler and select it; `PwrRoute::draft_from` gives the draft its
   note (where it came from, and `config_hint`'s line beside a config).
   Activity's sheet is the one other form, with the same rule: no browser
-  is chosen for the person, and Add waits for one. Open in and Profile are
-  pickers over the scan (`rule_pickers`: this Mac's browsers, then the apps
+  is chosen for the person, and Add waits for one.
+  A draft starts from a link (`start_from.rs`; design: Rule From a Link):
+  the last link the feed holds with its full URL (`start_from::recent`,
+  newest first, one per URL), or Test a link's, puts its narrowest
+  `suggest_rule` pattern in the first field, selected, and the link in Try
+  it; `PwrRoute::draft_link` keeps which link, by the draft's index like
+  `draft_from`. The Overview's "+ Rule" offers the links but fills in
+  nothing: its browser is set, so a pattern would save the rule unasked.
+  The rail's Start from picker (drafts only) lists the recent
+  links, the wider suggestions are chips under the pattern, and Clear goes
+  back to a blank rule. The Overview's first-rule prompt names the last
+  link, with "Blank rule" for `add_blank_handler`. The link stays in
+  memory: Try it is never written. Open in and Profile are pickers over
+  the scan (`rule_pickers`: this Mac's browsers, then the apps
   the rules name, dimmed when the scan ran and found nothing), each with a
   way out to a typed value ("Other app…", "Profile by name or folder…")
   that `Rail::browser_typed` / `profile_typed` keep across rebuilds of the
