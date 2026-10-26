@@ -9,10 +9,10 @@
 //!
 //! That new instance is a whole second copy of the browser, started only to
 //! pass its command line to the running one over Chromium's singleton
-//! socket. For a running Chromium browser the plan also carries that
-//! command line ([`Plan::socket`]), and [`Launcher::run`] writes it to the
-//! socket itself ([`crate::singleton`]), running `open` only when that
-//! fails.
+//! socket. For a running Chromium browser with a verified protocol the plan
+//! carries that command line ([`Plan::socket`]), and [`Launcher::run`]
+//! writes it to the socket itself ([`crate::singleton`]), running `open`
+//! only when that fails.
 //!
 //! Windows and Linux run the browser's executable directly, never "the
 //! default browser": that is PwrRoute, and the link would loop back.
@@ -30,7 +30,7 @@ use std::{
 use pwrroute_engine::{AppType, Browser};
 
 use crate::{
-    catalog::{BrowserEngine, BrowserInfo, Catalog, PrivateFlag},
+    catalog::{BrowserEngine, BrowserInfo, Catalog, PrivateFlag, SingletonProtocol},
     desktop_entry, detect,
     env::{Env, Platform},
     profiles::{self, ProfileMatch},
@@ -83,9 +83,10 @@ pub struct Plan {
     /// the launching app should. `None` for every other launch.
     pub hand_off_to: Option<String>,
     /// The singleton-socket hand-off, tried before `program`: `Some(Ok)`
-    /// for a running Chromium browser whose socket passed every check that
-    /// does not connect, `Some(Err)` with why not when it is running but
-    /// its socket did not, `None` for every other launch.
+    /// for a running Chromium browser with a verified protocol whose socket
+    /// passed every check that does not connect, `Some(Err)` with why not
+    /// when it is running but its socket did not, `None` for every other
+    /// launch.
     pub socket: Option<Result<SocketHandOff, SocketError>>,
     platform: Platform,
 }
@@ -348,15 +349,22 @@ impl Launcher {
 
     /// The singleton-socket hand-off for a running Chromium `browser`: its
     /// user data dir and the command line `open -n --args` would pass, or
-    /// `None` when that command line is not one the socket can carry (a
-    /// config's `open` options before its own `--args`, or another
-    /// `--user-data-dir`, whose browser listens on another socket).
+    /// `None` when its protocol is unverified or that command line is not
+    /// one the socket can carry (a config's `open` options before its own
+    /// `--args`, or another `--user-data-dir`, whose browser listens on
+    /// another socket).
     fn socket_plan(
         &self,
         browser: &Browser,
         entry: &BrowserInfo,
         flags: Option<&[String]>,
     ) -> Option<Result<SocketHandOff, SocketError>> {
+        // ACK only means the browser accepted a message. Edge, for example,
+        // consumes two extra header fields before argv; upstream's format
+        // can therefore lose the profile and URL without a socket error.
+        if entry.singleton_protocol != Some(SingletonProtocol::Chromium) {
+            return None;
+        }
         let own_open_options = browser.args.iter().any(|a| a == "--args");
         let other_data_dir = browser
             .args
@@ -1074,6 +1082,73 @@ mod tests {
         let launched = launcher.run(with_fake_open(plan, "fail")).unwrap();
         assert_eq!(launched.delivery, Delivery::Socket);
         assert_eq!(got.recv().unwrap(), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edge_defaults_keep_the_profile_and_url_on_every_launch() {
+        use std::rc::Rc;
+
+        use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, Sources};
+
+        // Edge 156's native sender puts two timestamps between cwd and
+        // argv. Sending the upstream header loses the profile and URL,
+        // even though Edge replies ACK. A valid socket must not opt it in.
+        let fake =
+            crate::singleton::fake::Fake::new("home/Library/Application Support/Microsoft Edge");
+        std::fs::write(
+            fake.data.join("Local State"),
+            include_str!("../tests/fixtures/chromium-local-state.json")
+                .replace(r#""last_used": "Profile 1""#, r#""last_used": "Profile 3""#),
+        )
+        .unwrap();
+        let mut env = Env::fixture(Platform::MacOs, fake.root());
+        env.set_var("TMPDIR", fake.temp.to_string_lossy().into_owned());
+        let launcher = Launcher::with_env(env, LaunchOptions::default()).with_running(|_| true);
+
+        for (name, app_type, selector) in [
+            ("Microsoft Edge", AppType::AppName, "-a"),
+            ("com.microsoft.edgemac", AppType::BundleId, "-b"),
+            ("/Applications/Microsoft Edge.app", AppType::Path, "-a"),
+        ] {
+            // No Finicky config and no rules: only the saved default.
+            let engine = Engine::from_sources(
+                &Sources {
+                    config: None,
+                    rules: RulesFile {
+                        default_browser: name.into(),
+                        default_profile: "Personal".into(),
+                        ..RulesFile::default()
+                    },
+                },
+                Rc::new(DefaultHost),
+                Limits::default(),
+            )
+            .unwrap();
+            for url in [URL, "https://example.com/second?x=1&y=2"] {
+                let b = engine.resolve(url, None).unwrap().browser;
+                assert_eq!(b.app_type, app_type);
+                assert_eq!(b.profile, "Personal");
+                let plan = launcher.plan(&b).unwrap().unwrap();
+                assert!(plan.notes.is_empty());
+                assert_eq!(plan.socket, None);
+                assert_eq!(plan.hand_off_to.as_deref(), Some("com.microsoft.edgemac"));
+                assert_eq!(
+                    args(&plan),
+                    [
+                        selector,
+                        name,
+                        "-g",
+                        "-n",
+                        "--args",
+                        "--profile-directory=Profile 1",
+                        url,
+                    ]
+                );
+                let launched = launcher.run(with_fake_open(plan, "ok")).unwrap();
+                assert_eq!(launched.delivery, Delivery::Command);
+            }
+        }
     }
 
     #[cfg(unix)]

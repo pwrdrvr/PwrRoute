@@ -44,11 +44,16 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   and `Plan::hand_off_to` names the running copy unless the link (or the
   config's default) asked for the background: the app yields to that copy
   so it may raise its own window. Tests pass a closure.
-- **A running Chromium browser gets the link over its singleton socket**
+- **A verified Chromium browser gets the link over its singleton socket**
   (`src/singleton.rs`, Chromium's `process_singleton_posix.cc` protocol),
   not by starting a second copy with `open -n`, which costs seconds cold.
   `Plan::socket` is the planned hand-off (`Some(Err)` says why not, so the
-  dry run says which way a link goes); `Launcher::run` tries it within
+  dry run says which way a link goes). The catalog's `singleton_protocol`
+  must explicitly opt in with a protocol source; never infer compatibility
+  from the engine. Edge 156's native sender puts two timestamp fields
+  between cwd and argv; an upstream message can lose the profile and URL
+  even while Edge replies `ACK`. Browsers without a verified protocol use
+  their own `open -n --args` hand-off. `Launcher::run` tries the socket within
   `SOCKET_BUDGET` and runs the `open` plan on any failure, and `Launched`'s
   `Delivery` says which way it went. Only the user data dir from
   `profile_dir`, a socket and directory owned by this uid under `$TMPDIR`,

@@ -17,6 +17,10 @@
 //! page cache; writing it here takes milliseconds. Any failure leaves the
 //! caller to run `open` as before.
 //!
+//! This is the upstream Chromium format, not a contract for its forks.
+//! Callers must opt in by the catalog's verified `singleton_protocol`.
+//! An ACK alone does not establish that a different header was understood.
+//!
 //! Beyond Chromium's own checks, the socket and its directory must be ours
 //! (owner uid, no group or other write), the directory a real one under the
 //! user's temp dir, and the socket a socket. Nothing here logs, and no
