@@ -11,8 +11,9 @@
 //! - [`Launcher`]: turns the engine's [`pwrroute_engine::Browser`] into a
 //!   command ([`Launcher::plan`], the dry run) and runs it
 //!   ([`Launcher::launch`]), adding the browser's private-window flag when
-//!   the rule asked for one. A running Chromium browser gets the link over
-//!   its singleton socket ([`SocketHandOff`]), with `open` as the fallback.
+//!   the rule asked for one. A running Chromium browser with a verified
+//!   protocol gets the link over its singleton socket ([`SocketHandOff`]),
+//!   with `open` as the fallback; other browsers handle their own hand-off.
 //!
 //! Everything that reads the machine takes an [`Env`], so tests run against
 //! fixture trees for any platform on any host. Nothing here writes to disk,

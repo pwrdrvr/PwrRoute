@@ -3,6 +3,7 @@
     "Entries with \"finicky\": true come from Finicky's apps/finicky/src/browser/browsers.json (MIT, Copyright (c) 2015-2025 John Sterling); their macOS bundle_id, app_name, engine and profile directory are Finicky's.",
     "Everything else (Windows, Linux, and the browsers Finicky lacks) was added for PwrRoute; each entry's sources say where its facts came from.",
     "Path templates start with a base-directory token; see Env::expand in src/env.rs.",
+    "singleton_protocol opts in to a verified wire format; absent, the browser handles its own handoff. Chromium forks may change the header (Edge 156 sends two timestamp fields before argv), so engine is not evidence of compatibility.",
     "private_flag is the engine's by default: Chromium's --incognito (chrome/common/chrome_switches.cc, kIncognito) and Firefox's --private-window (wiki.mozilla.org/Firefox/CommandLineOptions); WebKit browsers have none. An entry sets it only to override: Edge spells it --inprivate, and Arc and Dia take none."
   ],
   "browsers": [
@@ -10,6 +11,7 @@
       "id": "chrome",
       "name": "Google Chrome",
       "engine": "chromium",
+      "singleton_protocol": "chromium",
       "finicky": true,
       "macos": {
         "bundle_id": "com.google.Chrome",
@@ -42,6 +44,7 @@
         ]
       },
       "sources": [
+        "https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/process_singleton_posix.cc",
         "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
         "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
         "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
@@ -55,6 +58,7 @@
       "id": "chrome-beta",
       "name": "Google Chrome Beta",
       "engine": "chromium",
+      "singleton_protocol": "chromium",
       "finicky": true,
       "macos": {
         "bundle_id": "com.google.Chrome.beta",
@@ -87,6 +91,7 @@
         ]
       },
       "sources": [
+        "https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/process_singleton_posix.cc",
         "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
         "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
         "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
@@ -100,6 +105,7 @@
       "id": "chrome-dev",
       "name": "Google Chrome Dev",
       "engine": "chromium",
+      "singleton_protocol": "chromium",
       "macos": {
         "bundle_id": "com.google.Chrome.dev",
         "app_name": "Google Chrome Dev",
@@ -131,6 +137,7 @@
         ]
       },
       "sources": [
+        "https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/process_singleton_posix.cc",
         "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
         "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
         "https://github.com/chromium/chromium/blob/main/chrome/installer/util/shell_util.cc",
@@ -143,6 +150,7 @@
       "id": "chrome-canary",
       "name": "Google Chrome Canary",
       "engine": "chromium",
+      "singleton_protocol": "chromium",
       "finicky": true,
       "macos": {
         "bundle_id": "com.google.Chrome.canary",
@@ -173,6 +181,7 @@
         ]
       },
       "sources": [
+        "https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/process_singleton_posix.cc",
         "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
         "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
         "https://github.com/chromium/chromium/blob/main/chrome/install_static/google_chrome_install_modes.h",
@@ -186,6 +195,7 @@
       "id": "chromium",
       "name": "Chromium",
       "engine": "chromium",
+      "singleton_protocol": "chromium",
       "finicky": true,
       "aliases": [
         "ungoogled-chromium"
@@ -227,6 +237,7 @@
         ]
       },
       "sources": [
+        "https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/process_singleton_posix.cc",
         "https://github.com/johnste/finicky/blob/main/apps/finicky/src/browser/browsers.json",
         "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md",
         "https://github.com/chromium/chromium/blob/main/chrome/install_static/chromium_install_modes.h",

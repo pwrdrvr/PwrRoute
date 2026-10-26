@@ -32,6 +32,10 @@ pub struct BrowserInfo {
     /// The display name. On macOS it is also the app name Finicky configs use.
     pub name: String,
     pub engine: BrowserEngine,
+    /// A verified singleton wire format. Chromium derivatives can change
+    /// it while still replying ACK, so the engine alone is not enough.
+    #[serde(default)]
+    pub(crate) singleton_protocol: Option<SingletonProtocol>,
     /// Present in Finicky's `browsers.json`.
     #[serde(default)]
     pub finicky: bool,
@@ -64,6 +68,13 @@ pub enum BrowserEngine {
     Chromium,
     Firefox,
     WebKit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SingletonProtocol {
+    /// Upstream's START, cwd, argv (process_singleton_posix.cc).
+    Chromium,
 }
 
 /// How a browser is told which profile to open.
