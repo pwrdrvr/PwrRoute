@@ -4782,6 +4782,7 @@ fn opened_links(urls: &[&str]) -> Vec<DispatchRecord> {
                 url: (*url).to_owned(),
             }];
             record.outcome = Outcome::Opened;
+            record.final_url = Some((*url).to_owned());
             if let Some(browser) = &mut record.browser {
                 "Microsoft Edge".clone_into(&mut browser.name);
                 browser.profile.clear();
@@ -4899,5 +4900,42 @@ fn the_first_rule_prompt_names_the_last_link(cx: &mut TestAppContext) {
     click(cx, "overview-blank-rule");
     let patterns = view.read_with(cx, |app, _| app.handlers[0].patterns.clone());
     assert_eq!(patterns, [""]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_rewritten_link_starts_a_rule_for_where_it_went(cx: &mut TestAppContext) {
+    let dir = scratch("start-rewritten");
+    let mut records = opened_links(&["https://x.com/pwrdrvr/status/1842"]);
+    records[0].final_url = Some("https://xcancel.com/pwrdrvr/status/1842".into());
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "add-handler");
+    // The fixture rewrites x.com to xcancel.com: the handlers see the
+    // latter, so the pattern is for it, while Try it runs the link as
+    // opened, through the rewrite.
+    let (patterns, sample) = view.read_with(cx, |app, _| {
+        (
+            app.handlers[7].patterns.clone(),
+            app.rail.as_ref().unwrap().sample.text.clone(),
+        )
+    });
+    assert_eq!(patterns, ["xcancel.com/pwrdrvr/*"]);
+    assert_eq!(sample, "https://x.com/pwrdrvr/status/1842");
+
+    // A handler above the draft goes: the draft's link moves up with it,
+    // and no other rule shows its suggestions.
+    view.update_in(cx, |app, window, cx| {
+        app.select(Selection::Handler(0), cx);
+        app.delete_selected(window, cx);
+    });
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.draft_link.as_ref().map(|(at, _)| *at)),
+        Some(6)
+    );
+    view.update_in(cx, |app, _, cx| app.select(Selection::Handler(5), cx));
+    draw(cx);
+    assert!(cx.debug_bounds("start-suggestions").is_none());
     let _ = std::fs::remove_dir_all(dir);
 }

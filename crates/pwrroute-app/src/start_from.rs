@@ -23,28 +23,52 @@ use pwrroute_router::{DispatchRecord, Outcome};
 use crate::activity::{self, matched_url};
 use crate::app::{PwrRoute, Selection};
 use crate::editor::RailMenu;
+use crate::rules_model::RowBadge;
 use crate::theme::{self, text, tracked};
 use crate::widgets::{ButtonKind, button, caret, input_box, one_line};
 
 /// How many links the picker offers.
 pub const RECENT_LIMIT: usize = 20;
 
+/// The link a draft started from: the URL as opened, which Try it runs
+/// through the rewrites, and the URL the handlers saw after them, which
+/// the patterns are suggested from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StartLink {
+    pub url: String,
+    pub seen: String,
+}
+
 /// A link the person opened, as the picker lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentLink {
-    /// The URL the rules saw (`activity::matched_url`).
+    /// As opened, before the rewrites (`activity::matched_url`).
     pub url: String,
+    /// After the rewrites: what the handlers matched.
+    pub seen: String,
     /// "08:40".
     pub time: String,
     /// Where it went: "Microsoft Edge", "Google Chrome · Work".
     pub opened: String,
 }
 
+impl RecentLink {
+    pub fn start(&self) -> StartLink {
+        StartLink {
+            url: self.url.clone(),
+            seen: self.seen.clone(),
+        }
+    }
+}
+
 /// The links to start from: the records kept with their full URL, newest
-/// first, one per URL, at most [`RECENT_LIMIT`].
-pub fn recent(records: &[DispatchRecord]) -> Vec<RecentLink> {
+/// first, one per URL, at most `limit`.
+pub fn recent(records: &[DispatchRecord], limit: usize) -> Vec<RecentLink> {
     let mut links: Vec<RecentLink> = Vec::new();
     for record in records {
+        if links.len() == limit {
+            break;
+        }
         if record.privacy != Privacy::Full || record.outcome == Outcome::Tested {
             continue;
         }
@@ -54,16 +78,10 @@ pub fn recent(records: &[DispatchRecord]) -> Vec<RecentLink> {
         }
         links.push(RecentLink {
             url: url.to_owned(),
+            seen: record.final_url.as_deref().unwrap_or(url).to_owned(),
             time: clock(record.received_at),
-            opened: match &record.browser {
-                Some(browser) if browser.profile.is_empty() => browser.name.clone(),
-                Some(browser) => format!("{} \u{00b7} {}", browser.name, browser.profile),
-                None => "not opened".to_owned(),
-            },
+            opened: crate::activity_actions::opened_label(record),
         });
-        if links.len() == RECENT_LIMIT {
-            break;
-        }
     }
     links
 }
@@ -71,8 +89,13 @@ pub fn recent(records: &[DispatchRecord]) -> Vec<RecentLink> {
 /// The feed's links to start from; none without a feed.
 pub fn recent_links(cx: &App) -> Vec<RecentLink> {
     activity::feed(cx)
-        .map(|feed| recent(feed.read(cx).records()))
+        .map(|feed| recent(feed.read(cx).records(), RECENT_LIMIT))
         .unwrap_or_default()
+}
+
+/// The last link the person opened, if the feed kept it whole.
+pub fn last_link(cx: &App) -> Option<RecentLink> {
+    activity::feed(cx).and_then(|feed| recent(feed.read(cx).records(), 1).into_iter().next())
 }
 
 /// Why the picker has nothing to offer.
@@ -95,9 +118,9 @@ pub fn candidates(url: &str) -> Vec<String> {
 }
 
 /// The link the draft at `index` started from, if it still has one.
-pub fn link_of(app: &PwrRoute, index: usize) -> Option<&str> {
+pub fn link_of(app: &PwrRoute, index: usize) -> Option<&StartLink> {
     match &app.draft_link {
-        Some((at, Some(url))) if *at == index => Some(url.as_str()),
+        Some((at, Some(link))) if *at == index => Some(link),
         _ => None,
     }
 }
@@ -106,7 +129,7 @@ pub fn link_of(app: &PwrRoute, index: usize) -> Option<&str> {
 /// links, and Clear (design 1a to 1d). Only for a draft.
 pub fn section(app: &PwrRoute, index: usize, cx: &mut Context<'_, PwrRoute>) -> Div {
     let links = recent_links(cx);
-    let chosen = link_of(app, index).map(str::to_owned);
+    let chosen = link_of(app, index).map(|link| link.url.clone());
     let open = app.rail.as_ref().and_then(|rail| rail.menu) == Some(RailMenu::StartFrom);
     let head = div()
         .flex()
@@ -261,7 +284,7 @@ fn menu(
             "Recent links \u{00b7} newest first",
         ));
     for (index, link) in links.iter().enumerate() {
-        let url = link.url.clone();
+        let start = link.start();
         let selected = chosen == Some(link.url.as_str());
         menu = menu.child(
             div()
@@ -296,7 +319,7 @@ fn menu(
                     theme::text_muted(),
                 )))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.start_from(url.clone(), window, cx);
+                    this.start_from(start.clone(), window, cx);
                 })),
         );
     }
@@ -309,15 +332,18 @@ fn menu(
 }
 
 /// The patterns the start link suggests, under the pattern list; the one
-/// in the first field is lit (design 1a).
+/// in the first field is lit (design 1a). Only while the rule is a draft:
+/// a saved rule, or another one at the index, is not the link's.
 pub fn suggestions(
     app: &PwrRoute,
     index: usize,
     first: &str,
     cx: &mut Context<'_, PwrRoute>,
 ) -> Option<Div> {
-    let url = link_of(app, index)?;
-    let candidates = candidates(url);
+    app.handlers
+        .get(index)
+        .filter(|handler| handler.rule.badge == RowBadge::Draft)?;
+    let candidates = candidates(&link_of(app, index)?.seen);
     if candidates.is_empty() {
         return None;
     }
@@ -374,28 +400,32 @@ impl PwrRoute {
         let Some(Selection::Handler(h)) = self.selection else {
             return;
         };
-        match recent_links(cx).into_iter().next() {
-            Some(link) => self.start_from(link.url, window, cx),
+        match last_link(cx) {
+            Some(link) => self.start_from(link.start(), window, cx),
             None => self.draft_link = Some((h, None)),
         }
     }
 
-    /// The selected draft starts from `url`: its first pattern becomes the
-    /// narrowest the link suggests, selected so typing replaces it, and Try
-    /// it holds the link.
-    pub fn start_from(&mut self, url: String, window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// The selected draft starts from `link`: its first pattern becomes the
+    /// narrowest the link suggests (from the URL the handlers saw), selected
+    /// so typing replaces it, and Try it holds the link as opened.
+    pub fn start_from(&mut self, link: StartLink, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(Selection::Handler(h)) = self.selection else {
             return;
         };
-        let pattern = candidates(&url).into_iter().next().unwrap_or_default();
-        self.draft_link = Some((h, Some(url.clone())));
-        self.set_first_pattern(&pattern, cx);
+        let pattern = candidates(&link.seen)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        // The sample first: the rebuild below keeps an edited sample, and
+        // its Try it run is then the one that counts.
         if let Some(rail) = &mut self.rail {
             rail.menu = None;
-            rail.sample.set(url);
+            rail.sample.set(link.url.clone());
             rail.sample_edited = true;
         }
-        self.try_it();
+        self.draft_link = Some((h, Some(link)));
+        self.set_first_pattern(&pattern, cx);
         self.focus_field(window, cx, |rail| rail.patterns.first());
         cx.notify();
     }
@@ -483,6 +513,7 @@ mod tests {
             url: url.to_owned(),
         }];
         record.outcome = Outcome::Opened;
+        record.final_url = Some(url.to_owned());
         if let Some(browser) = &mut record.browser {
             "Microsoft Edge".clone_into(&mut browser.name);
             browser.profile.clear();
@@ -507,7 +538,7 @@ mod tests {
             record(2, "https://meet.example.com/abc", Privacy::Full),
             record(1, "https://hidden.example.com/", Privacy::None),
         ];
-        let links = recent(&records);
+        let links = recent(&records, RECENT_LIMIT);
         let urls: Vec<&str> = links.iter().map(|link| link.url.as_str()).collect();
         assert_eq!(
             urls,
@@ -531,9 +562,19 @@ mod tests {
                 Privacy::Full,
             ));
         }
-        let links = recent(&records);
+        let links = recent(&records, RECENT_LIMIT);
         assert_eq!(links.len(), RECENT_LIMIT);
         assert_eq!(links[0].url, "https://example.com/0");
+    }
+
+    #[test]
+    fn a_rewritten_link_is_suggested_as_the_handlers_saw_it() {
+        let mut rewritten = record(1, "https://x.com/pwrdrvr/status/1", Privacy::Full);
+        rewritten.final_url = Some("https://xcancel.com/pwrdrvr/status/1".into());
+        let links = recent(&[rewritten], RECENT_LIMIT);
+        assert_eq!(links[0].url, "https://x.com/pwrdrvr/status/1");
+        assert_eq!(links[0].seen, "https://xcancel.com/pwrdrvr/status/1");
+        assert_eq!(candidates(&links[0].seen)[0], "xcancel.com/pwrdrvr/*");
     }
 
     #[test]
