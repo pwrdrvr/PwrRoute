@@ -53,6 +53,7 @@ mod rules_view;
 mod settings;
 mod settings_live;
 mod settings_store;
+mod start_from;
 mod test_link;
 #[cfg(test)]
 mod tests;

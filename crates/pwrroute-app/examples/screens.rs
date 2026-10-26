@@ -131,6 +131,9 @@ mod settings;
 #[cfg(target_os = "macos")]
 #[path = "../src/settings_store.rs"]
 mod settings_store;
+
+#[path = "../src/start_from.rs"]
+mod start_from;
 #[cfg(target_os = "macos")]
 #[path = "../src/test_link.rs"]
 mod test_link;
@@ -557,6 +560,33 @@ fn main() {
             app.add_handler(window, cx);
         },
     );
+    // Rule From a Link 1a to 1c: a new rule starts from the last link the
+    // design's Activity fixtures opened.
+    shoot("app-1a-new-rule-from-link", None, &|app, window, cx| {
+        with_scan(app);
+        activity::install_feed(activity::Feed::from_records(fixtures::activity()), cx);
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        app.add_handler(window, cx);
+    });
+    shoot("app-1a-new-rule-start-menu", None, &|app, window, cx| {
+        with_scan(app);
+        activity::install_feed(activity::Feed::from_records(fixtures::activity()), cx);
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        app.add_handler(window, cx);
+        if let Some(rail) = &mut app.rail {
+            rail.menu = Some(editor::RailMenu::StartFrom);
+        }
+    });
+    shoot("app-1a-new-rule-cleared", None, &|app, window, cx| {
+        with_scan(app);
+        activity::install_feed(activity::Feed::from_records(fixtures::activity()), cx);
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        app.add_handler(window, cx);
+        app.clear_start(window, cx);
+    });
     shoot("app-0-overview-card-add", None, &|app, window, cx| {
         with_scan(app);
         scratch_store(app, cx);

@@ -819,6 +819,11 @@ impl PwrRoute {
         {
             *draft += 1;
         }
+        if let Some((draft, _)) = &mut self.draft_link
+            && *draft >= index
+        {
+            *draft += 1;
+        }
         let kept = match test {
             Some(test) => {
                 let number = self.store.add_test(test);
