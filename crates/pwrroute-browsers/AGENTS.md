@@ -29,6 +29,10 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   person should ask `read_profiles`.
 - **URLs are private.** Nothing here logs. `Plan` holds the URL;
   `LaunchError`'s `Display` and `Note`s never do.
+  `Plan::diagnostic_summary` and `Launcher::run_observed` expose only
+  fixed delivery labels, flags, timings and socket failure categories.
+  Never include program paths, arguments or stderr in those diagnostics.
+  A command's return or socket ACK does not confirm tab readiness.
 - **Private windows are a catalog fact.** `private_flag` defaults from the
   engine (`--incognito`, `--private-window`, none for WebKit); an entry
   overrides it only with a source (Edge's `--inprivate`) or to say the
