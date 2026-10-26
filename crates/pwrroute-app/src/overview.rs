@@ -385,6 +385,10 @@ impl PwrRoute {
         self.rebuild_rail(cx);
         self.add_pattern(window, cx);
         self.draft_from = Some((index, crate::editor::DraftFrom::Overview));
+        // Start from offers the links but fills nothing in: with the
+        // browser set, a pattern would make the rule whole, and it would
+        // save before the person chose it.
+        self.draft_link = Some((index, None));
     }
 
     /// A key on Overview while the window has the keyboard. Up, Down and
@@ -2669,6 +2673,7 @@ fn everything_else_row(
 }
 
 fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let last = crate::start_from::recent_links(cx).into_iter().next();
     div()
         .debug_selector(|| "overview-empty".into())
         .flex()
@@ -2700,21 +2705,48 @@ fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -
             )
             .mb(px(4.0)),
         )
+        .when_some(last.clone(), |prompt, last| prompt.child(last_link(&last)))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .child(
-                    add_button("Add your first rule", true)
-                        .id("overview-add-rule")
-                        .debug_selector(|| "overview-add-rule".into())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.navigate(Screen::Rules, window, cx);
-                            this.add_handler(window, cx);
-                        })),
-                )
+                .map(|actions| match last {
+                    // The prompt names the last link and offers a rule for
+                    // it (design: Rule From a Link 2a).
+                    Some(last) => actions
+                        .child(
+                            add_button("Add a rule for this link", true)
+                                .id("overview-add-rule")
+                                .debug_selector(|| "overview-add-rule".into())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.navigate(Screen::Rules, window, cx);
+                                    this.add_handler_from(last.url.clone(), window, cx);
+                                })),
+                        )
+                        .child(
+                            button("Blank rule", ButtonKind::Quiet, false)
+                                .id("overview-blank-rule")
+                                .debug_selector(|| "overview-blank-rule".into())
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.navigate(Screen::Rules, window, cx);
+                                    this.add_blank_handler(window, cx);
+                                })),
+                        ),
+                    None => actions.child(
+                        add_button("Add your first rule", true)
+                            .id("overview-add-rule")
+                            .debug_selector(|| "overview-add-rule".into())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.navigate(Screen::Rules, window, cx);
+                                this.add_handler(window, cx);
+                            })),
+                    ),
+                })
                 .when_some(empty.import.clone(), |actions, label| {
                     actions.child(
                         button(label, ButtonKind::Default, false)
@@ -2729,6 +2761,45 @@ fn empty_prompt(empty: &overview_model::Empty, cx: &mut Context<'_, PwrRoute>) -
                     )
                 }),
         )
+}
+
+/// The first-rule prompt's last link: when, the URL on one line, and
+/// where it went.
+fn last_link(last: &crate::start_from::RecentLink) -> Div {
+    div()
+        .debug_selector(|| "overview-last-link".into())
+        .flex()
+        .flex_col()
+        .self_stretch()
+        .gap(px(5.0))
+        .mb(px(4.0))
+        .py(px(9.0))
+        .px(px(10.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme::border_subtle())
+        .bg(theme::bg_app())
+        .child(theme::tracked(
+            &format!("Last link \u{00b7} {}", last.time),
+            9.5,
+            600.0,
+            0.12,
+            theme::text_subtle(),
+        ))
+        .child(crate::widgets::one_line(
+            last.url.clone(),
+            theme::mono_family(500.0),
+            500.0,
+            11.5,
+            15.0,
+            theme::text_primary(),
+        ))
+        .child(theme::text(
+            format!("Went to {}", last.opened),
+            10.5,
+            500.0,
+            theme::text_muted(),
+        ))
 }
 
 /// "Also installed", over the browsers with no rules yet.

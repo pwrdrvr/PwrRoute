@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* ---- overview: hero ---- */
+.hero { position: relative; display: flex; align-items: center; gap: 16px; min-height: 96px; padding: 18px 20px; border: 1px solid var(--accent-border); border-radius: var(--radius-xl); background: linear-gradient(90deg, rgba(255,138,31,0.11) 0%, rgba(255,138,31,0.03) 42%, var(--bg-panel) 72%); flex: 0 0 auto; }
+.hero.off { border-color: var(--border-default); background: var(--bg-panel); }
+.ht { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.ht b { font: 700 24px/1.15 var(--font-sans); letter-spacing: -0.015em; color: var(--text-primary); }
+.ht span { font: 500 11.5px/1.5 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+.ht span em { font-style: normal; color: var(--text-subtle); }
+.orb { width: 56px; height: 56px; flex: 0 0 auto; border-radius: 14px; display: flex; align-items: center; justify-content: center; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-border); box-shadow: 0 0 0 4px rgba(255,138,31,0.06), 0 0 28px rgba(255,138,31,0.2); }
+.orb svg { display: block; }
+.orb.off { color: var(--text-muted); background: var(--bg-panel-elevated); border-color: var(--border-default); box-shadow: none; }
+.strip-chip.acc .dot { background: var(--accent); }
+.cap { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+.cap small { margin-left: 8px; font: 500 10.5px/1 var(--font-sans); letter-spacing: 0; text-transform: none; color: var(--text-subtle); }
+          /* ---- today strip ---- */
+.blk { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+.blk-hd { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.today { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.tile { display: flex; flex-direction: column; gap: 9px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-panel); }
+.tile .tl { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+.tile .tl em { font: 500 13px/1 var(--font-sans); font-style: normal; color: var(--text-subtle); letter-spacing: 0; }
+.tile .tn { font: 700 22px/1 var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; color: var(--text-primary); }
+.tile .tn.zero { color: var(--text-subtle); }
+          /* ---- route map ---- */
+.map { flex: 0 0 auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); background: var(--bg-panel); overflow: hidden; }
+.map-hd { display: flex; align-items: center; height: 40px; padding: 0 16px; border-bottom: 1px solid var(--border-faint); }
+.map-hd .c1 { width: 360px; flex: none; display: flex; align-items: center; justify-content: space-between; padding-right: 12px; }
+.map-hd .c2 { margin-left: 96px; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.map-hd .c2 .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-bd { position: relative; display: flex; gap: 96px; padding: 16px; background-image: radial-gradient(circle, rgba(247,243,235,0.05) 1px, transparent 1.3px); background-size: 16px 16px; background-position: 8px 8px; }
+.curves { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.curves path { fill: none; stroke: var(--accent); stroke-linecap: round; }
+.col-r { position: relative; width: 360px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+.col-d { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.rw { position: relative; height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 10px; border: 1px solid var(--border-faint); border-radius: 8px; background: var(--bg-panel-elevated); }
+.rw .rk { width: 18px; flex: none; font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.rw .pt { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; }
+.rw .more { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.rw .chip { padding: 3px 7px; }
+.to { flex: none; display: flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+.rw .n { width: 36px; flex: none; text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.port { position: absolute; top: calc(50% - 4.5px); width: 9px; height: 9px; border-radius: 50%; background: var(--bg-panel); border: 1.5px solid var(--border-strong); z-index: 1; }
+.rw .port { right: -5px; }
+.dc .port { left: -5px; }
+.rw.off { opacity: 0.4; }
+.rw.ee { height: 44px; margin-top: 8px; border-color: var(--accent-border); background: linear-gradient(90deg, rgba(255,138,31,0.1), var(--bg-panel-elevated) 70%); }
+.rw.ee .rk { color: var(--accent-bright); font-size: 13px; }
+.rw .eep { flex-direction: column; align-items: flex-start; gap: 4px; }
+.eep b { font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+.eep small { font: 500 10px/1 var(--font-mono); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.rw.on { border-color: var(--accent-border); background: var(--bg-row-active); box-shadow: 0 0 0 3px rgba(255,138,31,0.08); }
+.rw.on .rk { color: var(--accent-bright); }
+.rw.on .port, .dc.on .port { background: var(--accent); border-color: var(--accent); }
+.dc { position: relative; height: 96px; flex: none; display: flex; gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-panel-elevated); }
+.dc .big { width: 40px; height: 40px; flex: none; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-app); display: flex; align-items: center; justify-content: center; font: 700 13px/1 var(--font-mono); color: var(--text-secondary); }
+.dc .di { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.dc .dn { display: flex; align-items: center; gap: 8px; font: 600 13.5px/16px var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+.dc .dm { font: 500 10.5px/12px var(--font-mono); color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pills { display: flex; gap: 6px; overflow: hidden; }
+.pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-panel); font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); white-space: nowrap; }
+.pill.mute { color: var(--text-subtle); }
+.pill .inf { color: var(--accent-bright); font-family: var(--font-sans); }
+.pill.on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+.dc.ring { border-color: var(--accent-border); box-shadow: 0 0 0 3px rgba(255,138,31,0.1); }
+.ribbon { position: absolute; top: -9px; right: 14px; height: 18px; padding: 0 8px; border-radius: 999px; background: var(--accent); color: var(--accent-on); font: 650 10px/18px var(--font-sans); white-space: nowrap; }
+.dc.on { border-color: var(--accent); background: linear-gradient(90deg, var(--bg-row-active), var(--bg-panel-elevated) 75%); box-shadow: 0 0 0 3px rgba(255,138,31,0.14), 0 10px 30px rgba(255,138,31,0.12); }
+.dc.on .big { border-color: var(--accent-border); background: var(--bg-active-strong); color: var(--accent-bright); }
+.dc.sm { height: 60px; align-items: center; }
+.dc.sm .di { gap: 6px; }
+.dc.sm .big { width: 32px; height: 32px; border-radius: 8px; font-size: 11px; }
+.dc.tall { height: auto; min-height: 96px; }
+.dc.tall .dm { white-space: normal; }
+.emp { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; border: 1px dashed var(--border-default); border-radius: 10px; background: var(--bg-panel-elevated); }
+.emp b { font: 600 13.5px/1.2 var(--font-sans); color: var(--text-primary); }
+.emp p { margin: 0 0 4px; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          /* callout under the map */
+          /* setup card, built from first-run step cards */
+.setup { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; }
+.prog { display: flex; align-items: center; gap: 4px; }
+.prog i { width: 22px; height: 4px; border-radius: 2px; background: var(--border-default); }
+.prog i.on { background: var(--accent); }
+.prog .note { margin-left: 6px; }
+          /* first run, as in Tray and First Run */
+.steps { display: flex; flex-direction: column; gap: 10px; }
+.step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); }
+.step.cur { border-color: var(--accent-border); background: var(--bg-row-active); }
+.step .sn { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--font-mono); border: 1px solid var(--border-default); color: var(--text-muted); background: var(--bg-panel-elevated); }
+.step.done .sn { background: var(--success-soft); border-color: transparent; color: var(--success-text); }
+.step.cur .sn { background: var(--accent); border-color: transparent; color: var(--accent-on); }
+.step .sb { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.step .sb b { font: 600 13px/1.3 var(--font-sans); color: var(--text-primary); }
+.step .sb p { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+.step .sb .inp { width: 300px; }
+.step.side { grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; }
+.step.side .sb { gap: 5px; }
+.step .seg { align-self: flex-start; }
+          /* rules, as in App Baseline */
+.rules { display: flex; flex-direction: column; }
+.rr { position: relative; display: grid; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+.rr:last-child { border-bottom: none; }
+.rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+.rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+.rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+.rr.ee .idx { color: var(--accent-bright); font-size: 13px; }
+          /* settings, as in Settings */
+          /* revision 2 */
+.rw .pt > .more, .rw .pt > .chip, .rw .pt > .lbl { flex: none; }
+          /* revision 3: the route graph, rules to profile nodes (.map.g) */
+.map.g .map-hd .c1 { width: var(--rc); }
+.map.g .map-hd .c2 { margin-left: var(--gt); }
+.map.g .map-bd { gap: var(--gt); }
+.map.g .col-r { width: var(--rc); }
+.map.g .col-d { gap: 10px; }
+.map.g .curves path { fill: none; stroke-linecap: round; }
+.map.g .curves .r { stroke: var(--accent); stroke-width: 1; opacity: 0.3; }
+.map.g .curves .r.dm { opacity: 0.08; }
+.map.g .rw .port { border-color: rgba(255,138,31,0.45); }
+.map.g .rw.off .port { display: none; }
+.map.g .rw.on .port, .map.g .rw.pulse .port { background: var(--accent); border-color: var(--accent); }
+.map.g .rw.hov { background: var(--bg-panel-hover); }
+.map.g .rw .to { min-width: 0; }
+.rw .to .tl { overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+          /* revision 4: private-window nodes, spare width to the routes */
+body { margin: 0; }
+.rel { position: relative; }
+/* rule rows, as in Rule Editing */
+.rules { display: flex; flex-direction: column; position: relative; }
+.rr { position: relative; display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 230px) 64px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+.rr:last-child { border-bottom: none; }
+.rr.sel { background: var(--bg-row-active); }
+.rr.sel::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+.rr.sel .idx { color: var(--accent-bright); }
+.rr.fresh { background: var(--accent-tint); }
+.grip { width: 7px; height: 12px; justify-self: center; background-image: radial-gradient(circle, var(--text-subtle) 1.1px, transparent 1.3px); background-size: 4.5px 5px; background-position: -0.5px 0; }
+.rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+.rr .m .tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+.rr .dest .ph { color: var(--text-subtle); }
+.rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+.card-hd.solo { border-bottom: none; }
+/* banner, as in Overview States */
+/* the rail */
+.rrail { flex: 0 0 372px; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); display: flex; flex-direction: column; overflow: visible; position: relative; }
+.rrail.solo { width: 372px; border: 1px solid var(--border-subtle); border-radius: 10px; }
+.rs { padding: 14px 16px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 8px; position: relative; }
+.rs h5 { margin: 0 0 2px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.lab { font: 600 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+.lrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lrow .lab { flex: 1; }
+.lrow.dis .lab { color: var(--text-subtle); }
+.lrow.dis .sw { opacity: 0.4; }
+.plist { display: flex; flex-direction: column; gap: 5px; }
+.plist .inp { padding-right: 6px; }
+.inp .x { margin-left: auto; color: var(--text-subtle); font: 500 11px/1 var(--font-mono); }
+.inp .cur { width: 1px; height: 14px; background: var(--accent); margin-right: -6px; }
+.addp { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px dashed var(--border-default); border-radius: var(--radius-md); font: 500 11px/1 var(--font-sans); color: var(--text-muted); align-self: flex-start; white-space: nowrap; }
+.any { font: 500 11px/1 var(--font-sans); color: var(--text-subtle); }
+.rs .try { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-app); border: 1px solid var(--border-faint); font: 500 11px/1.45 var(--font-sans); color: var(--text-secondary); }
+.rs .try b { color: var(--text-primary); font-weight: 600; }
+.rs .try .st { margin-top: 4px; }
+.rail-end { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-faint); }
+.rhead { flex-direction: row; align-items: center; gap: 10px; }
+.rhead > div { flex: 1; min-width: 0; }
+.rhead .ttl { font-size: 15px; }
+/* pickers */
+.inp.pick { gap: 8px; cursor: default; }
+.inp.pick .pv { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.inp.pick .ph { flex: 1; }
+.inp.pick .ph2 { flex: none; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.inp.pick .caret { margin-left: 0; }
+.inp.pick.dis { opacity: 0.45; }
+/* menus, as in Rule Editing */
+.menu { position: absolute; z-index: 5; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-popover); padding: 4px; display: flex; flex-direction: column; }
+.mi { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; min-width: 0; }
+.mi .ml { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mi.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+.mi .ck { width: 10px; flex: none; font: 600 10px/1 var(--font-sans); color: var(--accent-bright); }
+.mi .ex { margin-left: auto; padding-left: 16px; font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.mcap { padding: 7px 8px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+.msep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+.mfoot { padding: 6px 8px 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); white-space: normal; }
+/* Overview cards, as in Overview and Setup */
+/* Test a link and the Activity sheet */
+.tbl2 { border-collapse: collapse; font: 400 11.5px/1.45 var(--font-sans); color: var(--text-secondary); background: var(--bg-panel); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.tbl2 th { text-align: left; padding: 9px 12px; font: 600 10px/1.2 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle); }
+.tbl2 td { padding: 9px 12px; border-bottom: 1px solid var(--border-faint); vertical-align: top; }
+.tbl2 tr:last-child td { border-bottom: none; }
+.tbl2 td:first-child { color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+.tbl2 code { font: 500 10.5px/1.4 var(--font-mono); color: var(--accent-bright); }
+.grid-states { align-items: start; display: grid; grid-template-columns: repeat(3, 372px); gap: 20px; }
+.state { display: flex; flex-direction: column; gap: 8px; }
+.state > .cap2 { font: 600 10.5px/1.3 var(--font-sans); color: var(--text-muted); }
+/* Rule From a Link */
+.sh2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 18px; }
+.sh2 h5 { margin: 0; }
+.clr { padding: 3px 8px; margin: -4px -8px -4px 0; }
+.inp.lk .pv { font: 500 11.5px/1 var(--font-mono); }
+.selt { background: rgba(255,138,31,0.28); color: var(--text-primary); padding: 2px 0; }
+.sugg { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.sg-l { font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+.sg { padding: 4px 8px; border: 1px solid var(--border-default); border-radius: 6px; font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); }
+.sg.on { border-color: var(--accent-border); background: var(--bg-row-active); color: var(--accent-bright); }
+.mono-l { font: 500 11px/1.2 var(--font-mono); }
+.menu .mi .ml { flex: 1 1 auto; }
+.menu .mi .ex { flex: none; }
+.last { display: flex; flex-direction: column; gap: 5px; align-self: stretch; padding: 9px 10px; margin: 2px 0 6px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); }
+.last .ll { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+.last .lu { font: 500 11.5px/1.3 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.last .lw { font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); }
+.crop { overflow: hidden; }
+</style>
+      </helmet>
+<section class="dv-turn" id="t1"><div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Rules &middot; a new rule starts from the link you just opened</span></div><p class="dv-sub">Add rule used to open a blank rail: an empty pattern with a problem under it, and nothing to say what you were trying to route. Now every new rule starts from the last link PwrRoute opened. The rail gains <b>Start from</b>, a picker over the recent links Activity holds in memory, with <b>Clear</b> to start blank. The pattern is the narrowest suggestion, selected so typing replaces it, and Try it holds the link. Nothing reaches rules.json until a browser is chosen, and the link itself never does.</p><div class="dv-opts"><div class="dv-opt" id="1a"><div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Recommended. Add rule (or Add your first rule) on a fresh install, right after a link opened in Edge. The rail starts from that link: the pattern is <b>git.example.com/acme/*</b>, selected, with the wider <b>git.example.com/*</b> one click away. The title follows the pattern.</span></div><div class="dv-card win rel" style="width: 1240px;"><div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 0 rewrites &middot; 1 rule</span><span class="strip-chip"><span class="dot"></span>default browser</span></div><div class="body"><nav class="rail"><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div><div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">1</span></div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">5</span></div><div class="rail-foot"><span class="st"><i></i>routing</span><span>rules.json &middot; saved 09:41</span></div></nav><div class="pane"><div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1><p class="help">Rewrites run in order and every match applies. Then the first matching rule opens the link. Anything left goes to Everything else.</p></div><div class="actions"><span class="btn">Add rewrite</span><span class="btn primary">Add rule</span></div></div><section class="card"><div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Step 2 &middot; first match wins</p><h2 class="card-title">Rules</h2></div><span class="chip">1 rule &middot; 1 draft</span></div><div class="rules"><div class="rr sel fresh"><span class="grip"></span><span class="idx">01</span><div class="m"><span class="tag">git.example.com/acme/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="ph">Choose a browser</span></div><span class="hits">draft</span><span class="more">&#8943;</span></div><div class="rr"><span></span><span class="idx">&infin;</span><div class="m"><b style="font: 600 11.5px/1 var(--font-sans); color: var(--text-primary);">Everything else</b></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ed</span>Microsoft Edge</div><span class="hits">5 today</span><span class="more">&#8943;</span></div></div></section></div><aside class="rrail"><div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">New rule &middot; 1 of 1</div><h2 class="ttl">git.example.com</h2></div><span class="chip acc">draft</span></div><div class="rs"><div class="sh2"><h5>Start from</h5><span class="btn quiet sm clr">Clear</span></div><div class="inp pick mono lk"><span class="pv">https://git.example.com/acme/widgets/pull/128</span><span class="ph2">08:40</span><span class="caret">&#9662;</span></div><span class="field-help">The last link you opened. It went to Microsoft Edge. Only Try it holds the link; it is never saved.</span></div><div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="plist"><div class="inp mono focus"><span class="selt">git.example.com/acme/*</span><span class="x">&times;</span></div></div><div class="sugg"><span class="sg-l">Suggested</span><span class="sg on">git.example.com/acme/*</span><span class="sg">git.example.com/*</span></div><span class="field-help">Matches everything under the first part of the path. Type to replace it.</span><span class="addp">+ pattern &nbsp;<span class="note">wildcard, or /regex/</span></span><div class="lrow" style="margin-top: 6px;"><span class="lab">Sent from</span><span class="any">Any app</span><span class="addp">+ app</span></div></div><div class="rs"><h5>Open in</h5><span class="lab">Browser or app</span><div class="inp pick"><span class="ph">Choose a browser or app</span><span class="caret">&#9662;</span></div><span class="lab" style="margin-top: 4px;">Profile</span><div class="inp pick dis"><span class="ph">Choose a browser first</span><span class="caret">&#9662;</span></div><div class="lrow"><span class="lab">Open in a private window</span><span class="sw"></span></div><div class="lrow"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span class="">Host only</span><span class="">Nothing</span></div></div></div><div class="rs"><h5>Try it</h5><div class="inp mono">https://git.example.com/acme/widgets/pull/128</div><div class="try"><span class="st "><i></i></span><span>Matches this rule&rsquo;s pattern. Choose where it opens.</span></div></div><div class="rail-end"><span class="btn quiet sm">Discard draft</span><span class="note">saves once it has a pattern and a browser</span></div></aside></div></div></div><div class="dv-opt" id="1b"><div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Start from&rsquo;s picker: the recent links with a full URL, newest first, one row per URL, each with its time and who took it. Picking one replaces the pattern with its suggestion and puts it in Try it. The list is as wide as the field and scrolls past 8&frac12; rows.</span></div><div class="rel"><aside class="rrail solo"><div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">New rule &middot; 1 of 1</div><h2 class="ttl">git.example.com</h2></div><span class="chip acc">draft</span></div><div class="rs"><div class="sh2"><h5>Start from</h5><span class="btn quiet sm clr">Clear</span></div><div class="inp pick mono lk focus"><span class="pv">https://git.example.com/acme/widgets/pull/128</span><span class="ph2">08:40</span><span class="caret">&#9662;</span></div><span class="field-help">The last link you opened. It went to Microsoft Edge. Only Try it holds the link; it is never saved.</span><div class="menu" style="left: 16px; right: 16px; top: 74px;"><div class="mcap">Recent links &middot; newest first</div><div class="mi"><span class="ck">&#10003;</span><span class="ml mono-l">https://git.example.com/acme/widgets/pull/128</span><span class="ex">08:40 &middot; Edge</span></div><div class="mi hov"><span class="ck"></span><span class="ml mono-l">https://docs.example.com/guides/setup#install</span><span class="ex">08:37 &middot; Edge</span></div><div class="mi"><span class="ck"></span><span class="ml mono-l">https://meet.example.com/abc-defg-hij</span><span class="ex">08:31 &middot; Edge</span></div><div class="mi"><span class="ck"></span><span class="ml mono-l">http://localhost:5173/settings</span><span class="ex">08:12 &middot; Edge</span></div><div class="mi"><span class="ck"></span><span class="ml mono-l">https://news.example.org/2026/10/26/a-long-story-about-routing-links</span><span class="ex">07:58 &middot; Edge</span></div><div class="msep"></div><div class="mfoot">Links Activity keeps as host only, or not at all, are not listed. Picking one replaces the pattern and Try it.</div></div></div><div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="plist"><div class="inp mono focus"><span class="selt">git.example.com/acme/*</span><span class="x">&times;</span></div></div><div class="sugg"><span class="sg-l">Suggested</span><span class="sg on">git.example.com/acme/*</span><span class="sg">git.example.com/*</span></div><span class="field-help">Matches everything under the first part of the path. Type to replace it.</span><span class="addp">+ pattern &nbsp;<span class="note">wildcard, or /regex/</span></span><div class="lrow" style="margin-top: 6px;"><span class="lab">Sent from</span><span class="any">Any app</span><span class="addp">+ app</span></div></div><div class="rs"><h5>Open in</h5><span class="lab">Browser or app</span><div class="inp pick"><span class="ph">Choose a browser or app</span><span class="caret">&#9662;</span></div><span class="lab" style="margin-top: 4px;">Profile</span><div class="inp pick dis"><span class="ph">Choose a browser first</span><span class="caret">&#9662;</span></div><div class="lrow"><span class="lab">Open in a private window</span><span class="sw"></span></div><div class="lrow"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span class="">Host only</span><span class="">Nothing</span></div></div></div><div class="rs"><h5>Try it</h5><div class="inp mono">https://git.example.com/acme/widgets/pull/128</div><div class="try"><span class="st "><i></i></span><span>Matches this rule&rsquo;s pattern. Choose where it opens.</span></div></div><div class="rail-end"><span class="btn quiet sm">Discard draft</span><span class="note">saves once it has a pattern and a browser</span></div></aside></div></div><div class="dv-opt" id="1c"><div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>After <b>Clear</b>: the blank rule of before, pattern focused. Start from stays, so the links are one click away again.</span></div><div class="rel"><aside class="rrail solo"><div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">New rule &middot; 1 of 1</div><h2 class="ttl">New rule</h2></div><span class="chip acc">draft</span></div><div class="rs"><div class="sh2"><h5>Start from</h5></div><div class="inp pick mono lk"><span class="ph">Pick a link you opened&hellip;</span><span class="ph2">5 recent</span><span class="caret">&#9662;</span></div><span class="field-help">Cleared. The rule starts blank; pick a link to fill the pattern and Try it again.</span></div><div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="plist"><div class="inp mono focus"><span class="cur"></span><span class="ph">example.com/*</span><span class="x">&times;</span></div></div><span class="addp">+ pattern &nbsp;<span class="note">wildcard, or /regex/</span></span><div class="lrow" style="margin-top: 6px;"><span class="lab">Sent from</span><span class="any">Any app</span><span class="addp">+ app</span></div></div><div class="rs"><h5>Open in</h5><span class="lab">Browser or app</span><div class="inp pick"><span class="ph">Choose a browser or app</span><span class="caret">&#9662;</span></div><span class="lab" style="margin-top: 4px;">Profile</span><div class="inp pick dis"><span class="ph">Choose a browser first</span><span class="caret">&#9662;</span></div><div class="lrow"><span class="lab">Open in a private window</span><span class="sw"></span></div><div class="lrow"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span class="">Host only</span><span class="">Nothing</span></div></div></div><div class="rs"><h5>Try it</h5><div class="inp mono"><span class="ph">https://</span></div><span class="field-help">Type a link to see whether this rule takes it.</span></div><div class="rail-end"><span class="btn quiet sm">Discard draft</span><span class="note">saves once it has a pattern and a browser</span></div></aside></div></div><div class="dv-opt" id="1d"><div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>No links to start from. On a fresh install before any link, or with Activity keeping nothing, the picker is disabled and says why; the rest of the rail is the blank rule.</span></div><div class="grid-states" style="grid-template-columns: repeat(2, 372px);"><div class="state"><span class="cap2">No links yet</span><div class="rrail solo" style="flex: none;"><div class="rs"><div class="sh2"><h5>Start from</h5></div><div class="inp pick dis lk"><span class="ph">No links yet</span><span class="caret">&#9662;</span></div><span class="field-help">Click a link in any app and it shows up here.</span></div></div></div><div class="state"><span class="cap2">Activity keeps nothing</span><div class="rrail solo" style="flex: none;"><div class="rs"><div class="sh2"><h5>Start from</h5></div><div class="inp pick dis lk"><span class="ph">No links yet</span><span class="caret">&#9662;</span></div><span class="field-help">Activity kept no full links to start from (Settings &rsaquo; Privacy).</span></div></div></div></div></div></div></section><section class="dv-turn" id="t2"><div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Overview &middot; the first-rule prompt names the last link</span></div><p class="dv-sub">The Overview&rsquo;s empty prompt is where most people meet rules, right after their first link. It now shows that link and offers a rule for it; <b>Blank rule</b> keeps the old path. With no links yet it is unchanged.</p><div class="dv-opts"><div class="dv-opt" id="2a"><div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Recommended. The prompt with the last link: its URL on one line, ellipsized, and where it went. <b>Add a rule for this link</b> opens Rules on the rail of 1a.</span></div><div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>no rules.json yet</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">5</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>no rules.json yet</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>PwrRoute is catching links.</b><span>No rules yet, so every link opens in Microsoft Edge.</span></div></div>
+              <section class="setup"><div class="blk-hd"><span class="cap">Finish setting up</span><span class="prog"><i class="on"></i><i></i><span class="note">1 of 2 done</span></span></div>
+              <div class="steps">
+              <div class="step cur side"><span class="sn">1</span><div class="sb"><b>Choose where everything else goes</b><p>Links no rule claims open here. Until you choose, that's Microsoft Edge.</p></div><div class="inp" style="width: 220px;"><span class="ph">Choose a browser</span><span class="caret">&#9662;</span></div></div>
+              <div class="step done side"><span class="sn">&#10003;</span><div class="sb"><b>Make PwrRoute the default browser</b><p>PwrRoute is the default browser.</p></div></div></div></section>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">5</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">5</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn zero">0</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations</span><span class="note">Not used: Google Chrome, Firefox, Safari</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="emp"><b>Every link opens in Microsoft Edge.</b><p>Rules send matching links somewhere else: work docs to a work profile, local servers to a dev browser. First match wins.</p><div class="last"><span class="ll">Last link &middot; 08:40</span><span class="lu">https://git.example.com/acme/widgets/pull/128</span><span class="lw">Went to Microsoft Edge</span></div><div class="row-actions"><span class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add a rule for this link</span><span class="btn quiet">Blank rule</span></div></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>Microsoft Edge until you choose</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ed</span>Microsoft Edge</span><span class="n">5</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring tall"><span class="ribbon">Everything else</span><span class="port"></span><span class="big">Ed</span><div class="di"><span class="dn">Microsoft Edge</span><div class="pills"><span class="pill mute">default profile<span class="inf">&infin;</span></span></div><span class="dm">Everything opens in Microsoft Edge</span><span class="dm">5 links today</span></div></div></div></div></section></div></div></div>
+          </div><div class="dv-opt" id="2b"><div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>No links yet: as before, Add your first rule. It still opens the rail of 1d.</span></div><div class="dv-card win" style="width: 1000px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>no rules.json yet</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body">
+              <nav class="rail">
+              <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">5</span></div>
+              <div class="rail-label">Settings</div>
+              <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Open Settings&hellip;<span class="kbd" style="margin-left: auto;">&#8984;,</span></div>
+              <div class="rail-foot"><span class="st"><i></i>routing</span><span>no rules.json yet</span></div></nav>
+              <div class="pane">
+              <div class="hero"><span class="orb"><svg class="om" viewBox="188 188 648 648" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><div class="ht"><b>PwrRoute is catching links.</b><span>No rules yet, so every link opens in Microsoft Edge.</span></div></div>
+              <section class="setup"><div class="blk-hd"><span class="cap">Finish setting up</span><span class="prog"><i class="on"></i><i></i><span class="note">1 of 2 done</span></span></div>
+              <div class="steps">
+              <div class="step cur side"><span class="sn">1</span><div class="sb"><b>Choose where everything else goes</b><p>Links no rule claims open here. Until you choose, that's Microsoft Edge.</p></div><div class="inp" style="width: 220px;"><span class="ph">Choose a browser</span><span class="caret">&#9662;</span></div></div>
+              <div class="step done side"><span class="sn">&#10003;</span><div class="sb"><b>Make PwrRoute the default browser</b><p>PwrRoute is the default browser.</p></div></div></div></section>
+              <div class="blk"><div class="blk-hd"><span class="cap">Today</span><span class="note">Since PwrRoute started</span></div><div class="today">
+              <div class="tile"><span class="tl">Links today<em>&rsaquo;</em></span><span class="tn">5</span></div>
+              <div class="tile"><span class="tl">Took Everything else<em>&rsaquo;</em></span><span class="tn">5</span></div>
+              <div class="tile"><span class="tl">Rewritten<em>&rsaquo;</em></span><span class="tn zero">0</span></div>
+              <div class="tile"><span class="tl">Failed<em>&rsaquo;</em></span><span class="tn zero">0</span></div></div></div>
+              <section class="map">
+              <div class="map-hd"><div class="c1"><span class="cap">In order<small>first match wins</small></span><span class="note">today</span></div><div class="c2"><span class="cap">Destinations</span><span class="note">Not used: Google Chrome, Firefox, Safari</span></div></div>
+              <div class="map-bd">
+              <svg class="curves" aria-hidden="true"></svg>
+              <div class="col-r">
+              <div class="emp"><b>Every link opens in Microsoft Edge.</b><p>Rules send matching links somewhere else: work docs to a work profile, local servers to a dev browser. First match wins.</p><div class="row-actions"><span class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>Add your first rule</span></div></div>
+              <div class="rw ee"><span class="rk">&infin;</span><span class="pt eep"><b>Everything else</b><small>Microsoft Edge until you choose</small></span><span class="to"><span class="arrow">&rarr;</span><span class="bi">Ed</span>Microsoft Edge</span><span class="n">5</span><span class="port"></span></div></div>
+              <div class="col-d">
+              <div class="dc ring tall"><span class="ribbon">Everything else</span><span class="port"></span><span class="big">Ed</span><div class="di"><span class="dn">Microsoft Edge</span><div class="pills"><span class="pill mute">default profile<span class="inf">&infin;</span></span></div><span class="dm">Everything opens in Microsoft Edge</span><span class="dm">5 links today</span></div></div></div></div></section></div></div></div>
+          </div></div></section><section class="dv-turn" id="t3"><div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Defaults by entry point</span></div><p class="dv-sub">Every way to start a rule lands in the same rail. Start from shows only while the rule is a draft; a saved rule has its examples instead. &ldquo;The last link&rdquo; is the newest record Activity holds with a full URL. Clear drops the link, the pattern and Try it, and nothing else. An Overview card&rsquo;s + Rule fills in no pattern: its browser is already set, so a pattern would make the rule whole and save it before the person chose it.</p><div class="dv-opts"><div class="dv-opt" id="3a"><div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>Defaults by entry point.</span></div><div class="dv-card" style="width: 1180px; padding: 0; border: none; background: none;"><table class="tbl2"><tr><th>Start</th><th>Start from</th><th>Pattern</th><th>Try it</th><th>Open in</th></tr><tr><td>Rules &rsaquo; Add rule</td><td>the last link</td><td>its narrowest suggestion, selected</td><td>the link</td><td>Choose a browser</td></tr><tr><td>Overview &rsaquo; Add a rule for this link</td><td>the last link</td><td>its narrowest suggestion, selected</td><td>the link</td><td>Choose a browser</td></tr><tr><td>Overview &rsaquo; Blank rule</td><td>empty, picker open to use</td><td>empty, focused</td><td>empty</td><td>Choose a browser</td></tr><tr><td>Overview card &rsaquo; + Rule, + Rule for Work</td><td>offered, nothing filled in</td><td>empty, focused</td><td>empty</td><td>the card&rsquo;s browser (and profile)</td></tr><tr><td>Test a link &rsaquo; Add a rule&hellip;</td><td>the tested link</td><td>suggested from the link the rules saw, selected</td><td>the link</td><td>Choose a browser</td></tr><tr><td>Activity &rsaquo; Add a rule for this link</td><td colspan="4">the sheet, unchanged</td></tr><tr><td>Any of the above, no links</td><td>disabled, says why</td><td>empty, focused</td><td>empty</td><td>as above</td></tr></table></div></div></div></section>
+</x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
