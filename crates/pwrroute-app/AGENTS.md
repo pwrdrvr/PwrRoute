@@ -46,7 +46,7 @@ their own modules.
   MCP browser listings into `<data dir>/profiles.json`. Successful reads
   refresh its parsed metadata; blocked reads may populate profiles from it
   while keeping `profiles_blocked` true. Settings labels those as cached,
-  and launch diagnostics name cached selections. Unit-test environments
+  and launch diagnostics identify cache use without profile names. Unit-test environments
   never opt into the real data directory's cache.
   `browser_scan::install_fixture` gives a test a scan; first run
   (`onboarding.rs`) reads the same scan, and its "Look again" (no browsers
@@ -285,8 +285,14 @@ their own modules.
   after the record is reduced to its rule's privacy) and from `handoff.rs`
   (who owns the top window from receipt until the browser does), and both
   are written only while links are kept at all. `router.rs`'s
-  `BrowserLauncher` adds a hand-off's way and times (debug; a warning when
-  the singleton socket failed and `open` ran), naming no browser; the retention text in
+  `BrowserLauncher::launch_observed` reports planning, URL-free delivery
+  decisions, profile/private requests, fixed note labels, yield and each
+  socket/command attempt through the router's observer. The router logs
+  them at Info with the link id and attempt number, only while diagnostic
+  logging and retention are enabled. Never log the command line or stderr.
+  Command return and socket ACK do not establish tab readiness. The window
+  watcher logs its first sample's delay and largest sampling gap, and warns
+  when PwrRoute stays on top through its timeout. The retention text in
   Activity, Settings and MCP names the log while it is.
 - **Examples and tests are the only URLs that reach disk, and only by
   hand.** `rules_store.rs` writes a rule's `examples`, a rewrite's

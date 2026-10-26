@@ -2247,3 +2247,62 @@ fn the_retention_names_the_diagnostic_log_only_while_links_are_kept() {
         "Nothing is kept: not in memory, and nothing is written to disk."
     );
 }
+
+#[test]
+fn launch_progress_observers_follow_diagnostic_and_retention_settings() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone, Default)]
+    struct Observed(Arc<AtomicUsize>);
+    impl Launcher for Observed {
+        fn launch(&mut self, _browser: &Browser) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn launch_observed(
+            &mut self,
+            browser: &Browser,
+            observe: &mut dyn FnMut(&str),
+        ) -> anyhow::Result<()> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            observe("command begin");
+            self.launch(browser)
+        }
+    }
+
+    for (diagnostics, kept, expected) in [(false, true, 0), (true, false, 0), (true, true, 1)] {
+        let launcher = Observed::default();
+        let count = Arc::clone(&launcher.0);
+        let launcher: Box<dyn Launcher> = Box::new(launcher);
+        let router = Router::spawn(
+            Options {
+                diagnostic_log: diagnostics.then(|| "fixture.log".into()),
+                retention: Retention {
+                    count: usize::from(kept),
+                    hours: 24,
+                },
+                ..Options::default()
+            },
+            Some(rules_factory(RulesFile {
+                rules: vec![Rule {
+                    patterns: vec!["*".into()],
+                    browser: "Firefox".into(),
+                    privacy: Some(Privacy::None.into()),
+                    ..Rule::default()
+                }],
+                ..RulesFile::default()
+            })),
+            launcher,
+        )
+        .unwrap();
+        // Even a counted-only link can report timings; its observer's
+        // fixed labels must not reveal the URL, browser or profile.
+        let record = router
+            .handle()
+            .dispatch_and_wait(link("https://example.com/progress"))
+            .unwrap();
+        assert_eq!(record.outcome, Outcome::Opened);
+        assert_eq!(record.privacy, Privacy::None);
+        assert_eq!(count.load(Ordering::Relaxed), expected);
+    }
+}

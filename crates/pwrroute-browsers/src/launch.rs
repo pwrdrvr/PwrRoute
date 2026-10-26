@@ -88,7 +88,50 @@ pub struct Plan {
     /// when it is running but its socket did not, `None` for every other
     /// launch.
     pub socket: Option<Result<SocketHandOff, SocketError>>,
+    socket_not_used: &'static str,
     platform: Platform,
+}
+
+/// URL-free progress from running a launch plan. Command completion only
+/// means the launcher returned; it does not confirm a visible browser tab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RunEvent {
+    SocketStarted,
+    SocketFinished {
+        elapsed: Duration,
+        error: Option<SocketError>,
+    },
+    CommandStarted,
+    CommandFinished {
+        elapsed: Duration,
+        success: bool,
+    },
+}
+
+impl fmt::Display for RunEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SocketStarted => f.write_str("socket begin"),
+            Self::SocketFinished { elapsed, error } => {
+                write!(
+                    f,
+                    "socket returned after {:.1}ms; ",
+                    elapsed.as_secs_f64() * 1000.0
+                )?;
+                match error {
+                    Some(error) => write!(f, "fallback_reason={error}"),
+                    None => f.write_str("ack=true; tab_readiness=unobserved"),
+                }
+            }
+            Self::CommandStarted => f.write_str("command begin"),
+            Self::CommandFinished { elapsed, success } => write!(
+                f,
+                "command returned after {:.1}ms; success={success}; tab_readiness=unobserved",
+                elapsed.as_secs_f64() * 1000.0,
+            ),
+        }
+    }
 }
 
 /// A launch that ran: the plan, and which way the link went.
@@ -201,6 +244,27 @@ impl std::error::Error for LaunchError {
 }
 
 impl Plan {
+    /// Delivery decisions without the program path, arguments or URL.
+    pub fn diagnostic_summary(&self) -> String {
+        let socket = match &self.socket {
+            Some(Ok(_)) => "ready".to_owned(),
+            Some(Err(error)) => format!("unavailable({error})"),
+            None => format!("skipped({})", self.socket_not_used),
+        };
+        let options: Vec<_> = self.args.iter().take_while(|a| *a != "--args").collect();
+        format!(
+            "command={} new_instance={} background={} yield_requested={} socket={socket}",
+            if self.platform == Platform::MacOs {
+                "open"
+            } else {
+                "executable"
+            },
+            self.platform == Platform::MacOs && options.iter().any(|a| a.as_str() == "-n"),
+            self.platform == Platform::MacOs && options.iter().any(|a| a.as_str() == "-g"),
+            self.hand_off_to.is_some(),
+        )
+    }
+
     /// The plan as a [`Command`], ready to spawn.
     pub fn to_command(&self) -> Command {
         let mut command = Command::new(&self.program);
@@ -286,15 +350,30 @@ impl Launcher {
             .unwrap_or(self.options.background_by_default);
         let mut hand_off_to = None;
         let mut socket = None;
+        let mut socket_not_used = "not_applicable";
         let plan = match platform {
             Platform::MacOs => {
                 let running = self.hands_off(browser, entry);
                 let uses_args = flags.is_some() || !browser.args.is_empty();
+                socket_not_used = if !uses_args {
+                    "no_browser_arguments"
+                } else if entry.is_none() {
+                    "unknown_browser"
+                } else if entry.is_some_and(|e| e.engine != BrowserEngine::Chromium) {
+                    "not_chromium"
+                } else if self.running.is_none() {
+                    "running_check_unavailable"
+                } else {
+                    "browser_not_running"
+                };
                 if uses_args && running.is_some() {
                     if !background {
                         hand_off_to.clone_from(&running);
                     }
-                    socket = entry.and_then(|e| self.socket_plan(browser, e, flags.as_deref()));
+                    if let Some(entry) = entry {
+                        (socket, socket_not_used) =
+                            self.socket_plan(browser, entry, flags.as_deref());
+                    }
                 }
                 macos_plan(browser, background, running.is_some(), flags)
             }
@@ -317,6 +396,7 @@ impl Launcher {
             notes,
             hand_off_to,
             socket,
+            socket_not_used,
             platform,
         }))
     }
@@ -335,16 +415,41 @@ impl Launcher {
     /// app has the URL) so its errors are reported; elsewhere the browser
     /// is started and left running.
     pub fn run(&self, plan: Plan) -> Result<Launched, LaunchError> {
+        self.run_observed(plan, &mut |_| {})
+    }
+
+    /// Runs a plan while reporting URL-free progress, including failures.
+    pub fn run_observed(
+        &self,
+        plan: Plan,
+        observe: &mut dyn FnMut(RunEvent),
+    ) -> Result<Launched, LaunchError> {
         let delivery = match &plan.socket {
-            Some(Ok(handoff)) => match singleton::send(handoff, SOCKET_BUDGET) {
-                Ok(()) => Delivery::Socket,
-                Err(why) => Delivery::CommandAfter(why),
-            },
+            Some(Ok(handoff)) => {
+                observe(RunEvent::SocketStarted);
+                let started = Instant::now();
+                let result = singleton::send(handoff, SOCKET_BUDGET);
+                observe(RunEvent::SocketFinished {
+                    elapsed: started.elapsed(),
+                    error: result.as_ref().err().cloned(),
+                });
+                match result {
+                    Ok(()) => Delivery::Socket,
+                    Err(why) => Delivery::CommandAfter(why),
+                }
+            }
             Some(Err(why)) => Delivery::CommandAfter(why.clone()),
             None => Delivery::Command,
         };
         if delivery != Delivery::Socket {
-            spawn(&plan)?;
+            observe(RunEvent::CommandStarted);
+            let started = Instant::now();
+            let result = spawn(&plan);
+            observe(RunEvent::CommandFinished {
+                elapsed: started.elapsed(),
+                success: result.is_ok(),
+            });
+            result?;
         }
         Ok(Launched { plan, delivery })
     }
@@ -360,24 +465,32 @@ impl Launcher {
         browser: &Browser,
         entry: &BrowserInfo,
         flags: Option<&[String]>,
-    ) -> Option<Result<SocketHandOff, SocketError>> {
+    ) -> (Option<Result<SocketHandOff, SocketError>>, &'static str) {
         // ACK only means the browser accepted a message. Edge, for example,
         // consumes two extra header fields before argv; upstream's format
         // can therefore lose the profile and URL without a socket error.
         if entry.singleton_protocol != Some(SingletonProtocol::Chromium) {
-            return None;
+            return (None, "unverified_protocol");
         }
         let own_open_options = browser.args.iter().any(|a| a == "--args");
         let other_data_dir = browser
             .args
             .iter()
             .any(|a| a == "--user-data-dir" || a.starts_with("--user-data-dir="));
-        if own_open_options || other_data_dir {
-            return None;
+        if own_open_options {
+            return (None, "custom_open_options");
         }
-        let user_data_dir = entry.profile_dir(&self.env)?;
+        if other_data_dir {
+            return (None, "custom_user_data_dir");
+        }
+        let Some(user_data_dir) = entry.profile_dir(&self.env) else {
+            return (None, "no_user_data_directory");
+        };
         // `hands_off` found the browser by its macOS entry, so it has one.
-        let app_name = &entry.macos.as_ref()?.app_name;
+        let Some(macos) = entry.macos.as_ref() else {
+            return (None, "no_macos_catalog_entry");
+        };
+        let app_name = &macos.app_name;
         let mut argv = vec![macos_program(browser, app_name)];
         argv.extend(flags.unwrap_or_default().iter().cloned());
         argv.extend(browser_args(browser));
@@ -390,7 +503,7 @@ impl Launcher {
                 .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from),
             uid: singleton::current_uid(),
         };
-        Some(singleton::locate(&handoff).map(|_| handoff))
+        (Some(singleton::locate(&handoff).map(|_| handoff)), "")
     }
 
     /// The bundle id of the copy a `-n` launch of `browser` only hands the
@@ -791,6 +904,7 @@ mod tests {
             notes: Vec::new(),
             hand_off_to: None,
             socket: None,
+            socket_not_used: "test",
             platform: Platform::MacOs,
         }
     }
@@ -808,6 +922,26 @@ mod tests {
     }
 
     #[test]
+    fn command_progress_includes_failed_launches_without_arguments() {
+        let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        for outcome in ["ok", "fail"] {
+            let mut events = Vec::new();
+            let result = launcher.run_observed(fake_open_plan(outcome), &mut |e| events.push(e));
+            assert_eq!(result.is_ok(), outcome == "ok");
+            assert!(
+                matches!(events.as_slice(), [RunEvent::CommandStarted, RunEvent::CommandFinished { success, .. }] if *success == (outcome == "ok"))
+            );
+            let lines = events
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(lines.contains("tab_readiness=unobserved"));
+            assert!(!lines.contains(URL));
+        }
+    }
+
+    #[test]
     fn command_line_keeps_backslashes() {
         let plan = Plan {
             program: PathBuf::from(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
@@ -819,6 +953,7 @@ mod tests {
             notes: Vec::new(),
             hand_off_to: None,
             socket: None,
+            socket_not_used: "test",
             platform: Platform::Windows,
         };
         assert_eq!(
@@ -1088,8 +1223,18 @@ mod tests {
         let got = fake.serve(Some(b"ACK"));
         let expected = crate::singleton::encode("/", &handoff.argv).unwrap();
         // The fake `open` fails: had it run, `run` would say so.
-        let launched = launcher.run(with_fake_open(plan, "fail")).unwrap();
+        let mut events = Vec::new();
+        let launched = launcher
+            .run_observed(with_fake_open(plan, "fail"), &mut |e| events.push(e))
+            .unwrap();
         assert_eq!(launched.delivery, Delivery::Socket);
+        assert!(matches!(
+            events.as_slice(),
+            [
+                RunEvent::SocketStarted,
+                RunEvent::SocketFinished { error: None, .. }
+            ]
+        ));
         assert_eq!(got.recv().unwrap(), expected);
     }
 
@@ -1171,7 +1316,22 @@ mod tests {
         let _got = fake.serve(Some(b"SHUTDOWN"));
         let plan = launcher.plan(&b).unwrap().unwrap();
         assert!(matches!(plan.socket, Some(Ok(_))));
-        let launched = launcher.run(with_fake_open(plan, "ok")).unwrap();
+        let mut events = Vec::new();
+        let launched = launcher
+            .run_observed(with_fake_open(plan, "ok"), &mut |e| events.push(e))
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                RunEvent::SocketStarted,
+                RunEvent::SocketFinished {
+                    error: Some(SocketError::ShuttingDown),
+                    ..
+                },
+                RunEvent::CommandStarted,
+                RunEvent::CommandFinished { success: true, .. }
+            ]
+        ));
         assert_eq!(
             launched.delivery,
             Delivery::CommandAfter(SocketError::ShuttingDown)
@@ -1195,6 +1355,25 @@ mod tests {
             launched.delivery,
             Delivery::CommandAfter(SocketError::CookieMismatch)
         );
+    }
+
+    #[test]
+    fn diagnostic_plans_explain_edge_and_never_print_custom_arguments() {
+        let (_dir, launcher) = fixture(Platform::MacOs, &[]);
+        let launcher = Launcher::with_env(launcher.env().clone(), LaunchOptions::default())
+            .with_running(|_| true);
+        let mut b = browser("Microsoft Edge", AppType::AppName);
+        b.args = vec![
+            "--new-window".into(),
+            "https://secret.example.com/?token=private".into(),
+        ];
+        b.profile = "Secret Profile".into();
+        let summary = launcher.plan(&b).unwrap().unwrap().diagnostic_summary();
+        assert!(summary.contains("socket=skipped(unverified_protocol)"));
+        assert!(summary.contains("new_instance=true background=true yield_requested=true"));
+        for secret in [&b.url, &b.profile, &b.name, &b.args[1]] {
+            assert!(!summary.contains(secret), "{summary}");
+        }
     }
 
     #[cfg(unix)]
@@ -1409,6 +1588,7 @@ mod tests {
             notes: Vec::new(),
             hand_off_to: None,
             socket: None,
+            socket_not_used: "test",
             platform: Platform::Linux,
         };
         let err = spawn(&plan).unwrap_err();

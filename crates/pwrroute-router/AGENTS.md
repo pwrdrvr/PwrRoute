@@ -9,6 +9,12 @@ runs on every platform.
   Everything else talks through `RouterHandle`.
 - **`Launcher` is the seam to pwrroute-browsers.** Keep it small. Tests use
   `DryRunLauncher`; nothing in this crate opens a browser.
+  `launch_observed` optionally reports fixed labels, counts and timings
+  during an attempt. The router logs each at Info with the dispatch id and
+  attempt number, gated by `diagnostic_log` and retention as dispatch lines
+  are. These messages must carry no URL, command argument, browser/profile
+  name or arbitrary error text, even for a counted-only link. A boxed
+  launcher must forward the observer.
 - **A link is never dropped for want of a browser.** `Worker::launch` tries
   the fallback browser once when the chosen browser fails to open, traced
   as `LaunchFailed`, `Fallback`, `Launched`, keeping the chosen browser's
