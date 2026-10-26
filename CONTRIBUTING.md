@@ -14,7 +14,8 @@ PwrRoute is pre-release, and app code is still being ported in. Read
 ## Development setup
 
 PwrRoute is a Cargo workspace. `rust-toolchain.toml` pins Rust 1.97, and rustup
-installs it on first use. The lint chain needs cargo-deny and cargo-about.
+installs it on first use. The lint chain needs cargo-deny, cargo-about and
+Node.js 22 or newer for the dependency-free CI classifier tests.
 
 ```bash
 git clone https://github.com/pwrdrvr/PwrRoute.git
@@ -58,8 +59,9 @@ cargo xtask test
 ```
 
 `cargo xtask lint` runs every check CI's Typecheck job runs, cheapest first:
-rustfmt, clippy with warnings denied, cargo-deny and the THIRD_PARTY_LICENSES
-check. Add a new repository-wide check to that chain in `xtask/src/main.rs`,
+rustfmt, CI classifier tests, clippy with warnings denied, cargo-deny and the
+THIRD_PARTY_LICENSES check. Add a new repository-wide check to that chain in
+`xtask/src/main.rs`,
 not as a separate CI step.
 
 For a documentation-only change, `cargo xtask lint` is the expected baseline.

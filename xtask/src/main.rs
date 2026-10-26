@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result, bail, ensure};
 const USAGE: &str = "\
 usage: cargo xtask <task>
 
-  lint                 rustfmt --check, clippy -D warnings, cargo-deny, notices
+  lint                 rustfmt --check, CI classifier tests, clippy, cargo-deny, notices
   test                 every workspace test
   fmt                  format in place
   licenses [--check]   write THIRD_PARTY_LICENSES, or check it is current
@@ -64,6 +64,10 @@ fn main() -> Result<()> {
 /// Cheapest first, so a formatting slip fails in a second, not after clippy.
 fn lint() -> Result<()> {
     cargo(&["fmt", "--all", "--", "--check"])?;
+    run(Command::new("node")
+        .args(["--test", "scripts/ci/classify-changes.test.cjs"])
+        .current_dir(root()))
+    .context("Node.js is required to test the CI classifier")?;
     cargo(&[
         "clippy",
         "--workspace",
