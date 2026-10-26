@@ -6,7 +6,7 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that runs the tests; Desktop E2E on Linux, macOS and Windows. Docs/Dependabot-only PRs skip everything after Classify Changes (see below). |
+| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that runs the tests; Desktop E2E on Linux, macOS and Windows. Non-code-only PRs skip everything after Classify Changes (see below). |
 | `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, Velopack Setup.exe and MSI, uploaded as workflow artifacts. |
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
@@ -26,7 +26,7 @@ Jobs and the names the "Protect main" ruleset requires:
 | Job id | Check name | Runner | Runs |
 |---|---|---|---|
 | `changes` | Classify Changes | ubuntu-latest | Decides whether the PR is code-impacting. |
-| `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
+| `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, CI classifier tests, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
 | `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
 | `macos` | macOS (test + bundle) | macos-26 | Tests, then `cargo xtask bundle` (ad hoc signed). |
@@ -80,17 +80,46 @@ ruleset to the job list. Adding a platform is a change to the aggregate's
 `needs`. `Desktop E2E` is not in the "Protect main" ruleset yet; add it once
 it is green on `main`.
 
-### Docs/Dependabot-only PRs
+### Non-code-only PRs
 
-`ci.yml` classifies each pull request before the expensive jobs. If every
-changed path (and `previous_filename` on a rename) is under `docs/` or ends
-with `.md` (case-insensitive), or is exactly `.github/dependabot.yml`,
-Classify Changes sets `code_impacting=false` and every other job skips. Push
-events, API errors and incomplete file lists still run full CI.
+`ci.yml` retains the paginated, path-based classifier used by PwrAgnt and
+extends PwrRoute's allowlist. Expensive CI skips only when **every** changed
+path, including `previous_filename` on a rename, matches one of:
+
+- `docs/**` or a Markdown file (`.md`, case-insensitive), except
+  `CHANGELOG.md`, which the app embeds at compile time.
+- `.agents/skills/**`, including `SKILL.md`, `agents/openai.yaml`, references,
+  scripts and other skill assets. These files are agent resources, not app
+  or CI inputs. If a build or workflow starts consuming them, update the
+  classifier before introducing that dependency.
+- `.github/ISSUE_TEMPLATE/**`, `.github/PULL_REQUEST_TEMPLATE/**`, or exactly
+  `.github/dependabot.yml`.
+
+For example, PR #93's release skill has three paths: `SKILL.md`,
+`agents/openai.yaml` and `references/publishing.md`, all under
+`.agents/skills/release/`. All three qualify, individually or together.
+Adding a Rust source, dependency manifest, build script, packaging asset or
+workflow change to that PR selects full CI. Unknown paths also run full CI.
+A rename qualifies only if both paths qualify; missing rename metadata runs
+full CI.
+
+Push events always run full CI. API errors, empty or incomplete pagination
+(including GitHub's 3,000-file limit), invalid counts, malformed file entries
+and duplicate results also run full CI. A script failure or missing output
+cannot opt out: the job output defaults to full CI unless the classifier
+successfully emits `false`. Downstream jobs also run if the classification
+job itself fails, while retaining the macOS self-hosted fork guard.
 
 Do not add `paths` or `paths-ignore` to the `pull_request` trigger. Required
 status checks must still exist on every PR: skipped jobs satisfy them, missing
-jobs leave them pending.
+jobs leave them pending. The effective main ruleset requires `Typecheck`,
+`Build` and `Test`; their names and the `Desktop E2E` aggregate are preserved.
+No override or ruleset change is needed for non-code PRs.
+
+`node --test scripts/ci/classify-changes.test.cjs` runs fixtures against the
+actual inline classifier and job conditions, without GitHub credentials or
+npm dependencies. `cargo xtask lint` includes this check; Node.js 22 or newer
+must be on `PATH` (the GitHub runners already provide it).
 
 ## preview-build.yml
 

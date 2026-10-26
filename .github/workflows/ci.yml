@@ -38,15 +38,18 @@ env:
 
 jobs:
   # Keep the pull_request trigger path-unfiltered so the required check jobs
-  # exist on every PR. Docs/Dependabot-only PRs skip those jobs below instead.
+  # exist on every PR. Non-code-only PRs skip those jobs below instead.
   changes:
     name: Classify Changes
     runs-on: ubuntu-latest
     outputs:
-      code_impacting: ${{ steps.classify.outputs.code_impacting }}
+      # Only an explicit false from a successful classifier may skip CI.
+      code_impacting: ${{ steps.classify.outcome != 'success' || steps.classify.outputs.code_impacting != 'false' }}
     steps:
       - name: Classify changed files
         id: classify
+        # A script/runtime failure must select full CI, too.
+        continue-on-error: true
         uses: actions/github-script@v9
         with:
           script: |
@@ -74,16 +77,35 @@ jobs:
             }
 
             const reportedCount = context.payload.pull_request.changed_files;
-            if (files.length === 0 || files.length !== reportedCount) {
+            if (!Array.isArray(files) || !Number.isSafeInteger(reportedCount) ||
+                reportedCount <= 0 || files.length !== reportedCount) {
               fullCi(
-                `changed-file list was incomplete (received ${files.length} of ${reportedCount})`,
+                `changed-file list was incomplete (received ${files?.length} of ${reportedCount})`,
               );
               return;
             }
 
-            const isNonCodePath = (path) =>
-              path === ".github/dependabot.yml" ||
-              path.startsWith("docs/") || path.toLowerCase().endsWith(".md");
+            // Unknown/malformed entries are not evidence for skipping CI.
+            if (files.some((file) => !file || typeof file.filename !== "string" ||
+                file.filename.length === 0 ||
+                (file.previous_filename !== undefined &&
+                 (typeof file.previous_filename !== "string" || file.previous_filename.length === 0)) ||
+                (file.status === "renamed" && !file.previous_filename)) ||
+                new Set(files.map((file) => file.filename)).size !== reportedCount) {
+              fullCi("changed-file list had invalid or duplicate entries");
+              return;
+            }
+
+            const isNonCodePath = (path) => {
+              // Embedded in the app by doc_window.rs, despite its extension.
+              if (path === "CHANGELOG.md") return false;
+              return path === ".github/dependabot.yml" ||
+                path.startsWith("docs/") ||
+                path.startsWith(".agents/skills/") ||
+                path.startsWith(".github/ISSUE_TEMPLATE/") ||
+                path.startsWith(".github/PULL_REQUEST_TEMPLATE/") ||
+                path.toLowerCase().endsWith(".md");
+            };
             const codeImpactingFile = files.find((file) => {
               const paths = [file.filename, file.previous_filename].filter(Boolean);
               return paths.some((path) => !isNonCodePath(path));
@@ -99,7 +121,7 @@ jobs:
               ])
               .addRaw(
                 nonCodeOnly
-                  ? "Only documentation or Dependabot configuration changed; expensive CI jobs are skipped."
+                  ? "Only documentation, agent skills, PR/issue templates or Dependabot configuration changed; expensive CI jobs are skipped."
                   : `Full CI runs because \`${codeImpactingFile.filename}\` requires it.`,
               )
               .write();
@@ -113,7 +135,9 @@ jobs:
     name: Typecheck
     runs-on: ubuntu-24.04
     needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -160,7 +184,9 @@ jobs:
     name: Build
     runs-on: ubuntu-24.04
     needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -198,7 +224,9 @@ jobs:
     name: Test
     runs-on: ubuntu-24.04
     needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -238,7 +266,9 @@ jobs:
     # toolchain is needed here.
     runs-on: macos-26
     needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -289,7 +319,9 @@ jobs:
     name: Windows (test)
     runs-on: windows-2025
     needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
     timeout-minutes: 60
     steps:
       # .gitattributes forces LF; this keeps Git for Windows from fighting it.
@@ -332,7 +364,9 @@ jobs:
     name: Linux Desktop E2E
     runs-on: ubuntu-24.04
     needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
     timeout-minutes: 40
     env:
       # A hosted runner is thrown away after the job (e2e/CONTRACT.md).
@@ -387,7 +421,8 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs: changes
     if: >-
-      needs.changes.outputs.code_impacting == 'true' &&
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false') &&
       (github.event_name == 'push' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     timeout-minutes: 45
@@ -445,7 +480,9 @@ jobs:
     # (see the windows job); the cache makes later runs a few.
     runs-on: windows-2025
     needs: changes
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
     timeout-minutes: 60
     env:
       PWRROUTE_E2E_DISPOSABLE: "1"
@@ -493,7 +530,7 @@ jobs:
     if: >-
       always() &&
       (needs.changes.result != 'success' ||
-       needs.changes.outputs.code_impacting == 'true')
+       needs.changes.outputs.code_impacting != 'false')
     timeout-minutes: 5
     steps:
       - name: Require Linux, eligible macOS and Windows Desktop E2E
