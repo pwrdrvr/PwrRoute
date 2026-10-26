@@ -487,6 +487,15 @@ their own modules.
   (`visualOnly`, `router::choose_source`, and an open main window shown
   the change), which `onboarding::hooks_with`
   takes as a parameter so tests never switch the process-wide source.
+  On macOS a browser whose profile list is there but may not be read
+  (`DetectedApp::profiles_blocked`, from `pwrroute_browsers::read_profiles`:
+  macOS 27 keeps other apps' data until Files & Folders allows it) puts
+  an access step first (design: First Run Profile Access): why, a copy
+  of the switches to turn on, Open Files & Folders
+  (`pwrroute_os::open_files_and_folders_settings`), Check again and Skip.
+  It re-reads through `browser_scan::reread` (icons kept) on Check again
+  and when the window is activated after losing focus, never on a timer:
+  each blocked read can post macOS's notice again.
   "Open PwrRoute" (every step done) and "Later" mark it done and
   open the main window on Overview, on the first-run window's display
   (`onboarding::main_window_display`); closing the window only marks it

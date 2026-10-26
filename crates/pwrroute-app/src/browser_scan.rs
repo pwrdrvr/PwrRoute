@@ -4,12 +4,13 @@
 //! only on Settings' Rescan; a launch never scans twice.
 //!
 //! What the scan reads is the app's name, bundle id, location and profile
-//! names, from `pwrroute_browsers`. Nothing here holds a URL.
+//! names, from `pwrroute_browsers`, and whether the OS kept a profile list
+//! from it (`DetectedApp::profiles_blocked`). Nothing here holds a URL.
 
 use std::path::PathBuf;
 
 use gpui_kit::{App, BorrowAppContext as _, Global};
-use pwrroute_browsers::{Env, detect_installed, list_profiles};
+use pwrroute_browsers::{Env, detect_installed, read_profiles};
 
 use crate::activity_actions::BrowserChoice;
 use crate::app::PwrRoute;
@@ -28,6 +29,10 @@ pub struct DetectedApp {
     /// Each profile's directory, by `profiles`' index: Chromium's
     /// `Profile 1`, Firefox's profile path. A rule may name a profile by it.
     pub directories: Vec<String>,
+    /// The browser's profile list is there, but the OS would not let
+    /// PwrRoute read it (macOS 27's Files & Folders), so `profiles` is
+    /// empty for want of access, not of profiles.
+    pub profiles_blocked: bool,
 }
 
 impl DetectedApp {
@@ -61,10 +66,13 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
     detect_installed(env)
         .into_iter()
         .map(|installed| {
-            let profiles = installed
+            let read = installed
                 .browser
-                .map_or_else(Vec::new, |info| list_profiles(info, env));
+                .map_or(Ok(Vec::new()), |info| read_profiles(info, env));
+            let profiles_blocked = read.is_err();
+            let profiles = read.unwrap_or_default();
             DetectedApp {
+                profiles_blocked,
                 directories: profiles.iter().map(|p| p.directory.clone()).collect(),
                 profiles: profiles.into_iter().map(|p| p.name).collect(),
                 name: installed.name,
@@ -131,6 +139,13 @@ pub fn location_of(value: &str, cx: &App) -> Option<PathBuf> {
 /// The apps' icons are read again too.
 pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
     crate::app_icons::forget(cx);
+    reread(cx)
+}
+
+/// Reads the machine again for first run's profile-access step, which
+/// re-reads each time its window comes to the front: the same scan as
+/// [`rescan`], but the icons stay, as the apps did not change.
+pub fn reread(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() {
         return scan(&Env::system());
     }
@@ -254,6 +269,7 @@ mod tests {
                 location: "/Applications/Safari.app".into(),
                 profiles: vec![],
                 directories: Vec::new(),
+                profiles_blocked: false,
             },
             DetectedApp {
                 name: "Firefox".into(),
@@ -261,6 +277,7 @@ mod tests {
                 location: "/Applications/Firefox.app".into(),
                 profiles: vec!["default-release".into()],
                 directories: Vec::new(),
+                profiles_blocked: false,
             },
             DetectedApp {
                 name: "Nameless".into(),
@@ -268,6 +285,7 @@ mod tests {
                 location: "/Applications/Nameless.app".into(),
                 profiles: vec![],
                 directories: Vec::new(),
+                profiles_blocked: false,
             },
         ];
         let mut hidden = settings_store::BrowserSettings::default();

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          .fr { padding: 26px 28px 22px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+          .steps { display: flex; flex-direction: column; gap: 10px; }
+          .step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 14px; padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); }
+          .step.cur { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .step.todo { opacity: 0.6; }
+          .step .sn { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--font-mono); border: 1px solid var(--border-default); color: var(--text-muted); background: var(--bg-panel-elevated); }
+          .step.done .sn { background: var(--success-soft); border-color: transparent; color: var(--success-text); }
+          .step.cur .sn { background: var(--accent); border-color: transparent; color: var(--accent-on); }
+          .step .sb { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+          .step .sb b { font: 600 13px/1.3 var(--font-sans); color: var(--text-primary); }
+          .step .sb p { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .step .sb .inp { width: 300px; }
+          .step .sb .inp.pfl { width: 180px; }
+          .step.side { grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; }
+          .step.side .sb { gap: 5px; }
+          .step .res { display: flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .step.warnc { border-color: rgba(196,90,58,0.5); background: rgba(185,66,50,0.08); }
+          .step.warnc .sn { background: var(--danger-soft); color: var(--danger-text); }
+          .step .det { font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); }
+          .step .seg { align-self: flex-start; }
+          .step.mini { grid-template-columns: 20px minmax(0, 1fr); gap: 12px; padding: 10px 14px; align-items: center; }
+          .step.mini .sn { width: 20px; height: 20px; font-size: 10px; }
+          .step.mini .sb { flex-direction: row; align-items: baseline; gap: 10px; }
+          .step.mini .sb b { font-size: 12px; white-space: nowrap; }
+          .step.mini .sb p { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .selrow { display: flex; align-items: center; gap: 8px; }
+          .errl { align-self: flex-start; padding: 6px 8px; border-radius: 5px; background: var(--danger-soft); font: 500 10.5px/1.4 var(--font-mono); color: var(--danger-text); }
+          .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(22,10,0,0.3); border-top-color: var(--accent-on); display: block; }
+          .frfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; }
+          .slab { margin-top: 4px; font: 600 11px/1 var(--font-sans); color: var(--text-subtle); }
+          .slab:first-child { margin-top: 0; }
+          .wi { width: 14px; height: 14px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--warn-soft); font: 700 9px/1 var(--font-sans); }
+          .wnote { display: flex; align-items: flex-start; gap: 6px; font: 500 11px/1.5 var(--font-sans); color: var(--warn-text); }
+          .wnote .wi { margin-top: 2px; }
+          .stage { background: var(--bg-panel); padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+          .stage .steps { gap: 8px; }
+          /* turn 6: profile access on macOS */
+          .acc { display: flex; flex-direction: column; border: 1px solid var(--border-default); border-radius: 9px; background: var(--bg-app); overflow: hidden; }
+          .acc-crumb { padding: 7px 12px; border-bottom: 1px solid var(--border-faint); font: 500 10.5px/1.3 var(--font-sans); color: var(--text-subtle); white-space: nowrap; }
+          .acc-crumb b { font: inherit; font-weight: 600; color: var(--text-secondary); }
+          .acc-row { display: flex; align-items: center; gap: 9px; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--border-faint); font: 500 12px/1 var(--font-sans); color: var(--text-primary); }
+          .acc-row:last-child { border-bottom: none; }
+          .acc-row.kid { padding-left: 34px; }
+          .acc-row .chev { width: 10px; color: var(--text-subtle); font-size: 9px; }
+          .acc-row .nm { flex: 1; min-width: 0; }
+          .acc-row .st { font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); white-space: nowrap; }
+          .acc-row .st.go { color: var(--accent-bright); font-weight: 600; }
+          .acc-row .st.ok { color: var(--success-text); }
+          .acc-row.kid.need { background: var(--bg-row-active); }
+          .acc-row.kid.need .sw { box-shadow: 0 0 0 2px var(--accent-border); }
+          .ai { width: 18px; height: 18px; flex: none; border-radius: 5px; border: 1px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); color: var(--text-muted); background: var(--bg-panel-elevated); }
+          .ai.pr { color: var(--accent-bright); border-color: var(--accent-border); background: var(--accent-soft); }
+          .how { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-muted); }
+          .how b { font: inherit; font-weight: 600; color: var(--text-secondary); }
+        </style>
+      </helmet>
+
+      <section class="dv-turn" id="t6">
+        <div class="dv-thd"><a class="dv-tid" href="#t6">6</a><span class="dv-tname">First run: let PwrRoute see browser profiles (macOS)</span></div>
+        <p class="dv-sub">From macOS 27, reading another app's files needs the user's say-so in Privacy &amp; Security &rsaquo; Files &amp; Folders. macOS does not ask: it posts &ldquo;PwrRoute was blocked from accessing other apps' data&rdquo; and leaves the switches off, so the Everything else select can name a browser but none of its profiles. When the scan finds a browser whose profile list exists but cannot be read, first run gains a step before everything else that says why PwrRoute needs it, opens the pane, and draws the switches the user will find there, with the apps' own icons. The step re-reads whenever the window comes back to the front and on Check again; Skip leaves the profiles out. Browsers that read fine are never named.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="6a" data-screen-label="6a Profiles blocked">
+            <div class="dv-olabel"><a class="dv-oid" href="#6a">6a</a><span>No config, two browsers blocked. The access step comes first, so the window has three steps. The panel is a copy of what Files &amp; Folders will show under PwrRoute: one row per blocked browser, its switch off, &ldquo;Turn on&rdquo; beside it.</span></div>
+            <div class="dv-card win" style="width: 680px; min-height: 600px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div><div class="strip-fill"></div><span class="strip-chip off"><span class="dot"></span>not routing yet</span></div>
+              <div class="fr"><div><div class="eyebrow">Set up</div><h1 class="ttl" style="font-size: 21px;">Three steps, then links start routing</h1><p class="help">Links keep opening the way they do now until the last step. Close this any time; PwrRoute's Overview shows what's left.</p></div>
+              <div class="steps">
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Let PwrRoute see your browser profiles</b><p>macOS blocked PwrRoute from reading the profile list of Google Chrome and Microsoft Edge, so the next step can offer each browser but not its profiles, and a rule that names a profile opens in whichever one the browser picks. PwrRoute reads one file per browser, the one that names its profiles, and never your history, cookies or passwords.</p>
+              <div class="acc"><div class="acc-crumb">System Settings &rsaquo; Privacy &amp; Security &rsaquo; <b>Files &amp; Folders</b></div>
+              <div class="acc-row"><span class="chev">&#9662;</span><span class="ai pr">PR</span><span class="nm">PwrRoute</span></div>
+              <div class="acc-row kid need"><span class="ai">Ch</span><span class="nm">Google Chrome</span><span class="st go">Turn on</span><span class="sw"></span></div>
+              <div class="acc-row kid need"><span class="ai">Ed</span><span class="nm">Microsoft Edge</span><span class="st go">Turn on</span><span class="sw"></span></div></div>
+              <ol class="how"><li><b>Open Files &amp; Folders</b> in System Settings.</li><li>Click &#9656; beside <b>PwrRoute</b> to show its apps.</li><li>Turn on each browser shown above. They start off.</li></ol>
+              <div class="row-actions"><span class="btn primary">Open Files &amp; Folders</span><span class="btn">Check again</span><span class="btn quiet">Skip</span></div></div></div>
+              <div class="step todo"><span class="sn">2</span><div class="sb"><b>Where should everything else go?</b><p>Links no rule claims open here. It also takes links whose browser can't open, and every link while routing is paused.</p></div></div>
+              <div class="step todo"><span class="sn">3</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Microsoft Edge as they do now.</p><div class="row-actions"><span class="btn">Set as default browser</span></div></div></div></div>
+              <div class="frfoot"><span class="note">Change any of this later in Settings &rsaquo; Browsers and Configuration.</span><span class="btn quiet sm">Later</span></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="6b" data-screen-label="6b Access step variants">
+            <div class="dv-olabel"><a class="dv-oid" href="#6b">6b</a><span>The step's other states. Each browser's row follows the last read: one turned on shows its profile count. Still blocked after Check again adds a warning: some macOS releases apply the switch only to a fresh launch. If System Settings does not open, the same warning line says so and names the pane. Skip and full access both finish the step.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <span class="slab">One of two turned on</span>
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Let PwrRoute see your browser profiles</b><p>PwrRoute can read Google Chrome's profiles now. Microsoft Edge is still blocked.</p>
+              <div class="acc"><div class="acc-crumb">System Settings &rsaquo; Privacy &amp; Security &rsaquo; <b>Files &amp; Folders</b></div>
+              <div class="acc-row"><span class="chev">&#9662;</span><span class="ai pr">PR</span><span class="nm">PwrRoute</span></div>
+              <div class="acc-row kid"><span class="ai">Ch</span><span class="nm">Google Chrome</span><span class="st ok">&#10003; 3 profiles</span><span class="sw on"></span></div>
+              <div class="acc-row kid need"><span class="ai">Ed</span><span class="nm">Microsoft Edge</span><span class="st go">Turn on</span><span class="sw"></span></div></div>
+              <div class="row-actions"><span class="btn primary">Open Files &amp; Folders</span><span class="btn">Check again</span><span class="btn quiet">Skip</span></div></div></div>
+              <span class="slab">Still blocked after Check again</span>
+              <div class="step cur"><span class="sn">1</span><div class="sb"><b>Let PwrRoute see your browser profiles</b><span class="wnote"><span class="wi">!</span>Still blocked. If the switches are already on, quit PwrRoute from the menu bar and open it again.</span><div class="row-actions"><span class="btn primary">Open Files &amp; Folders</span><span class="btn">Check again</span><span class="btn quiet">Skip</span></div></div></div>
+              <span class="slab">After Skip</span>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Let PwrRoute see your browser profiles</b><p>Skipped. Until you turn them on in Files &amp; Folders, PwrRoute can't list Google Chrome and Microsoft Edge's profiles, and a link for one of them opens in whichever profile the browser picks.</p></div></div>
+              <span class="slab">Every browser readable</span>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Let PwrRoute see your browser profiles</b><p>PwrRoute can read the profiles of Google Chrome and Microsoft Edge.</p></div></div></div></div>
+          </div>
+
+          <div class="dv-opt" id="6c" data-screen-label="6c Profiles after access">
+            <div class="dv-olabel"><a class="dv-oid" href="#6c">6c</a><span>Back from System Settings: the window came to the front, read the profiles again, and step 2 now has its profile select. The rest of the app's pickers read the same scan. Done folds the access step to one line, as 4g does.</span></div>
+            <div class="dv-card stage" style="width: 680px;">
+              <div class="steps">
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Let PwrRoute see your browser profiles</b><p>PwrRoute can read the profiles of Google Chrome and Microsoft Edge.</p></div></div>
+              <div class="step done"><span class="sn">&#10003;</span><div class="sb"><b>Where should everything else go?</b><p>Links no rule claims open here. It also takes links whose browser can't open, and every link while routing is paused.</p><div class="selrow"><div class="inp"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp pfl">Default profile<span class="caret">&#9662;</span></div></div><span class="det">Picked from your current default browser. Change it any time.</span></div></div>
+              <div class="step cur"><span class="sn">3</span><div class="sb"><b>Make PwrRoute the default browser</b><p>macOS will ask you to confirm. Until then, links keep opening in Microsoft Edge as they do now.</p><div class="row-actions"><span class="btn primary">Set as default browser</span></div></div></div>
+              <span class="slab">Folded, once every step is done</span>
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Browser profiles</b><p>PwrRoute can read Google Chrome and Microsoft Edge.</p></div></div>
+              <span class="slab">Folded after Skip</span>
+              <div class="step done mini"><span class="sn">&#10003;</span><div class="sb"><b>Browser profiles</b><p>Skipped: Google Chrome and Microsoft Edge.</p></div></div></div></div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>When it shows.</b> macOS only, and only when the scan found a browser whose profile file is there but cannot be read (permission denied). A browser with no profiles, or one never opened, is not blocked. The step goes first, before the config step when there is one (four steps then): it is what macOS's notice is about, and step 2's profile select needs it. <b>Copy.</b> The paragraph names the blocked browsers in the scan's order (&ldquo;A&rdquo;, &ldquo;A and B&rdquo;, &ldquo;A, B and C&rdquo;) and always says what is read and what is not. <b>Open Files &amp; Folders</b> opens <code>x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders</code>. <b>Re-reading.</b> On Check again and whenever the window becomes active again after losing focus (not on its first activation, which follows the scan it opened with), never on a timer: each blocked read can post macOS's notice again. A read re-reads profiles only (no icon reload). <b>Measurements.</b> The panel is the step body's width: radius 9, a 10.5 crumb row, 34px rows, kid rows indented 34, 18px app icons, the shared <code>.sw</code>. A row still to do is tinted <code>--bg-row-active</code> with an accent ring round its switch.</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
