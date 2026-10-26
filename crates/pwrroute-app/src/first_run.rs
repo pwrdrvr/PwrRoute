@@ -101,7 +101,7 @@ pub struct BrowserChoice {
     /// lists them), for the profile select. Empty: no select.
     pub profiles: Vec<String>,
     /// The OS kept its profile list from PwrRoute (macOS 27's Files &
-    /// Folders), so `profiles` is empty for want of access.
+    /// Folders). `profiles` may still contain last-successful cached metadata.
     pub profiles_blocked: bool,
 }
 

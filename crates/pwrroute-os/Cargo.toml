@@ -44,6 +44,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     # URLForApplicationWithBundleIdentifier, for a handler's display name,
     # and iconForFile:, for an app's icon.
     "NSWorkspace",
+    # Path-specific default-browser requests (distinguishes worktree bundles).
+    "block2",
     # Rendering that icon to a PNG.
     "NSBitmapImageRep",
     "NSColorSpace",

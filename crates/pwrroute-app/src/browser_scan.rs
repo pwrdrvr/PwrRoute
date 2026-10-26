@@ -31,8 +31,20 @@ pub struct DetectedApp {
     pub directories: Vec<String>,
     /// The browser's profile list is there, but the OS would not let
     /// PwrRoute read it (macOS 27's Files & Folders), so `profiles` is
-    /// empty for want of access, not of profiles.
+    /// unavailable live. Nonempty `profiles` then comes from the saved cache.
     pub profiles_blocked: bool,
+}
+
+/// All app readers share the data directory's last-successful profile metadata.
+pub fn environment() -> Env {
+    let env = Env::system();
+    if cfg!(test) {
+        return env;
+    }
+    match pwrroute_os::data_dir() {
+        Some(dir) => env.with_profile_cache(dir.join("profiles.json")),
+        None => env,
+    }
 }
 
 impl DetectedApp {
@@ -70,7 +82,7 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
                 .browser
                 .map_or(Ok(Vec::new()), |info| read_profiles(info, env));
             let profiles_blocked = read.is_err();
-            let profiles = read.unwrap_or_default();
+            let profiles = read.unwrap_or_else(|blocked| blocked.cached);
             DetectedApp {
                 profiles_blocked,
                 directories: profiles.iter().map(|p| p.directory.clone()).collect(),
@@ -111,7 +123,7 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
 /// time, as the pickers always did.
 pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() {
-        return scan(&Env::system());
+        return scan(&environment());
     }
     cx.update_global(|global: &mut ScanGlobal, _| {
         global.apps.get_or_insert_with(|| scan(&global.env)).clone()
@@ -147,7 +159,7 @@ pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
 /// [`rescan`], but the icons stay, as the apps did not change.
 pub fn reread(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() {
-        return scan(&Env::system());
+        return scan(&environment());
     }
     cx.update_global(|global: &mut ScanGlobal, _| {
         let apps = scan(&global.env);

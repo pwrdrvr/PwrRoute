@@ -39,6 +39,45 @@ fn mac_with_chrome_profiles() -> Fixture {
     fx
 }
 
+#[cfg(unix)]
+#[test]
+fn a_later_launcher_selects_the_saved_profile_when_the_index_is_blocked() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut fx = mac_with_chrome_profiles();
+    fx.env = fx
+        .env
+        .clone()
+        .with_profile_cache(fx.root().join("profiles.json"));
+    let mut b = browser("Google Chrome", AppType::AppName);
+    b.profile = "Personal".into();
+    assert!(
+        plan(&fx, &b)
+            .args
+            .contains(&"--profile-directory=Profile 1".into())
+    );
+    let path = fx.path("home/Library/Application Support/Google/Chrome/Local State");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root can still read a mode-000 file; injected denied reads are tested
+    // on every platform in profiles.rs independently of the process's uid.
+    if fs::read(&path).is_err() {
+        let later = Launcher::with_env(fx.env.clone(), LaunchOptions::default());
+        let p = later.plan(&b).unwrap().unwrap();
+        assert!(p.args.contains(&"--profile-directory=Profile 1".into()));
+        assert_eq!(
+            p.notes,
+            [Note::ProfileCached {
+                profile: "Personal".into()
+            }]
+        );
+        b.profile = "Unknown".into();
+        assert!(matches!(
+            &later.plan(&b).unwrap().unwrap().notes[..],
+            [Note::ProfileNotFound { .. }]
+        ));
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
+}
+
 #[test]
 fn none_means_do_not_open() {
     for platform in [Platform::MacOs, Platform::Windows, Platform::Linux] {

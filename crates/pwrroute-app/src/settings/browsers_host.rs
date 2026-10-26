@@ -68,7 +68,18 @@ fn detected_row(app: &DetectedApp, facts: &Facts) -> BrowserApp {
         name: app.name.clone().into(),
         badge: badge_for(&app.name),
         location: location.into(),
-        note: profiles.is_empty().then(|| "no profiles".into()),
+        note: if app.profiles_blocked {
+            Some(
+                if profiles.is_empty() {
+                    "profile access blocked"
+                } else {
+                    "using cached profiles; access blocked"
+                }
+                .into(),
+            )
+        } else {
+            profiles.is_empty().then(|| "no profiles".into())
+        },
         profiles,
         usage: usage(&facts.rules, |value| app.is_named(value)),
         visible: !facts.hidden.is_hidden(app.id()),
@@ -230,6 +241,18 @@ mod tests {
         assert!(safari.visible);
         assert!(model.other_apps.is_empty());
         assert_eq!(model.default.state, DefaultState::Other("Safari".into()));
+    }
+
+    #[test]
+    fn cached_profiles_stay_available_and_are_labelled_as_cached() {
+        let mut chrome = app("Google Chrome", Some("com.google.Chrome"), &["Work"]);
+        chrome.profiles_blocked = true;
+        let model = build(&[chrome], &Facts::default(), default());
+        assert_eq!(model.detected[0].profiles[0], "Work");
+        assert_eq!(
+            model.detected[0].note.as_deref(),
+            Some("using cached profiles; access blocked")
+        );
     }
 
     #[test]

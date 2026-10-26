@@ -41,6 +41,7 @@ pub struct Env {
     /// `None` on the real machine.
     root: Option<PathBuf>,
     registry: bool,
+    profile_cache: Option<PathBuf>,
 }
 
 impl Env {
@@ -64,6 +65,7 @@ impl Env {
             vars: HashMap::new(),
             root: None,
             registry: platform == Platform::Windows,
+            profile_cache: None,
         };
         for (k, v) in vars {
             env.set_var(&k, v);
@@ -86,6 +88,7 @@ impl Env {
             vars: HashMap::new(),
             root: Some(root.clone()),
             registry: false,
+            profile_cache: None,
         };
         let s = |p: PathBuf| p.to_string_lossy().into_owned();
         // Component by component, so the host's separator is used throughout.
@@ -115,6 +118,17 @@ impl Env {
 
     pub fn home(&self) -> &Path {
         &self.home
+    }
+
+    /// Opt in to sharing last-successful profile metadata at this path.
+    /// Fixtures and standalone catalog reads do not persist anything by default.
+    pub fn with_profile_cache(mut self, path: impl Into<PathBuf>) -> Self {
+        self.profile_cache = Some(path.into());
+        self
+    }
+
+    pub(crate) fn profile_cache(&self) -> Option<&Path> {
+        self.profile_cache.as_deref()
     }
 
     /// Sets an environment variable as this `Env` sees it (not the process's).

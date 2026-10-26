@@ -29,6 +29,7 @@ const TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Options {
+    debug: bool,
     universal: bool,
     identity: Option<String>,
     notarize: bool,
@@ -41,6 +42,7 @@ fn parse(args: &[String]) -> Result<Options> {
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--debug" => options.debug = true,
             "--universal" => options.universal = true,
             "--sign" => {
                 let identity = it.next().filter(|s| !s.is_empty()).context(
@@ -62,6 +64,10 @@ fn parse(args: &[String]) -> Result<Options> {
         !(options.app_only && options.notarize),
         "--app-only stops before notarizing; drop --notarize"
     );
+    ensure!(
+        !options.debug || (options.app_only && !options.universal),
+        "--debug needs --app-only and builds the native architecture only"
+    );
     Ok(options)
 }
 
@@ -71,12 +77,13 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
     let root = root();
     let version = package_version()?;
     let built = target_dir();
-    let out = built.join("bundle");
+    // A debug app belongs to its checkout even when Cargo's cache is shared.
+    let out = bundle_dir(&root, &built, options.debug);
     fs::create_dir_all(&out)?;
 
     let (binary, arch) = if options.universal {
         for triple in TARGETS {
-            build(&root, Some(triple))?;
+            build(&root, Some(triple), false)?;
         }
         let universal = out.join("pwrroute-universal");
         let mut lipo = Command::new("lipo");
@@ -87,12 +94,14 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
         run(&mut lipo)?;
         (universal, "universal")
     } else {
-        build(&root, None)?;
-        (built.join("release/pwrroute"), std::env::consts::ARCH)
+        build(&root, None, options.debug)?;
+        let profile = if options.debug { "debug" } else { "release" };
+        (built.join(profile).join("pwrroute"), std::env::consts::ARCH)
     };
 
     let app = out.join("PwrRoute.app");
-    if app.exists() {
+    // Keep the debug bundle's directory stable for LaunchServices across builds.
+    if app.exists() && !options.debug {
         // Replaced whole: a stale file inside a signed bundle breaks its
         // signature.
         fs::remove_dir_all(&app)?;
@@ -100,7 +109,10 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
     let contents = app.join("Contents");
     fs::create_dir_all(contents.join("MacOS"))?;
     fs::create_dir_all(contents.join("Resources"))?;
-    fs::copy(&binary, contents.join("MacOS/pwrroute"))?;
+    let executable = contents.join("MacOS/pwrroute");
+    let next_executable = contents.join("MacOS/pwrroute.next");
+    fs::copy(&binary, &next_executable)?;
+    fs::rename(&next_executable, &executable)?;
     let resources = contents.join("Resources");
     for file in ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"] {
         fs::copy(root.join(file), resources.join(file))?;
@@ -170,11 +182,22 @@ pub(crate) fn bundle(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn build(root: &Path, target: Option<&str>) -> Result<()> {
+fn bundle_dir(root: &Path, built: &Path, debug: bool) -> PathBuf {
+    if debug {
+        root.join("target/dev")
+    } else {
+        built.join("bundle")
+    }
+}
+
+fn build(root: &Path, target: Option<&str>, debug: bool) -> Result<()> {
     let mut cargo = Command::new("cargo");
     cargo
-        .args(["build", "--release", "--locked", "-p", "pwrroute-app"])
+        .args(["build", "--locked", "-p", "pwrroute-app"])
         .current_dir(root);
+    if !debug {
+        cargo.arg("--release");
+    }
     if let Some(target) = target {
         cargo.args(["--target", target]);
     }
@@ -466,6 +489,17 @@ mod tests {
                 .app_only
         );
         assert!(parse(&args(&["--app-only", "--sign", "X", "--notarize"])).is_err());
+    }
+
+    #[test]
+    fn debug_is_a_native_app_at_a_worktree_local_path() {
+        assert!(parse(&args(&["--debug", "--app-only"])).unwrap().debug);
+        assert!(parse(&args(&["--debug"])).is_err());
+        assert!(parse(&args(&["--debug", "--app-only", "--universal"])).is_err());
+        let root = Path::new("/worktrees/feature");
+        let cache = Path::new("/shared/cargo-target");
+        assert_eq!(bundle_dir(root, cache, true), root.join("target/dev"));
+        assert_eq!(bundle_dir(root, cache, false), cache.join("bundle"));
     }
 
     #[test]

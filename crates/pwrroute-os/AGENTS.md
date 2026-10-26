@@ -3,9 +3,11 @@
 The OS edge: link receipt (macOS Apple Event sender, argv), default-
 browser registration on macOS, Windows and Linux, and apps' icons (macOS).
 
-- **Never change this machine's default browser.** No test, example or
-  launch calls `register_browser`, `unregister_browser` or
-  `set_default_browser`. Test the plans instead: `windows_registry_values`
+- **Default-browser changes require explicit intent.** No test, example or
+  ordinary launch calls `register_browser`, `unregister_browser` or
+  `set_default_browser`. An explicit `--make-default` launch may request
+  ownership (PwrAgent's Start action); it is ignored with `--dry-run` and
+  under the E2E hook. Test the plans instead: `windows_registry_values`
   and `desktop_entry` are plain functions for that reason. The exception is
   the app's E2E hook, which calls them only on a throwaway runner
   (`PWRROUTE_E2E_DISPOSABLE=1`, see `e2e/CONTRACT.md`).
@@ -41,3 +43,6 @@ browser registration on macOS, Windows and Linux, and apps' icons (macOS).
   does. Windows and Linux return `None` until they have an implementation.
 - Names (`BUNDLE_ID`, `PROG_ID`, `DESKTOP_ID`) must match `packaging/`; a
   test reads the packaging files to hold them together.
+- macOS requests target the running `.app` by URL through NSWorkspace
+  (legacy bundle-id fallback on macOS 11). Status also compares the selected
+  handlers' paths, so an installed copy cannot count as the worktree copy.

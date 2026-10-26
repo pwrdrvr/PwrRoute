@@ -1,0 +1,17 @@
+version = 1
+name = "PwrRoute"
+
+[[actions]]
+name = "Build"
+icon = "build"
+command = "cargo build --locked -p pwrroute-app"
+
+[[actions]]
+name = "Test"
+icon = "test"
+command = "cargo xtask test"
+
+[[actions]]
+name = "Start"
+icon = "run"
+command = "bash scripts/dev/start.sh"

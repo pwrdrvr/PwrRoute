@@ -4,9 +4,10 @@
 //!
 //! The OS calls come in as [`Os`], so tests supply fakes and nothing here
 //! ever reaches `pwrroute_os` from a test. [`request`] runs only from a
-//! click: the Settings button, the first-run step and the tray's row. The
-//! OS has the last word (a consent prompt on macOS, Settings › Default apps
-//! on Windows), so the answer is read back rather than assumed: on every
+//! click (Settings, first run, the tray), or the explicit `--make-default`
+//! startup flag. The OS has the last word (a consent prompt on macOS,
+//! Settings › Default apps on Windows), so the answer is read back rather
+//! than assumed: on every
 //! window activation ([`watch`]), when the tray dropdown opens, for a while
 //! after a request on a fast timer, every second while first run's step 3
 //! is open and not done ([`follow_while`]), and always on a slow timer
@@ -447,9 +448,9 @@ pub fn follow_while(keep: impl Fn(&mut App) -> bool + 'static, cx: &mut App) {
 
 /// Asks the OS to make PwrRoute the default browser. The explicit action,
 /// and the only caller of `set_default_browser` in the app: wire it to a
-/// click and nothing else. Then reads the answer back every [`POLL_EVERY`]
-/// for [`POLL_FOR`]: until PwrRoute is the default, the answer settles the
-/// other way ([`ACTIVATION_GRACE`] after the window came to the front, or a
+/// click or an explicit `--make-default` launch. Then reads the answer back
+/// every [`POLL_EVERY`] for [`POLL_FOR`]: until PwrRoute is the default, the
+/// answer settles the other way ([`ACTIVATION_GRACE`] after the window came to the front, or a
 /// newer request took over), or the time is up, which settles it too.
 pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
     let Some(registrar) = registrar(cx) else {

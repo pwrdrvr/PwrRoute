@@ -385,9 +385,10 @@ fn backends(wiring: &Wiring) -> Backends {
     Backends {
         resolver: router.clone(),
         router: router.clone(),
-        browsers: Arc::new(LiveBrowsers::new(pwrroute_browsers::Env::system(), || {
-            pwrroute_os::default_browser_status().ok()
-        })),
+        browsers: Arc::new(LiveBrowsers::new(
+            crate::browser_scan::environment(),
+            || pwrroute_os::default_browser_status().ok(),
+        )),
         rules: Arc::new(LiveRules::new(
             rules_path
                 .clone()

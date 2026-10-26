@@ -72,9 +72,15 @@ pub struct Args {
     pub config: Option<PathBuf>,
     /// Open the first-run window (`--first-run`), whatever has run before.
     pub first_run: bool,
+    /// Explicitly request default-browser ownership on startup.
+    pub make_default: bool,
 }
 
 impl Args {
+    pub fn request_default_on_startup(&self, under_e2e: bool) -> bool {
+        self.make_default && !self.dry_run && !under_e2e
+    }
+
     pub fn from_env() -> Self {
         Self::parse(env::args_os().collect()).with_e2e_env(|key| env::var_os(key))
     }
@@ -105,6 +111,7 @@ impl Args {
             match arg {
                 "--dry-run" => args.dry_run = true,
                 "--first-run" => args.first_run = true,
+                "--make-default" => args.make_default = true,
                 "--config" => args.config = rest.next().map(PathBuf::from),
                 _ => {
                     if let Some(path) = arg.strip_prefix("--config=") {
@@ -646,7 +653,7 @@ pub struct BrowserLauncher {
 impl BrowserLauncher {
     /// A launcher for this machine.
     pub fn new() -> Self {
-        let mut launcher = Self::with_env(Env::system());
+        let mut launcher = Self::with_env(crate::browser_scan::environment());
         // A profile or private launch of a running Chromium browser then
         // hands the link over without the new instance taking focus.
         launcher.inner = launcher.inner.with_running(pwrroute_os::app_is_running);
@@ -737,6 +744,7 @@ fn launch_error(error: LaunchError) -> anyhow::Error {
 /// Only fixed labels: a counted-only link must not reveal profile names.
 fn describe_note(note: &Note) -> &'static str {
     match note {
+        Note::ProfileCached { .. } => "note=profile_cached; profile_index_access=blocked",
         Note::ProfileNotFound { .. } => "note=profile_not_found; browser_will_choose_profile=true",
         Note::ProfileUnsupported { .. } => "note=profile_unsupported",
         Note::BackgroundUnsupported => "note=background_unsupported",
@@ -756,6 +764,17 @@ mod tests {
     use super::*;
 
     const URL: &str = "https://secret.example.com/path?token=abc";
+
+    #[test]
+    fn cached_profile_diagnostics_do_not_expose_profile_names() {
+        for profile in ["Work", "private@example.com"] {
+            let note = describe_note(&Note::ProfileCached {
+                profile: profile.into(),
+            });
+            assert_eq!(note, "note=profile_cached; profile_index_access=blocked");
+            assert!(!note.contains(profile));
+        }
+    }
 
     fn parse(args: &[&str]) -> Args {
         Args::parse(args.iter().map(OsString::from).collect())
@@ -779,6 +798,16 @@ mod tests {
         assert!(args.links.is_empty() && !args.dry_run && !args.first_run);
 
         assert!(parse(&["pwrroute", "--first-run"]).first_run);
+    }
+
+    #[test]
+    fn startup_default_request_requires_an_explicit_flag_and_a_live_launch() {
+        assert!(!parse(&["pwrroute"]).request_default_on_startup(false));
+        assert!(parse(&["pwrroute", "--make-default"]).request_default_on_startup(false));
+        assert!(
+            !parse(&["pwrroute", "--make-default", "--dry-run"]).request_default_on_startup(false)
+        );
+        assert!(!parse(&["pwrroute", "--make-default"]).request_default_on_startup(true));
     }
 
     fn browser(name: &str, app_type: AppType) -> Browser {
