@@ -131,7 +131,7 @@ mod settings;
 #[cfg(target_os = "macos")]
 #[path = "../src/settings_store.rs"]
 mod settings_store;
-
+#[cfg(target_os = "macos")]
 #[path = "../src/start_from.rs"]
 mod start_from;
 #[cfg(target_os = "macos")]
