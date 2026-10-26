@@ -194,14 +194,17 @@ their own modules.
   Window · Help, with About and Check for Updates… atop the macOS app
   menu, View opening with the screens, and Help in its fixed order (Settings
   in File and About last in Help off macOS). `app_menu::menus` is a pure
-  template per `Platform` and its tests hold both to the order; only macOS
-  installs it (no in-window strip on Windows/Linux yet). No Website row
+  template per `Platform` and its tests hold both to the order. macOS
+  installs it with `cx.set_menus`; Windows and Linux draw the same
+  template in the title strip (below). No Website row
   (PwrRoute has none) and no Reload/zoom rows (a GPUI window has neither).
   Edit's rows replay ⌘X/⌘C/⌘V/⌘A into the window in front: the text
   fields read raw keys, so those bindings live in `MENU_ONLY`, a context no
   element has, and never steal a key. A global action that touches a
-  window goes through `in_front_window`, which defers: GPUI still holds the
-  window an action was dispatched in. About (menu and tray) is Settings ›
+  window goes through `in_front_window`, or `cx.defer`s whatever reads,
+  raises or navigates a window (View's rows, About, Settings…, Help's
+  windows): GPUI still holds the window an action was dispatched in, so
+  the update fails without a word, or a second window opens. About (menu and tray) is Settings ›
   About. Help's links go through the router as an `Api` link (else
   `open_url`), so the rules pick the browser. Changelog, View License and
   Third-Party Notices are `doc_window.rs`, from files compiled in with
@@ -235,6 +238,33 @@ their own modules.
   query. Below `NARROW_BELOW` Wrap and Mark keep icons and tooltips;
   `FRAME.min` holds the toolbar's one row. Window tests drive it
   through `debug_selector`s; the `screens` example draws `help-logs*`.
+- **The strip is the menu bar off macOS (`chrome.rs`, `menu_bar.rs`;
+  design: Windows and Linux Chrome 1a/1b).** Every window with a strip
+  (main, Settings, the importer, first run, Help's) owns a `MenuBar` and
+  draws `chrome::strip`, never its own copy. `chrome::Chrome` decides:
+  macOS keeps the brand at x=96 after the traffic lights; Windows and Linux
+  start it at x=16 with the bar after it, built from
+  `app_menu::menus(Platform::Other)` (no second list) plus Window's list of
+  the windows with a bar. Rows are `widgets::menu_card`/`menu_row`, each with
+  the keymap's shortcut ("Ctrl+W"), and dispatch to the window's focused
+  element. Keys reach the bar through `cx.intercept_keystrokes`, before any
+  binding or field, so focus never moves to it and Edit's replay lands in
+  the field: F10 or a lone Alt (a binding, `FocusMenuBar`) takes the
+  keyboard, Alt+letter opens a menu, arrows/Enter/Esc walk it, and a
+  shortcut lets go and runs. The keyboard model is `menu_bar::State`, plain
+  data with its own tests. **Bring a window forward with
+  `menu_bar::bring_forward`, never `activate_window` directly:** on Windows
+  GPUI taps Alt itself (`SendInput`) to take the foreground, and the bar
+  ignores a lone Alt for `FAKE_ALT_WINDOW` after `bring_forward`, and after
+  a window becomes active (Alt+Tab back in re-reports a held Alt), so neither
+  lights File; nor does releasing an Alt that clicked. On Windows GPUI hides the OS title bar, so the
+  strip is the drag area and draws minimize, maximize/restore and close as
+  `WindowControlArea`s (Windows presses them; titles and buttons `occlude`
+  the drag area, and so must anything clickable a window adds to its strip,
+  or Windows takes the press for a drag). Linux keeps the desktop's server-side title bar and its
+  buttons; the design's frameless GNOME strip (1b) is not built yet.
+  `app_menu::install_for(Chrome::Windows | Linux)` draws that strip and
+  installs the Ctrl keymap on a Mac, for the window tests and `screens`.
 - **Log with the `log` macros, never `eprintln!` (`diag_log.rs`).**
   `diag_log::install` (top of `main`) sends PwrRoute's lines, Velopack's and
   GPUI's warnings to `main.log` in `pwrroute_os::log_dir()`

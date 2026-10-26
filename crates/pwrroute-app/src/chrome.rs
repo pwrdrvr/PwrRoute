@@ -3,14 +3,16 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, Div, HighlightStyle, InteractiveElement as _, IntoElement as _,
-    ParentElement as _, Stateful, StatefulInteractiveElement as _, Styled as _, StyledText, div,
-    px,
+    AnyElement, App, Context, Div, Entity, Global, HighlightStyle, InteractiveElement as _,
+    IntoElement as _, ParentElement as _, Stateful, StatefulInteractiveElement as _, Styled as _,
+    StyledText, Window, WindowControlArea, div, px, svg,
 };
 
 use crate::app::{PwrRoute, Screen};
+use crate::app_menu::Platform;
 use crate::default_browser::DefaultState;
 use crate::e2e;
+use crate::menu_bar::MenuBar;
 use crate::overview_model::{ConfigTrouble, State, Status, plural};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{ButtonKind, button, key_cap, status_chip};
@@ -22,8 +24,88 @@ pub const OPEN_SETTINGS_ID: &str = "nav-settings";
 pub const RELOAD_ID: &str = "rules-reload";
 pub const OVERWRITE_ID: &str = "rules-overwrite";
 
-/// Where the brand starts, after the traffic lights. The family spec.
-pub const BRAND_X: f32 = 96.0;
+/// Where the brand starts on macOS, after the traffic lights. The family
+/// spec.
+pub const MAC_BRAND_X: f32 = 96.0;
+
+/// Where it starts on Windows and Linux, at the rail's 16px inset: there
+/// are no traffic lights to clear (design: Windows and Linux Chrome 1a/1b).
+pub const OTHER_BRAND_X: f32 = 16.0;
+
+/// The Windows caption buttons: three of Windows' 46px buttons, the full
+/// height of the strip's fill.
+pub const CAPTION_WIDTH: f32 = 46.0;
+
+/// What the strip reserves for them on the right (design 1a's
+/// `padding-right: 150px`): the buttons and a gap before the last chip.
+pub const CAPTIONS_RESERVE: f32 = 150.0;
+
+/// Whose window chrome the strip draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Chrome {
+    /// The traffic lights are AppKit's and the menu bar is the system's.
+    Mac,
+    /// The strip draws the menu bar and the caption buttons, and is the
+    /// window's drag area: GPUI hides Windows' own title bar.
+    Windows,
+    /// The strip draws the menu bar; the desktop draws the title bar and
+    /// its buttons (GPUI asks for server-side decorations).
+    Linux,
+}
+
+impl Chrome {
+    /// This build's OS.
+    pub fn host() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Mac
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+
+    /// The menu template it uses.
+    pub fn menus(self) -> Platform {
+        match self {
+            Self::Mac => Platform::Mac,
+            Self::Windows | Self::Linux => Platform::Other,
+        }
+    }
+
+    /// Where the brand starts.
+    pub fn brand_x(self) -> f32 {
+        match self {
+            Self::Mac => MAC_BRAND_X,
+            Self::Windows | Self::Linux => OTHER_BRAND_X,
+        }
+    }
+
+    /// The Settings shortcut as the rail's key cap shows it.
+    pub fn settings_key(self) -> &'static str {
+        match self {
+            Self::Mac => "\u{2318},",
+            Self::Windows | Self::Linux => "Ctrl+,",
+        }
+    }
+}
+
+/// The chrome `app_menu::install_for` was given, when it differs from the
+/// host's.
+struct ChromeOverride(Chrome);
+
+impl Global for ChromeOverride {}
+
+/// Draw `chrome`'s strip in every window from now on.
+pub fn set(chrome: Chrome, cx: &mut App) {
+    cx.set_global(ChromeOverride(chrome));
+}
+
+/// The chrome the strip draws: the one installed, else the host's.
+pub fn current(cx: &App) -> Chrome {
+    cx.try_global::<ChromeOverride>()
+        .map_or_else(Chrome::host, |chrome| chrome.0)
+}
 
 /// The strip's fill. The 1px bottom border makes the strip 41px in all.
 pub const STRIP_HEIGHT: f32 = 40.0;
@@ -163,8 +245,8 @@ pub fn routing_line(status: &Status) -> (gpui_kit::Hsla, String) {
 ///
 /// The traffic lights are AppKit's own, placed by the window's
 /// `TitlebarOptions` (see `main`), so the strip only leaves room for them.
-pub fn title_strip(app: &PwrRoute, status: &Status) -> Div {
-    strip()
+pub fn title_strip(app: &PwrRoute, status: &Status, window: &Window, cx: &App) -> Div {
+    strip(&app.menu_bar, window, cx)
         .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
         .child(text(
             app.screen.label(),
@@ -176,9 +258,42 @@ pub fn title_strip(app: &PwrRoute, status: &Status) -> Div {
         .children(strip_chips(app, status))
 }
 
+/// The strip's children, by chrome, for `e2e::regions`: what the callers
+/// add follows the brand (and the menu bar off macOS).
+const MAC_REGIONS: &[&str] = &[
+    "titleStrip.brand",
+    "titleStrip.chevron",
+    "titleStrip.breadcrumb",
+    "titleStrip.spacer",
+    "titleStrip.chip1",
+    "titleStrip.chip2",
+];
+const LINUX_REGIONS: &[&str] = &[
+    "titleStrip.brand",
+    "titleStrip.menuBar",
+    "titleStrip.chevron",
+    "titleStrip.breadcrumb",
+    "titleStrip.spacer",
+    "titleStrip.chip1",
+    "titleStrip.chip2",
+];
+const WINDOWS_REGIONS: &[&str] = &[
+    "titleStrip.captions",
+    "titleStrip.brand",
+    "titleStrip.menuBar",
+    "titleStrip.chevron",
+    "titleStrip.breadcrumb",
+    "titleStrip.spacer",
+    "titleStrip.chip1",
+    "titleStrip.chip2",
+];
+
 /// `.strip` with its `.brand`: the mark and the wordmark, after the
-/// traffic lights. The crumb and whatever follows go in as children.
-pub fn strip() -> Div {
+/// traffic lights on macOS; elsewhere at x=16 with `menu_bar` after it
+/// and, on Windows, the caption buttons on the right. The crumb and
+/// whatever follows go in as children.
+pub fn strip(menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
+    let chrome = current(cx);
     let wordmark = StyledText::new("PwrRoute").with_highlights([(
         3..8,
         HighlightStyle {
@@ -186,25 +301,37 @@ pub fn strip() -> Div {
             ..Default::default()
         },
     )]);
+    let regions = match chrome {
+        Chrome::Mac => MAC_REGIONS,
+        Chrome::Linux => LINUX_REGIONS,
+        Chrome::Windows => WINDOWS_REGIONS,
+    };
     div()
-        .on_children_prepainted(e2e::regions(&[
-            "titleStrip.brand",
-            "titleStrip.chevron",
-            "titleStrip.breadcrumb",
-            "titleStrip.spacer",
-            "titleStrip.chip1",
-            "titleStrip.chip2",
-        ]))
+        .on_children_prepainted(e2e::regions(regions))
+        .relative()
         .h(px(STRIP_HEIGHT + 1.0))
         .flex_none()
         .flex()
         .items_center()
         .gap(px(12.0))
-        .pl(px(BRAND_X))
-        .pr(px(16.0))
+        .pl(px(chrome.brand_x()))
+        .pr(px(if chrome == Chrome::Windows {
+            CAPTIONS_RESERVE
+        } else {
+            16.0
+        }))
         .bg(theme::bg_titlebar())
         .border_b_1()
         .border_color(theme::border_subtle())
+        // GPUI hides Windows' title bar, so the strip is where the window
+        // is dragged from (and double-clicked to maximize). The menu
+        // titles, the caption buttons and any child a caller adds that
+        // takes a click (`.occlude()`) block it.
+        .when(chrome == Chrome::Windows, |strip| {
+            strip
+                .window_control_area(WindowControlArea::Drag)
+                .child(captions(window))
+        })
         .child(
             div()
                 .flex()
@@ -223,6 +350,67 @@ pub fn strip() -> Div {
                         .child(wordmark),
                 ),
         )
+        .when(chrome != Chrome::Mac, |strip| strip.child(menu_bar.clone()))
+}
+
+/// Windows' minimize, maximize (restore while maximized) and close, on
+/// the strip's right edge: Windows draws them itself only with its own
+/// title bar, which GPUI hides. Each is a `WindowControlArea`, so Windows
+/// presses it (and offers Snap layouts on maximize) as its own.
+fn captions(window: &Window) -> Div {
+    let button = |id: &'static str, path: &'static str, area: WindowControlArea| {
+        let close = area == WindowControlArea::Close;
+        div()
+            .id(id)
+            .debug_selector(|| id.into())
+            .group(id)
+            .occlude()
+            .window_control_area(area)
+            .w(px(CAPTION_WIDTH))
+            .h(px(STRIP_HEIGHT))
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(close, |button| button.rounded_tr(px(7.0)))
+            .hover(move |style| {
+                style.bg(if close {
+                    theme::caption_close()
+                } else {
+                    theme::bg_hover()
+                })
+            })
+            .child(
+                svg()
+                    .path(path)
+                    .flex_none()
+                    .size(px(10.0))
+                    .text_color(theme::text_secondary())
+                    .when(close, |glyph| {
+                        glyph.group_hover(id, |style| style.text_color(gpui_kit::white()))
+                    }),
+            )
+    };
+    let maximize = if window.is_maximized() {
+        "pwrroute/caption-restore.svg"
+    } else {
+        "pwrroute/caption-maximize.svg"
+    };
+    div()
+        .absolute()
+        .top_0()
+        .right_0()
+        .flex()
+        .child(button(
+            "caption-minimize",
+            "pwrroute/caption-minimize.svg",
+            WindowControlArea::Min,
+        ))
+        .child(button("caption-maximize", maximize, WindowControlArea::Max))
+        .child(button(
+            "caption-close",
+            "pwrroute/caption-close.svg",
+            WindowControlArea::Close,
+        ))
 }
 
 /// `.rail-item`; `.on` when `selected`.
@@ -433,7 +621,7 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
                 "pwrroute/settings.svg",
                 "Open Settings\u{2026}",
                 false,
-                Some(key_cap("\u{2318},").into_any_element()),
+                Some(key_cap(current(cx).settings_key()).into_any_element()),
             )
             .on_click(|_, _, cx| crate::settings::open(cx, None)),
         )

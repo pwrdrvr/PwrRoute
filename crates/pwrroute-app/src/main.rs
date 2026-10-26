@@ -40,6 +40,7 @@ mod logs_window;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
+mod menu_bar;
 mod onboarding;
 mod overview;
 mod overview_model;
@@ -453,7 +454,7 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
         .into_iter()
         .find(|window| window.downcast::<PwrRoute>().is_some());
     if let Some(window) = main {
-        let _ = window.update(cx, |_, window, _| window.activate_window());
+        let _ = window.update(cx, |_, window, cx| menu_bar::bring_forward(window, cx));
         cx.activate(true);
         return;
     }

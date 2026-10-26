@@ -3,10 +3,11 @@
 //! "Help › …" crumb (the family's auxiliary title bar).
 
 use gpui_kit::{
-    App, AppContext as _, Bounds, Context, Div, ParentElement as _, Render, Styled as _,
+    App, AppContext as _, Bounds, Context, Div, Entity, ParentElement as _, Render, Styled as _,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, point, px, size,
 };
 
+use crate::menu_bar::MenuBar;
 use crate::theme::{self, text};
 
 /// Where AppKit puts the traffic lights: the family's (16, 13), as the main
@@ -26,7 +27,9 @@ pub fn activate<V: 'static>(existing: Option<WindowHandle<V>>, cx: &mut App) -> 
         return false;
     };
     let shown = handle
-        .update(cx, |_, window, _| window.activate_window())
+        .update(cx, |_, window, cx| {
+            crate::menu_bar::bring_forward(window, cx)
+        })
         .is_ok();
     if shown {
         cx.activate(true);
@@ -71,8 +74,8 @@ pub fn open<V: Render + 'static>(
 
 /// The strip: brand › Help › `title`. Whatever follows (buttons) goes in
 /// as children, after a spacer.
-pub fn strip(title: &'static str) -> Div {
-    crate::chrome::strip()
+pub fn strip(title: &'static str, menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
+    crate::chrome::strip(menu_bar, window, cx)
         .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))
         .child(text("Help", 13.0, 500.0, theme::text_muted()))
         .child(text("\u{203a}", 14.0, 500.0, theme::text_subtle()))

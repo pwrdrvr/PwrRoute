@@ -10,9 +10,14 @@ use pwrroute_e2e::{App, harness, os, quit_keystroke, rect};
 use pwrroute_router::instance::{self, Claim, Endpoint};
 use serde_json::Value;
 
-/// The family spec: the brand starts 96px in, after the traffic lights, in a
-/// strip 40px tall plus its 1px border (`chrome.rs`).
-const BRAND_X: f64 = 96.0;
+/// The family spec: the brand starts 96px in on macOS, after the traffic
+/// lights, and at the rail's 16px inset on Windows and Linux, in a strip
+/// 40px tall plus its 1px border (`chrome.rs`).
+const BRAND_X: f64 = if cfg!(target_os = "macos") {
+    96.0
+} else {
+    16.0
+};
 const STRIP_HEIGHT: f64 = 41.0;
 /// The rail's width (`chrome.rs`).
 const RAIL_WIDTH: f64 = 196.0;
@@ -82,6 +87,24 @@ fn launches_and_draws_the_title_strip() {
     assert!(brand_x + brand_w < crumb_x && crumb_x < chip1_x);
     assert!(chip1_x + chip1_w <= chip2_x);
     assert!(chip2_x + chip2_w <= viewport_width);
+    // macOS has the system's menu bar. Elsewhere the strip draws the
+    // menus between the brand and the crumb, and on Windows the caption
+    // buttons at its right edge, after the chips.
+    if cfg!(target_os = "macos") {
+        assert!(state["main"]["regions"]["titleStrip.menuBar"].is_null());
+    } else {
+        let (menu_x, _, menu_w, _) = region(&state, "titleStrip.menuBar");
+        assert!(brand_x + brand_w < menu_x && menu_x + menu_w < crumb_x);
+        let (file_x, ..) = region(&state, "menuBar.file");
+        let (help_x, ..) = region(&state, "menuBar.help");
+        assert!(menu_x <= file_x && file_x < help_x);
+    }
+    if cfg!(target_os = "windows") {
+        let (caps_x, caps_y, caps_w, caps_h) = region(&state, "titleStrip.captions");
+        assert_eq!((caps_y, caps_x + caps_w), (0.0, viewport_width));
+        assert_eq!(caps_h, STRIP_HEIGHT - 1.0);
+        assert!(chip2_x + chip2_w <= caps_x);
+    }
 
     // Rail and the Overview fill the body under the strip: every launch
     // lands on Overview, with no editor.
@@ -224,6 +247,35 @@ fn rail_navigation_switches_sections() {
         .unwrap();
         app.screenshot(section);
     }
+}
+
+/// Windows and Linux: the strip's menu bar. A click opens View and the
+/// keyboard runs a row; F10 and the arrows reach another. macOS draws the
+/// system's menu bar instead, which the hook cannot reach.
+#[test]
+fn the_strip_menu_bar_opens_screens() {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let harness = harness!("the_strip_menu_bar_opens_screens");
+    let app = harness.launch().unwrap();
+    app.wait_for_main_window().unwrap();
+    let section =
+        |name: &'static str| move |s: &Value| (s["main"]["section"] == name).then_some(());
+    // View: Overview, Rules, Test a link, Activity.
+    app.click("menuBar.view").unwrap();
+    app.screenshot("view-menu");
+    app.keys("down down down down enter").unwrap();
+    app.wait_for(
+        "Activity, from View",
+        pwrroute_e2e::WAIT,
+        section("activity"),
+    )
+    .unwrap();
+    // F10 puts the keyboard on File; across to View, down to Rules.
+    app.keys("f10 right right down down enter").unwrap();
+    app.wait_for("Rules, from F10", pwrroute_e2e::WAIT, section("rules"))
+        .unwrap();
 }
 
 #[test]

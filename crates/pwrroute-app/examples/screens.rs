@@ -33,6 +33,9 @@ mod app;
 #[path = "../src/app_icons.rs"]
 mod app_icons;
 #[cfg(target_os = "macos")]
+#[path = "../src/app_menu.rs"]
+mod app_menu;
+#[cfg(target_os = "macos")]
 #[path = "../src/assets.rs"]
 mod assets;
 #[cfg(target_os = "macos")]
@@ -99,6 +102,9 @@ mod importer_view;
 #[path = "../src/macos.rs"]
 mod macos;
 #[cfg(target_os = "macos")]
+#[path = "../src/menu_bar.rs"]
+mod menu_bar;
+#[cfg(target_os = "macos")]
 #[path = "../src/overview.rs"]
 mod overview;
 #[cfg(target_os = "macos")]
@@ -159,6 +165,9 @@ mod tray {
     pub fn model(_: &gpui_kit::App) -> Option<gpui_kit::Entity<crate::tray_model::TrayModel>> {
         None
     }
+
+    /// View's rows: nothing to show here.
+    pub fn show_screen(_: crate::app::Screen, _: &mut gpui_kit::App) {}
 }
 #[cfg(target_os = "macos")]
 use tray_model as model;
@@ -199,9 +208,33 @@ mod log_view;
 #[cfg(target_os = "macos")]
 #[path = "../src/logs_window.rs"]
 mod logs_window;
-/// The Logs window's Copy header: contrived, as everything drawn here.
+/// The Logs window's Copy header, contrived as everything drawn here, and
+/// Help's actions for the strip's menus, which do nothing here.
 #[cfg(target_os = "macos")]
 mod help {
+    #![allow(
+        clippy::derive_partial_eq_without_eq,
+        reason = "GPUI's actions! macro writes the derives, not us"
+    )]
+
+    gpui_kit::actions!(
+        pwrroute,
+        [
+            OpenDocumentation,
+            OpenChangelog,
+            ReplayOnboarding,
+            ReportIssue,
+            ReportVulnerability,
+            CopyDiagnostics,
+            OpenLogs,
+            ViewSource,
+            ViewLicense,
+            ThirdPartyNotices,
+        ]
+    );
+
+    pub fn install(_: &mut gpui_kit::App) {}
+
     pub fn diagnostics_report(_: &mut gpui_kit::App) -> String {
         "PwrRoute 0.2.0 \u{00b7} release \u{00b7} arm64\n".to_owned()
     }
@@ -230,12 +263,23 @@ mod widgets;
 #[cfg(target_os = "macos")]
 static APP_ICONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Each window's fonts, and the apps' icons when asked for.
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// The strip to draw instead of macOS's: Windows' or Linux's, with
+    /// their menu bar and Ctrl shortcuts.
+    static CHROME: std::cell::Cell<Option<chrome::Chrome>> = const { std::cell::Cell::new(None) };
+}
+
+/// Each window's fonts, the apps' icons when asked for, and the menus and
+/// shortcuts of the strip being drawn.
 #[cfg(target_os = "macos")]
 fn setup(cx: &mut gpui_kit::App) {
     assets::load_fonts(cx);
     if APP_ICONS.load(std::sync::atomic::Ordering::Relaxed) {
         app_icons::install(cx);
+    }
+    if let Some(chrome) = CHROME.get() {
+        app_menu::install_for(chrome, cx);
     }
 }
 
@@ -326,6 +370,40 @@ fn main() {
         app.navigate(Screen::Rules, window, cx);
         app.select(Selection::Handler(0), cx);
     });
+    // The Windows and Linux strips (design: Windows and Linux Chrome 1a,
+    // 1b): the brand at x=16 and the menu bar after it, Windows' caption
+    // buttons, and menus open as Alt and a click leave them.
+    for (chrome, name) in [
+        (chrome::Chrome::Windows, "chrome-1a-windows"),
+        (chrome::Chrome::Linux, "chrome-1b-linux"),
+    ] {
+        CHROME.set(Some(chrome));
+        shoot(name, None, &|app, window, cx| {
+            app.navigate(Screen::Rules, window, cx);
+            app.select(Selection::Handler(0), cx);
+        });
+    }
+    CHROME.set(Some(chrome::Chrome::Windows));
+    let menu = |title: usize, row: Option<usize>, keyboard: bool| {
+        move |app: &mut PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>| {
+            app.navigate(Screen::Rules, window, cx);
+            app.select(Selection::Handler(0), cx);
+            app.menu_bar.update(cx, |bar, cx| {
+                bar.state = menu_bar::State {
+                    title: Some(title),
+                    open: true,
+                    row,
+                    keyboard,
+                };
+                cx.notify();
+            });
+        }
+    };
+    shoot("chrome-1a-file-menu", None, &menu(0, Some(2), true));
+    shoot("chrome-1a-edit-menu", None, &menu(1, None, false));
+    shoot("chrome-1a-window-menu", None, &menu(3, Some(0), false));
+    shoot("chrome-1a-help-menu", None, &menu(4, Some(7), false));
+    CHROME.set(None);
     shoot("app-1a-rewrite", None, &|app, window, cx| {
         app.navigate(Screen::Rules, window, cx);
         app.select(Selection::Rewrite(0), cx);

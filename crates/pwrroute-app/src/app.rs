@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
 use gpui_kit::{
-    App, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
+    App, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
     ParentElement as _, Render, Styled as _, Subscription, Window, div,
 };
 
@@ -18,6 +18,7 @@ use crate::config_view::{self, ConfigInCharge};
 use crate::editor::{Field, Rail};
 use crate::importer::ImportModel;
 use crate::importer_view::{FoundConfig, ImportDone};
+use crate::menu_bar::MenuBar;
 use crate::overview::OverviewState;
 use crate::overview_model::Installed;
 use crate::rules_model::{self, Handler, Rewrite};
@@ -65,6 +66,8 @@ pub enum Selection {
 
 pub struct PwrRoute {
     pub focus: FocusHandle,
+    /// The strip's menu bar off macOS (`menu_bar.rs`).
+    pub menu_bar: Entity<MenuBar>,
     pub screen: Screen,
     /// `rules.json`, read on open and written after every edit.
     pub store: RulesStore,
@@ -172,6 +175,7 @@ impl PwrRoute {
         // Rules opens as a list: the editor appears on a click (or Down).
         let mut this = Self {
             focus: cx.focus_handle(),
+            menu_bar: MenuBar::entity("PwrRoute", cx),
             screen: Screen::Overview,
             rewrites: store.rewrites(),
             handlers: store.handlers(),
@@ -983,7 +987,7 @@ impl Render for PwrRoute {
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
-            .child(chrome::title_strip(self, &status))
+            .child(chrome::title_strip(self, &status, window, cx))
             .child(
                 div()
                     .on_children_prepainted(e2e::regions(&["rail", "pane", "editor"]))

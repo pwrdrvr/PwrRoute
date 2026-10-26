@@ -587,7 +587,9 @@ pub fn open(cx: &mut App) {
     // Help › Replay Onboarding… while it is open brings it forward.
     if let Some(open) = cx.try_global::<Open>().map(|open| open.window)
         && open
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, cx| {
+                crate::menu_bar::bring_forward(window, cx)
+            })
             .is_ok()
     {
         cx.activate(true);
