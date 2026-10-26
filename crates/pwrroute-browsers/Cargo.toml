@@ -18,6 +18,11 @@ serde_json = { workspace = true }
 # macOS Info.plist files are XML. Already shipped (GPUI's usvg uses it).
 roxmltree = "0.21"
 
+[target.'cfg(unix)'.dependencies]
+# getuid, safely: the singleton socket must be ours. Already shipped (GPUI's
+# async-io and polling use it).
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
+
 [target.'cfg(windows)'.dependencies]
 # StartMenuInternet and App Paths. Already shipped (GPUI's Windows platform
 # uses it); its API is safe, so this crate needs no `unsafe`.

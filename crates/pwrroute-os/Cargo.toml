@@ -18,15 +18,15 @@ dirs = "6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+# The main queue, for NSApplication's yieldActivation from the dispatch
+# thread. Already shipped (GPUI's macOS platform uses it).
+dispatch2 = { version = "0.3", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSAppleEventDescriptor",
     "NSAppleEventManager",
     "NSBundle",
     "NSData",
-    # NSRunningApplication's launch date, to tell a browser from its
-    # hand-off instance.
-    "NSDate",
     "NSDictionary",
     "NSGeometry",
     "NSString",
@@ -37,6 +37,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "libc",
+    # yieldActivation, so a browser may bring its own window forward.
+    "NSApplication",
+    "NSResponder",
     "NSRunningApplication",
     # URLForApplicationWithBundleIdentifier, for a handler's display name,
     # and iconForFile:, for an app's icon.

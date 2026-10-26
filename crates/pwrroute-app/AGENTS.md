@@ -278,7 +278,9 @@ their own modules.
   one.** Per-link lines come from the router (`DispatchRecord::log_line`,
   after the record is reduced to its rule's privacy) and from `handoff.rs`
   (who owns the top window from receipt until the browser does), and both
-  are written only while links are kept at all; the retention text in
+  are written only while links are kept at all. `router.rs`'s
+  `BrowserLauncher` adds a hand-off's way and times (debug; a warning when
+  the singleton socket failed and `open` ran), naming no browser; the retention text in
   Activity, Settings and MCP names the log while it is.
 - **Examples and tests are the only URLs that reach disk, and only by
   hand.** `rules_store.rs` writes a rule's `examples`, a rewrite's
