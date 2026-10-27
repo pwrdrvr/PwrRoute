@@ -627,7 +627,6 @@ pub fn menu_row(
                     // Its padding, so the row counts it when the label
                     // takes the rest.
                     .min_w(px(16.0))
-                    .overflow_hidden()
                     // The hint shrinks long before the label does.
                     .flex_shrink(10_000.0)
                     .child(one_line(
@@ -891,10 +890,13 @@ mod tests {
 
     #[test]
     fn the_clip_clears_geist_monos_glyphs() {
-        // Geist Mono's ascent plus descent is 1.3em, centered in the line.
-        for (size, line_height) in [(10.5, 10.5), (11.5, 11.5), (12.0, 12.0), (10.0, 12.0)] {
-            let overhang: f32 = (size * 1.3 - line_height) / 2.0;
-            assert!(super::glyph_overhang(size, line_height) >= overhang + 1.0);
+        // Geist Mono 500's hhea ascent and descent (1.005em, 0.295em) and
+        // the deepest ink of g, p and y (0.162em below the baseline), laid
+        // out as GPUI does: ascent plus descent centered in the line.
+        for (size, line_height) in [(10.0, 10.0), (10.5, 10.5), (11.5, 11.5), (12.0, 12.0)] {
+            let baseline: f32 = (line_height - 1.3 * size) / 2.0 + 1.005 * size;
+            let below = baseline + 0.162 * size - line_height;
+            assert!(super::glyph_overhang(size, line_height) > below);
         }
         assert_eq!(super::glyph_overhang(10.0, 20.0), 1.0);
     }
