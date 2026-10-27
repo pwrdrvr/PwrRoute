@@ -9226,7 +9226,7 @@ Apache License 2.0 (486)
 - itoa@1.0.18 | https://github.com/dtolnay/itoa
 - leak@0.1.2 | https://github.com/jmesmon/leak.git
 - leaky-cow@0.1.1 | https://github.com/notriddle/rust-leaky-cow
-- libc@0.2.190 | https://github.com/rust-lang/libc
+- libc@0.2.191 | https://github.com/rust-lang/libc
 - linebender_resource_handle@0.1.1 | https://github.com/linebender/raw_resource_handle
 - litrs@1.0.1 | https://github.com/LukasKalbertodt/litrs
 - lyon@1.0.19 | https://github.com/nical/lyon
@@ -19534,7 +19534,7 @@ Applies to:
 - itoa@1.0.18
 - leak@0.1.2
 - leaky-cow@0.1.1
-- libc@0.2.190
+- libc@0.2.191
 - linebender_resource_handle@0.1.1
 - litrs@1.0.1
 - lyon@1.0.19
