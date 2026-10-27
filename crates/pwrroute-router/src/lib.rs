@@ -17,6 +17,9 @@
 //!   gets the same record without opening anything or recording it.
 //! - [`RouterHandle::set_paused`] sends every dispatch to a [`PauseTarget`]
 //!   after its rewrites, with [`Step::Paused`] in the trace, until resumed.
+//!   [`RouterHandle::set_send_to`] does the same for a [`Destination`] the
+//!   user chose, for the next few links or all of them ([`SendTo`]), with
+//!   [`Step::Sent`]; the two share one slot.
 //! - [`instance`] keeps one router per user: a second launch forwards its
 //!   links over a local socket ([`ipc`]) and exits.
 //!
@@ -42,17 +45,17 @@ mod recent;
 mod trace;
 
 pub use dispatch::{
-    DispatchCallback, FALLBACK_BROWSER, FallbackSource, Options, PauseTarget, ReceivedCallback,
-    Resolved, Resolver, ResolverFactory, RetentionInfo, Router, RouterGone, RouterHandle,
-    RouterStatus, SLOW_DISPATCH,
+    Destination, DispatchCallback, FALLBACK_BROWSER, FallbackSource, MAX_NEXT, Options,
+    PauseTarget, ReceivedCallback, Resolved, Resolver, ResolverFactory, RetentionInfo, Router,
+    RouterGone, RouterHandle, RouterStatus, SLOW_DISPATCH, SendScope, SendTo,
 };
 pub use journal::{JournalConfig, JournalMode, JournalStamp, read_recent as read_journal};
 pub use launcher::{DryRunLauncher, Launcher};
 pub use link::{Link, LinkError, MAX_URL_LEN, OpenerInfo, Source, normalize_url};
 pub use recent::{RecentDispatches, Retention};
 pub use trace::{
-    DispatchId, DispatchRecord, DispatchTiming, Matched, Outcome, Owner, Privacy, PrivacyExt, Step,
-    Timings, WITHHELD, host_only,
+    DispatchId, DispatchRecord, DispatchTiming, Matched, Outcome, Owner, Privacy, PrivacyExt, Sent,
+    Step, Timings, WITHHELD, host_only,
 };
 
 /// Re-exported so a launcher or UI can name the engine's types without a

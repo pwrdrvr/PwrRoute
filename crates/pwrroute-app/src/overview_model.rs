@@ -15,6 +15,7 @@
 //! counts and browser names.
 
 use std::collections::{BTreeSet, HashMap};
+use std::time::SystemTime;
 
 use pwrroute_browsers::Catalog;
 use pwrroute_engine::{
@@ -107,6 +108,47 @@ pub struct Pause {
     pub display: String,
 }
 
+/// The user sent links somewhere without a rule (design: Send Links 2a,
+/// 2b): the tray's Send links, or a node's Next link here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sending {
+    /// Next link's count, or All links' time.
+    pub scope: pwrroute_router::SendScope,
+    /// "Microsoft Edge", for the strip chip and the rail foot.
+    pub name: String,
+    /// "Microsoft Edge · Work", for the hero.
+    pub display: String,
+    /// The app as the router opens it, and its name: a card matches either.
+    pub app: String,
+    /// The profile, `None` for the browser's own or a private window.
+    pub profile: Option<String>,
+    /// A private window.
+    pub private: bool,
+}
+
+impl Sending {
+    /// "next link" or "all links".
+    pub fn short(&self) -> &'static str {
+        match self.scope {
+            pwrroute_router::SendScope::Next { .. } => "next link",
+            pwrroute_router::SendScope::All { .. } => "all links",
+        }
+    }
+
+    /// Whether `node` of `card` is where links are sent.
+    pub fn is_node(&self, card: &Card, node: &Node) -> bool {
+        let names = [self.app.as_str(), self.name.as_str()];
+        let card_matches = names.iter().any(|name| {
+            name.eq_ignore_ascii_case(&card.name) || name.eq_ignore_ascii_case(card.key())
+        });
+        card_matches
+            && node.private.is_some() == self.private
+            && (self.private
+                || node.profile.as_deref().map(str::to_lowercase)
+                    == self.profile.as_deref().map(str::to_lowercase))
+    }
+}
+
 /// The config in charge is in trouble, as the router reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfigTrouble {
@@ -138,6 +180,8 @@ impl ConfigTrouble {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
     pub paused: Option<Pause>,
+    /// Links sent without a rule; never with `paused` (one slot).
+    pub sending: Option<Sending>,
     pub default: DefaultState,
     /// The config in charge did not load, or did not reload.
     pub config_error: Option<ConfigTrouble>,
@@ -152,13 +196,15 @@ impl Status {
     pub fn routing() -> Self {
         Self {
             paused: None,
+            sending: None,
             default: DefaultState::PwrRoute,
             config_error: None,
         }
     }
 
     /// The hero's state, highest priority first: the config did not load
-    /// (or reload), paused, not the default browser, unknown, routing.
+    /// (or reload), paused, sending, not the default browser, unknown,
+    /// routing.
     pub fn state(&self) -> State {
         if let Some(trouble) = &self.config_error {
             match trouble {
@@ -167,6 +213,8 @@ impl Status {
             }
         } else if self.paused.is_some() {
             State::Paused
+        } else if self.sending.is_some() {
+            State::Sending
         } else {
             match self.default {
                 DefaultState::Other(_) => State::NotDefault,
@@ -186,6 +234,8 @@ pub enum State {
     /// Its last reload failed: the version that loaded before still runs.
     ConfigStale,
     Paused,
+    /// The user sent links somewhere: Next link or All links.
+    Sending,
     NotDefault,
     Unknown,
     Routing,
@@ -208,6 +258,8 @@ pub enum Action {
     MakeDefault,
     OpenBrowsersSettings,
     TestLink,
+    /// End a send: the rules decide again.
+    BackToRules,
 }
 
 impl Action {
@@ -218,6 +270,7 @@ impl Action {
             Self::MakeDefault => "Make PwrRoute the default browser",
             Self::OpenBrowsersSettings => "Open Settings \u{203a} Browsers",
             Self::TestLink => "Test a link\u{2026}",
+            Self::BackToRules => "Back to rules",
         }
     }
 
@@ -225,7 +278,7 @@ impl Action {
     pub fn primary(self) -> bool {
         matches!(
             self,
-            Self::Resume | Self::MakeDefault | Self::OpenBrowsersSettings
+            Self::Resume | Self::MakeDefault | Self::OpenBrowsersSettings | Self::BackToRules
         )
     }
 }
@@ -286,6 +339,8 @@ pub enum Caption {
     InOrder,
     /// Paused: "When routing resumes", in warning text.
     WhenResumes,
+    /// All links sent: "When rules decide again", in accent text.
+    WhenRulesDecide,
     /// Not the default browser: "What will happen · first match wins".
     WhatWillHappen,
 }
@@ -1729,6 +1784,42 @@ pub(crate) fn private_term(name: &str) -> Option<String> {
     .map(str::to_owned)
 }
 
+/// The hero's sentence while links are sent (design: Send Links 2a, 2b):
+/// "Next link → Microsoft Edge · Work.", "Next 3 links → …", "All links
+/// → …".
+pub fn sending_sentence(sending: &Sending) -> String {
+    let what = match sending.scope {
+        pwrroute_router::SendScope::Next { left: 1, .. } => "Next link".to_owned(),
+        pwrroute_router::SendScope::Next { left, .. } => format!("Next {left} links"),
+        pwrroute_router::SendScope::All { .. } => "All links".to_owned(),
+    };
+    format!("{what} \u{2192} {}.", sending.display)
+}
+
+/// The hero's line under it: what happens after, and that rewrites run.
+pub fn sending_detail(sending: &Sending, now: SystemTime) -> String {
+    let after = match sending.scope {
+        pwrroute_router::SendScope::Next { left, of } if left < of => {
+            format!("{left} of {of} left, then your rules decide again.")
+        }
+        pwrroute_router::SendScope::Next { .. } => "Then your rules decide again.".to_owned(),
+        pwrroute_router::SendScope::All { until: None } => "Until you go back to rules.".to_owned(),
+        pwrroute_router::SendScope::All { until: Some(until) } => {
+            let minutes = until
+                .duration_since(now)
+                .unwrap_or_default()
+                .as_secs()
+                .div_ceil(60);
+            match minutes {
+                0 => "For less than a minute, then your rules decide again.".to_owned(),
+                1 => "For 1 more minute, then your rules decide again.".to_owned(),
+                n => format!("For {n} more minutes, then your rules decide again."),
+            }
+        }
+    };
+    format!("{after} Rewrites still run.")
+}
+
 /// "an Incognito window", "an InPrivate window", "a private window".
 pub(crate) fn window_phrase(term: &str) -> String {
     let lower = term.to_lowercase();
@@ -2657,14 +2748,21 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             .map(|shown| format!("Import from {shown}\u{2026}")),
     });
 
+    let all_sent = matches!(
+        status.sending.as_ref().map(|sending| sending.scope),
+        Some(pwrroute_router::SendScope::All { .. })
+    );
     let map = Map {
         caption: match state {
             State::Paused => Caption::WhenResumes,
+            State::Sending if all_sent => Caption::WhenRulesDecide,
             State::NotDefault => Caption::WhatWillHappen,
             _ => Caption::InOrder,
         },
         counts,
-        dimmed: state == State::Paused,
+        // Paused, or every link sent elsewhere: the rules wait. Next link
+        // leaves them lit, since they are back after it.
+        dimmed: state == State::Paused || (state == State::Sending && all_sent),
         in_use: in_use_line,
         also,
         rewrites: (rewrites > 0).then(|| {
@@ -2789,6 +2887,16 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             )],
             action: Some(Action::Resume),
         },
+        State::Sending => {
+            let sending = status.sending.as_ref().expect("Sending has a send");
+            Hero {
+                state,
+                tone: Tone::Accent,
+                sentence: sending_sentence(sending),
+                detail: vec![sending_detail(sending, SystemTime::now())],
+                action: Some(Action::BackToRules),
+            }
+        }
         State::NotDefault => Hero {
             state,
             tone: Tone::Neutral,
@@ -4506,6 +4614,108 @@ mod tests {
         assert_eq!(overview.map.rows.len(), 4);
         assert_eq!(overview.map.caption, Caption::WhenResumes);
         assert!(overview.map.dimmed);
+    }
+
+    fn sending(scope: pwrroute_router::SendScope) -> Sending {
+        Sending {
+            scope,
+            name: "Google Chrome".into(),
+            display: "Google Chrome \u{b7} Work".into(),
+            app: "Google Chrome".into(),
+            profile: Some("Work".into()),
+            private: false,
+        }
+    }
+
+    /// Send Links 2a: the hero says where the next link goes, in the
+    /// accent tone, with Back to rules; the map stays lit and the node is
+    /// found.
+    #[test]
+    fn next_link_2a_names_the_destination_and_offers_back_to_rules() {
+        use pwrroute_router::SendScope;
+        let mut world = World::rules();
+        world.status.sending = Some(sending(SendScope::Next { left: 1, of: 1 }));
+        let overview = world.build();
+        assert_eq!(overview.hero.state, State::Sending);
+        assert_eq!(overview.hero.tone, Tone::Accent);
+        assert_eq!(
+            overview.hero.sentence,
+            "Next link \u{2192} Google Chrome \u{b7} Work."
+        );
+        assert_eq!(
+            overview.hero.detail,
+            ["Then your rules decide again. Rewrites still run."]
+        );
+        assert_eq!(overview.hero.action, Some(Action::BackToRules));
+        assert!(overview.hero.action.unwrap().primary());
+        assert!(!overview.map.dimmed);
+        assert_eq!(overview.map.caption, Caption::InOrder);
+        let sending = world.status.sending.as_ref().unwrap();
+        let marked: Vec<(&str, &str)> = overview
+            .map
+            .cards
+            .iter()
+            .flat_map(|card| {
+                card.nodes
+                    .iter()
+                    .filter(|node| sending.is_node(card, node))
+                    .map(|node| (card.name.as_str(), node.label()))
+            })
+            .collect();
+        assert_eq!(marked, [("Google Chrome", "Work")]);
+
+        world.status.sending = Some(super::Sending {
+            scope: SendScope::Next { left: 2, of: 3 },
+            ..sending.clone()
+        });
+        let overview = world.build();
+        assert_eq!(
+            overview.hero.sentence,
+            "Next 2 links \u{2192} Google Chrome \u{b7} Work."
+        );
+        assert_eq!(
+            overview.hero.detail,
+            ["2 of 3 left, then your rules decide again. Rewrites still run."]
+        );
+    }
+
+    /// 2b: all links for the hour dims the rules under "When rules decide
+    /// again"; a pause still comes first.
+    #[test]
+    fn all_links_2b_dims_the_rules_and_a_pause_comes_first() {
+        use pwrroute_router::SendScope;
+        let mut world = World::rules();
+        world.status.sending = Some(sending(SendScope::All {
+            until: Some(SystemTime::now() + std::time::Duration::from_secs(52 * 60 - 5)),
+        }));
+        let overview = world.build();
+        assert_eq!(
+            overview.hero.sentence,
+            "All links \u{2192} Google Chrome \u{b7} Work."
+        );
+        assert_eq!(
+            overview.hero.detail,
+            ["For 52 more minutes, then your rules decide again. Rewrites still run."]
+        );
+        assert_eq!(overview.map.caption, Caption::WhenRulesDecide);
+        assert!(overview.map.dimmed);
+        world.status.sending = Some(sending(SendScope::All { until: None }));
+        assert_eq!(
+            world.build().hero.detail,
+            ["Until you go back to rules. Rewrites still run."]
+        );
+        world.status.paused = Some(Pause {
+            name: "Google Chrome".into(),
+            display: "Google Chrome \u{b7} Personal".into(),
+        });
+        assert_eq!(world.status.state(), State::Paused);
+        world.status.paused = None;
+        world.status.default = DefaultState::Other("Safari".into());
+        assert_eq!(
+            world.status.state(),
+            State::Sending,
+            "sending before not default"
+        );
     }
 
     #[test]

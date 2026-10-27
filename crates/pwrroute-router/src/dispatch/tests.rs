@@ -14,7 +14,7 @@ use super::*;
 use crate::{
     launcher::DryRunLauncher,
     link::{OpenerInfo, Source},
-    trace::WITHHELD,
+    trace::{Sent, WITHHELD},
 };
 
 const CONFIG: &str = r#"
@@ -364,6 +364,273 @@ fn paused_with_no_config_the_pause_target_takes_the_fallbacks_links() {
     }));
     assert!(record.steps.contains(&Step::Paused { skipped: None }));
     assert_eq!(launcher.launched()[0].name, "Google Chrome");
+}
+
+fn edge(profile: &str, private: bool) -> Destination {
+    Destination {
+        browser: "Microsoft Edge".into(),
+        profile: profile.into(),
+        private,
+    }
+}
+
+fn next(n: u32) -> SendTo {
+    SendTo {
+        destination: edge("Work", false),
+        scope: SendScope::Next { left: n, of: n },
+    }
+}
+
+fn sent_step(record: &DispatchRecord) -> Option<(Sent, Option<usize>)> {
+    record.steps.iter().find_map(|step| match step {
+        Step::Sent { sent, skipped } => Some((*sent, *skipped)),
+        _ => None,
+    })
+}
+
+#[test]
+fn next_links_go_to_the_destination_then_the_rules_decide_again() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    assert_eq!(handle.send_to(), None);
+    handle.set_send_to(Some(next(2)));
+
+    let first = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/1"))
+        .unwrap();
+    assert_eq!(
+        sent_step(&first),
+        Some((Sent::Next { nth: 1, of: 2 }, Some(0)))
+    );
+    let browser = first.browser.unwrap();
+    assert_eq!(
+        (browser.name.as_str(), browser.profile.as_str()),
+        ("Microsoft Edge", "Work")
+    );
+    assert!(!browser.private);
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 1, of: 2 })
+    );
+
+    // The default would have taken this one: nothing is skipped.
+    let second = handle
+        .dispatch_and_wait(link("https://example.com/anything"))
+        .unwrap();
+    assert_eq!(
+        sent_step(&second),
+        Some((Sent::Next { nth: 2, of: 2 }, None))
+    );
+    assert_eq!(handle.send_to(), None, "the count ran out");
+
+    let third = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/3"))
+        .unwrap();
+    assert_eq!(sent_step(&third), None);
+    assert_eq!(third.browser.unwrap().name, "Firefox");
+    let opened: Vec<_> = launcher.launched().iter().map(|b| b.name.clone()).collect();
+    assert_eq!(opened, ["Microsoft Edge", "Microsoft Edge", "Firefox"]);
+}
+
+#[test]
+fn the_count_is_taken_once_per_link_however_many_arrive_together() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_send_to(Some(next(3)));
+    let threads: Vec<_> = (0..8)
+        .map(|i| {
+            let handle = handle.clone();
+            std::thread::spawn(move || {
+                let url = format!("https://team.chat.example.com/{i}");
+                // Half come from a second launch, as forwarded links do.
+                if i % 2 == 0 {
+                    handle.dispatch_forwarded(link(&url)).unwrap();
+                } else {
+                    handle.dispatch(link(&url)).unwrap();
+                }
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    // A last link behind them all, so every one has been dispatched.
+    handle
+        .dispatch_and_wait(link("https://team.chat.example.com/last"))
+        .unwrap();
+    let launched = launcher.launched();
+    assert_eq!(launched.len(), 9);
+    let sent = launched
+        .iter()
+        .filter(|b| b.name == "Microsoft Edge")
+        .count();
+    assert_eq!(sent, 3);
+    let mut nths: Vec<u32> = handle
+        .recent()
+        .iter()
+        .filter_map(|record| match sent_step(record) {
+            Some((Sent::Next { nth, of: 3 }, _)) => Some(nth),
+            _ => None,
+        })
+        .collect();
+    nths.sort_unstable();
+    assert_eq!(nths, [1, 2, 3]);
+    assert_eq!(handle.send_to(), None);
+}
+
+#[test]
+fn all_links_go_to_the_destination_until_switched_back_or_out_of_time() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    let all = |until| SendTo {
+        destination: edge("Work", false),
+        scope: SendScope::All { until },
+    };
+    handle.set_send_to(Some(all(None)));
+    for i in 0..3 {
+        let record = handle
+            .dispatch_and_wait(link(&format!("https://team.chat.example.com/{i}")))
+            .unwrap();
+        assert_eq!(sent_step(&record), Some((Sent::All, Some(0))));
+    }
+    assert_eq!(
+        handle.send_to(),
+        Some(all(None)),
+        "all links never counts down"
+    );
+    handle.set_send_to(None);
+    let record = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/x"))
+        .unwrap();
+    assert_eq!(sent_step(&record), None);
+
+    // An hour that ran out takes nothing, and reads as off.
+    let past = SystemTime::now() - Duration::from_secs(1);
+    handle.set_send_to(Some(all(Some(past))));
+    let record = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/y"))
+        .unwrap();
+    assert_eq!(sent_step(&record), None);
+    assert_eq!(handle.send_to(), None);
+    let later = SystemTime::now() + Duration::from_secs(3600);
+    handle.set_send_to(Some(all(Some(later))));
+    assert_eq!(handle.send_to(), Some(all(Some(later))));
+    assert_eq!(launcher.launched().last().unwrap().name, "Firefox");
+}
+
+#[test]
+fn pause_and_send_share_one_slot() {
+    let (_dir, router, _launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_paused(Some(pause_target()));
+    handle.set_send_to(Some(next(1)));
+    assert_eq!(handle.paused(), None, "sending ends a pause");
+    assert!(handle.send_to().is_some());
+    // Resuming a pause that is not on leaves the send alone.
+    handle.set_paused(None);
+    assert!(handle.send_to().is_some());
+    handle.set_paused(Some(pause_target()));
+    assert_eq!(handle.send_to(), None, "pausing ends a send");
+    // Ending a send that is not on leaves the pause alone.
+    handle.set_send_to(None);
+    assert_eq!(handle.paused(), Some(pause_target()));
+    let record = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/1"))
+        .unwrap();
+    assert!(record.steps.contains(&Step::Paused { skipped: Some(0) }));
+    assert_eq!(sent_step(&record), None);
+}
+
+#[test]
+fn a_send_can_be_pointed_elsewhere_and_its_count_changed() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    assert!(!handle.retarget_send(edge("Travel", false)));
+    assert_eq!(handle.add_to_next(1), None);
+    handle.set_send_to(Some(next(1)));
+    assert!(handle.retarget_send(edge("Travel", false)));
+    assert_eq!(
+        handle.add_to_next(2).map(|send| send.scope),
+        Some(SendScope::Next { left: 3, of: 3 })
+    );
+    handle
+        .dispatch_and_wait(link("https://team.chat.example.com/1"))
+        .unwrap();
+    assert_eq!(launcher.launched()[0].profile, "Travel");
+    // Down from 2 left of 3: never below one, and the total follows.
+    assert_eq!(
+        handle.add_to_next(-5).map(|send| send.scope),
+        Some(SendScope::Next { left: 1, of: 2 })
+    );
+    assert_eq!(
+        handle.add_to_next(500).map(|send| send.scope),
+        Some(SendScope::Next {
+            left: MAX_NEXT,
+            of: MAX_NEXT + 1
+        })
+    );
+}
+
+#[test]
+fn a_link_sent_to_a_private_window_keeps_at_most_its_host() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_send_to(Some(SendTo::next(edge("", true))));
+    let secret = "https://team.chat.example.com/inbox?token=hunter2";
+    let reply = handle.dispatch_and_wait(link(secret)).unwrap();
+    assert_eq!(launcher.launched()[0].url, secret);
+    assert!(launcher.launched()[0].private);
+    let stored = handle.get(reply.id).unwrap();
+    for record in [&reply, &stored] {
+        assert_eq!(record.privacy, Privacy::Host);
+        let json = serde_json::to_string(record).unwrap();
+        assert!(!json.contains("hunter2"), "{json}");
+    }
+}
+
+#[test]
+fn test_a_link_ignores_a_send_and_does_not_count() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_send_to(Some(next(1)));
+    let record = handle
+        .test(link("https://team.chat.example.com/x"))
+        .unwrap();
+    assert_eq!(record.browser.as_ref().unwrap().name, "Firefox");
+    assert_eq!(sent_step(&record), None);
+    assert!(launcher.launched().is_empty());
+    assert!(handle.send_to().is_some(), "a test takes no count");
+    // Nor does a link the router refuses.
+    handle.dispatch_and_wait(link("not a url")).unwrap();
+    assert!(handle.send_to().is_some());
+}
+
+#[test]
+fn a_sent_step_reads_back_from_json() {
+    for step in [
+        Step::Sent {
+            sent: Sent::Next { nth: 2, of: 3 },
+            skipped: Some(1),
+        },
+        Step::Sent {
+            sent: Sent::All,
+            skipped: None,
+        },
+    ] {
+        let json = serde_json::to_string(&step).unwrap();
+        assert_eq!(serde_json::from_str::<Step>(&json).unwrap(), step, "{json}");
+    }
+    assert_eq!(
+        serde_json::to_string(&Step::Sent {
+            sent: Sent::Next { nth: 1, of: 1 },
+            skipped: None
+        })
+        .unwrap(),
+        r#"{"kind":"sent","sent":{"kind":"next","nth":1,"of":1},"skipped":null}"#
+    );
+    assert_eq!(Sent::Next { nth: 1, of: 1 }.label(), "next link");
+    assert_eq!(Sent::Next { nth: 2, of: 3 }.label(), "next link 2 of 3");
+    assert_eq!(Sent::All.label(), "all links");
 }
 
 #[test]

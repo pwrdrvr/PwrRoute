@@ -172,6 +172,23 @@ mod tray {
         None
     }
 
+    /// Overview's Back to rules and Next link here: drawn only.
+    pub fn set_send_mode(_: crate::tray_model::SendMode, _: &mut gpui_kit::App) {}
+
+    pub fn send_next_to(_: crate::tray_model::SendDestination, _: &mut gpui_kit::App) {}
+
+    pub fn destination(
+        browser: &str,
+        profile: &str,
+        _private: bool,
+    ) -> crate::tray_model::SendDestination {
+        crate::tray_model::SendDestination::profile(crate::tray_model::BrowserLabel::new(
+            "",
+            browser,
+            Some(profile),
+        ))
+    }
+
     /// View's rows: nothing to show here.
     pub fn show_screen(_: crate::app::Screen, _: &mut gpui_kit::App) {}
 }
@@ -195,6 +212,19 @@ fn toggle_pause(_: &gpui_kit::Entity<tray_model::TrayModel>, _: &mut gpui_kit::A
 
 #[cfg(target_os = "macos")]
 fn dropdown_closed(_: &mut gpui_kit::App) {}
+
+// The dropdown's Send links controls: drawn only.
+#[cfg(target_os = "macos")]
+fn set_send_mode(_: tray_model::SendMode, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn choose_destination(_: tray_model::SendDestination, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn step_next(_: i64, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn set_all_for_hour(_: bool, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn run(_: TrayCommand, _: &mut gpui_kit::App) {}
@@ -455,6 +485,12 @@ fn main() {
     shoot("app-2b", None, &|app, window, cx| {
         app.activity.load(fixtures::activity());
         app.activity.expanded = Some(app.activity.rows[1].key);
+        app.navigate(Screen::Activity, window, cx);
+    });
+    // Send Links 2d: links the user sent, the first expanded.
+    shoot("app-2b-sent", None, &|app, window, cx| {
+        app.activity.load(fixtures::sent_activity());
+        app.activity.expanded = Some(app.activity.rows[0].key);
         app.navigate(Screen::Activity, window, cx);
     });
     shoot("app-2b-empty", None, &|app, window, cx| {
@@ -796,11 +832,15 @@ fn main() {
     // The tray dropdown (Tray and First Run 1a; Popovers and Overflow 2a)
     // with the window sized as `dropdown::open` sizes it, over the design's
     // fixture with a rules.json default saved as a bundle id and a recent
-    // link to a profile with a long name.
+    // link to a profile with a long name; then Send links (Send Links 1b,
+    // 1d, 1e): the destination list open, three next links with one used,
+    // and all links for an hour.
     {
-        use tray::model::{BrowserLabel, Recent, RecentRoute, TrayModel};
+        use pwrroute_router::{SendScope, Sent};
+        use tray::model::{BrowserLabel, Recent, RecentRoute, Routing, SendDestination, TrayModel};
 
-        let mut model = TrayModel::fixture(std::time::SystemTime::now());
+        let now = std::time::SystemTime::now();
+        let mut model = TrayModel::fixture(now);
         model.pause_target =
             BrowserLabel::new("Ed", "Microsoft Edge", None).for_app("com.microsoft.edgemac");
         model.recents[0] = Recent::from_urls(
@@ -812,48 +852,90 @@ fn main() {
                 Some("Research and Development Team"),
             ),
             RecentRoute::Handler(2),
-            std::time::SystemTime::now() - Duration::from_secs(180),
+            now - Duration::from_secs(180),
         )
         .expect("a host");
-        let mut cx = HeadlessAppContext::with_platform(
-            gpui_kit::platform::current_platform(true).text_system(),
-            Arc::new(assets::Assets),
-            gpui_kit::platform::current_headless_renderer,
+        let base = TrayModel::fixture(now);
+        let mut next = base.clone();
+        next.routing = Routing::Sending(SendScope::Next { left: 2, of: 3 });
+        next.next_count = 3;
+        next.recents.insert(
+            0,
+            Recent::from_urls(
+                "https://docs.example.com/guide",
+                None,
+                BrowserLabel::new("Ed", "Microsoft Edge", Some("Work")),
+                RecentRoute::Sent {
+                    sent: Sent::Next { nth: 1, of: 3 },
+                    skipped: Some(tray::model::Skipped::Rule(2)),
+                },
+                now,
+            )
+            .expect("a host"),
         );
-        cx.update(setup);
-        let height = cx.update(|cx| {
-            tray::dropdown::fitted_height(&model, &cx.text_system().clone(), px(f32::MAX))
+        let mut all = base.clone();
+        all.routing = Routing::Sending(SendScope::All {
+            until: Some(now + Duration::from_secs(52 * 60)),
         });
-        let handle = cx
-            .open_window(size(px(tray::dropdown::WIDTH), height), |window, cx| {
-                let model = cx.new(|_| model);
-                cx.new(|cx| {
-                    tray::dropdown::Dropdown::new(
-                        model,
-                        px(f32::MAX),
-                        std::rc::Rc::new(|_| {}),
-                        window,
-                        cx,
-                    )
+        all.all_for_hour = true;
+        all.destination = SendDestination {
+            browser: BrowserLabel::new("Ed", "Microsoft Edge", None),
+            private: Some("InPrivate".into()),
+        };
+        let shots = [
+            ("tray-1a", model, false),
+            ("tray-send-choose", base, true),
+            ("tray-send-next", next, false),
+            ("tray-send-all", all, false),
+        ];
+        for (name, model, choosing) in shots {
+            let mut cx = HeadlessAppContext::with_platform(
+                gpui_kit::platform::current_platform(true).text_system(),
+                Arc::new(assets::Assets),
+                gpui_kit::platform::current_headless_renderer,
+            );
+            cx.update(setup);
+            let height = cx.update(|cx| {
+                tray::dropdown::fitted_height(
+                    &model,
+                    choosing,
+                    &cx.text_system().clone(),
+                    px(f32::MAX),
+                )
+            });
+            let handle = cx
+                .open_window(size(px(tray::dropdown::WIDTH), height), |window, cx| {
+                    let model = cx.new(|_| model);
+                    cx.new(|cx| {
+                        let mut dropdown = tray::dropdown::Dropdown::new(
+                            model,
+                            px(f32::MAX),
+                            std::rc::Rc::new(|_| {}),
+                            window,
+                            cx,
+                        );
+                        dropdown.choosing = choosing;
+                        dropdown
+                    })
                 })
-            })
-            .expect("open a headless window");
-        cx.allow_parking();
-        for _ in 0..draws() {
-            cx.run_until_parked();
-            cx.update_window(handle.into(), |_, window, cx| {
-                window.refresh();
-                window.draw(cx).clear(cx);
-            })
-            .expect("draw");
-            std::thread::sleep(Duration::from_millis(50));
+                .expect("open a headless window");
+            cx.allow_parking();
+            for _ in 0..draws() {
+                cx.run_until_parked();
+                cx.update_window(handle.into(), |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .expect("draw");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let image = cx
+                .capture_screenshot(handle.into())
+                .expect("render with Metal");
+            let path = dir.join(format!("{name}.png"));
+            image.save(&path).expect("write the PNG");
+            println!("{}", path.display());
         }
-        let image = cx
-            .capture_screenshot(handle.into())
-            .expect("render with Metal");
-        let path = dir.join("tray-1a.png");
-        image.save(&path).expect("write the PNG");
-        println!("{}", path.display());
     }
     // The same sheet with the Finicky config in charge, for the Slack
     // record: Add found the config's Slack handler takes the link first,
@@ -1587,7 +1669,7 @@ fn main() {
     // 1a-3f) over its example.com fixtures, with the routing state set by
     // hand and motion off so each shot is the settled frame.
     {
-        use overview_model::{ConfigTrouble, FocusKey, Pause, RowSource, Status};
+        use overview_model::{ConfigTrouble, FocusKey, Pause, RowSource, Sending, Status};
         use pwrroute_engine::{Precedence, RulesFile};
 
         type Day = fn() -> Vec<pwrroute_router::DispatchRecord>;
@@ -1771,6 +1853,56 @@ fn main() {
                     paused: Some(Pause {
                         name: "Google Chrome".into(),
                         display: "Google Chrome \u{00b7} Personal".into(),
+                    }),
+                    ..routing()
+                },
+                prepare: |_| {},
+            },
+            // Send links (design: Send Links 2a): the next link to
+            // Google Chrome · Work, its node marked, and Safari's idle node
+            // under the pointer offering Next link here (2c).
+            Shot {
+                name: "app-0-overview-next-link",
+                width: 1240.0,
+                config: None,
+                rules: fixtures::overview_rules,
+                exists: true,
+                day: Some(fixtures::overview_rules_day),
+                status: Status {
+                    sending: Some(Sending {
+                        scope: pwrroute_router::SendScope::Next { left: 1, of: 1 },
+                        name: "Google Chrome".into(),
+                        display: "Google Chrome \u{00b7} Work".into(),
+                        app: "Google Chrome".into(),
+                        profile: Some("Work".into()),
+                        private: false,
+                    }),
+                    ..routing()
+                },
+                prepare: |app| {
+                    app.overview.idle_hover = Some(FocusKey::Node("safari".into(), None));
+                },
+            },
+            // 2b: all links to Firefox's private window for the hour.
+            Shot {
+                name: "app-0-overview-all-links",
+                width: 1000.0,
+                config: None,
+                rules: fixtures::overview_paused_rules,
+                exists: true,
+                day: Some(fixtures::overview_paused_day),
+                status: Status {
+                    sending: Some(Sending {
+                        scope: pwrroute_router::SendScope::All {
+                            until: Some(
+                                std::time::SystemTime::now() + Duration::from_secs(52 * 60 + 30),
+                            ),
+                        },
+                        name: "Firefox".into(),
+                        display: "Firefox \u{00b7} Private window".into(),
+                        app: "Firefox".into(),
+                        profile: None,
+                        private: true,
                     }),
                     ..routing()
                 },

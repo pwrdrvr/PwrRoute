@@ -198,6 +198,11 @@ fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
     let source = source_chip(app, status);
     let state = if status.paused.is_some() {
         status_chip("paused", theme::status_warning())
+    } else if let Some(sending) = &status.sending {
+        status_chip(
+            format!("{} \u{00b7} {}", sending.short(), sending.name),
+            theme::accent(),
+        )
     } else {
         match status.default {
             DefaultState::PwrRoute => status_chip("default browser", theme::status_ok()),
@@ -228,6 +233,12 @@ pub fn routing_line(status: &Status) -> (gpui_kit::Hsla, String) {
                     .as_ref()
                     .map_or("", |pause| pause.name.as_str())
             ),
+        ),
+        State::Sending => (
+            theme::accent(),
+            status.sending.as_ref().map_or_else(String::new, |sending| {
+                format!("{} \u{00b7} {}", sending.short(), sending.name)
+            }),
         ),
         State::NotDefault => (
             theme::status_warning(),

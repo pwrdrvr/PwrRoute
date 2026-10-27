@@ -167,7 +167,8 @@ pub enum HitKey {
 /// profile they opened in: the Overview's per-rule and per-browser counts.
 /// Counted in [`Feed::push`] beside [`Counts`], so it survives retention 0
 /// and Clear and resets with the day. Keys are rule numbers and browser
-/// names, never a host or URL. A paused link counts for its browser only;
+/// names, never a host or URL. A paused or sent link counts for its
+/// browser only;
 /// a record kept at nothing has no browser, so it counts for its rule
 /// only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -179,11 +180,7 @@ pub struct Tally {
 impl Tally {
     /// Adds one record to the day.
     fn count(&mut self, record: &DispatchRecord) {
-        let paused = record
-            .steps
-            .iter()
-            .any(|step| matches!(step, Step::Paused { .. }));
-        if !paused {
+        if !is_held(&record.steps) {
             let key = record.steps.iter().find_map(|step| match step {
                 Step::Matched { by } => match *by {
                     Matched::Handler { index } => Some(HitKey::Handler(index)),
@@ -529,8 +526,12 @@ pub struct ActivityRow {
     pub took: SharedString,
     /// A rewrite ran.
     pub rewritten: bool,
-    /// No rule routed it: the default, the fallback or a pause took it.
+    /// No rule routed it: the default, the fallback, a pause or a send
+    /// took it.
     pub default: bool,
+    /// The user sent it ("next link", "all links"): the chip is accent,
+    /// not amber.
+    pub sent: bool,
     /// Resolved and recorded, nothing opened (`--dry-run`).
     pub dry_run: bool,
     /// The trace, for the expanded row.
@@ -619,7 +620,8 @@ impl Filter {
 
 /// No rule or handler routed it: a default applied (PwrRoute's or the
 /// config's, whoever owns it), nothing was in charge and the fallback
-/// browser took it, or routing was paused and the pause target did.
+/// browser took it, or routing was paused and the pause target did, or
+/// the user sent it somewhere (`Step::Sent`).
 fn is_unrouted(record: &DispatchRecord) -> bool {
     record.steps.iter().any(|step| {
         matches!(
@@ -628,7 +630,23 @@ fn is_unrouted(record: &DispatchRecord) -> bool {
                 by: Matched::Default { .. }
             } | Step::Fallback { .. }
                 | Step::Paused { .. }
+                | Step::Sent { .. }
         )
+    })
+}
+
+/// A pause or a send took the link from the rules.
+fn is_held(steps: &[Step]) -> bool {
+    steps
+        .iter()
+        .any(|step| matches!(step, Step::Paused { .. } | Step::Sent { .. }))
+}
+
+/// The send that took the link, when the user sent it.
+pub fn sent_by(steps: &[Step]) -> Option<pwrroute_router::Sent> {
+    steps.iter().find_map(|step| match step {
+        Step::Sent { sent, .. } => Some(*sent),
+        _ => None,
     })
 }
 
@@ -683,6 +701,7 @@ impl ActivityRow {
             took: took_label(record.timings.total_us).into(),
             rewritten: is_rewritten(record),
             default: is_unrouted(record),
+            sent: sent_by(&record.steps).is_some(),
             dry_run: record
                 .steps
                 .iter()
@@ -777,7 +796,9 @@ pub(crate) fn matched_url(record: &DispatchRecord) -> &str {
 /// "config default" (the config's `defaultBrowser`), "fallback". Rewrites
 /// come first ("rw 1, 2 · rule 3"); while paused it names what the pause
 /// passed over ("skipped rule 3"), and a paused link no rule would have
-/// taken, or whose record does not say which, is "paused".
+/// taken, or whose record does not say which, is "paused". A link the
+/// user sent is "next link" or "all links" (the accent chip; the expanded
+/// row names what it passed over).
 /// "matched" is a resolver
 /// that did not say which rule, as builds before rule numbers recorded a
 /// `rules.json` rule.
@@ -799,8 +820,11 @@ fn rule_label(steps: &[Step]) -> String {
     } else if unnumbered {
         parts.push("rw".into());
     }
-    let paused = steps.iter().any(|step| matches!(step, Step::Paused { .. }));
-    if paused {
+    let sent = sent_by(steps);
+    let paused = sent.is_some() || steps.iter().any(|step| matches!(step, Step::Paused { .. }));
+    if let Some(sent) = sent {
+        parts.push(sent.short().to_owned());
+    } else if paused {
         // What the pause passed over, never what routed the link: "skipped
         // rule 2" (the amber chip and the trace line's "paused · skipped
         // rule 2" say why), short enough for the column. "paused" when a
@@ -865,7 +889,7 @@ fn matched_line(by: Matched, config: Option<&str>) -> String {
     }
 }
 
-/// What a pause passed over.
+/// What a pause or a send passed over.
 enum Skipped {
     /// `rules.json`'s rule, by its place in the file.
     Rule(usize),
@@ -883,7 +907,7 @@ fn skipped(steps: &[Step]) -> Option<Skipped> {
         _ => None,
     });
     let paused = steps.iter().find_map(|step| match step {
-        Step::Paused { skipped } => *skipped,
+        Step::Paused { skipped } | Step::Sent { skipped, .. } => *skipped,
         _ => None,
     });
     match (matched, paused) {
@@ -896,12 +920,18 @@ fn skipped(steps: &[Step]) -> Option<Skipped> {
 /// The expanded row's line for a paused dispatch: what would have routed
 /// the link ([`skipped`]).
 fn paused_line(steps: &[Step]) -> String {
+    held_line("paused", steps)
+}
+
+/// `why` and what the pause or send passed over: "next link 1 of 3 ·
+/// skipped rule 2".
+fn held_line(why: &str, steps: &[Step]) -> String {
     match skipped(steps) {
-        Some(Skipped::Rule(index)) => format!("paused \u{00b7} skipped rule {}", index + 1),
+        Some(Skipped::Rule(index)) => format!("{why} \u{00b7} skipped rule {}", index + 1),
         Some(Skipped::Handler(index)) => {
-            format!("paused \u{00b7} skipped config handler {}", index + 1)
+            format!("{why} \u{00b7} skipped config handler {}", index + 1)
         }
-        None => "paused \u{00b7} every rule and handler skipped".to_owned(),
+        None => format!("{why} \u{00b7} every rule and handler skipped"),
     }
 }
 
@@ -1014,6 +1044,10 @@ fn trace_lines(record: &DispatchRecord, config: Option<&str>) -> Vec<ActivitySte
                 format!("{browser} is PwrRoute \u{00b7} fallback instead"),
             ),
             Step::Paused { .. } => (StepMark::Miss(number), paused_line(&record.steps)),
+            Step::Sent { sent, .. } => (
+                StepMark::Hit(number),
+                held_line(&sent.label(), &record.steps),
+            ),
             Step::NotOpened => (
                 StepMark::Miss(number),
                 "not opened \u{00b7} the rule says browser: null".to_owned(),
@@ -1509,20 +1543,36 @@ fn row(
     // `.ar.unr .tag`: an unrouted row's rule chip is amber.
     // It stays inside the column: a long one ("rw 1, 2 · skipped rule 12")
     // ends in an ellipsis, and the expanded row says it in full.
+    let (tone, rule_color) = if row.sent {
+        (Tone::Accent, theme::accent_bright())
+    } else {
+        (Tone::Warn, theme::warn_text())
+    };
     let rule = if row.default {
-        toned_chip("", Tone::Warn)
+        toned_chip("", tone)
             .flex_shrink(1.0)
             .max_w_full()
             .min_w_0()
             .overflow_hidden()
+            .gap(px(4.0))
+            // A send carries its arrow, so it never reads as the amber
+            // "default" or "skipped rule" chips beside it.
+            .when(row.sent, |chip| {
+                chip.child(
+                    div()
+                        .flex_none()
+                        .child(crate::theme::icon("pwrroute/forward.svg", 10.0, rule_color)),
+                )
+            })
             .child(one_line(
                 row.rule.clone(),
                 theme::SANS,
                 600.0,
                 10.0,
                 12.0,
-                theme::warn_text(),
+                rule_color,
             ))
+            .debug_selector(move || format!("activity-rule-{index}"))
     } else {
         tag(row.rule.clone())
     };
@@ -3249,6 +3299,38 @@ mod tests {
         };
         assert_eq!(found("rule 3"), [1]);
         assert_eq!(found("config default"), [3]);
+    }
+
+    /// A link the user sent (design: Send Links 2d) says "next link" or
+    /// "all links" in the accent chip, names what it passed over in the
+    /// expanded row, and counts for its browser, never the rule.
+    #[test]
+    fn a_sent_link_says_who_sent_it() {
+        let records = crate::fixtures::sent_activity();
+        let next = ActivityRow::from_record(&records[0]);
+        assert_eq!(next.rule, "next link");
+        assert!(next.sent && next.default);
+        assert!(
+            texts(&next).contains(&"next link 1 of 3 \u{00b7} skipped rule 3"),
+            "{:?}",
+            texts(&next)
+        );
+        let all = ActivityRow::from_record(&records[1]);
+        assert_eq!(all.rule, "rw \u{00b7} all links");
+        assert!(all.sent);
+        // A paused row stays amber.
+        let paused = ActivityRow::from_record(&records[5]);
+        assert!(!paused.sent && paused.default);
+
+        let mut tally = Tally::default();
+        tally.count(&records[0]);
+        assert!(tally.rules.is_empty(), "the skipped rule gets no link");
+        assert_eq!(
+            tally
+                .browsers
+                .get(&("Microsoft Edge".to_owned(), "Work".to_owned(), false)),
+            Some(&1)
+        );
     }
 
     /// The screens example's attribution rows read as the canvas words

@@ -156,6 +156,14 @@ pub enum Step {
     Paused {
         skipped: Option<usize>,
     },
+    /// The user sent this link somewhere without a rule (the tray's Send
+    /// links, the Overview's Next link here): it went to their destination
+    /// after the rewrites. `sent` says which send; `skipped` is as
+    /// [`Paused`](Self::Paused)'s.
+    Sent {
+        sent: Sent,
+        skipped: Option<usize>,
+    },
     /// The chosen browser.
     Browser {
         browser: Browser,
@@ -173,6 +181,35 @@ pub enum Step {
     Rejected {
         reason: String,
     },
+}
+
+/// Which send took a link: the `nth` of `of` next links, or all links.
+/// Serialized inside [`Step::Sent`] as `{"kind":"next","nth":1,"of":3}` or
+/// `{"kind":"all"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Sent {
+    Next { nth: u32, of: u32 },
+    All,
+}
+
+impl Sent {
+    /// "next link", "next link 2 of 3", "all links": the trace's words.
+    pub fn label(self) -> String {
+        match self {
+            Self::Next { of: 1, .. } => "next link".to_owned(),
+            Self::Next { nth, of } => format!("next link {nth} of {of}"),
+            Self::All => "all links".to_owned(),
+        }
+    }
+
+    /// "next link" or "all links", without the count.
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::Next { .. } => "next link",
+            Self::All => "all links",
+        }
+    }
 }
 
 /// The rule that chose the browser.
@@ -387,6 +424,10 @@ impl DispatchRecord {
                 Step::Matched { by } => line.push_str(&format!(" by={}", matched_label(by))),
                 Step::Fallback { .. } => line.push_str(" by=fallback"),
                 Step::Paused { .. } => line.push_str(" paused"),
+                Step::Sent { sent, .. } => line.push_str(match sent {
+                    Sent::Next { .. } => " sent=next",
+                    Sent::All => " sent=all",
+                }),
                 Step::ConfigError { .. } => line.push_str(" config-error"),
                 Step::LaunchFailed { .. } => line.push_str(" launch-failed"),
                 _ => {}
@@ -480,6 +521,7 @@ fn reduce_step(step: &mut Step) {
         | Step::Fallback { .. }
         | Step::RefusedLoop { .. }
         | Step::Paused { .. }
+        | Step::Sent { .. }
         | Step::NotOpened
         | Step::Launched { .. }
         | Step::Rejected { .. } => {}

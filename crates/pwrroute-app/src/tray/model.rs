@@ -14,7 +14,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use pwrroute_router::{DispatchRecord, Matched, Outcome, Owner, Step};
+use pwrroute_router::{
+    Destination, DispatchRecord, MAX_NEXT, Matched, Outcome, Owner, SendScope, SendTo, Sent, Step,
+};
 
 use crate::activity::{Feed, thousands};
 use crate::widgets::{AppBadge, badge_for};
@@ -29,6 +31,74 @@ pub enum Routing {
     Active,
     /// Every link goes to [`TrayModel::pause_target`]; rewrites still run.
     Paused,
+    /// The user sent links to [`TrayModel::destination`]: the next few, or
+    /// all of them for a while (design: Send Links 1c-1e). The router
+    /// counts; the tray follows it (`tray::sync_send`).
+    Sending(SendScope),
+}
+
+/// The Send links switch: who picks the browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendMode {
+    Rules,
+    Next,
+    All,
+}
+
+/// How long All links lasts.
+pub const ALL_FOR: Duration = Duration::from_secs(60 * 60);
+
+/// Where Send links sends links: a browser, a profile or none (the
+/// browser's own), or the browser's private window by its word.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SendDestination {
+    pub browser: BrowserLabel,
+    /// The browser's word for its private window ("InPrivate") when the
+    /// destination is one; `browser.profile` is then `None`.
+    pub private: Option<String>,
+}
+
+impl SendDestination {
+    pub fn profile(browser: BrowserLabel) -> Self {
+        Self {
+            browser,
+            private: None,
+        }
+    }
+
+    /// "Microsoft Edge · Work", "Microsoft Edge · InPrivate", or the name.
+    pub fn display(&self) -> String {
+        match &self.private {
+            Some(word) => format!("{} \u{00b7} {word}", self.browser.name),
+            None => self.browser.display(),
+        }
+    }
+
+    /// What follows the name: the profile or the private window's word.
+    pub fn detail(&self) -> Option<&str> {
+        self.private.as_deref().or(self.browser.profile.as_deref())
+    }
+
+    /// The destination as the router is told it.
+    pub fn target(&self) -> Destination {
+        Destination {
+            browser: self.browser.app().to_owned(),
+            profile: if self.private.is_some() {
+                String::new()
+            } else {
+                self.browser.profile.clone().unwrap_or_default()
+            },
+            private: self.private.is_some(),
+        }
+    }
+}
+
+/// One browser in the destination list (design: Send Links 1b): its
+/// profiles, then its private window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DestinationGroup {
+    pub browser: BrowserLabel,
+    pub destinations: Vec<SendDestination>,
 }
 
 /// A browser and profile, as the dropdown names it.
@@ -100,6 +170,11 @@ pub enum RecentRoute {
     /// Routing was paused. `skipped` is what matched and was passed over,
     /// when the record numbers it.
     Paused { skipped: Option<Skipped> },
+    /// The user sent it ("next link", "all links"), passing over `skipped`.
+    Sent {
+        sent: Sent,
+        skipped: Option<Skipped>,
+    },
 }
 
 /// What a paused link would have gone to: a rule or handler, numbered
@@ -177,12 +252,15 @@ impl Recent {
                 // it. That step says which list the skipped rule is in;
                 // the pause's own number is the config's.
                 Step::Paused { skipped } => {
-                    let skipped = match route {
-                        RecentRoute::Rule(n) => Some(Skipped::Rule(n)),
-                        RecentRoute::Handler(n) => Some(Skipped::Handler(n)),
-                        _ => skipped.map(|index| Skipped::Handler(index + 1)),
+                    route = RecentRoute::Paused {
+                        skipped: skipped_by(route, *skipped),
                     };
-                    route = RecentRoute::Paused { skipped };
+                }
+                Step::Sent { sent, skipped } => {
+                    route = RecentRoute::Sent {
+                        sent: *sent,
+                        skipped: skipped_by(route, *skipped),
+                    };
                 }
                 _ => {}
             }
@@ -221,11 +299,11 @@ impl Recent {
             RecentRoute::Fallback => parts.push("fallback".to_owned()),
             RecentRoute::Paused { skipped } => {
                 parts.push("paused".to_owned());
-                match skipped {
-                    Some(Skipped::Handler(n)) => parts.push(format!("skipped config handler {n}")),
-                    Some(Skipped::Rule(n)) => parts.push(format!("skipped rule {n}")),
-                    None => {}
-                }
+                parts.extend(skipped_part(skipped));
+            }
+            RecentRoute::Sent { sent, skipped } => {
+                parts.push(sent.short().to_owned());
+                parts.extend(skipped_part(skipped));
             }
         }
         parts.join(" \u{00b7} ")
@@ -234,6 +312,24 @@ impl Recent {
     /// "now", "4m", "2h", "3d".
     pub fn age(&self, now: SystemTime) -> String {
         age(now.duration_since(self.at).unwrap_or_default())
+    }
+}
+
+/// What a pause or a send passed over: the step that chose the browser
+/// says which list; else the config's handler number the step carries.
+fn skipped_by(route: RecentRoute, skipped: Option<usize>) -> Option<Skipped> {
+    match route {
+        RecentRoute::Rule(n) => Some(Skipped::Rule(n)),
+        RecentRoute::Handler(n) => Some(Skipped::Handler(n)),
+        _ => skipped.map(|index| Skipped::Handler(index + 1)),
+    }
+}
+
+fn skipped_part(skipped: Option<Skipped>) -> Option<String> {
+    match skipped {
+        Some(Skipped::Handler(n)) => Some(format!("skipped config handler {n}")),
+        Some(Skipped::Rule(n)) => Some(format!("skipped rule {n}")),
+        None => None,
     }
 }
 
@@ -246,6 +342,15 @@ pub fn host_of(url: &str) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
     })
+}
+
+/// "52 min", "1 min", "under a minute".
+fn time_left(left: Duration) -> String {
+    let minutes = left.as_secs().div_ceil(60);
+    match minutes {
+        0 => "under a minute".to_owned(),
+        _ => format!("{minutes} min"),
+    }
 }
 
 fn age(elapsed: Duration) -> String {
@@ -289,6 +394,8 @@ pub enum HeaderChip {
     Paused,
     /// `.chip` "not default": links do not reach PwrRoute yet.
     NotDefault,
+    /// `.chip.acc` "next link" or "all links": the user sent links.
+    Sending(Sent),
 }
 
 impl HeaderChip {
@@ -297,6 +404,7 @@ impl HeaderChip {
             Self::Default => "default",
             Self::Paused => "paused",
             Self::NotDefault => "not default",
+            Self::Sending(sent) => sent.short(),
         }
     }
 }
@@ -313,6 +421,19 @@ pub struct TrayModel {
     /// Newest first. The dropdown shows the first [`RECENT_LIMIT`].
     pub recents: Vec<Recent>,
     pub links_today: u64,
+    /// Where Send links sends links: the one in force, else the last one
+    /// chosen this session, else the Everything else browser.
+    pub destination: SendDestination,
+    /// The user picked [`destination`](Self::destination); until then it
+    /// follows the pause target.
+    pub destination_chosen: bool,
+    /// How many links Next link takes when turned on (the stepper).
+    pub next_count: u32,
+    /// All links lasts [`ALL_FOR`] rather than until switched back.
+    pub all_for_hour: bool,
+    /// The destination list, from the browser scan; read when the dropdown
+    /// opens.
+    pub destinations: Vec<DestinationGroup>,
 }
 
 impl TrayModel {
@@ -346,12 +467,50 @@ impl TrayModel {
                 ago(4),
             ),
         ];
+        let edge = |profile: &str| BrowserLabel::new("Ed", "Microsoft Edge", Some(profile));
+        let private = |label: BrowserLabel, word: &str| SendDestination {
+            browser: BrowserLabel {
+                profile: None,
+                ..label
+            },
+            private: Some(word.to_owned()),
+        };
         Self {
             routing: Routing::Active,
             is_default_browser: true,
             pause_target: chrome(Some("Personal")),
             recents: recents.into_iter().flatten().collect(),
             links_today: 1412,
+            destination: SendDestination::profile(edge("Work")),
+            destination_chosen: true,
+            next_count: 1,
+            all_for_hour: false,
+            destinations: vec![
+                DestinationGroup {
+                    browser: BrowserLabel::new("Ed", "Microsoft Edge", None),
+                    destinations: vec![
+                        SendDestination::profile(edge("Personal")),
+                        SendDestination::profile(edge("Work")),
+                        SendDestination::profile(edge("Travel")),
+                        private(edge("Work"), "InPrivate"),
+                    ],
+                },
+                DestinationGroup {
+                    browser: chrome(None),
+                    destinations: vec![
+                        SendDestination::profile(chrome(Some("Personal"))),
+                        SendDestination::profile(chrome(Some("Work"))),
+                        private(chrome(None), "Incognito"),
+                    ],
+                },
+                DestinationGroup {
+                    browser: BrowserLabel::new("Ff", "Firefox", None),
+                    destinations: vec![
+                        SendDestination::profile(BrowserLabel::new("Ff", "Firefox", None)),
+                        private(BrowserLabel::new("Ff", "Firefox", None), "Private window"),
+                    ],
+                },
+            ],
         }
     }
 
@@ -362,9 +521,14 @@ impl TrayModel {
         Self {
             routing: Routing::Active,
             is_default_browser: false,
+            destination: SendDestination::profile(pause_target.clone()),
+            destination_chosen: false,
             pause_target,
             recents: Vec::new(),
             links_today: 0,
+            next_count: 1,
+            all_for_hour: false,
+            destinations: Vec::new(),
         }
     }
 
@@ -407,9 +571,77 @@ impl TrayModel {
         };
     }
 
+    /// The send in force, when the user sent links.
+    pub fn sending(&self) -> Option<SendScope> {
+        match self.routing {
+            Routing::Sending(scope) => Some(scope),
+            _ => None,
+        }
+    }
+
+    /// Which segment of the Send links switch is lit: none while paused.
+    pub fn send_mode(&self) -> Option<SendMode> {
+        match self.routing {
+            Routing::Active => Some(SendMode::Rules),
+            Routing::Paused => None,
+            Routing::Sending(SendScope::Next { .. }) => Some(SendMode::Next),
+            Routing::Sending(SendScope::All { .. }) => Some(SendMode::All),
+        }
+    }
+
+    /// The router's send for `mode` as the switch stands: the stepper's
+    /// count, the hour from `now`. `None` for Rules.
+    pub fn send_for(&self, mode: SendMode, now: SystemTime) -> Option<SendTo> {
+        let scope = match mode {
+            SendMode::Rules => return None,
+            SendMode::Next => {
+                let n = self.next_count.clamp(1, MAX_NEXT);
+                SendScope::Next { left: n, of: n }
+            }
+            SendMode::All => SendScope::All {
+                until: self.all_for_hour.then(|| now + ALL_FOR),
+            },
+        };
+        Some(SendTo {
+            destination: self.destination.target(),
+            scope,
+        })
+    }
+
+    /// The line under the switch while Next link or All links is on
+    /// (design 1c-1e): what happens after, or how long is left.
+    pub fn send_detail(&self, now: SystemTime) -> Option<String> {
+        match self.sending()? {
+            SendScope::Next { left, of } if left < of => {
+                Some(format!("{left} of {of} left, then the rules again"))
+            }
+            SendScope::Next { left: 1, .. } => Some("link, then the rules again".to_owned()),
+            SendScope::Next { .. } => Some("links, then the rules again".to_owned()),
+            SendScope::All { until: None } => None,
+            SendScope::All { until: Some(until) } => Some(format!(
+                "{} left",
+                time_left(until.duration_since(now).unwrap_or_default())
+            )),
+        }
+    }
+
+    /// The stepper's number: what is left while Next link is on, else how
+    /// many it will take.
+    pub fn next_shown(&self) -> u32 {
+        match self.sending() {
+            Some(SendScope::Next { left, .. }) => left,
+            _ => self.next_count,
+        }
+    }
+
     pub fn chip(&self) -> HeaderChip {
         if self.is_paused() {
             HeaderChip::Paused
+        } else if let Some(scope) = self.sending() {
+            HeaderChip::Sending(match scope {
+                SendScope::Next { .. } => Sent::Next { nth: 1, of: 1 },
+                SendScope::All { .. } => Sent::All,
+            })
         } else if self.is_default_browser {
             HeaderChip::Default
         } else {
@@ -452,6 +684,13 @@ impl TrayModel {
 
     /// The tray icon's tooltip.
     pub fn tooltip(&self) -> String {
+        if let HeaderChip::Sending(sent) = self.chip() {
+            return format!(
+                "PwrRoute \u{00b7} {} \u{00b7} {}",
+                sent.short(),
+                self.destination.display()
+            );
+        }
         if self.is_paused() {
             format!(
                 "PwrRoute \u{00b7} paused \u{00b7} {}",
@@ -867,6 +1106,146 @@ mod tests {
                 Step::Paused { skipped: Some(1) },
             ]),
             "Firefox \u{00b7} paused \u{00b7} skipped rule 2"
+        );
+    }
+
+    fn sending(scope: SendScope) -> TrayModel {
+        let mut model = TrayModel::fixture(now());
+        model.routing = Routing::Sending(scope);
+        model
+    }
+
+    #[test]
+    fn send_links_says_who_picks_the_browser() {
+        let model = TrayModel::fixture(now());
+        assert_eq!(model.send_mode(), Some(SendMode::Rules));
+        assert_eq!(model.chip(), HeaderChip::Default);
+        assert_eq!(model.send_detail(now()), None);
+
+        let next = sending(SendScope::Next { left: 1, of: 1 });
+        assert_eq!(next.send_mode(), Some(SendMode::Next));
+        assert_eq!(next.chip().label(), "next link");
+        assert_eq!(
+            next.send_detail(now()).as_deref(),
+            Some("link, then the rules again")
+        );
+        assert_eq!(
+            next.tooltip(),
+            "PwrRoute \u{00b7} next link \u{00b7} Microsoft Edge \u{00b7} Work"
+        );
+        let counting = sending(SendScope::Next { left: 2, of: 3 });
+        assert_eq!(
+            counting.send_detail(now()).as_deref(),
+            Some("2 of 3 left, then the rules again")
+        );
+        assert_eq!(counting.next_shown(), 2);
+        let three = sending(SendScope::Next { left: 3, of: 3 });
+        assert_eq!(
+            three.send_detail(now()).as_deref(),
+            Some("links, then the rules again")
+        );
+
+        let all = sending(SendScope::All {
+            until: Some(now() + Duration::from_secs(51 * 60 + 10)),
+        });
+        assert_eq!(all.chip().label(), "all links");
+        assert_eq!(all.send_detail(now()).as_deref(), Some("52 min left"));
+        assert_eq!(
+            sending(SendScope::All { until: None }).send_detail(now()),
+            None
+        );
+
+        // Paused: no segment is lit, and the pause wins the chip.
+        let mut paused = TrayModel::fixture(now());
+        paused.set_paused(true);
+        assert_eq!(paused.send_mode(), None);
+        assert_eq!(paused.chip(), HeaderChip::Paused);
+    }
+
+    #[test]
+    fn the_switch_asks_the_router_for_the_stepper_count_or_the_hour() {
+        let mut model = TrayModel::fixture(now());
+        assert_eq!(model.send_for(SendMode::Rules, now()), None);
+        model.next_count = 3;
+        let next = model.send_for(SendMode::Next, now()).unwrap();
+        assert_eq!(next.scope, SendScope::Next { left: 3, of: 3 });
+        assert_eq!(
+            next.destination,
+            Destination {
+                browser: "Microsoft Edge".into(),
+                profile: "Work".into(),
+                private: false,
+            }
+        );
+        assert_eq!(
+            model.send_for(SendMode::All, now()).unwrap().scope,
+            SendScope::All { until: None }
+        );
+        model.all_for_hour = true;
+        assert_eq!(
+            model.send_for(SendMode::All, now()).unwrap().scope,
+            SendScope::All {
+                until: Some(now() + ALL_FOR)
+            }
+        );
+        // A private window is the browser's, with no profile.
+        model.destination = model.destinations[0].destinations[3].clone();
+        assert_eq!(
+            model.destination.display(),
+            "Microsoft Edge \u{00b7} InPrivate"
+        );
+        assert_eq!(
+            model.destination.target(),
+            Destination {
+                browser: "Microsoft Edge".into(),
+                profile: String::new(),
+                private: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_sent_record_says_so_in_the_recents() {
+        let records = crate::fixtures::sent_activity();
+        let next = Recent::from_record(&records[0]).unwrap();
+        assert!(matches!(
+            next.route,
+            RecentRoute::Sent {
+                sent: Sent::Next { nth: 1, of: 3 },
+                ..
+            }
+        ));
+        assert!(
+            next.detail().starts_with("Microsoft Edge \u{00b7} Work"),
+            "{}",
+            next.detail()
+        );
+        assert!(next.detail().contains("next link"), "{}", next.detail());
+        let all = Recent::from_record(&records[1]).unwrap();
+        assert!(all.detail().contains("all links"), "{}", all.detail());
+        // Over a rules.json rule, the rule is named from its own list.
+        let recent = Recent::from_record(&DispatchRecord {
+            steps: vec![
+                Step::Received {
+                    url: "https://docs.example.com/".into(),
+                },
+                Step::Matched {
+                    by: Matched::Rule { index: 1 },
+                },
+                Step::Sent {
+                    sent: Sent::Next { nth: 1, of: 1 },
+                    skipped: None,
+                },
+            ],
+            ..records[0].clone()
+        })
+        .unwrap();
+        assert!(
+            recent
+                .detail()
+                .ends_with("next link \u{00b7} skipped rule 2"),
+            "{}",
+            recent.detail()
         );
     }
 }

@@ -1,5 +1,6 @@
 //! The macOS menu bar dropdown: `design/PwrRoute Tray and First Run.dc.html`
-//! options 1a (routing) and 1b (paused).
+//! options 1a (routing) and 1b (paused), with the Send links section of
+//! `design/PwrRoute Send Links.dc.html` 1a-1f above Pause routing.
 //!
 //! A 300px GPUI `PopUp` window (a non-activating `NSPanel`) opened under the
 //! menu bar item. It takes key focus without activating the app, so the
@@ -31,13 +32,24 @@ use gpui_kit::{
 };
 
 use super::TrayCommand;
-use super::model::{HeaderChip, Recent, TrayModel};
+use super::model::{HeaderChip, Recent, SendDestination, SendMode, TrayModel};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{badge, key_cap, one_line, switch};
+use pwrroute_router::SendScope;
 
 /// The element ids tests and the inspector find things by.
 pub const CARD_ID: &str = "tray-card";
 pub const PAUSE_ID: &str = "tray-pause";
+pub const SEND_RULES_ID: &str = "tray-send-rules";
+pub const SEND_NEXT_ID: &str = "tray-send-next";
+pub const SEND_ALL_ID: &str = "tray-send-all";
+pub const DESTINATION_ID: &str = "tray-destination";
+pub const DESTINATIONS_ID: &str = "tray-destinations";
+pub const STEP_DOWN_ID: &str = "tray-step-down";
+pub const STEP_UP_ID: &str = "tray-step-up";
+pub const SEND_DETAIL_ID: &str = "tray-send-detail";
+pub const UNTIL_OFF_ID: &str = "tray-until-off";
+pub const FOR_HOUR_ID: &str = "tray-for-hour";
 pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
 pub const QUIT_ID: &str = "tray-quit";
 /// The sections between the header and Quit, which scroll on a display too
@@ -113,7 +125,7 @@ pub fn open(
     max_height: Pixels,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<Dropdown>> {
-    let height = fitted_height(model.read(cx), &cx.text_system().clone(), max_height);
+    let height = fitted_height(model.read(cx), false, &cx.text_system().clone(), max_height);
     let window = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -149,6 +161,8 @@ pub struct Dropdown {
     /// The command row under the pointer. GPUI resolves text color before it
     /// knows what is hovered, so the `.hov` label color comes from here.
     hovered: Option<&'static str>,
+    /// The destination list is open (design: Send Links 1b).
+    pub choosing: bool,
     /// The tallest the window may be: the display's visible area under it.
     max_height: Pixels,
     /// The height the window was last asked to be: [`fitted_height`].
@@ -165,7 +179,7 @@ impl Dropdown {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let height = fitted_height(model.read(cx), &cx.text_system().clone(), max_height);
+        let height = fitted_height(model.read(cx), false, &cx.text_system().clone(), max_height);
         let subscriptions = vec![
             // The window follows the card.
             cx.observe_in(&model, window, |this, _, window, cx| this.fit(window, cx)),
@@ -181,6 +195,7 @@ impl Dropdown {
             model,
             focus: cx.focus_handle(),
             hovered: None,
+            choosing: false,
             max_height,
             height,
             resize,
@@ -196,6 +211,7 @@ impl Dropdown {
     pub fn fit(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let want = fitted_height(
             self.model.read(cx),
+            self.choosing,
             &cx.text_system().clone(),
             self.max_height,
         );
@@ -216,6 +232,30 @@ impl Dropdown {
         super::dropdown_closed(cx);
         window.remove_window();
         cx.defer(move |cx| super::run(command, cx));
+    }
+
+    /// A Send links segment. The dropdown stays open, so the user sees the
+    /// switch take.
+    fn send(&mut self, mode: SendMode, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.choosing = false;
+        super::set_send_mode(mode, cx);
+        self.fit(window, cx);
+    }
+
+    fn toggle_choosing(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.choosing = !self.choosing;
+        self.fit(window, cx);
+    }
+
+    fn choose(
+        &mut self,
+        destination: SendDestination,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.choosing = false;
+        super::choose_destination(destination, cx);
+        self.fit(window, cx);
     }
 
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -245,7 +285,13 @@ impl Render for Dropdown {
             .flex()
             .flex_col()
             .font_family(theme::SANS)
-            .child(card(&model, SystemTime::now(), self.hovered, cx))
+            .child(card(
+                &model,
+                SystemTime::now(),
+                self.hovered,
+                self.choosing,
+                cx,
+            ))
             // Until the window catches up with a card that shrank, a click
             // below it is a click outside the dropdown.
             .child(
@@ -264,6 +310,7 @@ fn card(
     model: &TrayModel,
     now: SystemTime,
     hovered: Option<&'static str>,
+    choosing: bool,
     cx: &mut Context<'_, Dropdown>,
 ) -> gpui_kit::Stateful<Div> {
     let paused = model.is_paused();
@@ -398,6 +445,7 @@ fn card(
                 .min_h_0()
                 .overflow_y_scroll()
                 .child(recents.flex_none())
+                .child(send_section(model, now, choosing, cx).flex_none())
                 .child(pause.flex_none())
                 .child(commands.flex_none()),
         )
@@ -434,6 +482,11 @@ fn header(chip: HeaderChip) -> Div {
             theme::success_text(),
         ),
         HeaderChip::Paused => (theme::warn_soft(), theme::transparent(), theme::warn_text()),
+        HeaderChip::Sending(_) => (
+            theme::accent_soft(),
+            theme::transparent(),
+            theme::accent_bright(),
+        ),
         HeaderChip::NotDefault => (
             theme::bg_elevated(),
             theme::border_subtle(),
@@ -471,8 +524,405 @@ fn header(chip: HeaderChip) -> Div {
                 .border_1()
                 .border_color(border)
                 .bg(fill)
+                .debug_selector(|| "tray-chip".into())
                 .child(text(chip.label(), 10.0, 600.0, color)),
         )
+}
+
+/// Send links (design: Send Links 1a-1f): the three-way switch, the
+/// destination row (and its list, while choosing), and the line for the
+/// mode that is on: the stepper for Next link, the length for All links.
+fn send_section(
+    model: &TrayModel,
+    now: SystemTime,
+    choosing: bool,
+    cx: &mut Context<'_, Dropdown>,
+) -> Div {
+    let mode = model.send_mode();
+    let segment = |id: &'static str,
+                   label: &'static str,
+                   target: SendMode,
+                   cx: &mut Context<'_, Dropdown>| {
+        let on = mode == Some(target);
+        div()
+            .id(id)
+            .debug_selector(|| id.into())
+            .flex_1()
+            .h(px(SEG_BUTTON))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.0))
+            .cursor_pointer()
+            .map(|button| {
+                if on {
+                    button
+                        .bg(theme::bg_row_active())
+                        .border_1()
+                        .border_color(theme::accent_border())
+                } else {
+                    button.hover(|button| button.bg(theme::bg_hover()))
+                }
+            })
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.send(target, window, cx);
+            }))
+            .child(text(
+                label,
+                11.0,
+                550.0,
+                if on {
+                    theme::accent_bright()
+                } else {
+                    theme::text_secondary()
+                },
+            ))
+    };
+    let switch_row = div()
+        .mt(px(2.0))
+        .mb(px(6.0))
+        .mx(px(6.0))
+        .h(px(SEG))
+        .p(px(2.0))
+        .flex()
+        .gap(px(1.0))
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(theme::border_subtle())
+        .bg(theme::bg_input())
+        .child(segment(SEND_RULES_ID, "Rules", SendMode::Rules, cx))
+        .child(segment(SEND_NEXT_ID, "Next link", SendMode::Next, cx))
+        .child(segment(SEND_ALL_ID, "All links", SendMode::All, cx));
+
+    let live = model.sending().is_some();
+    let destination = &model.destination;
+    let destination_row = div()
+        .id(DESTINATION_ID)
+        .debug_selector(|| DESTINATION_ID.into())
+        .mx(px(6.0))
+        .h(px(DEST_ROW))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(7.0))
+        .px(px(8.0))
+        .border_1()
+        .border_color(if live || choosing {
+            theme::accent_border()
+        } else {
+            theme::border_subtle()
+        })
+        .map(|row| {
+            if choosing {
+                row.rounded_t(px(7.0))
+            } else {
+                row.rounded(px(7.0))
+            }
+        })
+        .bg(if live {
+            theme::bg_row_active()
+        } else {
+            theme::bg_panel()
+        })
+        .cursor_pointer()
+        .hover(|row| row.border_color(theme::accent_border()))
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.toggle_choosing(window, cx);
+        }))
+        .child(
+            div()
+                .w(px(18.0))
+                .child(tracked("To", 9.5, 600.0, 0.1, theme::text_subtle())),
+        )
+        .child(badge(destination.browser.badge.clone()))
+        .when(destination.private.is_some(), |row| {
+            row.child(icon("pwrroute/mask.svg", 13.0, theme::text_subtle()))
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .overflow_hidden()
+                .child(
+                    one_line(
+                        destination.browser.name.clone(),
+                        theme::SANS,
+                        500.0,
+                        11.5,
+                        12.0,
+                        if live {
+                            theme::text_primary()
+                        } else {
+                            theme::text_secondary()
+                        },
+                    )
+                    .flex_shrink_0(),
+                )
+                .children(destination.detail().map(|detail| {
+                    one_line(
+                        format!("\u{00b7} {detail}"),
+                        theme::SANS,
+                        500.0,
+                        11.5,
+                        12.0,
+                        if live {
+                            theme::accent_bright()
+                        } else {
+                            theme::text_muted()
+                        },
+                    )
+                    .min_w_0()
+                })),
+        )
+        .child(text(
+            if choosing { "\u{2304}" } else { "\u{203a}" },
+            12.0,
+            500.0,
+            theme::text_subtle(),
+        ));
+
+    let mut body = section()
+        .child(div().px(px(6.0)).py(px(4.0)).child(tracked(
+            "Send links",
+            9.5,
+            600.0,
+            0.12,
+            theme::text_subtle(),
+        )))
+        .child(switch_row)
+        .child(destination_row);
+    if choosing {
+        body = body.child(destination_list(model, cx));
+    }
+    match model.sending() {
+        Some(SendScope::Next { .. }) => body = body.child(next_line(model, now, cx)),
+        Some(SendScope::All { .. }) => body = body.child(all_line(model, now, cx)),
+        None => {}
+    }
+    body
+}
+
+/// The destination list under the row: each browser, its profiles, then
+/// its private window. It scrolls past [`LIST_MAX`].
+fn destination_list(model: &TrayModel, cx: &mut Context<'_, Dropdown>) -> impl IntoElement {
+    let mut list = div()
+        .id(DESTINATIONS_ID)
+        .debug_selector(|| DESTINATIONS_ID.into())
+        .mx(px(6.0))
+        .h(px(list_height(model)))
+        .flex()
+        .flex_col()
+        .flex_none()
+        .p(px(4.0))
+        .border_1()
+        .border_t_0()
+        .border_color(theme::accent_border())
+        .rounded_b(px(7.0))
+        .bg(theme::bg_elevated())
+        .overflow_y_scroll();
+    if model.destinations.is_empty() {
+        list = list.child(
+            div()
+                .h(px(LIST_ROW))
+                .flex()
+                .items_center()
+                .px(px(6.0))
+                .child(text("No browsers found", 11.0, 500.0, theme::text_muted())),
+        );
+    }
+    let mut row_index: usize = 0;
+    for group in &model.destinations {
+        list = list.child(
+            div()
+                .h(px(GROUP_HEAD))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(6.0))
+                .child(badge(group.browser.badge.clone()))
+                .child(text(
+                    group.browser.name.clone(),
+                    10.0,
+                    600.0,
+                    theme::text_muted(),
+                )),
+        );
+        for destination in &group.destinations {
+            let index = row_index;
+            row_index += 1;
+            let selected = *destination == model.destination;
+            let label = destination
+                .detail()
+                .map_or_else(|| "Default profile".to_owned(), str::to_owned);
+            let picked = destination.clone();
+            list = list.child(
+                div()
+                    .id(("tray-destination-row", index))
+                    .debug_selector(move || format!("tray-destination-{index}"))
+                    .h(px(LIST_ROW))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .pl(px(24.0))
+                    .pr(px(6.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .hover(|row| row.bg(theme::bg_row_active()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.choose(picked.clone(), window, cx);
+                    }))
+                    .when(destination.private.is_some(), |row| {
+                        row.child(icon("pwrroute/mask.svg", 13.0, theme::text_subtle()))
+                    })
+                    .child(
+                        one_line(
+                            label,
+                            theme::SANS,
+                            500.0,
+                            11.5,
+                            12.0,
+                            if selected {
+                                theme::text_primary()
+                            } else {
+                                theme::text_secondary()
+                            },
+                        )
+                        .flex_1()
+                        .min_w_0(),
+                    )
+                    .when(selected, |row| {
+                        row.child(text("\u{2713}", 11.0, 600.0, theme::accent_bright()))
+                    }),
+            );
+        }
+    }
+    list
+}
+
+/// Next link's line: the stepper, and what happens after (1c, 1d).
+fn next_line(model: &TrayModel, now: SystemTime, cx: &mut Context<'_, Dropdown>) -> Div {
+    let step =
+        |id: &'static str, glyph: &'static str, delta: i64, cx: &mut Context<'_, Dropdown>| {
+            div()
+                .id(id)
+                .debug_selector(|| id.into())
+                .w(px(20.0))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.0))
+                .cursor_pointer()
+                .hover(|button| button.bg(theme::bg_hover()))
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    super::step_next(delta, cx);
+                }))
+                .child(text(glyph, 12.0, 600.0, theme::text_secondary()))
+        };
+    let stepper = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .border_1()
+        .border_color(theme::border_default())
+        .rounded(px(6.0))
+        .bg(theme::bg_panel())
+        .child(step(STEP_DOWN_ID, "\u{2212}", -1, cx))
+        .child(div().min_w(px(18.0)).flex().justify_center().child(mono(
+            model.next_shown().to_string(),
+            11.0,
+            600.0,
+            theme::text_primary(),
+        )))
+        .child(step(STEP_UP_ID, "+", 1, cx));
+    send_line()
+        .child(stepper)
+        .child(detail_text(model.send_detail(now).unwrap_or_default()))
+}
+
+/// All links' line: until switched back or for an hour, and the time
+/// left (1e).
+fn all_line(model: &TrayModel, now: SystemTime, cx: &mut Context<'_, Dropdown>) -> Div {
+    let option =
+        |id: &'static str, label: &'static str, hour: bool, cx: &mut Context<'_, Dropdown>| {
+            let on = model.all_for_hour == hour;
+            div()
+                .id(id)
+                .debug_selector(|| id.into())
+                .px(px(7.0))
+                .py(px(4.0))
+                .rounded(px(4.0))
+                .cursor_pointer()
+                .when(on, |option| option.bg(theme::bg_row_active()))
+                .when(!on, |option| {
+                    option.hover(|option| option.bg(theme::bg_hover()))
+                })
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    super::set_all_for_hour(hour, cx);
+                }))
+                .child(text(
+                    label,
+                    10.0,
+                    550.0,
+                    if on {
+                        theme::accent_bright()
+                    } else {
+                        theme::text_secondary()
+                    },
+                ))
+        };
+    send_line()
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .gap(px(1.0))
+                .p(px(2.0))
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(theme::border_subtle())
+                .bg(theme::bg_input())
+                .child(option(UNTIL_OFF_ID, "Until switched back", false, cx))
+                .child(option(FOR_HOUR_ID, "For 1 hour", true, cx)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .justify_end()
+                .child(detail_text(model.send_detail(now).unwrap_or_default())),
+        )
+}
+
+/// `.sline`: the row under the destination.
+fn send_line() -> Div {
+    div()
+        .mt(px(4.0))
+        .h(px(SEND_LINE))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .pl(px(12.0))
+        .pr(px(6.0))
+}
+
+fn detail_text(detail: String) -> impl IntoElement {
+    div()
+        .debug_selector(|| SEND_DETAIL_ID.into())
+        .min_w_0()
+        .child(one_line(
+            detail,
+            theme::SANS,
+            400.0,
+            10.5,
+            14.0,
+            theme::text_muted(),
+        ))
 }
 
 /// `.sec`: a group of rows with a hairline under it.
@@ -680,6 +1130,39 @@ const PAUSE_LINE: f32 = 14.0;
 /// section's and the row's padding, the gap and the 30px switch.
 const PAUSE_TEXT_WIDTH: f32 = WIDTH - 2.0 - 12.0 - 12.0 - 10.0 - 30.0;
 
+/// Send links' switch: its 24px buttons in 2px padding and a border.
+const SEG_BUTTON: f32 = 24.0;
+const SEG: f32 = SEG_BUTTON + 4.0 + 2.0;
+/// The switch's margins above and below.
+const SEG_MARGIN: f32 = 2.0 + 6.0;
+/// The destination row.
+const DEST_ROW: f32 = 30.0;
+/// The stepper's or the length's line, and the gap above it.
+const SEND_LINE: f32 = 26.0;
+const SEND_LINE_GAP: f32 = 4.0;
+/// The destination list: a browser's heading and each destination.
+const GROUP_HEAD: f32 = 22.0;
+const LIST_ROW: f32 = 26.0;
+/// The list stops at 8½ rows and scrolls.
+const LIST_MAX: f32 = LIST_ROW * 8.5 + 8.0 + 1.0;
+
+/// The destination list's height: its rows in 4px padding and a border
+/// (none on top), at most [`LIST_MAX`].
+fn list_height(model: &TrayModel) -> f32 {
+    let rows: usize = model
+        .destinations
+        .iter()
+        .map(|group| group.destinations.len())
+        .sum();
+    let rows = if model.destinations.is_empty() {
+        1
+    } else {
+        rows
+    };
+    let content = 8.0 + 1.0 + GROUP_HEAD * model.destinations.len() as f32 + LIST_ROW * rows as f32;
+    content.min(LIST_MAX)
+}
+
 /// What the card is made of, for its height.
 #[derive(Clone, Copy, Debug)]
 struct Rows {
@@ -689,16 +1172,22 @@ struct Rows {
     pause_lines: usize,
     /// "Make default browser…" under the commands.
     make_default: bool,
+    /// The destination list's height, while it is open.
+    list: Option<f32>,
+    /// Next link or All links is on: its line shows.
+    send_line: bool,
 }
 
 impl Rows {
-    fn of(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>) -> Self {
+    fn of(model: &TrayModel, choosing: bool, text_system: &std::sync::Arc<TextSystem>) -> Self {
         let recents = model.shown_recents().len();
         Self {
             recents,
             small_rows: usize::from(recents == 0) + usize::from(model.shows_activity_row()),
             pause_lines: pause_lines(&model.pause_detail(), text_system),
             make_default: model.shows_make_default_row(),
+            list: choosing.then(|| list_height(model)),
+            send_line: model.sending().is_some(),
         }
     }
 
@@ -712,8 +1201,20 @@ impl Rows {
             SECTION_PADDING + 14.0 + PAUSE_TITLE + 3.0 + PAUSE_LINE * self.pause_lines as f32 + 1.0;
         let commands =
             SECTION_PADDING + MENU_ROW * (3.0 + f32::from(u8::from(self.make_default))) + 1.0;
+        let send = SECTION_PADDING
+            + CAPTION
+            + SEG
+            + SEG_MARGIN
+            + DEST_ROW
+            + self.list.unwrap_or(0.0)
+            + if self.send_line {
+                SEND_LINE_GAP + SEND_LINE
+            } else {
+                0.0
+            }
+            + 1.0;
         let quit = SECTION_PADDING + MENU_ROW;
-        px(2.0 + HEADER + recents + pause + commands + quit)
+        px(2.0 + HEADER + recents + send + pause + commands + quit)
     }
 }
 
@@ -728,17 +1229,23 @@ fn pause_lines(detail: &str, text_system: &std::sync::Arc<TextSystem>) -> usize 
     1 + wrapper.wrap_line(&fragments, px(PAUSE_TEXT_WIDTH)).count()
 }
 
-/// The card's height for `model` as it is now.
-pub fn card_height(model: &TrayModel, text_system: &std::sync::Arc<TextSystem>) -> Pixels {
-    Rows::of(model, text_system).height()
+/// The card's height for `model` as it is now, with the destination list
+/// open or not.
+pub fn card_height(
+    model: &TrayModel,
+    choosing: bool,
+    text_system: &std::sync::Arc<TextSystem>,
+) -> Pixels {
+    Rows::of(model, choosing, text_system).height()
 }
 
 /// The window's height: the card's, rounded up to a whole point, and no
 /// taller than `max_height`.
 pub fn fitted_height(
     model: &TrayModel,
+    choosing: bool,
     text_system: &std::sync::Arc<TextSystem>,
     max_height: Pixels,
 ) -> Pixels {
-    px(card_height(model, text_system).as_f32().ceil()).min(max_height)
+    px(card_height(model, choosing, text_system).as_f32().ceil()).min(max_height)
 }

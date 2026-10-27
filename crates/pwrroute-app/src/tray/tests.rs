@@ -11,12 +11,15 @@ use std::time::SystemTime;
 use gpui_kit::{
     AppContext as _, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px, size,
 };
-use pwrroute_router::{DryRunLauncher, Options, PauseTarget, Router};
+use pwrroute_router::{
+    Destination, DryRunLauncher, Options, PauseTarget, Router, RouterHandle, SendScope,
+};
 
 use super::dropdown::{
-    BODY_ID, CARD_ID, Dropdown, MAKE_DEFAULT_ID, PAUSE_ID, QUIT_ID, WIDTH, card_height,
+    BODY_ID, CARD_ID, DESTINATION_ID, DESTINATIONS_ID, Dropdown, FOR_HOUR_ID, MAKE_DEFAULT_ID,
+    PAUSE_ID, QUIT_ID, SEND_ALL_ID, SEND_NEXT_ID, SEND_RULES_ID, STEP_UP_ID, WIDTH, card_height,
 };
-use super::model::{BrowserLabel, Recent, RecentRoute, TrayModel};
+use super::model::{BrowserLabel, Recent, RecentRoute, Routing, TrayModel};
 use super::{ConfigDefault, Tray};
 
 /// A display with room for any card.
@@ -97,10 +100,11 @@ fn draw(cx: &mut VisualTestContext) {
 /// bottom.
 fn assert_card_fits(opened: &mut Opened<'_>) {
     let model = opened.model.clone();
+    let choosing = opened.view.read_with(opened.cx, |view, _| view.choosing);
     let card = opened.cx.debug_bounds(CARD_ID).expect("the card");
     let computed = opened.cx.update(|_, cx| {
         let text_system = cx.text_system().clone();
-        card_height(model.read(cx), &text_system)
+        card_height(model.read(cx), choosing, &text_system)
     });
     let laid_out = card.size.height;
     assert!(
@@ -196,7 +200,7 @@ fn a_short_display_scrolls_between_the_header_and_quit(cx: &mut TestAppContext) 
     assert!(body.bottom() <= quit.top(), "{body:?} above {quit:?}");
     let full = opened.cx.update(|_, cx| {
         let text_system = cx.text_system().clone();
-        card_height(opened.model.read(cx), &text_system)
+        card_height(opened.model.read(cx), false, &text_system)
     });
     assert!(full > px(220.0), "the card is taller than the display");
 }
@@ -277,5 +281,206 @@ fn the_pause_row_pauses_the_router_and_the_card_still_fits(cx: &mut TestAppConte
     opened.settle();
     assert!(!model.read_with(opened.cx, |model, _| model.is_paused()));
     assert_eq!(handle.paused(), None);
+    assert_card_fits(&mut opened);
+}
+
+/// The tray as `install` holds it, over `opened`'s model and a router with
+/// no config.
+fn with_router(opened: &mut Opened<'_>) -> (Router, RouterHandle) {
+    let router = Router::spawn(Options::default(), None, DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
+    let model = opened.model.clone();
+    let tray_router = handle.clone();
+    opened.cx.update(|_, cx| {
+        cx.set_global(Tray {
+            model,
+            live: false,
+            router: Some(tray_router),
+            config_default: ConfigDefault::default(),
+            native: None,
+            dropdown: None,
+            dropdown_closed_at: None,
+        });
+    });
+    (router, handle)
+}
+
+fn click(opened: &mut Opened<'_>, id: &'static str) {
+    let at = opened
+        .cx
+        .debug_bounds(id)
+        .unwrap_or_else(|| panic!("{id} is drawn"));
+    opened.cx.simulate_click(at.center(), Modifiers::none());
+    opened.settle();
+}
+
+fn edge_work() -> Destination {
+    Destination {
+        browser: "Microsoft Edge".into(),
+        profile: "Work".into(),
+        private: false,
+    }
+}
+
+/// Send links (design: Send Links 1c, 1d): Next link sends the next link
+/// to the destination the row names, the stepper adds more, and Rules
+/// ends it; the card fits at every step.
+#[gpui_kit::test]
+fn next_link_sends_to_the_destination_and_rules_ends_it(cx: &mut TestAppContext) {
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    let (_router, handle) = with_router(&mut opened);
+    assert_card_fits(&mut opened);
+
+    click(&mut opened, SEND_NEXT_ID);
+    let send = handle.send_to().expect("sending");
+    assert_eq!(send.destination, edge_work());
+    assert_eq!(send.scope, SendScope::Next { left: 1, of: 1 });
+    let model = opened.model.clone();
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.chip().label()),
+        "next link"
+    );
+    assert!(opened.cx.debug_bounds(STEP_UP_ID).is_some(), "the stepper");
+    assert_card_fits(&mut opened);
+
+    click(&mut opened, STEP_UP_ID);
+    click(&mut opened, STEP_UP_ID);
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 3, of: 3 })
+    );
+    assert_card_fits(&mut opened);
+
+    click(&mut opened, SEND_RULES_ID);
+    assert_eq!(handle.send_to(), None);
+    assert!(opened.cx.debug_bounds(STEP_UP_ID).is_none());
+    assert_card_fits(&mut opened);
+}
+
+/// All links, then for an hour; Pause ends the send and Rules resumes.
+#[gpui_kit::test]
+fn all_links_and_pause_share_the_slot(cx: &mut TestAppContext) {
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    let (_router, handle) = with_router(&mut opened);
+
+    click(&mut opened, SEND_ALL_ID);
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::All { until: None })
+    );
+    assert_card_fits(&mut opened);
+    click(&mut opened, FOR_HOUR_ID);
+    assert!(matches!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::All { until: Some(_) })
+    ));
+    assert_card_fits(&mut opened);
+
+    click(&mut opened, PAUSE_ID);
+    assert_eq!(handle.send_to(), None, "pausing ends the send");
+    assert!(handle.paused().is_some());
+    let model = opened.model.clone();
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.send_mode()),
+        None
+    );
+    assert_card_fits(&mut opened);
+
+    click(&mut opened, SEND_RULES_ID);
+    assert_eq!(handle.paused(), None, "Rules resumes");
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.routing),
+        Routing::Active
+    );
+}
+
+/// The destination row opens the list in place; a row picks it, and a
+/// send in force goes there from the next link (1b).
+#[gpui_kit::test]
+fn choosing_a_destination_retargets_the_send(cx: &mut TestAppContext) {
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    let (_router, handle) = with_router(&mut opened);
+    click(&mut opened, SEND_NEXT_ID);
+
+    assert!(opened.cx.debug_bounds(DESTINATIONS_ID).is_none());
+    click(&mut opened, DESTINATION_ID);
+    assert!(
+        opened.cx.debug_bounds(DESTINATIONS_ID).is_some(),
+        "the list"
+    );
+    assert_card_fits(&mut opened);
+
+    // Edge's InPrivate window: the fourth destination.
+    click(&mut opened, "tray-destination-3");
+    assert!(opened.cx.debug_bounds(DESTINATIONS_ID).is_none(), "closed");
+    assert_eq!(
+        handle.send_to().map(|send| send.destination),
+        Some(Destination {
+            browser: "Microsoft Edge".into(),
+            profile: String::new(),
+            private: true,
+        })
+    );
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 1, of: 1 }),
+        "the count stands"
+    );
+    assert_card_fits(&mut opened);
+}
+
+/// A long destination list stops at 8½ rows and the card still fits.
+#[gpui_kit::test]
+fn a_long_destination_list_scrolls(cx: &mut TestAppContext) {
+    let mut model = TrayModel::fixture(SystemTime::now());
+    let group = model.destinations[0].clone();
+    for _ in 0..4 {
+        model.destinations.push(group.clone());
+    }
+    let mut opened = open(model, cx);
+    click(&mut opened, DESTINATION_ID);
+    let list = opened.cx.debug_bounds(DESTINATIONS_ID).expect("the list");
+    assert!(list.size.height <= px(26.0 * 8.5 + 9.0 + 0.5), "{list:?}");
+    assert_card_fits(&mut opened);
+}
+
+/// The router counts Next link down; after each dispatch the tray reads
+/// it back (`sync_send`), so the stepper and the chip follow and the
+/// switch returns to Rules when the count runs out.
+#[gpui_kit::test]
+fn the_tray_follows_the_routers_countdown(cx: &mut TestAppContext) {
+    use pwrroute_router::{Link, Source};
+
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    let (_router, handle) = with_router(&mut opened);
+    opened
+        .cx
+        .update(|_, cx| cx.global_mut::<Tray>().live = true);
+    click(&mut opened, SEND_NEXT_ID);
+    click(&mut opened, STEP_UP_ID);
+    let model = opened.model.clone();
+    let dispatch_and_sync = |opened: &mut Opened<'_>| {
+        handle
+            .dispatch_and_wait(Link::new("https://docs.example.com/", Source::CommandLine))
+            .unwrap();
+        let model = opened.model.clone();
+        opened.cx.update(|_, cx| super::sync_send(&model, cx));
+        opened.settle();
+    };
+    dispatch_and_sync(&mut opened);
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.routing),
+        Routing::Sending(SendScope::Next { left: 1, of: 2 })
+    );
+    assert_card_fits(&mut opened);
+    dispatch_and_sync(&mut opened);
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.routing),
+        Routing::Active
+    );
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.chip().label()),
+        "default"
+    );
     assert_card_fits(&mut opened);
 }

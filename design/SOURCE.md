@@ -153,6 +153,17 @@ the project and re-export here.
   project, then compared by size with the file here. The other canvases,
   `pwrroute.css` and `support.js` are unchanged.
 
+- Updated **2026-10-27**: one canvas added for sending links without a
+  rule (`PwrRoute Send Links.dc.html`): the menu bar dropdown's Send links
+  section (Rules, Next link with its count, All links until switched back
+  or for an hour, the destination row and its list in place, sharing the
+  router's slot with Pause routing), the Windows and Linux menu rows, the
+  Overview's hero, strip chip, rail foot and marked node, a node's Next
+  link here, Activity's next link and all links chips, and the behaviour
+  table (which links count, memory only, private windows, hero order).
+  Written to the project, then compared by size with the file here. The
+  other canvases, `pwrroute.css` and `support.js` are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -177,7 +188,8 @@ the project and re-export here.
 | `PwrRoute First Run and Everything Else.dc.html` | The revised first run (turn 4: config found and its variants, broken config, no config in two steps, the Everything else segmented control, done, no browsers found, a failed default request) and the Everything else override (turn 5: the Rules banner switch with the overridden defaultBrowser row and its warnings; Settings › Configuration's Everything else row) |
 | `PwrRoute First Run Profile Access.dc.html` | First run on macOS 27 when a browser's profile list is kept from PwrRoute (turn 6): why, the Files &amp; Folders switches as the user will find them, Open Files &amp; Folders, Check again, Skip, and the profile select once access is on |
 | `PwrRoute Activity Quick Add Rule.dc.html` | Adding a rule from an Activity row in one click: "+ Rule" where Took was on hover (and at rest under Everything else), where else it was tried, the expanded row's primary Add a rule… under a long link, ⌘N, and host-only rows |
-| `pwrroute.css` | Shared tokens and chrome for all twenty canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute Send Links.dc.html` | Sending the next link, the next few, or all links for a while to a browser and profile without a rule: the dropdown's Send links section and destination list, the native menu's rows, the Overview's hero, chips, rail foot and marked node, Next link here on a node, Activity's chips, and how it behaves (one slot with Pause, counted per link in the router, memory only) |
+| `pwrroute.css` | Shared tokens and chrome for all twenty-one canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.

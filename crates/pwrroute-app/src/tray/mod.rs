@@ -7,7 +7,12 @@
 //! ([`follow_default_browser`]). Pausing from either surface pauses the
 //! router ([`RouterHandle::set_paused`]) with the target the dropdown
 //! names, read from the files each time the dropdown opens or a pause
-//! begins ([`pause_target`]).
+//! begins ([`pause_target`]). Send links ([`set_send_mode`] and the
+//! rest, design: Send Links) sends the next few links, or all of them, to
+//! a destination the user picks; the router counts them down
+//! ([`RouterHandle::set_send_to`]) and the model follows it after every
+//! dispatch ([`sync_send`]). A pause and a send share the router's one
+//! slot, so turning one on turns the other off.
 
 mod dropdown;
 mod icon;
@@ -24,10 +29,12 @@ use std::time::{Duration, Instant, SystemTime};
 
 use gpui_kit::{App, AppContext as _, Entity, Global, WindowHandle};
 use pwrroute_engine::{AppType, BrowserSpec, Engine, Limits, NativeHost, RulesFile, discovery};
-use pwrroute_router::{FALLBACK_BROWSER, PauseTarget, RouterHandle};
+use pwrroute_router::{FALLBACK_BROWSER, PauseTarget, RouterHandle, SendScope};
 
 use self::dropdown::Dropdown;
-use self::model::{BrowserLabel, Dispatched, TrayModel};
+use self::model::{
+    BrowserLabel, DestinationGroup, Dispatched, Routing, SendDestination, SendMode, TrayModel,
+};
 use self::native::{NativeTray, TrayEvent};
 use crate::activity::{self, Feed};
 use crate::app::{PwrRoute, Screen};
@@ -35,7 +42,7 @@ use crate::default_browser;
 use crate::widgets::badge_for;
 
 /// What a tray row or menu item does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TrayCommand {
     OpenMain,
     TestLink,
@@ -44,6 +51,15 @@ pub enum TrayCommand {
     Settings,
     About,
     TogglePause,
+    /// Send links: back to the rules (ends a pause too).
+    SendRules,
+    /// Send links: the next link to the destination.
+    SendNext,
+    /// Send links: all links to the destination.
+    SendAll,
+    /// The native menu's "Choose where…": the Overview, whose nodes offer
+    /// Next link here.
+    ChooseWhere,
     /// Ask the OS to make PwrRoute the default browser: the dropdown's row
     /// while another app has it.
     MakeDefault,
@@ -51,7 +67,7 @@ pub enum TrayCommand {
 }
 
 impl TrayCommand {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 13] = [
         Self::OpenMain,
         Self::TestLink,
         Self::Rules,
@@ -59,6 +75,10 @@ impl TrayCommand {
         Self::Settings,
         Self::About,
         Self::TogglePause,
+        Self::SendRules,
+        Self::SendNext,
+        Self::SendAll,
+        Self::ChooseWhere,
         Self::MakeDefault,
         Self::Quit,
     ];
@@ -74,6 +94,10 @@ impl TrayCommand {
             Self::Settings => "pwrroute.settings",
             Self::About => "pwrroute.about",
             Self::TogglePause => "pwrroute.pause",
+            Self::SendRules => "pwrroute.send-rules",
+            Self::SendNext => "pwrroute.send-next",
+            Self::SendAll => "pwrroute.send-all",
+            Self::ChooseWhere => "pwrroute.send-choose",
             Self::MakeDefault => "pwrroute.make-default",
             Self::Quit => "pwrroute.quit",
         }
@@ -139,6 +163,7 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
     });
     if live {
         follow_feed(&model, cx);
+        follow_send_clock(&model, cx);
     }
     let (events, received) = async_channel::unbounded();
     let native = match NativeTray::create(model.read(cx), events) {
@@ -299,6 +324,11 @@ fn refresh_pause_target(model: &Entity<TrayModel>, cx: &mut App) {
     };
     model.update(cx, |model, cx| {
         if model.pause_target != target {
+            // Until the user picks one, Send links offers the Everything
+            // else browser.
+            if !model.destination_chosen && model.sending().is_none() {
+                model.destination = SendDestination::profile(target.clone());
+            }
             model.pause_target = target;
             cx.notify();
         }
@@ -356,6 +386,8 @@ fn follow_feed(model: &Entity<TrayModel>, cx: &mut App) {
             model.sync(dispatched);
             cx.notify();
         });
+        // A dispatch may have used up the last of Next link.
+        sync_send(model, cx);
     }
     sync(model, &feed, cx);
     let model = model.clone();
@@ -391,6 +423,8 @@ fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
     default_browser::refresh(false, cx);
     // The pause row names where links would go now, not at launch.
     refresh_pause_target(&model, cx);
+    refresh_destinations(&model, cx);
+    sync_send(&model, cx);
     let anchor = crate::macos::status_item_anchor(position, size);
     let (origin, display, max_height) = match &anchor {
         Some(anchor) => {
@@ -446,6 +480,16 @@ pub fn run(command: TrayCommand, cx: &mut App) {
                 toggle_pause(&model, cx);
             }
         }
+        TrayCommand::SendRules => set_send_mode(SendMode::Rules, cx),
+        // The native menu's rows: one link, and the hour as last set.
+        TrayCommand::SendNext => {
+            if let Some(model) = model(cx) {
+                model.update(cx, |model, _| model.next_count = 1);
+            }
+            set_send_mode(SendMode::Next, cx);
+        }
+        TrayCommand::SendAll => set_send_mode(SendMode::All, cx),
+        TrayCommand::ChooseWhere => show_screen(Screen::Overview, cx),
         // A click, as the Settings button is: the one way to the OS.
         TrayCommand::MakeDefault => {
             default_browser::handle_settings_request(
@@ -490,6 +534,243 @@ fn toggle_pause(model: &Entity<TrayModel>, cx: &mut App) {
         model.set_paused(pausing);
         cx.notify();
     });
+}
+
+/// The tray over `model` and `router`, without an icon or the files: for
+/// window tests that drive Send links through the Overview.
+#[cfg(test)]
+pub fn install_for_test(
+    model: TrayModel,
+    router: Option<RouterHandle>,
+    cx: &mut App,
+) -> Entity<TrayModel> {
+    let model = cx.new(|_| model);
+    cx.set_global(Tray {
+        model: model.clone(),
+        live: false,
+        router,
+        config_default: ConfigDefault::default(),
+        native: None,
+        dropdown: None,
+        dropdown_closed_at: None,
+    });
+    model
+}
+
+/// The router Send links drives, when the app has one.
+fn router(cx: &App) -> Option<RouterHandle> {
+    cx.try_global::<Tray>().and_then(|tray| tray.router.clone())
+}
+
+/// Turn Send links to `mode`: Rules ends a send and a pause; Next link and
+/// All links send to the model's destination, with the stepper's count or
+/// the hour, ending a pause. The router first, then the model.
+pub fn set_send_mode(mode: SendMode, cx: &mut App) {
+    let Some(model) = model(cx) else {
+        return;
+    };
+    let send = model.read(cx).send_for(mode, SystemTime::now());
+    if let Some(router) = router(cx) {
+        match &send {
+            Some(send) => router.set_send_to(Some(send.clone())),
+            None => {
+                router.set_send_to(None);
+                router.set_paused(None);
+            }
+        }
+    }
+    model.update(cx, |model, cx| {
+        model.routing = match send {
+            Some(send) => Routing::Sending(send.scope),
+            None => Routing::Active,
+        };
+        cx.notify();
+    });
+}
+
+/// Send the next link to `destination`: the Overview's Next link here
+/// (design: Send Links 2c). Always one link, whatever the stepper says.
+pub fn send_next_to(destination: SendDestination, cx: &mut App) {
+    let Some(model) = model(cx) else {
+        return;
+    };
+    model.update(cx, |model, _| {
+        model.destination = destination;
+        model.destination_chosen = true;
+        model.next_count = 1;
+    });
+    set_send_mode(SendMode::Next, cx);
+}
+
+/// Pick where Send links sends links. A send in force goes there from the
+/// next link on, keeping its count or time.
+pub fn choose_destination(destination: SendDestination, cx: &mut App) {
+    let Some(model) = model(cx) else {
+        return;
+    };
+    if let Some(router) = router(cx) {
+        router.retarget_send(destination.target());
+    }
+    model.update(cx, |model, cx| {
+        model.destination = destination;
+        model.destination_chosen = true;
+        cx.notify();
+    });
+}
+
+/// The stepper: while Next link is on, more or fewer links left (the
+/// router changes the count under its lock); otherwise how many it will
+/// take.
+pub fn step_next(delta: i64, cx: &mut App) {
+    let Some(model) = model(cx) else {
+        return;
+    };
+    let running = matches!(model.read(cx).sending(), Some(SendScope::Next { .. }));
+    let router = router(cx);
+    model.update(cx, |model, cx| {
+        let shown = i64::from(model.next_shown());
+        let wanted = (shown + delta).clamp(1, i64::from(pwrroute_router::MAX_NEXT));
+        let wanted = u32::try_from(wanted).unwrap_or(1);
+        model.next_count = wanted;
+        if running {
+            let scope = match router.and_then(|router| router.add_to_next(delta)) {
+                Some(send) => send.scope,
+                // No router (the window harness): the model counts alone.
+                None => match model.sending() {
+                    Some(SendScope::Next { left, of }) => {
+                        let change = i64::from(wanted) - i64::from(left);
+                        SendScope::Next {
+                            left: wanted,
+                            of: u32::try_from((i64::from(of) + change).max(i64::from(wanted)))
+                                .unwrap_or(wanted),
+                        }
+                    }
+                    _ => return,
+                },
+            };
+            model.routing = Routing::Sending(scope);
+        }
+        cx.notify();
+    });
+}
+
+/// All links' length: until switched back, or for [`model::ALL_FOR`]. While
+/// All links is on, the hour starts again from now.
+pub fn set_all_for_hour(for_hour: bool, cx: &mut App) {
+    let Some(model) = model(cx) else {
+        return;
+    };
+    let running = matches!(model.read(cx).sending(), Some(SendScope::All { .. }));
+    model.update(cx, |model, cx| {
+        model.all_for_hour = for_hour;
+        cx.notify();
+    });
+    if running {
+        set_send_mode(SendMode::All, cx);
+    }
+}
+
+/// Bring the model's send up to date with the router's: a Next link
+/// counted down by a dispatch, used up, or an hour that ran out. A fixture
+/// or a tray without a router keeps its own.
+pub fn sync_send(model: &Entity<TrayModel>, cx: &mut App) {
+    if !cx.try_global::<Tray>().is_some_and(|tray| tray.live) {
+        return;
+    }
+    let Some(router) = router(cx) else {
+        return;
+    };
+    let routing = match (router.send_to(), router.paused()) {
+        (Some(send), _) => Routing::Sending(send.scope),
+        (None, Some(_)) => Routing::Paused,
+        (None, None) => Routing::Active,
+    };
+    model.update(cx, |model, cx| {
+        if model.routing != routing {
+            model.routing = routing;
+            cx.notify();
+        }
+    });
+}
+
+/// While All links runs for an hour, check every few seconds so the line
+/// counts down and the surfaces go back to Rules when it runs out.
+fn follow_send_clock(model: &Entity<TrayModel>, cx: &mut App) {
+    let model = model.clone();
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(Duration::from_secs(5)).await;
+            cx.update(|cx| {
+                if matches!(
+                    model.read(cx).sending(),
+                    Some(SendScope::All { until: Some(_) })
+                ) {
+                    sync_send(&model, cx);
+                    model.update(cx, |_, cx| cx.notify());
+                }
+            });
+        }
+    })
+    .detach();
+}
+
+/// The destination list as the scan has it: each browser the pickers
+/// offer, its profiles (or the browser's own, when it lists none), then
+/// its private window in its own word.
+fn refresh_destinations(model: &Entity<TrayModel>, cx: &mut App) {
+    if !cx.try_global::<Tray>().is_some_and(|tray| tray.live) {
+        return;
+    }
+    let groups = destination_groups(&crate::browser_scan::choices(cx));
+    model.update(cx, |model, cx| {
+        if model.destinations != groups {
+            model.destinations = groups;
+            cx.notify();
+        }
+    });
+}
+
+/// [`refresh_destinations`]' list, from the pickers' choices.
+fn destination_groups(choices: &[crate::activity_actions::BrowserChoice]) -> Vec<DestinationGroup> {
+    choices
+        .iter()
+        .filter(|choice| !choice.name.to_ascii_lowercase().contains("pwrroute"))
+        .map(|choice| {
+            let mut destinations: Vec<SendDestination> = if choice.profiles.is_empty() {
+                vec![SendDestination::profile(label(&choice.name, ""))]
+            } else {
+                choice
+                    .profiles
+                    .iter()
+                    .map(|profile| SendDestination::profile(label(&choice.name, profile)))
+                    .collect()
+            };
+            if let Some(word) = crate::overview_model::private_term(&choice.name) {
+                destinations.push(SendDestination {
+                    browser: label(&choice.name, ""),
+                    private: Some(word),
+                });
+            }
+            DestinationGroup {
+                browser: label(&choice.name, ""),
+                destinations,
+            }
+        })
+        .collect()
+}
+
+/// A destination named as the Overview names a node: `browser` and
+/// `profile` as written, or its private window.
+pub fn destination(browser: &str, profile: &str, private: bool) -> SendDestination {
+    if private {
+        SendDestination {
+            browser: label(browser, ""),
+            private: crate::overview_model::private_term(browser)
+                .or_else(|| Some("Private window".to_owned())),
+        }
+    } else {
+        SendDestination::profile(label(browser, profile))
+    }
 }
 
 #[cfg(test)]
@@ -628,6 +909,58 @@ mod target_tests {
             pause_target(None, Some(&dir.path().join("missing.js")), &mut cache),
             fallback
         );
+    }
+
+    /// The destination list: each browser the pickers offer (never
+    /// PwrRoute), its profiles or its own when it lists none, then its
+    /// private window in its word where it has one.
+    #[test]
+    fn the_destination_list_follows_the_scan() {
+        use crate::activity_actions::BrowserChoice;
+        let groups = destination_groups(&[
+            BrowserChoice {
+                name: "Google Chrome".into(),
+                profiles: vec!["Personal".into(), "Work".into()],
+            },
+            BrowserChoice {
+                name: "Safari".into(),
+                profiles: Vec::new(),
+            },
+            BrowserChoice {
+                name: "PwrRoute".into(),
+                profiles: Vec::new(),
+            },
+        ]);
+        let shown: Vec<Vec<String>> = groups
+            .iter()
+            .map(|group| {
+                group
+                    .destinations
+                    .iter()
+                    .map(model::SendDestination::display)
+                    .collect()
+            })
+            .collect();
+        let private = crate::overview_model::private_term("Google Chrome")
+            .map(|word| format!("Google Chrome \u{00b7} {word}"));
+        let mut chrome = vec![
+            "Google Chrome \u{00b7} Personal".to_owned(),
+            "Google Chrome \u{00b7} Work".to_owned(),
+        ];
+        chrome.extend(private);
+        assert_eq!(shown[0], chrome);
+        assert_eq!(shown[1][0], "Safari");
+        assert_eq!(groups.len(), 2, "never PwrRoute itself");
+        // A node's destination, as the Overview names it.
+        assert_eq!(
+            destination("Google Chrome", "Work", false).target(),
+            pwrroute_router::Destination {
+                browser: "Google Chrome".into(),
+                profile: "Work".into(),
+                private: false,
+            }
+        );
+        assert!(destination("Google Chrome", "", true).target().private);
     }
 
     #[test]

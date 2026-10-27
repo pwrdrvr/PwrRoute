@@ -146,6 +146,7 @@ pub fn entry_of(
                 by: Matched::Default { .. }
             } | Step::Fallback { .. }
                 | Step::Paused { .. }
+                | Step::Sent { .. }
         )
     });
     let rewritten = record
@@ -289,33 +290,21 @@ pub fn trace_of(record: &DispatchRecord, config: Option<&str>) -> Trace {
             )),
             // The step that chose the browser says which list the skipped
             // rule is in; the pause's own number is the config's.
-            Step::Paused { skipped } => steps.push(match (matched, skipped) {
-                (Some(Matched::Rule { index }), _) => step(
-                    StepKind::Default,
-                    Some(index),
-                    format!(
-                        "routing is paused: rules.json rule {} skipped, the pause target instead",
-                        index + 1
-                    ),
-                    Some(StepSource::Rules),
-                ),
-                (Some(Matched::Handler { index }), _) | (_, &Some(index)) => step(
-                    StepKind::Default,
-                    Some(index),
-                    format!(
-                        "routing is paused: config handler {} skipped, the pause target instead",
-                        index + 1
-                    ),
-                    Some(StepSource::Config),
-                ),
-                (_, None) => step(
-                    StepKind::Default,
-                    None,
-                    "routing is paused: every rule and handler skipped, the pause target instead"
-                        .to_owned(),
-                    None,
-                ),
-            }),
+            Step::Paused { skipped } => steps.push(held_step(
+                "routing is paused",
+                "the pause target instead",
+                matched,
+                *skipped,
+            )),
+            Step::Sent { sent, skipped } => {
+                let why = format!("the user sent this link ({})", sent.label());
+                steps.push(held_step(
+                    &why,
+                    "their destination instead",
+                    matched,
+                    *skipped,
+                ));
+            }
             Step::LaunchFailed { message } => {
                 launch_failed = true;
                 error.get_or_insert_with(|| message.clone());
@@ -511,6 +500,41 @@ pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// A pause's or a send's step: what it passed over, named from the step
+/// that chose the browser (which says which list), else the config's
+/// handler number it carries.
+fn held_step(
+    why: &str,
+    instead: &str,
+    matched: Option<Matched>,
+    skipped: Option<usize>,
+) -> TraceStep {
+    let (index, summary, source) = match (matched, skipped) {
+        (Some(Matched::Rule { index }), _) => (
+            Some(index),
+            format!("{why}: rules.json rule {} skipped, {instead}", index + 1),
+            Some(StepSource::Rules),
+        ),
+        (Some(Matched::Handler { index }), _) | (_, Some(index)) => (
+            Some(index),
+            format!("{why}: config handler {} skipped, {instead}", index + 1),
+            Some(StepSource::Config),
+        ),
+        (_, None) => (
+            None,
+            format!("{why}: every rule and handler skipped, {instead}"),
+            None,
+        ),
+    };
+    TraceStep {
+        kind: StepKind::Default,
+        index,
+        summary,
+        url: None,
+        source,
+    }
 }
 
 #[cfg(test)]
@@ -1028,6 +1052,36 @@ mod tests {
             ])
             .3,
             "routing is paused: every rule and handler skipped, the pause target instead"
+        );
+        // Sent: the same, in the user's words and with the count.
+        assert_eq!(
+            last(vec![
+                matched(Matched::Rule { index: 1 }),
+                Step::Sent {
+                    sent: pwrroute_router::Sent::Next { nth: 1, of: 3 },
+                    skipped: None,
+                },
+            ]),
+            (
+                StepKind::Default,
+                Some(1),
+                Some(StepSource::Rules),
+                "the user sent this link (next link 1 of 3): rules.json rule 2 skipped, \
+                 their destination instead"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            last(vec![
+                matched(Matched::Default { owner: None }),
+                Step::Sent {
+                    sent: pwrroute_router::Sent::All,
+                    skipped: None,
+                },
+            ])
+            .3,
+            "the user sent this link (all links): every rule and handler skipped, \
+             their destination instead"
         );
 
         // On the wire: `source` says whose list `index` counts.
