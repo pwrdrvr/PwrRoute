@@ -50,7 +50,7 @@ mod config_view;
 #[cfg(target_os = "macos")]
 #[path = "../src/default_browser.rs"]
 mod default_browser;
-
+#[cfg(target_os = "macos")]
 #[path = "../src/destinations.rs"]
 mod destinations;
 #[cfg(target_os = "macos")]
