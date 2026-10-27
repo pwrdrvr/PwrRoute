@@ -1104,6 +1104,8 @@ pub struct Activity {
     /// is on.
     pub journal_rows: Vec<ActivityRow>,
     pub expanded: Option<RowKey>,
+    /// The row under the pointer, which shows "+ Rule" ([`quick_add`]).
+    pub hovered: Option<RowKey>,
     pub filter: Filter,
     pub search: TextField,
     pub today: Counts,
@@ -1127,6 +1129,7 @@ impl Activity {
             rows: Vec::new(),
             journal_rows: Vec::new(),
             expanded: None,
+            hovered: None,
             filter: Filter::All,
             search: TextField::new("", cx),
             today: Counts::default(),
@@ -1197,6 +1200,15 @@ impl Activity {
                 .any(|row| row.key == key)
         }) {
             self.expanded = None;
+        }
+        if self.hovered.is_some_and(|key| {
+            !self
+                .rows
+                .iter()
+                .chain(&self.journal_rows)
+                .any(|row| row.key == key)
+        }) {
+            self.hovered = None;
         }
     }
 
@@ -1286,6 +1298,7 @@ impl Activity {
         self.kept_nothing = 0;
         self.counts = Counts::default();
         self.expanded = None;
+        self.hovered = None;
         if let Some(feed) = feed(cx) {
             feed.update(cx, |feed, cx| {
                 feed.clear();
@@ -1364,8 +1377,9 @@ fn grid_row(cells: [Div; 7]) -> Div {
         .child(more.w(px(column::MORE)).flex_none().flex().justify_center())
 }
 
-/// `.ar.head`
-fn head_row() -> Div {
+/// `.ar.head`. Under Everything else the Took column holds "+ Rule" at
+/// rest, so it has no heading.
+fn head_row(filter: Filter) -> Div {
     let cell = |label: &str| div().child(tracked(label, 9.5, 600.0, 0.14, theme::text_muted()));
     grid_row([
         cell("Time"),
@@ -1373,7 +1387,11 @@ fn head_row() -> Div {
         cell("From"),
         cell("Rule"),
         cell("Opened in"),
-        cell("Took"),
+        if filter == Filter::Unrouted {
+            div()
+        } else {
+            cell("Took")
+        },
         div(),
     ])
     .py(px(7.0))
@@ -1464,6 +1482,7 @@ fn row(
     index: usize,
     row: &ActivityRow,
     expanded: bool,
+    quick: Option<QuickAdd>,
     menu: Option<AnyElement>,
     last: bool,
     cx: &mut Context<'_, PwrRoute>,
@@ -1523,7 +1542,12 @@ fn row(
         clipped(row.from.clone(), false, 11.5, theme::text_secondary()),
         div().flex().child(rule),
         opened_cell(&row.opened, row.dry_run),
-        div().child(mono(row.took.clone(), 10.5, 500.0, theme::text_subtle())),
+        // "+ Rule" takes the Took cell's place: the cell keeps its width and
+        // the button the tag's height, so nothing moves.
+        match quick {
+            Some(quick) => div().child(quick_add_button(index, key, quick, cx)),
+            None => div().child(mono(row.took.clone(), 10.5, 500.0, theme::text_subtle())),
+        },
         div().relative().child(more).children(menu),
     ])
     .py(px(8.0))
@@ -1537,10 +1561,103 @@ fn row(
     .id(("activity-row", index))
     .debug_selector(move || format!("activity-row-{index}"))
     .cursor_pointer()
-    .on_click(cx.listener(move |this, _, _, cx| {
+    .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+        let next = if *over {
+            Some(key)
+        } else if this.activity.hovered == Some(key) {
+            None
+        } else {
+            return;
+        };
+        if this.activity.hovered != next {
+            this.activity.hovered = next;
+            cx.notify();
+        }
+    }))
+    .on_click(cx.listener(move |this, _, window, cx| {
         this.activity.toggle(key);
+        // The list takes the keyboard back from the search field, so
+        // ⌘N reaches the expanded row.
+        window.focus(&this.focus, cx);
         cx.notify();
     }))
+}
+
+/// How a row shows "+ Rule" (design: Activity Quick Add Rule 1a, 1c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuickAdd {
+    /// Under Everything else, at rest: quiet.
+    Rest,
+    /// The row under the pointer: in the accent.
+    Lit,
+}
+
+/// Whether a row shows "+ Rule" in its Took cell: on hover, and at rest
+/// under Everything else (the links no rule chose). Never for a record
+/// that did not keep its URL, nor for the expanded row, whose primary
+/// "Add a rule…" is right below it.
+pub fn quick_add(
+    row: &ActivityRow,
+    expanded: bool,
+    hovered: bool,
+    filter: Filter,
+) -> Option<QuickAdd> {
+    if row.privacy != Privacy::Full || expanded {
+        None
+    } else if hovered {
+        Some(QuickAdd::Lit)
+    } else if filter == Filter::Unrouted {
+        Some(QuickAdd::Rest)
+    } else {
+        None
+    }
+}
+
+/// The row's "+ Rule": opens the Add a rule sheet for it, without
+/// expanding or collapsing the row.
+fn quick_add_button(
+    index: usize,
+    key: RowKey,
+    quick: QuickAdd,
+    cx: &mut Context<'_, PwrRoute>,
+) -> impl IntoElement + use<> {
+    let (fill, border, color) = match quick {
+        QuickAdd::Lit => (
+            theme::accent_soft(),
+            theme::accent_border(),
+            theme::accent_bright(),
+        ),
+        QuickAdd::Rest => (
+            theme::transparent(),
+            theme::border_subtle(),
+            theme::text_secondary(),
+        ),
+    };
+    let shortcut = crate::activity_actions::add_rule_shortcut(cx);
+    div()
+        .id(("activity-quick-rule", index))
+        .debug_selector(move || format!("activity-quick-rule-{index}"))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.0))
+        .h(px(20.0))
+        .px(px(7.0))
+        .rounded(px(5.0))
+        .border_1()
+        .border_color(border)
+        .bg(fill)
+        .cursor_pointer()
+        .child(text("+", 11.0, 700.0, theme::accent()))
+        .child(text("Rule", 10.5, 600.0, color))
+        .tooltip(crate::overview::tip_with_key(
+            "Add a rule for this link",
+            shortcut,
+        ))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            cx.stop_propagation();
+            this.add_rule(key, window, cx);
+        }))
 }
 
 /// `.ax`: the expanded row's trace and actions.
@@ -1576,6 +1693,7 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
     let url = row.matched_url.to_string();
     let from = row.from.to_string();
     let key = row.key;
+    let shortcut = crate::activity_actions::add_rule_shortcut(cx);
     // A host-only record has no full URL to re-test or add a rule for.
     let whole = row.privacy == Privacy::Full;
     row.steps
@@ -1595,25 +1713,39 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
                 }),
             |ax, step| ax.child(line(step.mark, step.text.clone())),
         )
+        // The link on its own lines, two at most (the sheet shows it
+        // whole), so a long one never pushes the actions out of sight.
+        .child(
+            div()
+                .mt(px(2.0))
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .line_clamp(2)
+                .text_ellipsis()
+                .font_family(theme::mono_family(500.0))
+                .font_weight(theme::weight(500.0))
+                .text_size(px(11.5))
+                .line_height(px(16.5))
+                .text_color(theme::text_secondary())
+                .child(row.final_url.clone()),
+        )
+        // Add a rule first, the primary action (design: Activity Quick Add
+        // Rule 1d), then the rest.
         .child(
             div()
                 .mt(px(2.0))
                 .flex()
                 .items_center()
-                .gap(px(8.0))
-                .child(mono(
-                    row.final_url.clone(),
-                    11.5,
-                    500.0,
-                    theme::text_secondary(),
-                ))
-                .when(row.journaled, |actions| actions.child(tag("from the journal")))
+                .gap(px(6.0))
                 .when(whole, |actions| {
                     actions.child(
-                        button("Add a rule\u{2026}", ButtonKind::Quiet, true)
+                        button("Add a rule\u{2026}", ButtonKind::Primary, true)
+                            .child(on_primary_key(shortcut))
                             .id(("activity-add-rule", index))
                             .debug_selector(move || format!("activity-add-rule-{index}"))
                             .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
                                 this.add_rule(key, window, cx);
                             })),
                     )
@@ -1629,8 +1761,23 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
                                 this.retest(&url, &from, window, cx);
                             })),
                     )
-                }),
+                })
+                .when(row.journaled, |actions| actions.child(tag("from the journal"))),
         )
+}
+
+/// `.kbd` on a primary button: the accent's ink, on a faint edge.
+fn on_primary_key(label: &'static str) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(16.0))
+        .px(px(4.0))
+        .border_1()
+        .border_color(gpui_kit::hsla(0.0, 0.0, 0.0, 0.25))
+        .rounded(px(4.0))
+        .child(mono(label, 9.5, 600.0, theme::accent_on()))
 }
 
 /// `.toolbar`: search, the filters and where the list lives.
@@ -1925,15 +2072,21 @@ pub fn pane(
                 .fold(list, |list, (position, (index, item))| {
                     let last = offset + position + 1 == count && kept_nothing == 0;
                     let expanded = app.activity.expanded == Some(item.key);
+                    let quick = quick_add(
+                        item,
+                        expanded,
+                        app.activity.hovered == Some(item.key),
+                        app.activity.filter,
+                    );
                     let menu = row_menu(app, index, item.key, cx);
-                    list.child(row(index, item, expanded, menu, last, cx))
+                    list.child(row(index, item, expanded, quick, menu, last, cx))
                         .when(expanded, |list| {
                             list.child(expansion(index, item, last, cx))
                         })
                 })
         };
         let memory_rows = visible.len();
-        let mut list = rows(list.child(head_row()), visible, 0, cx);
+        let mut list = rows(list.child(head_row(app.activity.filter)), visible, 0, cx);
         if !journaled.is_empty() {
             list = rows(list.child(journal_divider()), journaled, memory_rows, cx);
         }
@@ -2973,6 +3126,38 @@ mod tests {
             vec![Step::Paused { skipped: None }],
         ));
         assert_eq!(paused.rule, "paused");
+    }
+
+    #[test]
+    fn plus_rule_shows_on_hover_and_at_rest_under_everything_else() {
+        let full = ActivityRow::from_record(&routed(
+            1,
+            Vec::new(),
+            Matched::Default { owner: None },
+            Vec::new(),
+        ));
+        let mut host = routed(2, Vec::new(), Matched::Rule { index: 0 }, Vec::new());
+        host.privacy = Privacy::Host;
+        let host = ActivityRow::from_record(&host);
+        // Hovered: lit, under any filter.
+        assert_eq!(
+            quick_add(&full, false, true, Filter::All),
+            Some(QuickAdd::Lit)
+        );
+        assert_eq!(
+            quick_add(&full, false, true, Filter::Unrouted),
+            Some(QuickAdd::Lit)
+        );
+        // At rest: only under Everything else.
+        assert_eq!(quick_add(&full, false, false, Filter::All), None);
+        assert_eq!(
+            quick_add(&full, false, false, Filter::Unrouted),
+            Some(QuickAdd::Rest)
+        );
+        // Never on the expanded row, nor on one without its URL.
+        assert_eq!(quick_add(&full, true, true, Filter::Unrouted), None);
+        assert_eq!(quick_add(&host, false, true, Filter::All), None);
+        assert_eq!(quick_add(&host, false, false, Filter::Unrouted), None);
     }
 
     #[test]

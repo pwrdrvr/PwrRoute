@@ -980,6 +980,9 @@ impl PwrRoute {
                     _ => {}
                 }
             }
+            Screen::Activity => {
+                self.activity_key(event, window, cx);
+            }
             _ => {}
         }
     }
