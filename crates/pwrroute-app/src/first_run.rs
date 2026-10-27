@@ -1771,10 +1771,13 @@ fn where_links_go(model: &FirstRunModel) -> Div {
                 row.border_b_1().border_color(theme::border_faint())
             })
             .child(marker)
+            // As tall as the row (the marker sets it), so the clip leaves
+            // the glyphs room below and above.
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
+                    .self_stretch()
                     .flex()
                     .items_center()
                     .overflow_hidden()

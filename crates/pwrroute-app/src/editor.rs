@@ -407,7 +407,6 @@ fn editable(
     };
     let content = content
         .min_w_0()
-        .overflow_hidden()
         .whitespace_nowrap()
         .map(|text| {
             if focused {
@@ -420,6 +419,7 @@ fn editable(
         .font_weight(theme::weight(weight))
         .text_size(px(size))
         .line_height(px(size));
+    let content = crate::widgets::clip_x(content, size, size);
     let caret_bar = || div().flex_none().w(px(1.0)).h(px(14.0)).bg(theme::accent());
     let mut inner = input_box().w_full().gap(px(8.0)).when(look.error, |input| {
         input.border_color(theme::status_error())

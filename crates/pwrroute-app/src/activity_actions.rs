@@ -1321,13 +1321,13 @@ fn pattern_field(
     };
     let content = content
         .min_w_0()
-        .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
         .font_family(theme::mono_family(500.0))
         .font_weight(theme::weight(500.0))
         .text_size(px(12.0))
         .line_height(px(12.0));
+    let content = crate::widgets::clip_x(content, 12.0, 12.0);
     let mut inner = input_box().w_full().child(content);
     if focused && !sheet.pattern.selected {
         inner = inner.child(
