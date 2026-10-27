@@ -39,13 +39,14 @@ use pwrroute_router::{DispatchRecord, Matched, OpenerInfo, Outcome, Owner, Step}
 
 use crate::activity::{self, RowKey, matched_url};
 use crate::app::{PwrRoute, Selection};
+use crate::destinations::{self, Choice};
 use crate::rules_model::KEEP_LEVELS;
 use crate::rules_store::Status;
 use crate::text_field::{Edit, TextField};
 use crate::theme::{self, mono, text, tracked};
 use crate::widgets::{
-    AppBadge, ButtonKind, badge, badge_for, button, caret, field_label, input_box, menu_card,
-    menu_row, one_line, paragraph, profiles_hint, segment, segmented, switch,
+    AppBadge, ButtonKind, badge, badge_for, button, input_box, menu_card, menu_row, one_line,
+    paragraph, segment, segmented, switch,
 };
 
 /// A browser the sheet offers, with the profiles it has on this machine.
@@ -101,15 +102,6 @@ pub enum Position {
     Top,
     #[default]
     Bottom,
-}
-
-/// Which of the sheet's menus is open.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Picking {
-    #[default]
-    None,
-    Browser,
-    Profile,
 }
 
 /// A recent link the chosen pattern would also catch.
@@ -202,8 +194,6 @@ pub struct AddRule {
     /// "where it opened") when the scan does not list it.
     pub opened_in: Option<String>,
     pub profile: String,
-    pub picking: Picking,
-    was_picking: Picking,
     pub private: bool,
     pub keep: Privacy,
     pub position: Position,
@@ -284,8 +274,6 @@ impl AddRule {
                 .map(|b| b.name.clone())
                 .filter(|name| !name.trim().is_empty()),
             profile: String::new(),
-            picking: Picking::None,
-            was_picking: Picking::None,
             private: false,
             keep: Privacy::Full,
             position: Position::Bottom,
@@ -411,6 +399,24 @@ impl AddRule {
             self.only_from = !self.only_from;
         }
         self.problem = None;
+    }
+
+    /// A pill in Open in: browser, profile and private window at once. Keep
+    /// follows the private window while it is what private implies.
+    pub fn choose(&mut self, choice: Choice) {
+        let implied = |private| {
+            if private {
+                Privacy::Host
+            } else {
+                Privacy::Full
+            }
+        };
+        if self.keep == implied(self.private) {
+            self.keep = implied(choice.private);
+        }
+        self.browser = choice.browser;
+        self.profile = choice.profile;
+        self.private = choice.private;
     }
 
     /// After a keystroke in the pattern field: which choice it is now.
@@ -1711,164 +1717,55 @@ fn pattern_field(
         }))
 }
 
-/// The profile picker's first choice, by position: the browser's own
-/// default, written as no profile.
-const DEFAULT_PROFILE: &str = "Default profile";
-
-/// A picker: the current value in a box, and while open its menu.
-fn picker(
-    id: &'static str,
-    which: Picking,
-    label: Div,
-    choices: Vec<(String, Option<String>)>,
-    sheet: &AddRule,
-    cx: &mut Context<'_, PwrRoute>,
-) -> Div {
-    let menu = choices.into_iter().enumerate().fold(
-        menu_card(ElementId::Name(format!("{id}-menu").into()))
-            .debug_selector(move || format!("{id}-menu"))
-            // As wide as the field, never narrower.
-            .absolute()
-            .top(px(34.0))
-            .left_0()
-            .right_0()
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.set_add_rule(|sheet| sheet.picking = Picking::None, cx);
-            })),
-        |menu, (index, (name, extra))| {
-            let chosen = name.clone();
-            let badge_label = (which == Picking::Browser).then(|| badge_for(&name));
-            menu.child(
-                menu_row(
-                    ElementId::Name(format!("{id}-choice-{index}").into()),
-                    badge_label,
-                    name.clone(),
-                    extra.map(Into::into),
-                )
-                .debug_selector(move || format!("{id}-choice-{index}"))
-                .hover(|row| row.bg(theme::bg_hover()))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let chosen = chosen.clone();
-                    this.set_add_rule(
-                        move |sheet| {
-                            match which {
-                                Picking::Browser => {
-                                    if sheet.browser != chosen {
-                                        sheet.profile.clear();
-                                    }
-                                    sheet.browser = chosen;
-                                }
-                                Picking::Profile => {
-                                    // The first row is the browser's own
-                                    // default, whatever a profile is called.
-                                    sheet.profile = if index == 0 { String::new() } else { chosen };
-                                }
-                                Picking::None => {}
-                            }
-                            sheet.picking = Picking::None;
-                        },
-                        cx,
-                    );
-                })),
-            )
-        },
-    );
-    div()
-        .relative()
-        .w_full()
-        .child(
-            input_box()
-                .id(ElementId::Name(id.into()))
-                .debug_selector(move || id.into())
-                .cursor_pointer()
-                .child(label)
-                .child(caret())
-                .capture_any_mouse_down(cx.listener(|this, _, _, _| {
-                    if let Some(sheet) = &mut this.actions.sheet {
-                        sheet.was_picking = sheet.picking;
-                    }
-                }))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.set_add_rule(
-                        |sheet| {
-                            sheet.picking = if sheet.was_picking == which {
-                                Picking::None
-                            } else {
-                                which
-                            };
-                        },
-                        cx,
-                    );
-                })),
-        )
-        .when(sheet.picking == which, |picker| {
-            picker.child(deferred(menu))
-        })
-}
-
-/// The browser and profile pickers, from the detected browsers.
+/// Open in: the browsers and their profiles as one control (design:
+/// Destination and App Pickers 1a, 1b). The browser the link opened in
+/// leads; one the scan does not list still gets its lane.
 fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let mut browsers: Vec<(String, Option<String>)> = app
-        .browsers
-        .iter()
-        .map(|b| (b.name.clone(), profiles_hint(&b.profiles)))
-        .collect();
+    let mut browsers = app.browsers.clone();
     if let Some(opened) = &sheet.opened_in
-        && !browsers.iter().any(|(name, _)| name == opened)
+        && !browsers.iter().any(|b| b.name.eq_ignore_ascii_case(opened))
     {
-        browsers.push((opened.clone(), Some("where it opened".into())));
+        browsers.push(BrowserChoice {
+            name: opened.clone(),
+            profiles: Vec::new(),
+        });
     }
-    if !sheet.browser.is_empty() && !browsers.iter().any(|(name, _)| *name == sheet.browser) {
-        browsers.push((sheet.browser.clone(), None));
-    }
-    let mut profiles: Vec<(String, Option<String>)> = vec![(DEFAULT_PROFILE.into(), None)];
-    profiles.extend(
-        app.browsers
-            .iter()
-            .find(|b| b.name == sheet.browser)
-            .map(|b| {
-                b.profiles
-                    .iter()
-                    .map(|p| (p.clone(), None))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default(),
+    let current = Choice {
+        browser: sheet.browser.clone(),
+        profile: sheet.profile.clone(),
+        private: sheet.private,
+    };
+    let lanes = destinations::lanes(
+        &browsers,
+        &app.installed,
+        &current,
+        sheet
+            .opened_in
+            .as_deref()
+            .map(|opened| (opened, "where it opened")),
+        !app.installed.is_empty(),
     );
-    let browser_label = if sheet.browser.is_empty() {
-        div().child(text("Choose a browser", 12.5, 400.0, theme::text_subtle()))
-    } else {
-        div()
-            .flex()
-            .min_w_0()
-            .items_center()
-            .gap(px(8.0))
-            .child(badge(badge_for(&sheet.browser)))
-            .child(field_label(sheet.browser.clone(), theme::text_primary()))
-    };
-    let profile_label = if sheet.profile.is_empty() {
-        div().child(text(DEFAULT_PROFILE, 12.5, 400.0, theme::text_subtle()))
-    } else {
-        div()
-            .min_w_0()
-            .child(field_label(sheet.profile.clone(), theme::text_primary()))
-    };
+    let private_word = sheet
+        .private
+        .then(|| crate::overview_model::private_term(&sheet.browser))
+        .flatten();
     div()
-        .child(picker(
-            "add-rule-browser",
-            Picking::Browser,
-            browser_label,
-            browsers,
-            sheet,
+        .child(destinations::draw(
+            "add-rule-dest",
+            &lanes,
+            destinations::Density::Regular,
+            |this: &mut PwrRoute, choice, _, cx| {
+                this.set_add_rule(|sheet| sheet.choose(choice), cx)
+            },
             cx,
         ))
-        .child(picker(
-            "add-rule-profile",
-            Picking::Profile,
-            profile_label,
-            profiles,
-            sheet,
-            cx,
-        ))
+        .when_some(private_word, |control, word| {
+            control.child(help(format!(
+                "{} opens these in its {word} window. A private rule keeps host only unless \
+                 Keep says otherwise.",
+                crate::default_browser::browser_name(&sheet.browser)
+            )))
+        })
 }
 
 /// The sheet's line about the config in charge, in the order
@@ -2020,27 +1917,11 @@ fn sheet_body(
             .into_any_element(),
         );
     }
-    body.push(field("Open in", None, open_in(app, sheet, cx)).into_any_element());
     body.push(
         field(
-            "Open in a private window",
-            None,
-            div()
-                .child(
-                    div()
-                        .id("add-rule-private")
-                        .debug_selector(|| "add-rule-private".into())
-                        .cursor_pointer()
-                        .self_start()
-                        .child(switch(sheet.private))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_add_rule(|sheet| sheet.private = !sheet.private, cx);
-                        })),
-                )
-                .child(help(
-                    "The browser's own private-window flag. On, the rule keeps host only \
-                     unless Keep says otherwise.",
-                )),
+            "Open in",
+            Some("Pick a profile, or the browser's private window."),
+            open_in(app, sheet, cx),
         )
         .into_any_element(),
     );

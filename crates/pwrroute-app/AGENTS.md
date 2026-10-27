@@ -38,7 +38,7 @@ their own modules.
 - **One browser scan (`browser_scan.rs`).** The machine's browsers and
   their profiles are read once, the first time a picker or Settings asks,
   and again only on Settings › Browsers' Rescan; `PwrRoute::browsers`
-  (the rule editor's pickers, Activity's Add a rule sheet) and the
+  (the rule editor's lanes, Activity's Add a rule sheet) and the
   Browsers pane read the same scan.
   `settings.json`'s `browsers.hidden` (bundle ids, or names where there is
   none) keeps apps out of the pickers; rules that name a hidden app still
@@ -483,8 +483,8 @@ their own modules.
   the top and bottom too. An ellipsized line is `widgets::one_line`; any
   other box that clips text sideways is `widgets::clip_x`, or a box that
   is taller than the glyphs (stretched to its row).
-- **Every way to start a rule ends in one editor (`editor.rs`,
-  `rule_pickers.rs`; design: Rule Editor Pickers).** Rules' Add rule (also
+- **Every way to start a rule ends in one editor (`editor.rs`; design:
+  Rule Editor Pickers).** Rules' Add rule (also
   under a config, where it opens the folded visual rules), the Overview's
   "+ Rule" and "+ Rule for …", and Test a link's "Add a rule…" (its pattern
   suggested from the URL the rules saw, after rewrites: `TestLink::rule_start`)
@@ -510,19 +510,28 @@ their own modules.
   chips under the pattern, and Clear goes
   back to a blank rule. The Overview's first-rule prompt names the last
   link, with "Blank rule" for `add_blank_handler`. The link stays in
-  memory: Try it is never written. Open in and Profile are pickers over
-  the scan (`rule_pickers`: this Mac's browsers, then the apps
-  the rules name, dimmed when the scan ran and found nothing), each with a
-  way out to a typed value ("Other app…", "Profile by name or folder…")
-  that `Rail::browser_typed` / `profile_typed` keep across rebuilds of the
-  same rule's rail (`rebuild_rail_kept`, only after adding or removing a
-  field; a delete, insert or reload can put another rule at the index, so
-  those rebuild fresh). A value the scan cannot match is never rewritten: it
-  shows as written with a warning. Choosing another browser clears a
-  profile it does not have. "Missing" needs `PwrRoute::installed` to be
-  non-empty, as on the Overview. The private switch reads in the browser's
-  word (`overview_model::private_term`) and is off-limits for a scanned
-  browser without one.
+  memory: Try it is never written.
+- **Open in is lanes, Sent from is chips (`destinations.rs`; design:
+  Destination and App Pickers).** The editor and Activity's sheet draw the
+  same `destinations::lanes`: a lane per browser in the scan, in its order
+  (the sheet leads with where the link opened), and as pills its Default,
+  each profile and its private window in the browser's word
+  (`overview_model::private_term`; none for a browser without one). One
+  pill is on across every lane, and a pill is the whole choice: browser,
+  profile and private together. A value the scan cannot match is never
+  rewritten: the rule's browser gets a lane of its own, first, missing once
+  `PwrRoute::installed` is non-empty, and a profile the scan lacks gets a
+  pill of its own, with `profile-warning` when the browser's profiles were
+  read. The editor's way out, "Other app or profile by name…", is the typed
+  browser and profile fields and the private switch; `Rail::browser_typed`
+  keeps it across rebuilds of the same rule's rail (`rebuild_rail_kept`,
+  only after adding or removing a field; a delete, insert or reload can
+  put another rule at the index, so those rebuild fresh). Sent from is
+  never typed: each app is a chip by the name it goes by
+  (`default_browser::browser_name`) while `rules[].opener` keeps the bundle
+  id, and "+ app" offers the apps that sent links recently
+  (`start_from::recent_senders`), the apps other rules name, and any app
+  in Applications through the file panel (`pwrroute_os::app_bundle_id`).
 - **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
   Settings, first-run or one of Help's windows (`DocWindow`, `LogsWindow`)
   is open (`Regular`) and goes when the last closes

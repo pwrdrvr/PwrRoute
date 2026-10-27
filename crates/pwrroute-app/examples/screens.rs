@@ -50,6 +50,9 @@ mod config_view;
 #[cfg(target_os = "macos")]
 #[path = "../src/default_browser.rs"]
 mod default_browser;
+
+#[path = "../src/destinations.rs"]
+mod destinations;
 #[cfg(target_os = "macos")]
 #[path = "../src/editor.rs"]
 mod editor;
@@ -528,20 +531,20 @@ fn main() {
         );
         app.refresh(cx);
     }
+    // Destination and App Pickers 1c, 2a, 2b: the editor's Open in lanes
+    // and Sent from's chips, with "+ app" open over recent senders.
     shoot("app-1a-open-in", None, &|app, window, cx| {
         with_scan(app);
         app.navigate(Screen::Rules, window, cx);
-        app.select(Selection::Handler(0), cx);
-        if let Some(rail) = &mut app.rail {
-            rail.menu = Some(editor::RailMenu::Browser);
-        }
+        app.select(Selection::Handler(2), cx);
     });
-    shoot("app-1a-profile", None, &|app, window, cx| {
+    shoot("app-1a-sent-from-menu", None, &|app, window, cx| {
         with_scan(app);
+        activity::install_feed(activity::Feed::from_records(fixtures::activity()), cx);
         app.navigate(Screen::Rules, window, cx);
-        app.select(Selection::Handler(0), cx);
+        app.select(Selection::Handler(2), cx);
         if let Some(rail) = &mut app.rail {
-            rail.menu = Some(editor::RailMenu::Profile);
+            rail.menu = Some(editor::RailMenu::Opener);
         }
     });
     shoot("app-1a-new-rule", None, &|app, window, cx| {
@@ -722,9 +725,6 @@ fn main() {
             window,
             cx,
         );
-        if let Some(sheet) = app.actions.sheet.as_mut() {
-            sheet.picking = activity_actions::Picking::Browser;
-        }
     });
 
     // Activity's row menu with a Save hint that names a long profile

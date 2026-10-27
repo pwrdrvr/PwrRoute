@@ -93,6 +93,58 @@ pub fn recent_links(cx: &App) -> Vec<RecentLink> {
         .unwrap_or_default()
 }
 
+/// An app that sent links lately (design: Destination and App Pickers
+/// 2b): what a rule writes for it, its name, and how many of the links in
+/// memory it sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sender {
+    /// Its bundle id, else its name: what `rules[].opener` keeps.
+    pub value: String,
+    pub name: String,
+    pub links: usize,
+}
+
+/// The apps that sent the links in memory, the latest sender first, each
+/// once, at most `limit`. Tests run from no app, so they count for none.
+pub fn senders(records: &[DispatchRecord], limit: usize) -> Vec<Sender> {
+    let mut out: Vec<Sender> = Vec::new();
+    for record in records {
+        if record.outcome == Outcome::Tested {
+            continue;
+        }
+        let Some(app) = record
+            .link
+            .opener
+            .as_ref()
+            .filter(|a| !a.name.trim().is_empty())
+        else {
+            continue;
+        };
+        let value = if app.bundle_id.trim().is_empty() {
+            app.name.trim()
+        } else {
+            app.bundle_id.trim()
+        };
+        if let Some(sender) = out.iter_mut().find(|s| s.value.eq_ignore_ascii_case(value)) {
+            sender.links += 1;
+        } else if out.len() < limit {
+            out.push(Sender {
+                value: value.to_owned(),
+                name: app.name.trim().to_owned(),
+                links: 1,
+            });
+        }
+    }
+    out
+}
+
+/// The feed's senders; none without a feed.
+pub fn recent_senders(cx: &App) -> Vec<Sender> {
+    activity::feed(cx)
+        .map(|feed| senders(feed.read(cx).records(), 8))
+        .unwrap_or_default()
+}
+
 /// The last link the person opened, if the feed kept it whole.
 pub fn last_link(cx: &App) -> Option<RecentLink> {
     activity::feed(cx).and_then(|feed| recent(feed.read(cx).records(), 1).into_iter().next())
