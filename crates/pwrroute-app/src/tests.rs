@@ -1833,6 +1833,10 @@ fn activity_adds_a_rule_for_any_link_from_the_app(cx: &mut TestAppContext) {
             )
         })
     };
+    // A click on the dimmed window around the sheet keeps it open.
+    let scrim = cx.debug_bounds("add-rule-scrim").expect("the scrim");
+    cx.simulate_click(scrim.origin + point(px(8.0), px(8.0)), Modifiers::none());
+    assert!(cx.debug_bounds("add-rule-sheet").is_some());
     // Offered, never chosen for the person.
     assert!(cx.debug_bounds("add-rule-any-from").is_some());
     let (pattern, any_from, only_from, _, _) = sheet(cx);

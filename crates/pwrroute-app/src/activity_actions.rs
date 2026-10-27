@@ -2271,8 +2271,9 @@ pub fn sheet(
             .pt(px(56.0))
             .pb(px(24.0))
             .bg(scrim())
-            .on_click(cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx)))
-            .child(panel.on_click(|_, _, cx| cx.stop_propagation())),
+            // A click outside the sheet does nothing: only Cancel throws
+            // away what the person has chosen so far.
+            .child(panel),
     ))
 }
 
