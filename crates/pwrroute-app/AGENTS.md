@@ -117,7 +117,7 @@ their own modules.
   item; Rules opens as a list with nothing selected (a click or Down
   selects). `overview_model::build` is plain data over the edited
   `rules.json`, the config's `describe()`, the routing `Status` (config
-  error > paused > not default > unknown > routing), the scan
+  error > paused > sending > not default > unknown > routing), the scan
   (`PwrRoute::installed`; a target is drawn missing only once the scan ran)
   and the feed's counts and `Tally`. The map is a graph from rows to
   profile nodes: one card per browser with a node per profile (routed
@@ -444,14 +444,16 @@ their own modules.
   section above Pause routing is a three-way switch (Rules, Next link,
   All links), the destination row with the editor's lanes in place
   (`destinations::draw` at `Density::Compact`, over
-  `TrayModel::choices`: the scan less hidden apps and PwrRoute; a pill
+  `TrayModel::choices`: the scan, which already leaves out PwrRoute and
+  every other link router, less hidden apps; a pill
   is the destination, `destination_of`), and the line
   for the mode on: the stepper (`step_next`) or Until switched back / For
   1 hour (`set_all_for_hour`). `set_send_mode` writes the router first
   (Rules ends a pause too), then `TrayModel::routing`
   (`Routing::Sending(SendScope)`); `choose_destination` retargets a send
   in force. The router counts, and the tray reads it back after every
-  dispatch and every 5 s while an hour runs (`sync_send`). The
+  dispatch and every second while an hour runs (`sync_send`,
+  `follow_send_clock`, which runs only then). The
   destination is the last chosen this session, else the pause target;
   nothing about it is saved. The native menu has radio rows naming the
   destination and Choose where… (the Overview). The Overview reads the

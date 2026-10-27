@@ -414,6 +414,24 @@ pub enum SendScope {
     All { until: Option<SystemTime> },
 }
 
+impl SendScope {
+    /// A `Next` with `delta` more or fewer links left, never below one or
+    /// past [`MAX_NEXT`], and the number asked for moved with it. An `All`
+    /// is unchanged.
+    pub fn stepped(self, delta: i64) -> Self {
+        let Self::Next { left, of } = self else {
+            return self;
+        };
+        let new_left = (i64::from(left) + delta).clamp(1, i64::from(MAX_NEXT));
+        let change = new_left - i64::from(left);
+        let left = u32::try_from(new_left).unwrap_or(1);
+        Self::Next {
+            left,
+            of: u32::try_from((i64::from(of) + change).max(new_left)).unwrap_or(left),
+        }
+    }
+}
+
 /// Links sent to a [`Destination`] instead of where the rules would send
 /// them, for the next few or for all of them. In memory only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -807,12 +825,7 @@ impl RouterHandle {
     pub fn add_to_next(&self, delta: i64) -> Option<SendTo> {
         match &mut *self.held() {
             Some(Hold::Sending(send)) => {
-                if let SendScope::Next { left, of } = &mut send.scope {
-                    let new_left = (i64::from(*left) + delta).clamp(1, i64::from(MAX_NEXT));
-                    let change = new_left - i64::from(*left);
-                    *left = u32::try_from(new_left).unwrap_or(1);
-                    *of = u32::try_from((i64::from(*of) + change).max(new_left)).unwrap_or(*left);
-                }
+                send.scope = send.scope.stepped(delta);
                 Some(send.clone())
             }
             _ => None,

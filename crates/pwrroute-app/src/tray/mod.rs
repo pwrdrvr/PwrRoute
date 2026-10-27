@@ -141,6 +141,9 @@ struct Tray {
         allow(dead_code, reason = "only macOS has the dropdown")
     )]
     dropdown_closed_at: Option<Instant>,
+    /// Ticks while All links runs for an hour ([`follow_send_clock`]);
+    /// dropped, it stops.
+    send_clock: Option<gpui_kit::Task<()>>,
 }
 
 impl Global for Tray {}
@@ -163,7 +166,6 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
     });
     if live {
         follow_feed(&model, cx);
-        follow_send_clock(&model, cx);
     }
     let (events, received) = async_channel::unbounded();
     let native = match NativeTray::create(model.read(cx), events) {
@@ -188,6 +190,7 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
         native,
         dropdown: None,
         dropdown_closed_at: None,
+        send_clock: None,
     });
     cx.spawn(async move |cx| {
         while let Ok(event) = received.recv().await {
@@ -482,12 +485,7 @@ pub fn run(command: TrayCommand, cx: &mut App) {
         }
         TrayCommand::SendRules => set_send_mode(SendMode::Rules, cx),
         // The native menu's rows: one link, and the hour as last set.
-        TrayCommand::SendNext => {
-            if let Some(model) = model(cx) {
-                model.update(cx, |model, _| model.next_count = 1);
-            }
-            set_send_mode(SendMode::Next, cx);
-        }
+        TrayCommand::SendNext => start_send(SendMode::Next, Some(1), cx),
         TrayCommand::SendAll => set_send_mode(SendMode::All, cx),
         TrayCommand::ChooseWhere => show_screen(Screen::Overview, cx),
         // A click, as the Settings button is: the one way to the OS.
@@ -553,6 +551,7 @@ pub fn install_for_test(
         native: None,
         dropdown: None,
         dropdown_closed_at: None,
+        send_clock: None,
     });
     model
 }
@@ -566,10 +565,21 @@ fn router(cx: &App) -> Option<RouterHandle> {
 /// All links send to the model's destination, with the stepper's count or
 /// the hour, ending a pause. The router first, then the model.
 pub fn set_send_mode(mode: SendMode, cx: &mut App) {
+    start_send(mode, None, cx);
+}
+
+/// [`set_send_mode`], with Next link taking `next` links instead of the
+/// stepper's count, which stays as the user set it.
+fn start_send(mode: SendMode, next: Option<u32>, cx: &mut App) {
     let Some(model) = model(cx) else {
         return;
     };
-    let send = model.read(cx).send_for(mode, SystemTime::now());
+    let mut send = model.read(cx).send_for(mode, SystemTime::now());
+    if let (Some(send), Some(n)) = (send.as_mut(), next)
+        && matches!(send.scope, SendScope::Next { .. })
+    {
+        send.scope = SendScope::Next { left: n, of: n };
+    }
     if let Some(router) = router(cx) {
         match &send {
             Some(send) => router.set_send_to(Some(send.clone())),
@@ -586,6 +596,7 @@ pub fn set_send_mode(mode: SendMode, cx: &mut App) {
         };
         cx.notify();
     });
+    follow_send_clock(&model, cx);
 }
 
 /// Send the next link to `destination`: the Overview's Next link here
@@ -597,9 +608,8 @@ pub fn send_next_to(destination: SendDestination, cx: &mut App) {
     model.update(cx, |model, _| {
         model.destination = destination;
         model.destination_chosen = true;
-        model.next_count = 1;
     });
-    set_send_mode(SendMode::Next, cx);
+    start_send(SendMode::Next, Some(1), cx);
 }
 
 /// Pick where Send links sends links. A send in force goes there from the
@@ -635,17 +645,11 @@ pub fn step_next(delta: i64, cx: &mut App) {
         if running {
             let scope = match router.and_then(|router| router.add_to_next(delta)) {
                 Some(send) => send.scope,
-                // No router (the window harness): the model counts alone.
+                // No router (the window harness): the model counts alone,
+                // as the router would.
                 None => match model.sending() {
-                    Some(SendScope::Next { left, of }) => {
-                        let change = i64::from(wanted) - i64::from(left);
-                        SendScope::Next {
-                            left: wanted,
-                            of: u32::try_from((i64::from(of) + change).max(i64::from(wanted)))
-                                .unwrap_or(wanted),
-                        }
-                    }
-                    _ => return,
+                    Some(scope) => scope.stepped(delta),
+                    None => return,
                 },
             };
             model.routing = Routing::Sending(scope);
@@ -693,25 +697,33 @@ pub fn sync_send(model: &Entity<TrayModel>, cx: &mut App) {
     });
 }
 
-/// While All links runs for an hour, check every few seconds so the line
-/// counts down and the surfaces go back to Rules when it runs out.
+/// While All links runs for an hour, check every second so the line
+/// counts down and every surface goes back to Rules within a second of the
+/// hour running out (design: Send Links 3a). The clock runs only then: it
+/// stops itself, and any other mode drops it.
 fn follow_send_clock(model: &Entity<TrayModel>, cx: &mut App) {
-    let model = model.clone();
-    cx.spawn(async move |cx| {
-        loop {
-            cx.background_executor().timer(Duration::from_secs(5)).await;
-            cx.update(|cx| {
-                if matches!(
-                    model.read(cx).sending(),
-                    Some(SendScope::All { until: Some(_) })
-                ) {
+    let timed =
+        |model: &TrayModel| matches!(model.sending(), Some(SendScope::All { until: Some(_) }));
+    let live = cx.try_global::<Tray>().is_some_and(|tray| tray.live);
+    let clock = (live && timed(model.read(cx))).then(|| {
+        let model = model.clone();
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let ticking = cx.update(|cx| {
                     sync_send(&model, cx);
                     model.update(cx, |_, cx| cx.notify());
+                    timed(model.read(cx))
+                });
+                if !ticking {
+                    break;
                 }
-            });
-        }
-    })
-    .detach();
+            }
+        })
+    });
+    if cx.has_global::<Tray>() {
+        cx.global_mut::<Tray>().send_clock = clock;
+    }
 }
 
 /// What the destination lanes offer, as the scan has it now.
@@ -723,37 +735,18 @@ fn refresh_destinations(model: &Entity<TrayModel>, cx: &mut App) {
     if !cx.try_global::<Tray>().is_some_and(|tray| tray.live) {
         return;
     }
-    let choices = destination_choices(
-        crate::browser_scan::choices(cx),
-        crate::browser_scan::installed(cx),
-        crate::browser_scan::has_run(cx),
-    );
+    // The scan already leaves out PwrRoute and every other link router.
+    let choices = DestinationChoices {
+        browsers: crate::browser_scan::choices(cx),
+        installed: crate::browser_scan::installed(cx),
+        scanned: crate::browser_scan::has_run(cx),
+    };
     model.update(cx, |model, cx| {
         if model.choices != choices {
             model.choices = choices;
             cx.notify();
         }
     });
-}
-
-/// The pickers' choices less PwrRoute, which is never a destination.
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "only macOS has the dropdown")
-)]
-fn destination_choices(
-    browsers: Vec<crate::activity_actions::BrowserChoice>,
-    installed: Vec<crate::overview_model::Installed>,
-    scanned: bool,
-) -> DestinationChoices {
-    DestinationChoices {
-        browsers: browsers
-            .into_iter()
-            .filter(|choice| !choice.name.to_ascii_lowercase().contains("pwrroute"))
-            .collect(),
-        installed,
-        scanned,
-    }
 }
 
 /// A picked pill as the send's destination.
@@ -913,15 +906,15 @@ mod target_tests {
         );
     }
 
-    /// The destination list: each browser the pickers offer (never
-    /// PwrRoute), its profiles or its own when it lists none, then its
-    /// private window in its word where it has one.
+    /// The destination lanes: each browser the pickers offer, its
+    /// profiles, then its private window in its word where it has one;
+    /// the destination's pill lit, however the destination names its app.
     #[test]
     fn the_destination_lanes_follow_the_scan() {
         use crate::activity_actions::BrowserChoice;
         let mut model = TrayModel::starting(label("Google Chrome", "Work"));
-        model.choices = destination_choices(
-            vec![
+        model.choices = DestinationChoices {
+            browsers: vec![
                 BrowserChoice {
                     name: "Google Chrome".into(),
                     profiles: vec!["Personal".into(), "Work".into()],
@@ -930,22 +923,23 @@ mod target_tests {
                     name: "Safari".into(),
                     profiles: Vec::new(),
                 },
-                BrowserChoice {
-                    name: "PwrRoute".into(),
-                    profiles: Vec::new(),
-                },
             ],
-            Vec::new(),
-            true,
-        );
+            installed: vec![crate::overview_model::Installed {
+                name: "Google Chrome".into(),
+                bundle_id: Some("com.google.Chrome".into()),
+                profiles: vec!["Personal".into(), "Work".into()],
+                directories: Vec::new(),
+                hidden: false,
+            }],
+            scanned: true,
+        };
         let lanes = model.lanes();
         assert_eq!(
             lanes
                 .iter()
                 .map(|lane| lane.name.as_str())
                 .collect::<Vec<_>>(),
-            ["Google Chrome", "Safari"],
-            "never PwrRoute itself"
+            ["Google Chrome", "Safari"]
         );
         let lit: Vec<&str> = lanes
             .iter()
@@ -969,6 +963,19 @@ mod target_tests {
             .map(|pill| pill.label.clone())
             .collect();
         assert_eq!(lit, std::slice::from_ref(&private.label));
+        // Named by its bundle id under a name the scan does not use, the
+        // destination still lights its own lane, not a missing one.
+        model.destination = SendDestination::profile(
+            BrowserLabel::new("Ch", "Chrome", Some("Work")).for_app("com.google.Chrome"),
+        );
+        let lanes = model.lanes();
+        assert_eq!(lanes.len(), 2, "no lane for the other name");
+        assert!(
+            lanes[0]
+                .pills
+                .iter()
+                .any(|pill| pill.on && pill.label == "Work")
+        );
         // A destination the scan lacks keeps a lane of its own.
         model.destination = destination("Vivaldi", "", false);
         assert_eq!(model.lanes()[0].name, "Vivaldi");

@@ -258,6 +258,7 @@ fn the_pause_row_pauses_the_router_and_the_card_still_fits(cx: &mut TestAppConte
             native: None,
             dropdown: None,
             dropdown_closed_at: None,
+            send_clock: None,
         });
     });
     assert_eq!(handle.paused(), None);
@@ -301,6 +302,7 @@ fn with_router(opened: &mut Opened<'_>) -> (Router, RouterHandle) {
             native: None,
             dropdown: None,
             dropdown_closed_at: None,
+            send_clock: None,
         });
     });
     (router, handle)
@@ -326,6 +328,41 @@ fn edge_work() -> Destination {
 /// Send links (design: Send Links 1c, 1d): Next link sends the next link
 /// to the destination the row names, the stepper adds more, and Rules
 /// ends it; the card fits at every step.
+/// The native menu's Next link and the Overview's Next link here send one
+/// link and leave the stepper's count as the user set it.
+#[gpui_kit::test]
+fn a_one_link_send_keeps_the_steppers_count(cx: &mut TestAppContext) {
+    let mut fixture = TrayModel::fixture(SystemTime::now());
+    fixture.next_count = 5;
+    let mut opened = open(fixture, cx);
+    let (_router, handle) = with_router(&mut opened);
+    opened
+        .cx
+        .update(|_, cx| super::run(super::TrayCommand::SendNext, cx));
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 1, of: 1 })
+    );
+    let model = opened.model.clone();
+    assert_eq!(model.read_with(opened.cx, |model, _| model.next_count), 5);
+    opened.cx.update(|_, cx| {
+        super::send_next_to(super::destination("Google Chrome", "Work", false), cx);
+    });
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 1, of: 1 })
+    );
+    assert_eq!(model.read_with(opened.cx, |model, _| model.next_count), 5);
+    // The dropdown's Next link takes the stepper's count.
+    opened
+        .cx
+        .update(|_, cx| super::set_send_mode(super::model::SendMode::Next, cx));
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 5, of: 5 })
+    );
+}
+
 #[gpui_kit::test]
 fn next_link_sends_to_the_destination_and_rules_ends_it(cx: &mut TestAppContext) {
     let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);

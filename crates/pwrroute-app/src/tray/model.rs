@@ -579,10 +579,25 @@ impl TrayModel {
     /// the scan lacks (a default browser since removed) keeps a lane of
     /// its own, first.
     pub fn lanes(&self) -> Vec<Lane> {
+        let mut current = self.destination.choice();
+        // The name the reader sees may not be the scan's (an app named by
+        // bundle id or path): then let the lanes find it by what the
+        // router is told.
+        if !self
+            .choices
+            .browsers
+            .iter()
+            .any(|browser| browser.name.eq_ignore_ascii_case(&current.browser))
+        {
+            self.destination
+                .browser
+                .app()
+                .clone_into(&mut current.browser);
+        }
         destinations::lanes(
             &self.choices.browsers,
             &self.choices.installed,
-            &self.destination.choice(),
+            &current,
             None,
             self.choices.scanned,
         )
