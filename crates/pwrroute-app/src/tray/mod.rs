@@ -717,6 +717,10 @@ fn follow_send_clock(model: &Entity<TrayModel>, cx: &mut App) {
 /// The destination list as the scan has it: each browser the pickers
 /// offer, its profiles (or the browser's own, when it lists none), then
 /// its private window in its own word.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only macOS has the dropdown")
+)]
 fn refresh_destinations(model: &Entity<TrayModel>, cx: &mut App) {
     if !cx.try_global::<Tray>().is_some_and(|tray| tray.live) {
         return;
@@ -731,6 +735,10 @@ fn refresh_destinations(model: &Entity<TrayModel>, cx: &mut App) {
 }
 
 /// [`refresh_destinations`]' list, from the pickers' choices.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only macOS has the dropdown")
+)]
 fn destination_groups(choices: &[crate::activity_actions::BrowserChoice]) -> Vec<DestinationGroup> {
     choices
         .iter()
