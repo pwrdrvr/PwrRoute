@@ -677,6 +677,21 @@ fn opener_add(
     let Some(Selection::Handler(h)) = app.selection else {
         return (div(), None);
     };
+    let add = div().flex().child(
+        add_button(
+            "opener-add",
+            "+ app",
+            None,
+            |this, _, cx| this.toggle_rail_menu(RailMenu::Opener, cx),
+            cx,
+        )
+        .h(px(28.0))
+        .capture_any_mouse_down(cx.listener(|this, _, _, _| this.note_rail_menu())),
+    );
+    // The menu reads the feed: only while it is open.
+    if rail.menu != Some(RailMenu::Opener) {
+        return (add, None);
+    }
     let has = |value: &str| {
         handler
             .openers
@@ -751,22 +766,7 @@ fn opener_add(
         "Choose an app in Applications\u{2026}",
         cx.listener(|this, _, window, cx| this.pick_opener_app(window, cx)),
     ));
-    let add = div().flex().child(
-        add_button(
-            "opener-add",
-            "+ app",
-            None,
-            |this, _, cx| this.toggle_rail_menu(RailMenu::Opener, cx),
-            cx,
-        )
-        .h(px(28.0))
-        .capture_any_mouse_down(cx.listener(|this, _, _, _| this.note_rail_menu())),
-    );
-    let open = rail.menu == Some(RailMenu::Opener);
-    (
-        add,
-        open.then(|| menu.top(gpui_kit::relative(1.0)).mt(px(6.0))),
-    )
+    (add, Some(menu.top(gpui_kit::relative(1.0)).mt(px(6.0))))
 }
 
 /// A rail menu placed under its control at the left; the caller sets its
@@ -845,7 +845,7 @@ fn list_link(
 /// The scan's browsers are known: it ran (so finding none is an answer),
 /// or the window was handed a scan, as a test or screenshot does. Before
 /// then nothing is drawn as missing.
-fn scanned(app: &PwrRoute, cx: &App) -> bool {
+pub(crate) fn scanned(app: &PwrRoute, cx: &App) -> bool {
     !app.installed.is_empty() || crate::browser_scan::has_run(cx)
 }
 
@@ -863,11 +863,7 @@ fn open_in_section(
     let stray_profile = crate::destinations::unknown_profile(
         &app.browsers,
         &app.installed,
-        &crate::destinations::Choice {
-            browser: handler.browser.clone(),
-            profile: handler.profile.clone(),
-            private: handler.private,
-        },
+        &crate::destinations::Choice::of(handler),
     );
     let keep = handler.keep();
     let keep_control = KEEP_LEVELS.iter().fold(segmented(), |seg, (level, label)| {
@@ -921,11 +917,7 @@ fn open_in_section(
 /// rule's browser first, then the scan's, and under them the hidden count
 /// and the way out to typed values.
 fn lanes_destination(app: &PwrRoute, handler: &Handler, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let current = crate::destinations::Choice {
-        browser: handler.browser.clone(),
-        profile: handler.profile.clone(),
-        private: handler.private,
-    };
+    let current = crate::destinations::Choice::of(handler);
     // Scan order, so a lane stays put when one of its pills is picked.
     let lanes = crate::destinations::lanes(
         &app.browsers,
@@ -1317,7 +1309,14 @@ impl PwrRoute {
         let Some(Selection::Handler(h)) = self.selection else {
             return;
         };
-        if let Some(i) = self.store.add_opener(h) {
+        let name = name.trim();
+        let has = self.handlers.get(h).is_some_and(|handler| {
+            handler
+                .openers
+                .iter()
+                .any(|o| o.trim().eq_ignore_ascii_case(name))
+        });
+        if !has && let Some(i) = self.store.add_opener(h) {
             self.store.set_opener(h, i, name);
         }
         if let Some(rail) = &mut self.rail {
@@ -1331,7 +1330,10 @@ impl PwrRoute {
     /// "Choose an app in Applications…": the system file panel, and the
     /// app picked joins the rule by its bundle id (by its name when it has
     /// none).
-    pub fn pick_opener_app(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+    pub fn pick_opener_app(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // The panel's answer is for this rule only: if another is selected
+        // (or the rules moved) by then, it is dropped.
+        let asked = (self.selection, self.handlers.len());
         if let Some(rail) = &mut self.rail {
             rail.menu = None;
         }
@@ -1342,7 +1344,7 @@ impl PwrRoute {
             multiple: false,
             prompt: Some("Choose".into()),
         });
-        cx.spawn_in(_window, async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
                 return;
             };
@@ -1357,7 +1359,9 @@ impl PwrRoute {
                 return;
             };
             let _ = this.update_in(cx, |this, window, cx| {
-                this.choose_opener(&value, window, cx);
+                if (this.selection, this.handlers.len()) == asked {
+                    this.choose_opener(&value, window, cx);
+                }
             });
         })
         .detach();

@@ -519,10 +519,11 @@ their own modules.
   (`overview_model::private_term`; none for a browser without one). One
   pill is on across every lane, and a pill is the whole choice: browser,
   profile and private together. A value the scan cannot match is never
-  rewritten: the rule's browser gets a lane of its own, first, missing once
-  `PwrRoute::installed` is non-empty, and a profile the scan lacks gets a
-  pill of its own, with `profile-warning` when the browser's profiles were
-  read. The editor's way out, "Other app or profile by name…", is the typed
+  rewritten: the rule's browser gets a lane of its own, first (missing once
+  the scan ran, or "hidden in Settings"), a private flag on a browser with
+  no private window from a link still shows as a lit "Private window"
+  pill, and a profile the scan lacks gets a pill of its own, with
+  `profile-warning` when the browser's profiles were read. The editor's way out, "Other app or profile by name…", is the typed
   browser and profile fields and the private switch; `Rail::browser_typed`
   keeps it across rebuilds of the same rule's rail (`rebuild_rail_kept`,
   only after adding or removing a field; a delete, insert or reload can

@@ -33,6 +33,17 @@ pub struct Choice {
     pub private: bool,
 }
 
+impl Choice {
+    /// A rule's browser, profile and private window.
+    pub fn of(handler: &crate::rules_model::Handler) -> Self {
+        Self {
+            browser: handler.browser.clone(),
+            profile: handler.profile.clone(),
+            private: handler.private,
+        }
+    }
+}
+
 /// What kind of pill it is, which sets how it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PillKind {
@@ -110,6 +121,27 @@ pub fn lanes(
                 .to_owned(),
             ),
             scanned,
+        ));
+    }
+    // The rule's browser, found in the scan but hidden in Settings: its own
+    // lane, first, so the rule's choice still shows.
+    if let Some(Some(name)) = &current_name
+        && !browsers.iter().any(|b| b.name == *name)
+        && let Some(app) = crate::rule_pickers::installed_named(name, installed)
+    {
+        let profiles: Vec<(String, Option<String>)> = app
+            .profiles
+            .iter()
+            .enumerate()
+            .map(|(i, profile)| (profile.clone(), app.directories.get(i).cloned()))
+            .collect();
+        out.push(lane_for(
+            &app.name,
+            value,
+            &profiles,
+            current,
+            Some("hidden in Settings".to_owned()),
+            false,
         ));
     }
     let mut order: Vec<&BrowserChoice> = browsers.iter().collect();
@@ -232,7 +264,9 @@ fn lane_for(
             || directory.is_some_and(|d| !d.is_empty() && d.eq_ignore_ascii_case(wanted))
     };
     let term = private_term(name).or_else(|| private_term(value));
-    let private_on = selected && current.private && term.is_some();
+    // A rule that is private on a browser with no private window from a
+    // link still shows it, so the flag can be seen and switched off.
+    let private_on = selected && current.private;
     let choice = |profile: &str, private: bool| Choice {
         browser: value.to_owned(),
         profile: profile.to_owned(),
@@ -265,7 +299,7 @@ fn lane_for(
             on: true,
         });
     }
-    if let Some(term) = term {
+    if let Some(term) = term.or_else(|| private_on.then(|| "Private window".to_owned())) {
         // A rule that pairs a profile with private keeps both.
         let (label, profile) = if private_on && !wanted.is_empty() {
             (format!("{term} \u{00b7} {wanted}"), wanted.to_owned())
@@ -648,5 +682,38 @@ mod tests {
             ..other
         };
         assert!(!unknown_profile(&scan(), &[], &work));
+    }
+
+    #[test]
+    fn a_hidden_browser_and_a_private_flag_without_a_window_still_show() {
+        let installed = [Installed {
+            name: "Arc".into(),
+            bundle_id: Some("company.thebrowser.Browser".into()),
+            profiles: Vec::new(),
+            directories: Vec::new(),
+            hidden: true,
+        }];
+        let arc = Choice {
+            browser: "company.thebrowser.browser".into(),
+            profile: String::new(),
+            private: false,
+        };
+        let drawn = lanes(&scan(), &installed, &arc, None, true);
+        assert_eq!(drawn.len(), 3);
+        assert_eq!(drawn[0].tag.as_deref(), Some("hidden in Settings"));
+        assert_eq!(on(&drawn), [("Arc".into(), "Default".into())]);
+        // Its pills write the rule's value as written.
+        assert_eq!(
+            drawn[0].pills[0].choice.browser,
+            "company.thebrowser.browser"
+        );
+
+        let safari = Choice {
+            browser: "Safari".into(),
+            profile: String::new(),
+            private: true,
+        };
+        let drawn = lanes(&scan(), &[], &safari, None, true);
+        assert_eq!(on(&drawn), [("Safari".into(), "Private window".into())]);
     }
 }

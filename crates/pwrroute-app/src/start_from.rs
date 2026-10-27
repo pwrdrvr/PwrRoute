@@ -125,8 +125,17 @@ pub fn senders(records: &[DispatchRecord], limit: usize) -> Vec<Sender> {
         } else {
             app.bundle_id.trim()
         };
-        if let Some(sender) = out.iter_mut().find(|s| s.value.eq_ignore_ascii_case(value)) {
+        // One app, whether a record named it by bundle id or only by name.
+        let name = app.name.trim();
+        if let Some(sender) = out
+            .iter_mut()
+            .find(|s| s.value.eq_ignore_ascii_case(value) || s.name.eq_ignore_ascii_case(name))
+        {
             sender.links += 1;
+            // Keep the bundle id once any record has it.
+            if sender.value == sender.name && value != name {
+                sender.value = value.to_owned();
+            }
         } else if out.len() < limit {
             out.push(Sender {
                 value: value.to_owned(),
@@ -571,6 +580,36 @@ mod tests {
             browser.profile.clear();
         }
         record
+    }
+
+    #[test]
+    fn senders_count_one_app_once_by_bundle_id_or_name() {
+        let from = |id: u64, name: &str, bundle_id: &str| {
+            let mut record = record(id, "https://docs.example.com/a", Privacy::Full);
+            record.link = record.link.with_opener(Some(pwrroute_router::OpenerInfo {
+                name: name.into(),
+                bundle_id: bundle_id.into(),
+                ..pwrroute_router::OpenerInfo::default()
+            }));
+            record
+        };
+        let records = vec![
+            from(4, "Slack", ""),
+            from(3, "Mail", "com.apple.mail"),
+            from(2, "Slack", "com.tinyspeck.slackmacgap"),
+            from(1, "slack", "com.tinyspeck.slackmacgap"),
+        ];
+        let found = senders(&records, 8);
+        assert_eq!(
+            found
+                .iter()
+                .map(|s| (s.value.as_str(), s.name.as_str(), s.links))
+                .collect::<Vec<_>>(),
+            [
+                ("com.tinyspeck.slackmacgap", "Slack", 3),
+                ("com.apple.mail", "Mail", 1)
+            ]
+        );
     }
 
     #[test]

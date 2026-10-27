@@ -4489,6 +4489,15 @@ fn plus_app_offers_the_apps_the_rules_name(cx: &mut TestAppContext) {
         ["com.tinyspeck.slackmacgap"]
     );
     assert!(cx.debug_bounds("opener-any").is_none());
+    // An app the rule already names (as the file panel may pick it) is
+    // not added twice.
+    view.update_in(cx, |app, window, cx| {
+        app.choose_opener("COM.tinyspeck.slackmacgap", window, cx);
+    });
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[0].openers.clone()),
+        ["com.tinyspeck.slackmacgap"]
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
