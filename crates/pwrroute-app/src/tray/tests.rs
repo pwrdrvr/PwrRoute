@@ -16,8 +16,9 @@ use pwrroute_router::{
 };
 
 use super::dropdown::{
-    BODY_ID, CARD_ID, DESTINATION_ID, DESTINATIONS_ID, Dropdown, FOR_HOUR_ID, MAKE_DEFAULT_ID,
-    PAUSE_ID, QUIT_ID, SEND_ALL_ID, SEND_NEXT_ID, SEND_RULES_ID, STEP_UP_ID, WIDTH, card_height,
+    BODY_ID, CARD_ID, DESTINATION_ID, DESTINATIONS_ID, Dropdown, FOR_HOUR_ID, LANES_WIDTH,
+    LIST_MAX, MAKE_DEFAULT_ID, PAUSE_ID, QUIT_ID, SEND_ALL_ID, SEND_NEXT_ID, SEND_RULES_ID,
+    STEP_UP_ID, WIDTH, card_height, lanes_height,
 };
 use super::model::{BrowserLabel, Recent, RecentRoute, Routing, TrayModel};
 use super::{ConfigDefault, Tray};
@@ -410,8 +411,17 @@ fn choosing_a_destination_retargets_the_send(cx: &mut TestAppContext) {
     );
     assert_card_fits(&mut opened);
 
-    // Edge's InPrivate window: the fourth destination.
-    click(&mut opened, "tray-destination-3");
+    assert_lanes_measured(&mut opened);
+    // Edge's lane: Default, Personal, Work (lit), Travel, InPrivate.
+    let lit = opened.model.read_with(opened.cx, |model, _| {
+        model.lanes()[0]
+            .pills
+            .iter()
+            .map(|pill| pill.on)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(lit, [false, false, true, false, false]);
+    click(&mut opened, "tray-lanes-0-4");
     assert!(opened.cx.debug_bounds(DESTINATIONS_ID).is_none(), "closed");
     assert_eq!(
         handle.send_to().map(|send| send.destination),
@@ -429,18 +439,46 @@ fn choosing_a_destination_retargets_the_send(cx: &mut TestAppContext) {
     assert_card_fits(&mut opened);
 }
 
-/// A long destination list stops at 8½ rows and the card still fits.
+/// The lanes are as tall as `lanes_height` measured them: the list is
+/// sized before it is drawn, and pills wrap by their text.
+fn assert_lanes_measured(opened: &mut Opened<'_>) {
+    let model = opened.model.clone();
+    let (lanes, measured) = opened.cx.update(|_, cx| {
+        let lanes = model.read(cx).lanes();
+        let measured = lanes_height(&lanes, &cx.text_system().clone());
+        (lanes.len(), measured)
+    });
+    let first = opened
+        .cx
+        .debug_bounds("tray-lanes-lane-0")
+        .expect("the first lane");
+    let last = opened
+        .cx
+        .debug_bounds(Box::leak(
+            format!("tray-lanes-lane-{}", lanes - 1).into_boxed_str(),
+        ))
+        .expect("the last lane");
+    assert_eq!(first.size.width, px(LANES_WIDTH), "the lanes' width");
+    let laid_out = last.bottom() - first.top();
+    assert!(
+        (laid_out - px(measured)).abs() <= px(0.5),
+        "laid out {laid_out:?}, measured {measured}"
+    );
+}
+
+/// A long destination list stops at [`LIST_MAX`] and scrolls, and the
+/// card still fits.
 #[gpui_kit::test]
 fn a_long_destination_list_scrolls(cx: &mut TestAppContext) {
     let mut model = TrayModel::fixture(SystemTime::now());
-    let group = model.destinations[0].clone();
-    for _ in 0..4 {
-        model.destinations.push(group.clone());
+    let browsers = model.choices.browsers.clone();
+    for _ in 0..3 {
+        model.choices.browsers.extend(browsers.clone());
     }
     let mut opened = open(model, cx);
     click(&mut opened, DESTINATION_ID);
     let list = opened.cx.debug_bounds(DESTINATIONS_ID).expect("the list");
-    assert!(list.size.height <= px(26.0 * 8.5 + 9.0 + 0.5), "{list:?}");
+    assert!(list.size.height <= px(LIST_MAX + 0.5), "{list:?}");
     assert_card_fits(&mut opened);
 }
 

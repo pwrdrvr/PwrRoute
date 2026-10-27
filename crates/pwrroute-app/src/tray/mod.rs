@@ -33,7 +33,7 @@ use pwrroute_router::{FALLBACK_BROWSER, PauseTarget, RouterHandle, SendScope};
 
 use self::dropdown::Dropdown;
 use self::model::{
-    BrowserLabel, DestinationGroup, Dispatched, Routing, SendDestination, SendMode, TrayModel,
+    BrowserLabel, DestinationChoices, Dispatched, Routing, SendDestination, SendMode, TrayModel,
 };
 use self::native::{NativeTray, TrayEvent};
 use crate::activity::{self, Feed};
@@ -714,9 +714,7 @@ fn follow_send_clock(model: &Entity<TrayModel>, cx: &mut App) {
     .detach();
 }
 
-/// The destination list as the scan has it: each browser the pickers
-/// offer, its profiles (or the browser's own, when it lists none), then
-/// its private window in its own word.
+/// What the destination lanes offer, as the scan has it now.
 #[cfg_attr(
     not(target_os = "macos"),
     allow(dead_code, reason = "only macOS has the dropdown")
@@ -725,46 +723,42 @@ fn refresh_destinations(model: &Entity<TrayModel>, cx: &mut App) {
     if !cx.try_global::<Tray>().is_some_and(|tray| tray.live) {
         return;
     }
-    let groups = destination_groups(&crate::browser_scan::choices(cx));
+    let choices = destination_choices(
+        crate::browser_scan::choices(cx),
+        crate::browser_scan::installed(cx),
+        crate::browser_scan::has_run(cx),
+    );
     model.update(cx, |model, cx| {
-        if model.destinations != groups {
-            model.destinations = groups;
+        if model.choices != choices {
+            model.choices = choices;
             cx.notify();
         }
     });
 }
 
-/// [`refresh_destinations`]' list, from the pickers' choices.
+/// The pickers' choices less PwrRoute, which is never a destination.
 #[cfg_attr(
     not(target_os = "macos"),
     allow(dead_code, reason = "only macOS has the dropdown")
 )]
-fn destination_groups(choices: &[crate::activity_actions::BrowserChoice]) -> Vec<DestinationGroup> {
-    choices
-        .iter()
-        .filter(|choice| !choice.name.to_ascii_lowercase().contains("pwrroute"))
-        .map(|choice| {
-            let mut destinations: Vec<SendDestination> = if choice.profiles.is_empty() {
-                vec![SendDestination::profile(label(&choice.name, ""))]
-            } else {
-                choice
-                    .profiles
-                    .iter()
-                    .map(|profile| SendDestination::profile(label(&choice.name, profile)))
-                    .collect()
-            };
-            if let Some(word) = crate::overview_model::private_term(&choice.name) {
-                destinations.push(SendDestination {
-                    browser: label(&choice.name, ""),
-                    private: Some(word),
-                });
-            }
-            DestinationGroup {
-                browser: label(&choice.name, ""),
-                destinations,
-            }
-        })
-        .collect()
+fn destination_choices(
+    browsers: Vec<crate::activity_actions::BrowserChoice>,
+    installed: Vec<crate::overview_model::Installed>,
+    scanned: bool,
+) -> DestinationChoices {
+    DestinationChoices {
+        browsers: browsers
+            .into_iter()
+            .filter(|choice| !choice.name.to_ascii_lowercase().contains("pwrroute"))
+            .collect(),
+        installed,
+        scanned,
+    }
+}
+
+/// A picked pill as the send's destination.
+pub fn destination_of(choice: &crate::destinations::Choice) -> SendDestination {
+    destination(&choice.browser, &choice.profile, choice.private)
 }
 
 /// A destination named as the Overview names a node: `browser` and
@@ -923,42 +917,62 @@ mod target_tests {
     /// PwrRoute), its profiles or its own when it lists none, then its
     /// private window in its word where it has one.
     #[test]
-    fn the_destination_list_follows_the_scan() {
+    fn the_destination_lanes_follow_the_scan() {
         use crate::activity_actions::BrowserChoice;
-        let groups = destination_groups(&[
-            BrowserChoice {
-                name: "Google Chrome".into(),
-                profiles: vec!["Personal".into(), "Work".into()],
-            },
-            BrowserChoice {
-                name: "Safari".into(),
-                profiles: Vec::new(),
-            },
-            BrowserChoice {
-                name: "PwrRoute".into(),
-                profiles: Vec::new(),
-            },
-        ]);
-        let shown: Vec<Vec<String>> = groups
+        let mut model = TrayModel::starting(label("Google Chrome", "Work"));
+        model.choices = destination_choices(
+            vec![
+                BrowserChoice {
+                    name: "Google Chrome".into(),
+                    profiles: vec!["Personal".into(), "Work".into()],
+                },
+                BrowserChoice {
+                    name: "Safari".into(),
+                    profiles: Vec::new(),
+                },
+                BrowserChoice {
+                    name: "PwrRoute".into(),
+                    profiles: Vec::new(),
+                },
+            ],
+            Vec::new(),
+            true,
+        );
+        let lanes = model.lanes();
+        assert_eq!(
+            lanes
+                .iter()
+                .map(|lane| lane.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Google Chrome", "Safari"],
+            "never PwrRoute itself"
+        );
+        let lit: Vec<&str> = lanes
             .iter()
-            .map(|group| {
-                group
-                    .destinations
-                    .iter()
-                    .map(model::SendDestination::display)
-                    .collect()
-            })
+            .flat_map(|lane| lane.pills.iter().filter(|pill| pill.on))
+            .map(|pill| pill.label.as_str())
             .collect();
-        let private = crate::overview_model::private_term("Google Chrome")
-            .map(|word| format!("Google Chrome \u{00b7} {word}"));
-        let mut chrome = vec![
-            "Google Chrome \u{00b7} Personal".to_owned(),
-            "Google Chrome \u{00b7} Work".to_owned(),
-        ];
-        chrome.extend(private);
-        assert_eq!(shown[0], chrome);
-        assert_eq!(shown[1][0], "Safari");
-        assert_eq!(groups.len(), 2, "never PwrRoute itself");
+        assert_eq!(lit, ["Work"], "the destination's pill, and only it");
+        // A pill is the destination it names, private window included.
+        let private = lanes[0]
+            .pills
+            .iter()
+            .find(|pill| pill.kind == crate::destinations::PillKind::Private)
+            .expect("Chrome opens a private window from a link");
+        let picked = destination_of(&private.choice);
+        assert_eq!(picked, destination("Google Chrome", "", true));
+        model.destination = picked;
+        let lit: Vec<String> = model
+            .lanes()
+            .iter()
+            .flat_map(|lane| lane.pills.iter().filter(|pill| pill.on))
+            .map(|pill| pill.label.clone())
+            .collect();
+        assert_eq!(lit, std::slice::from_ref(&private.label));
+        // A destination the scan lacks keeps a lane of its own.
+        model.destination = destination("Vivaldi", "", false);
+        assert_eq!(model.lanes()[0].name, "Vivaldi");
+        assert!(model.lanes()[0].missing);
         // A node's destination, as the Overview names it.
         assert_eq!(
             destination("Google Chrome", "Work", false).target(),

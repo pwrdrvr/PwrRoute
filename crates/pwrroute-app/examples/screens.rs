@@ -221,6 +221,11 @@ fn set_send_mode(_: tray_model::SendMode, _: &mut gpui_kit::App) {}
 fn choose_destination(_: tray_model::SendDestination, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
+fn destination_of(choice: &destinations::Choice) -> tray_model::SendDestination {
+    tray::destination(&choice.browser, &choice.profile, choice.private)
+}
+
+#[cfg(target_os = "macos")]
 fn step_next(_: i64, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]

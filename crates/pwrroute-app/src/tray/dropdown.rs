@@ -33,6 +33,7 @@ use gpui_kit::{
 
 use super::TrayCommand;
 use super::model::{HeaderChip, Recent, SendDestination, SendMode, TrayModel};
+use crate::destinations::{self, Density, Lane};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{badge, key_cap, one_line, switch};
 use pwrroute_router::SendScope;
@@ -45,6 +46,8 @@ pub const SEND_NEXT_ID: &str = "tray-send-next";
 pub const SEND_ALL_ID: &str = "tray-send-all";
 pub const DESTINATION_ID: &str = "tray-destination";
 pub const DESTINATIONS_ID: &str = "tray-destinations";
+/// The lanes' selectors: `tray-lanes-lane-{l}`, `tray-lanes-{l}-{p}`.
+pub const LANES_ID: &str = "tray-lanes";
 pub const STEP_DOWN_ID: &str = "tray-step-down";
 pub const STEP_UP_ID: &str = "tray-step-up";
 pub const SEND_DETAIL_ID: &str = "tray-send-detail";
@@ -705,103 +708,44 @@ fn send_section(
     body
 }
 
-/// The destination list under the row: each browser, its profiles, then
-/// its private window. It scrolls past [`LIST_MAX`].
+/// The destination list under the row: the rule editor's lanes
+/// (`destinations::draw`), compact, the destination's pill lit. It
+/// scrolls past [`LIST_MAX`].
 fn destination_list(model: &TrayModel, cx: &mut Context<'_, Dropdown>) -> impl IntoElement {
-    let mut list = div()
+    let lanes = model.lanes();
+    let height = list_height(&lanes, &cx.text_system().clone());
+    let list = div()
         .id(DESTINATIONS_ID)
         .debug_selector(|| DESTINATIONS_ID.into())
-        .mx(px(6.0))
-        .h(px(list_height(model)))
-        .flex()
-        .flex_col()
+        .mx(px(LIST_MARGIN))
+        .h(px(height))
         .flex_none()
-        .p(px(4.0))
+        .p(px(LIST_PADDING))
         .border_1()
         .border_t_0()
         .border_color(theme::accent_border())
         .rounded_b(px(7.0))
         .bg(theme::bg_elevated())
         .overflow_y_scroll();
-    if model.destinations.is_empty() {
-        list = list.child(
+    if lanes.is_empty() {
+        return list.child(
             div()
-                .h(px(LIST_ROW))
+                .h(px(NO_BROWSERS))
                 .flex()
                 .items_center()
                 .px(px(6.0))
                 .child(text("No browsers found", 11.0, 500.0, theme::text_muted())),
         );
     }
-    let mut row_index: usize = 0;
-    for group in &model.destinations {
-        list = list.child(
-            div()
-                .h(px(GROUP_HEAD))
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .px(px(6.0))
-                .child(badge(group.browser.badge.clone()))
-                .child(text(
-                    group.browser.name.clone(),
-                    10.0,
-                    600.0,
-                    theme::text_muted(),
-                )),
-        );
-        for destination in &group.destinations {
-            let index = row_index;
-            row_index += 1;
-            let selected = *destination == model.destination;
-            let label = destination
-                .detail()
-                .map_or_else(|| "Default profile".to_owned(), str::to_owned);
-            let picked = destination.clone();
-            list = list.child(
-                div()
-                    .id(("tray-destination-row", index))
-                    .debug_selector(move || format!("tray-destination-{index}"))
-                    .h(px(LIST_ROW))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .pl(px(24.0))
-                    .pr(px(6.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .hover(|row| row.bg(theme::bg_row_active()))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.choose(picked.clone(), window, cx);
-                    }))
-                    .when(destination.private.is_some(), |row| {
-                        row.child(icon("pwrroute/mask.svg", 13.0, theme::text_subtle()))
-                    })
-                    .child(
-                        one_line(
-                            label,
-                            theme::SANS,
-                            500.0,
-                            11.5,
-                            12.0,
-                            if selected {
-                                theme::text_primary()
-                            } else {
-                                theme::text_secondary()
-                            },
-                        )
-                        .flex_1()
-                        .min_w_0(),
-                    )
-                    .when(selected, |row| {
-                        row.child(text("\u{2713}", 11.0, 600.0, theme::accent_bright()))
-                    }),
-            );
-        }
-    }
-    list
+    list.child(destinations::draw(
+        LANES_ID,
+        &lanes,
+        Density::Compact,
+        |this: &mut Dropdown, choice, window, cx| {
+            this.choose(super::destination_of(&choice), window, cx);
+        },
+        cx,
+    ))
 }
 
 /// Next link's line: the stepper, and what happens after (1c, 1d).
@@ -1140,27 +1084,46 @@ const DEST_ROW: f32 = 30.0;
 /// The stepper's or the length's line, and the gap above it.
 const SEND_LINE: f32 = 26.0;
 const SEND_LINE_GAP: f32 = 4.0;
-/// The destination list: a browser's heading and each destination.
-const GROUP_HEAD: f32 = 22.0;
-const LIST_ROW: f32 = 26.0;
-/// The list stops at 8½ rows and scrolls.
-const LIST_MAX: f32 = LIST_ROW * 8.5 + 8.0 + 1.0;
+/// The destination list: its margin in the section, its padding, and the
+/// lanes' width inside its side borders.
+const LIST_MARGIN: f32 = 6.0;
+const LIST_PADDING: f32 = 4.0;
+pub const LANES_WIDTH: f32 =
+    WIDTH - 2.0 - SECTION_PADDING - 2.0 * LIST_MARGIN - 2.0 - 2.0 * LIST_PADDING;
+/// "No browsers found", before a scan finds one.
+const NO_BROWSERS: f32 = 26.0;
+/// The list stops here and scrolls: three lanes of two rows and one of one.
+pub const LIST_MAX: f32 = 260.0;
 
-/// The destination list's height: its rows in 4px padding and a border
-/// (none on top), at most [`LIST_MAX`].
-fn list_height(model: &TrayModel) -> f32 {
-    let rows: usize = model
-        .destinations
-        .iter()
-        .map(|group| group.destinations.len())
-        .sum();
-    let rows = if model.destinations.is_empty() {
-        1
+/// The destination list's height: the lanes in their padding and a
+/// border (none on top), at most [`LIST_MAX`].
+fn list_height(lanes: &[Lane], text_system: &std::sync::Arc<TextSystem>) -> f32 {
+    let content = if lanes.is_empty() {
+        NO_BROWSERS
     } else {
-        rows
+        lanes_height(lanes, text_system)
     };
-    let content = 8.0 + 1.0 + GROUP_HEAD * model.destinations.len() as f32 + LIST_ROW * rows as f32;
-    content.min(LIST_MAX)
+    (content + 2.0 * LIST_PADDING + 1.0).min(LIST_MAX)
+}
+
+/// The lanes' own height, wrapped as `destinations::draw` wraps them.
+pub fn lanes_height(lanes: &[Lane], text_system: &std::sync::Arc<TextSystem>) -> f32 {
+    destinations::height(lanes, Density::Compact, LANES_WIDTH, |label, weight| {
+        let font = text_system.resolve_font(&Font {
+            weight: theme::weight(weight),
+            ..font(theme::SANS)
+        });
+        let width: f32 = label
+            .chars()
+            .map(|ch| {
+                text_system
+                    .advance(font, px(destinations::PILL_TEXT), ch)
+                    .map_or(0.0, |size| size.width.as_f32())
+            })
+            .sum();
+        // GPUI rounds a text box up to a whole pixel.
+        width.ceil()
+    })
 }
 
 /// What the card is made of, for its height.
@@ -1186,7 +1149,7 @@ impl Rows {
             small_rows: usize::from(recents == 0) + usize::from(model.shows_activity_row()),
             pause_lines: pause_lines(&model.pause_detail(), text_system),
             make_default: model.shows_make_default_row(),
-            list: choosing.then(|| list_height(model)),
+            list: choosing.then(|| list_height(&model.lanes(), text_system)),
             send_line: model.sending().is_some(),
         }
     }

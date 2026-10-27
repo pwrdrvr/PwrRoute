@@ -442,9 +442,10 @@ their own modules.
   (the config's handlers).
 - **Send links (`tray/mod.rs`, design: Send Links).** The dropdown's
   section above Pause routing is a three-way switch (Rules, Next link,
-  All links), the destination row with its list in place (the scan's
-  browsers less hidden ones and PwrRoute, each profile, then the private
-  window in `private_term`'s word: `destination_groups`), and the line
+  All links), the destination row with the editor's lanes in place
+  (`destinations::draw` at `Density::Compact`, over
+  `TrayModel::choices`: the scan less hidden apps and PwrRoute; a pill
+  is the destination, `destination_of`), and the line
   for the mode on: the stepper (`step_next`) or Until switched back / For
   1 hour (`set_all_for_hour`). `set_send_mode` writes the router first
   (Rules ends a pause too), then `TrayModel::routing`
@@ -537,8 +538,11 @@ their own modules.
   link, with "Blank rule" for `add_blank_handler`. The link stays in
   memory: Try it is never written.
 - **Open in is lanes, Sent from is chips (`destinations.rs`; design:
-  Destination and App Pickers).** The editor and Activity's sheet draw the
-  same `destinations::lanes`: a lane per browser in the scan, in its order
+  Destination and App Pickers).** The editor, Activity's sheet and the
+  tray's Send links destination draw the same `destinations::lanes`
+  (the tray at `Density::Compact`; it sizes its card before drawing, so
+  `destinations::height` measures the wrapped pills and `tray/tests.rs`
+  holds it to the laid-out lanes): a lane per browser in the scan, in its order
   (the sheet leads with where the link opened), and as pills its Default,
   each profile and its private window in the browser's word
   (`overview_model::private_term`; none for a browser without one). One

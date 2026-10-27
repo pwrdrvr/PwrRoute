@@ -137,19 +137,7 @@ impl PwrRoute {
             Self::with_store(router::config_in_charge(), std::env::home_dir(), store, cx);
         // The one scan the app makes, less the apps hidden in Settings.
         this.browsers = crate::browser_scan::choices(cx);
-        let hidden = crate::settings_store::store(cx)
-            .map(|store| store.read(cx).settings().browsers.clone())
-            .unwrap_or_default();
-        this.installed = crate::browser_scan::apps(cx)
-            .into_iter()
-            .map(|app| Installed {
-                hidden: hidden.is_hidden(app.id()),
-                name: app.name,
-                bundle_id: app.bundle_id,
-                profiles: app.profiles,
-                directories: app.directories,
-            })
-            .collect();
+        this.installed = crate::browser_scan::installed(cx);
         this
     }
 

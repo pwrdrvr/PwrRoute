@@ -19,6 +19,9 @@ use pwrroute_router::{
 };
 
 use crate::activity::{Feed, thousands};
+use crate::activity_actions::BrowserChoice;
+use crate::destinations::{self, Choice, Lane};
+use crate::overview_model::Installed;
 use crate::widgets::{AppBadge, badge_for};
 
 /// How many recent links the dropdown lists.
@@ -79,6 +82,20 @@ impl SendDestination {
         self.private.as_deref().or(self.browser.profile.as_deref())
     }
 
+    /// The destination as the lanes light it: the browser by the name the
+    /// scan knows it by.
+    pub fn choice(&self) -> Choice {
+        Choice {
+            browser: self.browser.name.clone(),
+            profile: if self.private.is_some() {
+                String::new()
+            } else {
+                self.browser.profile.clone().unwrap_or_default()
+            },
+            private: self.private.is_some(),
+        }
+    }
+
     /// The destination as the router is told it.
     pub fn target(&self) -> Destination {
         Destination {
@@ -93,12 +110,14 @@ impl SendDestination {
     }
 }
 
-/// One browser in the destination list (design: Send Links 1b): its
-/// profiles, then its private window.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DestinationGroup {
-    pub browser: BrowserLabel,
-    pub destinations: Vec<SendDestination>,
+/// What the destination lanes are drawn from (design: Destination and
+/// App Pickers, as the rule editor draws them): the scan less the hidden
+/// apps and PwrRoute, the whole scan, and whether it ran.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DestinationChoices {
+    pub browsers: Vec<BrowserChoice>,
+    pub installed: Vec<Installed>,
+    pub scanned: bool,
 }
 
 /// A browser and profile, as the dropdown names it.
@@ -431,9 +450,9 @@ pub struct TrayModel {
     pub next_count: u32,
     /// All links lasts [`ALL_FOR`] rather than until switched back.
     pub all_for_hour: bool,
-    /// The destination list, from the browser scan; read when the dropdown
-    /// opens.
-    pub destinations: Vec<DestinationGroup>,
+    /// What the destination lanes offer, from the browser scan; read when
+    /// the dropdown opens.
+    pub choices: DestinationChoices,
 }
 
 impl TrayModel {
@@ -468,13 +487,6 @@ impl TrayModel {
             ),
         ];
         let edge = |profile: &str| BrowserLabel::new("Ed", "Microsoft Edge", Some(profile));
-        let private = |label: BrowserLabel, word: &str| SendDestination {
-            browser: BrowserLabel {
-                profile: None,
-                ..label
-            },
-            private: Some(word.to_owned()),
-        };
         Self {
             routing: Routing::Active,
             is_default_browser: true,
@@ -485,32 +497,24 @@ impl TrayModel {
             destination_chosen: true,
             next_count: 1,
             all_for_hour: false,
-            destinations: vec![
-                DestinationGroup {
-                    browser: BrowserLabel::new("Ed", "Microsoft Edge", None),
-                    destinations: vec![
-                        SendDestination::profile(edge("Personal")),
-                        SendDestination::profile(edge("Work")),
-                        SendDestination::profile(edge("Travel")),
-                        private(edge("Work"), "InPrivate"),
-                    ],
-                },
-                DestinationGroup {
-                    browser: chrome(None),
-                    destinations: vec![
-                        SendDestination::profile(chrome(Some("Personal"))),
-                        SendDestination::profile(chrome(Some("Work"))),
-                        private(chrome(None), "Incognito"),
-                    ],
-                },
-                DestinationGroup {
-                    browser: BrowserLabel::new("Ff", "Firefox", None),
-                    destinations: vec![
-                        SendDestination::profile(BrowserLabel::new("Ff", "Firefox", None)),
-                        private(BrowserLabel::new("Ff", "Firefox", None), "Private window"),
-                    ],
-                },
-            ],
+            choices: DestinationChoices {
+                browsers: vec![
+                    BrowserChoice {
+                        name: "Microsoft Edge".into(),
+                        profiles: vec!["Personal".into(), "Work".into(), "Travel".into()],
+                    },
+                    BrowserChoice {
+                        name: "Google Chrome".into(),
+                        profiles: vec!["Personal".into(), "Work".into()],
+                    },
+                    BrowserChoice {
+                        name: "Firefox".into(),
+                        profiles: Vec::new(),
+                    },
+                ],
+                installed: Vec::new(),
+                scanned: true,
+            },
         }
     }
 
@@ -528,7 +532,7 @@ impl TrayModel {
             links_today: 0,
             next_count: 1,
             all_for_hour: false,
-            destinations: Vec::new(),
+            choices: DestinationChoices::default(),
         }
     }
 
@@ -569,6 +573,19 @@ impl TrayModel {
         } else {
             Routing::Active
         };
+    }
+
+    /// The destination lanes, the destination's pill lit. A destination
+    /// the scan lacks (a default browser since removed) keeps a lane of
+    /// its own, first.
+    pub fn lanes(&self) -> Vec<Lane> {
+        destinations::lanes(
+            &self.choices.browsers,
+            &self.choices.installed,
+            &self.destination.choice(),
+            None,
+            self.choices.scanned,
+        )
     }
 
     /// The send in force, when the user sent links.
@@ -1189,7 +1206,7 @@ mod tests {
             }
         );
         // A private window is the browser's, with no profile.
-        model.destination = model.destinations[0].destinations[3].clone();
+        model.destination = crate::tray::destination("Microsoft Edge", "", true);
         assert_eq!(
             model.destination.display(),
             "Microsoft Edge \u{00b7} InPrivate"

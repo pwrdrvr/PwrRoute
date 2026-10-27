@@ -164,6 +164,14 @@ the project and re-export here.
   Written to the project, then compared by size with the file here. The
   other canvases, `pwrroute.css` and `support.js` are unchanged.
 
+- Updated **2026-10-27**: `PwrRoute Send Links.dc.html` 1b redrawn: the
+  dropdown's destination list is now the lanes from Destination and App
+  Pickers, compact (a lane per browser, its profiles and private window as
+  pills, the destination's pill lit), so PwrRoute has one way to pick a
+  destination; the behaviour table's Destination row says so. Written over
+  the project's copy (its etag unchanged since the last write), then
+  compared by size with the file here.
+
 ## Files
 
 | File | What it holds |
@@ -188,7 +196,7 @@ the project and re-export here.
 | `PwrRoute First Run and Everything Else.dc.html` | The revised first run (turn 4: config found and its variants, broken config, no config in two steps, the Everything else segmented control, done, no browsers found, a failed default request) and the Everything else override (turn 5: the Rules banner switch with the overridden defaultBrowser row and its warnings; Settings › Configuration's Everything else row) |
 | `PwrRoute First Run Profile Access.dc.html` | First run on macOS 27 when a browser's profile list is kept from PwrRoute (turn 6): why, the Files &amp; Folders switches as the user will find them, Open Files &amp; Folders, Check again, Skip, and the profile select once access is on |
 | `PwrRoute Activity Quick Add Rule.dc.html` | Adding a rule from an Activity row in one click: "+ Rule" where Took was on hover (and at rest under Everything else), where else it was tried, the expanded row's primary Add a rule… under a long link, ⌘N, and host-only rows |
-| `PwrRoute Send Links.dc.html` | Sending the next link, the next few, or all links for a while to a browser and profile without a rule: the dropdown's Send links section and destination list, the native menu's rows, the Overview's hero, chips, rail foot and marked node, Next link here on a node, Activity's chips, and how it behaves (one slot with Pause, counted per link in the router, memory only) |
+| `PwrRoute Send Links.dc.html` | Sending the next link, the next few, or all links for a while to a browser and profile without a rule: the dropdown's Send links section and its destination lanes, the native menu's rows, the Overview's hero, chips, rail foot and marked node, Next link here on a node, Activity's chips, and how it behaves (one slot with Pause, counted per link in the router, memory only) |
 | `pwrroute.css` | Shared tokens and chrome for all twenty-one canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
