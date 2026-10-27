@@ -1760,6 +1760,14 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     // Only from the app that sent it: the link is saved as a test with
     // that app, since a rule's examples run from no app.
     click(cx, "add-rule-only-from");
+    // The rule now sees only PwrAgnt's links, and this was its only one.
+    let (pattern, _, collisions, caption) = sheet(cx);
+    assert_eq!(pattern, "*");
+    assert!(collisions.is_empty(), "{collisions:?}");
+    assert_eq!(
+        caption,
+        "No other recent link from PwrAgnt matches this pattern."
+    );
     let (rule, test) = view.read_with(cx, |app, _| {
         let sheet = app.actions.sheet.as_ref().unwrap();
         (sheet.rule().unwrap(), sheet.test())
