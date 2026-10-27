@@ -153,6 +153,7 @@ test('classifier job output fails open to full CI after script failures or missi
 });
 
 test('expensive jobs run on classifier failure and skip only on explicit non-code success', () => {
+  const selfHosted = [];
   for (const id of ['typecheck', 'build', 'test', 'macos', 'windows', 'e2e-linux', 'e2e-macos', 'e2e-windows']) {
     const job = workflow.match(new RegExp(`^  ${id}:\\n([\\s\\S]*?)(?=^  [a-z].*:|$(?![\\s\\S]))`, 'm'))?.[1];
     assert.ok(job, id);
@@ -169,15 +170,19 @@ test('expensive jobs run on classifier failure and skip only on explicit non-cod
       assert.equal(evaluate(needs, github, () => false), expected, `${id}: ${result}/${output}`);
       assert.equal(evaluate(needs, github, () => true), false, `${id}: cancelled`);
     }
-    if (id === 'e2e-macos') {
+    // Every job on the self-hosted pool keeps the fork guard: the guests
+    // persist and must never run fork code.
+    if (/^    runs-on: \[self-hosted\b/m.test(job)) {
       const needs = { changes: { result: 'success', outputs: { code_impacting: 'true' } } };
       const github = { event_name: 'pull_request', repository: 'pwrdrvr/PwrRoute',
         event: { pull_request: { head: { repo: { full_name: 'someone/fork' } } } } };
-      assert.equal(evaluate(needs, github, () => false), false, 'fork guard is retained');
+      assert.equal(evaluate(needs, github, () => false), false, `${id}: fork guard is retained`);
       github.event.pull_request.head.repo.full_name = github.repository;
-      assert.equal(evaluate(needs, github, () => false), true, 'same-repository PR runs macOS');
+      assert.equal(evaluate(needs, github, () => false), true, `${id}: same-repository PR runs`);
+      selfHosted.push(id);
     }
   }
+  assert.deepEqual(selfHosted, ['macos', 'e2e-macos'], 'the self-hosted jobs were checked');
 });
 
 test('required check names stay present and the workflow trigger has no path filters', () => {

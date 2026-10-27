@@ -263,33 +263,36 @@ jobs:
   macos:
     name: macOS (test + bundle)
     # Apple silicon. gpui-kit compiles Metal shaders at runtime, so no Metal
-    # toolchain is needed here.
-    runs-on: macos-26
+    # toolchain is needed here. The self-hosted Tart pool e2e-macos uses:
+    # GitHub-hosted macOS minutes cost ten times Linux's on a private repo.
+    # Never run fork code on this pool, so fork PRs skip this job; it is not
+    # a required check.
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs: changes
     if: >-
       !cancelled() &&
-      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
-    timeout-minutes: 30
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false') &&
+      (github.event_name == 'push' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        timeout-minutes: 10
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
-      # Before rust-cache: its key hashes every installed toolchain, and the
-      # runner image's preinstalled stable changes with each image rollout.
-      - name: Keep only the pinned Rust toolchain
-        shell: bash
-        run: ./scripts/ci/prune-rust-toolchains.sh
-
+      # No prune-rust-toolchains.sh here: the guests persist and are shared
+      # with other repositories, so uninstalling their toolchains is not
+      # ours to do. Their toolchains change only when someone updates them,
+      # so the cache key stays steady without it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
-          # starts a fresh cache; the prune step above keeps the runner's
-          # preinstalled stable out of the key (see the script).
+          # starts a fresh cache.
           prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
@@ -300,10 +303,13 @@ jobs:
       - name: Test
         run: cargo xtask test
 
-      # Ad hoc signed: catches a broken Info.plist, signature or icon asset
-      # catalog before a release does.
+      # Ad hoc signed: catches a broken Info.plist or signature before a
+      # release does. No --require-icon-catalog: the guests are not known to
+      # carry Xcode 26's actool, so without it this falls back to the legacy
+      # .icns with a warning. preview-build.yml and release.yml still require
+      # the catalog on GitHub's macos-26 image.
       - name: Bundle
-        run: cargo xtask bundle --require-icon-catalog
+        run: cargo xtask bundle
 
   windows:
     # No license-notice check here: it is CPU-bound (cargo-about matches every

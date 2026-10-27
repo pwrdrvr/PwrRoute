@@ -29,7 +29,7 @@ Jobs and the names the "Protect main" ruleset requires:
 | `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, CI classifier tests, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
 | `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
-| `macos` | macOS (test + bundle) | macos-26 | Tests, then `cargo xtask bundle` (ad hoc signed). |
+| `macos` | macOS (test + bundle) | self-hosted `pwrdrvr-macos` | Tests, then `cargo xtask bundle` (ad hoc signed); same-repository PRs and pushes only. |
 | `windows` | Windows (test) | windows-2025 | The tests, which compile every module of the app. |
 | `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | `cargo xtask e2e` under Xvfb, with Mesa's software Vulkan. |
 | `e2e-macos` | macOS Desktop E2E | self-hosted `pwrdrvr-macos` | `cargo xtask e2e` on a Tart guest; same-repository PRs and pushes only. |

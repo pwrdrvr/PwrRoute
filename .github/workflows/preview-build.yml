@@ -11,6 +11,14 @@ on:
   # opening a PR.
   workflow_dispatch:
 
+concurrency:
+  # A new push to a labeled PR cancels the preview build it supersedes; both
+  # jobs run on paid GitHub-hosted runners. Adding any other label creates a
+  # skipped run, so it gets its own group and cannot cancel an active build.
+  # Dispatch runs group by run id and never cancel each other.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}${{ github.event.action == 'labeled' && github.event.label.name != 'build-preview' && '-unrelated-label' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
