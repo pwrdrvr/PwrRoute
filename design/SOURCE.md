@@ -125,6 +125,15 @@ the project and re-export here.
   with the file here. The other canvases, `pwrroute.css` and `support.js`
   are unchanged.
 
+- Updated **2026-10-27**: one canvas added for adding a rule from an
+  Activity row in one click (`PwrRoute Activity Quick Add Rule.dc.html`):
+  "+ Rule" in the Took column on the row under the pointer, the places
+  tried for it, at rest on every row under Everything else, the expanded
+  row with the link on its own lines and Add a rule… first as the primary
+  button, ⌘N, and the host-only row that offers nothing. Written to the
+  project, then compared by size with the file here. The other canvases,
+  `pwrroute.css` and `support.js` are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -146,7 +155,8 @@ the project and re-export here.
 | `PwrRoute Overview States.dc.html` | Overview states (turns 2 and 3): a Finicky config in charge with the Everything else callout and the override on with Undo in place; paused, not the default browser with the setup card, config didn't load, nothing set up yet, default unknown, and a default with no rules while a config is found |
 | `PwrRoute First Run and Everything Else.dc.html` | The revised first run (turn 4: config found and its variants, broken config, no config in two steps, the Everything else segmented control, done, no browsers found, a failed default request) and the Everything else override (turn 5: the Rules banner switch with the overridden defaultBrowser row and its warnings; Settings › Configuration's Everything else row) |
 | `PwrRoute First Run Profile Access.dc.html` | First run on macOS 27 when a browser's profile list is kept from PwrRoute (turn 6): why, the Files &amp; Folders switches as the user will find them, Open Files &amp; Folders, Check again, Skip, and the profile select once access is on |
-| `pwrroute.css` | Shared tokens and chrome for all seventeen canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute Activity Quick Add Rule.dc.html` | Adding a rule from an Activity row in one click: "+ Rule" where Took was on hover (and at rest under Everything else), where else it was tried, the expanded row's primary Add a rule… under a long link, ⌘N, and host-only rows |
+| `pwrroute.css` | Shared tokens and chrome for all eighteen canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.

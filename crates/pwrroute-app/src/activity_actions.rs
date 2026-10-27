@@ -688,9 +688,44 @@ impl PwrRoute {
         cx.notify();
     }
 
-    /// Closes the sheet without adding anything.
-    pub fn cancel_add_rule(&mut self, cx: &mut Context<'_, Self>) {
+    /// ⌘N (Ctrl+N) on Activity: Add a rule for the row whose "⋯" menu is
+    /// open, else the expanded row, as the menu's first item would. Returns
+    /// whether it took the key.
+    pub fn activity_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        let keystroke = &event.keystroke;
+        let modifiers = &keystroke.modifiers;
+        if keystroke.key != "n" || !modifiers.secondary() || modifiers.shift || modifiers.alt {
+            return false;
+        }
+        if self.actions.sheet.is_some() {
+            return false;
+        }
+        // Only a row on screen: the menu and the expanded row outlive a
+        // change of filter or search that hides them.
+        let Some(key) = self
+            .actions
+            .menu
+            .as_ref()
+            .map(|menu| menu.key)
+            .or(self.activity.expanded)
+            .filter(|key| self.activity.is_visible(*key))
+        else {
+            return false;
+        };
+        self.add_rule(key, window, cx);
+        true
+    }
+
+    /// Closes the sheet without adding anything, and gives the list the
+    /// keyboard back (the sheet's field may have had it).
+    pub fn cancel_add_rule(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         self.actions.sheet = None;
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -995,6 +1030,15 @@ impl PwrRoute {
     }
 }
 
+/// Add a rule's key as the window's chrome writes it: ⌘N on macOS,
+/// Ctrl+N on Windows and Linux. `PwrRoute::activity_key` handles it.
+pub fn add_rule_shortcut(cx: &App) -> &'static str {
+    match crate::chrome::current(cx) {
+        crate::chrome::Chrome::Mac => "\u{2318}N",
+        crate::chrome::Chrome::Windows | crate::chrome::Chrome::Linux => "Ctrl+N",
+    }
+}
+
 /// `.menu`: the row's "⋯" menu (design 2b), under the button while
 /// `Actions::menu` names this row: Add a rule for this link, then Save as
 /// example for the `rules.json` rule that took the link or Save
@@ -1022,7 +1066,7 @@ pub fn row_menu(
     let add = item(
         "activity-add-rule-menu",
         "Add a rule for this link\u{2026}".into(),
-        None,
+        Some(add_rule_shortcut(cx).to_owned()),
     )
     .on_click(cx.listener(move |this, _, window, cx| {
         cx.stop_propagation();
@@ -1827,7 +1871,7 @@ pub fn sheet(
                 button("Close", ButtonKind::Default, false)
                     .id("add-rule-cancel")
                     .debug_selector(|| "add-rule-cancel".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.cancel_add_rule(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx))),
             ),
         ),
         None => {
@@ -1866,7 +1910,9 @@ pub fn sheet(
                         button("Cancel", ButtonKind::Quiet, false)
                             .id("add-rule-cancel")
                             .debug_selector(|| "add-rule-cancel".into())
-                            .on_click(cx.listener(|this, _, _, cx| this.cancel_add_rule(cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx)),
+                            ),
                     )
                     .child(add),
             )
@@ -1919,7 +1965,7 @@ pub fn sheet(
             .pt(px(56.0))
             .pb(px(24.0))
             .bg(scrim())
-            .on_click(cx.listener(|this, _, _, cx| this.cancel_add_rule(cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx)))
             .child(panel.on_click(|_, _, cx| cx.stop_propagation())),
     ))
 }

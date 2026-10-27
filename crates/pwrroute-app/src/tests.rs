@@ -1535,6 +1535,137 @@ fn record_like(base: &DispatchRecord, id: u64, url: &str, by: Matched) -> Dispat
     record
 }
 
+/// "+ Rule" (design: Activity Quick Add Rule): on the row under the
+/// pointer, at rest on every row under Everything else, never on a
+/// host-only row or the expanded one; its click opens the sheet and leaves
+/// the row as it was. ⌘N opens it for the expanded row, or the row whose
+/// "⋯" menu is open.
+#[gpui_kit::test]
+fn activity_adds_a_rule_from_a_row_in_one_click(cx: &mut TestAppContext) {
+    let dir = scratch("quick-rule");
+    // Row 0 kept host only.
+    let mut records = fixtures::activity();
+    records[0].privacy = Privacy::Host;
+    let mut newest = records[1].clone();
+    newest.id = DispatchId(99);
+    let feed = cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    let sheet_key = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| app.actions.sheet.as_ref().map(|s| s.key))
+    };
+    let key = |cx: &mut VisualTestContext, index: usize| {
+        view.read_with(cx, |app, _| app.activity.rows[index].key)
+    };
+    let expanded = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.activity.expanded);
+
+    // At rest under All: no row offers it.
+    assert!(cx.debug_bounds("activity-quick-rule-4").is_none());
+    // Over row 4 (handler 2's pull request) it takes the Took cell's place
+    // without moving the row.
+    let rest = cx.debug_bounds("activity-row-4").expect("row 4");
+    hover(cx, "activity-row-4");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.hovered),
+        Some(key(cx, 4))
+    );
+    assert!(cx.debug_bounds("activity-quick-rule-4").is_some());
+    assert_eq!(cx.debug_bounds("activity-row-4"), Some(rest));
+    assert!(cx.debug_bounds("activity-quick-rule-3").is_none());
+    // A host-only row has no URL to write a rule for: nothing.
+    hover(cx, "activity-row-0");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.activity.rows[0].privacy),
+        Privacy::Host
+    );
+    assert!(cx.debug_bounds("activity-quick-rule-0").is_none());
+    assert!(cx.debug_bounds("activity-quick-rule-4").is_none());
+
+    // Its click opens the sheet for that row and does not expand it.
+    hover(cx, "activity-row-4");
+    click(cx, "activity-quick-rule-4");
+    assert_eq!(sheet_key(cx), Some(key(cx, 4)));
+    assert_eq!(expanded(cx), None);
+    click(cx, "add-rule-cancel");
+    assert_eq!(sheet_key(cx), None);
+
+    // Under Everything else every row shows it at rest.
+    click(cx, "activity-filter-Unrouted");
+    let unrouted: Vec<usize> = view.read_with(cx, |app, _| {
+        app.activity
+            .visible()
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect()
+    });
+    assert!(!unrouted.is_empty());
+    for index in &unrouted {
+        assert!(
+            cx.debug_bounds(format!("activity-quick-rule-{index}").leak())
+                .is_some(),
+            "row {index}"
+        );
+    }
+    // The expanded row has the primary Add a rule… instead.
+    let first = unrouted[0];
+    click(cx, format!("activity-row-{first}").leak());
+    assert_eq!(expanded(cx), Some(key(cx, first)));
+    assert!(
+        cx.debug_bounds(format!("activity-quick-rule-{first}").leak())
+            .is_none()
+    );
+    assert!(
+        cx.debug_bounds(format!("activity-add-rule-{first}").leak())
+            .is_some()
+    );
+
+    // ⌘N (Ctrl+N off macOS: "secondary"): the expanded row.
+    cx.simulate_keystrokes("secondary-n");
+    draw(cx);
+    assert_eq!(sheet_key(cx), Some(key(cx, first)));
+    click(cx, "add-rule-cancel");
+
+    // ⌘N with a row's "⋯" menu open: that row, not the expanded one.
+    click(cx, "activity-filter-All");
+    click(cx, "activity-more-4");
+    assert!(cx.debug_bounds("activity-menu-4").is_some());
+    cx.simulate_keystrokes("secondary-n");
+    draw(cx);
+    assert_eq!(sheet_key(cx), Some(key(cx, 4)));
+    click(cx, "add-rule-cancel");
+
+    // Nothing expanded and no menu: ⌘N does nothing.
+    click(cx, format!("activity-row-{first}").leak());
+    assert_eq!(expanded(cx), None);
+    cx.simulate_keystrokes("secondary-n");
+    draw(cx);
+    assert_eq!(sheet_key(cx), None);
+
+    // Nor for an expanded row the filter hides.
+    click(cx, "activity-row-4");
+    assert_eq!(expanded(cx), Some(key(cx, 4)));
+    click(cx, "activity-filter-Failed");
+    assert!(cx.debug_bounds("activity-row-4").is_none());
+    cx.simulate_keystrokes("secondary-n");
+    draw(cx);
+    assert_eq!(sheet_key(cx), None);
+    click(cx, "activity-filter-All");
+    click(cx, "activity-row-4");
+
+    // A new link moves every row under a pointer that did not move:
+    // nothing stays hovered until it moves again.
+    hover(cx, "activity-row-5");
+    assert!(cx.debug_bounds("activity-quick-rule-5").is_some());
+    feed.update(cx, |feed, cx| {
+        feed.push(newest);
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.activity.hovered), None);
+    assert!(cx.debug_bounds("activity-quick-rule-5").is_none());
+    assert!(cx.debug_bounds("activity-quick-rule-6").is_none());
+}
+
 #[gpui_kit::test]
 fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     let dir = scratch("add-rule");

@@ -84,8 +84,26 @@ their own modules.
   writes one to disk or a log. The row's "⋯" opens `activity::row_menu`
   and the expanded row's "Add a rule…" calls `PwrRoute::add_rule`, both in
   `activity_actions.rs`; a `RowKey` names the row, and `Feed::record` reads
-  a journaled row's record back from the journal. The feed also keeps
-  today's `Tally` (links per rule, handler and default owner, and per
+  a journaled row's record back from the journal. Add a rule is one click
+  from a row (design: Activity Quick Add Rule): `activity::quick_add`
+  decides when "+ Rule" takes the Took cell's place (the row under the
+  pointer, `Activity::hovered`, set from `on_hover` as the Overview's
+  `idle_hover` is; every row at rest under Everything else, whose Took
+  heading goes; never a row kept as host only, nor the expanded row). It
+  keeps the cell's width and the tag's height, so nothing moves, and its
+  click opens the sheet without toggling the row. The expanded row draws
+  the link on its own two lines (`line_clamp`, never `mono`, which does not
+  wrap and pushed the buttons off the edge) and then "Add a rule…" first as
+  the primary button. ⌘N (Ctrl+N off macOS, `add_rule_shortcut`) is
+  `PwrRoute::activity_key`: the row whose "⋯" menu is open, else the
+  expanded row, as the menu's first item does (a host-only row gets the
+  sheet's disabled state), and only while that row is listed under the
+  filter and search; a row click, "⋯" and the sheet's Cancel focus the
+  window's list so the key reaches it. Every feed change and a scroll
+  forget the hovered row (GPUI reports hover only on a move), as the
+  Overview's `forget_pointer` does. The menu item, the button's tooltip
+  (`overview::tip_with_key`) and the primary button show the key. The
+  feed also keeps today's `Tally` (links per rule, handler and default owner, and per
   browser and profile), reset with the day, for the Overview's map.
 - **Overview is where every window lands (`overview_model.rs`,
   `overview.rs`).** `Screen::Overview` is the default and the rail's first

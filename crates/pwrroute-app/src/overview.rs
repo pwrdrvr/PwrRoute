@@ -574,6 +574,8 @@ const TIP_LINES: usize = 12;
 struct Tip {
     label: SharedString,
     source: Option<SharedString>,
+    /// The action's key, as a `.kbd` after the label.
+    key: Option<&'static str>,
 }
 
 impl Render for Tip {
@@ -605,12 +607,19 @@ impl Render for Tip {
             .border_1()
             .border_color(theme::border_default())
             .rounded(px(6.0))
-            .child(text(
-                self.label.clone(),
-                11.0,
-                500.0,
-                theme::text_secondary(),
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(text(
+                        self.label.clone(),
+                        11.0,
+                        500.0,
+                        theme::text_secondary(),
+                    ))
+                    .children(self.key.map(crate::widgets::key_cap)),
+            )
             .when(!lines.is_empty(), |tip| {
                 tip.child(
                     div()
@@ -647,6 +656,24 @@ pub(crate) fn tip(
         cx.new(|_| Tip {
             label: label.clone(),
             source: source.clone(),
+            key: None,
+        })
+        .into()
+    }
+}
+
+/// A tooltip that names an action and its key: "Add a rule for this link
+/// ⌘N".
+pub(crate) fn tip_with_key(
+    label: impl Into<SharedString>,
+    key: &'static str,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let label = label.into();
+    move |_, cx| {
+        cx.new(|_| Tip {
+            label: label.clone(),
+            source: None,
+            key: Some(key),
         })
         .into()
     }

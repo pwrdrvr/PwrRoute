@@ -694,6 +694,56 @@ fn main() {
         });
     });
 
+    // Activity Quick Add Rule 1a, 1c and 1d: "+ Rule" on the row under the
+    // pointer, at rest under Everything else, and the expanded row with a
+    // long contrived link, Add a rule… first.
+    fn long_link(
+        mut records: Vec<pwrroute_router::DispatchRecord>,
+    ) -> Vec<pwrroute_router::DispatchRecord> {
+        const LONG: &str = "https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client.apps.example.com&redirect_uri=https%3A%2F%2Ftracker.example.com%2Fauth%2Fdesktop-redirect&scope=openid%20email%20profile&access_type=offline&response_type=code&state=%7B%22key%22%3A%22demo-state-0001%22%2C%22flow%22%3A%22desktop%22%7D&prompt=consent";
+        // The record PwrRoute's default took (www.apple.com in the fixture).
+        let record = &mut records[6];
+        record.link.url = LONG.into();
+        record.final_url = Some(LONG.into());
+        if let Some(browser) = &mut record.browser {
+            browser.url = LONG.into();
+        }
+        for step in &mut record.steps {
+            match step {
+                pwrroute_router::Step::Received { url } => *url = LONG.into(),
+                pwrroute_router::Step::Browser { browser } => browser.url = LONG.into(),
+                _ => {}
+            }
+        }
+        records
+    }
+    shoot("app-2b-quick-rule-hover", None, &|app, window, cx| {
+        let records = fixtures::activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.navigate(Screen::Activity, window, cx);
+        app.activity.hovered = Some(app.activity.rows[4].key);
+    });
+    shoot(
+        "app-2b-quick-rule-everything-else",
+        None,
+        &|app, window, cx| {
+            let records = fixtures::activity();
+            activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+            app.activity.load(records);
+            app.navigate(Screen::Activity, window, cx);
+            app.activity.filter = activity::Filter::Unrouted;
+            app.activity.hovered = Some(app.activity.rows[6].key);
+        },
+    );
+    shoot("app-2b-expanded-long-link", None, &|app, window, cx| {
+        let records = long_link(fixtures::activity());
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.navigate(Screen::Activity, window, cx);
+        app.activity.expanded = Some(app.activity.rows[6].key);
+    });
+
     // The tray dropdown (Tray and First Run 1a; Popovers and Overflow 2a)
     // with the window sized as `dropdown::open` sizes it, over the design's
     // fixture with a rules.json default saved as a bundle id and a recent

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* Activity's rows, as in Activity Privacy and Route Tests 2a */
+          .ar { display: grid; grid-template-columns: 54px minmax(0, 1fr) 76px 110px 176px 48px 18px; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1 var(--font-sans); color: var(--text-secondary); position: relative; }
+          .ar:last-child { border-bottom: none; }
+          .ar.head { padding: 7px 14px; background: var(--bg-panel-elevated); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .ar .t { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .u { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: flex; align-items: center; gap: 7px; }
+          .ar .u .chip { font-size: 9px; padding: 3px 6px; }
+          .ar .ms { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .d { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+          .ar .d .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .ar .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .ar.unr .tag { color: var(--warn-text); background: var(--warn-soft); border-color: transparent; }
+          .ar.hov { background: var(--bg-panel-hover); }
+          .ar.sel { background: var(--bg-row-active); border-bottom: none; }
+          .lock { width: 11px; height: 11px; color: var(--text-muted); flex: 0 0 auto; }
+          .toolbar { display: flex; align-items: center; gap: 8px; }
+          .toolbar .inp { width: 220px; }
+          .seg i { font-style: normal; margin-left: 5px; font: 600 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .crop { background: var(--bg-app); padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+          .menu { position: absolute; z-index: 5; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-popover); padding: 4px; display: flex; flex-direction: column; }
+          .mi { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+          .mi .k, .mi .ex { margin-left: auto; padding-left: 16px; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .mfoot { padding: 6px 8px 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); white-space: normal; }
+          .ax { padding: 4px 14px 12px 80px; border-bottom: 1px solid var(--border-faint); background: var(--bg-row-active); display: flex; flex-direction: column; gap: 6px; }
+          .ax .l { display: flex; align-items: center; gap: 8px; font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .ax .n { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 600 8.5px/1 var(--font-mono); background: var(--bg-panel-elevated); color: var(--text-subtle); flex: 0 0 auto; }
+          .ax .n.ok { background: var(--success-soft); color: var(--success-text); }
+          .ax .url { font: 500 11.5px/16.5px var(--font-mono); color: var(--text-secondary); }
+
+          /* new in this canvas */
+          .qa { justify-self: end; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 5px; border: 1px solid var(--border-subtle); background: transparent; font: 600 10.5px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .qa b { font: 700 11px/1 var(--font-sans); color: var(--accent); }
+          .qa.on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+          .tip { position: absolute; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); font: 500 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .tip .kbd { height: 16px; font-size: 9.5px; }
+          .ax .url.wrap { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+          .ax .url.one { white-space: nowrap; }
+          .ax .acts { margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+          .ax .acts .kbd { height: 16px; font-size: 9.5px; border-color: rgba(22,10,0,0.25); color: var(--accent-on); }
+          .ax .clip { display: flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; }
+          .lbl { font: 600 10px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .lbl.no { color: var(--danger-text); }
+          .lbl.yes { color: var(--success-text); }
+          .cmp { display: flex; flex-direction: column; gap: 6px; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Add a rule from a row, in one click ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Activity &rsaquo; add a rule from a row in one click</span></div>
+        <p class="dv-sub">Adding a rule from Activity took two clicks on a small target: the row&rsquo;s &ldquo;&#8943;&rdquo;, then <b>Add a rule for this link&hellip;</b>. Nothing on the row said rules could be added there, and on a long link the expanded row&rsquo;s own <b>Add a rule&hellip;</b> sat after the URL, off the right edge. Now a row that can take a rule shows <b>+ Rule</b> where its Took time was while the pointer is over it; under <b>Everything else</b> (the links no rule chose) every row shows it at rest. The expanded row puts the link on its own lines and <b>Add a rule&hellip;</b> first, as the primary button. <b>&#8984;N</b> opens the sheet for the expanded row, or the row whose &ldquo;&#8943;&rdquo; menu is open. The &ldquo;&#8943;&rdquo; menu stays for the rest (Save as test or example, Show in Rules). All three open the same sheet (Activity Privacy and Route Tests 2c).</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Hover: + Rule where Took was">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>All. The pointer is over a link rule 3 routed: the row lights, its Took time gives way to <b>+ Rule</b>, and the tooltip names the action and its key. Nothing moves: the button is the Took column&rsquo;s width (48) and the tag&rsquo;s height (20), so the row stays 36 high. Off the row, the time comes back.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <div class="toolbar"><div class="inp"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="color: var(--text-subtle);"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><span class="ph">Search URL, app, browser</span></div><div class="seg"><span class="on">All<i>6</i></span><span>Everything else<i>3</i></span><span>Failed<i>0</i></span><span>Rewritten<i>0</i></span><span>Private<i>1</i></span></div></div>
+              <section class="card" style="overflow: visible;">
+                <div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span><span></span></div>
+                <div class="ar unr"><span class="t">15:42:47</span><span class="u">https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client&amp;redirect_uri=https%3A%2F%2Ftracker.example.com</span><span>Linear</span><span><span class="tag">config default</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">42 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar hov"><span class="t">15:40:12</span><span class="u">https://docs.example.com/guide/setup</span><span>Slack</span><span><span class="tag">rule 3</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="qa on"><b>+</b>Rule</span><span class="more">&#8943;</span>
+                  <div class="tip" style="right: 26px; top: 34px;">Add a rule for this link<span class="kbd">&#8984;N</span></div></div>
+                <div class="ar"><span class="t">15:38:02</span><span class="u">https://tracker.example.com/issue/PR-118</span><span>Linear</span><span><span class="tag">rule 1</span></span><div class="d"><span class="bi">Ff</span>Firefox<span class="pf">default-release</span></div><span class="ms">6 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar"><span class="t">15:36:40</span><span class="u">https://bank.example.com<span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>host only</span></span><span>Mail</span><span><span class="tag">rule 8</span></span><div class="d"><span class="bi">Sa</span>Safari<span class="pf">private window</span></div><span class="ms">5 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar unr"><span class="t">15:33:05</span><span class="u">https://news.example.org/story/42</span><span>Slack</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar unr"><span class="t">15:30:00</span><span class="u">https://files.example.net/report.pdf</span><span>Mail</span><span><span class="tag">fallback</span></span><div class="d"><span class="bi">Sa</span>Safari</div><span class="ms">31 ms</span><span class="more">&#8943;</span></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Where the button goes">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Three places tried for the hover button, on the amber row where a rule is most wanted. <b>Took</b> wins: it is the least-read column, it is next to &ldquo;&#8943;&rdquo; so a row&rsquo;s actions sit together, and the expanded row still shows the timings. Over the Rule chip hides who routed the link, the one thing being decided; at the end of the link it covers the part of the URL that differs between links.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <div class="cmp"><span class="lbl yes">Chosen &middot; in the Took column</span>
+                <section class="card"><div class="ar unr hov"><span class="t">15:33:05</span><span class="u">https://news.example.org/story/42</span><span>Slack</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="qa on"><b>+</b>Rule</span><span class="more">&#8943;</span></div></section></div>
+              <div class="cmp"><span class="lbl no">Passed &middot; over the Rule chip</span>
+                <section class="card"><div class="ar unr hov"><span class="t">15:33:05</span><span class="u">https://news.example.org/story/42</span><span>Slack</span><span><span class="qa on" style="justify-self: start;"><b>+</b>Rule</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div></section></div>
+              <div class="cmp"><span class="lbl no">Passed &middot; at the end of the link</span>
+                <section class="card"><div class="ar unr hov"><span class="t">15:33:05</span><span class="u">https://news.example.org/sto<span class="qa on" style="margin-left: auto;"><b>+</b>Rule</span></span><span>Slack</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="ms">4 ms</span><span class="more">&#8943;</span></div></section></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Everything else: + Rule at rest">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Everything else is the list of links no rule chose, so every row that can take a rule shows <b>+ Rule</b> at rest, quiet (secondary text, a faint border), and the column has no header. The row under the pointer lights it in the accent. Under All the amber chip already marks these rows, so there it stays hover-only and the Took column keeps one meaning.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <div class="toolbar"><div class="inp"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="color: var(--text-subtle);"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><span class="ph">Search URL, app, browser</span></div><div class="seg"><span>All<i>6</i></span><span class="on">Everything else<i>3</i></span><span>Failed<i>0</i></span><span>Rewritten<i>0</i></span><span>Private<i>1</i></span></div></div>
+              <section class="card" style="overflow: visible;">
+                <div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span></span><span></span></div>
+                <div class="ar unr"><span class="t">15:42:47</span><span class="u">https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client&amp;redirect_uri=https%3A%2F%2Ftracker.example.com</span><span>Linear</span><span><span class="tag">config default</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="qa"><b>+</b>Rule</span><span class="more">&#8943;</span></div>
+                <div class="ar unr hov"><span class="t">15:33:05</span><span class="u">https://news.example.org/story/42</span><span>Slack</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Personal</span></div><span class="qa on"><b>+</b>Rule</span><span class="more">&#8943;</span></div>
+                <div class="ar unr"><span class="t">15:30:00</span><span class="u">https://files.example.net/report.pdf</span><span>Mail</span><span><span class="tag">fallback</span></span><div class="d"><span class="bi">Sa</span>Safari</div><span class="qa"><b>+</b>Rule</span><span class="more">&#8943;</span></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1d" data-screen-label="1d Expanded row: Add a rule first">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>The expanded row. <b>Before</b>: the link and the buttons share one line, so a long OAuth link pushes <b>Add a rule&hellip;</b>, Open again and Re-test past the edge, out of sight; a shorter link shows it as a quiet button among quiet buttons. <b>After</b>: the link has its own lines, two at most, cut with an ellipsis (the sheet shows it whole), and the actions follow on a line of their own with <b>Add a rule&hellip;</b> first as the primary button, its key on it. An expanded row does not also show <b>+ Rule</b>: its Took time stays.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <span class="lbl">Before</span>
+              <section class="card">
+                <div class="ar unr sel"><span class="t">15:42:47</span><span class="u">https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client&amp;redirect_uri=https%3A%2F%2Ftracker.example.com</span><span>Linear</span><span><span class="tag">config default</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">42 ms</span><span class="more">&#8943;</span></div>
+                <div class="ax"><span class="l"><span class="n">D</span>~/.finicky.js&rsquo;s default &middot; no config handler or rule matched</span><span class="l"><span class="n ok">&#10003;</span>Microsoft Edge &middot; Work &middot; resolved in 3 ms, launched in 39 ms</span>
+                  <div class="clip"><span class="url one">https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client.apps.example.com&amp;redirect_uri=https%3A%2F%2Ftracker.example.com%2Fauth&amp;scope=openid</span><span class="btn sm quiet">Add a rule&hellip;</span><span class="btn sm quiet">Open again</span><span class="btn sm quiet">Re-test</span></div></div>
+              </section>
+              <span class="lbl" style="margin-top: 6px;">After</span>
+              <section class="card">
+                <div class="ar unr sel"><span class="t">15:42:47</span><span class="u">https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client&amp;redirect_uri=https%3A%2F%2Ftracker.example.com</span><span>Linear</span><span><span class="tag">config default</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">42 ms</span><span class="more">&#8943;</span></div>
+                <div class="ax"><span class="l"><span class="n">D</span>~/.finicky.js&rsquo;s default &middot; no config handler or rule matched</span><span class="l"><span class="n ok">&#10003;</span>Microsoft Edge &middot; Work &middot; resolved in 3 ms, launched in 39 ms</span>
+                  <span class="url wrap">https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client.apps.example.com&amp;redirect_uri=https%3A%2F%2Ftracker.example.com%2Fauth%2Fdesktop-redirect&amp;scope=openid%20email%20profile&amp;access_type=offline&amp;response_type=code&amp;state=%7B%22key%22%3A%22demo-state-0001%22%2C%22flow%22%3A%22desktop%22%7D&amp;prompt=consent</span>
+                  <div class="acts"><span class="btn sm primary">Add a rule&hellip;<span class="kbd">&#8984;N</span></span><span class="btn sm quiet">Open again</span><span class="btn sm quiet">Re-test</span></div></div>
+                <div class="ar"><span class="t">15:40:12</span><span class="u">https://docs.example.com/guide/setup</span><span>Slack</span><span><span class="tag">rule 3</span></span><div class="d"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="ms">5 ms</span><span class="more">&#8943;</span></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1e" data-screen-label="1e No rule to add, and the menu">
+            <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span>Left: a row kept as host only has no URL to write a rule from, so hovering it shows nothing new: the row lights and Took stays. No disabled button: a control that never works on a row is noise, and the &ldquo;&#8943;&rdquo; menu says why. Right: the &ldquo;&#8943;&rdquo; menu is unchanged but for the key, &#8984;N (Ctrl+N on Windows and Linux), which also works while the menu is open.</span></div>
+            <div class="dv-card crop" style="width: 1100px; height: 220px;">
+              <div style="display: flex; gap: 16px; align-items: flex-start;">
+                <section class="card" style="flex: 1.25; overflow: visible;">
+                  <div class="ar head" style="grid-template-columns: 54px minmax(0, 1fr) 96px 48px 18px;"><span>Time</span><span>Link</span><span>Rule</span><span style="text-align: right;">Took</span><span></span></div>
+                  <div class="ar hov" style="grid-template-columns: 54px minmax(0, 1fr) 96px 48px 18px;"><span class="t">15:36:40</span><span class="u">https://bank.example.com<span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>host only</span></span><span><span class="tag">rule 8</span></span><span class="ms">5 ms</span><span class="more">&#8943;</span>
+                    <div class="menu" style="right: 8px; top: 30px; width: 300px;"><div class="mi">Add a rule for this link&hellip;<span class="k">&#8984;N</span></div><div class="mfoot">Kept as host only: there is no full URL to write a rule or a test from.</div></div></div>
+                </section>
+                <section class="card" style="flex: 1; overflow: visible;">
+                  <div class="ar unr sel" style="grid-template-columns: 54px minmax(0, 1fr) 18px;"><span class="t">15:42:47</span><span class="u">https://auth.example.com/o/oauth2/v2/auth?client_id=&hellip;</span><span class="more" style="color: var(--accent-bright);">&#8943;</span>
+                    <div class="menu" style="right: 8px; top: 30px; width: 320px;"><div class="mi hov">Add a rule for this link&hellip;<span class="k">&#8984;N</span></div><div class="mi">Save as test<span class="ex">expects Microsoft Edge &middot; Work</span></div><div class="mfoot">No rule matched; it went to the config&rsquo;s default. Add a rule, or save it as a test so a future rule cannot take it unnoticed.</div></div></div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Which rows.</b> + Rule shows on a row whose record kept its full URL (the same rows whose expanded view offers Add a rule&hellip;), live or from the journal, routed or not, failed or not. A routed row gets it too: a narrower rule for one link of a busy rule is a common fix. <b>Never on</b> a host-only row, nor on the expanded row (its primary button is right below). <b>Click.</b> Opens the Add a rule sheet for that row without expanding or collapsing it. <b>Keyboard.</b> &#8984;N (Ctrl+N) with the main window&rsquo;s list focused: the row whose &ldquo;&#8943;&rdquo; menu is open, else the expanded row; nothing when neither. It does what the menu item it is shown on does, so a host-only row gets the sheet&rsquo;s disabled state with the reason. <b>Measurements.</b> The button is 20 high and fits the 48px Took column: 10.5/600 label, 11/700 accent &ldquo;+&rdquo;, 4 gap, 7 side padding, radius 5. At rest (Everything else): transparent, <code>--border-subtle</code>, <code>--text-secondary</code>. Lit (hovered row): <code>--accent-soft</code> fill, <code>--accent-border</code>, <code>--accent-bright</code>. The tooltip is the app&rsquo;s usual one with the key in a <code>.kbd</code>. The expanded row&rsquo;s link is mono 11.5 on 16.5 lines, two at most.</p>
+        <p class="dv-next">Try next: &ldquo;Everything else grouped by host, with one + Rule per host&rdquo; &middot; &ldquo;arrow keys to move the expanded row&rdquo; &middot; &ldquo;+ Rule in the tray&rsquo;s recents&rdquo;</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
