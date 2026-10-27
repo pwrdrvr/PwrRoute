@@ -157,7 +157,7 @@ jobs:
         shell: bash
         run: ./scripts/ci/prune-rust-toolchains.sh
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
           # starts a fresh cache; the prune step above keeps the runner's
@@ -205,7 +205,7 @@ jobs:
         shell: bash
         run: ./scripts/ci/prune-rust-toolchains.sh
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
           # starts a fresh cache; the prune step above keeps the runner's
@@ -245,7 +245,7 @@ jobs:
         shell: bash
         run: ./scripts/ci/prune-rust-toolchains.sh
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
           # starts a fresh cache; the prune step above keeps the runner's
@@ -285,7 +285,7 @@ jobs:
         shell: bash
         run: ./scripts/ci/prune-rust-toolchains.sh
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
           # starts a fresh cache; the prune step above keeps the runner's
@@ -341,7 +341,7 @@ jobs:
         shell: bash
         run: ./scripts/ci/prune-rust-toolchains.sh
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
           # starts a fresh cache; the prune step above keeps the runner's
@@ -391,7 +391,7 @@ jobs:
         with:
           toolchain: "1.97"
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
@@ -436,7 +436,7 @@ jobs:
         with:
           toolchain: "1.97"
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting
@@ -497,7 +497,7 @@ jobs:
         with:
           toolchain: "1.97"
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Only main writes the cache. The store is capped at 10 GB and each
           # PR branch would save 2-3 GB across the three platforms, evicting

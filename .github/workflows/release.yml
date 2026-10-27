@@ -79,7 +79,7 @@ jobs:
         shell: bash
         run: ./scripts/ci/prune-rust-toolchains.sh
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           # Restore main's cache; a tag's own cache no later run could read.
@@ -127,7 +127,7 @@ jobs:
         shell: bash
         run: ./scripts/ci/prune-rust-toolchains.sh
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1-rust-${{ env.RUST_TOOLCHAIN }}
           save-if: false
@@ -155,7 +155,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # A cache saved under a tag is readable by that tag's runs alone,
           # so it would only take room in the store from main's caches.
@@ -440,7 +440,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # A cache saved under a tag is readable by that tag's runs alone,
           # so it would only take room in the store from main's caches.
@@ -701,7 +701,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # A cache saved under a tag is readable by that tag's runs alone,
           # so it would only take room in the store from main's caches.
