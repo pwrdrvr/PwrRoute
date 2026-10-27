@@ -177,7 +177,6 @@ pub fn field_with(
     };
     let content = content
         .min_w_0()
-        .overflow_hidden()
         .whitespace_nowrap()
         // While typing, keep the end of a long URL in view.
         .map(|text| {
@@ -191,6 +190,7 @@ pub fn field_with(
         .font_weight(theme::weight(weight))
         .text_size(px(size))
         .line_height(px(size));
+    let content = crate::widgets::clip_x(content, size, size);
     let mut inner = input_box()
         .w_full()
         .gap(px(8.0))

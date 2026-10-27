@@ -3,9 +3,8 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Div, ElementId, Hsla, InteractiveElement as _, IntoElement as _, ParentElement as _,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledImage as _, div,
-    img, px,
+    Div, ElementId, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    Stateful, StatefulInteractiveElement as _, Styled as _, StyledImage as _, div, img, px,
 };
 
 use crate::theme::{self, icon, mono, text};
@@ -500,9 +499,7 @@ pub fn one_line(
     line_height: f32,
     color: Hsla,
 ) -> Div {
-    div()
-        .min_w_0()
-        .overflow_hidden()
+    clip_x(content.into(), size, line_height)
         .whitespace_nowrap()
         .text_ellipsis()
         .font_family(family)
@@ -510,7 +507,34 @@ pub fn one_line(
         .text_size(px(size))
         .line_height(px(line_height))
         .text_color(color)
-        .child(content.into())
+}
+
+/// Clips `content` at its sides but not at its top and bottom, so the
+/// ellipsized line keeps its descenders. Lay it out as `content` would be:
+/// it takes the same space, and text styles set on it reach the text.
+///
+/// GPUI centers a line's ascent plus descent in its line height, and that
+/// is 1.3em in Geist Mono (1.14em in Geist), so text whose line height is
+/// its size draws its g, p and y below its box. `overflow_hidden` would cut
+/// them off there, and so would `overflow_x_hidden`, which also clips at
+/// the box's top and bottom. Here the clip is a box taller by the overhang
+/// on each side, pulled back by a negative margin.
+pub fn clip_x(content: impl IntoElement, size: f32, line_height: f32) -> Div {
+    let slack = px(glyph_overhang(size, line_height));
+    div().min_w_0().flex().flex_col().child(
+        div()
+            .min_w_0()
+            .my(-slack)
+            .py(slack)
+            .overflow_hidden()
+            .child(content),
+    )
+}
+
+/// How far glyphs can reach past a line `line_height` tall, plus a pixel
+/// for antialiasing.
+fn glyph_overhang(size: f32, line_height: f32) -> f32 {
+    ((size * 1.3 - line_height) / 2.0).max(0.0) + 1.0
 }
 
 /// A select field's value: one line of 12.5px text that ends in an
@@ -603,7 +627,6 @@ pub fn menu_row(
                     // Its padding, so the row counts it when the label
                     // takes the rest.
                     .min_w(px(16.0))
-                    .overflow_hidden()
                     // The hint shrinks long before the label does.
                     .flex_shrink(10_000.0)
                     .child(one_line(
@@ -684,11 +707,11 @@ fn badge_letters(name: &str) -> SharedString {
 #[cfg(test)]
 mod tests {
     use gpui_kit::{
-        Context, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
-        VisualTestContext, Window, div,
+        Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div,
     };
 
-    use super::{AppBadge, NOT_OPENED_BADGE, badge, badge_for, profiles_hint};
+    use super::{AppBadge, NOT_OPENED_BADGE, badge, badge_for, one_line, profiles_hint};
 
     #[test]
     fn a_badge_names_its_app_and_a_fixed_label_names_none() {
@@ -814,5 +837,67 @@ mod tests {
         assert_eq!(badge_for("Search Browser"), "Se");
         assert_eq!(badge_for("com.example.archiver"), "Ar");
         assert_eq!(badge_for("Searchlight"), "Se");
+    }
+
+    /// `one_line` above a fixed box, in a column.
+    struct Lines;
+
+    impl Render for Lines {
+        fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .flex_col()
+                .w(gpui_kit::px(120.0))
+                .child(
+                    one_line(
+                        "https://example.com/gpq/a-long-path-that-does-not-fit",
+                        crate::theme::mono_family(500.0),
+                        500.0,
+                        11.5,
+                        11.5,
+                        crate::theme::text_primary(),
+                    )
+                    .debug_selector(|| "line".into()),
+                )
+                .child(
+                    super::clip_x(div().h(gpui_kit::px(12.0)), 12.0, 12.0)
+                        .debug_selector(|| "clipped".into()),
+                )
+                .child(
+                    div()
+                        .h(gpui_kit::px(10.0))
+                        .debug_selector(|| "after".into()),
+                )
+        }
+    }
+
+    /// The clip leaves room for descenders without moving anything: a
+    /// clipped line still takes exactly its line height and its width.
+    #[gpui_kit::test]
+    fn a_clipped_line_takes_its_line_height(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Lines);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let line = cx.debug_bounds("line").expect("the line");
+        let clipped = cx.debug_bounds("clipped").expect("the clipped box");
+        let after = cx.debug_bounds("after").expect("the box after it");
+        assert_eq!(line.size.height, gpui_kit::px(11.5));
+        assert_eq!(line.size.width, gpui_kit::px(120.0));
+        assert_eq!(clipped.origin.y, line.origin.y + gpui_kit::px(11.5));
+        assert_eq!(clipped.size.height, gpui_kit::px(12.0));
+        assert_eq!(after.origin.y, clipped.origin.y + gpui_kit::px(12.0));
+    }
+
+    #[test]
+    fn the_clip_clears_geist_monos_glyphs() {
+        // Geist Mono 500's hhea ascent and descent (1.005em, 0.295em) and
+        // the deepest ink of g, p and y (0.162em below the baseline), laid
+        // out as GPUI does: ascent plus descent centered in the line.
+        for (size, line_height) in [(10.0, 10.0), (10.5, 10.5), (11.5, 11.5), (12.0, 12.0)] {
+            let baseline: f32 = (line_height - 1.3 * size) / 2.0 + 1.005 * size;
+            let below = baseline + 0.162 * size - line_height;
+            assert!(super::glyph_overhang(size, line_height) > below);
+        }
+        assert_eq!(super::glyph_overhang(10.0, 20.0), 1.0);
     }
 }

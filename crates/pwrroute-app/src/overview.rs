@@ -1499,7 +1499,6 @@ fn map(
                     div()
                         .debug_selector(|| "overview-in-use".into())
                         .min_w_0()
-                        .overflow_hidden()
                         .child(one_line(
                             map.in_use.clone(),
                             theme::SANS,
@@ -3499,7 +3498,6 @@ fn single_card(
         div()
             .min_w_0()
             .flex_shrink(1.0)
-            .overflow_hidden()
             .child(one_line(
                 meta,
                 theme::mono_family(500.0),

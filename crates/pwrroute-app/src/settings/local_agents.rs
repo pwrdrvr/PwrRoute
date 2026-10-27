@@ -876,14 +876,14 @@ fn recent_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
                     400.0,
                     theme::text_secondary(),
                 )))
-                .child(
-                    div().flex_1().min_w_0().overflow_hidden().child(
-                        mono(action.call.clone(), 11.0, 500.0, theme::text_primary())
-                            .flex_shrink_1()
-                            .min_w_0()
-                            .text_ellipsis(),
-                    ),
-                )
+                .child(div().flex_1().min_w_0().child(crate::widgets::one_line(
+                    action.call.clone(),
+                    theme::mono_family(500.0),
+                    500.0,
+                    11.0,
+                    11.0,
+                    theme::text_primary(),
+                )))
                 .child(
                     div()
                         .w(px(160.0))

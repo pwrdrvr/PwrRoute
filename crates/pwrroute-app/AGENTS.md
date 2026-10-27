@@ -451,6 +451,13 @@ their own modules.
   in an ellipsis; a browser row's hint is `profiles_hint` (two names, then
   a count). A field's value is `field_label`, never `theme::text`, which
   does not shrink.
+- **Never clip text at its line box.** `theme::text` and most one-line
+  helpers set the line height to the font size, and Geist's glyphs are
+  taller than that (1.14em, Geist Mono 1.3em), so `overflow_hidden` on
+  such a box cuts off g, p and y, and GPUI's `overflow_x_hidden` clips
+  the top and bottom too. An ellipsized line is `widgets::one_line`; any
+  other box that clips text sideways is `widgets::clip_x`, or a box that
+  is taller than the glyphs (stretched to its row).
 - **Every way to start a rule ends in one editor (`editor.rs`,
   `rule_pickers.rs`; design: Rule Editor Pickers).** Rules' Add rule (also
   under a config, where it opens the folded visual rules), the Overview's
