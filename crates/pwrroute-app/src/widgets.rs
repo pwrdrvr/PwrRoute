@@ -455,15 +455,26 @@ pub fn status(label: impl Into<SharedString>, dot: Hsla) -> Div {
 
 /// `.kbd`: a key cap.
 pub fn key_cap(label: &'static str) -> Div {
+    key_cap_in(
+        label,
+        18.0,
+        10.0,
+        theme::border_default(),
+        theme::text_muted(),
+    )
+}
+
+/// `.kbd` at another height and in other colours: on a primary button.
+pub fn key_cap_in(label: &'static str, height: f32, size: f32, border: Hsla, color: Hsla) -> Div {
     div()
         .flex()
         .items_center()
-        .h(px(18.0))
+        .h(px(height))
         .px(px(5.0))
         .border_1()
-        .border_color(theme::border_default())
+        .border_color(border)
         .rounded(px(4.0))
-        .child(mono(label, 10.0, 600.0, theme::text_muted()))
+        .child(mono(label, size, 600.0, color))
 }
 
 /// A wrapping run of sans text: CSS `font: <weight> <size>/<line-height>`.

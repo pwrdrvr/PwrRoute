@@ -97,8 +97,11 @@ their own modules.
   the primary button. ⌘N (Ctrl+N off macOS, `add_rule_shortcut`) is
   `PwrRoute::activity_key`: the row whose "⋯" menu is open, else the
   expanded row, as the menu's first item does (a host-only row gets the
-  sheet's disabled state); a row click focuses the window's list so the
-  key reaches it. The menu item, the button's tooltip
+  sheet's disabled state), and only while that row is listed under the
+  filter and search; a row click, "⋯" and the sheet's Cancel focus the
+  window's list so the key reaches it. Every feed change and a scroll
+  forget the hovered row (GPUI reports hover only on a move), as the
+  Overview's `forget_pointer` does. The menu item, the button's tooltip
   (`overview::tip_with_key`) and the primary button show the key. The
   feed also keeps today's `Tally` (links per rule, handler and default owner, and per
   browser and profile), reset with the day, for the Overview's map.

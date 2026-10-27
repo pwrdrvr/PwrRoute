@@ -49,8 +49,8 @@ use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::widgets::{
-    AppBadge, ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge, badge_for, button, chip, note,
-    one_line, paragraph, segment, segmented, status, tag, toned_chip,
+    AppBadge, ButtonKind, NOT_OPENED, NOT_OPENED_BADGE, Tone, badge, badge_for, button, chip,
+    key_cap_in, note, one_line, paragraph, segment, segmented, status, tag, toned_chip,
 };
 
 /// The element id of the empty state, for tests.
@@ -1201,15 +1201,18 @@ impl Activity {
         }) {
             self.expanded = None;
         }
-        if self.hovered.is_some_and(|key| {
-            !self
-                .rows
-                .iter()
-                .chain(&self.journal_rows)
-                .any(|row| row.key == key)
-        }) {
-            self.hovered = None;
-        }
+        // The rows may have moved under a pointer that did not: GPUI
+        // reports hover only on a move, so nothing stays hovered until it
+        // moves again.
+        self.hovered = None;
+    }
+
+    /// `key` is listed under the filter and search now.
+    pub fn is_visible(&self, key: RowKey) -> bool {
+        self.visible()
+            .into_iter()
+            .chain(self.visible_journal())
+            .any(|(_, row)| row.key == key)
     }
 
     /// The count a filter shows: the records it would list, plus, for
@@ -1532,8 +1535,11 @@ fn row(
         .capture_any_mouse_down(cx.listener(|this, _, _, _| {
             this.actions.menu_was = this.actions.menu.as_ref().map(|menu| menu.key);
         }))
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
+            // The menu shows ⌘N: the list takes the keyboard back from
+            // the search field so the key reaches it.
+            window.focus(&this.focus, cx);
             this.toggle_row_menu(key, cx);
         }));
     grid_row([
@@ -1768,16 +1774,15 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
 
 /// `.kbd` on a primary button: the accent's ink, on a faint edge.
 fn on_primary_key(label: &'static str) -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .h(px(16.0))
-        .px(px(4.0))
-        .border_1()
-        .border_color(gpui_kit::hsla(0.0, 0.0, 0.0, 0.25))
-        .rounded(px(4.0))
-        .child(mono(label, 9.5, 600.0, theme::accent_on()))
+    key_cap_in(
+        label,
+        16.0,
+        9.5,
+        gpui_kit::hsla(0.0, 0.0, 0.0, 0.25),
+        theme::accent_on(),
+    )
+    .flex_none()
+    .px(px(4.0))
 }
 
 /// `.toolbar`: search, the filters and where the list lives.
@@ -2106,6 +2111,12 @@ pub fn pane(
         list
     };
     pane_frame("activity-pane")
+        // A scroll moves the rows under a pointer that did not move.
+        .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+            if this.activity.hovered.take().is_some() {
+                cx.notify();
+            }
+        }))
         .child(
             div()
                 .flex()

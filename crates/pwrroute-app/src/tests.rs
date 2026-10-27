@@ -1546,7 +1546,9 @@ fn activity_adds_a_rule_from_a_row_in_one_click(cx: &mut TestAppContext) {
     // Row 0 kept host only.
     let mut records = fixtures::activity();
     records[0].privacy = Privacy::Host;
-    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let mut newest = records[1].clone();
+    newest.id = DispatchId(99);
+    let feed = cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
     let (view, cx) = open_store(cx, None, fixture_store(&dir));
     click(cx, "nav-activity");
     let sheet_key = |cx: &mut VisualTestContext| {
@@ -1638,6 +1640,30 @@ fn activity_adds_a_rule_from_a_row_in_one_click(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("secondary-n");
     draw(cx);
     assert_eq!(sheet_key(cx), None);
+
+    // Nor for an expanded row the filter hides.
+    click(cx, "activity-row-4");
+    assert_eq!(expanded(cx), Some(key(cx, 4)));
+    click(cx, "activity-filter-Failed");
+    assert!(cx.debug_bounds("activity-row-4").is_none());
+    cx.simulate_keystrokes("secondary-n");
+    draw(cx);
+    assert_eq!(sheet_key(cx), None);
+    click(cx, "activity-filter-All");
+    click(cx, "activity-row-4");
+
+    // A new link moves every row under a pointer that did not move:
+    // nothing stays hovered until it moves again.
+    hover(cx, "activity-row-5");
+    assert!(cx.debug_bounds("activity-quick-rule-5").is_some());
+    feed.update(cx, |feed, cx| {
+        feed.push(newest);
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.activity.hovered), None);
+    assert!(cx.debug_bounds("activity-quick-rule-5").is_none());
+    assert!(cx.debug_bounds("activity-quick-rule-6").is_none());
 }
 
 #[gpui_kit::test]

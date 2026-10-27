@@ -705,12 +705,15 @@ impl PwrRoute {
         if self.actions.sheet.is_some() {
             return false;
         }
+        // Only a row on screen: the menu and the expanded row outlive a
+        // change of filter or search that hides them.
         let Some(key) = self
             .actions
             .menu
             .as_ref()
             .map(|menu| menu.key)
             .or(self.activity.expanded)
+            .filter(|key| self.activity.is_visible(*key))
         else {
             return false;
         };
@@ -718,9 +721,11 @@ impl PwrRoute {
         true
     }
 
-    /// Closes the sheet without adding anything.
-    pub fn cancel_add_rule(&mut self, cx: &mut Context<'_, Self>) {
+    /// Closes the sheet without adding anything, and gives the list the
+    /// keyboard back (the sheet's field may have had it).
+    pub fn cancel_add_rule(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         self.actions.sheet = None;
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -1866,7 +1871,7 @@ pub fn sheet(
                 button("Close", ButtonKind::Default, false)
                     .id("add-rule-cancel")
                     .debug_selector(|| "add-rule-cancel".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.cancel_add_rule(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx))),
             ),
         ),
         None => {
@@ -1905,7 +1910,9 @@ pub fn sheet(
                         button("Cancel", ButtonKind::Quiet, false)
                             .id("add-rule-cancel")
                             .debug_selector(|| "add-rule-cancel".into())
-                            .on_click(cx.listener(|this, _, _, cx| this.cancel_add_rule(cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx)),
+                            ),
                     )
                     .child(add),
             )
@@ -1958,7 +1965,7 @@ pub fn sheet(
             .pt(px(56.0))
             .pb(px(24.0))
             .bg(scrim())
-            .on_click(cx.listener(|this, _, _, cx| this.cancel_add_rule(cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx)))
             .child(panel.on_click(|_, _, cx| cx.stop_propagation())),
     ))
 }
