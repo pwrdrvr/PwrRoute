@@ -1801,6 +1801,132 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[gpui_kit::test]
+fn activity_adds_a_rule_for_any_link_from_the_app(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-any-from");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_activity(cx, &dir, None);
+    // Row 0 is the Jira link Slack sent.
+    click(cx, "activity-row-0");
+    click(cx, "activity-add-rule-0");
+    let sheet = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let sheet = app.actions.sheet.as_ref().expect("the sheet is open");
+            (
+                sheet.pattern.text.clone(),
+                sheet.any_from,
+                sheet.only_from,
+                sheet
+                    .collisions
+                    .iter()
+                    .map(|c| c.url.clone())
+                    .collect::<Vec<_>>(),
+                sheet.collision_caption(),
+            )
+        })
+    };
+    // Offered, never chosen for the person.
+    assert!(cx.debug_bounds("add-rule-any-from").is_some());
+    let (pattern, any_from, only_from, _, _) = sheet(cx);
+    assert_eq!(pattern, "example.atlassian.net/browse/*");
+    assert!(!any_from && !only_from);
+
+    // Any link from Slack: every site, Sent from on, and only Slack's
+    // other links caught.
+    click(cx, "add-rule-any-from");
+    let (pattern, any_from, only_from, collisions, caption) = sheet(cx);
+    assert_eq!(pattern, "*");
+    assert!(any_from && only_from);
+    assert_eq!(collisions, [fixtures::TEST_URL], "{caption}");
+    assert!(
+        caption.starts_with("Would also catch these 1 recent link from Slack"),
+        "{caption}"
+    );
+
+    // Sent from off goes back to the narrowest pattern, never every link
+    // from every app.
+    click(cx, "add-rule-only-from");
+    let (pattern, any_from, only_from, _, _) = sheet(cx);
+    assert_eq!(pattern, "example.atlassian.net/browse/*");
+    assert!(!any_from && !only_from);
+    // A pattern chosen after it puts Sent from back where it was.
+    click(cx, "add-rule-any-from");
+    click(cx, "add-rule-candidate-1");
+    let (pattern, any_from, only_from, _, _) = sheet(cx);
+    assert_eq!(pattern, "example.atlassian.net/*");
+    assert!(!any_from && !only_from);
+
+    // An earlier rule takes this link today, so the new rule goes on top.
+    click(cx, "add-rule-any-from");
+    choose_sheet_browser(cx);
+    click(cx, "add-rule-position-top");
+    click(cx, "add-rule-save");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    let file = saved(cx, &path);
+    let added = &file.rules[0];
+    assert_eq!(added.patterns, ["*"]);
+    assert_eq!(added.opener, ["Slack"]);
+    assert!(added.examples.is_empty());
+    assert_eq!(file.tests.len(), 1);
+    assert_eq!(file.tests[0].opener.as_deref(), Some("Slack"));
+    // The saved test resolves to the new rule.
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.tests.passed(TestSource::Test { test: 0 })),
+        Some(true)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn the_add_rule_sheet_folds_a_long_link(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-long-link");
+    let records = fixtures::activity();
+    let long = format!(
+        "https://auth.example.com/o/oauth2/v2/auth?client_id=demo&state={}&prompt=consent",
+        "x".repeat(200)
+    );
+    let mut feed = records.clone();
+    feed.push(record_like(
+        &records[2],
+        99,
+        &long,
+        Matched::Default { owner: None },
+    ));
+    cx.update(|cx| activity::install_feed(Feed::from_records(feed), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    view.update_in(cx, |app, window, cx| {
+        app.add_rule(
+            RowKey {
+                id: DispatchId(99),
+                journaled: false,
+            },
+            window,
+            cx,
+        );
+    });
+    draw(cx);
+    let folded = cx
+        .debug_bounds("add-rule-link")
+        .expect("the link")
+        .size
+        .height;
+    // Two lines of 16.5px.
+    assert!(folded <= px(34.0), "{folded:?}");
+    click(cx, "add-rule-link-toggle");
+    let shown = cx
+        .debug_bounds("add-rule-link")
+        .expect("the link")
+        .size
+        .height;
+    assert!(shown > folded, "{shown:?} after {folded:?}");
+    assert!(view.read_with(cx, |app, _| {
+        app.actions.sheet.as_ref().unwrap().url_expanded
+    }));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Activity with the fixture records, a window over the fixture rules in
 /// `dir`, and `config` in charge when given.
 fn open_activity<'a>(

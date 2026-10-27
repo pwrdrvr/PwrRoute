@@ -631,6 +631,55 @@ fn main() {
         );
     });
 
+    // Add Rule From an App 1b and 1c: a long contrived sign-in link Slack
+    // sent, folded to two lines, then with "Any link from Slack" chosen.
+    fn long_sign_in_link(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+        let mut records = fixtures::activity();
+        let url = "https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client.apps.\
+                   example.com&redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-\
+                   redirect&scope=openid%20email%20profile&access_type=offline&response_type=\
+                   code&state=%7B%22key%22%3A%22demo-state-0001%22%2C%22flow%22%3A%22desktop\
+                   %22%7D&prompt=consent";
+        let mut record = records[0].clone();
+        record.id = pwrroute_router::DispatchId(99);
+        record.link.url = url.into();
+        record.final_url = Some(url.into());
+        if let Some(browser) = &mut record.browser {
+            browser.url = url.into();
+        }
+        for step in &mut record.steps {
+            match step {
+                pwrroute_router::Step::Received { url: received } => *received = url.into(),
+                pwrroute_router::Step::Browser { browser } => browser.url = url.into(),
+                _ => {}
+            }
+        }
+        records.insert(0, record);
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        with_scan(app);
+    }
+    fn open_long(app: &mut PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) {
+        app.navigate(Screen::Activity, window, cx);
+        app.add_rule(
+            activity::RowKey {
+                id: pwrroute_router::DispatchId(99),
+                journaled: false,
+            },
+            window,
+            cx,
+        );
+    }
+    shoot("app-2b-add-rule-long-link", None, &|app, window, cx| {
+        long_sign_in_link(app, cx);
+        open_long(app, window, cx);
+    });
+    shoot("app-2b-add-rule-any-from", None, &|app, window, cx| {
+        long_sign_in_link(app, cx);
+        open_long(app, window, cx);
+        app.pick_any_from(cx);
+    });
+
     // The same sheet with the browser list open, over a browser with many
     // profiles and one with a long name (Popovers and Overflow 1a).
     shoot("app-2b-add-rule-browsers", None, &|app, window, cx| {

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* the Add a rule sheet, as in Activity Privacy and Route Tests 2c */
+          .sheet { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); width: 560px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-popover); display: flex; flex-direction: column; }
+          .sheet-hd { padding: 16px 18px 12px; border-bottom: 1px solid var(--border-faint); }
+          .sheet-hd .help { margin-top: 4px; }
+          .sheet-bd { padding: 4px 0; }
+          .sheet-bd .field { padding: 11px 18px; }
+          .sheet-bd .field-l { width: 136px; }
+          .sheet-ft { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-faint); }
+          .sheet-ft .note { flex: 1; }
+          .pats { display: flex; flex-direction: column; gap: 5px; width: 100%; }
+          .pat { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); }
+          .pat.on { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .pat .radio { width: 13px; height: 13px; }
+          .pat code { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); }
+          .pat .why { margin-left: auto; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .pat.on .why { color: var(--accent-bright); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          .coll { width: 100%; display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+          .coll .cr { display: grid; grid-template-columns: 50px minmax(0, 1fr) 150px; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); font: 400 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cr:last-child { border-bottom: none; }
+          .coll .cr .t { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .coll .cr .u { font: 500 10.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .coll .cr .d { display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; font-size: 10.5px; }
+          .coll .cr .d .bi { width: 11px; height: 11px; font-size: 6px; }
+          .coll .cap { padding: 6px 10px; background: var(--bg-panel-elevated); font: 600 10.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cap i { font-style: normal; color: var(--text-subtle); font-weight: 500; }
+
+          /* this canvas: the sheet on its own, over the dimmed window */
+          .stage { position: relative; padding: 28px 34px; background: rgba(0,0,0,0.62); }
+          .stage .sheet { position: static; transform: none; margin: 0 auto; }
+          /* the link in the head: two lines, then Show full link */
+          .lnk { margin-top: 4px; font: 500 11px/16.5px var(--font-mono); color: var(--text-secondary); overflow-wrap: anywhere; }
+          .lnk.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+          .lnk.full { max-height: 132px; overflow-y: auto; }
+          .lnk-more { margin-top: 5px; display: flex; align-items: center; gap: 8px; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+          .lnk-more a { color: var(--accent-bright); text-decoration: none; }
+          .tall { outline: 1px dashed rgba(255,138,31,0.45); outline-offset: 2px; }
+          /* Match: any link from the app, above the patterns */
+          .pat.app .ab { width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); color: #fff; background: #5e6ad2; flex: 0 0 auto; }
+          .pat.app b { font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .pats .pat code { white-space: nowrap; }
+          .pats .pat .why { white-space: normal; text-align: right; line-height: 14px; padding-left: 10px; }
+          .pat-or { margin: 3px 0 1px; font: 600 9px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-subtle); }
+          .inp .any { margin-left: 10px; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); }
+          .swrow { display: flex; align-items: center; gap: 10px; font: 500 11.5px/1 var(--font-sans); color: var(--text-primary); }
+          .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Add a rule: by app, and a long link ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Activity &rsaquo; Add a rule for this link: any link from the app, and a long link kept short</span></div>
+        <p class="dv-sub">Two changes to Activity&rsquo;s Add a rule sheet (Activity Privacy and Route Tests 2c). <b>The link in the head</b> is two lines at most: host and path in the primary text, the query after it in the secondary, cut with an ellipsis, and under it <b>Show full link</b> with the count of query parameters. An OAuth or tracking link used to push Match and the buttons off the sheet; now the head is the same height for every link. Show full link opens it in place, scrolling past eight lines. <b>Any link from Linear</b> is the first choice under Match whenever the record names the app that sent the link. It is the whole rule in one click: the pattern becomes <code>*</code>, Sent from turns on, and Also catches lists only the recent links that app sent. The sheet still picks the narrowest pattern first; the app is offered, never chosen for the person.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Before: the link fills the head">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Today: the whole link, wrapped. This one is 600 characters, and the head is taller than Match.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 14:45:17 &middot; sent from Linear</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk tall">https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client.apps.example.com&amp;redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-redirect&amp;scope=openid%20email%20profile&amp;access_type=offline&amp;response_type=code&amp;state=%7B%22key%22%3A%22demo-state-0001%22%2C%22isMobileAppLogin%22%3Afalse%2C%22flow%22%3A%22desktop%22%2C%22localWrite%22%3Atrue%2C%22startOrigin%22%3A%22https%3A%2F%2Ftracker.example%22%7D&amp;prompt=consent</p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats">
+                      <div class="pat on"><span class="radio on"></span><code>auth.example.com/o/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>auth.example.com/*</code><span class="why">Everything on this host.</span></div></div><div class="inp mono" style="width: 100%;">auth.example.com/o/*<span class="caret" style="font-size: 10px;">edit</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><div class="swrow"><span class="sw on"></span>Only when sent from Linear</div><span class="field-help">Linear sent this one. Off, the rule matches a link from any app.</span></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in a private window</span></div><div class="field-c"><span class="sw"></span></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link from Linear as a saved test. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="1b" data-screen-label="1b After: two lines, and Any link from Linear">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>The head is two lines with Show full link. Match leads with <b>Any link from Linear</b>, then &ldquo;or by pattern&rdquo; and the patterns, narrowest selected as before. Sent from starts off.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 14:45:17 &middot; sent from Linear</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://auth.example.com/o/oauth2/v2/auth</span>?client_id=4417-demo-client.apps.example.com&amp;redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-redirect&amp;scope=openid%20email%20profile&amp;access_type=offline&amp;response_type=code&amp;state=%7B%22key%22%3A%22demo-state-0001%22%2C%22isMobileAppLogin%22%3Afalse%2C%22flow%22%3A%22desktop%22%2C%22localWrite%22%3Atrue%2C%22startOrigin%22%3A%22https%3A%2F%2Ftracker.example%22%7D&amp;prompt=consent</p><div class="lnk-more"><a>Show full link</a><span>&middot; 9 query parameters</span></div></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Every link from the app, or a pattern, narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats"><div class="pat app"><span class="radio"></span><span class="ab">Li</span><b>Any link from Linear</b><span class="why">Every site. Turns on Sent from.</span></div>
+                      <div class="pat-or">or by pattern</div>
+                      <div class="pat on"><span class="radio on"></span><code>auth.example.com/o/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>auth.example.com/*</code><span class="why">Everything on this host.</span></div></div><div class="inp mono" style="width: 100%;">auth.example.com/o/*<span class="caret" style="font-size: 10px;">edit</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><div class="swrow"><span class="sw"></span>Only when sent from Linear</div><span class="field-help">Linear sent this one. Off, the rule matches a link from any app.</span></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in a private window</span></div><div class="field-c"><span class="sw"></span></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Any link from Linear chosen">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>The pattern is <code>*</code> (&ldquo;any link&rdquo; beside it, still editable), Sent from is on, and Also catches lists only Linear&rsquo;s recent links, with who takes them now. The rule requires the app, so the link is saved as a test from Linear, not an example. Turning Sent from off goes back to the narrowest pattern, so the sheet never offers a rule that takes every link from every app. Choosing a pattern instead puts Sent from back where it was.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 14:45:17 &middot; sent from Linear</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://auth.example.com/o/oauth2/v2/auth</span>?client_id=4417-demo-client.apps.example.com&amp;redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-redirect&amp;scope=openid%20email%20profile&amp;access_type=offline&amp;response_type=code&amp;state=%7B%22key%22%3A%22demo-state-0001%22%2C%22isMobileAppLogin%22%3Afalse%2C%22flow%22%3A%22desktop%22%2C%22localWrite%22%3Atrue%2C%22startOrigin%22%3A%22https%3A%2F%2Ftracker.example%22%7D&amp;prompt=consent</p><div class="lnk-more"><a>Show full link</a><span>&middot; 9 query parameters</span></div></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Every link from the app, or a pattern, narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats"><div class="pat app on"><span class="radio on"></span><span class="ab">Li</span><b>Any link from Linear</b><span class="why">Every site. Turns on Sent from.</span></div>
+                      <div class="pat-or">or by pattern</div>
+                      <div class="pat"><span class="radio"></span><code>auth.example.com/o/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>auth.example.com/*</code><span class="why">Everything on this host.</span></div></div><div class="inp mono" style="width: 100%;">*<span class="any">any link</span><span class="caret" style="font-size: 10px;">edit</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">Would also catch these 2 recent links from Linear <i>&middot; 1 stays with an earlier rule, which runs first</i></div><div class="cr"><span class="t">14:31</span><span class="u">https://tracker.example/team/ENG/issue/ENG-2041</span><div class="d"><span class="tag">default</span><span class="bi">Ed</span>PwrDrvr</div></div><div class="cr"><span class="t">12:53</span><span class="u">https://github.com/example-org/app/pull/118</span><div class="d"><span class="tag">rule 2</span><span class="bi">Ed</span>Work</div></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><div class="swrow"><span class="sw on"></span>Only when sent from Linear</div><span class="field-help">On because Match is any link from Linear. Off goes back to the narrowest pattern.</span></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in a private window</span></div><div class="field-c"><span class="sw"></span></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link from Linear as a saved test. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="1d" data-screen-label="1d Show full link">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>The whole link in place, scrolling past eight lines; Show less folds it back. Nothing else moves but the body below.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 14:45:17 &middot; sent from Linear</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk full"><span style="color: var(--text-primary);">https://auth.example.com/o/oauth2/v2/auth</span>?client_id=4417-demo-client.apps.example.com&amp;redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-redirect&amp;scope=openid%20email%20profile&amp;access_type=offline&amp;response_type=code&amp;state=%7B%22key%22%3A%22demo-state-0001%22%2C%22isMobileAppLogin%22%3Afalse%2C%22flow%22%3A%22desktop%22%2C%22localWrite%22%3Atrue%2C%22startOrigin%22%3A%22https%3A%2F%2Ftracker.example%22%7D&amp;prompt=consent</p><div class="lnk-more"><a>Show less</a></div></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Every link from the app, or a pattern, narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats"><div class="pat app"><span class="radio"></span><span class="ab">Li</span><b>Any link from Linear</b><span class="why">Every site. Turns on Sent from.</span></div>
+                      <div class="pat-or">or by pattern</div>
+                      <div class="pat on"><span class="radio on"></span><code>auth.example.com/o/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>auth.example.com/*</code><span class="why">Everything on this host.</span></div></div><div class="inp mono" style="width: 100%;">auth.example.com/o/*<span class="caret" style="font-size: 10px;">edit</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><div class="swrow"><span class="sw"></span>Only when sent from Linear</div><span class="field-help">Linear sent this one. Off, the rule matches a link from any app.</span></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in a private window</span></div><div class="field-c"><span class="sw"></span></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="1e" data-screen-label="1e No sending app on record">
+            <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span>A link with no app on record (the OS did not say, or an agent opened it) has no app choice and no Sent from: the sheet is the patterns alone, as before.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 14:45:17</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://auth.example.com/o/oauth2/v2/auth</span>?client_id=4417-demo-client.apps.example.com&amp;redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-redirect&amp;scope=openid%20email%20profile&amp;access_type=offline&amp;response_type=code&amp;state=%7B%22key%22%3A%22demo-state-0001%22%2C%22isMobileAppLogin%22%3Afalse%2C%22flow%22%3A%22desktop%22%2C%22localWrite%22%3Atrue%2C%22startOrigin%22%3A%22https%3A%2F%2Ftracker.example%22%7D&amp;prompt=consent</p><div class="lnk-more"><a>Show full link</a><span>&middot; 9 query parameters</span></div></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats">
+                      <div class="pat on"><span class="radio on"></span><code>auth.example.com/o/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>auth.example.com/*</code><span class="why">Everything on this host.</span></div></div><div class="inp mono" style="width: 100%;">auth.example.com/o/*<span class="caret" style="font-size: 10px;">edit</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in a private window</span></div><div class="field-c"><span class="sw"></span></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Why <code>*</code> and not a new kind of rule.</b> A <code>rules.json</code> rule already has <code>opener</code>, and Finicky&rsquo;s matcher reads <code>*</code> as every link, so &ldquo;any link from Linear&rdquo; is <code>{ "match": "*", "opener": ["com.linear"], "browser": &hellip; }</code>: the Go host&rsquo;s schema plus the existing extension, shown in Rules like any other rule. Its Also catches filters by the app as the router would, so the list says what the rule takes, not every link in memory. Position still decides: at the bottom an earlier rule that matches a Linear link keeps it, and the caption says so.</p>
+        <p class="dv-next">Try next: &ldquo;Any link from Linear in the rule editor rail&rdquo; &middot; &ldquo;the Overview row for a rule that matches by app only&rdquo;</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
