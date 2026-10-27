@@ -1617,8 +1617,8 @@ fn activity_adds_a_rule_from_a_row_in_one_click(cx: &mut TestAppContext) {
             .is_some()
     );
 
-    // ⌘N: the expanded row.
-    cx.simulate_keystrokes("cmd-n");
+    // ⌘N (Ctrl+N off macOS: "secondary"): the expanded row.
+    cx.simulate_keystrokes("secondary-n");
     draw(cx);
     assert_eq!(sheet_key(cx), Some(key(cx, first)));
     click(cx, "add-rule-cancel");
@@ -1627,7 +1627,7 @@ fn activity_adds_a_rule_from_a_row_in_one_click(cx: &mut TestAppContext) {
     click(cx, "activity-filter-All");
     click(cx, "activity-more-4");
     assert!(cx.debug_bounds("activity-menu-4").is_some());
-    cx.simulate_keystrokes("cmd-n");
+    cx.simulate_keystrokes("secondary-n");
     draw(cx);
     assert_eq!(sheet_key(cx), Some(key(cx, 4)));
     click(cx, "add-rule-cancel");
@@ -1635,7 +1635,7 @@ fn activity_adds_a_rule_from_a_row_in_one_click(cx: &mut TestAppContext) {
     // Nothing expanded and no menu: ⌘N does nothing.
     click(cx, format!("activity-row-{first}").leak());
     assert_eq!(expanded(cx), None);
-    cx.simulate_keystrokes("cmd-n");
+    cx.simulate_keystrokes("secondary-n");
     draw(cx);
     assert_eq!(sheet_key(cx), None);
 }
