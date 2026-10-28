@@ -58,7 +58,7 @@ impl Screen {
 }
 
 /// The rule the editor rail shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Selection {
     Rewrite(usize),
     Handler(usize),
@@ -111,6 +111,9 @@ pub struct PwrRoute {
     /// A config discovery found while visual rules are in charge, whose
     /// notice was not dismissed (Finicky Importer 1a).
     pub found_config: Option<FoundConfig>,
+    /// The Rules rows' menus, the deleted rule's Undo and the drag
+    /// (`rule_menu.rs`).
+    pub row_actions: crate::rule_menu::RowActions,
     /// The Overview's hover, pin, callout and setup state.
     pub overview: OverviewState,
     /// The browsers the scan found, for the Overview's cards (a test or
@@ -192,6 +195,7 @@ impl PwrRoute {
             browsers: Vec::new(),
             last_import: None,
             found_config: None,
+            row_actions: crate::rule_menu::RowActions::default(),
             overview: OverviewState::default(),
             installed: Vec::new(),
             described,
@@ -284,10 +288,11 @@ impl PwrRoute {
     /// checked first: an edit over a file another writer changed is kept
     /// on screen and not saved, and the status says so.
     pub(crate) fn refresh(&mut self, cx: &mut Context<'_, Self>) {
-        // Undo import is good until the next edit.
+        // Undo import and Undo delete are good until the next edit.
         if let Some(done) = &mut self.last_import {
             done.undoable = false;
         }
+        self.row_actions.edited();
         let disk = self.store.check_disk();
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
@@ -449,6 +454,9 @@ impl PwrRoute {
     /// The store holds the file again: the rows, the selection (cleared
     /// when its row is gone), the rail, and every engine over the rules.
     fn reloaded(&mut self, cx: &mut Context<'_, Self>) {
+        // The rows may be other rules now: a menu, a drag or an Undo for
+        // one of them would land on the wrong one.
+        self.row_actions = crate::rule_menu::RowActions::default();
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
         let order = self.order();
@@ -636,6 +644,26 @@ impl PwrRoute {
         )
     }
 
+    /// `rules.json`'s default browser and profile, through
+    /// [`PwrRoute::write_now`]: the Overview's setup card and Everything
+    /// else's menu.
+    pub fn write_default_browser(
+        &mut self,
+        browser: &str,
+        profile: &str,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), String> {
+        self.write_now(
+            |store| {
+                let file = store.edited();
+                let (was, was_profile) = (file.default_browser, file.default_profile);
+                store.set_default_browser(browser, profile);
+                move |store: &mut RulesStore| store.set_default_browser(&was, &was_profile)
+            },
+            cx,
+        )
+    }
+
     /// A new, empty rewrite at the end of its list, selected, with its
     /// first pattern ready to type.
     pub fn add_rewrite(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -718,7 +746,7 @@ impl PwrRoute {
 
     /// The draft's note and start link after the handler at `deleted` went:
     /// gone with it, or up one below it.
-    fn drafts_after_delete(&mut self, deleted: usize) {
+    pub(crate) fn drafts_after_delete(&mut self, deleted: usize) {
         fn shift<T>(draft: Option<(usize, T)>, deleted: usize) -> Option<(usize, T)> {
             match draft {
                 Some((at, _)) if at == deleted => None,
@@ -745,27 +773,22 @@ impl PwrRoute {
         }
     }
 
-    /// Removes the selected rule; the row that takes its place is selected.
-    pub fn delete_selected(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(selection) = self.selection else {
-            return;
-        };
-        self.store.delete(selection);
-        if let Selection::Handler(deleted) = selection {
-            self.drafts_after_delete(deleted);
+    /// The same after the handler at `from` moved to `to`.
+    pub(crate) fn drafts_after_move(&mut self, from: usize, to: usize) {
+        if let Some((draft, _)) = &mut self.draft_from {
+            *draft = crate::rule_menu::shifted(*draft, from, to);
         }
-        // The row that took its place, or the last of its list.
-        let (len, make): (usize, fn(usize) -> Selection) = match selection {
-            Selection::Rewrite(_) => (self.store.rewrite_count(), Selection::Rewrite),
-            Selection::Handler(_) => (self.store.handler_count(), Selection::Handler),
-        };
-        let index = match selection {
-            Selection::Rewrite(i) | Selection::Handler(i) => i,
-        };
-        self.selection = (len > 0).then(|| make(index.min(len - 1)));
-        self.refresh(cx);
-        self.rebuild_rail(cx);
-        window.focus(&self.focus, cx);
+        if let Some((draft, _)) = &mut self.draft_link {
+            *draft = crate::rule_menu::shifted(*draft, from, to);
+        }
+    }
+
+    /// Removes the selected rule, leaving Undo in its place; the row that
+    /// takes its place is selected.
+    pub fn delete_selected(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if let Some(selection) = self.selection {
+            self.delete_rule(selection, window, cx);
+        }
     }
 
     /// Switch the selected rule on or off.
@@ -944,6 +967,9 @@ impl PwrRoute {
                 self.overview_key(key, event.keystroke.modifiers.shift, window, cx);
             }
             Screen::Rules if self.config.is_none() || self.visual_rules_expanded => {
+                if self.rules_list_key(event, window, cx) {
+                    return;
+                }
                 match (key, self.selection) {
                     // Nothing selected yet: Down selects the first row.
                     ("down", None) => {
