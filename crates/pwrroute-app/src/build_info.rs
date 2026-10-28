@@ -312,9 +312,11 @@ mod tests {
     fn the_checkout_shows_home_as_a_tilde_then_its_last_two_folders() {
         let build = BuildInfo::fixture();
         let home = Path::new("/Users/you");
+        // `~` joins the rest with the OS's separator (`~\` on Windows).
+        let tilde = |rest: &str| Path::new("~").join(rest).display().to_string();
         assert_eq!(
-            build.checkout_label(Some(home), 80).as_deref(),
-            Some("~/.pwragent/worktrees/k3x9q2ab/PwrRoute")
+            build.checkout_label(Some(home), 80),
+            Some(tilde(".pwragent/worktrees/k3x9q2ab/PwrRoute"))
         );
         assert_eq!(
             build.checkout_label(Some(home), 24).as_deref(),
@@ -325,8 +327,8 @@ mod tests {
             ..BuildInfo::fixture()
         };
         assert_eq!(
-            main.checkout_label(Some(home), 24).as_deref(),
-            Some("~/pwrdrvr/PwrRoute")
+            main.checkout_label(Some(home), 24),
+            Some(tilde("pwrdrvr/PwrRoute"))
         );
         assert_eq!(release().checkout_label(Some(home), 24), None);
     }
