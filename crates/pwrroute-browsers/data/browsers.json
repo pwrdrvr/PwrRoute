@@ -3,7 +3,7 @@
     "Entries with \"finicky\": true come from Finicky's apps/finicky/src/browser/browsers.json (MIT, Copyright (c) 2015-2025 John Sterling); their macOS bundle_id, app_name, engine and profile directory are Finicky's.",
     "Everything else (Windows, Linux, and the browsers Finicky lacks) was added for PwrRoute; each entry's sources say where its facts came from.",
     "Path templates start with a base-directory token; see Env::expand in src/env.rs.",
-    "singleton_protocol opts in to a verified wire format; absent, the browser handles its own handoff. Chromium forks may change the header (Edge 156 sends two timestamp fields before argv), so engine is not evidence of compatibility.",
+    "singleton_protocol opts in to a verified wire format; absent, the browser handles its own handoff. Chromium forks may change the header (Edge sends two timestamp fields before argv: \"edge\"), so engine is not evidence of compatibility.",
     "private_flag is the engine's by default: Chromium's --incognito (chrome/common/chrome_switches.cc, kIncognito) and Firefox's --private-window (wiki.mozilla.org/Firefox/CommandLineOptions); WebKit browsers have none. An entry sets it only to override: Edge spells it --inprivate, and Arc and Dia take none."
   ],
   "browsers": [
@@ -256,6 +256,7 @@
       "id": "edge",
       "name": "Microsoft Edge",
       "engine": "chromium",
+      "singleton_protocol": "edge",
       "private_flag": "inprivate",
       "finicky": true,
       "macos": {
@@ -294,9 +295,10 @@
         "https://github.com/mozilla-firefox/firefox/blob/main/browser/components/migration/ChromeMigrationUtils.sys.mjs",
         "https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/set-preview-channel",
         "https://packages.microsoft.com/yumrepos/edge",
-        "https://answers.microsoft.com/en-us/microsoftedge/forum/msedge_open-msedge_win10/access-microsoft-edge-using-command-line/03a4add6-9ca4-4fbb-a183-aaa763a0ab76"
+        "https://answers.microsoft.com/en-us/microsoftedge/forum/msedge_open-msedge_win10/access-microsoft-edge-using-command-line/03a4add6-9ca4-4fbb-a183-aaa763a0ab76",
+        "https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/process_singleton_posix.cc"
       ],
-      "notes": "Edge spells the private-window switch --inprivate. /usr/bin/microsoft-edge is shared by every channel's package, so only microsoft-edge-stable is used. Linux profile directories follow Chromium's naming; Microsoft does not document them."
+      "notes": "Edge spells the private-window switch --inprivate. Its singleton message is upstream Chromium's with two fields after the cwd (the wall clock in microseconds since 1601, then the uptime in microseconds), captured from Edge 156.0.4314.50's own sender on macOS: tests/fixtures/edge-156-singleton-message.bin. /usr/bin/microsoft-edge is shared by every channel's package, so only microsoft-edge-stable is used. Linux profile directories follow Chromium's naming; Microsoft does not document them."
     },
     {
       "id": "edge-beta",

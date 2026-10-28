@@ -38,6 +38,9 @@ browser registration on macOS, Windows and Linux, and apps' icons (macOS).
   the yield must land before the browser hears of the link). It takes a
   bundle id: the launcher's `Plan::hand_off_to` names the copy, and is
   `None` when the link is meant for the background.
+- **`system_uptime` is `NSProcessInfo.systemUptime`**: time awake since
+  boot, the clock Chromium's `TimeTicks` reads on macOS. Edge's singleton
+  message carries it; the app passes it to the launcher's `with_uptime`.
 - **App icons (`app_bundle`, `app_icon_png`) read the disk.** Callers run
   them off the UI thread and cache the result; the app's `app_icons.rs`
   does. Windows and Linux return `None` until they have an implementation.

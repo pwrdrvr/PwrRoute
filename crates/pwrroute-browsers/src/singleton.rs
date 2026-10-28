@@ -17,9 +17,16 @@
 //! page cache; writing it here takes milliseconds. Any failure leaves the
 //! caller to run `open` as before.
 //!
-//! This is the upstream Chromium format, not a contract for its forks.
-//! Callers must opt in by the catalog's verified `singleton_protocol`.
-//! An ACK alone does not establish that a different header was understood.
+//! That is the upstream Chromium format, not a contract for its forks, and
+//! the catalog's `singleton_protocol` names the one each browser speaks.
+//! Microsoft Edge (156, captured from its own sender: the fixture
+//! `tests/fixtures/edge-156-singleton-message.bin`) puts two numbers between
+//! the cwd and argv: the wall-clock time in microseconds since 1601
+//! (Chromium's `base::Time`) and the system's uptime in microseconds, sleep
+//! excluded (`base::TimeTicks` on macOS, `CLOCK_UPTIME_RAW`). Sent the
+//! upstream message, Edge still answers `ACK` but reads the program and the
+//! profile flag as those numbers, losing the profile and the URL: an ACK
+//! alone does not establish that a header was understood.
 //!
 //! Beyond Chromium's own checks, the socket and its directory must be ours
 //! (owner uid, no group or other write), the directory a real one under the
@@ -33,8 +40,10 @@
 use std::{
     fmt, io,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use crate::catalog::SingletonProtocol;
 
 #[cfg(unix)]
 use std::time::Instant;
@@ -63,6 +72,8 @@ pub struct SocketHandOff {
     pub user_data_dir: PathBuf,
     /// The command line, program first. Holds the URL: never log it.
     pub argv: Vec<String>,
+    /// The message format the browser reads.
+    pub(crate) protocol: SingletonProtocol,
     /// Where the user's temp dir is; the socket must be under it.
     pub(crate) temp_dir: PathBuf,
     /// The uid the socket and its directory must belong to.
@@ -134,11 +145,43 @@ impl fmt::Display for SocketError {
 
 impl std::error::Error for SocketError {}
 
-/// The message for `argv`, run from `cwd`: `START`, `cwd` and each argument,
-/// NUL-separated, as Chromium's client writes it.
-pub(crate) fn encode(cwd: &str, argv: &[String]) -> Result<Vec<u8>, SocketError> {
+/// Microseconds from 1601-01-01 to 1970-01-01, as Chromium's `base::Time`
+/// counts from 1601 (`kTimeTToMicrosecondsOffset`).
+const UNIX_EPOCH_SINCE_1601_US: u128 = 11_644_473_600_000_000;
+
+/// The fields `protocol` puts between the cwd and argv, read now: none for
+/// upstream Chromium; for Edge the wall clock (microseconds since 1601) and
+/// `uptime` (microseconds), which Edge's own sender reads as it sends.
+/// `None` when Edge's header needs an uptime there is none of.
+pub(crate) fn header(protocol: SingletonProtocol, uptime: Option<Duration>) -> Option<Vec<String>> {
+    match protocol {
+        SingletonProtocol::Chromium => Some(Vec::new()),
+        SingletonProtocol::Edge => {
+            let since_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros();
+            Some(vec![
+                (since_unix + UNIX_EPOCH_SINCE_1601_US).to_string(),
+                uptime?.as_micros().to_string(),
+            ])
+        }
+    }
+}
+
+/// The message for `argv`, run from `cwd`: `START`, `cwd`, the protocol's
+/// `header` fields (see [`header`]) and each argument, NUL-separated, as the
+/// browser's own client writes it.
+pub(crate) fn encode(
+    cwd: &str,
+    header: &[String],
+    argv: &[String],
+) -> Result<Vec<u8>, SocketError> {
     let mut message = START.to_vec();
-    for token in std::iter::once(cwd).chain(argv.iter().map(String::as_str)) {
+    let tokens = std::iter::once(cwd)
+        .chain(header.iter().map(String::as_str))
+        .chain(argv.iter().map(String::as_str));
+    for token in tokens {
         let bytes = token.as_bytes();
         let trimmed = bytes
             .first()
@@ -253,9 +296,14 @@ fn check_cookie(user_data_dir: &Path, remote_cookie: &Path) -> Result<(), Socket
 }
 
 /// Hands `handoff`'s command line to the browser and waits up to `budget`
-/// for its `ACK`.
+/// for its `ACK`. `uptime` reads the clock Edge's header carries; see
+/// [`header`].
 #[cfg(unix)]
-pub(crate) fn send(handoff: &SocketHandOff, budget: Duration) -> Result<(), SocketError> {
+pub(crate) fn send(
+    handoff: &SocketHandOff,
+    uptime: Option<&dyn Fn() -> Option<Duration>>,
+    budget: Duration,
+) -> Result<(), SocketError> {
     use std::{
         io::{Read as _, Write as _},
         net::Shutdown,
@@ -269,8 +317,11 @@ pub(crate) fn send(handoff: &SocketHandOff, budget: Duration) -> Result<(), Sock
             .filter(|d| !d.is_zero())
             .ok_or(SocketError::NoReply)
     };
-    let message = encode("/", &handoff.argv)?;
     let (socket, remote_cookie) = locate(handoff)?;
+    // Read as late as possible: these are "now" in the browser's eyes.
+    let header = header(handoff.protocol, uptime.and_then(|clock| clock()))
+        .ok_or(SocketError::Unsupported)?;
+    let message = encode("/", &header, &handoff.argv)?;
     // A Unix socket's connect does not wait on macOS: a full backlog is
     // refused at once.
     let mut stream = UnixStream::connect(&socket).map_err(|e| SocketError::Connect(e.kind()))?;
@@ -312,7 +363,11 @@ pub(crate) fn send(handoff: &SocketHandOff, budget: Duration) -> Result<(), Sock
 }
 
 #[cfg(not(unix))]
-pub(crate) fn send(_handoff: &SocketHandOff, _budget: Duration) -> Result<(), SocketError> {
+pub(crate) fn send(
+    _handoff: &SocketHandOff,
+    _uptime: Option<&dyn Fn() -> Option<Duration>>,
+    _budget: Duration,
+) -> Result<(), SocketError> {
     Err(SocketError::Unsupported)
 }
 
@@ -403,6 +458,7 @@ mod tests {
     fn the_message_is_nul_separated_like_chromiums() {
         let message = encode(
             "/",
+            &[],
             &argv(&[
                 "/Applications/Example.app/Contents/MacOS/Example",
                 "--profile-directory=Profile 1",
@@ -420,16 +476,78 @@ mod tests {
     fn what_chromium_would_change_is_refused() {
         for bad in ["a\0b", " leading", "trailing\n", "\ttab"] {
             assert_eq!(
-                encode("/", &argv(&["x", bad])),
+                encode("/", &[], &argv(&["x", bad])),
                 Err(SocketError::Unrepresentable),
                 "{bad:?}"
             );
         }
         let long = "x".repeat(MAX_MESSAGE);
-        assert_eq!(encode("/", &argv(&["x", &long])), Err(SocketError::TooLong));
+        assert_eq!(
+            encode("/", &[], &argv(&["x", &long])),
+            Err(SocketError::TooLong)
+        );
         // Just under the limit is fine.
         let fits = "x".repeat(MAX_MESSAGE - b"START\0/\0x\0".len() - 1);
-        assert!(encode("/", &argv(&["x", &fits])).is_ok());
+        assert!(encode("/", &[], &argv(&["x", &fits])).is_ok());
+    }
+
+    /// The tokens of a captured message, split as the browser splits it.
+    fn tokens(message: &[u8]) -> Vec<String> {
+        message
+            .split(|b| *b == 0)
+            .map(|t| String::from_utf8(t.to_vec()).unwrap())
+            .collect()
+    }
+
+    /// Chrome's and Edge 156's own senders, captured against a fake
+    /// receiver (an isolated `--user-data-dir`): ours writes the same bytes.
+    #[test]
+    fn messages_match_each_browsers_own_sender() {
+        let chrome = include_bytes!("../tests/fixtures/chrome-singleton-message.bin");
+        let t = tokens(chrome);
+        assert_eq!(t[..2], ["START", "/"]);
+        assert!(t[2].ends_with("/Google Chrome"), "{t:?}");
+        assert_eq!(encode("/", &[], &t[2..]).unwrap(), chrome);
+
+        let edge = include_bytes!("../tests/fixtures/edge-156-singleton-message.bin");
+        let t = tokens(edge);
+        assert_eq!(t[..2], ["START", "/"]);
+        // The two numbers, then the program: Edge's header.
+        assert!(
+            t[2..4]
+                .iter()
+                .all(|n| n.bytes().all(|b| b.is_ascii_digit()))
+        );
+        assert!(t[4].ends_with("/Microsoft Edge"), "{t:?}");
+        assert_eq!(
+            t[t.len() - 2..],
+            [
+                "--profile-directory=Profile 1",
+                "https://example.com/edge-capture"
+            ]
+        );
+        assert_eq!(encode("/", &t[2..4], &t[4..]).unwrap(), edge);
+    }
+
+    #[test]
+    fn edges_header_is_the_wall_clock_since_1601_and_the_uptime() {
+        assert_eq!(header(SingletonProtocol::Chromium, None), Some(Vec::new()));
+        assert_eq!(header(SingletonProtocol::Edge, None), None);
+        let before = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let fields = header(
+            SingletonProtocol::Edge,
+            Some(Duration::from_micros(206_565_059_142)),
+        )
+        .unwrap();
+        let after = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let wall: u128 = fields[0].parse().unwrap();
+        let since_1601 = |d: Duration| d.as_micros() + UNIX_EPOCH_SINCE_1601_US;
+        assert!((since_1601(before)..=since_1601(after)).contains(&wall));
+        assert_eq!(fields[1], "206565059142");
+        // The captured message's wall clock decodes to its day, 2026-10-28.
+        let captured: u128 = 13_437_698_950_766_736;
+        let unix_secs = (captured - UNIX_EPOCH_SINCE_1601_US) / 1_000_000;
+        assert_eq!(unix_secs / 86_400, 20_754);
     }
 
     #[test]
@@ -480,6 +598,7 @@ mod tests {
             SocketHandOff {
                 user_data_dir: fake.data.clone(),
                 argv: argv(&["/A/Example", "--profile-directory=Profile 1", URL]),
+                protocol: SingletonProtocol::Chromium,
                 temp_dir: fake.temp.clone(),
                 uid: current_uid(),
             }
@@ -492,8 +611,35 @@ mod tests {
             let mut fake = Fake::new("d");
             let got = fake.serve(Some(b"ACK"));
             let handoff = handoff(&fake);
-            send(&handoff, SOCKET_BUDGET).unwrap();
-            assert_eq!(got.recv().unwrap(), encode("/", &handoff.argv).unwrap());
+            send(&handoff, None, SOCKET_BUDGET).unwrap();
+            assert_eq!(
+                got.recv().unwrap(),
+                encode("/", &[], &handoff.argv).unwrap()
+            );
+        }
+
+        #[test]
+        fn edge_gets_its_header_read_at_send_time() {
+            let mut fake = Fake::new("d");
+            let got = fake.serve(Some(b"ACK"));
+            let mut edge = handoff(&fake);
+            edge.protocol = SingletonProtocol::Edge;
+            let uptime = || Some(Duration::from_micros(42_000_123));
+            send(&edge, Some(&uptime), SOCKET_BUDGET).unwrap();
+            let t = tokens(&got.recv().unwrap());
+            assert_eq!(t[..2], ["START", "/"]);
+            assert!(t[2].parse::<u128>().unwrap() > UNIX_EPOCH_SINCE_1601_US);
+            assert_eq!(t[3], "42000123");
+            assert_eq!(t[4..], edge.argv);
+
+            // No clock, no Edge message: the caller falls back.
+            let fake = Fake::new("d");
+            let mut edge = handoff(&fake);
+            edge.protocol = SingletonProtocol::Edge;
+            assert_eq!(
+                send(&edge, None, SOCKET_BUDGET),
+                Err(SocketError::Unsupported)
+            );
         }
 
         #[test]
@@ -501,7 +647,7 @@ mod tests {
             let mut fake = Fake::new("d");
             let _got = fake.serve(Some(b"SHUTDOWN"));
             assert_eq!(
-                send(&handoff(&fake), SOCKET_BUDGET),
+                send(&handoff(&fake), None, SOCKET_BUDGET),
                 Err(SocketError::ShuttingDown)
             );
 
@@ -509,7 +655,7 @@ mod tests {
             let _got = fake.serve(None);
             let started = Instant::now();
             assert_eq!(
-                send(&handoff(&fake), Duration::from_millis(100)),
+                send(&handoff(&fake), None, Duration::from_millis(100)),
                 Err(SocketError::NoReply)
             );
             assert!(started.elapsed() < Duration::from_millis(450));
@@ -517,14 +663,14 @@ mod tests {
             let mut fake = Fake::new("d");
             let _got = fake.serve(Some(b"WHAT"));
             assert_eq!(
-                send(&handoff(&fake), SOCKET_BUDGET),
+                send(&handoff(&fake), None, SOCKET_BUDGET),
                 Err(SocketError::Unexpected)
             );
 
             let mut fake = Fake::new("d");
             let _got = fake.serve(Some(b""));
             assert_eq!(
-                send(&handoff(&fake), SOCKET_BUDGET),
+                send(&handoff(&fake), None, SOCKET_BUDGET),
                 Err(SocketError::Closed)
             );
         }
@@ -534,7 +680,7 @@ mod tests {
             let mut fake = Fake::new("d");
             drop(fake.listener.take());
             assert!(matches!(
-                send(&handoff(&fake), SOCKET_BUDGET),
+                send(&handoff(&fake), None, SOCKET_BUDGET),
                 Err(SocketError::Connect(_))
             ));
         }

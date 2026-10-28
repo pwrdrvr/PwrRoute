@@ -79,6 +79,20 @@ pub fn yield_front_to(bundle_id: &str, wait: std::time::Duration) -> Yield {
     }
 }
 
+/// How long the system has been awake since it booted: sleep excluded, the
+/// clock Chromium's `TimeTicks` reads on macOS (`CLOCK_UPTIME_RAW`). Edge's
+/// singleton message carries it. Any thread. `None` off macOS.
+pub fn system_uptime() -> Option<std::time::Duration> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::system_uptime()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// The process that owns a window, and its bundle id when it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowOwner {
@@ -201,5 +215,26 @@ mod window_order_tests {
         let owner = super::top_window_owner().expect("a window is on top");
         eprintln!("top window: {owner:?}");
         assert!(owner.pid > 0);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod uptime_tests {
+    /// The uptime is the sleep-excluded clock Rust's `Instant` reads on
+    /// macOS (`CLOCK_UPTIME_RAW`): it moves with it, and is no larger than
+    /// the time since boot.
+    #[test]
+    fn uptime_moves_with_instant() {
+        let a = super::system_uptime().expect("an uptime on macOS");
+        let started = std::time::Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let b = super::system_uptime().unwrap();
+        let moved = b - a;
+        let elapsed = started.elapsed();
+        assert!(moved >= std::time::Duration::from_millis(45), "{moved:?}");
+        assert!(
+            moved <= elapsed + std::time::Duration::from_millis(20),
+            "{moved:?}"
+        );
     }
 }

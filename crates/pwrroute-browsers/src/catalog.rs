@@ -75,6 +75,10 @@ pub enum BrowserEngine {
 pub(crate) enum SingletonProtocol {
     /// Upstream's START, cwd, argv (process_singleton_posix.cc).
     Chromium,
+    /// Microsoft Edge's: START, cwd, the wall clock and the uptime in
+    /// microseconds, argv (captured from Edge 156's own sender; see
+    /// `singleton.rs`).
+    Edge,
 }
 
 /// How a browser is told which profile to open.

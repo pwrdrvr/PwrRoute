@@ -64,10 +64,20 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   `Plan::socket` is the planned hand-off (`Some(Err)` says why not, so the
   dry run says which way a link goes). The catalog's `singleton_protocol`
   must explicitly opt in with a protocol source; never infer compatibility
-  from the engine. Edge 156's native sender puts two timestamp fields
-  between cwd and argv; an upstream message can lose the profile and URL
-  even while Edge replies `ACK`. Browsers without a verified protocol use
-  their own `open -n --args` hand-off. `Launcher::run` tries the socket within
+  from the engine, since a browser replies `ACK` to a header it misreads.
+  `chromium` is upstream's; `edge` (Microsoft Edge) adds two fields after
+  the cwd: the wall clock in microseconds since 1601 and the uptime in
+  microseconds, sleep excluded, read at send time (`singleton::header`;
+  the uptime comes from `Launcher::with_uptime`, else Edge keeps `open`).
+  Each protocol's evidence is a capture of the browser's own sender in
+  `tests/fixtures/*-singleton-message.bin`, which `singleton.rs`'s tests
+  replay byte for byte. To capture or re-check one, run the browser's
+  executable with its own temp `--user-data-dir` holding a fake socket
+  that replies `ACK`, matching `SingletonCookie` links, and a
+  `SingletonLock` naming a dummy process with the browser's executable
+  name (Chromium kills the lock's pid when the reply is late): never the
+  user's running browser. Browsers without a verified protocol use their
+  own `open -n --args` hand-off. `Launcher::run` tries the socket within
   `SOCKET_BUDGET` and runs the `open` plan on any failure, and `Launched`'s
   `Delivery` says which way it went. Only the user data dir from
   `profile_dir`, a socket and directory owned by this uid under `$TMPDIR`,

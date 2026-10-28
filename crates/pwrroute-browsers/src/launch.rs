@@ -66,6 +66,17 @@ pub struct Launcher {
     env: Env,
     options: LaunchOptions,
     running: Option<RunningApps>,
+    uptime: Option<Uptime>,
+}
+
+/// The system's uptime, sleep excluded; see [`Launcher::with_uptime`].
+#[derive(Clone)]
+struct Uptime(Arc<dyn Fn() -> Option<Duration> + Send + Sync>);
+
+impl fmt::Debug for Uptime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Uptime")
+    }
 }
 
 /// The exact command a launch runs.
@@ -302,6 +313,7 @@ impl Launcher {
             env,
             options,
             running: None,
+            uptime: None,
         }
     }
 
@@ -315,6 +327,18 @@ impl Launcher {
     /// `-g` is passed only when the browser asks for the background.
     pub fn with_running(mut self, running: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
         self.running = Some(RunningApps(Arc::new(running)));
+        self
+    }
+
+    /// The launcher, reading the system's uptime with `uptime` (the app
+    /// passes `pwrroute_os::system_uptime`): sleep excluded, the clock
+    /// Chromium's `TimeTicks` reads on macOS. Edge's singleton message
+    /// carries it, so without it Edge gets no socket hand-off.
+    pub fn with_uptime(
+        mut self,
+        uptime: impl Fn() -> Option<Duration> + Send + Sync + 'static,
+    ) -> Self {
+        self.uptime = Some(Uptime(Arc::new(uptime)));
         self
     }
 
@@ -428,7 +452,8 @@ impl Launcher {
             Some(Ok(handoff)) => {
                 observe(RunEvent::SocketStarted);
                 let started = Instant::now();
-                let result = singleton::send(handoff, SOCKET_BUDGET);
+                let uptime = self.uptime.as_ref().map(|u| &*u.0 as &dyn Fn() -> _);
+                let result = singleton::send(handoff, uptime, SOCKET_BUDGET);
                 observe(RunEvent::SocketFinished {
                     elapsed: started.elapsed(),
                     error: result.as_ref().err().cloned(),
@@ -466,11 +491,13 @@ impl Launcher {
         entry: &BrowserInfo,
         flags: Option<&[String]>,
     ) -> (Option<Result<SocketHandOff, SocketError>>, &'static str) {
-        // ACK only means the browser accepted a message. Edge, for example,
-        // consumes two extra header fields before argv; upstream's format
-        // can therefore lose the profile and URL without a socket error.
-        if entry.singleton_protocol != Some(SingletonProtocol::Chromium) {
+        // ACK only means the browser accepted a message, not that it read
+        // the header it expects: only a protocol the catalog names is used.
+        let Some(protocol) = entry.singleton_protocol else {
             return (None, "unverified_protocol");
+        };
+        if protocol == SingletonProtocol::Edge && self.uptime.is_none() {
+            return (None, "no_uptime_clock");
         }
         let own_open_options = browser.args.iter().any(|a| a == "--args");
         let other_data_dir = browser
@@ -497,6 +524,7 @@ impl Launcher {
         let handoff = SocketHandOff {
             user_data_dir,
             argv,
+            protocol,
             temp_dir: self
                 .env
                 .var("TMPDIR")
@@ -1221,7 +1249,7 @@ mod tests {
         assert_eq!(plan.hand_off_to.as_deref(), Some("com.google.Chrome"));
 
         let got = fake.serve(Some(b"ACK"));
-        let expected = crate::singleton::encode("/", &handoff.argv).unwrap();
+        let expected = crate::singleton::encode("/", &[], &handoff.argv).unwrap();
         // The fake `open` fails: had it run, `run` would say so.
         let mut events = Vec::new();
         let launched = launcher
@@ -1246,19 +1274,23 @@ mod tests {
         use pwrroute_engine::{DefaultHost, Engine, Limits, RulesFile, Sources};
 
         // Edge 156's native sender puts two timestamps between cwd and
-        // argv. Sending the upstream header loses the profile and URL,
-        // even though Edge replies ACK. A valid socket must not opt it in.
-        let fake =
-            crate::singleton::fake::Fake::new("home/Library/Application Support/Microsoft Edge");
-        std::fs::write(
-            fake.data.join("Local State"),
-            include_str!("../tests/fixtures/chromium-local-state.json")
-                .replace(r#""last_used": "Profile 1""#, r#""last_used": "Profile 3""#),
-        )
-        .unwrap();
-        let mut env = Env::fixture(Platform::MacOs, fake.root());
-        env.set_var("TMPDIR", fake.temp.to_string_lossy().into_owned());
-        let launcher = Launcher::with_env(env, LaunchOptions::default()).with_running(|_| true);
+        // argv. The upstream header lost the profile and URL even though
+        // Edge replied ACK, so Edge's own header goes out instead.
+        let edge = || {
+            let fake = crate::singleton::fake::Fake::new(
+                "home/Library/Application Support/Microsoft Edge",
+            );
+            std::fs::write(
+                fake.data.join("Local State"),
+                include_str!("../tests/fixtures/chromium-local-state.json")
+                    .replace(r#""last_used": "Profile 1""#, r#""last_used": "Profile 3""#),
+            )
+            .unwrap();
+            let mut env = Env::fixture(Platform::MacOs, fake.root());
+            env.set_var("TMPDIR", fake.temp.to_string_lossy().into_owned());
+            let launcher = Launcher::with_env(env, LaunchOptions::default()).with_running(|_| true);
+            (fake, launcher)
+        };
 
         for (name, app_type, selector) in [
             ("Microsoft Edge", AppType::AppName, "-a"),
@@ -1283,9 +1315,16 @@ mod tests {
                 let b = engine.resolve(url, None).unwrap().browser;
                 assert_eq!(b.app_type, app_type);
                 assert_eq!(b.profile, "Personal");
+
+                // Without an uptime clock there is no Edge header: `open`.
+                let (_fake, launcher) = edge();
                 let plan = launcher.plan(&b).unwrap().unwrap();
                 assert!(plan.notes.is_empty());
                 assert_eq!(plan.socket, None);
+                assert!(
+                    plan.diagnostic_summary()
+                        .contains("skipped(no_uptime_clock)")
+                );
                 assert_eq!(plan.hand_off_to.as_deref(), Some("com.microsoft.edgemac"));
                 assert_eq!(
                     args(&plan),
@@ -1301,6 +1340,25 @@ mod tests {
                 );
                 let launched = launcher.run(with_fake_open(plan, "ok")).unwrap();
                 assert_eq!(launched.delivery, Delivery::Command);
+
+                // With one, the socket gets Edge's header and the profile and
+                // URL arrive in argv where Edge reads them.
+                let (mut fake, launcher) = edge();
+                let launcher = launcher.with_uptime(|| Some(Duration::from_micros(7_000_001)));
+                let got = fake.serve(Some(b"ACK"));
+                let plan = launcher.plan(&b).unwrap().unwrap();
+                assert!(matches!(plan.socket, Some(Ok(_))), "{:?}", plan.socket);
+                let launched = launcher.run(with_fake_open(plan, "fail")).unwrap();
+                assert_eq!(launched.delivery, Delivery::Socket);
+                let message = got.recv().unwrap();
+                let tokens: Vec<&[u8]> = message.split(|b| *b == 0).collect();
+                assert_eq!(tokens.len(), 7, "{name}");
+                assert_eq!(tokens[..2], [b"START".as_slice(), b"/"]);
+                assert!(tokens[2].iter().all(u8::is_ascii_digit));
+                assert_eq!(tokens[3], b"7000001");
+                assert!(tokens[4].ends_with(b"/Contents/MacOS/Microsoft Edge"));
+                assert_eq!(tokens[5], b"--profile-directory=Profile 1");
+                assert_eq!(tokens[6], url.as_bytes());
             }
         }
     }
@@ -1369,6 +1427,10 @@ mod tests {
         ];
         b.profile = "Secret Profile".into();
         let summary = launcher.plan(&b).unwrap().unwrap().diagnostic_summary();
+        assert!(summary.contains("socket=skipped(no_uptime_clock)"));
+        let mut brave = b.clone();
+        brave.name = "Brave Browser".into();
+        let summary = launcher.plan(&brave).unwrap().unwrap().diagnostic_summary();
         assert!(summary.contains("socket=skipped(unverified_protocol)"));
         assert!(summary.contains("new_instance=true background=true yield_requested=true"));
         for secret in [&b.url, &b.profile, &b.name, &b.args[1]] {

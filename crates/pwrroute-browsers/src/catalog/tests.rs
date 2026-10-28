@@ -73,20 +73,36 @@ fn every_entry_has_a_platform_and_sources() {
 #[test]
 fn singleton_protocols_are_explicit_and_sourced() {
     for b in catalog().browsers() {
-        if let Some(SingletonProtocol::Chromium) = b.singleton_protocol {
-            assert_eq!(b.engine, BrowserEngine::Chromium, "{}", b.id);
-            assert!(b.macos.is_some(), "{}", b.id);
+        let Some(protocol) = b.singleton_protocol else {
+            continue;
+        };
+        assert_eq!(b.engine, BrowserEngine::Chromium, "{}", b.id);
+        assert!(b.macos.is_some(), "{}", b.id);
+        assert!(
+            b.sources
+                .iter()
+                .any(|s| s.ends_with("/process_singleton_posix.cc")),
+            "{}: no singleton protocol source",
+            b.id
+        );
+        if protocol == SingletonProtocol::Edge {
+            // Edge's header has no public source: the capture is the
+            // evidence, and singleton.rs's tests replay it.
+            let notes = b.notes.as_deref().unwrap_or_default();
             assert!(
-                b.sources
-                    .iter()
-                    .any(|s| s.ends_with("/process_singleton_posix.cc")),
-                "{}: no singleton protocol source",
+                notes.contains("edge-156-singleton-message.bin"),
+                "{}: Edge's protocol must cite its capture",
                 b.id
             );
         }
     }
-    // Being a Chromium browser does not establish wire compatibility.
-    for id in ["edge", "edge-beta", "edge-dev", "edge-canary", "brave"] {
+    assert_eq!(
+        catalog().find("edge").unwrap().singleton_protocol,
+        Some(SingletonProtocol::Edge)
+    );
+    // Being a Chromium browser does not establish wire compatibility: these
+    // were never captured.
+    for id in ["edge-beta", "edge-dev", "edge-canary", "brave"] {
         assert_eq!(catalog().find(id).unwrap().singleton_protocol, None, "{id}");
     }
 }

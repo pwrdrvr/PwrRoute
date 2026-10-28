@@ -29,6 +29,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSData",
     "NSDictionary",
     "NSGeometry",
+    # systemUptime, the clock in Edge's singleton message.
+    "NSProcessInfo",
     "NSString",
     "NSURL",
     # AEKeyword, for reading the sender's pid off the Apple Event.
