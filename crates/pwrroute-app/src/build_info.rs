@@ -139,7 +139,7 @@ impl BuildInfo {
         let checkout = self.checkout.as_deref()?;
         let shown = match home.and_then(|home| Path::new(checkout).strip_prefix(home).ok()) {
             Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-            Some(rest) => format!("~/{}", rest.display()),
+            Some(rest) => Path::new("~").join(rest).display().to_string(),
             None => checkout.to_owned(),
         };
         if shown.chars().count() <= max_chars {

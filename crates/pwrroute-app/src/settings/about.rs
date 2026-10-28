@@ -49,8 +49,8 @@ fn version_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
             "Version",
             None,
             [
-                field_help(format!("PwrRoute {}", about.version)).into_any_element(),
-                field_help(about.build.clone()).into_any_element(),
+                field_help(format!("PwrRoute {}", about.source.version)).into_any_element(),
+                field_help(about.source.build_line()).into_any_element(),
             ],
         ),
         field(

@@ -214,11 +214,8 @@ pub fn os_release_name(text: &str) -> Option<String> {
 
 /// The About pane for this copy.
 pub fn about() -> About {
-    let source = BuildInfo::current();
     About {
-        version: source.version.clone().into(),
-        build: source.build_line().into(),
-        source,
+        source: BuildInfo::current(),
         license: LICENSE.into(),
         links: vec![
             ("Source".into(), "github.com/pwrdrvr/PwrRoute".into()),
@@ -451,10 +448,11 @@ mod tests {
     #[test]
     fn about_shows_the_version_and_the_license_without_a_url() {
         let model = about();
-        assert_eq!(model.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(model.source.version, env!("CARGO_PKG_VERSION"));
         assert!(
             model
-                .build
+                .source
+                .build_line()
                 .ends_with(&format!("build for {}", std::env::consts::ARCH))
         );
         assert!(model.license.contains("Finicky"));

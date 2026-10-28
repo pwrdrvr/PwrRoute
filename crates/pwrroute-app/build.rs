@@ -14,10 +14,38 @@ fn main() {
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
     let on_ci = std::env::var_os("GITHUB_ACTIONS").is_some();
 
-    let commit = git(&manifest, &["rev-parse", "HEAD"]);
-    let toplevel = git(&manifest, &["rev-parse", "--show-toplevel"]);
-    let subject = git(&manifest, &["log", "-1", "--format=%s"]);
-    let commit_time = git(&manifest, &["log", "-1", "--format=%ct"]);
+    // One call for HEAD, the checkout and the git dirs `watch` needs.
+    let parsed = git(
+        &manifest,
+        &[
+            "rev-parse",
+            "HEAD",
+            "--show-toplevel",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+    )
+    .map(|out| out.lines().map(str::to_owned).collect::<Vec<_>>())
+    .unwrap_or_default();
+    let head = parsed.first().cloned();
+    let toplevel = parsed.get(1).cloned();
+    // A pull request's CI checkout is GitHub's merge commit, on no branch:
+    // the workflow names the PR's head instead (preview-build.yml).
+    let commit = std::env::var("PWRROUTE_SOURCE_SHA")
+        .ok()
+        .map(|sha| sha.trim().to_owned())
+        .filter(|sha| !sha.is_empty())
+        .or(head);
+    // The subject and time of that commit; a shallow checkout may not
+    // have the PR's head, and then neither is known.
+    let (subject, commit_time) = commit
+        .as_deref()
+        .and_then(|commit| git(&manifest, &["log", "-1", "--format=%ct%n%s", commit]))
+        .and_then(|out| {
+            let (time, subject) = out.split_once('\n')?;
+            Some((Some(subject.to_owned()), Some(time.to_owned())))
+        })
+        .unwrap_or((None, None));
     // `--no-optional-locks`: a build never rewrites the index.
     let dirty = git(
         &manifest,
@@ -31,8 +59,19 @@ fn main() {
     .is_some_and(|status| !status.is_empty());
     let branch = git(&manifest, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .or_else(|| ci_branch(on_ci));
-    let tag =
-        git(&manifest, &["describe", "--tags", "--exact-match", "HEAD"]).or_else(|| ci_tag(on_ci));
+    // HEAD may carry more than one tag; this version's is the one that
+    // makes it a release.
+    let release_tag = format!(
+        "v{}",
+        std::env::var("CARGO_PKG_VERSION").unwrap_or_default()
+    );
+    let tags = git(&manifest, &["tag", "--points-at", "HEAD"]).unwrap_or_default();
+    let tag = tags
+        .lines()
+        .find(|tag| *tag == release_tag)
+        .or_else(|| tags.lines().next())
+        .map(str::to_owned)
+        .or_else(|| ci_tag(on_ci));
     // A runner's path says nothing about the build, so CI leaves it out.
     let checkout = if on_ci { None } else { toplevel };
     // The time only means something when the tree had changes: otherwise
@@ -56,7 +95,7 @@ fn main() {
     emit("PWRROUTE_BUILD_CHECKOUT", checkout.as_deref());
     emit("PWRROUTE_BUILD_TIME", built_at.as_deref());
 
-    watch(&manifest);
+    watch(&manifest, parsed.get(2), parsed.get(3));
 }
 
 fn emit(name: &str, value: Option<&str>) {
@@ -113,12 +152,13 @@ fn ci_tag(on_ci: bool) -> Option<String> {
 /// branch or tag changes (a commit) or anything under `crates/` does (an
 /// edit that makes or clears uncommitted changes). Not on the index: tools
 /// that only refresh it would rebuild the app for nothing.
-fn watch(manifest: &Path) {
+fn watch(manifest: &Path, git_dir: Option<&String>, common_dir: Option<&String>) {
     for var in [
         "GITHUB_ACTIONS",
         "GITHUB_HEAD_REF",
         "GITHUB_REF_NAME",
         "GITHUB_REF_TYPE",
+        "PWRROUTE_SOURCE_SHA",
         "SOURCE_DATE_EPOCH",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
@@ -132,7 +172,7 @@ fn watch(manifest: &Path) {
             }
         }
     }
-    let absolute = |path: String| {
+    let absolute = |path: &String| {
         let path = PathBuf::from(path);
         if path.is_absolute() {
             path
@@ -140,10 +180,10 @@ fn watch(manifest: &Path) {
             manifest.join(path)
         }
     };
-    if let Some(git_dir) = git(manifest, &["rev-parse", "--git-dir"]).map(absolute) {
+    if let Some(git_dir) = git_dir.map(absolute) {
         println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
     }
-    if let Some(common) = git(manifest, &["rev-parse", "--git-common-dir"]).map(absolute) {
+    if let Some(common) = common_dir.map(absolute) {
         for path in ["refs/heads", "refs/tags", "packed-refs"] {
             println!("cargo:rerun-if-changed={}", common.join(path).display());
         }

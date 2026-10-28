@@ -640,7 +640,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
                     "Click to copy the checkout\u{2019}s path",
                     build.checkout.clone(),
                 ),
-                copied,
+                app,
                 cx,
             )
         });
@@ -651,7 +651,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
             "pwrroute/branch.svg",
             value(branch.clone(), theme::text_secondary()),
             ("Click to copy the branch", Some(branch.clone())),
-            copied,
+            app,
             cx,
         ),
         // Nothing to copy: the commit below names it.
@@ -661,7 +661,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
             "pwrroute/branch.svg",
             value("detached HEAD", theme::text_subtle()),
             ("Built from a detached HEAD: the commit names it", None),
-            copied,
+            app,
             cx,
         ),
     };
@@ -696,7 +696,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
                 .child(after.flex_1())
                 .into_any_element(),
             ("Click to copy the commit", Some(source)),
-            copied,
+            app,
             cx,
         )
     });
@@ -729,11 +729,11 @@ fn build_row(
     glyph: &'static str,
     content: impl gpui_kit::IntoElement,
     (tip, source): (&'static str, Option<String>),
-    copied: Option<Part>,
+    app: &PwrRoute,
     cx: &mut Context<'_, PwrRoute>,
 ) -> AnyElement {
-    let copyable = part != Part::Branch || source.is_some();
-    let done = copied == Some(part);
+    let copyable = app.build.copy_text(part).is_some();
+    let done = app.build_copied.is_some_and(|(copied, _)| copied == part);
     let row = div()
         .id(id)
         .debug_selector(|| id.into())

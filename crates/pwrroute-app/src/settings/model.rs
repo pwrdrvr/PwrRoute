@@ -542,20 +542,18 @@ impl Diagnostics {
 
 // ---- About ----------------------------------------------------------------
 
-/// Settings › About: the version, the license and where to find the
+/// Settings › About: the build, the license and where to find the
 /// project, as plain text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct About {
-    pub version: SharedString,
-    /// "release build for arm64".
-    pub build: SharedString,
     /// The license line: "MIT. Includes code from Finicky, …".
     pub license: SharedString,
     /// Where to find the project: each a label and the address as text.
     /// Help's rows open them; here they are words to copy.
     pub links: Vec<(SharedString, SharedString)>,
-    /// Where this binary was built from: the Source row and Copy build
-    /// info (design: Build Identity 2a, 2b).
+    /// This copy: the Version row ("PwrRoute 0.5.0", "debug build for
+    /// aarch64"), the Source row and Copy build info (design: Build
+    /// Identity 2a, 2b).
     pub source: BuildInfo,
 }
 

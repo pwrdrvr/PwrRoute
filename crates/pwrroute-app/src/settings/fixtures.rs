@@ -107,8 +107,6 @@ pub fn build() -> BuildInfo {
 /// About for the contrived 0.2.0 copy.
 pub fn about() -> About {
     About {
-        version: "0.2.0".into(),
-        build: "debug build for aarch64".into(),
         source: build(),
         license: "MIT. Includes code from Finicky, copyright John Sterling, under the MIT \
                   license; see LICENSE."
