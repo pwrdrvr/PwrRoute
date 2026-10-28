@@ -1816,10 +1816,16 @@ fn needs_js(app: &PwrRoute, sheet: &AddRule) -> Option<Div> {
     }
     let mut lines: Vec<String> = Vec::new();
     if sheet.needs_js_now() {
+        // The reasons are sentences; the first one continues this one.
+        let reasons = sheet.needs_js.join(" ");
+        let mut chars = reasons.chars();
+        let reasons = chars
+            .next()
+            .map(|first| first.to_lowercase().chain(chars).collect::<String>())
+            .unwrap_or_default();
         lines.push(format!(
-            "This needs a JS handler because {} A wildcard rule here also catches every link \
-             its pattern matches.",
-            sheet.needs_js.join(" ")
+            "This needs a JS handler because {reasons} A wildcard rule here also catches \
+             every link its pattern matches."
         ));
     }
     if let Some(config) = &app.config {

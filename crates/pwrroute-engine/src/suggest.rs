@@ -37,6 +37,22 @@ pub struct Suggestion {
     pub why: Vec<&'static str>,
 }
 
+/// Query parameters a redirect wrapper carries its destination in.
+const WRAPPER_PARAMS: [&str; 12] = [
+    "q",
+    "u",
+    "url",
+    "link",
+    "target",
+    "dest",
+    "destination",
+    "to",
+    "href",
+    "goto",
+    "out",
+    "r",
+];
+
 /// Schemes a pattern without one matches anyway, from Finicky's
 /// `matchWildcard`.
 const IMPLICIT_SCHEMES: [&str; 8] = [
@@ -159,10 +175,14 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         suggestion.needs_js = true;
         suggestion.why.push(WHY_ID);
     }
-    // OAuth's `redirect_uri` (RFC 6749) names where the sign-in returns,
-    // never a link to unwrap, and every authorize link carries one.
+    // A redirect wrapper (`google.com/url?q=…`, `l.example/l.php?u=…`)
+    // carries its destination in a parameter named for it. Other URLs in a
+    // query are not the link's destination: an OAuth sign-in's
+    // `redirect_uri` (RFC 6749) or `resource` (RFC 8707, which MCP clients
+    // send), a login's `return_to`. Those need nothing unwrapped.
     if parsed.query_pairs().any(|(name, value)| {
-        name != "redirect_uri" && (value.starts_with("http://") || value.starts_with("https://"))
+        WRAPPER_PARAMS.contains(&name.to_ascii_lowercase().as_str())
+            && (value.starts_with("http://") || value.starts_with("https://"))
     }) {
         suggestion.needs_js = true;
         suggestion.why.push(WHY_INNER_URL);
@@ -293,6 +313,19 @@ mod tests {
             ["auth.example.com/authorize*", "auth.example.com/*"]
         );
         assert!(!s.needs_js, "{:?}", s.why);
+        // An MCP client's sign-in also names the server as `resource`.
+        assert!(
+            !suggest_rule(
+                "https://mcp.example.com/authorize?response_type=code&client_id=demo\
+                 &redirect_uri=http%3A%2F%2F127.0.0.1%3A3118%2Fcallback\
+                 &resource=https%3A%2F%2Fmcp.example.com%2Fmcp&state=one"
+            )
+            .needs_js
+        );
+        assert!(
+            !suggest_rule("https://id.example/login?return_to=https%3A%2F%2Fapp.example%2Fhome")
+                .needs_js
+        );
         assert!(
             s.candidates.iter().all(|c| !c.contains('?')),
             "{:?}",
@@ -326,6 +359,9 @@ mod tests {
         let s = suggest_rule("https://www.google.com/url?q=https://example.com/x");
         assert!(s.needs_js);
         assert!(s.why.contains(&WHY_INNER_URL));
+        assert!(
+            suggest_rule("https://l.example.com/l.php?u=https%3A%2F%2Fexample.com%2Fx").needs_js
+        );
         assert!(!suggest_rule("https://docs.example/guide/intro").needs_js);
     }
 
