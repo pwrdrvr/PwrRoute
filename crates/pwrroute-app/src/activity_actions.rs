@@ -645,7 +645,7 @@ pub(crate) fn opened_label(record: &DispatchRecord) -> String {
 }
 
 /// The opener as the engine sees it, for a re-resolution.
-fn engine_opener(record: &DispatchRecord) -> Option<Opener> {
+pub(crate) fn engine_opener(record: &DispatchRecord) -> Option<Opener> {
     record
         .link
         .opener

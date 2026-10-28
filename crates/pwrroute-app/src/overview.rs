@@ -524,18 +524,7 @@ impl PwrRoute {
     pub fn choose_default(&mut self, browser: &str, profile: &str, cx: &mut Context<'_, Self>) {
         self.overview.picking = false;
         self.overview.choosing = None;
-        let written = self.write_now(
-            |store| {
-                let file = store.edited();
-                let (was, was_profile) =
-                    (file.default_browser.clone(), file.default_profile.clone());
-                store.set_default_browser(browser, profile);
-                move |store: &mut crate::rules_store::RulesStore| {
-                    store.set_default_browser(&was, &was_profile);
-                }
-            },
-            cx,
-        );
+        let written = self.write_default_browser(browser, profile, cx);
         self.overview.refused = written.err().map(Refused::Setup);
         cx.notify();
     }

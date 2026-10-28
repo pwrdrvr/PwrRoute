@@ -393,6 +393,26 @@ their own modules.
   Choose another file keeps the first-run context: the file picked opens
   for first run the same way, and no file picked is a cancel. The config
   file is only ever read.
+- **A Rules row's "⋯" is real (`rule_menu.rs`; design: Rule Editing 3a,
+  3b, 4b).** `rules_view::rule_row` draws only the `more` it is given
+  (`rule_menu::more_cell`), never a bare "⋯": a rule's menu moves it
+  (top, up, down, bottom; also by dragging the row and ⌥⌘↑/⌥⌘↓),
+  duplicates it (⌘D, without its examples), turns it off, tests a link
+  with it and deletes it (⌫). Moves go through `RulesStore::move_to`,
+  which keeps each entry's id, so a rule's saved version moves with it;
+  the selection, the rail and the draft notes follow by
+  `rule_menu::shifted`. A move's count re-resolves the feed's newest
+  `IMPACT_OF` full-URL records against the written file before and after
+  (`RowActions::impact`), and says nothing below `IMPACT_MIN`. Delete
+  leaves a tombstone with Undo and ⌘Z (`RulesStore::remove`/`restore`)
+  until the next `refresh`; a draft is discarded without one. Everything
+  else's menu writes `defaultBrowser`/`defaultProfile` through
+  `write_now`; a config's read-only row offers its file and the importer.
+  Previews (the importer's) pass no `more`. The rule menu's rows are an
+  exception to `menu_row` (a move shows a count and a key, and an item
+  can be dim or danger); their labels still end in an ellipsis. The keys
+  act on the row whose menu is open, else the selected row. A drop lands
+  only on the row its line is drawn on.
 - **Rules under a Finicky config (`config_view.rs`).** The banner's switch
   "Let PwrRoute's default take everything else" is `rules.json`'s
   `precedence` (`RulesStore::set_precedence`), written at once like any
@@ -429,7 +449,12 @@ their own modules.
   `mcp-agents.json`.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
-  `PopUp` window (design 1a/1b); recents there are hosts only
+  `PopUp` window (design 1a/1b) under the item
+  (`macos::status_item_anchor`). macOS 27 draws status items itself, and
+  the item's own window can poke 1pt above the display or be 0x0 at the
+  primary screen's corner, so the item counts by its center, an empty one
+  not at all, and a pointer pressing the menu bar away from it wins
+  (`macos::anchor_on`). Recents there are hosts only
   (`model::host_of`), from the feed. Pause routing is
   `RouterHandle::set_paused` from `tray::toggle_pause`, with the target
   `tray::pause_target` names: `rules.json`'s `defaultBrowser` and

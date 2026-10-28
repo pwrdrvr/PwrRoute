@@ -97,12 +97,14 @@ impl Stamp {
 /// A rewrite or handler for the session: its position is its place in the
 /// file, its id survives moves and renumbering.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Entry<T> {
+pub struct Entry<T> {
     id: u64,
     value: T,
 }
 
-#[derive(Debug)]
+/// Cloned only to ask what an edit would do before making it (the row
+/// menu's and the drag's "N links change").
+#[derive(Clone, Debug)]
 pub struct RulesStore {
     /// `None` when the OS has no configuration directory: edits then live
     /// for the session only, and the status says so.
@@ -231,6 +233,7 @@ impl RulesStore {
         self.rewrites.is_empty() && self.rules.is_empty()
     }
 
+    #[cfg(test)]
     pub fn rewrite_count(&self) -> usize {
         self.rewrites.len()
     }
@@ -416,20 +419,117 @@ impl RulesStore {
         self.rules.len() - 1
     }
 
-    /// Removes a rule. A rule that is not there is ignored.
-    pub fn delete(&mut self, selection: Selection) {
-        match selection {
+    /// Takes a rule out of its list for Undo delete: its id and saved
+    /// version go with it, so [`Self::restore`] puts back the same rule,
+    /// saved or not as it was. `None` when it is not there.
+    pub fn remove(&mut self, selection: Selection) -> Option<Removed> {
+        let removed = match selection {
             Selection::Rewrite(i) if i < self.rewrites.len() => {
                 let entry = self.rewrites.remove(i);
-                self.saved_rewrites.remove(&entry.id);
+                let saved = self.saved_rewrites.remove(&entry.id);
+                Removed::Rewrite {
+                    at: i,
+                    entry,
+                    saved,
+                }
             }
             Selection::Handler(i) if i < self.rules.len() => {
                 let entry = self.rules.remove(i);
-                self.saved_rules.remove(&entry.id);
+                let saved = self.saved_rules.remove(&entry.id);
+                Removed::Rule {
+                    at: i,
+                    entry,
+                    saved,
+                }
             }
-            _ => return,
-        }
+            _ => return None,
+        };
         self.touch();
+        Some(removed)
+    }
+
+    /// Undo delete: the rule back where it was (or at the end of its list,
+    /// if the list is now shorter). Returns where it landed.
+    pub fn restore(&mut self, removed: Removed) -> Selection {
+        let restored = match removed {
+            Removed::Rewrite { at, entry, saved } => {
+                let at = at.min(self.rewrites.len());
+                if let Some(saved) = saved {
+                    self.saved_rewrites.insert(entry.id, saved);
+                }
+                self.rewrites.insert(at, entry);
+                Selection::Rewrite(at)
+            }
+            Removed::Rule { at, entry, saved } => {
+                let at = at.min(self.rules.len());
+                if let Some(saved) = saved {
+                    self.saved_rules.insert(entry.id, saved);
+                }
+                self.rules.insert(at, entry);
+                Selection::Handler(at)
+            }
+        };
+        self.touch();
+        restored
+    }
+
+    /// Moves a rule to position `to` of its own list (clamped to the end),
+    /// keeping its id: its saved version moves with it. A rule never moves
+    /// between the lists. Returns where it landed, or `None` when it is not
+    /// there or is already at `to`.
+    pub fn move_to(&mut self, selection: Selection, to: usize) -> Option<Selection> {
+        fn shift<T>(list: &mut Vec<T>, from: usize, to: usize) -> Option<usize> {
+            if from >= list.len() {
+                return None;
+            }
+            let to = to.min(list.len() - 1);
+            if to == from {
+                return None;
+            }
+            let item = list.remove(from);
+            list.insert(to, item);
+            Some(to)
+        }
+        let moved = match selection {
+            Selection::Rewrite(i) => shift(&mut self.rewrites, i, to).map(Selection::Rewrite),
+            Selection::Handler(i) => shift(&mut self.rules, i, to).map(Selection::Handler),
+        };
+        if moved.is_some() {
+            self.touch();
+        }
+        moved
+    }
+
+    /// A copy of a rule just below it, as a new rule. Its examples stay
+    /// with the original: the copy runs second, so the same links would
+    /// fail as its examples. Returns the copy's position.
+    pub fn duplicate(&mut self, selection: Selection) -> Option<Selection> {
+        let copy = match selection {
+            Selection::Rewrite(i) => {
+                let mut value = self.rewrites.get(i)?.value.clone();
+                value.examples.clear();
+                let id = self.next();
+                self.rewrites.insert(i + 1, Entry { id, value });
+                Selection::Rewrite(i + 1)
+            }
+            Selection::Handler(i) => {
+                let mut value = self.rules.get(i)?.value.clone();
+                value.examples.clear();
+                let id = self.next();
+                self.rules.insert(i + 1, Entry { id, value });
+                Selection::Handler(i + 1)
+            }
+        };
+        self.touch();
+        Some(copy)
+    }
+
+    /// How many rows `selection`'s list has.
+    pub fn len_of(&self, selection: Selection) -> usize {
+        match selection {
+            Selection::Rewrite(_) => self.rewrites.len(),
+            Selection::Handler(_) => self.rules.len(),
+        }
     }
 
     pub fn enabled(&self, selection: Selection) -> Option<bool> {
@@ -865,6 +965,21 @@ impl RulesStore {
     }
 }
 
+/// A rule [`RulesStore::remove`] took out, for [`RulesStore::restore`].
+#[derive(Clone, Debug)]
+pub enum Removed {
+    Rewrite {
+        at: usize,
+        entry: Entry<engine::Rewrite>,
+        saved: Option<engine::Rewrite>,
+    },
+    Rule {
+        at: usize,
+        entry: Entry<engine::Rule>,
+        saved: Option<engine::Rule>,
+    },
+}
+
 /// The problems of a file, looked up by place.
 struct Problems(Vec<Problem>);
 
@@ -1135,8 +1250,8 @@ mod tests {
         assert_eq!(json(&path)["rules"][0]["browser"], "Firefox");
 
         // Delete writes the file without it.
-        store.delete(Selection::Handler(0));
-        store.delete(Selection::Rewrite(0));
+        store.remove(Selection::Handler(0));
+        store.remove(Selection::Rewrite(0));
         assert!(store.is_empty());
         store.save().unwrap();
         assert_eq!(json(&path), json!({ "defaultBrowser": "", "rules": [] }));
@@ -1539,5 +1654,77 @@ mod tests {
         assert_eq!(on_disk.rules[0].profile, "Work");
         assert_eq!(store.check_disk(), Disk::Unchanged, "its own write");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn moves_keep_each_rules_saved_version_and_undo_restores_it() {
+        let dir = scratch("move-undo");
+        let path = dir.join("rules.json");
+        RulesFile {
+            rules: ["a.com/*", "b.com/*", "c.com/*"]
+                .iter()
+                .map(|p| engine::Rule {
+                    patterns: vec![(*p).into()],
+                    browser: "Firefox".into(),
+                    examples: vec![format!("https://{}", p.trim_end_matches("/*"))],
+                    ..engine::Rule::default()
+                })
+                .collect(),
+            ..RulesFile::default()
+        }
+        .save(&path)
+        .unwrap();
+        let mut store = RulesStore::load(Some(path.clone()));
+        let order = |file: &RulesFile| -> Vec<String> {
+            file.rules.iter().map(|r| r.patterns[0].clone()).collect()
+        };
+
+        // Rule 3 to the top; a move to where it is does nothing.
+        assert_eq!(
+            store.move_to(Selection::Handler(2), 0),
+            Some(Selection::Handler(0))
+        );
+        assert_eq!(store.move_to(Selection::Handler(1), 1), None);
+        assert_eq!(store.move_to(Selection::Handler(9), 0), None);
+        store.save().unwrap();
+        assert_eq!(
+            order(&RulesFile::load(&path).unwrap()),
+            ["c.com/*", "a.com/*", "b.com/*"]
+        );
+
+        // A rule with a problem keeps its saved version where it moved.
+        store.set_browser(1, "");
+        store.move_to(Selection::Handler(1), 2);
+        store.save().unwrap();
+        let file = RulesFile::load(&path).unwrap();
+        assert_eq!(order(&file), ["c.com/*", "b.com/*", "a.com/*"]);
+        assert_eq!(file.rules[2].browser, "Firefox");
+        store.set_browser(2, "Firefox");
+
+        // A copy goes just below, without the examples.
+        assert_eq!(
+            store.duplicate(Selection::Handler(0)),
+            Some(Selection::Handler(1))
+        );
+        let edited = store.edited();
+        assert_eq!(edited.rules[1].patterns, edited.rules[0].patterns);
+        assert!(edited.rules[1].examples.is_empty());
+        assert_eq!(edited.rules[0].examples.len(), 1);
+
+        // Remove and restore: the same rule at the same place, saved.
+        let removed = store.remove(Selection::Handler(2)).unwrap();
+        assert_eq!(store.handler_count(), 3);
+        assert_eq!(store.restore(removed), Selection::Handler(2));
+        store.save().unwrap();
+        assert_eq!(
+            order(&RulesFile::load(&path).unwrap()),
+            ["c.com/*", "c.com/*", "b.com/*", "a.com/*"]
+        );
+        assert!(
+            store
+                .rail_label(Selection::Handler(2))
+                .ends_with("\u{00b7} saved")
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

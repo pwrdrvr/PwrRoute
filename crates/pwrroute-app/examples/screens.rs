@@ -120,6 +120,10 @@ mod overview_model;
 #[path = "../src/router.rs"]
 mod router;
 #[cfg(target_os = "macos")]
+#[path = "../src/rule_menu.rs"]
+mod rule_menu;
+
+#[cfg(target_os = "macos")]
 #[path = "../src/rule_pickers.rs"]
 mod rule_pickers;
 #[cfg(target_os = "macos")]
@@ -579,6 +583,54 @@ fn main() {
         );
         app.refresh(cx);
     }
+    // Rule Editing 3b and 4b: a rule's "⋯" menu with what each move would
+    // change among 30 contrived recent links, and a deleted rule's
+    // tombstone with Undo.
+    fn recent_meetings(cx: &mut Context<'_, PwrRoute>) {
+        let base = fixtures::activity()
+            .into_iter()
+            .find(|r| r.privacy == pwrroute_router::Privacy::Full)
+            .expect("a full record");
+        let records = (0..30u64)
+            .map(|i| {
+                let mut record = base.clone();
+                record.id = pwrroute_router::DispatchId(5_000 + i);
+                let url = if i < 23 {
+                    format!("https://meet.google.com/abc-defg-{i:03}")
+                } else {
+                    format!("https://bsky.app/profile/example-{i}")
+                };
+                record.link.url = url.clone();
+                record.steps = vec![pwrroute_router::Step::Received { url }];
+                record.link.opener = Some(pwrroute_router::OpenerInfo {
+                    name: "Slack".into(),
+                    bundle_id: "com.tinyspeck.slackmacgap".into(),
+                    ..Default::default()
+                });
+                record
+            })
+            .collect();
+        activity::install_feed(activity::Feed::from_records(records), cx);
+    }
+    shoot("app-3b-row-menu", None, &|app, window, cx| {
+        recent_meetings(cx);
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        app.select(Selection::Handler(2), cx);
+        app.toggle_row_actions(rule_menu::MenuRow::Rule(Selection::Handler(2)), cx);
+    });
+    shoot("app-4b-tombstone", None, &|app, window, cx| {
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        app.select(Selection::Handler(4), cx);
+        app.delete_rule(Selection::Handler(5), window, cx);
+    });
+    shoot("app-everything-else-menu", None, &|app, window, cx| {
+        with_scan(app);
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        app.toggle_row_actions(rule_menu::MenuRow::EverythingElse, cx);
+    });
     // Destination and App Pickers 1c, 2a, 2b: the editor's Open in lanes
     // and Sent from's chips, with "+ app" open over recent senders.
     shoot("app-1a-open-in", None, &|app, window, cx| {

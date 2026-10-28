@@ -162,6 +162,19 @@ impl Probe {
             .map_err(|error| format!("The rules failed: {error:#}"))
     }
 
+    /// Where `url` (already normalized) opens, as from `opener`: the
+    /// browser, profile, private window and the URL after the rewrites.
+    /// `None` when the rules fail on it.
+    pub fn opens(
+        &mut self,
+        url: &str,
+        opener: Option<&Opener>,
+    ) -> Option<pwrroute_engine::Browser> {
+        self.trace(url, opener)
+            .ok()
+            .map(|trace| trace.resolution.browser)
+    }
+
     /// Which of `urls` `pattern` would match, by Finicky's own `isMatch`:
     /// what a candidate rule would also catch.
     pub fn collisions(&mut self, pattern: &str, urls: &[&str]) -> Result<Vec<String>, String> {
