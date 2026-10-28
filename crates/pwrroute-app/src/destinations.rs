@@ -334,10 +334,6 @@ const MASK: &str = "pwrroute/mask.svg";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Density {
     Regular,
-    #[allow(
-        dead_code,
-        reason = "for the tray's Send links card, which draws it next"
-    )]
     Compact,
 }
 
@@ -375,6 +371,64 @@ impl Density {
     }
 }
 
+/// A lane's head: the badge, the name and the tag share one 12px line.
+const HEAD: f32 = 12.0;
+/// The private pill's mask and the gap after it.
+const MASK_SIZE: f32 = 12.0;
+const PILL_GAP: f32 = 5.0;
+/// A pill label's size.
+pub const PILL_TEXT: f32 = 11.0;
+
+/// The lanes' height as [`draw`] lays them out `width` wide, for a card
+/// sized before it is drawn (the tray's). Pills wrap, so `measure` gives
+/// a label's width at 11px in a CSS weight.
+pub fn height(
+    lanes: &[Lane],
+    density: Density,
+    width: f32,
+    measure: impl Fn(&str, f32) -> f32,
+) -> f32 {
+    let (top, side, bottom) = density.padding();
+    let (pill_height, pill_side) = density.pill();
+    let gap = pill_row_gap(density);
+    let room = width - 2.0 - 2.0 * side;
+    let lanes_height: f32 = lanes
+        .iter()
+        .map(|lane| {
+            let mut rows = 1_usize;
+            let mut x = 0.0_f32;
+            for pill in &lane.pills {
+                let mut pill_width = 2.0
+                    + 2.0 * pill_side
+                    + measure(&pill.label, if pill.on { 600.0 } else { 500.0 });
+                if pill.kind == PillKind::Private {
+                    pill_width += MASK_SIZE + PILL_GAP;
+                }
+                if x > 0.0 && x + gap + pill_width > room {
+                    rows += 1;
+                    x = pill_width;
+                } else if x > 0.0 {
+                    x += gap + pill_width;
+                } else {
+                    x = pill_width;
+                }
+            }
+            2.0 + top
+                + HEAD
+                + density.head_gap()
+                + pill_height * rows as f32
+                + gap * (rows - 1) as f32
+                + bottom
+        })
+        .sum();
+    lanes_height + density.gap() * lanes.len().saturating_sub(1) as f32
+}
+
+/// Between pills, across and down.
+fn pill_row_gap(density: Density) -> f32 {
+    density.gap().min(5.0)
+}
+
 /// The lanes, each pill a click that hands its [`Choice`] to `pick`, in
 /// any view. Selectors are `{id}-lane-{lane}` and `{id}-{lane}-{pill}`.
 pub fn draw<V: 'static>(
@@ -389,7 +443,7 @@ pub fn draw<V: 'static>(
         div().w_full().flex().flex_col().gap(px(density.gap())),
         |list, (l, lane)| {
             let pills = lane.pills.iter().enumerate().fold(
-                div().flex().flex_wrap().gap(px(density.gap().min(5.0))),
+                div().flex().flex_wrap().gap(px(pill_row_gap(density))),
                 |row, (p, pill)| {
                     let pick = pick.clone();
                     let choice = pill.choice.clone();
@@ -483,7 +537,7 @@ fn pill_view(pill: &Pill, density: Density) -> Div {
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(5.0))
+        .gap(px(PILL_GAP))
         .h(px(height))
         .px(px(side))
         .rounded_full()
@@ -502,13 +556,13 @@ fn pill_view(pill: &Pill, density: Density) -> Div {
             }
         })
         .when(pill.kind == PillKind::Private, |el| {
-            el.child(svg().path(MASK).size(px(12.0)).text_color(color))
+            el.child(svg().path(MASK).size(px(MASK_SIZE)).text_color(color))
         })
         .child(
             div()
                 .font_family(theme::SANS)
                 .font_weight(theme::weight(if pill.on { 600.0 } else { 500.0 }))
-                .text_size(px(11.0))
+                .text_size(px(PILL_TEXT))
                 .line_height(px(11.0))
                 .whitespace_nowrap()
                 .child(label),

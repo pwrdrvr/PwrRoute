@@ -442,6 +442,58 @@ pub fn attribution_activity() -> Vec<DispatchRecord> {
     ]
 }
 
+/// [`attribution_activity`] with two links the user sent (design: Send
+/// Links 2d): the newest went to Microsoft Edge · Work as the first of
+/// three next links, passing over rule 2; the next to Edge's InPrivate
+/// window while all links were sent. Every host is example.com's.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the window harness and the screens example")
+)]
+pub fn sent_activity() -> Vec<DispatchRecord> {
+    let mut records = attribution_activity();
+    let send =
+        |record: &mut DispatchRecord, sent: pwrroute_router::Sent, profile: &str, private: bool| {
+            let url = record.final_url.clone().unwrap_or_default();
+            let opened = Browser {
+                name: "Microsoft Edge".into(),
+                app_type: AppType::AppName,
+                url,
+                profile: profile.into(),
+                args: Vec::new(),
+                open_in_background: None,
+                private,
+                privacy: pwrroute_engine::Privacy::Full,
+            };
+            let at = record
+                .steps
+                .iter()
+                .position(|step| matches!(step, Step::Browser { .. }))
+                .unwrap_or(record.steps.len());
+            record.steps.insert(
+                at,
+                Step::Sent {
+                    sent,
+                    skipped: None,
+                },
+            );
+            for step in &mut record.steps {
+                if let Step::Browser { browser } = step {
+                    *browser = opened.clone();
+                }
+            }
+            record.browser = Some(opened);
+        };
+    send(
+        &mut records[0],
+        pwrroute_router::Sent::Next { nth: 1, of: 3 },
+        "Work",
+        false,
+    );
+    send(&mut records[1], pwrroute_router::Sent::All, "", true);
+    records
+}
+
 // Overview (WP-D) ----------------------------------------------------------
 //
 // The Overview design's examples (`design/PwrRoute Overview and Setup.dc.html`):

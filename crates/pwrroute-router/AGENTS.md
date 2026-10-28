@@ -68,6 +68,19 @@ runs on every platform.
   the target replaces the browser, a `browser: null` or `private` handler
   included.
   Test a link ignores the pause. Keep it out of `launch` and `fallback()`.
+- **Send links shares the pause's slot.** `RouterHandle::set_send_to(Some(
+  SendTo))` sends links to a user's `Destination` (browser, profile,
+  private) for `SendScope::Next { left, of }` or `All { until }`, applied
+  where a pause is and traced as `Step::Sent { sent, skipped }`. One
+  `Hold` slot holds a pause or a send: setting one ends the other, and
+  clearing one (`None`) leaves the other alone. A `Next` is counted in
+  `Worker::take_hold`, under the slot's lock, once per dispatched link
+  (forwarded and agent links included, a rejected link or a test not),
+  and the slot clears when it reaches zero; an `All` past `until` clears
+  without taking the link, and `send_to()` never returns one. A private
+  destination keeps the record at most `Host`. `retarget_send` and
+  `add_to_next` change a send in force under the same lock. Memory only:
+  nothing about a send is saved.
 - **Short links expand on the dispatch thread, before the resolver.**
   `Worker::expand` reads `Resolver::short_links()` (the engine's list, as
   the config in charge set it), then follows a short link through

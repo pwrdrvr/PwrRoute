@@ -14,9 +14,11 @@
 use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+use std::collections::HashMap;
+
 use super::TrayCommand;
 use super::icon;
-use super::model::TrayModel;
+use super::model::{SendMode, TrayModel};
 
 /// What the tray reported, for the main thread.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,15 +34,17 @@ pub enum TrayEvent {
 }
 
 /// One line of the native menu.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuEntry {
-    Item(TrayCommand, &'static str),
+    Item(TrayCommand, String),
     /// A checkable item and whether it is checked.
-    Check(TrayCommand, &'static str, bool),
+    Check(TrayCommand, String, bool),
     Separator,
 }
 
-/// The design's 1c, in order. macOS's right-click menu is the same list.
+/// The design's 1c with Send links' rows (Send Links 1g), in order.
+/// macOS's right-click menu is the same list. The send rows name the
+/// destination, so their words change with it.
 pub fn menu_entries(model: &TrayModel) -> Vec<MenuEntry> {
     use MenuEntry::{Check, Item, Separator};
     let quit = if cfg!(target_os = "macos") {
@@ -48,23 +52,48 @@ pub fn menu_entries(model: &TrayModel) -> Vec<MenuEntry> {
     } else {
         "Quit"
     };
+    let mode = model.send_mode();
+    let to = model.destination.display();
     vec![
-        Item(TrayCommand::OpenMain, "Open PwrRoute"),
-        Item(TrayCommand::TestLink, "Test a link\u{2026}"),
+        Item(TrayCommand::OpenMain, "Open PwrRoute".into()),
+        Item(TrayCommand::TestLink, "Test a link\u{2026}".into()),
         Separator,
-        Check(TrayCommand::TogglePause, "Pause routing", model.is_paused()),
+        Check(
+            TrayCommand::SendRules,
+            "Route by rules".into(),
+            mode == Some(SendMode::Rules),
+        ),
+        Check(
+            TrayCommand::SendNext,
+            format!("Next link \u{2192} {to}"),
+            mode == Some(SendMode::Next),
+        ),
+        Check(
+            TrayCommand::SendAll,
+            format!("All links \u{2192} {to}"),
+            mode == Some(SendMode::All),
+        ),
+        Item(TrayCommand::ChooseWhere, "Choose where\u{2026}".into()),
         Separator,
-        Item(TrayCommand::Settings, "Settings\u{2026}"),
-        Item(TrayCommand::About, "About PwrRoute"),
+        Check(
+            TrayCommand::TogglePause,
+            "Pause routing".into(),
+            model.is_paused(),
+        ),
         Separator,
-        Item(TrayCommand::Quit, quit),
+        Item(TrayCommand::Settings, "Settings\u{2026}".into()),
+        Item(TrayCommand::About, "About PwrRoute".into()),
+        Separator,
+        Item(TrayCommand::Quit, quit.into()),
     ]
 }
 
 /// The live tray icon. Dropping it removes the icon.
 pub struct NativeTray {
     icon: TrayIcon,
-    pause: CheckMenuItem,
+    /// Every checkable row, by its command: their checks and words follow
+    /// the model.
+    checks: HashMap<TrayCommand, CheckMenuItem>,
 }
 
 impl NativeTray {
@@ -75,7 +104,7 @@ impl NativeTray {
         events: async_channel::Sender<TrayEvent>,
     ) -> anyhow::Result<Self> {
         let menu = Menu::new();
-        let mut pause = None;
+        let mut checks = HashMap::new();
         for entry in menu_entries(model) {
             let item: Box<dyn IsMenuItem> = match entry {
                 MenuEntry::Item(command, label) => {
@@ -84,14 +113,13 @@ impl NativeTray {
                 MenuEntry::Check(command, label, checked) => {
                     let item =
                         CheckMenuItem::with_id(command.menu_id(), label, true, checked, None);
-                    pause = Some(item.clone());
+                    checks.insert(command, item.clone());
                     Box::new(item)
                 }
                 MenuEntry::Separator => Box::new(PredefinedMenuItem::separator()),
             };
             menu.append(item.as_ref())?;
         }
-        let pause = pause.expect("the menu has Pause routing");
 
         let menu_events = events.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
@@ -141,7 +169,7 @@ impl NativeTray {
             // elsewhere. The menu is the right click.
             .with_menu_on_left_click(false)
             .build()?;
-        Ok(Self { icon, pause })
+        Ok(Self { icon, checks })
     }
 
     /// A left click on the icon where it is now, as tray-icon would report
@@ -154,9 +182,17 @@ impl NativeTray {
         })
     }
 
-    /// Bring the menu's check mark and the tooltip up to date.
+    /// Bring the menu's check marks, the send rows' words and the tooltip
+    /// up to date.
     pub fn sync(&self, model: &TrayModel) {
-        self.pause.set_checked(model.is_paused());
+        for entry in menu_entries(model) {
+            if let MenuEntry::Check(command, label, checked) = entry
+                && let Some(item) = self.checks.get(&command)
+            {
+                item.set_checked(checked);
+                item.set_text(label);
+            }
+        }
         let _ = self.icon.set_tooltip(Some(model.tooltip()));
     }
 }
@@ -174,7 +210,7 @@ mod tests {
         let labels: Vec<&str> = entries
             .iter()
             .map(|entry| match entry {
-                MenuEntry::Item(_, label) | MenuEntry::Check(_, label, _) => label,
+                MenuEntry::Item(_, label) | MenuEntry::Check(_, label, _) => label.as_str(),
                 MenuEntry::Separator => "-",
             })
             .collect();
@@ -189,6 +225,11 @@ mod tests {
                 "Open PwrRoute",
                 "Test a link\u{2026}",
                 "-",
+                "Route by rules",
+                "Next link \u{2192} Microsoft Edge \u{00b7} Work",
+                "All links \u{2192} Microsoft Edge \u{00b7} Work",
+                "Choose where\u{2026}",
+                "-",
                 "Pause routing",
                 "-",
                 "Settings\u{2026}",
@@ -197,17 +238,27 @@ mod tests {
                 quit,
             ]
         );
-        assert!(entries.contains(&MenuEntry::Check(
-            TrayCommand::TogglePause,
-            "Pause routing",
-            false
-        )));
+        let checked = |model: &TrayModel| -> Vec<TrayCommand> {
+            menu_entries(model)
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Check(command, _, true) => Some(command),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(checked(&model), [TrayCommand::SendRules]);
         model.set_paused(true);
-        assert!(menu_entries(&model).contains(&MenuEntry::Check(
-            TrayCommand::TogglePause,
-            "Pause routing",
-            true
-        )));
+        assert_eq!(
+            checked(&model),
+            [TrayCommand::TogglePause],
+            "no send row while paused"
+        );
+        model.routing = super::super::model::Routing::Sending(pwrroute_router::SendScope::Next {
+            left: 1,
+            of: 1,
+        });
+        assert_eq!(checked(&model), [TrayCommand::SendNext]);
     }
 
     #[test]

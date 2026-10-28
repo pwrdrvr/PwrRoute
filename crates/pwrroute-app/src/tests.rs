@@ -3289,6 +3289,75 @@ fn an_idle_node_adds_a_rule_for_its_profile(cx: &mut TestAppContext) {
     );
 }
 
+/// Send Links 2c and 2a: a node's Next link here sends the next link to
+/// that profile, the node and the hero say so, and Back to rules ends it.
+#[gpui_kit::test]
+fn next_link_here_sends_the_next_link_and_back_to_rules_ends_it(cx: &mut TestAppContext) {
+    use crate::tray::model::{Routing, TrayModel};
+    use pwrroute_router::{Destination as SendTarget, DryRunLauncher, Options, Router, SendScope};
+
+    let router = Router::spawn(Options::default(), None, DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
+    let model = cx.update(|cx| {
+        crate::tray::install_for_test(
+            TrayModel::fixture(std::time::SystemTime::now()),
+            Some(handle.clone()),
+            cx,
+        )
+    });
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    // Read the routing state from the tray, as the app does.
+    view.update(cx, |app, _| {
+        app.overview.status = None;
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("overview-node-send-0-2").is_none(),
+        "only on hover"
+    );
+
+    // Chrome's Design, a node with no rules yet.
+    scroll_to(cx, "overview-node-0-2");
+    hover(cx, "overview-node-0-2");
+    click(cx, "overview-node-send-0-2");
+    let send = handle.send_to().expect("the next link is sent");
+    assert_eq!(
+        send.destination,
+        SendTarget {
+            browser: "Google Chrome".into(),
+            profile: "Design".into(),
+            private: false,
+        }
+    );
+    assert_eq!(send.scope, SendScope::Next { left: 1, of: 1 });
+    // It sent the link; it did not start a rule.
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Overview);
+    draw(cx);
+    assert!(
+        cx.debug_bounds("overview-node-sent-0-2").is_some(),
+        "the pill"
+    );
+    let state = cx.update(|_, cx| {
+        let app = view.read(cx);
+        crate::overview::status(app, cx).state()
+    });
+    assert_eq!(state, crate::overview_model::State::Sending);
+
+    click(cx, crate::overview::HERO_ACTION_ID);
+    assert_eq!(handle.send_to(), None);
+    assert_eq!(
+        model.read_with(cx, |model, _| model.routing),
+        Routing::Active
+    );
+    draw(cx);
+    assert!(cx.debug_bounds("overview-node-sent-0-2").is_none());
+}
+
 /// Rule 5 opens a private Firefox window: hovering Firefox's private
 /// node lights its route, which ends there and not at the profile.
 #[gpui_kit::test]

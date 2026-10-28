@@ -33,8 +33,8 @@ use crate::overview_model::{
     self, Action, CHANGE_IN_RULES, Callout, Caption, Card, CardKind, ConfigInputs, ConfigTrouble,
     DONE_TITLE, End, EverythingElse, Focus, FocusKey, GUTTER_MIN, Inputs, Installed, Item, Lit,
     Map, MapWidths, Node, NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener, Overview, Pattern, Pause,
-    Private, Route, Row, RowMatch, RowSource, Setup, SetupStep, Share, State, Status, Target, Tone,
-    fit_tags,
+    Private, Route, Row, RowMatch, RowSource, Sending, Setup, SetupStep, Share, State, Status,
+    Target, Tone, fit_tags,
 };
 use crate::rules_view::pane_frame;
 use crate::theme::{self, icon, mono, text, tracked};
@@ -272,11 +272,29 @@ pub fn status(app: &PwrRoute, cx: &App) -> Status {
             display: model.pause_target.display(),
         })
     });
+    let sending = crate::tray::model(cx).and_then(|model| {
+        let model = model.read(cx);
+        let scope = model.sending()?;
+        let destination = &model.destination;
+        Some(Sending {
+            scope,
+            name: destination.browser.name.clone(),
+            display: destination.display(),
+            app: destination.browser.app().to_owned(),
+            profile: if destination.private.is_some() {
+                None
+            } else {
+                destination.browser.profile.clone()
+            },
+            private: destination.private.is_some(),
+        })
+    });
     let config_error = app.config.as_ref().and_then(|config| {
         config_trouble(crate::router::routing_source(), config.problem.as_deref())
     });
     Status {
         paused,
+        sending,
         default: crate::default_browser::state(cx),
         config_error,
     }
@@ -551,6 +569,10 @@ impl PwrRoute {
                 if paused {
                     crate::tray::run(crate::tray::TrayCommand::TogglePause, cx);
                 }
+                cx.notify();
+            }
+            Action::BackToRules => {
+                crate::tray::set_send_mode(crate::tray::model::SendMode::Rules, cx);
                 cx.notify();
             }
             Action::MakeDefault => {
@@ -840,6 +862,7 @@ fn hero(overview: &Overview, cx: &mut Context<'_, PwrRoute>) -> Div {
     };
     let orb_icon = match hero.state {
         State::Paused => "pwrroute/pause.svg",
+        State::Sending => "pwrroute/forward.svg",
         State::ConfigError | State::ConfigStale => "pwrroute/alert.svg",
         _ => "pwrroute/mark.svg",
     };
@@ -1353,6 +1376,9 @@ struct Look<'a> {
     pinned: Option<Focus>,
     keyed: Option<Focus>,
     idle_hover: Option<NodeRef>,
+    /// Where links are being sent, to mark its node (design: Send Links
+    /// 2a, 2b).
+    sending: Option<&'a Sending>,
 }
 
 impl Look<'_> {
@@ -1465,6 +1491,7 @@ fn map(
             }
             _ => None,
         });
+    let sending = status(app, cx).sending;
     let trace = Look {
         lit: &lit,
         before: &before,
@@ -1473,6 +1500,7 @@ fn map(
         pinned,
         keyed,
         idle_hover,
+        sending: sending.as_ref(),
     };
     let measure = Measure(window.text_system().clone());
     let wide = widths.dest >= SHARE_MIN;
@@ -1481,6 +1509,7 @@ fn map(
     let (left_cap, left_small, left_color) = match map.caption {
         Caption::InOrder => ("In order", Some("first match wins"), theme::text_muted()),
         Caption::WhenResumes => ("When routing resumes", None, theme::warn_text()),
+        Caption::WhenRulesDecide => ("When rules decide again", None, theme::accent_bright()),
         Caption::WhatWillHappen => (
             "What will happen",
             Some("first match wins"),
@@ -1714,6 +1743,7 @@ fn map(
         )
     });
 
+    let rules_only = map.dimmed && map.caption == Caption::WhenRulesDecide;
     let body = div()
         .id("overview-map-body")
         .debug_selector(|| "overview-map-body".into())
@@ -1725,12 +1755,25 @@ fn map(
         .justify_between()
         .gap(px(GUTTER_MIN))
         .p(px(16.0))
-        .when(map.dimmed, |body| body.opacity(0.4))
+        // Paused, the whole map waits; with all links sent, only the rules
+        // and their routes do: the destination's node stays lit.
+        .when(map.dimmed && !rules_only, |body| body.opacity(0.4))
         // A click on the empty ground lets go of the pin.
         .on_click(cx.listener(|this, _, _, cx| clear_pin(this, cx)))
-        .child(layer)
+        .child(if rules_only {
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .opacity(0.4)
+                .child(layer)
+                .into_any_element()
+        } else {
+            layer.into_any_element()
+        })
         .children(handoff)
-        .child(rule_column)
+        .child(rule_column.when(rules_only, |column| column.opacity(0.4)))
         .child(card_column);
 
     div()
@@ -3254,6 +3297,13 @@ fn node_row(
     let lit = trace.lit.node(card_index, index);
     let pinned = trace.pinned == Some(focus);
     let adding = node.addable && trace.idle_hover == Some((card_index, index));
+    // Links are being sent here: the node says so in place of its rules.
+    let sent_here = trace
+        .sending
+        .filter(|sending| sending.is_node(card, node))
+        .map(Sending::short);
+    // Under the pointer: Next link here (design: Send Links 2c).
+    let offer_send = sent_here.is_none() && (adding || trace.hovered == Some(focus));
     let fan = trace.lit.fan(card_index, index);
     let port_style = if node.unused {
         PortStyle::Empty
@@ -3301,6 +3351,9 @@ fn node_row(
                 if pinned {
                     row.bg(theme::bg_hover_strong())
                         .shadow(vec![inset(theme::accent())])
+                } else if sent_here.is_some() {
+                    row.bg(theme::bg_row_active())
+                        .shadow(vec![inset(theme::accent())])
                 } else if lit {
                     row.bg(theme::bg_row_active())
                 } else if adding {
@@ -3347,7 +3400,9 @@ fn node_row(
                     }),
             )
             .map(|row| {
-                if adding {
+                if let Some(sent) = sent_here {
+                    row.child(sent_pill(card_index, index, sent))
+                } else if adding {
                     // Names the profile it adds for, so it never reads as
                     // the card's own button (design: Rule Editor Pickers 2c).
                     row.child(
@@ -3368,6 +3423,9 @@ fn node_row(
                             .map(|meta| mono(meta, 10.0, 500.0, theme::text_subtle())),
                     )
                 }
+            })
+            .when(offer_send, |row| {
+                row.child(send_here_button(card_index, index, card, node, cx))
             })
             .when(!node.unused, |row| {
                 row.child(div().w(px(40.0)).flex_none().flex().justify_end().children(
@@ -3436,6 +3494,62 @@ fn node_row(
         from,
         to,
     )
+}
+
+/// The pill on the node links are sent to: "next link", "all links".
+fn sent_pill(card_index: usize, index: usize, sent: &'static str) -> impl IntoElement {
+    div()
+        .debug_selector(move || format!("overview-node-sent-{card_index}-{index}"))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.0))
+        .h(px(18.0))
+        .px(px(7.0))
+        .rounded_full()
+        .bg(theme::accent())
+        .child(icon("pwrroute/forward.svg", 10.0, theme::accent_on()))
+        .child(text(sent, 9.5, 650.0, theme::accent_on()))
+}
+
+/// Next link here: send the next link to this profile or private window,
+/// one link, without a rule (design: Send Links 2c).
+fn send_here_button(
+    card_index: usize,
+    index: usize,
+    card: &Card,
+    node: &Node,
+    cx: &mut Context<'_, PwrRoute>,
+) -> impl IntoElement {
+    let browser = card.name.clone();
+    let profile = node.profile.clone().unwrap_or_default();
+    let private = node.private.is_some();
+    let named = format!("{} \u{00b7} {}", card.name, node.label());
+    div()
+        .id(("overview-node-send", card_index * 1_000 + index))
+        .debug_selector(move || format!("overview-node-send-{card_index}-{index}"))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(22.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(theme::border_default())
+        .bg(theme::bg_panel())
+        .cursor_pointer()
+        .hover(|button| {
+            button
+                .border_color(theme::accent_border())
+                .bg(theme::bg_row_active())
+        })
+        .tooltip(tip(format!("Send the next link to {named}"), None))
+        .child(icon("pwrroute/forward.svg", 12.0, theme::accent_bright()))
+        .on_click(cx.listener(move |_, _, _, cx| {
+            cx.stop_propagation();
+            crate::tray::send_next_to(crate::tray::destination(&browser, &profile, private), cx);
+            cx.notify();
+        }))
 }
 
 /// Decided by JavaScript, Not opened, not installed: one node, the whole

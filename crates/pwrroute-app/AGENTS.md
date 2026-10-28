@@ -117,7 +117,7 @@ their own modules.
   item; Rules opens as a list with nothing selected (a click or Down
   selects). `overview_model::build` is plain data over the edited
   `rules.json`, the config's `describe()`, the routing `Status` (config
-  error > paused > not default > unknown > routing), the scan
+  error > paused > sending > not default > unknown > routing), the scan
   (`PwrRoute::installed`; a target is drawn missing only once the scan ran)
   and the feed's counts and `Tally`. The map is a graph from rows to
   profile nodes: one card per browser with a node per profile (routed
@@ -440,6 +440,34 @@ their own modules.
   with "paused · skipped rule 2" in the expanded row; which list comes
   from the record's `Matched` step, else the `Paused` step's `skipped`
   (the config's handlers).
+- **Send links (`tray/mod.rs`, design: Send Links).** The dropdown's
+  section above Pause routing is a three-way switch (Rules, Next link,
+  All links), the destination row with the editor's lanes in place
+  (`destinations::draw` at `Density::Compact`, over
+  `TrayModel::choices`: the scan, which already leaves out PwrRoute and
+  every other link router, less hidden apps; a pill
+  is the destination, `destination_of`), and the line
+  for the mode on: the stepper (`step_next`) or Until switched back / For
+  1 hour (`set_all_for_hour`). `set_send_mode` writes the router first
+  (Rules ends a pause too), then `TrayModel::routing`
+  (`Routing::Sending(SendScope)`); `choose_destination` retargets a send
+  in force. The router counts, and the tray reads it back after every
+  dispatch and every second while an hour runs (`sync_send`,
+  `follow_send_clock`, which runs only then). The
+  destination is the last chosen this session, else the pause target;
+  nothing about it is saved. The native menu has radio rows naming the
+  destination and Choose where… (the Overview). The Overview reads the
+  state as `Status::sending` (hero `State::Sending`, after paused and
+  before not default, with Back to rules; strip chip and rail foot "next
+  link · {browser}"; All links dims the rule column only, under "When
+  rules decide again"), marks the node `Sending::is_node` names with a
+  pill, and offers Next link here on a hovered node
+  (`tray::send_next_to`, always one link). Activity's Rule column says
+  "next link" / "all links" in an accent chip with the arrow, the
+  expanded row "next link 1 of 3 · skipped rule 2", the tray's recents
+  the same; a sent link is unrouted and counts for its browser only, as
+  a paused one does. Window tests install the tray with
+  `tray::install_for_test`.
 - **The dropdown's window is its card** (design: Popovers and Overflow
   2a). A transparent window taller than the card is not invisible: macOS
   draws its frame and shadow at the window's size. It opens at
@@ -512,8 +540,11 @@ their own modules.
   link, with "Blank rule" for `add_blank_handler`. The link stays in
   memory: Try it is never written.
 - **Open in is lanes, Sent from is chips (`destinations.rs`; design:
-  Destination and App Pickers).** The editor and Activity's sheet draw the
-  same `destinations::lanes`: a lane per browser in the scan, in its order
+  Destination and App Pickers).** The editor, Activity's sheet and the
+  tray's Send links destination draw the same `destinations::lanes`
+  (the tray at `Density::Compact`; it sizes its card before drawing, so
+  `destinations::height` measures the wrapped pills and `tray/tests.rs`
+  holds it to the laid-out lanes): a lane per browser in the scan, in its order
   (the sheet leads with where the link opened), and as pills its Default,
   each profile and its private window in the browser's word
   (`overview_model::private_term`; none for a browser without one). One

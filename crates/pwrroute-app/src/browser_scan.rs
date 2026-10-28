@@ -14,6 +14,7 @@ use pwrroute_browsers::{Env, detect_installed, read_profiles};
 
 use crate::activity_actions::BrowserChoice;
 use crate::app::PwrRoute;
+use crate::overview_model::Installed;
 use crate::settings_store;
 
 /// One app the scan found.
@@ -189,6 +190,24 @@ pub fn choices(cx: &mut App) -> Vec<BrowserChoice> {
         .map(|store| store.read(cx).settings().browsers.clone())
         .unwrap_or_default();
     choices_from(&apps, &hidden)
+}
+
+/// The whole scan as the pickers' lanes and the Overview read it, each
+/// app marked hidden or not.
+pub fn installed(cx: &mut App) -> Vec<Installed> {
+    let hidden = settings_store::store(cx)
+        .map(|store| store.read(cx).settings().browsers.clone())
+        .unwrap_or_default();
+    apps(cx)
+        .into_iter()
+        .map(|app| Installed {
+            hidden: hidden.is_hidden(app.id()),
+            name: app.name,
+            bundle_id: app.bundle_id,
+            profiles: app.profiles,
+            directories: app.directories,
+        })
+        .collect()
 }
 
 /// Hands every open main window the choices as they now stand, after a

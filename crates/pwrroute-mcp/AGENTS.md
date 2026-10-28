@@ -115,7 +115,10 @@ and the audit holds no content.
   that path at each call; `EngineResolver` reads its engine's. A record
   that did not number its rule (`Matched::Unreported`) is never called a
   `rules.json` rule. `engine.rs` (`summary`, `default_config`) and
-  `live.rs` (`trace_of`) share the default wording.
+  `live.rs` (`trace_of`) share the default wording. A pause's or a
+  send's step (`held_step`) names what it passed over the same way; a
+  send says "the user sent this link (next link 1 of 3)". There is no
+  tool to send links yet: it would need its own permission.
 - **Activity is already reduced.** Entries come from the router at their
   rule's level (`privacy`); a `none` entry has no trace and no `via`. The
   tool adds only the role's cut (`hosts_only`) and the filters. The journal

@@ -228,6 +228,8 @@ pub enum Tone {
     Plain,
     /// `.chip.warn`
     Warn,
+    /// `.chip.acc`: a state the user chose (a send).
+    Accent,
 }
 
 /// `.chip`: a count or state in a card header.
@@ -244,6 +246,11 @@ pub fn toned_chip(label: impl Into<SharedString>, tone: Tone) -> Div {
             theme::text_muted(),
         ),
         Tone::Warn => (theme::warn_soft(), theme::transparent(), theme::warn_text()),
+        Tone::Accent => (
+            theme::accent_soft(),
+            theme::transparent(),
+            theme::accent_bright(),
+        ),
     };
     div()
         .flex()

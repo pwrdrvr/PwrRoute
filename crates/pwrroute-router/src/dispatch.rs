@@ -370,8 +370,107 @@ impl PauseTarget {
     }
 }
 
-/// The pause state the handle writes and the dispatch thread reads.
-type Paused = Arc<Mutex<Option<PauseTarget>>>;
+/// Where the user sent links without a rule: a browser, a profile and
+/// whether to open a private window. Like a pause target, it takes a link
+/// after the rules ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Destination {
+    /// An app name, bundle id or path.
+    pub browser: String,
+    /// Empty for the browser's own profile.
+    pub profile: String,
+    /// Open a private window, where the browser has one.
+    pub private: bool,
+}
+
+impl Destination {
+    /// The destination as the launcher opens it, for `url` (after every
+    /// rewrite). A private window keeps at most the host, as a private
+    /// rule does.
+    fn browser_for(&self, url: &str, privacy: Privacy) -> Browser {
+        Browser {
+            app_type: app_type_of(&self.browser),
+            name: self.browser.clone(),
+            url: url.to_owned(),
+            profile: self.profile.clone(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: self.private,
+            privacy: if self.private {
+                privacy.tighter(Privacy::Host)
+            } else {
+                privacy
+            },
+        }
+    }
+}
+
+/// How many links a send takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendScope {
+    /// The next `left` links, of `of` asked for; then the rules again.
+    Next { left: u32, of: u32 },
+    /// Every link until switched back, or until `until`.
+    All { until: Option<SystemTime> },
+}
+
+impl SendScope {
+    /// A `Next` with `delta` more or fewer links left, never below one or
+    /// past [`MAX_NEXT`], and the number asked for moved with it. An `All`
+    /// is unchanged.
+    pub fn stepped(self, delta: i64) -> Self {
+        let Self::Next { left, of } = self else {
+            return self;
+        };
+        let new_left = (i64::from(left) + delta).clamp(1, i64::from(MAX_NEXT));
+        let change = new_left - i64::from(left);
+        let left = u32::try_from(new_left).unwrap_or(1);
+        Self::Next {
+            left,
+            of: u32::try_from((i64::from(of) + change).max(new_left)).unwrap_or(left),
+        }
+    }
+}
+
+/// Links sent to a [`Destination`] instead of where the rules would send
+/// them, for the next few or for all of them. In memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendTo {
+    pub destination: Destination,
+    pub scope: SendScope,
+}
+
+impl SendTo {
+    /// The next link, once.
+    pub fn next(destination: Destination) -> Self {
+        Self {
+            destination,
+            scope: SendScope::Next { left: 1, of: 1 },
+        }
+    }
+
+    /// Whether an `All` with a time limit has run out at `now`.
+    pub fn expired(&self, now: SystemTime) -> bool {
+        matches!(self.scope, SendScope::All { until: Some(until) } if until <= now)
+    }
+}
+
+/// What takes links from the rules, when something does: a pause or a
+/// send. One slot, so turning one on turns the other off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Hold {
+    Paused(PauseTarget),
+    Sending(SendTo),
+}
+
+/// The hold the handle writes and the dispatch thread reads.
+type Held = Arc<Mutex<Option<Hold>>>;
+
+/// What the dispatch thread took from the hold for one link.
+enum Took {
+    Paused(PauseTarget),
+    Sent(Destination, crate::trace::Sent),
+}
 
 enum Command {
     Dispatch {
@@ -437,8 +536,8 @@ impl Router {
         let worker_recent = Arc::clone(&recent);
         let journal = Arc::new(Mutex::new(options.journal.clone()));
         let worker_journal = Arc::clone(&journal);
-        let paused: Paused = Arc::default();
-        let worker_paused = Arc::clone(&paused);
+        let held: Held = Arc::default();
+        let worker_held = Arc::clone(&held);
         let thread = thread::Builder::new()
             .name("pwrroute-dispatch".into())
             .spawn(move || {
@@ -452,7 +551,7 @@ impl Router {
                     recent: worker_recent,
                     journal: options.journal.clone().map(Journal::new),
                     journal_config: worker_journal,
-                    paused: worker_paused,
+                    held: worker_held,
                     network,
                     options,
                 }
@@ -463,7 +562,7 @@ impl Router {
                 tx,
                 recent,
                 journal,
-                paused,
+                held,
                 next_id: Arc::new(AtomicU64::new(1)),
                 on_received,
                 diagnostic_log,
@@ -507,11 +606,12 @@ pub struct RouterHandle {
     /// [`journal`](Self::journal) describe. The dispatch thread writes it
     /// when [`set_journal`](Self::set_journal) takes effect.
     journal: Arc<Mutex<Option<JournalConfig>>>,
-    /// Where links go while routing is paused, when it is. Read by the
-    /// dispatch thread for each link; written by [`set_paused`].
+    /// A pause or a send, when one is on. Read by the dispatch thread for
+    /// each link; written by [`set_paused`] and [`set_send_to`].
     ///
     /// [`set_paused`]: Self::set_paused
-    paused: Paused,
+    /// [`set_send_to`]: Self::set_send_to
+    held: Held,
     next_id: Arc<AtomicU64>,
     on_received: Option<ReceivedCallback>,
     diagnostic_log: Option<PathBuf>,
@@ -659,16 +759,81 @@ impl RouterHandle {
     /// naming the handler it skipped. `None` resumes. The record keeps the
     /// privacy level the rules gave it, since the rewrites still ran and a
     /// rule that keeps less of a link keeps less of it paused too.
+    /// Pausing ends a send; resuming leaves a send alone.
     pub fn set_paused(&self, target: Option<PauseTarget>) {
-        *self.paused.lock().unwrap_or_else(PoisonError::into_inner) = target;
+        let mut held = self.held();
+        match target {
+            Some(target) => *held = Some(Hold::Paused(target)),
+            None if matches!(*held, Some(Hold::Paused(_))) => *held = None,
+            None => {}
+        }
     }
 
     /// Where links go while paused, or `None` while routing.
     pub fn paused(&self) -> Option<PauseTarget> {
-        self.paused
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        match &*self.held() {
+            Some(Hold::Paused(target)) => Some(target.clone()),
+            _ => None,
+        }
+    }
+
+    /// Sends links to a destination instead of where the rules would: the
+    /// next few, or all of them for a while. From the next dispatch on,
+    /// each link goes there after its rewrites, with [`Step::Sent`] in its
+    /// trace, and a `Next` counts down one per link on the dispatch thread
+    /// (forwarded links included) until the rules decide again. Sending
+    /// ends a pause; `None` ends a send and leaves a pause alone.
+    pub fn set_send_to(&self, send: Option<SendTo>) {
+        let mut held = self.held();
+        match send {
+            Some(send) => *held = Some(Hold::Sending(send)),
+            None if matches!(*held, Some(Hold::Sending(_))) => *held = None,
+            None => {}
+        }
+    }
+
+    /// The send in force, or `None`. An `All` whose time ran out is ended
+    /// here, so a reader never sees it.
+    pub fn send_to(&self) -> Option<SendTo> {
+        let mut held = self.held();
+        match &*held {
+            Some(Hold::Sending(send)) if send.expired(SystemTime::now()) => {
+                *held = None;
+                None
+            }
+            Some(Hold::Sending(send)) => Some(send.clone()),
+            _ => None,
+        }
+    }
+
+    /// Points the send in force at `destination`, keeping its count or
+    /// time. `false` when nothing is being sent.
+    pub fn retarget_send(&self, destination: Destination) -> bool {
+        match &mut *self.held() {
+            Some(Hold::Sending(send)) => {
+                send.destination = destination;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Changes how many links a `Next` send has left by `delta`, never
+    /// below one, and the number asked for with it. Read and written under
+    /// one lock, so a link dispatched meanwhile is never counted twice.
+    /// Returns the send as it is now.
+    pub fn add_to_next(&self, delta: i64) -> Option<SendTo> {
+        match &mut *self.held() {
+            Some(Hold::Sending(send)) => {
+                send.scope = send.scope.stepped(delta);
+                Some(send.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, Option<Hold>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn journal_config(&self) -> Option<JournalConfig> {
@@ -747,8 +912,8 @@ struct Worker {
     /// `journal` so a reader never sees a journal that is not the one being
     /// written.
     journal_config: Arc<Mutex<Option<JournalConfig>>>,
-    /// The handle's pause state, read once per dispatch.
-    paused: Paused,
+    /// The handle's pause or send, read once per dispatch.
+    held: Held,
     /// `Options::network`, or the real one once a short link needed it.
     network: OnceLock<Arc<dyn Network + Send + Sync>>,
     options: Options,
@@ -881,13 +1046,25 @@ impl Worker {
         // Paused: the rules ran (so the rewrites and the privacy level
         // stand), and the pause target takes the link from whatever they
         // chose. A test still reports what the rules say.
-        if mode == Mode::Dispatch
-            && let Some(target) = self.pause_target()
-        {
-            record.steps.push(Step::Paused {
-                skipped: skipped_handler(&record.steps),
-            });
-            browser = target.browser_for(&browser.url, privacy);
+        let mut privacy = privacy;
+        if mode == Mode::Dispatch {
+            match self.take_hold() {
+                Some(Took::Paused(target)) => {
+                    record.steps.push(Step::Paused {
+                        skipped: skipped_handler(&record.steps),
+                    });
+                    browser = target.browser_for(&browser.url, privacy);
+                }
+                Some(Took::Sent(destination, sent)) => {
+                    record.steps.push(Step::Sent {
+                        sent,
+                        skipped: skipped_handler(&record.steps),
+                    });
+                    browser = destination.browser_for(&browser.url, privacy);
+                    privacy = browser.privacy;
+                }
+                None => {}
+            }
         }
         record.timings.resolve_us = Timings::micros(dequeued.elapsed());
         record.final_url = Some(browser.url.clone());
@@ -1098,11 +1275,35 @@ impl Worker {
         }
     }
 
-    fn pause_target(&self) -> Option<PauseTarget> {
-        self.paused
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    /// What takes this link from the rules, if anything. A `Next` send
+    /// counts the link here, under the lock, and ends when it reaches
+    /// zero; an `All` whose time ran out ends without taking it.
+    fn take_hold(&self) -> Option<Took> {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        match &mut *held {
+            None => None,
+            Some(Hold::Paused(target)) => Some(Took::Paused(target.clone())),
+            Some(Hold::Sending(send)) if send.expired(SystemTime::now()) => {
+                *held = None;
+                None
+            }
+            Some(Hold::Sending(send)) => {
+                let destination = send.destination.clone();
+                let sent = match &mut send.scope {
+                    SendScope::All { .. } => crate::trace::Sent::All,
+                    SendScope::Next { left, of } => {
+                        let nth = of.saturating_sub(*left) + 1;
+                        let of = *of;
+                        *left = left.saturating_sub(1);
+                        if *left == 0 {
+                            *held = None;
+                        }
+                        crate::trace::Sent::Next { nth, of }
+                    }
+                };
+                Some(Took::Sent(destination, sent))
+            }
+        }
     }
 
     /// The fallback browser with `url`: [`Options::fallback`] as it is now,
@@ -1122,8 +1323,11 @@ impl Worker {
     }
 }
 
+/// The most links one `Next` send can take.
+pub const MAX_NEXT: u32 = 99;
+
 /// The config handler the trace says chose the browser, for
-/// [`Step::Paused`]'s `skipped`, which numbers the config's handlers only
+/// [`Step::Paused`]'s and [`Step::Sent`]'s `skipped`, which numbers the config's handlers only
 /// (records journaled before `rules.json` rules were numbered read the
 /// same). `None` when the default chose it, when nothing was in charge, or
 /// when a `rules.json` rule did: that rule is the record's own
