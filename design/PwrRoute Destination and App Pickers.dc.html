@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* the Add a rule sheet, as in Activity Privacy and Route Tests 2c */
+          .sheet { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); width: 560px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-popover); display: flex; flex-direction: column; }
+          .sheet-hd { padding: 16px 18px 12px; border-bottom: 1px solid var(--border-faint); }
+          .sheet-hd .help { margin-top: 4px; }
+          .sheet-bd { padding: 4px 0; }
+          .sheet-bd .field { padding: 11px 18px; }
+          .sheet-bd .field-l { width: 136px; }
+          .sheet-ft { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-faint); }
+          .sheet-ft .note { flex: 1; }
+          .pats { display: flex; flex-direction: column; gap: 5px; width: 100%; }
+          .pat { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); }
+          .pat.on { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .pat .radio { width: 13px; height: 13px; }
+          .pat code { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); }
+          .pat .why { margin-left: auto; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .pat.on .why { color: var(--accent-bright); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          .coll { width: 100%; display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+          .coll .cr { display: grid; grid-template-columns: 50px minmax(0, 1fr) 150px; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); font: 400 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cr:last-child { border-bottom: none; }
+          .coll .cr .t { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .coll .cr .u { font: 500 10.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .coll .cr .d { display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; font-size: 10.5px; }
+          .coll .cr .d .bi { width: 11px; height: 11px; font-size: 6px; }
+          .coll .cap { padding: 6px 10px; background: var(--bg-panel-elevated); font: 600 10.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cap i { font-style: normal; color: var(--text-subtle); font-weight: 500; }
+          /* the rule editor rail, as in Activity Privacy and Route Tests 3b */
+          .rrail { flex: 0 0 372px; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); display: flex; flex-direction: column; overflow: hidden; }
+          .rrail.solo { width: 372px; border: 1px solid var(--border-subtle); border-radius: 10px; }
+          .rs { padding: 14px 16px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 8px; }
+          .rs h5 { margin: 0 0 2px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .lab { font: 600 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .lrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+          .lrow .lab { flex: 1; }
+          .plist { display: flex; flex-direction: column; gap: 5px; }
+          .plist .inp { padding-right: 6px; }
+          .inp .x { margin-left: auto; color: var(--text-subtle); font: 500 11px/1 var(--font-mono); }
+          .addp { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px dashed var(--border-default); border-radius: var(--radius-md); font: 500 11px/1 var(--font-sans); color: var(--text-muted); align-self: flex-start; }
+          .rs .try { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-app); border: 1px solid var(--border-faint); font: 500 11px/1.45 var(--font-sans); color: var(--text-secondary); }
+          .rs .try b { color: var(--text-primary); font-weight: 600; }
+          .rs .try .st { margin-top: 4px; }
+          .rail-end { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-faint); }
+          .rhead { flex-direction: row; align-items: center; gap: 10px; }
+          .rhead > div { flex: 1; min-width: 0; }
+          .rhead .ttl { font-size: 15px; }
+          .lnk { margin-top: 4px; font: 500 11px/16.5px var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+          .pats .pat .why { white-space: normal; text-align: right; line-height: 14px; padding-left: 10px; }
+
+          /* this canvas */
+          .stage { position: relative; padding: 28px 34px; background: rgba(0,0,0,0.62); }
+          .stage .sheet { position: static; transform: none; margin: 0 auto; }
+          .stage.plain { background: var(--bg-app); padding: 24px; }
+          .ab { width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); color: #fff; flex: 0 0 auto; }
+          .ab.ed { background: #1f8ad2; } .ab.ch { background: #3c9a4a; } .ab.ff { background: #e5671e; } .ab.sf { background: #2a7de1; } .ab.li { background: #5e6ad2; } .ab.sl { background: #6b2f6b; } .ab.ma { background: #3a8ee6; } .ab.zo { background: #2d8cff; } .ab.vi { background: #c93a3a; }
+          /* Open in: one lane per browser, its profiles as pills */
+          .lanes { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+          .lane { display: flex; flex-direction: column; gap: 8px; padding: 9px 10px 10px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-input); }
+          .lane.on { border-color: var(--accent-border); background: linear-gradient(90deg, rgba(255,138,31,0.07), var(--bg-input) 70%); }
+          .lane.missing { opacity: 0.75; border-style: dashed; }
+          .lane-hd { display: flex; align-items: center; gap: 8px; font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .lane-hd .tg { margin-left: auto; font: 500 10px/1 var(--font-sans); color: var(--text-subtle); }
+          .lane-hd .tg.warn { color: var(--warn-text); }
+          .pills { display: flex; flex-wrap: wrap; gap: 5px; }
+          .pl { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-panel); font: 500 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .pl.def { color: var(--text-muted); }
+          .pl.priv { border-style: dashed; color: var(--text-muted); }
+          .pl.on { background: var(--accent); border: 1px solid transparent; color: var(--accent-on); font-weight: 600; }
+          .pl.hov { background: var(--bg-hover-strong); color: var(--text-primary); }
+          .pl .mask { display: block; }
+          .lanes-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); padding: 2px 2px 0; }
+          .lanes-more a { color: var(--accent-bright); text-decoration: none; }
+          /* Sent from: apps as chips, never typed */
+          .apps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+          .appc { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 6px 0 7px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-panel-elevated); font: 600 11.5px/1 var(--font-sans); color: var(--text-primary); }
+          .appc .x { font: 500 11px/1 var(--font-mono); color: var(--text-subtle); padding: 0 3px; }
+          .appc.gone { border-style: dashed; color: var(--text-muted); }
+          .appc.gone small { font: 500 10px/1 var(--font-sans); color: var(--warn-text); }
+          .addp.solid { border-style: dashed; height: 28px; box-sizing: border-box; }
+          .menu { position: absolute; z-index: 5; width: 280px; padding: 5px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); display: flex; flex-direction: column; }
+          .menu .mh { padding: 8px 8px 5px; font: 600 9px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-subtle); }
+          .menu .mr { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; font: 500 12px/1 var(--font-sans); color: var(--text-primary); }
+          .menu .mr small { margin-left: auto; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+          .menu .mr.hov { background: var(--bg-hover-strong); }
+          .menu .mr.dim { color: var(--text-subtle); }
+          .menu .dv { height: 1px; margin: 5px 4px; background: var(--border-faint); }
+          .tip { display: inline-block; margin-top: 6px; padding: 5px 8px; border-radius: 6px; background: var(--bg-hover-strong); font: 500 10.5px/1.3 var(--font-mono); color: var(--text-secondary); }
+          .note-acc { padding: 8px 10px; border-radius: 7px; background: var(--bg-row-active); border: 1px solid var(--accent-border); font: 400 11px/1.5 var(--font-sans); color: var(--text-secondary); }
+          .note-warn { padding: 8px 10px; border-radius: 7px; background: var(--warn-soft); font: 400 11px/1.5 var(--font-sans); color: var(--warn-text); }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Open in: pick a profile, not two selects ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Open in &rsaquo; every browser and its profiles, one click</span></div>
+        <p class="dv-sub">The Add a rule sheet and the rule editor chose a destination with two selects (browser, then profile) and a separate private-window switch. They become one control: <b>a lane per browser</b> the scan found, the browser&rsquo;s icon and name, then <b>its profiles as pills</b> (Default first, the browser&rsquo;s own choice), ending with the browser&rsquo;s private window in its own word (<b>InPrivate</b>, <b>Incognito</b>, <b>Private window</b>; dashed, with the mask). One pill is on across all lanes; a click is the whole choice: browser, profile and private together. A browser with no private window from a link says so in its lane and has no such pill. The lane the link opened in comes first in the sheet (&ldquo;where it opened&rdquo;); the editor keeps the scan&rsquo;s order with the rule&rsquo;s own browser first. Pills wrap, so a narrow rail and a browser with eight profiles both fit without a menu. The sheet and the editor draw the same control.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Sheet: Edge · Work">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The sheet&rsquo;s Open in. No browser is on until the person picks a pill, as before; here Work in Edge is on, and its lane is lit.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 14:45:17 &middot; sent from Linear</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk">https://auth.example.com/o/oauth2/v2/auth<span style="color: var(--text-secondary);">?client_id=4417-demo&amp;state=demo</span></p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span></div><div class="field-c"><div class="pats"><div class="pat on"><span class="radio on"></span><span class="ab li">Li</span><b style="font: 600 12px/1 var(--font-sans);">Any link from Linear</b><span class="why">Every site. Turns on Sent from.</span></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span><span class="field-sub">Pick a profile, or the browser&rsquo;s private window.</span></div><div class="field-c"><div class="lanes"><div class="lane on"><div class="lane-hd"><span class="ab ed">Ed</span>Microsoft Edge<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span><span class="pl on">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl">Spanish</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>InPrivate</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">4 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">School</span><span class="pl">Performance</span><span class="pl">Person 1</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ff">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Private window</span></div></div><div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Keep</span></div><div class="field-c"><div class="seg"><span class="on">Full link</span><span>Host only</span><span>Nothing</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link from Linear as a saved test. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Sheet: InPrivate">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>The private pill replaces the switch. Picking it opens Edge&rsquo;s own private window with its default profile, and the note says what Keep does for a private rule.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 14:45:17 &middot; sent from Linear</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk">https://auth.example.com/o/oauth2/v2/auth<span style="color: var(--text-secondary);">?client_id=4417-demo&amp;state=demo</span></p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span></div><div class="field-c"><div class="pats"><div class="pat on"><span class="radio on"></span><span class="ab li">Li</span><b style="font: 600 12px/1 var(--font-sans);">Any link from Linear</b><span class="why">Every site. Turns on Sent from.</span></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span><span class="field-sub">Pick a profile, or the browser&rsquo;s private window.</span></div><div class="field-c"><div class="lanes"><div class="lane on"><div class="lane-hd"><span class="ab ed">Ed</span>Microsoft Edge<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl">Spanish</span><span class="pl priv on"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>InPrivate</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">4 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">School</span><span class="pl">Performance</span><span class="pl">Person 1</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ff">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Private window</span></div></div><div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div></div><div class="note-acc">Edge opens these in an InPrivate window. Keep defaults to Host only for a private rule; change it below.</div></div></div>
+                  <div class="field"><div class="field-l"><span>Keep</span></div><div class="field-c"><div class="seg"><span class="on">Full link</span><span>Host only</span><span>Nothing</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link from Linear as a saved test. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Rule editor rail">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>The same lanes in the 372px rail; pills wrap. Under them, the count of browsers hidden in Settings and the way out to a value typed by hand (a browser on another Mac, a profile by its folder), which opens the two text fields the editor has today.</span></div>
+            <div class="dv-card stage plain" style="width: 440px;">
+              <aside class="rrail solo">
+                <div class="rs rhead"><div><div class="eyebrow">Rule &middot; 5 of 5</div><div class="mono" style="font: 600 13px/1.4 var(--font-mono); color: var(--text-primary); margin-top: 6px;">*</div></div><span class="sw on"></span></div>
+                <div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="inp mono" style="width: 100%;">*<span class="caret" style="font-size: 10px;">&times;</span></div><span class="addp">+ pattern</span>
+                  <span class="lab" style="margin-top: 6px;">Sent from</span><div class="apps"><span class="appc"><span class="ab li">Li</span>Linear<span class="x">&times;</span></span><span class="addp solid">+ app</span></div>
+                  <span class="field-help">The app that handed the link to the OS. With none, the rule takes links from any app.</span></div>
+                <div class="rs"><h5>Open in</h5><div class="lanes"><div class="lane on"><div class="lane-hd"><span class="ab ed">Ed</span>Microsoft Edge<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span><span class="pl on">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl">Spanish</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>InPrivate</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">4 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">School</span><span class="pl">Performance</span><span class="pl">Person 1</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ff">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Private window</span></div></div><div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div><div class="lanes-more"><span>Hidden in Settings &rsaquo; Browsers: 1</span><a>Other app or profile by name&hellip;</a></div></div>
+                  <div class="lrow" style="margin-top: 4px;"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span>Host only</span><span>Nothing</span></div></div></div>
+              </aside>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="1d" data-screen-label="1d A browser the rule names isn&rsquo;t here">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>The rule&rsquo;s browser is not installed: its lane comes first, dashed, with the profile it names on, and the warning under the lanes. It is never rewritten until the person picks another pill.</span></div>
+            <div class="dv-card stage plain" style="width: 440px;">
+              <aside class="rrail solo">
+                <div class="rs rhead"><div><div class="eyebrow">Rule &middot; 5 of 5</div><div class="mono" style="font: 600 13px/1.4 var(--font-mono); color: var(--text-primary); margin-top: 6px;">*</div></div><span class="sw on"></span></div>
+                <div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="inp mono" style="width: 100%;">*<span class="caret" style="font-size: 10px;">&times;</span></div><span class="addp">+ pattern</span>
+                  <span class="lab" style="margin-top: 6px;">Sent from</span><div class="apps"><span class="appc"><span class="ab li">Li</span>Linear<span class="x">&times;</span></span><span class="addp solid">+ app</span></div>
+                  <span class="field-help">The app that handed the link to the OS. With none, the rule takes links from any app.</span></div>
+                <div class="rs"><h5>Open in</h5><div class="lanes"><div class="lane on missing"><div class="lane-hd"><span class="ab vi">Vi</span>Vivaldi<span class="tg warn">not installed</span></div><div class="pills"><span class="pl def">Default</span><span class="pl on">Work</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ed">Ed</span>Microsoft Edge<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl">Spanish</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>InPrivate</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">4 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">School</span><span class="pl">Performance</span><span class="pl">Person 1</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ff">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Private window</span></div></div><div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div><div class="lanes-more"><span>Hidden in Settings &rsaquo; Browsers: 1</span><a>Other app or profile by name&hellip;</a></div></div><div class="note-warn">Vivaldi isn&rsquo;t installed here. Links this rule takes go to the fallback browser until it is, or until you pick another.</div>
+                  <div class="lrow" style="margin-top: 4px;"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span>Host only</span><span>Nothing</span></div></div></div>
+              </aside>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================= TURN 2 — Sent from: apps, not text ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Sent from &rsaquo; apps by name and icon, never typed</span></div>
+        <p class="dv-sub">The editor showed a rule&rsquo;s apps as text fields holding what <code>rules.json</code> keeps (<code>com.linear</code>), so a rule made from Activity as &ldquo;Linear&rdquo; with its icon came back as a bundle id anyone could mistype. Each app is now a <b>chip</b>: the icon and the name the app goes by on this Mac, with &times; to remove it; the id it is saved by shows on hover. <b>+ app</b> opens a list: the apps that <b>sent links recently</b> (from Activity, in memory), the apps <b>named in your rules</b>, and <b>Choose an app in Applications&hellip;</b>, which opens the system file panel. The rule keeps the bundle id, as the router matches it.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Chips, with the id on hover">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Two apps: the rule takes links from Linear or Slack. Hovering a chip shows what is saved.</span></div>
+            <div class="dv-card stage plain" style="width: 440px;">
+              <aside class="rrail solo">
+                <div class="rs rhead"><div><div class="eyebrow">Rule &middot; 5 of 5</div><div class="mono" style="font: 600 13px/1.4 var(--font-mono); color: var(--text-primary); margin-top: 6px;">*</div></div><span class="sw on"></span></div>
+                <div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="inp mono" style="width: 100%;">*<span class="caret" style="font-size: 10px;">&times;</span></div><span class="addp">+ pattern</span>
+                  <span class="lab" style="margin-top: 6px;">Sent from</span><div class="apps"><span class="appc"><span class="ab li">Li</span>Linear<span class="x">&times;</span></span><span class="appc"><span class="ab sl">Sl</span>Slack<span class="x">&times;</span></span><span class="addp solid">+ app</span></div><span class="tip">Linear &middot; com.linear</span>
+                  <span class="field-help">The app that handed the link to the OS. With none, the rule takes links from any app.</span></div>
+                <div class="rs"><h5>Open in</h5><div class="lanes"><div class="lane on"><div class="lane-hd"><span class="ab ed">Ed</span>Microsoft Edge<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span><span class="pl on">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl">Spanish</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>InPrivate</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">4 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">School</span><span class="pl">Performance</span><span class="pl">Person 1</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ff">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Private window</span></div></div><div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div><div class="lanes-more"><span>Hidden in Settings &rsaquo; Browsers: 1</span><a>Other app or profile by name&hellip;</a></div></div>
+                  <div class="lrow" style="margin-top: 4px;"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span>Host only</span><span>Nothing</span></div></div></div>
+              </aside>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="2b" data-screen-label="2b + app">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>Recent senders with today&rsquo;s count, apps the rules name, then the file panel. An app the rule already has is dimmed.</span></div>
+            <div class="dv-card stage plain" style="width: 440px;"><div style="position: relative;">
+              <aside class="rrail solo">
+                <div class="rs rhead"><div><div class="eyebrow">Rule &middot; 5 of 5</div><div class="mono" style="font: 600 13px/1.4 var(--font-mono); color: var(--text-primary); margin-top: 6px;">*</div></div><span class="sw on"></span></div>
+                <div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="inp mono" style="width: 100%;">*<span class="caret" style="font-size: 10px;">&times;</span></div><span class="addp">+ pattern</span>
+                  <span class="lab" style="margin-top: 6px;">Sent from</span><div class="apps"><span class="appc"><span class="ab li">Li</span>Linear<span class="x">&times;</span></span><span class="addp solid">+ app</span></div>
+                  <span class="field-help">The app that handed the link to the OS. With none, the rule takes links from any app.</span></div>
+                <div class="rs"><h5>Open in</h5><div class="lanes"><div class="lane on"><div class="lane-hd"><span class="ab ed">Ed</span>Microsoft Edge<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span><span class="pl on">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl">Spanish</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>InPrivate</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">4 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">School</span><span class="pl">Performance</span><span class="pl">Person 1</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ff">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Private window</span></div></div><div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div><div class="lanes-more"><span>Hidden in Settings &rsaquo; Browsers: 1</span><a>Other app or profile by name&hellip;</a></div></div>
+                  <div class="lrow" style="margin-top: 4px;"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span>Host only</span><span>Nothing</span></div></div></div>
+              </aside><div class="menu" style="left: 16px; top: 214px;">
+                  <div class="mh">Sent links recently</div>
+                  <div class="mr hov"><span class="ab sl">Sl</span>Slack<small>14 today</small></div>
+                  <div class="mr"><span class="ab ma">Ma</span>Mail<small>3 today</small></div>
+                  <div class="mr dim"><span class="ab li">Li</span>Linear<small>in this rule</small></div>
+                  <div class="mh">Named in your rules</div>
+                  <div class="mr"><span class="ab zo">Zo</span>zoom.us<small>rule 2</small></div>
+                  <div class="dv"></div>
+                  <div class="mr">Choose an app in Applications&hellip;</div>
+                </div></div>
+            </div>
+          </div>
+
+
+          <div class="dv-opt" id="2c" data-screen-label="2c An app that isn&rsquo;t here">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>A value no app on this Mac answers to (typed by hand in an older file, or an app since removed) keeps its chip as written, dashed, with &ldquo;not on this Mac&rdquo;. It still matches by name, and &times; removes it.</span></div>
+            <div class="dv-card stage plain" style="width: 440px;">
+              <aside class="rrail solo">
+                <div class="rs rhead"><div><div class="eyebrow">Rule &middot; 5 of 5</div><div class="mono" style="font: 600 13px/1.4 var(--font-mono); color: var(--text-primary); margin-top: 6px;">*</div></div><span class="sw on"></span></div>
+                <div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="inp mono" style="width: 100%;">*<span class="caret" style="font-size: 10px;">&times;</span></div><span class="addp">+ pattern</span>
+                  <span class="lab" style="margin-top: 6px;">Sent from</span><div class="apps"><span class="appc"><span class="ab li">Li</span>Linear<span class="x">&times;</span></span><span class="appc gone">OldTool<small>not on this Mac</small><span class="x">&times;</span></span><span class="addp solid">+ app</span></div>
+                  <span class="field-help">The app that handed the link to the OS. With none, the rule takes links from any app.</span></div>
+                <div class="rs"><h5>Open in</h5><div class="lanes"><div class="lane on"><div class="lane-hd"><span class="ab ed">Ed</span>Microsoft Edge<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span><span class="pl on">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl">Spanish</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>InPrivate</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">4 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">School</span><span class="pl">Performance</span><span class="pl">Person 1</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div><div class="lane"><div class="lane-hd"><span class="ab ff">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv"><svg class="mask" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Private window</span></div></div><div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div><div class="lanes-more"><span>Hidden in Settings &rsaquo; Browsers: 1</span><a>Other app or profile by name&hellip;</a></div></div>
+                  <div class="lrow" style="margin-top: 4px;"><span class="lab">Activity keeps</span><div class="seg"><span class="on">Full link</span><span>Host only</span><span>Nothing</span></div></div></div>
+              </aside>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>What changes in the file.</b> Nothing: <code>rules[].browser</code>, <code>profile</code>, <code>private</code> and <code>opener</code> are written as before. A private pill writes <code>"private": true</code> with no profile; a rule that already pairs a profile with private keeps both and lights the private pill with the profile under it. A chip chosen from Activity or Applications writes the bundle id; one from a rule copies what that rule has.</p>
+        <p class="dv-next">Try next: &ldquo;the lanes with ten browsers&rdquo; &middot; &ldquo;keyboard: arrows across pills&rdquo;</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

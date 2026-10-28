@@ -22,6 +22,7 @@ mod browser_scan;
 mod chrome;
 mod config_view;
 mod default_browser;
+mod destinations;
 mod diag_log;
 mod doc_window;
 mod dock;

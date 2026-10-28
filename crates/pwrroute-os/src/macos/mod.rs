@@ -220,6 +220,16 @@ pub fn app_display_name(bundle_id: &str) -> Option<String> {
     })
 }
 
+/// The bundle id of the app at `path` (an `.app` the person picked), from
+/// its Info.plist. `None` when it is not a bundle or has no id.
+pub fn app_bundle_id(path: &Path) -> Option<String> {
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    let id = NSBundle::bundleWithURL(&url)?
+        .bundleIdentifier()?
+        .to_string();
+    (!id.trim().is_empty()).then_some(id)
+}
+
 /// Whether a scheme's handler, as LaunchServices names it, is PwrRoute.
 fn is_ours(handler: Option<&str>) -> bool {
     handler.is_some_and(|handler| handler.eq_ignore_ascii_case(BUNDLE_ID))

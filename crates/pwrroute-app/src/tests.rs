@@ -685,27 +685,28 @@ fn editing_a_handler_writes_the_file(cx: &mut TestAppContext) {
     let label = view.read_with(cx, |app, _| app.store.status_label());
     assert!(label.starts_with("saved "), "{label}");
 
-    // The profile, and the app the link must come from.
+    // A profile by name, typed: "Other app or profile by name…" opens the
+    // fields Open in had before its lanes.
+    click(cx, "destination-typed");
     click(cx, "profile");
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("Personal");
-    // "+ app" offers the app another rule names, then any app by name.
+    // "+ app" offers the app another rule names, and never a text field.
     click(cx, "opener-add");
-    assert!(cx.debug_bounds("opener-choice-0").is_some());
-    click(cx, "opener-other");
-    cx.simulate_input("com.apple.mail");
+    assert!(cx.debug_bounds("opener-other").is_some());
+    click(cx, "opener-choice-0");
     draw(cx);
     let file = saved(cx, &path);
     assert_eq!(file.rules[0].profile, "Personal");
-    assert_eq!(file.rules[0].opener, ["com.apple.mail"]);
+    assert_eq!(file.rules[0].opener, ["com.tinyspeck.slackmacgap"]);
+    // The app shows as a chip, by the name it goes by.
+    assert!(cx.debug_bounds("opener-0").is_some());
     // The row shows the app before the patterns.
     assert!(matches!(handler(cx).rule.matchers[1], Matcher::App { .. }));
 
     // Clearing the browser is a problem: the row says so, the file keeps
     // the saved browser, and Test a link routes by the saved version.
-    // Open in is a picker; "Other app…" makes it a field.
     click(cx, "browser");
-    click(cx, "browser-other");
     cx.simulate_keystrokes("cmd-a backspace");
     draw(cx);
     assert_eq!(handler(cx).rule.badge, RowBadge::NotSaved);
@@ -753,8 +754,7 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
         "saves once it has a pattern and a browser"
     );
     // Try it says the draft would take its sample once it is complete.
-    click(cx, "browser");
-    click(cx, "browser-other");
+    click(cx, "destination-typed");
     cx.simulate_input("Firefox");
     draw(cx);
     assert_eq!(handler(cx).rule.badge, RowBadge::None);
@@ -975,13 +975,12 @@ fn activity_filters_by_privacy_level_and_says_what_is_kept(cx: &mut TestAppConte
     assert!(view.read_with(cx, |app, _| app.activity.expanded.is_some()));
 }
 
-/// The Add a rule sheet's browser list is as wide as its field, and a
-/// browser with many profiles or a long name stays inside it: the hint is
-/// a count and ends before the list's edge. The profile list names every
-/// profile, each inside the list.
+/// Open in's lanes stay inside the sheet: a browser with many profiles
+/// wraps its pills, a long name ends in an ellipsis, and one pill is the
+/// whole choice (design: Destination and App Pickers 1a, 1b).
 #[gpui_kit::test]
-fn the_add_rule_browser_list_stays_inside_its_field(cx: &mut TestAppContext) {
-    let dir = scratch("add-rule-lists");
+fn the_add_rule_lanes_stay_inside_the_sheet(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-lanes");
     cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
     let (view, cx) = open_store(cx, None, fixture_store(&dir));
     let many: Vec<String> = [
@@ -1011,82 +1010,59 @@ fn the_add_rule_browser_list_stays_inside_its_field(cx: &mut TestAppContext) {
         ];
     });
     click(cx, "nav-activity");
+    // Row 4 opened in Google Chrome, which leads.
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
-    click(cx, "add-rule-browser");
-    let field = cx.debug_bounds("add-rule-browser").expect("the field");
-    let menu = cx.debug_bounds("add-rule-browser-menu").expect("the list");
-    assert_eq!(menu.left(), field.left(), "{menu:?} under {field:?}");
-    assert_eq!(menu.right(), field.right(), "{menu:?} as wide as {field:?}");
-    for index in 0..3 {
-        let row = cx
-            .debug_bounds(format!("add-rule-browser-choice-{index}").leak())
-            .expect("a row");
-        assert!(row.right() <= menu.right(), "row {index}: {row:?}");
-        let hint = cx
-            .debug_bounds(format!("add-rule-browser-choice-{index}-hint").leak())
-            .expect("a hint");
-        assert!(
-            hint.right() <= row.right(),
-            "hint {index}: {hint:?} in {row:?}"
-        );
+    let sheet = cx.debug_bounds("add-rule-sheet").expect("the sheet");
+    for lane in 0..3 {
+        let bounds = cx
+            .debug_bounds(format!("add-rule-dest-lane-{lane}").leak())
+            .expect("a lane");
+        assert!(bounds.right() <= sheet.right(), "lane {lane}: {bounds:?}");
+        let mut pill = 0;
+        while let Some(p) = cx.debug_bounds(format!("add-rule-dest-{lane}-{pill}").leak()) {
+            assert!(
+                p.right() <= bounds.right(),
+                "lane {lane} pill {pill}: {p:?}"
+            );
+            pill += 1;
+        }
+        assert!(pill > 0, "lane {lane} has pills");
     }
-
-    // Edge's five profiles, each in its own row of the profile list.
-    click(cx, "add-rule-browser-choice-1");
-    click(cx, "add-rule-profile");
-    let field = cx.debug_bounds("add-rule-profile").expect("the field");
-    let menu = cx.debug_bounds("add-rule-profile-menu").expect("the list");
-    assert_eq!((menu.left(), menu.right()), (field.left(), field.right()));
-    for index in 0..=many.len() {
-        let row = cx
-            .debug_bounds(format!("add-rule-profile-choice-{index}").leak())
-            .expect("a profile row");
-        assert!(row.right() <= menu.right(), "profile {index}: {row:?}");
-    }
-}
-
-/// A list longer than `MENU_MAX_HEIGHT` stops there and scrolls, and its
-/// rows keep their height instead of being squeezed to fit.
-#[gpui_kit::test]
-fn a_long_browser_list_scrolls_with_whole_rows(cx: &mut TestAppContext) {
-    let dir = scratch("add-rule-long-list");
-    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
-    let (view, cx) = open_store(cx, None, fixture_store(&dir));
-    view.update(cx, |app, _| {
-        app.browsers = (0..14)
-            .map(|n| BrowserChoice {
-                name: format!("Example Browser {n}"),
-                profiles: vec!["Personal".into(), "Work".into()],
-            })
-            .collect();
-    });
-    click(cx, "nav-activity");
-    click(cx, "activity-row-4");
-    click(cx, "activity-add-rule-4");
-    click(cx, "add-rule-browser");
-    let menu = cx.debug_bounds("add-rule-browser-menu").expect("the list");
-    assert!(
-        menu.size.height <= px(crate::widgets::MENU_MAX_HEIGHT),
-        "{menu:?}"
+    let sheet_state = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let sheet = app.actions.sheet.as_ref().unwrap();
+            (
+                sheet.browser.clone(),
+                sheet.profile.clone(),
+                sheet.private,
+                sheet.keep,
+            )
+        })
+    };
+    // Edge's Spanish: Default, then the five profiles.
+    click(cx, "add-rule-dest-1-5");
+    assert_eq!(
+        sheet_state(cx),
+        (
+            "Microsoft Edge".into(),
+            "Spanish".into(),
+            false,
+            Privacy::Full
+        )
     );
-    let first = cx
-        .debug_bounds("add-rule-browser-choice-0")
-        .expect("a row")
-        .size
-        .height;
-    assert!(first > px(20.0), "{first:?}");
-    for index in 1..14 {
-        let row = cx
-            .debug_bounds(format!("add-rule-browser-choice-{index}").leak())
-            .expect("a row");
-        assert_eq!(row.size.height, first, "row {index} keeps its height");
-    }
-    // The last rows lie past the card: the list scrolls to them.
-    let last = cx
-        .debug_bounds("add-rule-browser-choice-13")
-        .expect("the last row");
-    assert!(last.bottom() > menu.bottom(), "{last:?} past {menu:?}");
+    // Its InPrivate pill: private, the browser's own profile, host only.
+    click(cx, "add-rule-dest-1-6");
+    assert_eq!(
+        sheet_state(cx),
+        ("Microsoft Edge".into(), String::new(), true, Privacy::Host)
+    );
+    // Back to a profile: Keep follows.
+    click(cx, "add-rule-dest-0-2");
+    assert_eq!(
+        sheet_state(cx),
+        ("Google Chrome".into(), "Work".into(), false, Privacy::Full)
+    );
 }
 
 /// The row menu's Save hint names the browser and a long profile, and ends
@@ -1381,9 +1357,11 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("tests-strip").is_some());
 
-    // Private window and Keep write `private` and `privacy`.
-    click(cx, "handler-private");
+    // Private window and Keep write `private` and `privacy`. With no scan
+    // the rule's own browser is the one lane: Default, Work, Incognito.
+    click(cx, "destination-0-2");
     assert!(handler(cx).private);
+    assert_eq!(handler(cx).profile, "");
     assert_eq!(handler(cx).keep(), Some(Privacy::Host));
     assert!(
         handler(cx)
@@ -1396,10 +1374,13 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     let file = saved(cx, &path);
     assert!(file.rules[0].private);
     assert_eq!(file.rules[0].privacy, Some(Privacy::None.into()));
-    click(cx, "handler-private");
+    // Default leaves the private window; with no scan to list them, Work
+    // went with the pick.
+    click(cx, "destination-0-0");
     click(cx, "keep-full");
     let file = saved(cx, &path);
     assert!(!file.rules[0].private);
+    assert_eq!(file.rules[0].profile, "");
     assert_eq!(file.rules[0].privacy, Some(Privacy::Full.into()));
 
     // A bad example is a problem under the field; removing it clears it.
@@ -1737,12 +1718,9 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("add-rule-collision-5").is_some());
 
-    // Browser and profile from the detected browsers; the rule's privacy.
-    click(cx, "add-rule-browser");
-    click(cx, "add-rule-browser-choice-0");
-    click(cx, "add-rule-profile");
-    click(cx, "add-rule-profile-choice-2");
-    click(cx, "add-rule-private");
+    // Browser and profile in one pill: Work in Google Chrome, where the
+    // link opened (Default, Personal, Work); then Keep.
+    click(cx, "add-rule-dest-0-2");
     click(cx, "add-rule-keep-none");
     click(cx, "add-rule-position-top");
     let rule = view.read_with(cx, |app, _| {
@@ -1751,7 +1729,7 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     assert_eq!(rule.browser, "Google Chrome");
     assert_eq!(rule.profile, "Work");
     assert!(rule.opener.is_empty());
-    assert!(rule.private);
+    assert!(!rule.private);
     assert_eq!(rule.privacy, Some(Privacy::None.into()));
     assert_eq!(
         rule.examples,
@@ -1803,7 +1781,7 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     let file = saved(cx, &path);
     assert_eq!(file.rules[0].patterns, ["*"]);
     assert_eq!(file.rules[0].opener, ["PwrAgnt"]);
-    assert!(file.rules[0].private);
+    assert!(!file.rules[0].private);
     assert_eq!(file.rules.len(), 8);
     assert_eq!(file.tests.len(), 1);
     let _ = std::fs::remove_dir_all(dir);
@@ -1954,8 +1932,8 @@ fn open_activity<'a>(
 
 /// Picks the sheet's first browser: the sheet chooses none for the person.
 fn choose_sheet_browser(cx: &mut VisualTestContext) {
-    click(cx, "add-rule-browser");
-    click(cx, "add-rule-browser-choice-0");
+    // The first lane's Default pill: the browser the link opened in.
+    click(cx, "add-rule-dest-0-0");
 }
 
 /// What the open sheet says stops its rule from taking the link.
@@ -4386,9 +4364,9 @@ fn open_with_scan<'a>(
     (view, cx)
 }
 
-/// Open in and Profile are pickers over the scan, with a way out to a
-/// typed value; changing the browser drops a profile it does not have
-/// (design: Rule Editor Pickers 3a to 3d).
+/// Open in is a lane per browser in the scan, in the scan's order, and a
+/// pill is the whole choice; the way out types a name (design:
+/// Destination and App Pickers 1c, 1d).
 #[gpui_kit::test]
 fn open_in_and_profile_pick_from_the_scan(cx: &mut TestAppContext) {
     let dir = scratch("pickers");
@@ -4397,33 +4375,22 @@ fn open_in_and_profile_pick_from_the_scan(cx: &mut TestAppContext) {
     let rule = |cx: &mut VisualTestContext| {
         view.read_with(cx, |app, _| {
             let h = &app.handlers[0];
-            (h.browser.clone(), h.profile.clone())
+            (h.browser.clone(), h.profile.clone(), h.private)
         })
     };
-    assert_eq!(rule(cx), ("Google Chrome".into(), "Work".into()));
+    assert_eq!(rule(cx), ("Google Chrome".into(), "Work".into(), false));
 
-    // The list: this Mac's five browsers first; the menu closes on a pick.
-    click(cx, "browser");
-    assert!(cx.debug_bounds("browser-menu").is_some());
+    // This Mac's five browsers, and no lane for a missing one.
     for i in 0..5 {
         assert!(
-            cx.debug_bounds(format!("browser-choice-{i}").leak())
+            cx.debug_bounds(format!("destination-lane-{i}").leak())
                 .is_some()
         );
     }
-    assert!(cx.debug_bounds("browser-other").is_some());
-    // Edge has no "Work": the profile goes with the old browser.
-    click(cx, "browser-choice-4");
-    assert!(cx.debug_bounds("browser-menu").is_none());
-    assert_eq!(rule(cx), ("Microsoft Edge".into(), String::new()));
-
-    // Edge's profiles, after its own default.
-    click(cx, "profile");
-    assert!(cx.debug_bounds("profile-menu").is_some());
-    assert!(cx.debug_bounds("profile-choice-4").is_some());
-    assert!(cx.debug_bounds("profile-choice-5").is_none());
-    click(cx, "profile-choice-4");
-    assert_eq!(rule(cx), ("Microsoft Edge".into(), "Travel".into()));
+    assert!(cx.debug_bounds("destination-lane-5").is_none());
+    // Edge: Default, its four profiles, then InPrivate.
+    click(cx, "destination-4-4");
+    assert_eq!(rule(cx), ("Microsoft Edge".into(), "Travel".into(), false));
     let file = saved(cx, &path);
     assert_eq!(
         (
@@ -4432,49 +4399,57 @@ fn open_in_and_profile_pick_from_the_scan(cx: &mut TestAppContext) {
         ),
         ("Microsoft Edge", "Travel")
     );
-    click(cx, "profile");
-    click(cx, "profile-choice-0");
-    assert_eq!(rule(cx), ("Microsoft Edge".into(), String::new()));
+    // The lanes stay in the scan's order after a pick.
+    click(cx, "destination-4-0");
+    assert_eq!(rule(cx), ("Microsoft Edge".into(), String::new(), false));
+    click(cx, "destination-4-5");
+    assert_eq!(rule(cx), ("Microsoft Edge".into(), String::new(), true));
+    // Chrome's Design, by pill; a pick from a lane turns private off.
+    click(cx, "destination-0-3");
+    assert_eq!(rule(cx), ("Google Chrome".into(), "Design".into(), false));
 
     // A profile by folder: Chrome's "Profile 2" is Design, so it is no
-    // warning; a folder Chrome lacks is.
-    click(cx, "browser");
-    click(cx, "browser-choice-0");
+    // warning; a folder Chrome lacks is, and keeps a pill of its own.
+    click(cx, "destination-typed");
     click(cx, "profile");
-    click(cx, "profile-other");
+    cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("Profile 2");
     draw(cx);
     assert_eq!(rule(cx).1, "Profile 2");
-    click(cx, "profile-list");
+    click(cx, "browser-list");
     assert!(cx.debug_bounds("profile-warning").is_none());
+    assert!(
+        cx.debug_bounds("destination-0-5").is_none(),
+        "no stray pill"
+    );
+    click(cx, "destination-typed");
     click(cx, "profile");
-    click(cx, "profile-other");
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("Profile 9");
     draw(cx);
+    click(cx, "browser-list");
     assert!(cx.debug_bounds("profile-warning").is_some());
+    assert!(cx.debug_bounds("destination-0-4").is_some(), "Profile 9");
 
-    // Any other app by name: typed, and drawn as not installed here. Its
-    // profile is a plain field, since the scan knows nothing of it.
+    // Any other app by name: typed, and drawn as not installed here, in a
+    // lane of its own ahead of the scan's.
+    click(cx, "destination-typed");
     click(cx, "browser");
-    click(cx, "browser-other");
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("Example Viewer");
     draw(cx);
     assert_eq!(rule(cx).0, "Example Viewer");
     assert!(cx.debug_bounds("browser-warning").is_some());
-    // Back to the list, which now names it under the rules' apps.
     click(cx, "browser-list");
-    click(cx, "browser");
     assert!(
-        cx.debug_bounds("browser-choice-5").is_some(),
-        "Example Viewer, named"
+        cx.debug_bounds("destination-lane-5").is_some(),
+        "Example Viewer, then the five"
     );
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// A new rule's Profile waits for its browser, and a browser that can't
-/// open a private window from a link says so instead of offering it.
+/// A new rule starts with no pill on, and a browser that can't open a
+/// private window from a link has no private pill.
 #[gpui_kit::test]
 fn a_new_rules_profile_waits_for_its_browser(cx: &mut TestAppContext) {
     let dir = scratch("pickers-new");
@@ -4485,24 +4460,18 @@ fn a_new_rules_profile_waits_for_its_browser(cx: &mut TestAppContext) {
         view.read_with(cx, |app, _| app.selection),
         Some(Selection::Handler(h))
     );
-    // No browser: Profile is a reason, not a list.
-    click(cx, "profile");
-    assert!(cx.debug_bounds("profile-menu").is_none());
     // The editor's Examples start empty, and say what one is for.
     assert!(cx.debug_bounds("examples-empty").is_some());
-    // Safari (fourth on this Mac) opens no private window from a link.
-    click(cx, "browser");
-    click(cx, "browser-choice-3");
+    // Safari (fourth on this Mac) opens no private window from a link:
+    // its lane is Default alone.
+    click(cx, "destination-3-0");
     assert_eq!(
         view.read_with(cx, |app, _| app.handlers[h].browser.clone()),
         "Safari"
     );
-    click(cx, "handler-private");
-    assert!(!view.read_with(cx, |app, _| app.handlers[h].private));
-    // Chrome does.
-    click(cx, "browser");
-    click(cx, "browser-choice-0");
-    click(cx, "handler-private");
+    assert!(cx.debug_bounds("destination-3-1").is_none());
+    // Chrome's fifth pill is Incognito.
+    click(cx, "destination-0-4");
     assert!(view.read_with(cx, |app, _| app.handlers[h].private));
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -4520,6 +4489,15 @@ fn plus_app_offers_the_apps_the_rules_name(cx: &mut TestAppContext) {
         ["com.tinyspeck.slackmacgap"]
     );
     assert!(cx.debug_bounds("opener-any").is_none());
+    // An app the rule already names (as the file panel may pick it) is
+    // not added twice.
+    view.update_in(cx, |app, window, cx| {
+        app.choose_opener("COM.tinyspeck.slackmacgap", window, cx);
+    });
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[0].openers.clone()),
+        ["com.tinyspeck.slackmacgap"]
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -4609,8 +4587,7 @@ fn test_a_link_adds_a_rule_for_the_link(cx: &mut TestAppContext) {
     assert!(selected, "typing replaces the suggestion");
     assert!(cx.debug_bounds("draft-note").is_some());
     // Given a browser, the draft takes the tested link.
-    click(cx, "browser");
-    click(cx, "browser-other");
+    click(cx, "destination-typed");
     cx.simulate_input("Firefox");
     draw(cx);
     let result = view.read_with(cx, |app, _| app.rail.as_ref().unwrap().try_result.clone());
@@ -4652,19 +4629,22 @@ fn a_browser_without_readable_profiles_still_takes_a_named_one(cx: &mut TestAppC
     let dir = scratch("pickers-no-profiles");
     let (view, cx) = open_with_scan(cx, &dir);
     click(cx, "add-handler");
-    // Firefox, second on this Mac, with no profiles in the scan.
-    click(cx, "browser");
-    click(cx, "browser-choice-1");
-    assert!(cx.debug_bounds("profile-none-found").is_some());
+    // Firefox, second on this Mac, with no profiles in the scan: Default
+    // and its private window.
+    click(cx, "destination-1-0");
+    assert!(cx.debug_bounds("destination-1-2").is_none());
+    click(cx, "destination-typed");
     click(cx, "profile");
-    assert!(cx.debug_bounds("profile-choice-0").is_some());
-    click(cx, "profile-other");
     cx.simulate_input("default-release");
     draw(cx);
     assert_eq!(
         view.read_with(cx, |app, _| app.handlers[7].profile.clone()),
         "default-release"
     );
+    // Back in the lanes it is a pill of its own, on, and no warning.
+    click(cx, "browser-list");
+    assert!(cx.debug_bounds("destination-1-1").is_some());
+    assert!(cx.debug_bounds("profile-warning").is_none());
     let _ = std::fs::remove_dir_all(dir);
 }
 

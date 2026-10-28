@@ -116,6 +116,21 @@ pub fn app_bundle(app: &str) -> Option<PathBuf> {
     }
 }
 
+/// The bundle id of the app at `path`, as the person picked it in the
+/// file panel. Reads the bundle's Info.plist. Always `None` off macOS,
+/// which has no bundle ids.
+pub fn app_bundle_id(path: &Path) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::app_bundle_id(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// The icon Finder shows for the app at `bundle`, unmodified, as a
 /// `pixels`-square PNG (clamped to 16-1024). Reads the disk, so call it off
 /// the UI thread. Always `None` off macOS, which has no implementation yet.

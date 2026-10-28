@@ -816,17 +816,6 @@ impl PwrRoute {
         window.focus(&self.focus, cx);
     }
 
-    /// Adds an app the selected handler requires the link to come from.
-    pub fn add_opener(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(Selection::Handler(h)) = self.selection else {
-            return;
-        };
-        self.store.add_opener(h);
-        self.refresh(cx);
-        self.rebuild_rail_kept(cx);
-        self.focus_field(window, cx, |rail| rail.openers.last());
-    }
-
     pub fn remove_opener(&mut self, index: usize, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(Selection::Handler(h)) = self.selection else {
             return;
@@ -934,7 +923,6 @@ impl PwrRoute {
         };
         match (field, selection) {
             (Field::Pattern(i), _) => self.store.set_pattern(selection, i, text),
-            (Field::Opener(i), Selection::Handler(h)) => self.store.set_opener(h, i, text),
             (Field::Browser, Selection::Handler(h)) => self.store.set_browser(h, text),
             (Field::Profile, Selection::Handler(h)) => self.store.set_profile(h, text),
             (Field::Value(i), Selection::Rewrite(r)) => {
