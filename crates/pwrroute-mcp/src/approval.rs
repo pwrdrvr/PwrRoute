@@ -43,8 +43,11 @@ pub struct ApprovalRequest {
     /// The client's display title, when it sent one.
     pub client_title: Option<String>,
     pub client_version: String,
-    /// The roles to choose from.
+    /// The roles to choose from, least first.
     pub roles: Vec<Role>,
+    /// How long the prompt waits for an answer from when it is raised;
+    /// then it expires and the window should say so.
+    pub expires_in: Duration,
 }
 
 /// The person's answer.
@@ -186,6 +189,7 @@ impl Approvals {
                 client_title: client.title.clone(),
                 client_version: client.version.clone(),
                 roles: Role::ALL.to_vec(),
+                expires_in: self.ttl,
             },
             ApprovalReply(reply),
         );

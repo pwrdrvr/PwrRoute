@@ -72,7 +72,7 @@ impl Permission {
             Self::RulesRead => "Read the rules",
             Self::ActivityHosts => "See recent activity, hosts only",
             Self::ActivityUrls => "See recent activity with full URLs",
-            Self::ActivityJournal => "Read the activity journal on disk, when it is on",
+            Self::ActivityJournal => "Read the activity journal on disk",
             Self::Open => "Open links through PwrRoute",
             Self::RulesWrite => "Change rules.json",
         }

@@ -230,6 +230,8 @@ pub enum Tone {
     Warn,
     /// `.chip.acc`: a state the user chose (a send).
     Accent,
+    /// `.chip.ok`: a grant that went through.
+    Ok,
 }
 
 /// `.chip`: a count or state in a card header.
@@ -246,6 +248,11 @@ pub fn toned_chip(label: impl Into<SharedString>, tone: Tone) -> Div {
             theme::text_muted(),
         ),
         Tone::Warn => (theme::warn_soft(), theme::transparent(), theme::warn_text()),
+        Tone::Ok => (
+            theme::success_soft(),
+            theme::transparent(),
+            theme::success_text(),
+        ),
         Tone::Accent => (
             theme::accent_soft(),
             theme::transparent(),
@@ -481,6 +488,26 @@ pub fn key_cap_in(label: &'static str, height: f32, size: f32, border: Hsla, col
         .border_color(border)
         .rounded(px(4.0))
         .child(mono(label, size, 600.0, color))
+}
+
+/// `.btn` with its key cap after the label: `.btn.primary` gets the
+/// accent's ink on a faint edge.
+pub fn key_button(label: impl Into<SharedString>, key: &'static str, kind: ButtonKind) -> Div {
+    let foreground = kind.foreground();
+    let cap = if kind == ButtonKind::Primary {
+        key_cap_in(
+            key,
+            15.0,
+            9.0,
+            gpui_kit::hsla(0.0, 0.0, 0.0, 0.28),
+            foreground,
+        )
+    } else {
+        key_cap_in(key, 15.0, 9.0, theme::border_default(), theme::text_muted())
+    };
+    button_frame(kind, false)
+        .child(text(label, 11.5, 550.0, foreground))
+        .child(cap.px(px(4.0)))
 }
 
 /// A wrapping run of sans text: CSS `font: <weight> <size>/<line-height>`.

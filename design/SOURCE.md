@@ -172,6 +172,16 @@ the project and re-export here.
   the project's copy (its etag unchanged since the last write), then
   compared by size with the file here.
 
+- Updated **2026-10-28**: one canvas added for approving a local agent
+  (`PwrRoute Agent Approval.dc.html`): the approval window as it was, then
+  the roles as a radio group with Reader chosen, the chosen role's
+  permissions listed, Deny and Allow as <role> (Esc and Return, 1 2 3 to
+  pick), the prompt's expiry counting down, and the window kept open on
+  the outcome (allowed, denied, expired), shrunk to it. PwrSnap's and
+  PwrGit's consent windows were read first; both pick then confirm.
+  Written to the project, then compared by size with the file here. The
+  other canvases, `pwrroute.css` and `support.js` are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -197,7 +207,8 @@ the project and re-export here.
 | `PwrRoute First Run Profile Access.dc.html` | First run on macOS 27 when a browser's profile list is kept from PwrRoute (turn 6): why, the Files &amp; Folders switches as the user will find them, Open Files &amp; Folders, Check again, Skip, and the profile select once access is on |
 | `PwrRoute Activity Quick Add Rule.dc.html` | Adding a rule from an Activity row in one click: "+ Rule" where Took was on hover (and at rest under Everything else), where else it was tried, the expanded row's primary Add a rule… under a long link, ⌘N, and host-only rows |
 | `PwrRoute Send Links.dc.html` | Sending the next link, the next few, or all links for a while to a browser and profile without a rule: the dropdown's Send links section and its destination lanes, the native menu's rows, the Overview's hero, chips, rail foot and marked node, Next link here on a node, Activity's chips, and how it behaves (one slot with Pause, counted per link in the router, memory only) |
-| `pwrroute.css` | Shared tokens and chrome for all twenty-one canvases: family title strip, rail, cards, chips, controls |
+| `PwrRoute Agent Approval.dc.html` | The local-agent approval window: before, a role chosen (Reader at open) with its permissions and Deny / Allow as <role>, keys and the expiry countdown, and the allowed, denied and expired outcomes |
+| `pwrroute.css` | Shared tokens and chrome for all twenty-two canvases: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.
