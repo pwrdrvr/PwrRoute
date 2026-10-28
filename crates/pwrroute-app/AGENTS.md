@@ -109,8 +109,11 @@ their own modules.
   pattern `*` with Sent from on, which `AddRule::toggle_only_from` never
   leaves on its own (off goes back to the narrowest pattern). With Sent
   from on, Also catches lists only that app's links, compared as
-  `rules[].opener` is. The feed also keeps
-  today's `Tally` (links per rule, handler and default owner, and per
+  `rules[].opener` is. No pattern carries the query or fragment
+  (`suggest_rule`: a one-segment page with a query is `host/page*`), and
+  a Match row's pattern ends in an ellipsis beside an explanation that
+  keeps `WHY_MIN`, so a long one never pushes the row past the sheet.
+  The feed also keeps today's `Tally` (links per rule, handler and default owner, and per
   browser and profile), reset with the day, for the Overview's map.
 - **Overview is where every window lands (`overview_model.rs`,
   `overview.rs`).** `Screen::Overview` is the default and the rail's first

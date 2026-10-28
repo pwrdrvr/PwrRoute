@@ -17,7 +17,10 @@ pub struct Suggestion {
     /// Wildcard patterns that match the link, narrowest first: the host with
     /// the first path segment (`github.com/pwrdrvr/*`), then the host alone
     /// (`github.com/*`). A link whose path stops at its first segment gets
-    /// itself, exactly, in place of the first. A scheme outside the ones a
+    /// itself, exactly, in place of the first; with a query or fragment it
+    /// gets its page and a `*` instead (`auth.example.com/authorize*`), since
+    /// the query and fragment never enter a pattern and a pattern without a
+    /// `*` must equal the whole link. A scheme outside the ones a
     /// pattern matches implicitly (`http`, `https`, `ftp`, `mailto`,
     /// `file`, `tel`, `sms`, `data`) is written out, and so is the scheme
     /// of a link with a port, since `host:port` would read as a scheme, or
@@ -34,6 +37,22 @@ pub struct Suggestion {
     pub why: Vec<&'static str>,
 }
 
+/// Query parameters a redirect wrapper carries its destination in.
+const WRAPPER_PARAMS: [&str; 12] = [
+    "q",
+    "u",
+    "url",
+    "link",
+    "target",
+    "dest",
+    "destination",
+    "to",
+    "href",
+    "goto",
+    "out",
+    "r",
+];
+
 /// Schemes a pattern without one matches anyway, from Finicky's
 /// `matchWildcard`.
 const IMPLICIT_SCHEMES: [&str; 8] = [
@@ -41,6 +60,7 @@ const IMPLICIT_SCHEMES: [&str; 8] = [
 ];
 
 const WHY_PAGE: &str = "Matches this page only.";
+const WHY_PAGE_ANY_QUERY: &str = "Matches paths that start here, any query.";
 const WHY_SECTION: &str = "Matches everything under the first part of the path.";
 const WHY_HOST: &str = "Matches everything on this host.";
 const WHY_SCHEME: &str = "Matches every link with this scheme.";
@@ -90,11 +110,22 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         (WHY_USER_SECTION, WHY_USER_HOST)
     };
 
+    // A query or fragment is never written into a pattern: an OAuth link's
+    // `state` or a tracking id changes every time, and a pattern without a
+    // `*` must equal the whole link, so it would never match again.
+    let tail = parsed.query().is_some() || parsed.fragment().is_some();
     let Some(host) = parsed.host_str() else {
         // mailto:, tel:, data: and the like: the whole link, or every link
         // of its kind.
-        suggestion.candidates.push(link);
-        suggestion.why.push(WHY_PAGE);
+        if tail {
+            suggestion
+                .candidates
+                .push(format!("{scheme}:{}*", escape(parsed.path())));
+            suggestion.why.push(WHY_PAGE_ANY_QUERY);
+        } else {
+            suggestion.candidates.push(link);
+            suggestion.why.push(WHY_PAGE);
+        }
         suggestion.candidates.push(format!("{scheme}:*"));
         suggestion.why.push(WHY_SCHEME);
         return suggestion;
@@ -106,9 +137,12 @@ pub fn suggest_rule(url: &str) -> Suggestion {
     let path = parsed.path();
     if path.is_empty() {
         // A scheme of its own (`slack://channel?id=1`) may have no path at
-        // all, so `host/*` would not match it.
-        suggestion.candidates.push(link);
-        suggestion.why.push(WHY_PAGE);
+        // all, so `host/*` would not match it. With a query, `host*` is
+        // already the page with any query.
+        if !tail {
+            suggestion.candidates.push(link);
+            suggestion.why.push(WHY_PAGE);
+        }
         suggestion.candidates.push(format!("{origin}*"));
         suggestion.why.push(why_host);
         return suggestion;
@@ -120,9 +154,16 @@ pub fn suggest_rule(url: &str) -> Suggestion {
                 .candidates
                 .push(format!("{origin}/{}/*", escape(first)));
             suggestion.why.push(why_section);
-        } else {
+        } else if tail {
             // `host/first/*` needs a slash after the segment, which this
-            // link does not have, so the narrowest pattern is the link.
+            // link does not have: the page, with any query.
+            suggestion
+                .candidates
+                .push(format!("{origin}{}*", escape(path)));
+            suggestion.why.push(WHY_PAGE_ANY_QUERY);
+        } else {
+            // No slash after the segment and nothing after the path: the
+            // link itself.
             suggestion.candidates.push(link);
             suggestion.why.push(WHY_PAGE);
         }
@@ -134,10 +175,15 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         suggestion.needs_js = true;
         suggestion.why.push(WHY_ID);
     }
-    if parsed
-        .query_pairs()
-        .any(|(_, value)| value.starts_with("http://") || value.starts_with("https://"))
-    {
+    // A redirect wrapper (`google.com/url?q=…`, `l.example/l.php?u=…`)
+    // carries its destination in a parameter named for it. Other URLs in a
+    // query are not the link's destination: an OAuth sign-in's
+    // `redirect_uri` (RFC 6749) or `resource` (RFC 8707, which MCP clients
+    // send), a login's `return_to`. Those need nothing unwrapped.
+    if parsed.query_pairs().any(|(name, value)| {
+        WRAPPER_PARAMS.contains(&name.to_ascii_lowercase().as_str())
+            && (value.starts_with("http://") || value.starts_with("https://"))
+    }) {
         suggestion.needs_js = true;
         suggestion.why.push(WHY_INNER_URL);
     }
@@ -241,16 +287,50 @@ mod tests {
 
     #[test]
     fn a_path_that_stops_at_its_first_part_is_matched_exactly() {
-        let s = suggest_rule("https://github.com/pwrdrvr?tab=repositories");
-        assert_eq!(
-            s.candidates,
-            [
-                "https://github.com/pwrdrvr?tab=repositories",
-                "github.com/*"
-            ]
-        );
+        let s = suggest_rule("https://github.com/pwrdrvr");
+        assert_eq!(s.candidates, ["https://github.com/pwrdrvr", "github.com/*"]);
         assert_eq!(s.why, [WHY_PAGE, WHY_HOST]);
         assert!(!s.needs_js);
+    }
+
+    #[test]
+    fn the_query_and_fragment_never_enter_a_pattern() {
+        let s = suggest_rule("https://github.com/pwrdrvr?tab=repositories");
+        assert_eq!(s.candidates, ["github.com/pwrdrvr*", "github.com/*"]);
+        assert_eq!(s.why, [WHY_PAGE_ANY_QUERY, WHY_HOST]);
+        assert_eq!(
+            candidates("https://example.com/page#top"),
+            ["example.com/page*", "example.com/*"]
+        );
+        // An OAuth sign-in: one segment, a long query, a redirect_uri that
+        // is no link to unwrap.
+        let s = suggest_rule(
+            "https://auth.example.com/authorize?response_type=code&client_id=demo\
+             &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&state=demo-state-0001",
+        );
+        assert_eq!(
+            s.candidates,
+            ["auth.example.com/authorize*", "auth.example.com/*"]
+        );
+        assert!(!s.needs_js, "{:?}", s.why);
+        // An MCP client's sign-in also names the server as `resource`.
+        assert!(
+            !suggest_rule(
+                "https://mcp.example.com/authorize?response_type=code&client_id=demo\
+                 &redirect_uri=http%3A%2F%2F127.0.0.1%3A3118%2Fcallback\
+                 &resource=https%3A%2F%2Fmcp.example.com%2Fmcp&state=one"
+            )
+            .needs_js
+        );
+        assert!(
+            !suggest_rule("https://id.example/login?return_to=https%3A%2F%2Fapp.example%2Fhome")
+                .needs_js
+        );
+        assert!(
+            s.candidates.iter().all(|c| !c.contains('?')),
+            "{:?}",
+            s.candidates
+        );
     }
 
     #[test]
@@ -263,9 +343,10 @@ mod tests {
             candidates("mailto:alice@example.com"),
             ["mailto:alice@example.com", "mailto:*"]
         );
+        assert_eq!(candidates("slack://channel?id=1"), ["slack://channel*"]);
         assert_eq!(
-            candidates("slack://channel?id=1"),
-            ["slack://channel?id=1", "slack://channel*"]
+            candidates("mailto:alice@example.com?subject=hi"),
+            ["mailto:alice@example.com*", "mailto:*"]
         );
     }
 
@@ -278,6 +359,9 @@ mod tests {
         let s = suggest_rule("https://www.google.com/url?q=https://example.com/x");
         assert!(s.needs_js);
         assert!(s.why.contains(&WHY_INNER_URL));
+        assert!(
+            suggest_rule("https://l.example.com/l.php?u=https%3A%2F%2Fexample.com%2Fx").needs_js
+        );
         assert!(!suggest_rule("https://docs.example/guide/intro").needs_js);
     }
 
@@ -301,7 +385,7 @@ mod tests {
         assert_eq!(
             s.candidates,
             [
-                "https://user:*@host.example/a?q=1#f",
+                "https://user:*@host.example/a*",
                 "https://user:*@host.example/*"
             ]
         );

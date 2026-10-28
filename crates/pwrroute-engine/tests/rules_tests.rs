@@ -557,6 +557,10 @@ fn every_candidate_matches_its_own_link_by_finickys_is_match() {
         "https://user:s3cret@host.example/a",
         "https://user:s3cret@host.example/a/b?q=1#f",
         "http://user:s3cret@localhost:3000/x",
+        "https://user:s3cret@host.example/a?q=1#f",
+        "https://auth.example.com/authorize?client_id=demo&state=one",
+        "https://example.com/page#top",
+        "mailto:alice@example.com?subject=hi",
     ] {
         let suggestion = suggest_rule(url);
         assert!(!suggestion.candidates.is_empty(), "{url}");
@@ -572,6 +576,15 @@ fn every_candidate_matches_its_own_link_by_finickys_is_match() {
             );
         }
     }
+}
+
+#[test]
+fn a_page_with_a_query_is_caught_again_with_another_query() {
+    let e = engine(None, RulesFile::default());
+    let first = "https://auth.example.com/authorize?client_id=demo&state=one";
+    let again = "https://auth.example.com/authorize?client_id=demo&state=two";
+    let pattern = &suggest_rule(first).candidates[0];
+    assert_eq!(e.collisions(pattern, &[again]).unwrap(), [again]);
 }
 
 #[test]
