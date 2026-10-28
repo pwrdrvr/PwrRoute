@@ -360,10 +360,15 @@ impl PwrRoute {
         window.focus(&self.focus, cx);
     }
 
-    /// One row up or down: ⌥⌘↑ and ⌥⌘↓, and the menu's Move up and Move
-    /// down.
-    fn step_rule(&mut self, by: isize, window: &mut Window, cx: &mut Context<'_, Self>) -> bool {
-        let Some(selection) = self.selection else {
+    /// One row up or down: ⌥⌘↑ and ⌥⌘↓.
+    fn step_rule(
+        &mut self,
+        target: Option<Selection>,
+        by: isize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        let Some(selection) = target else {
             return false;
         };
         let to = position(selection).saturating_add_signed(by);
@@ -539,16 +544,7 @@ impl PwrRoute {
         profile: &str,
         cx: &mut Context<'_, Self>,
     ) {
-        let written = self.write_now(
-            |store| {
-                let file = store.edited();
-                let (was, was_profile) = (file.default_browser, file.default_profile);
-                store.set_default_browser(browser, profile);
-                move |store: &mut RulesStore| store.set_default_browser(&was, &was_profile)
-            },
-            cx,
-        );
-        match written {
+        match self.write_default_browser(browser, profile, cx) {
             Ok(()) => self.row_actions.menu = None,
             Err(reason) => self.row_actions.refused = Some(reason),
         }
@@ -567,6 +563,12 @@ impl PwrRoute {
         let keystroke = &event.keystroke;
         let m = &keystroke.modifiers;
         let plain = !m.secondary() && !m.alt && !m.shift && !m.control && !m.platform;
+        // The keys the menu shows act on its row; with none open, on the
+        // selected one.
+        let target = match self.row_actions.menu {
+            Some(MenuRow::Rule(selection)) => Some(selection),
+            _ => self.selection,
+        };
         match keystroke.key.as_str() {
             "escape" if cx.has_active_drag() => {
                 cx.stop_active_drag(window);
@@ -579,9 +581,9 @@ impl PwrRoute {
                 self.close_row_actions(cx);
                 true
             }
-            "up" if m.secondary() && m.alt && !m.shift => self.step_rule(-1, window, cx),
-            "down" if m.secondary() && m.alt && !m.shift => self.step_rule(1, window, cx),
-            "d" if m.secondary() && !m.alt && !m.shift => match self.selection {
+            "up" if m.secondary() && m.alt && !m.shift => self.step_rule(target, -1, window, cx),
+            "down" if m.secondary() && m.alt && !m.shift => self.step_rule(target, 1, window, cx),
+            "d" if m.secondary() && !m.alt && !m.shift => match target {
                 Some(selection) => {
                     self.duplicate_rule(selection, window, cx);
                     true
@@ -589,7 +591,7 @@ impl PwrRoute {
                 None => false,
             },
             "z" if m.secondary() && !m.alt && !m.shift => self.undo_delete(window, cx),
-            "backspace" | "delete" if plain => match self.selection {
+            "backspace" | "delete" if plain => match target {
                 Some(selection) => {
                     self.delete_rule(selection, window, cx);
                     true
@@ -609,6 +611,11 @@ impl PwrRoute {
         cx: &mut Context<'_, Self>,
     ) {
         if !same_list(dragged, over) {
+            // Nowhere to land in the other list: forget the last target, so
+            // a release here moves nothing.
+            if self.row_actions.drop.take().is_some() {
+                cx.notify();
+            }
             return;
         }
         let (from, row) = (position(dragged), position(over));
@@ -634,10 +641,23 @@ impl PwrRoute {
         }
     }
 
-    fn drop_row(&mut self, dragged: Selection, window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// A dragged row released over row `on`: it moves only to the place
+    /// drawn on that row.
+    fn drop_row(
+        &mut self,
+        dragged: Selection,
+        on: Selection,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         self.row_actions.dragging = None;
         match self.row_actions.drop.take() {
-            Some(drop) if drop.from == dragged && drop.to != position(dragged) => {
+            Some(drop)
+                if drop.from == dragged
+                    && same_list(dragged, on)
+                    && drop.over == position(on)
+                    && drop.to != position(dragged) =>
+            {
                 self.move_rule(dragged, drop.to, window, cx);
             }
             _ => cx.notify(),
@@ -750,7 +770,10 @@ enum Tone {
     Danger,
 }
 
-/// `.mi`: label, then the move's count (`.ex`) and the key (`.k`).
+/// `.mi`: label, then the move's count (`.ex`) and the key (`.k`). Not
+/// `widgets::menu_row`, which has one hint and one color: a move shows a
+/// count and a key, and an item can be dim or danger. The label still ends
+/// in an ellipsis at the card's edge.
 fn item(
     id: &'static str,
     label: impl Into<SharedString>,
@@ -772,9 +795,16 @@ fn item(
         .gap(px(8.0))
         .px(px(8.0))
         .py(px(6.0))
+        .min_w_0()
         .rounded(px(5.0))
-        .child(text(label, 12.0, 500.0, color).whitespace_nowrap())
-        .child(div().flex_1())
+        .child(div().flex_1().min_w_0().child(crate::widgets::one_line(
+            label,
+            theme::SANS,
+            500.0,
+            12.0,
+            14.4,
+            color,
+        )))
         .when_some(count, |row, count| {
             row.child(
                 mono(count, 10.5, 500.0, theme::text_muted())
@@ -1040,22 +1070,29 @@ fn config_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<AnyElement
     ]
 }
 
+/// What a rule matches, in words: its patterns, "from Slack", "function".
+fn matcher_words(rule: &Rule) -> impl Iterator<Item = String> + '_ {
+    rule.matchers.iter().filter_map(|matcher| match matcher {
+        Matcher::Pattern(p) | Matcher::Regex(p) => Some(p.to_string()),
+        Matcher::App { name, .. } => Some(format!("from {name}")),
+        Matcher::Function(_) => Some("function".into()),
+        Matcher::Label(label) => Some((*label).to_owned()),
+        Matcher::Off | Matcher::Privacy(_) => None,
+    })
+}
+
 /// `.rr.tomb` (design 4b): where the deleted rule was, with Undo, until
 /// the next edit.
-pub fn tombstone(deleted: &Deleted, last: bool, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
+///
+/// `after_last`: it follows the list's last row, which draws no bottom
+/// border, so the tombstone draws the line above itself and none below.
+pub fn tombstone(
+    deleted: &Deleted,
+    after_last: bool,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Stateful<Div> {
     let keys = keys(cx);
-    let what = deleted
-        .row
-        .matchers
-        .iter()
-        .map(|matcher| match matcher {
-            Matcher::Pattern(p) | Matcher::Regex(p) => p.to_string(),
-            Matcher::App { name, .. } => format!("from {name}"),
-            Matcher::Function(_) => "function".into(),
-            Matcher::Label(label) => (*label).to_owned(),
-            Matcher::Off | Matcher::Privacy(_) => String::new(),
-        })
-        .find(|s| !s.is_empty());
+    let what = matcher_words(&deleted.row).next();
     let to = match &deleted.row.destination {
         Destination::Browser { name, profile, .. } => Some(match profile {
             Some(profile) => format!("{name} \u{00b7} {profile}"),
@@ -1075,8 +1112,13 @@ pub fn tombstone(deleted: &Deleted, last: bool, cx: &mut Context<'_, PwrRoute>) 
         .pl(px(10.0))
         .pr(px(12.0))
         .bg(theme::bg_elevated())
-        .when(!last, |row| {
-            row.border_b_1().border_color(theme::border_faint())
+        .border_color(theme::border_faint())
+        .map(|row| {
+            if after_last {
+                row.border_t_1()
+            } else {
+                row.border_b_1()
+            }
         })
         .child(div().w(px(12.0)).flex_none())
         .child(div().w(px(22.0)).flex_none().child(mono(
@@ -1185,18 +1227,7 @@ pub fn draggable(
     rule: &Rule,
     cx: &mut Context<'_, PwrRoute>,
 ) -> Stateful<Div> {
-    let label: SharedString = rule
-        .matchers
-        .iter()
-        .filter_map(|matcher| match matcher {
-            Matcher::Pattern(p) | Matcher::Regex(p) => Some(p.to_string()),
-            Matcher::App { name, .. } => Some(format!("from {name}")),
-            Matcher::Function(_) => Some("function".into()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("  ")
-        .into();
+    let label: SharedString = matcher_words(rule).collect::<Vec<_>>().join("  ").into();
     let destination = match &rule.destination {
         Destination::Browser { badge, name, .. } => Some((badge.clone(), name.clone())),
         _ => None,
@@ -1236,7 +1267,7 @@ pub fn draggable(
         }),
     )
     .on_drop(cx.listener(move |this, dragged: &DraggedRule, window, cx| {
-        this.drop_row(dragged.selection, window, cx);
+        this.drop_row(dragged.selection, selection, window, cx);
     }))
 }
 

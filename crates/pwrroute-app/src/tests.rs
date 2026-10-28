@@ -5501,6 +5501,20 @@ fn delete_leaves_a_tombstone_that_undoes_it(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(saved_patterns(cx, &path), before);
 
+    // With another row's menu open, ⌫ deletes that row, as its menu says.
+    let selected = view.read_with(cx, |app, _| app.selection);
+    click(cx, "handler-4-more");
+    cx.simulate_keystrokes("backspace");
+    draw(cx);
+    let left = saved_patterns(cx, &path);
+    assert_eq!(left.len(), before.len() - 1);
+    assert!(!left.contains(&before[4]));
+    assert!(left.contains(&before[2]));
+    assert_eq!(view.read_with(cx, |app, _| app.selection), selected);
+    cx.simulate_keystrokes("secondary-z");
+    draw(cx);
+    assert_eq!(saved_patterns(cx, &path), before);
+
     // The next edit ends Undo.
     cx.simulate_keystrokes("backspace");
     draw(cx);
@@ -5570,11 +5584,10 @@ fn everything_else_and_config_rows_have_working_menus(cx: &mut TestAppContext) {
 
     // A config's read-only row offers its file and the importer.
     let (_, cx) = open_with(cx, Some(fixture_home().join(".finicky.ts")));
-    if cx.debug_bounds("config-handler-0-more").is_some() {
-        click(cx, "config-handler-0-more");
-        assert!(cx.debug_bounds("config-menu-open").is_some());
-        assert!(cx.debug_bounds("config-menu-import").is_some());
-    }
+    scroll_to(cx, "config-handler-0-more");
+    click(cx, "config-handler-0-more");
+    assert!(cx.debug_bounds("config-menu-open").is_some());
+    assert!(cx.debug_bounds("config-menu-import").is_some());
 }
 
 #[gpui_kit::test]
@@ -5675,9 +5688,14 @@ fn dragging_a_row_moves_the_rule(cx: &mut TestAppContext) {
     assert_eq!(after[0], before[3]);
     assert_eq!(after[1], before[0]);
 
-    // Onto a rewrite: nowhere to land.
+    // Over another rule, then onto a rewrite: nowhere to land, and the
+    // rule it passed over is forgotten.
     let rewrite = cx.debug_bounds("rewrite-0").unwrap();
-    drag(cx, "handler-0", rewrite.center());
+    let third = cx.debug_bounds("handler-2").unwrap();
+    drag(cx, "handler-0", third.center());
+    assert!(cx.debug_bounds("rule-drop-tip").is_some());
+    cx.simulate_mouse_move(rewrite.center(), MouseButton::Left, Modifiers::default());
+    draw(cx);
     assert!(cx.debug_bounds("rule-drop-tip").is_none());
     cx.simulate_mouse_up(rewrite.center(), MouseButton::Left, Modifiers::default());
     draw(cx);

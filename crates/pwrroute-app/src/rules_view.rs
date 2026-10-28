@@ -720,7 +720,14 @@ fn tombstone_at(
     cx: &mut Context<'_, PwrRoute>,
 ) -> Option<Stateful<Div>> {
     let deleted = app.row_actions.deleted.as_ref().filter(|d| d.at == at)?;
-    Some(rule_menu::tombstone(deleted, false, cx))
+    let len = match at {
+        Selection::Rewrite(_) => app.rewrites.len(),
+        Selection::Handler(_) => app.handlers.len(),
+    };
+    let index = match at {
+        Selection::Rewrite(i) | Selection::Handler(i) => i,
+    };
+    Some(rule_menu::tombstone(deleted, len > 0 && index == len, cx))
 }
 
 /// The rewrites and handlers cards, which select a row for the editor.

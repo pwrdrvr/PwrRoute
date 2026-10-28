@@ -644,6 +644,26 @@ impl PwrRoute {
         )
     }
 
+    /// `rules.json`'s default browser and profile, through
+    /// [`PwrRoute::write_now`]: the Overview's setup card and Everything
+    /// else's menu.
+    pub fn write_default_browser(
+        &mut self,
+        browser: &str,
+        profile: &str,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), String> {
+        self.write_now(
+            |store| {
+                let file = store.edited();
+                let (was, was_profile) = (file.default_browser, file.default_profile);
+                store.set_default_browser(browser, profile);
+                move |store: &mut RulesStore| store.set_default_browser(&was, &was_profile)
+            },
+            cx,
+        )
+    }
+
     /// A new, empty rewrite at the end of its list, selected, with its
     /// first pattern ready to type.
     pub fn add_rewrite(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {

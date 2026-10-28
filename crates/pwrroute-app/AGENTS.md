@@ -408,7 +408,11 @@ their own modules.
   until the next `refresh`; a draft is discarded without one. Everything
   else's menu writes `defaultBrowser`/`defaultProfile` through
   `write_now`; a config's read-only row offers its file and the importer.
-  Previews (the importer's) pass no `more`.
+  Previews (the importer's) pass no `more`. The rule menu's rows are an
+  exception to `menu_row` (a move shows a count and a key, and an item
+  can be dim or danger); their labels still end in an ellipsis. The keys
+  act on the row whose menu is open, else the selected row. A drop lands
+  only on the row its line is drawn on.
 - **Rules under a Finicky config (`config_view.rs`).** The banner's switch
   "Let PwrRoute's default take everything else" is `rules.json`'s
   `precedence` (`RulesStore::set_precedence`), written at once like any
