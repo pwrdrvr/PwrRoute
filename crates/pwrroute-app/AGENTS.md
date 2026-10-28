@@ -393,6 +393,22 @@ their own modules.
   Choose another file keeps the first-run context: the file picked opens
   for first run the same way, and no file picked is a cancel. The config
   file is only ever read.
+- **A Rules row's "⋯" is real (`rule_menu.rs`; design: Rule Editing 3a,
+  3b, 4b).** `rules_view::rule_row` draws only the `more` it is given
+  (`rule_menu::more_cell`), never a bare "⋯": a rule's menu moves it
+  (top, up, down, bottom; also by dragging the row and ⌥⌘↑/⌥⌘↓),
+  duplicates it (⌘D, without its examples), turns it off, tests a link
+  with it and deletes it (⌫). Moves go through `RulesStore::move_to`,
+  which keeps each entry's id, so a rule's saved version moves with it;
+  the selection, the rail and the draft notes follow by
+  `rule_menu::shifted`. A move's count re-resolves the feed's newest
+  `IMPACT_OF` full-URL records against the written file before and after
+  (`RowActions::impact`), and says nothing below `IMPACT_MIN`. Delete
+  leaves a tombstone with Undo and ⌘Z (`RulesStore::remove`/`restore`)
+  until the next `refresh`; a draft is discarded without one. Everything
+  else's menu writes `defaultBrowser`/`defaultProfile` through
+  `write_now`; a config's read-only row offers its file and the importer.
+  Previews (the importer's) pass no `more`.
 - **Rules under a Finicky config (`config_view.rs`).** The banner's switch
   "Let PwrRoute's default take everything else" is `rules.json`'s
   `precedence` (`RulesStore::set_precedence`), written at once like any

@@ -843,14 +843,22 @@ pub fn pane(
         ..RowState::default()
     };
     let from = format!("From {} \u{00b7} read-only", config.path);
-    let rows = |card: Div, id: &'static str, rules: &[Rule]| {
+    let mut rows = |card: Div, id: &'static str, rules: &[Rule]| {
+        let rewrite = id == "config-rewrite";
         rules.iter().enumerate().fold(card, |card, (index, rule)| {
+            let more = crate::rule_menu::more_cell(
+                crate::rule_menu::MenuRow::Config { rewrite, index },
+                ElementId::named_usize(id, index + 20_000),
+                app,
+                cx,
+            );
             card.child(rule_row(
                 ElementId::named_usize(id, index),
                 &format!("{:02}", index + 1),
                 rule,
                 read_only(false),
                 None,
+                Some(more),
             ))
         })
     };
@@ -919,6 +927,7 @@ pub fn pane(
                             .flex_1(),
                         ),
                 ),
+                None,
             )
             .debug_selector(|| "config-default-struck".into())
             .bg(theme::bg_elevated())
@@ -938,6 +947,7 @@ pub fn pane(
                         .child(text("defaultBrowser", 11.0, 600.0, theme::text_primary()))
                         .child(accent_tag(EVERYTHING_ELSE_TAG)),
                 ),
+                None,
             )
             .debug_selector(|| "config-default".into())
         }
@@ -968,6 +978,12 @@ pub fn pane(
     // under the switch with a default in `rules.json`, or while the config
     // does not load.
     let everything_else = order.pwrroute_default.then(|| {
+        let more = crate::rule_menu::more_cell(
+            crate::rule_menu::MenuRow::EverythingElse,
+            "config-everything-else",
+            app,
+            cx,
+        );
         card()
             .debug_selector(|| "config-everything-else".into())
             .child(rule_row(
@@ -988,6 +1004,7 @@ pub fn pane(
                         .child(text("Everything else", 11.0, 600.0, theme::text_primary()))
                         .child(accent_tag(PWRROUTE_DEFAULT_TAG)),
                 ),
+                Some(more),
             ))
     });
 

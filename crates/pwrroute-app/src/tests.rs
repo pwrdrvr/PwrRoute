@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    Bounds, Entity, InputEvent, Modifiers, Pixels, ScrollDelta, ScrollWheelEvent, TestAppContext,
-    VisualTestContext, point, px,
+    Bounds, Entity, InputEvent, Modifiers, Pixels, Point, ScrollDelta, ScrollWheelEvent,
+    TestAppContext, VisualTestContext, point, px,
 };
 use pwrroute_engine::{Privacy, PrivacySetting, RouteTest, RulesFile, TestSource};
 use pwrroute_router::{
@@ -5357,5 +5357,344 @@ fn a_rewritten_link_starts_a_rule_for_where_it_went(cx: &mut TestAppContext) {
     view.update_in(cx, |app, _, cx| app.select(Selection::Handler(5), cx));
     draw(cx);
     assert!(cx.debug_bounds("start-suggestions").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// --- the Rules rows' "⋯" menus (design: Rule Editing 3b, 4b) ---------------
+
+/// The patterns of the saved rules, in order: what a move changed.
+fn saved_patterns(cx: &mut VisualTestContext, path: &Path) -> Vec<String> {
+    saved(cx, path)
+        .rules
+        .iter()
+        .map(|rule| rule.patterns.first().cloned().unwrap_or_default())
+        .collect()
+}
+
+#[gpui_kit::test]
+fn a_rules_menu_opens_from_its_row_and_moves_the_rule(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-move");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let before = saved_patterns(cx, &path);
+
+    // "⋯" opens the menu without selecting the row; a second click closes
+    // it.
+    click(cx, "handler-3-more");
+    assert!(cx.debug_bounds("rule-menu").is_some());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(0))
+    );
+    click(cx, "handler-3-more");
+    assert!(cx.debug_bounds("rule-menu").is_none());
+
+    // Move up: rule 4 becomes rule 3, and the file says so.
+    click(cx, "handler-3-more");
+    click(cx, "rule-menu-up");
+    assert!(cx.debug_bounds("rule-menu").is_none());
+    let after = saved_patterns(cx, &path);
+    assert_eq!(after[2], before[3]);
+    assert_eq!(after[3], before[2]);
+
+    // Move to top, then to bottom, from the row's own menu.
+    click(cx, "handler-2-more");
+    click(cx, "rule-menu-top");
+    assert_eq!(saved_patterns(cx, &path)[0], before[3]);
+    click(cx, "handler-0-more");
+    click(cx, "rule-menu-bottom");
+    let last = saved_patterns(cx, &path);
+    assert_eq!(last[last.len() - 1], before[3]);
+
+    // The selected rule follows its row, not its number: rule 1 went down
+    // one when rule 4 went to the top, and back up when it went to the
+    // bottom.
+    let selected = view.read_with(cx, |app, _| app.selection);
+    assert_eq!(selected, Some(Selection::Handler(0)));
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[0].patterns[0].clone()),
+        before[0]
+    );
+
+    // At the top, Move up and Move to top do nothing.
+    click(cx, "handler-0-more");
+    click(cx, "rule-menu-up");
+    assert!(
+        cx.debug_bounds("rule-menu").is_some(),
+        "a dim item stays open"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn the_rules_menu_duplicates_turns_off_and_tests_a_rule(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-more");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let count = saved(cx, &path).rules.len();
+
+    // Duplicate: a copy just below, selected, without the examples.
+    click(cx, "handler-1-more");
+    click(cx, "rule-menu-duplicate");
+    let file = saved(cx, &path);
+    assert_eq!(file.rules.len(), count + 1);
+    assert_eq!(file.rules[2].patterns, file.rules[1].patterns);
+    assert!(file.rules[2].examples.is_empty());
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(2))
+    );
+
+    // Turn off, then on again.
+    click(cx, "handler-0-more");
+    click(cx, "rule-menu-enabled");
+    assert!(!saved(cx, &path).rules[0].enabled);
+    click(cx, "handler-0-more");
+    click(cx, "rule-menu-enabled");
+    assert!(saved(cx, &path).rules[0].enabled);
+
+    // Test a link with this rule: Test a link, with a link its pattern
+    // matches, from the app it requires.
+    // Rule 4 now: anything from Slack.
+    click(cx, "handler-3-more");
+    click(cx, "rule-menu-test");
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::TestLink);
+    let (url, opener) = view.read_with(cx, |app, _| {
+        (
+            app.test.url.text.clone(),
+            app.test.opener().map(|o| o.name.to_string()),
+        )
+    });
+    assert!(url.starts_with("https://"), "{url}");
+    assert_eq!(opener.as_deref(), Some("Slack"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn delete_leaves_a_tombstone_that_undoes_it(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-delete");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let before = saved_patterns(cx, &path);
+
+    // Delete from the menu: gone from the file at once, with Undo where
+    // the row was.
+    click(cx, "handler-2-more");
+    click(cx, "rule-menu-delete");
+    let after = saved_patterns(cx, &path);
+    assert_eq!(after.len(), before.len() - 1);
+    assert!(cx.debug_bounds("rule-tombstone").is_some());
+    click(cx, "rule-undo-delete");
+    assert!(cx.debug_bounds("rule-tombstone").is_none());
+    assert_eq!(saved_patterns(cx, &path), before);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(2))
+    );
+
+    // The keys on the selected row: ⌫ deletes, ⌘Z puts it back.
+    cx.simulate_keystrokes("backspace");
+    draw(cx);
+    assert_eq!(saved_patterns(cx, &path).len(), before.len() - 1);
+    assert!(cx.debug_bounds("rule-tombstone").is_some());
+    cx.simulate_keystrokes("secondary-z");
+    draw(cx);
+    assert_eq!(saved_patterns(cx, &path), before);
+
+    // The next edit ends Undo.
+    cx.simulate_keystrokes("backspace");
+    draw(cx);
+    click(cx, "handler-0-more");
+    click(cx, "rule-menu-enabled");
+    assert!(cx.debug_bounds("rule-tombstone").is_none());
+    cx.simulate_keystrokes("secondary-z");
+    assert_eq!(saved_patterns(cx, &path).len(), before.len() - 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn keys_move_and_duplicate_the_selected_rule(cx: &mut TestAppContext) {
+    let dir = scratch("row-keys");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let before = saved_patterns(cx, &path);
+
+    cx.simulate_keystrokes("alt-secondary-down alt-secondary-down");
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(2))
+    );
+    assert_eq!(saved_patterns(cx, &path)[2], before[0]);
+    cx.simulate_keystrokes("alt-secondary-up");
+    draw(cx);
+    assert_eq!(saved_patterns(cx, &path)[1], before[0]);
+
+    cx.simulate_keystrokes("secondary-d");
+    draw(cx);
+    assert_eq!(saved_patterns(cx, &path).len(), before.len() + 1);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(2))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn everything_else_and_config_rows_have_working_menus(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-default");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    view.update(cx, |app, _| {
+        app.browsers = vec![
+            BrowserChoice {
+                name: "Google Chrome".into(),
+                profiles: vec!["Personal".into(), "Work".into()],
+            },
+            BrowserChoice {
+                name: "Firefox".into(),
+                profiles: Vec::new(),
+            },
+        ];
+    });
+    scroll_to(cx, "everything-else-more");
+    click(cx, "everything-else-more");
+    assert!(cx.debug_bounds("rule-menu").is_some());
+    // Google Chrome, its two profiles, then Firefox.
+    click(cx, "everything-else-choice-3");
+    assert!(cx.debug_bounds("rule-menu").is_none());
+    let file = RulesFile::load(&path).unwrap();
+    assert_eq!(file.default_browser, "Firefox");
+    assert_eq!(file.default_profile, "");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // A config's read-only row offers its file and the importer.
+    let (_, cx) = open_with(cx, Some(fixture_home().join(".finicky.ts")));
+    if cx.debug_bounds("config-handler-0-more").is_some() {
+        click(cx, "config-handler-0-more");
+        assert!(cx.debug_bounds("config-menu-open").is_some());
+        assert!(cx.debug_bounds("config-menu-import").is_some());
+    }
+}
+
+#[gpui_kit::test]
+fn a_moves_count_says_how_many_recent_links_change(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-impact");
+    let base = fixtures::activity()
+        .into_iter()
+        .find(|r| r.privacy == Privacy::Full)
+        .expect("a full record");
+    // 24 links to meet.google.com from Slack: rule 1 takes them, and rule 3
+    // (anything from Slack) would, above it.
+    let records: Vec<DispatchRecord> = (0..24)
+        .map(|i| {
+            let mut record = record_like(
+                &base,
+                1_000 + i,
+                &format!("https://meet.google.com/x{i}"),
+                Matched::Rule { index: 0 },
+            );
+            record.link.opener = Some(pwrroute_router::OpenerInfo {
+                name: "Slack".into(),
+                bundle_id: "com.tinyspeck.slackmacgap".into(),
+                ..Default::default()
+            });
+            record
+        })
+        .collect();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "handler-2-more");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.row_actions.weighed()),
+        Some(24)
+    );
+    assert!(
+        cx.debug_bounds("rule-menu-top-count").is_some(),
+        "Move to top says what changes"
+    );
+    view.update(cx, |app, cx| {
+        assert_eq!(app.impact(Selection::Handler(2), 0, cx), Some(24));
+        assert_eq!(app.impact(Selection::Handler(2), 1, cx), Some(0));
+        assert_eq!(app.impact(Selection::Handler(2), 3, cx), Some(0));
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn fewer_than_twenty_recent_links_say_nothing_about_a_move(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-few");
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "handler-2-more");
+    assert!(cx.debug_bounds("rule-menu-top-count").is_none());
+    view.update(cx, |app, cx| {
+        assert_eq!(app.impact(Selection::Handler(2), 0, cx), None);
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Design 3a: a row dragged onto another lands above or below it, in its
+/// own list only, and Esc puts it back.
+#[gpui_kit::test]
+fn dragging_a_row_moves_the_rule(cx: &mut TestAppContext) {
+    use gpui_kit::MouseButton;
+    let dir = scratch("row-drag");
+    let path = dir.join("rules.json");
+    let (_, cx) = open_store(cx, None, fixture_store(&dir));
+    let before = saved_patterns(cx, &path);
+    let drag = |cx: &mut VisualTestContext, from: &'static str, to: Point<Pixels>| {
+        let start = cx.debug_bounds(from).expect("the dragged row").center();
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        // Past GPUI's drag threshold, then over the target.
+        cx.simulate_mouse_move(
+            point(start.x, start.y - px(12.0)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        draw(cx);
+        cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::default());
+        draw(cx);
+    };
+
+    // Rule 4 onto the top half of rule 1: it becomes rule 1.
+    let first = cx.debug_bounds("handler-0").unwrap();
+    drag(
+        cx,
+        "handler-3",
+        point(first.center().x, first.top() + px(4.0)),
+    );
+    assert!(cx.debug_bounds("rule-drop-tip").is_some());
+    cx.simulate_mouse_up(
+        point(first.center().x, first.top() + px(4.0)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    draw(cx);
+    let after = saved_patterns(cx, &path);
+    assert_eq!(after[0], before[3]);
+    assert_eq!(after[1], before[0]);
+
+    // Onto a rewrite: nowhere to land.
+    let rewrite = cx.debug_bounds("rewrite-0").unwrap();
+    drag(cx, "handler-0", rewrite.center());
+    assert!(cx.debug_bounds("rule-drop-tip").is_none());
+    cx.simulate_mouse_up(rewrite.center(), MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert_eq!(saved_patterns(cx, &path), after);
+
+    // Esc puts a lifted row back.
+    let third = cx.debug_bounds("handler-2").unwrap();
+    drag(
+        cx,
+        "handler-0",
+        point(third.center().x, third.bottom() - px(4.0)),
+    );
+    assert!(cx.debug_bounds("rule-drop-tip").is_some());
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    cx.simulate_mouse_up(third.center(), MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert_eq!(saved_patterns(cx, &path), after);
     let _ = std::fs::remove_dir_all(dir);
 }
