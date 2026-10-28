@@ -29,7 +29,7 @@ Jobs and the names the "Protect main" ruleset requires:
 | `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, CI classifier tests, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
 | `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
-| `macos` | macOS (test + bundle) | self-hosted `pwrdrvr-macos` | Tests, then `cargo xtask bundle` (ad hoc signed); same-repository PRs and pushes only. |
+| `macos` | macOS (test + bundle) | self-hosted `pwrdrvr-macos` | Tests, then `cargo xtask bundle --app-only` (ad hoc signed); same-repository PRs and pushes only. |
 | `windows` | Windows (test) | windows-2025 | The tests, which compile every module of the app. |
 | `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | `cargo xtask e2e` under Xvfb, with Mesa's software Vulkan. |
 | `e2e-macos` | macOS Desktop E2E | self-hosted `pwrdrvr-macos` | `cargo xtask e2e` on a Tart guest; same-repository PRs and pushes only. |
@@ -40,6 +40,12 @@ The required check names are pinned. Renaming the `Typecheck`, `Build` or
 `Test` job leaves that check permanently pending and blocks every PR.
 `Typecheck` kept its name from the Electron scaffold; in Rust it is the lint
 chain.
+
+The self-hosted macOS job validates the app bundle, including its Info.plist
+and ad hoc signature, without creating a DMG. DMG layout drives Finder through
+AppleEvents, and Automation access is not guaranteed on the persistent Tart
+guests. Preview and release workflows still create the full DMG on
+GitHub-hosted macOS runners.
 
 ### Desktop E2E
 

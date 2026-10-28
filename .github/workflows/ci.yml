@@ -303,13 +303,15 @@ jobs:
       - name: Test
         run: cargo xtask test
 
-      # Ad hoc signed: catches a broken Info.plist or signature before a
-      # release does. No --require-icon-catalog: the guests are not known to
+      # Validate the ad hoc signed app without driving Finder to lay out a
+      # DMG: Automation access is not guaranteed on these persistent guests.
+      # Preview and release workflows still build DMGs on GitHub's runners.
+      # No --require-icon-catalog: the guests are not known to
       # carry Xcode 26's actool, so without it this falls back to the legacy
       # .icns with a warning. preview-build.yml and release.yml still require
       # the catalog on GitHub's macos-26 image.
       - name: Bundle
-        run: cargo xtask bundle
+        run: cargo xtask bundle --app-only
 
   windows:
     # No license-notice check here: it is CPU-bound (cargo-about matches every
