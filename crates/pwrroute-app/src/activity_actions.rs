@@ -1446,9 +1446,10 @@ fn choice_row(
 /// beside it in the sheet.
 const WHY_MIN: f32 = 110.0;
 
-/// A pattern longer than this may be cut in its row: it shows whole in a
-/// tooltip, and in the field under the choices.
-const PATTERN_FITS: usize = 48;
+/// A pattern longer than this may be cut in its row (about what fits
+/// beside a `WHY_MIN` explanation): it shows whole in a tooltip, and in the
+/// field under the choices.
+const PATTERN_FITS: usize = 24;
 
 /// One suggested pattern.
 fn candidate(

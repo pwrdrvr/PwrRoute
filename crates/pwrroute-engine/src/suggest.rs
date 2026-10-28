@@ -44,7 +44,7 @@ const IMPLICIT_SCHEMES: [&str; 8] = [
 ];
 
 const WHY_PAGE: &str = "Matches this page only.";
-const WHY_PAGE_ANY_QUERY: &str = "Matches this page, any query.";
+const WHY_PAGE_ANY_QUERY: &str = "Matches paths that start here, any query.";
 const WHY_SECTION: &str = "Matches everything under the first part of the path.";
 const WHY_HOST: &str = "Matches everything on this host.";
 const WHY_SCHEME: &str = "Matches every link with this scheme.";
