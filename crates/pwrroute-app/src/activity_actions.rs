@@ -1375,7 +1375,9 @@ fn help(content: impl Into<SharedString>) -> Div {
 }
 
 /// `.pat`: one Match choice, its radio, what is chosen and why. The
-/// choice keeps its width and the explanation wraps.
+/// choice takes its width up to what the explanation leaves it, then ends
+/// in an ellipsis; the explanation keeps `WHY_MIN` and wraps, so a long
+/// pattern never pushes it out of the row or stretches the row tall.
 fn choice_row(
     id: ElementId,
     selector: String,
@@ -1392,6 +1394,8 @@ fn choice_row(
         .when(selected, |radio| {
             radio.border_4().border_color(theme::accent())
         });
+    let value = format!("{selector}-value");
+    let explained = format!("{selector}-why");
     div()
         .id(id)
         .debug_selector(move || selector.clone())
@@ -1413,23 +1417,39 @@ fn choice_row(
             }
         })
         .child(radio)
-        .child(chosen.flex_none())
+        .child(chosen.min_w_0().debug_selector(move || value.clone()))
         .child(
-            div().flex_1().min_w_0().pl(px(10.0)).text_right().child(
-                paragraph(
-                    why,
-                    10.5,
-                    14.0,
-                    if selected {
-                        theme::accent_bright()
-                    } else {
-                        theme::text_muted()
-                    },
-                )
-                .font_weight(theme::weight(500.0)),
-            ),
+            div()
+                .debug_selector(move || explained.clone())
+                .flex_1()
+                .min_w(px(WHY_MIN))
+                .pl(px(10.0))
+                .text_right()
+                .child(
+                    paragraph(
+                        why,
+                        10.5,
+                        14.0,
+                        if selected {
+                            theme::accent_bright()
+                        } else {
+                            theme::text_muted()
+                        },
+                    )
+                    .font_weight(theme::weight(500.0)),
+                ),
         )
 }
+
+/// The narrowest a Match choice's explanation gets: about two words a
+/// line, so a pattern as long as `auth.example.com/authorize*` still fits
+/// beside it in the sheet.
+const WHY_MIN: f32 = 110.0;
+
+/// A pattern longer than this may be cut in its row (about what fits
+/// beside a `WHY_MIN` explanation): it shows whole in a tooltip, and in the
+/// field under the choices.
+const PATTERN_FITS: usize = 24;
 
 /// One suggested pattern.
 fn candidate(
@@ -1453,6 +1473,9 @@ fn candidate(
         )),
         why,
     )
+    .when(pattern.chars().count() > PATTERN_FITS, |row| {
+        row.tooltip(crate::overview::tip(pattern.to_owned(), None))
+    })
     .on_click(cx.listener(move |this, _, _, cx| this.pick_candidate(index, cx)))
 }
 
@@ -1476,10 +1499,12 @@ fn any_from_choice(sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> Option<St
                 .items_center()
                 .gap(px(9.0))
                 .child(badge(icon))
-                .child(text(
+                .child(one_line(
                     format!("Any link from {}", from.name),
-                    12.0,
+                    theme::SANS,
                     600.0,
+                    12.0,
+                    12.0,
                     theme::text_primary(),
                 )),
             "Every site. Turns on Sent from.",
@@ -1791,10 +1816,19 @@ fn needs_js(app: &PwrRoute, sheet: &AddRule) -> Option<Div> {
     }
     let mut lines: Vec<String> = Vec::new();
     if sheet.needs_js_now() {
+        // The reasons are sentences; the first one continues this one, so
+        // its capital goes, unless it starts an acronym ("URL").
+        let reasons = sheet.needs_js.join(" ");
+        let mut chars = reasons.chars();
+        let reasons = match (chars.next(), chars.next()) {
+            (Some(first), Some(second)) if second.is_lowercase() || second == ' ' => {
+                first.to_lowercase().chain([second]).chain(chars).collect()
+            }
+            _ => reasons.clone(),
+        };
         lines.push(format!(
-            "This needs a JS handler because {} A wildcard rule here also catches every link \
-             its pattern matches.",
-            sheet.needs_js.join(" ")
+            "This needs a JS handler because {reasons} A wildcard rule here also catches \
+             every link its pattern matches."
         ));
     }
     if let Some(config) = &app.config {

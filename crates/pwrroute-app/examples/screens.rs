@@ -678,12 +678,30 @@ fn main() {
     // Add Rule From an App 1b and 1c: a long contrived sign-in link Slack
     // sent, folded to two lines, then with "Any link from Slack" chosen.
     fn long_sign_in_link(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+        sign_in_link(
+            app,
+            "https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client.apps.\
+             example.com&redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-\
+             redirect&scope=openid%20email%20profile&access_type=offline&response_type=\
+             code&state=%7B%22key%22%3A%22demo-state-0001%22%2C%22flow%22%3A%22desktop\
+             %22%7D&prompt=consent",
+            cx,
+        );
+    }
+    // A sign-in link whose path is one segment: its patterns leave the
+    // query out (Activity Privacy and Route Tests 2c).
+    fn one_segment_sign_in_link(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+        sign_in_link(
+            app,
+            "https://auth.example.com/authorize?response_type=code&client_id=4417-demo-\
+             client&code_challenge=demo-challenge-0001-demo-challenge-0001&code_challenge_\
+             method=S256&redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-\
+             redirect&state=%7B%22key%22%3A%22demo-state-0001%22%7D&scope=read%20write",
+            cx,
+        );
+    }
+    fn sign_in_link(app: &mut PwrRoute, url: &str, cx: &mut Context<'_, PwrRoute>) {
         let mut records = fixtures::activity();
-        let url = "https://auth.example.com/o/oauth2/v2/auth?client_id=4417-demo-client.apps.\
-                   example.com&redirect_uri=https%3A%2F%2Ftracker.example%2Fauth%2Fdesktop-\
-                   redirect&scope=openid%20email%20profile&access_type=offline&response_type=\
-                   code&state=%7B%22key%22%3A%22demo-state-0001%22%2C%22flow%22%3A%22desktop\
-                   %22%7D&prompt=consent";
         let mut record = records[0].clone();
         record.id = pwrroute_router::DispatchId(99);
         record.link.url = url.into();
@@ -716,6 +734,10 @@ fn main() {
     }
     shoot("app-2b-add-rule-long-link", None, &|app, window, cx| {
         long_sign_in_link(app, cx);
+        open_long(app, window, cx);
+    });
+    shoot("app-2b-add-rule-one-segment", None, &|app, window, cx| {
+        one_segment_sign_in_link(app, cx);
         open_long(app, window, cx);
     });
     shoot("app-2b-add-rule-any-from", None, &|app, window, cx| {
