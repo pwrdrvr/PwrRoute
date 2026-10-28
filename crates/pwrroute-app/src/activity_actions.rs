@@ -1816,13 +1816,16 @@ fn needs_js(app: &PwrRoute, sheet: &AddRule) -> Option<Div> {
     }
     let mut lines: Vec<String> = Vec::new();
     if sheet.needs_js_now() {
-        // The reasons are sentences; the first one continues this one.
+        // The reasons are sentences; the first one continues this one, so
+        // its capital goes, unless it starts an acronym ("URL").
         let reasons = sheet.needs_js.join(" ");
         let mut chars = reasons.chars();
-        let reasons = chars
-            .next()
-            .map(|first| first.to_lowercase().chain(chars).collect::<String>())
-            .unwrap_or_default();
+        let reasons = match (chars.next(), chars.next()) {
+            (Some(first), Some(second)) if second.is_lowercase() || second == ' ' => {
+                first.to_lowercase().chain([second]).chain(chars).collect()
+            }
+            _ => reasons.clone(),
+        };
         lines.push(format!(
             "This needs a JS handler because {reasons} A wildcard rule here also catches \
              every link its pattern matches."
