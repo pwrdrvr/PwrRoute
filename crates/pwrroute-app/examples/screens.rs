@@ -120,6 +120,7 @@ mod router;
 #[path = "../src/rule_menu.rs"]
 mod rule_menu;
 
+#[cfg(target_os = "macos")]
 #[path = "../src/rule_pickers.rs"]
 mod rule_pickers;
 #[cfg(target_os = "macos")]
