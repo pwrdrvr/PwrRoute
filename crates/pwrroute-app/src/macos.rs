@@ -48,18 +48,20 @@ pub struct StatusItemAnchor {
 ///
 /// tray-icon reports the item in physical pixels, measured from the top-left
 /// of the primary screen, scaled by the item's own screen. GPUI opens windows
-/// relative to a display's top-left, in points. `by_pointer` says the pointer
-/// clicked the item (not `click_here`'s launch-time click), so where the
-/// pointer is now says where the item is.
+/// relative to a display's top-left, in points. `pointer` is where the
+/// pointer was when it pressed the item ([`pointer_location`]), `None` for
+/// `click_here`'s launch-time click.
 pub fn status_item_anchor(
     position: (f64, f64),
     item_size: (f64, f64),
-    by_pointer: bool,
+    pointer: Option<(f64, f64)>,
 ) -> Option<StatusItemAnchor> {
     let mtm = MainThreadMarker::new()?;
+    // Every screen or none: dropping one could make another the primary,
+    // whose height flips tray-icon's rect.
     let screens: Vec<ScreenRects> = NSScreen::screens(mtm)
         .iter()
-        .filter_map(|screen| {
+        .map(|screen| {
             Some(ScreenRects {
                 display: screen_display(&screen)?,
                 frame: screen.frame(),
@@ -67,12 +69,15 @@ pub fn status_item_anchor(
                 scale: screen.backingScaleFactor(),
             })
         })
-        .collect();
-    let pointer = by_pointer.then(|| {
-        let mouse = NSEvent::mouseLocation();
-        (mouse.x, mouse.y)
-    });
+        .collect::<Option<_>>()?;
     anchor_on(&screens, position, item_size, pointer)
+}
+
+/// Where the pointer is, in AppKit's global space (bottom-left origin, in
+/// points). Read when the item is pressed, before the click is queued.
+pub fn pointer_location() -> (f64, f64) {
+    let mouse = NSEvent::mouseLocation();
+    (mouse.x, mouse.y)
 }
 
 /// A screen as AppKit reports it, in AppKit's global space: bottom-left
@@ -93,9 +98,10 @@ struct ScreenRects {
 /// partly above the display (30pt tall, its top 1pt over the edge), or be
 /// 0x0 at the primary screen's bottom-left. So the item counts by its
 /// center, an empty one not at all, and a pointer pressing the menu bar
-/// away from the item wins over it. With neither, the dropdown opens under
-/// the primary display's menu bar at the right, never `None` while there
-/// is a screen.
+/// away from the item wins over it. A pointer off the menu bar (a press
+/// from the keyboard or VoiceOver) never counts. With neither, the dropdown
+/// opens under the primary display's menu bar at the right, never `None`
+/// while there is a screen.
 fn anchor_on(
     screens: &[ScreenRects],
     position: (f64, f64),
@@ -106,17 +112,14 @@ fn anchor_on(
     let at_pointer = pointer.and_then(|pointer| pointer_anchor(screens, pointer));
     if let Some(item) = item_anchor(screens, position, item_size) {
         return Some(match at_pointer {
-            Some((pointer, true)) if !beside(&item, &pointer) => pointer,
+            Some(pointer) if !beside(&item, &pointer) => pointer,
             _ => item,
         });
     }
-    Some(match at_pointer {
-        Some((pointer, _)) => pointer,
-        None => {
-            let width = primary.frame.size.width;
-            anchor_at(primary, width, menu_bar_height(primary))
-        }
-    })
+    Some(at_pointer.unwrap_or_else(|| {
+        let width = primary.frame.size.width;
+        anchor_at(primary, width, menu_bar_height(primary))
+    }))
 }
 
 /// The item from tray-icon's rect, on the display holding its center.
@@ -149,9 +152,9 @@ fn item_anchor(
     })
 }
 
-/// An empty item where the pointer is, as deep as the menu bar (or the
-/// pointer, below it), and whether the pointer is on the menu bar.
-fn pointer_anchor(screens: &[ScreenRects], (x, y): (f64, f64)) -> Option<(StatusItemAnchor, bool)> {
+/// An empty item where the pointer is, as deep as the menu bar; `None`
+/// unless the pointer is on a display's menu bar.
+fn pointer_anchor(screens: &[ScreenRects], (x, y): (f64, f64)) -> Option<StatusItemAnchor> {
     let screen = screens.iter().find(|screen| {
         let frame = screen.frame;
         in_frame(
@@ -166,8 +169,7 @@ fn pointer_anchor(screens: &[ScreenRects], (x, y): (f64, f64)) -> Option<(Status
     })?;
     let depth = screen.frame.origin.y + screen.frame.size.height - y;
     let menu_bar = menu_bar_height(screen);
-    let anchor = anchor_at(screen, x - screen.frame.origin.x, menu_bar.max(depth));
-    Some((anchor, depth <= menu_bar))
+    (depth <= menu_bar).then(|| anchor_at(screen, x - screen.frame.origin.x, menu_bar))
 }
 
 /// An empty item at `x` on `screen`'s top edge, `height` deep.
@@ -475,6 +477,15 @@ mod tests {
         assert_eq!(
             origin_on(&[built_in()], SHOWN, Some((700.0, 400.0))),
             Some((DisplayId::new(1), point(px(396.5), px(33.0))))
+        );
+    }
+
+    #[test]
+    fn a_pointer_off_the_menu_bar_never_places_a_hidden_item() {
+        // A press from the keyboard or VoiceOver with the pointer mid-screen.
+        assert_eq!(
+            origin_on(&[built_in()], HIDDEN, Some((700.0, 400.0))),
+            Some((DisplayId::new(1), point(px(1192.0), px(32.0))))
         );
     }
 
