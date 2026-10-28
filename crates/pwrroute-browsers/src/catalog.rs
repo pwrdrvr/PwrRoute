@@ -81,6 +81,16 @@ pub(crate) enum SingletonProtocol {
     Edge,
 }
 
+impl SingletonProtocol {
+    /// Its catalog name, for diagnostics.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Chromium => "chromium",
+            Self::Edge => "edge",
+        }
+    }
+}
+
 /// How a browser is told which profile to open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]

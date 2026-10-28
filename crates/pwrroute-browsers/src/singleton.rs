@@ -117,6 +117,8 @@ pub enum SocketError {
     Unexpected,
     /// The socket hand-off is not built for this platform.
     Unsupported,
+    /// Edge's header needs the system's uptime and there was none to read.
+    NoClock,
 }
 
 impl fmt::Display for SocketError {
@@ -139,6 +141,7 @@ impl fmt::Display for SocketError {
             Self::ShuttingDown => f.write_str("the browser is shutting down"),
             Self::Unexpected => f.write_str("an unexpected reply"),
             Self::Unsupported => f.write_str("not supported on this platform"),
+            Self::NoClock => f.write_str("no uptime clock for Edge's header"),
         }
     }
 }
@@ -319,8 +322,8 @@ pub(crate) fn send(
     };
     let (socket, remote_cookie) = locate(handoff)?;
     // Read as late as possible: these are "now" in the browser's eyes.
-    let header = header(handoff.protocol, uptime.and_then(|clock| clock()))
-        .ok_or(SocketError::Unsupported)?;
+    let header =
+        header(handoff.protocol, uptime.and_then(|clock| clock())).ok_or(SocketError::NoClock)?;
     let message = encode("/", &header, &handoff.argv)?;
     // A Unix socket's connect does not wait on macOS: a full backlog is
     // refused at once.
@@ -579,6 +582,7 @@ mod tests {
             SocketError::ShuttingDown,
             SocketError::Unexpected,
             SocketError::Unsupported,
+            SocketError::NoClock,
         ];
         for e in all {
             let text = e.to_string();
@@ -636,10 +640,7 @@ mod tests {
             let fake = Fake::new("d");
             let mut edge = handoff(&fake);
             edge.protocol = SingletonProtocol::Edge;
-            assert_eq!(
-                send(&edge, None, SOCKET_BUDGET),
-                Err(SocketError::Unsupported)
-            );
+            assert_eq!(send(&edge, None, SOCKET_BUDGET), Err(SocketError::NoClock));
         }
 
         #[test]

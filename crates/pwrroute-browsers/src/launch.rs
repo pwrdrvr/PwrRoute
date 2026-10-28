@@ -258,7 +258,7 @@ impl Plan {
     /// Delivery decisions without the program path, arguments or URL.
     pub fn diagnostic_summary(&self) -> String {
         let socket = match &self.socket {
-            Some(Ok(_)) => "ready".to_owned(),
+            Some(Ok(handoff)) => format!("ready({})", handoff.protocol.label()),
             Some(Err(error)) => format!("unavailable({error})"),
             None => format!("skipped({})", self.socket_not_used),
         };
@@ -1348,6 +1348,7 @@ mod tests {
                 let got = fake.serve(Some(b"ACK"));
                 let plan = launcher.plan(&b).unwrap().unwrap();
                 assert!(matches!(plan.socket, Some(Ok(_))), "{:?}", plan.socket);
+                assert!(plan.diagnostic_summary().contains("socket=ready(edge)"));
                 let launched = launcher.run(with_fake_open(plan, "fail")).unwrap();
                 assert_eq!(launched.delivery, Delivery::Socket);
                 let message = got.recv().unwrap();
