@@ -88,39 +88,126 @@ struct ScreenRects {
 /// [`status_item_anchor`] apart from AppKit. `screens` start with the
 /// primary one (the menu bar's, at the origin); `position` and `item_size`
 /// are tray-icon's; `pointer` is where the pointer is, in AppKit's space.
+///
+/// macOS 27 draws status items for the app: the item's own window can sit
+/// partly above the display (30pt tall, its top 1pt over the edge), or be
+/// 0x0 at the primary screen's bottom-left. So the item counts by its
+/// center, an empty one not at all, and a pointer pressing the menu bar
+/// away from the item wins over it. With neither, the dropdown opens under
+/// the primary display's menu bar at the right, never `None` while there
+/// is a screen.
 fn anchor_on(
     screens: &[ScreenRects],
     position: (f64, f64),
     item_size: (f64, f64),
-    _pointer: Option<(f64, f64)>,
+    pointer: Option<(f64, f64)>,
 ) -> Option<StatusItemAnchor> {
+    let primary = screens.first()?;
+    let at_pointer = pointer.and_then(|pointer| pointer_anchor(screens, pointer));
+    if let Some(item) = item_anchor(screens, position, item_size) {
+        return Some(match at_pointer {
+            Some((pointer, true)) if !beside(&item, &pointer) => pointer,
+            _ => item,
+        });
+    }
+    Some(match at_pointer {
+        Some((pointer, _)) => pointer,
+        None => {
+            let width = primary.frame.size.width;
+            anchor_at(primary, width, menu_bar_height(primary))
+        }
+    })
+}
+
+/// The item from tray-icon's rect, on the display holding its center.
+fn item_anchor(
+    screens: &[ScreenRects],
+    position: (f64, f64),
+    item_size: (f64, f64),
+) -> Option<StatusItemAnchor> {
+    if item_size.0 < 1.0 || item_size.1 < 1.0 {
+        return None;
+    }
     let primary_height = screens.first()?.frame.size.height;
-    for screen in screens {
+    screens.iter().find_map(|screen| {
         let scale = screen.scale;
         let frame = screen.frame;
         let left = frame.origin.x;
         let top = primary_height - (frame.origin.y + frame.size.height);
         let (x, y) = (position.0 / scale, position.1 / scale);
-        let inside = (left..left + frame.size.width).contains(&x)
-            && (top..top + frame.size.height).contains(&y);
-        if !inside {
-            continue;
-        }
-        return Some(StatusItemAnchor {
-            display: screen.display,
+        let (width, height) = (item_size.0 / scale, item_size.1 / scale);
+        let (center_x, center_y) = (x + width / 2.0, y + height / 2.0);
+        let inside = (left..left + frame.size.width).contains(&center_x)
+            && (top..top + frame.size.height).contains(&center_y);
+        inside.then(|| StatusItemAnchor {
             item: Bounds {
                 origin: point(px((x - left) as f32), px((y - top) as f32)),
-                size: size(
-                    px((item_size.0 / scale) as f32),
-                    px((item_size.1 / scale) as f32),
-                ),
+                size: size(px(width as f32), px(height as f32)),
             },
-            display_size: size(px(frame.size.width as f32), px(frame.size.height as f32)),
-            visible_bottom: px(visible_bottom(frame, screen.visible) as f32),
-        });
-    }
-    None
+            ..anchor_at(screen, 0.0, 0.0)
+        })
+    })
 }
+
+/// An empty item where the pointer is, as deep as the menu bar (or the
+/// pointer, below it), and whether the pointer is on the menu bar.
+fn pointer_anchor(screens: &[ScreenRects], (x, y): (f64, f64)) -> Option<(StatusItemAnchor, bool)> {
+    let screen = screens.iter().find(|screen| {
+        let frame = screen.frame;
+        in_frame(
+            (
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            ),
+            (x, y),
+        )
+    })?;
+    let depth = screen.frame.origin.y + screen.frame.size.height - y;
+    let menu_bar = menu_bar_height(screen);
+    let anchor = anchor_at(screen, x - screen.frame.origin.x, menu_bar.max(depth));
+    Some((anchor, depth <= menu_bar))
+}
+
+/// An empty item at `x` on `screen`'s top edge, `height` deep.
+fn anchor_at(screen: &ScreenRects, x: f64, height: f64) -> StatusItemAnchor {
+    let frame = screen.frame;
+    StatusItemAnchor {
+        display: screen.display,
+        item: Bounds {
+            origin: point(px(x as f32), px(0.0)),
+            size: size(px(0.0), px(height as f32)),
+        },
+        display_size: size(px(frame.size.width as f32), px(frame.size.height as f32)),
+        visible_bottom: px(visible_bottom(frame, screen.visible) as f32),
+    }
+}
+
+/// Whether the pointer's anchor is on the item, give or take a few points.
+fn beside(item: &StatusItemAnchor, pointer: &StatusItemAnchor) -> bool {
+    let slack = px(DROPDOWN_MARGIN);
+    let x = pointer.item.origin.x;
+    item.display == pointer.display
+        && x >= item.item.origin.x - slack
+        && x <= item.item.origin.x + item.item.size.width + slack
+}
+
+/// The menu bar's height on `screen`: down to its visible area, or
+/// [`MENU_BAR_HEIGHT`] when the menu bar hides itself.
+fn menu_bar_height(screen: &ScreenRects) -> f64 {
+    let frame_top = screen.frame.origin.y + screen.frame.size.height;
+    let visible_top = screen.visible.origin.y + screen.visible.size.height;
+    let height = frame_top - visible_top;
+    if height < 1.0 {
+        MENU_BAR_HEIGHT
+    } else {
+        height
+    }
+}
+
+/// A menu bar's height without a notch, for a menu bar that hides itself.
+const MENU_BAR_HEIGHT: f64 = 24.0;
 
 /// The display GPUI knows `screen` by.
 fn screen_display(screen: &NSScreen) -> Option<DisplayId> {
