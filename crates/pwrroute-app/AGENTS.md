@@ -429,7 +429,12 @@ their own modules.
   `mcp-agents.json`.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
-  `PopUp` window (design 1a/1b); recents there are hosts only
+  `PopUp` window (design 1a/1b) under the item
+  (`macos::status_item_anchor`). macOS 27 draws status items itself, and
+  the item's own window can poke 1pt above the display or be 0x0 at the
+  primary screen's corner, so the item counts by its center, an empty one
+  not at all, and a pointer pressing the menu bar away from it wins
+  (`macos::anchor_on`). Recents there are hosts only
   (`model::host_of`), from the feed. Pause routing is
   `RouterHandle::set_paused` from `tray::toggle_pause`, with the target
   `tray::pause_target` names: `rules.json`'s `defaultBrowser` and
