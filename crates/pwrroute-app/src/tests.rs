@@ -1917,6 +1917,108 @@ fn the_add_rule_sheet_folds_a_long_link(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A sign-in link whose path is one segment and whose query is long: the
+/// patterns leave the query out (design: Activity Privacy and Route Tests
+/// 2c), an OAuth redirect_uri is no reason for JS, and a pattern too long
+/// for its row ends in an ellipsis inside the sheet instead of pushing its
+/// explanation out and stretching the row.
+#[gpui_kit::test]
+fn the_add_rule_sheet_keeps_long_patterns_in_their_rows(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-long-pattern");
+    let records = fixtures::activity();
+    let sign_in = format!(
+        "https://auth.example.com/authorize?response_type=code&client_id=demo\
+         &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&state={}",
+        "x".repeat(300)
+    );
+    let long_path = format!("https://docs.example.com/{}?page=2", "a".repeat(240));
+    let mut feed = records.clone();
+    feed.push(record_like(
+        &records[2],
+        98,
+        &sign_in,
+        Matched::Default { owner: None },
+    ));
+    feed.push(record_like(
+        &records[2],
+        99,
+        &long_path,
+        Matched::Default { owner: None },
+    ));
+    cx.update(|cx| activity::install_feed(Feed::from_records(feed), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    let open = |id: u64, view: &Entity<PwrRoute>, cx: &mut VisualTestContext| {
+        view.update_in(cx, |app, window, cx| {
+            app.add_rule(
+                RowKey {
+                    id: DispatchId(id),
+                    journaled: false,
+                },
+                window,
+                cx,
+            );
+        });
+        draw(cx);
+    };
+
+    open(98, &view, cx);
+    let (candidates, needs_js) = view.read_with(cx, |app, _| {
+        let sheet = app.actions.sheet.as_ref().unwrap();
+        (
+            sheet
+                .candidates
+                .iter()
+                .map(|(p, _)| p.clone())
+                .collect::<Vec<_>>(),
+            sheet.needs_js.clone(),
+        )
+    });
+    assert_eq!(
+        candidates,
+        ["auth.example.com/authorize*", "auth.example.com/*"]
+    );
+    assert!(needs_js.is_empty(), "{needs_js:?}");
+    click(cx, "add-rule-cancel");
+
+    open(99, &view, cx);
+    let pattern = view.read_with(cx, |app, _| {
+        app.actions.sheet.as_ref().unwrap().candidates[0].0.clone()
+    });
+    assert!(pattern.len() > 200 && !pattern.contains('?'), "{pattern}");
+    let sheet = cx.debug_bounds("add-rule-sheet").expect("the sheet");
+    for row in ["add-rule-candidate-0", "add-rule-candidate-1"] {
+        let bounds = cx.debug_bounds(row).expect(row);
+        let value = cx
+            .debug_bounds(format!("{row}-value").leak())
+            .expect("the pattern");
+        let why = cx
+            .debug_bounds(format!("{row}-why").leak())
+            .expect("the explanation");
+        assert!(
+            bounds.size.height <= px(80.0),
+            "{row} is {:?} tall",
+            bounds.size.height
+        );
+        assert!(
+            bounds.right() <= sheet.right(),
+            "{row} ends at {:?}, past the sheet at {:?}",
+            bounds.right(),
+            sheet.right()
+        );
+        // The pattern stops before its explanation, which keeps its room.
+        assert!(
+            value.right() <= why.left(),
+            "{row}'s pattern runs to {:?}, over its explanation at {:?}",
+            value.right(),
+            why.left()
+        );
+        assert!(why.right() <= bounds.right(), "{row}'s explanation is cut");
+        assert!(why.size.width >= px(100.0), "{:?}", why.size.width);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Activity with the fixture records, a window over the fixture rules in
 /// `dir`, and `config` in charge when given.
 fn open_activity<'a>(
