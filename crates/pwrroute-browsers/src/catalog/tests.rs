@@ -96,15 +96,16 @@ fn singleton_protocols_are_explicit_and_sourced() {
             );
         }
     }
-    assert_eq!(
-        catalog().find("edge").unwrap().singleton_protocol,
-        Some(SingletonProtocol::Edge)
-    );
-    // Being a Chromium browser does not establish wire compatibility: these
-    // were never captured.
-    for id in ["edge-beta", "edge-dev", "edge-canary", "brave"] {
-        assert_eq!(catalog().find(id).unwrap().singleton_protocol, None, "{id}");
+    // Every Edge channel speaks Edge's protocol.
+    for id in ["edge", "edge-beta", "edge-dev", "edge-canary"] {
+        assert_eq!(
+            catalog().find(id).unwrap().singleton_protocol,
+            Some(SingletonProtocol::Edge),
+            "{id}"
+        );
     }
+    // Being a Chromium browser does not establish wire compatibility.
+    assert_eq!(catalog().find("brave").unwrap().singleton_protocol, None);
 }
 
 /// Every identifier a config can use finds its own entry, so no entry

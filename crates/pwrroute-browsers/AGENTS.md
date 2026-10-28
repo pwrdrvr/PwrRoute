@@ -65,7 +65,7 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   dry run says which way a link goes). The catalog's `singleton_protocol`
   must explicitly opt in with a protocol source; never infer compatibility
   from the engine, since a browser replies `ACK` to a header it misreads.
-  `chromium` is upstream's; `edge` (Microsoft Edge) adds two fields after
+  `chromium` is upstream's; `edge` (every Microsoft Edge channel) adds two fields after
   the cwd: the wall clock in microseconds since 1601 and the uptime in
   microseconds, sleep excluded, read at send time (`singleton::header`;
   the uptime comes from `Launcher::with_uptime`, else Edge keeps `open`).
