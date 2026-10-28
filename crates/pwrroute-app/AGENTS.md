@@ -103,7 +103,14 @@ their own modules.
   forget the hovered row (GPUI reports hover only on a move), as the
   Overview's `forget_pointer` does. The menu item, the button's tooltip
   (`overview::tip_with_key`) and the primary button show the key. The
-  feed also keeps today's `Tally` (links per rule, handler and default owner, and per
+  sheet's head cuts the link at two lines (Show full link past
+  `LINK_FITS` characters), and a record that names its app offers "Any
+  link from <app>" above the patterns (design: Add Rule From an App): the
+  pattern `*` with Sent from on, which `AddRule::toggle_only_from` never
+  leaves on its own (off goes back to the narrowest pattern). With Sent
+  from on, Also catches lists only that app's links, compared as
+  `rules[].opener` is. The feed also keeps
+  today's `Tally` (links per rule, handler and default owner, and per
   browser and profile), reset with the day, for the Overview's map.
 - **Overview is where every window lands (`overview_model.rs`,
   `overview.rs`).** `Screen::Overview` is the default and the rail's first

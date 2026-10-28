@@ -27,9 +27,9 @@ use std::time::SystemTime;
 use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Context, Div, ElementId, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    Window, deferred, div, px,
+    AnyElement, App, Context, Div, ElementId, HighlightStyle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Window, deferred, div, px,
 };
 use pwrroute_engine::{
     self as engine, Expectation, Opener, Precedence, Privacy, RouteTest, Source, Stage,
@@ -44,8 +44,8 @@ use crate::rules_store::Status;
 use crate::text_field::{Edit, TextField};
 use crate::theme::{self, mono, text, tracked};
 use crate::widgets::{
-    ButtonKind, badge, badge_for, button, caret, field_label, input_box, menu_card, menu_row,
-    one_line, paragraph, profiles_hint, segment, segmented, switch,
+    AppBadge, ButtonKind, badge, badge_for, button, caret, field_label, input_box, menu_card,
+    menu_row, one_line, paragraph, profiles_hint, segment, segmented, switch,
 };
 
 /// A browser the sheet offers, with the profiles it has on this machine.
@@ -186,6 +186,17 @@ pub struct AddRule {
     pub config: Option<String>,
     /// The rule also requires the link to come from `from`.
     pub only_from: bool,
+    /// Match is "Any link from <app>": the pattern is [`ANY_LINK`] and
+    /// `only_from` is on (design: Add Rule From an App 1c).
+    pub any_from: bool,
+    /// `only_from` as it was before "Any link from <app>" turned it on,
+    /// put back when a pattern is chosen instead.
+    only_from_before: bool,
+    /// The link in the head is shown whole, not cut at two lines.
+    pub url_expanded: bool,
+    /// "9 query parameters", beside Show full link, when the link has a
+    /// query: counted once, since the link never changes.
+    pub query_summary: Option<String>,
     pub browser: String,
     /// The browser this link opened in, offered in the browser list (as
     /// "where it opened") when the scan does not list it.
@@ -226,6 +237,7 @@ impl AddRule {
     /// nobody chose.
     pub fn new(record: &DispatchRecord, cx: &mut App) -> Self {
         let url = matched_url(record).to_owned();
+        let query_summary = query_summary(&url);
         let suggestion = suggest_rule(&url);
         let candidates: Vec<(String, &'static str)> = suggestion
             .candidates
@@ -261,6 +273,10 @@ impl AddRule {
             rules_first: true,
             config: None,
             only_from: false,
+            any_from: false,
+            only_from_before: false,
+            url_expanded: false,
+            query_summary,
             browser: String::new(),
             opened_in: record
                 .browser
@@ -311,6 +327,105 @@ impl AddRule {
         }
     }
 
+    /// How the rule names the sending app: its bundle id, else its name,
+    /// as `rules[].opener` and the router compare them.
+    pub fn sender_spec(&self) -> Option<String> {
+        self.from.as_ref().map(|app| {
+            if app.bundle_id.is_empty() {
+                app.name.clone()
+            } else {
+                app.bundle_id.clone()
+            }
+        })
+    }
+
+    /// The link's host and path, drawn brighter than the rest of it, as a
+    /// byte length: everything before the query or fragment.
+    pub fn url_lead(&self) -> usize {
+        self.url.find(['?', '#']).unwrap_or(self.url.len())
+    }
+
+    /// Whether the link may run past the head's two lines, so the head
+    /// offers Show full link.
+    pub fn url_is_long(&self) -> bool {
+        self.url.chars().count() > LINK_FITS
+    }
+
+    /// Whether the sheet still needs a JS handler for a precise rule: never
+    /// for "Any link from <app>", which `rules.json` holds as it is.
+    pub fn needs_js_now(&self) -> bool {
+        !self.any_from && !self.needs_js.is_empty()
+    }
+
+    /// "Any link from <app>" (design: Add Rule From an App 1c): the
+    /// pattern becomes [`ANY_LINK`] and Sent from turns on. Only for a
+    /// record that names its app.
+    pub fn choose_any_from(&mut self) {
+        if self.from.is_none() || self.disabled.is_some() {
+            return;
+        }
+        if !self.any_from {
+            self.only_from_before = self.only_from;
+        }
+        self.any_from = true;
+        self.only_from = true;
+        self.selected = None;
+        self.pattern.set(ANY_LINK);
+        self.problem = None;
+    }
+
+    /// One of the suggested patterns. Leaving "Any link from <app>" puts
+    /// Sent from back where it was.
+    pub fn choose_candidate(&mut self, index: usize) {
+        let Some((pattern, _)) = self.candidates.get(index) else {
+            return;
+        };
+        self.pattern.set(pattern.clone());
+        self.selected = Some(index);
+        if self.any_from {
+            self.any_from = false;
+            self.only_from = self.only_from_before;
+        }
+        self.problem = None;
+    }
+
+    /// The Sent from switch. Off while Match is "Any link from <app>" goes
+    /// back to the narrowest pattern, so the sheet never offers a rule that
+    /// takes every link from every app.
+    pub fn toggle_only_from(&mut self) {
+        // Any link from the app always has Sent from on.
+        if self.any_from {
+            self.any_from = false;
+            self.only_from = false;
+            match self.candidates.first() {
+                Some((pattern, _)) => {
+                    self.pattern.set(pattern.clone());
+                    self.selected = Some(0);
+                }
+                None => {
+                    self.pattern.set(String::new());
+                    self.selected = None;
+                }
+            }
+        } else {
+            self.only_from = !self.only_from;
+        }
+        self.problem = None;
+    }
+
+    /// After a keystroke in the pattern field: which choice it is now.
+    fn pattern_typed(&mut self) {
+        let typed = self.pattern.text.trim().to_owned();
+        self.selected = self.candidates.iter().position(|(p, _)| *p == typed);
+        let any_from = typed == ANY_LINK && self.only_from && self.from.is_some();
+        // Entering it by hand: Sent from was already on.
+        if any_from && !self.any_from {
+            self.only_from_before = true;
+        }
+        self.any_from = any_from;
+        self.problem = None;
+    }
+
     /// The rule the sheet would add, with the link as its example. A rule
     /// that requires the sending app gets no example, since examples run
     /// from no app: the link goes in as a test instead ([`AddRule::test`]).
@@ -320,12 +435,8 @@ impl AddRule {
         if pattern.is_empty() || self.browser.trim().is_empty() || self.disabled.is_some() {
             return None;
         }
-        let opener = match (&self.from, self.only_from) {
-            (Some(app), true) => vec![if app.bundle_id.is_empty() {
-                app.name.clone()
-            } else {
-                app.bundle_id.clone()
-            }],
+        let opener = match self.sender_spec() {
+            Some(app) if self.only_from => vec![app],
             _ => Vec::new(),
         };
         // Written only when it differs from what `private` implies, so a
@@ -402,13 +513,25 @@ impl AddRule {
     /// config first, and otherwise may move.
     pub fn collision_caption(&self) -> String {
         let n = self.collisions.len();
+        let app = self
+            .from
+            .as_ref()
+            .filter(|_| self.only_from)
+            .map(|app| app.name.as_str());
         if n == 0 {
-            return "No other recent link matches this pattern.".into();
+            return match app {
+                Some(app) if self.any_from => format!("No other recent link came from {app}."),
+                Some(app) => format!("No other recent link from {app} matches this pattern."),
+                None => "No other recent link matches this pattern.".into(),
+            };
         }
-        let head = format!(
+        let mut head = format!(
             "Would also catch these {n} recent {}",
             plural(n, "link", "links")
         );
+        if let Some(app) = app {
+            head = format!("{head} from {app}");
+        }
         let top = self.position == Position::Top;
         let (mut moved_rules, mut moved_config, mut moved_unknown) = (0, 0, 0);
         let (mut kept_rules, mut kept_config, mut kept_unknown, mut maybe) = (0, 0, 0, 0);
@@ -472,6 +595,22 @@ impl AddRule {
     }
 }
 
+/// The pattern of "Any link from <app>": Finicky's wildcard for every link.
+pub const ANY_LINK: &str = "*";
+
+/// A link longer than this may not fit the head's two lines, so the head
+/// offers Show full link (design: Add Rule From an App 1b). The sheet's
+/// 524px of 11px mono hold about 79 characters a line; a link that fits on
+/// one line never runs past two however the wrapper breaks it, while a
+/// longer one can (a long token moved whole to the next line).
+const LINK_FITS: usize = 72;
+
+/// "9 query parameters" for a link with a query.
+fn query_summary(url: &str) -> Option<String> {
+    let count = url::Url::parse(url).ok()?.query_pairs().count();
+    (count > 0).then(|| format!("{count} query {}", plural(count, "parameter", "parameters")))
+}
+
 /// `one` for 1, else `many`.
 fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
     if n == 1 { one } else { many }
@@ -524,6 +663,14 @@ fn opener_spec(opener: &OpenerInfo) -> Option<String> {
 /// or the journal for a journaled row.
 fn record(key: RowKey, cx: &App) -> Option<DispatchRecord> {
     activity::feed(cx)?.read(cx).record(key)
+}
+
+/// Whether `record` came from `app` (a name or bundle id), compared as the
+/// router's `rules[].opener` compares them: either, ignoring case.
+fn sent_by(record: &DispatchRecord, app: &str) -> bool {
+    record.link.opener.as_ref().is_some_and(|opener| {
+        opener.name.eq_ignore_ascii_case(app) || opener.bundle_id.eq_ignore_ascii_case(app)
+    })
 }
 
 /// The same rule, whatever examples each keeps.
@@ -741,12 +888,18 @@ impl PwrRoute {
         let Some(feed) = activity::feed(cx) else {
             return;
         };
+        // A rule that requires the app only ever sees that app's links.
+        let opener = sheet.sender_spec().filter(|_| sheet.only_from);
         let records: Vec<DispatchRecord> = feed
             .read(cx)
             .records()
             .iter()
             .filter(|r| (sheet.key.journaled || r.id != sheet.key.id) && r.privacy == Privacy::Full)
             .filter(|r| !matches!(r.outcome, Outcome::Failed))
+            .filter(|r| match &opener {
+                Some(app) => sent_by(r, app),
+                None => true,
+            })
             .cloned()
             .collect();
         let urls: Vec<&str> = records.iter().map(matched_url).collect();
@@ -772,12 +925,29 @@ impl PwrRoute {
         let Some(mut sheet) = self.actions.sheet.take() else {
             return;
         };
-        if let Some((pattern, _)) = sheet.candidates.get(index) {
-            sheet.pattern.set(pattern.clone());
-            sheet.selected = Some(index);
-            sheet.problem = None;
-            self.find_collisions(&mut sheet, cx);
-        }
+        sheet.choose_candidate(index);
+        self.find_collisions(&mut sheet, cx);
+        self.actions.sheet = Some(sheet);
+        cx.notify();
+    }
+
+    /// Picks "Any link from <app>".
+    pub fn pick_any_from(&mut self, cx: &mut Context<'_, Self>) {
+        self.change_match(AddRule::choose_any_from, cx);
+    }
+
+    /// The Sent from switch, which changes what the rule catches.
+    pub fn toggle_only_from(&mut self, cx: &mut Context<'_, Self>) {
+        self.change_match(AddRule::toggle_only_from, cx);
+    }
+
+    /// A change to what the rule matches: the collisions follow it.
+    fn change_match(&mut self, change: impl FnOnce(&mut AddRule), cx: &mut Context<'_, Self>) {
+        let Some(mut sheet) = self.actions.sheet.take() else {
+            return;
+        };
+        change(&mut sheet);
+        self.find_collisions(&mut sheet, cx);
         self.actions.sheet = Some(sheet);
         cx.notify();
     }
@@ -789,9 +959,7 @@ impl PwrRoute {
         };
         let edit = sheet.pattern.key(&event.keystroke, cx);
         if edit == Edit::Changed {
-            let typed = sheet.pattern.text.trim().to_owned();
-            sheet.selected = sheet.candidates.iter().position(|(p, _)| *p == typed);
-            sheet.problem = None;
+            sheet.pattern_typed();
             self.find_collisions(&mut sheet, cx);
         }
         self.actions.sheet = Some(sheet);
@@ -1200,13 +1368,14 @@ fn help(content: impl Into<SharedString>) -> Div {
     paragraph(content, 10.5, 15.75, theme::text_subtle()).max_w(px(360.0))
 }
 
-/// `.pat`: one suggested pattern, its radio and why.
-fn candidate(
-    index: usize,
-    pattern: &str,
-    why: &'static str,
+/// `.pat`: one Match choice, its radio, what is chosen and why. The
+/// choice keeps its width and the explanation wraps.
+fn choice_row(
+    id: ElementId,
+    selector: String,
     selected: bool,
-    cx: &mut Context<'_, PwrRoute>,
+    chosen: Div,
+    why: &'static str,
 ) -> Stateful<Div> {
     let radio = div()
         .flex_none()
@@ -1218,8 +1387,8 @@ fn candidate(
             radio.border_4().border_color(theme::accent())
         });
     div()
-        .id(("add-rule-candidate", index))
-        .debug_selector(move || format!("add-rule-candidate-{index}"))
+        .id(id)
+        .debug_selector(move || selector.clone())
         .flex()
         .items_center()
         .gap(px(9.0))
@@ -1238,16 +1407,7 @@ fn candidate(
             }
         })
         .child(radio)
-        // The pattern is what is chosen: it keeps its width and the
-        // explanation wraps.
-        .child(div().flex_none().child(one_line(
-            pattern.to_owned(),
-            theme::mono_family(500.0),
-            500.0,
-            11.5,
-            11.5,
-            theme::text_primary(),
-        )))
+        .child(chosen.flex_none())
         .child(
             div().flex_1().min_w_0().pl(px(10.0)).text_right().child(
                 paragraph(
@@ -1263,7 +1423,136 @@ fn candidate(
                 .font_weight(theme::weight(500.0)),
             ),
         )
-        .on_click(cx.listener(move |this, _, _, cx| this.pick_candidate(index, cx)))
+}
+
+/// One suggested pattern.
+fn candidate(
+    index: usize,
+    pattern: &str,
+    why: &'static str,
+    selected: bool,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Stateful<Div> {
+    choice_row(
+        ElementId::NamedInteger("add-rule-candidate".into(), index as u64),
+        format!("add-rule-candidate-{index}"),
+        selected,
+        div().child(one_line(
+            pattern.to_owned(),
+            theme::mono_family(500.0),
+            500.0,
+            11.5,
+            11.5,
+            theme::text_primary(),
+        )),
+        why,
+    )
+    .on_click(cx.listener(move |this, _, _, cx| this.pick_candidate(index, cx)))
+}
+
+/// `.pat.app`: "Any link from <app>", above the patterns (design: Add Rule
+/// From an App 1b).
+fn any_from_choice(sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> Option<Stateful<Div>> {
+    let from = sheet.from.as_ref()?;
+    let app = [&from.path, &from.bundle_id, &from.name]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_default();
+    let icon = AppBadge::new(badge_for(&from.name).letters().clone(), app);
+    Some(
+        choice_row(
+            "add-rule-any-from".into(),
+            "add-rule-any-from".into(),
+            sheet.any_from,
+            div()
+                .flex()
+                .items_center()
+                .gap(px(9.0))
+                .child(badge(icon))
+                .child(text(
+                    format!("Any link from {}", from.name),
+                    12.0,
+                    600.0,
+                    theme::text_primary(),
+                )),
+            "Every site. Turns on Sent from.",
+        )
+        .on_click(cx.listener(|this, _, _, cx| this.pick_any_from(cx))),
+    )
+}
+
+/// The link in the sheet's head: host and path brighter than the query,
+/// cut at two lines with Show full link (design: Add Rule From an App 1b,
+/// 1d).
+fn head_link(sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> Div {
+    let lead = sheet.url_lead();
+    let link = StyledText::new(sheet.url.clone()).with_highlights([(
+        0..lead,
+        HighlightStyle {
+            color: Some(theme::text_primary()),
+            ..HighlightStyle::default()
+        },
+    )]);
+    let long = sheet.url_is_long();
+    let expanded = sheet.url_expanded;
+    let body = div()
+        .id("add-rule-link")
+        .debug_selector(|| "add-rule-link".into())
+        .mt(px(4.0))
+        .font_family(theme::mono_family(500.0))
+        .font_weight(theme::weight(500.0))
+        .text_size(px(11.0))
+        .line_height(px(16.5))
+        .text_color(theme::text_secondary())
+        .map(|body| {
+            if expanded {
+                // Eight lines, then it scrolls.
+                body.max_h(px(132.0)).overflow_y_scroll()
+            } else {
+                body.line_clamp(2).text_ellipsis()
+            }
+        })
+        .child(link);
+    div().flex().flex_col().child(body).when(long, |head| {
+        let label = if expanded {
+            "Show less"
+        } else {
+            "Show full link"
+        };
+        head.child(
+            div()
+                .mt(px(5.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                            .id("add-rule-link-toggle")
+                            .debug_selector(|| "add-rule-link-toggle".into())
+                            .cursor_pointer()
+                            .child(text(label, 10.5, 500.0, theme::accent_bright()))
+                            // Only the view changes: a warning from Add stays.
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(sheet) = &mut this.actions.sheet {
+                                    sheet.url_expanded = !sheet.url_expanded;
+                                    cx.notify();
+                                }
+                            })),
+                )
+                .when_some(
+                    sheet.query_summary.clone().filter(|_| !expanded),
+                    |row, summary| {
+                        row.child(text(
+                            format!("\u{00b7} {summary}"),
+                            10.5,
+                            500.0,
+                            theme::text_subtle(),
+                        ))
+                    },
+                ),
+        )
+    })
 }
 
 /// `.coll`: the recent links the pattern would also catch.
@@ -1280,15 +1569,19 @@ fn collisions(sheet: &AddRule) -> Div {
                 .py(px(6.0))
                 .px(px(10.0))
                 .bg(theme::bg_elevated())
-                .child(text(
-                    sheet
-                        .collision_error
-                        .clone()
-                        .unwrap_or_else(|| sheet.collision_caption()),
-                    10.5,
-                    600.0,
-                    theme::text_secondary(),
-                )),
+                // The caption wraps: who keeps what can take a sentence.
+                .child(
+                    paragraph(
+                        sheet
+                            .collision_error
+                            .clone()
+                            .unwrap_or_else(|| sheet.collision_caption()),
+                        10.5,
+                        13.65,
+                        theme::text_secondary(),
+                    )
+                    .font_weight(theme::weight(600.0)),
+                ),
         );
     sheet
         .collisions
@@ -1382,6 +1675,9 @@ fn pattern_field(
                 .bg(theme::accent())
                 .ml(px(-8.0)),
         );
+    }
+    if sheet.any_from {
+        inner = inner.child(text("any link", 10.5, 500.0, theme::text_muted()).ml(px(2.0)));
     }
     inner = inner.child(
         div()
@@ -1593,11 +1889,11 @@ pub(crate) fn config_hint(path: &str, rules_first: bool) -> String {
 
 /// `.needjs`: why a precise rule needs a JS config, when it does.
 fn needs_js(app: &PwrRoute, sheet: &AddRule) -> Option<Div> {
-    if sheet.needs_js.is_empty() && app.config.is_none() {
+    if !sheet.needs_js_now() && app.config.is_none() {
         return None;
     }
     let mut lines: Vec<String> = Vec::new();
-    if !sheet.needs_js.is_empty() {
+    if sheet.needs_js_now() {
         lines.push(format!(
             "This needs a JS handler because {} A wildcard rule here also catches every link \
              its pattern matches.",
@@ -1645,16 +1941,33 @@ fn sheet_body(
             ))
         },
     );
+    let any_from = any_from_choice(sheet, cx);
+    let sub = if any_from.is_some() {
+        "Every link from the app, or a pattern, narrowest first. The query and fragment are \
+         left out."
+    } else {
+        "Narrowest first. The query and fragment are left out."
+    };
+    let choices = match any_from {
+        Some(any_from) => div().flex().flex_col().gap(px(5.0)).child(any_from).when(
+            !sheet.candidates.is_empty(),
+            |list| {
+                list.child(
+                    tracked("or by pattern", 9.0, 600.0, 0.14, theme::text_subtle())
+                        .mt(px(3.0))
+                        .mb(px(1.0)),
+                )
+                .child(candidates)
+            },
+        ),
+        None => div().when(!sheet.candidates.is_empty(), |list| list.child(candidates)),
+    };
     let mut body: Vec<AnyElement> = Vec::new();
     body.push(
         field(
             "Match",
-            Some("Narrowest first. The query and fragment are left out."),
-            div()
-                .when(!sheet.candidates.is_empty(), |field| {
-                    field.child(candidates)
-                })
-                .child(pattern_field(sheet, window, cx)),
+            Some(sub),
+            div().child(choices).child(pattern_field(sheet, window, cx)),
         )
         .into_any_element(),
     );
@@ -1685,10 +1998,7 @@ fn sheet_body(
                                     .cursor_pointer()
                                     .child(switch(sheet.only_from))
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_add_rule(
-                                            |sheet| sheet.only_from = !sheet.only_from,
-                                            cx,
-                                        );
+                                        this.toggle_only_from(cx);
                                     })),
                             )
                             .child(text(
@@ -1698,9 +2008,14 @@ fn sheet_body(
                                 theme::text_primary(),
                             )),
                     )
-                    .child(help(format!(
-                        "{name} sent this one. Off, the rule matches a link from any app."
-                    ))),
+                    .child(help(if sheet.any_from {
+                        format!(
+                            "On because Match is any link from {name}. Off goes back to the \
+                             narrowest pattern."
+                        )
+                    } else {
+                        format!("{name} sent this one. Off, the rule matches a link from any app.")
+                    })),
             )
             .into_any_element(),
         );
@@ -1842,16 +2157,7 @@ pub fn sheet(
                 .line_height(px(19.2)),
         )
         .when(sheet.disabled.is_none(), |header| {
-            header.child(
-                div()
-                    .mt(px(4.0))
-                    .font_family(theme::mono_family(500.0))
-                    .font_weight(theme::weight(500.0))
-                    .text_size(px(11.0))
-                    .line_height(px(16.5))
-                    .text_color(theme::text_secondary())
-                    .child(sheet.url.clone()),
-            )
+            header.child(head_link(sheet, cx))
         });
     let (body, footer): (Vec<AnyElement>, Div) = match &sheet.disabled {
         Some(reason) => (
@@ -1884,7 +2190,7 @@ pub fn sheet(
                 .as_ref()
                 .is_some_and(|problem| problem.kind == ProblemKind::Duplicate);
             let ready = sheet.rule().is_some() && !duplicate;
-            let label = if sheet.needs_js.is_empty() && sheet.problem.is_none() {
+            let label = if !sheet.needs_js_now() && sheet.problem.is_none() {
                 "Add rule"
             } else {
                 "Add anyway"
@@ -1965,8 +2271,9 @@ pub fn sheet(
             .pt(px(56.0))
             .pb(px(24.0))
             .bg(scrim())
-            .on_click(cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx)))
-            .child(panel.on_click(|_, _, cx| cx.stop_propagation())),
+            // A click outside the sheet does nothing: only Cancel throws
+            // away what the person has chosen so far.
+            .child(panel),
     ))
 }
 
@@ -2094,6 +2401,81 @@ mod tests {
             sheet.collision_caption(),
             "Would also catch these 1 recent link \u{00b7} all unrouted, nothing changes hands"
         );
+    }
+
+    #[gpui_kit::test]
+    fn any_link_from_the_app_is_every_site_from_that_app(cx: &mut gpui_kit::TestAppContext) {
+        // An id in the path: a precise rule needs JS, but not one by app.
+        let from = record(
+            "https://issues.example/12345/comments?view=full&tab=2",
+            Privacy::Full,
+            Matched::Default { owner: None },
+            Some("Mail"),
+        );
+        let mut sheet = cx.update(|cx| AddRule::new(&from, cx));
+        sheet.browser = "Firefox".into();
+        assert!(sheet.needs_js_now());
+        sheet.choose_any_from();
+        assert!(!sheet.needs_js_now());
+        let rule = sheet.rule().expect("a rule");
+        assert_eq!(rule.patterns, [ANY_LINK]);
+        assert_eq!(rule.opener, ["com.example.mail"]);
+        assert!(rule.examples.is_empty());
+        assert!(sheet.test().is_some());
+        assert_eq!(
+            sheet.collision_caption(),
+            "No other recent link came from Mail."
+        );
+        // Typing a pattern leaves it, Sent from stays as it is.
+        sheet.pattern.set("issues.example/*");
+        sheet.pattern_typed();
+        assert!(!sheet.any_from && sheet.only_from);
+        assert_eq!(
+            sheet.collision_caption(),
+            "No other recent link from Mail matches this pattern."
+        );
+
+        // The head: host and path lead, and the query is counted.
+        assert_eq!(
+            &sheet.url[..sheet.url_lead()],
+            "https://issues.example/12345/comments"
+        );
+        assert_eq!(sheet.query_summary.as_deref(), Some("2 query parameters"));
+        assert!(!sheet.url_is_long());
+
+        // A keystroke that leaves the pattern `*` keeps where Sent from was:
+        // choosing a pattern still turns it back off.
+        sheet.only_from = false;
+        sheet.choose_any_from();
+        sheet.pattern.set("* ");
+        sheet.pattern_typed();
+        assert!(sheet.any_from);
+        sheet.choose_candidate(0);
+        assert!(!sheet.any_from && !sheet.only_from);
+
+        // A scheme without `//` and a `://` in the query: the lead stops at
+        // the query.
+        let mail = record(
+            "mailto:a@b.example?body=see%20https://x.example/y",
+            Privacy::Full,
+            Matched::Default { owner: None },
+            None,
+        );
+        let mail = cx.update(|cx| AddRule::new(&mail, cx));
+        assert_eq!(&mail.url[..mail.url_lead()], "mailto:a@b.example");
+
+        // No app on record: nothing to offer.
+        let anon = record(
+            "https://issues.example/a",
+            Privacy::Full,
+            Matched::Default { owner: None },
+            None,
+        );
+        let mut sheet = cx.update(|cx| AddRule::new(&anon, cx));
+        sheet.choose_any_from();
+        assert!(!sheet.any_from && !sheet.only_from);
+        assert_ne!(sheet.pattern.text, ANY_LINK);
+        assert_eq!(sheet.query_summary, None);
     }
 
     #[gpui_kit::test]
