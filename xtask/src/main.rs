@@ -239,7 +239,13 @@ pub(crate) fn workspace_version() -> Result<String> {
 }
 
 pub(crate) fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    // Cargo sets the active package's path at runtime, even when a shared
+    // target cache reuses an xtask compiled in a different worktree.
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    manifest_dir
         .parent()
         .expect("xtask lives in the workspace")
         .to_path_buf()
