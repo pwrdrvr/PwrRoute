@@ -109,7 +109,9 @@ pinned with `=` and upgraded by hand, with a look at the window.
 ## Launch the app
 
 Before launching, check whether a window titled `PwrRoute` already exists and
-reuse it when suitable. A dev build runs as a bare binary (`target/*/pwrroute`);
+reuse it when suitable. The main window's rail foot (and Settings › About)
+says which build is running: a dev build's checkout, branch and commit,
+each click-to-copy. A dev build runs as a bare binary (`target/*/pwrroute`);
 `cargo xtask bundle` makes a real `.app` with bundle id
 `com.pwrdrvr.pwrroute`.
 

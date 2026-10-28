@@ -420,10 +420,21 @@ impl SettingsWindow {
     }
 
     fn copy_button(&self, index: usize, content: String, cx: &mut Context<'_, Self>) -> AnyElement {
+        self.copy_button_labeled(index, "Copy", content, cx)
+    }
+
+    /// [`Self::copy_button`] with its own label until it is clicked.
+    fn copy_button_labeled(
+        &self,
+        index: usize,
+        idle: &'static str,
+        content: String,
+        cx: &mut Context<'_, Self>,
+    ) -> AnyElement {
         let label = if self.copied == Some(index) {
             "Copied"
         } else {
-            "Copy"
+            idle
         };
         let id = ElementId::Name(SharedString::from(format!("settings-copy-{index}")));
         button(id, label, Kind::Default, true)

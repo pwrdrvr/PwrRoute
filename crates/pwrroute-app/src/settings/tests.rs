@@ -429,6 +429,9 @@ fn the_diagnostics_pane_copies_the_report_and_opens_the_data_folder(cx: &mut Tes
     let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
     let report = view.read_with(cx, |view, _| view.model.diagnostics.report());
     assert_eq!(copied.as_deref(), Some(report.as_str()));
+    // The build's lines come first, as the rail and About copy them.
+    let build = view.read_with(cx, |view, _| view.model.diagnostics.build.report());
+    assert!(report.starts_with(&build), "{report}");
     assert!(!report.contains("://"), "{report}");
     assert!(requests.borrow().is_empty());
 
@@ -466,6 +469,23 @@ fn the_about_pane_opens_helps_documents(cx: &mut TestAppContext) {
             SettingsRequest::OpenChangelog,
         ]
     );
+}
+
+#[gpui_kit::test]
+fn the_about_pane_copies_the_build_and_its_commit(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::About.nav_id());
+    let copied = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+    };
+    click(cx, about::COPY_ALL_ID);
+    let source = view.read_with(cx, |view, _| view.model.about.source.clone());
+    assert_eq!(copied(cx), Some(source.report()));
+    click(cx, about::COPY_COMMIT_ID);
+    assert_eq!(copied(cx), source.commit.clone());
+    // The checkout is copied whole, never as `~`.
+    assert!(source.report().contains("Checkout: /Users/you/"));
+    assert!(requests.borrow().is_empty());
 }
 
 #[gpui_kit::test]
