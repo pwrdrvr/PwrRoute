@@ -25,9 +25,12 @@ use super::model::{SendMode, TrayModel};
 pub enum TrayEvent {
     /// A left click on the icon, with the icon's position and size in
     /// physical pixels (macOS: from the primary screen's top-left).
+    /// `by_pointer` is false for [`NativeTray::click_here`], whose pointer
+    /// can be anywhere.
     Click {
         position: (f64, f64),
         size: (f64, f64),
+        by_pointer: bool,
     },
     /// A native menu item.
     Command(TrayCommand),
@@ -146,6 +149,7 @@ impl NativeTray {
                     let _ = events.try_send(TrayEvent::Click {
                         position: (rect.position.x, rect.position.y),
                         size: (f64::from(rect.size.width), f64::from(rect.size.height)),
+                        by_pointer: true,
                     });
                 }
             }
@@ -179,6 +183,7 @@ impl NativeTray {
         Some(TrayEvent::Click {
             position: (rect.position.x, rect.position.y),
             size: (f64::from(rect.size.width), f64::from(rect.size.height)),
+            by_pointer: false,
         })
     }
 

@@ -44,20 +44,60 @@ pub struct StatusItemAnchor {
     pub visible_bottom: Pixels,
 }
 
-/// The display a tray-icon rect is on, and the rect relative to it.
+/// Where the menu bar item just clicked is.
 ///
 /// tray-icon reports the item in physical pixels, measured from the top-left
 /// of the primary screen, scaled by the item's own screen. GPUI opens windows
-/// relative to a display's top-left, in points.
-pub fn status_item_anchor(position: (f64, f64), item_size: (f64, f64)) -> Option<StatusItemAnchor> {
+/// relative to a display's top-left, in points. `by_pointer` says the pointer
+/// clicked the item (not `click_here`'s launch-time click), so where the
+/// pointer is now says where the item is.
+pub fn status_item_anchor(
+    position: (f64, f64),
+    item_size: (f64, f64),
+    by_pointer: bool,
+) -> Option<StatusItemAnchor> {
     let mtm = MainThreadMarker::new()?;
-    let screens = NSScreen::screens(mtm);
-    // The first screen is the one with the menu bar, at the origin of
-    // AppKit's bottom-left-origin global space.
-    let primary_height = screens.firstObject()?.frame().size.height;
-    for screen in screens.iter() {
-        let scale = screen.backingScaleFactor();
-        let frame = screen.frame();
+    let screens: Vec<ScreenRects> = NSScreen::screens(mtm)
+        .iter()
+        .filter_map(|screen| {
+            Some(ScreenRects {
+                display: screen_display(&screen)?,
+                frame: screen.frame(),
+                visible: screen.visibleFrame(),
+                scale: screen.backingScaleFactor(),
+            })
+        })
+        .collect();
+    let pointer = by_pointer.then(|| {
+        let mouse = NSEvent::mouseLocation();
+        (mouse.x, mouse.y)
+    });
+    anchor_on(&screens, position, item_size, pointer)
+}
+
+/// A screen as AppKit reports it, in AppKit's global space: bottom-left
+/// origin at the primary screen's corner, in points.
+#[derive(Clone, Copy, Debug)]
+struct ScreenRects {
+    display: DisplayId,
+    frame: NSRect,
+    visible: NSRect,
+    scale: f64,
+}
+
+/// [`status_item_anchor`] apart from AppKit. `screens` start with the
+/// primary one (the menu bar's, at the origin); `position` and `item_size`
+/// are tray-icon's; `pointer` is where the pointer is, in AppKit's space.
+fn anchor_on(
+    screens: &[ScreenRects],
+    position: (f64, f64),
+    item_size: (f64, f64),
+    _pointer: Option<(f64, f64)>,
+) -> Option<StatusItemAnchor> {
+    let primary_height = screens.first()?.frame.size.height;
+    for screen in screens {
+        let scale = screen.scale;
+        let frame = screen.frame;
         let left = frame.origin.x;
         let top = primary_height - (frame.origin.y + frame.size.height);
         let (x, y) = (position.0 / scale, position.1 / scale);
@@ -66,13 +106,8 @@ pub fn status_item_anchor(position: (f64, f64), item_size: (f64, f64)) -> Option
         if !inside {
             continue;
         }
-        let number = screen
-            .deviceDescription()
-            .objectForKey(&NSString::from_str("NSScreenNumber"))?
-            .downcast::<NSNumber>()
-            .ok()?;
         return Some(StatusItemAnchor {
-            display: DisplayId::new(u64::from(number.unsignedIntValue())),
+            display: screen.display,
             item: Bounds {
                 origin: point(px((x - left) as f32), px((y - top) as f32)),
                 size: size(
@@ -81,10 +116,20 @@ pub fn status_item_anchor(position: (f64, f64), item_size: (f64, f64)) -> Option
                 ),
             },
             display_size: size(px(frame.size.width as f32), px(frame.size.height as f32)),
-            visible_bottom: px(visible_bottom(frame, screen.visibleFrame()) as f32),
+            visible_bottom: px(visible_bottom(frame, screen.visible) as f32),
         });
     }
     None
+}
+
+/// The display GPUI knows `screen` by.
+fn screen_display(screen: &NSScreen) -> Option<DisplayId> {
+    let number = screen
+        .deviceDescription()
+        .objectForKey(&NSString::from_str("NSScreenNumber"))?
+        .downcast::<NSNumber>()
+        .ok()?;
+    Some(DisplayId::new(u64::from(number.unsignedIntValue())))
 }
 
 /// The display under the mouse pointer, as GPUI names displays. `None` off
@@ -106,12 +151,7 @@ pub fn display_under_mouse() -> Option<DisplayId> {
         ) {
             return None;
         }
-        let number = screen
-            .deviceDescription()
-            .objectForKey(&NSString::from_str("NSScreenNumber"))?
-            .downcast::<NSNumber>()
-            .ok()?;
-        Some(DisplayId::new(u64::from(number.unsignedIntValue())))
+        screen_display(&screen)
     })
 }
 
@@ -257,6 +297,120 @@ mod tests {
         assert_eq!(right.x, px(1136.0));
         let left = dropdown_origin(&anchor(0.0, 1440.0), px(300.0));
         assert_eq!(left.x, px(4.0));
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
+        NSRect::new(
+            objc2_foundation::NSPoint::new(x, y),
+            objc2_foundation::NSSize::new(width, height),
+        )
+    }
+
+    /// A 1496x967pt built-in display at 2x with a 28pt menu bar and the
+    /// Dock hidden, as AppKit reports it.
+    fn built_in() -> ScreenRects {
+        ScreenRects {
+            display: DisplayId::new(1),
+            frame: rect(0.0, 0.0, 1496.0, 967.0),
+            visible: rect(0.0, 0.0, 1496.0, 939.0),
+            scale: 2.0,
+        }
+    }
+
+    /// The item window AppKit gives a status item on the menu bar,
+    /// (515, 938, 63x30) in AppKit's space, as tray-icon reports it.
+    const SHOWN: ((f64, f64), (f64, f64)) = ((1030.0, -2.0), (126.0, 60.0));
+
+    /// The item window macOS 27 leaves a status item it draws for the app
+    /// (hidden behind the menu bar's "»", or shown from it): 0x0 at
+    /// AppKit's origin, the bottom-left of the primary screen. tray-icon
+    /// flips that to the primary screen's height.
+    const HIDDEN: ((f64, f64), (f64, f64)) = ((0.0, 967.0 * 2.0), (0.0, 0.0));
+
+    /// The pointer on the menu bar, pressing the item, in AppKit's space.
+    const ON_THE_MENU_BAR: (f64, f64) = (1258.0, 955.0);
+
+    fn origin_on(
+        screens: &[ScreenRects],
+        (position, item_size): ((f64, f64), (f64, f64)),
+        pointer: Option<(f64, f64)>,
+    ) -> Option<(DisplayId, Point<Pixels>)> {
+        let anchor = anchor_on(screens, position, item_size, pointer)?;
+        Some((anchor.display, dropdown_origin(&anchor, px(300.0))))
+    }
+
+    #[test]
+    fn an_item_on_the_menu_bar_anchors_the_dropdown() {
+        // The pointer on the item (515..578).
+        assert_eq!(
+            origin_on(&[built_in()], SHOWN, Some((540.0, 955.0))),
+            Some((DisplayId::new(1), point(px(396.5), px(33.0))))
+        );
+    }
+
+    #[test]
+    fn an_item_macos_27_draws_itself_opens_under_the_pointer() {
+        // Was the fallback: the top-left corner of the primary display.
+        assert_eq!(
+            origin_on(&[built_in()], HIDDEN, Some(ON_THE_MENU_BAR)),
+            Some((DisplayId::new(1), point(px(1108.0), px(32.0))))
+        );
+    }
+
+    #[test]
+    fn an_empty_item_never_anchors_on_the_display_below() {
+        // A 1920x1080 display at 1x under the built-in one: the hidden
+        // item's flipped corner is on it.
+        let below = ScreenRects {
+            display: DisplayId::new(2),
+            frame: rect(0.0, -1080.0, 1920.0, 1080.0),
+            visible: rect(0.0, -1080.0, 1920.0, 1080.0),
+            scale: 1.0,
+        };
+        assert_eq!(
+            origin_on(&[built_in(), below], HIDDEN, Some(ON_THE_MENU_BAR)),
+            Some((DisplayId::new(1), point(px(1108.0), px(32.0))))
+        );
+    }
+
+    #[test]
+    fn an_item_away_from_the_click_follows_the_pointer() {
+        // AppKit's window is still where the item was before macOS moved it.
+        assert_eq!(
+            origin_on(&[built_in()], SHOWN, Some(ON_THE_MENU_BAR)),
+            Some((DisplayId::new(1), point(px(1108.0), px(32.0))))
+        );
+    }
+
+    #[test]
+    fn a_pointer_off_the_menu_bar_keeps_the_item() {
+        // A click from the keyboard or VoiceOver: the pointer is anywhere.
+        assert_eq!(
+            origin_on(&[built_in()], SHOWN, Some((700.0, 400.0))),
+            Some((DisplayId::new(1), point(px(396.5), px(33.0))))
+        );
+    }
+
+    #[test]
+    fn with_no_item_and_no_pointer_the_dropdown_opens_top_right() {
+        // `click_here` at launch: under the menu bar, at the right edge.
+        assert_eq!(
+            origin_on(&[built_in()], HIDDEN, None),
+            Some((DisplayId::new(1), point(px(1192.0), px(32.0))))
+        );
+    }
+
+    #[test]
+    fn an_auto_hidden_menu_bar_still_opens_below_it() {
+        // The visible frame reaches the top of the display.
+        let screen = ScreenRects {
+            visible: rect(0.0, 0.0, 1496.0, 967.0),
+            ..built_in()
+        };
+        assert_eq!(
+            origin_on(&[screen], HIDDEN, Some((1258.0, 960.0))),
+            Some((DisplayId::new(1), point(px(1108.0), px(28.0))))
+        );
     }
 
     #[test]

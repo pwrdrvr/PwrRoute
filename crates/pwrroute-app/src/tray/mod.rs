@@ -401,13 +401,17 @@ fn follow_feed(model: &Entity<TrayModel>, cx: &mut App) {
 fn handle(event: TrayEvent, cx: &mut App) {
     match event {
         TrayEvent::Command(command) => run(command, cx),
-        TrayEvent::Click { position, size } => click(position, size, cx),
+        TrayEvent::Click {
+            position,
+            size,
+            by_pointer,
+        } => click(position, size, by_pointer, cx),
     }
 }
 
 /// A left click on the icon.
 #[cfg(target_os = "macos")]
-fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
+fn click(position: (f64, f64), size: (f64, f64), by_pointer: bool, cx: &mut App) {
     let tray = cx.global_mut::<Tray>();
     if let Some(window) = tray.dropdown.take() {
         tray.dropdown_closed_at = Some(Instant::now());
@@ -428,7 +432,7 @@ fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
     refresh_pause_target(&model, cx);
     refresh_destinations(&model, cx);
     sync_send(&model, cx);
-    let anchor = crate::macos::status_item_anchor(position, size);
+    let anchor = crate::macos::status_item_anchor(position, size, by_pointer);
     let (origin, display, max_height) = match &anchor {
         Some(anchor) => {
             let origin = crate::macos::dropdown_origin(anchor, gpui_kit::px(dropdown::WIDTH));
@@ -438,8 +442,8 @@ fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
                 crate::macos::dropdown_max_height(anchor, origin),
             )
         }
-        // Not on any screen we know: under the menu bar, top right, as tall
-        // as the card.
+        // No screen to read (off the main thread): under the menu bar at
+        // the left, as tall as the card.
         None => (
             gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(28.0)),
             None,
@@ -455,7 +459,7 @@ fn click(position: (f64, f64), size: (f64, f64), cx: &mut App) {
 /// A left click on the icon: Windows and Linux open the window, as a
 /// notification-area icon does; the menu is the right click.
 #[cfg(not(target_os = "macos"))]
-fn click(_position: (f64, f64), _size: (f64, f64), cx: &mut App) {
+fn click(_position: (f64, f64), _size: (f64, f64), _by_pointer: bool, cx: &mut App) {
     run(TrayCommand::OpenMain, cx);
 }
 
