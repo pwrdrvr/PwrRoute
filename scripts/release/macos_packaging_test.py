@@ -135,10 +135,14 @@ class LayoutTests(unittest.TestCase):
     def test_layout_records_round_trip_and_alias_has_no_staging_paths(self):
         # Independent decoder of the leaf node, including the plist values.
         alias = b"fixture-volume-relative-alias"
-        records = [(".", "bwsp", plistlib.dumps(layout.window_settings(), fmt=plistlib.FMT_BINARY)),
-                   (".", "icvp", plistlib.dumps(layout.icon_view_settings(alias), fmt=plistlib.FMT_BINARY))]
-        records += [(name, "Iloc", layout.icon_location(*xy)) for name, xy in layout.ITEM_POSITIONS.items()]
-        data = layout.encode_ds_store(layout.encode_records(records), len(records))
+        with tempfile.TemporaryDirectory() as directory:
+            volume = Path(directory)
+            (volume / "PwrRoute.app").mkdir()
+            (volume / "Applications").symlink_to("/Applications")
+            with patch.object(layout.sys, "argv", ["dmg-layout.py", directory, "PwrRoute Fixture"]), \
+                    patch.object(layout, "background_alias", return_value=alias):
+                layout.main()
+            data = (volume / ".DS_Store").read_bytes()
         self.assertEqual(data[4:8], b"Bud1")
         # Follow the allocator table to DSDB, then the root leaf.
         allocator = struct.unpack_from(">I", data, 8)[0] + 4
@@ -146,20 +150,34 @@ class LayoutTests(unittest.TestCase):
         tree = (addresses[1] & ~31) + 4
         root, levels, count, nodes, page_size = struct.unpack_from(">IIIII", data, tree)
         offset = (addresses[root] & ~31) + 4
-        self.assertEqual((levels, count, nodes, page_size), (0, 4, 1, 4096))
-        self.assertEqual(struct.unpack_from(">II", data, offset), (0, 4))
+        self.assertEqual((levels, count, nodes, page_size), (0, 6, 1, 4096))
+        self.assertEqual(struct.unpack_from(">II", data, offset), (0, 6))
         offset += 8
         decoded = {}
+        types = {}
         for _ in range(count):
             chars = struct.unpack_from(">I", data, offset)[0]
             offset += 4
             name = data[offset:offset + 2 * chars].decode("utf-16-be")
             offset += chars * 2
-            kind, value_type, length = struct.unpack_from(">4s4sI", data, offset)
-            self.assertEqual(value_type, b"blob")
-            offset += 12
-            decoded[(name, kind)] = data[offset:offset + length]
-            offset += length
+            kind, value_type = struct.unpack_from(">4s4s", data, offset)
+            offset += 8
+            types[(name, kind)] = value_type
+            if value_type == b"blob":
+                length = struct.unpack_from(">I", data, offset)[0]
+                offset += 4
+                decoded[(name, kind)] = data[offset:offset + length]
+                offset += length
+            elif value_type == b"type":
+                decoded[(name, kind)] = data[offset:offset + 4]
+                offset += 4
+            elif value_type == b"long":
+                decoded[(name, kind)] = struct.unpack_from(">I", data, offset)[0]
+                offset += 4
+            else:
+                self.fail(f"Unexpected record type: {value_type}")
+        self.assertEqual(types[(".", b"vstl")], b"type")
+        self.assertEqual(decoded[(".", b"vstl")], b"icnv")
         self.assertEqual(plistlib.loads(decoded[(".", b"bwsp")])["WindowBounds"], "{{200, 120}, {660, 400}}")
         options = plistlib.loads(decoded[(".", b"icvp")])
         self.assertEqual(options["backgroundImageAlias"], alias)

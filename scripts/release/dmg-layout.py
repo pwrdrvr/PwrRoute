@@ -208,6 +208,11 @@ def encode_records(records):
             node += b"blob" + struct.pack(">I", len(value)) + value
         elif isinstance(value, int):
             node += b"long" + struct.pack(">I", value)
+        elif isinstance(value, str):
+            code = value.encode("ascii")
+            if len(code) != 4:
+                raise ValueError(f"{name}/{struct_id}: type values must be four ASCII bytes")
+            node += b"type" + code
         else:
             raise TypeError(f"unsupported value for {name}/{struct_id}: {type(value)}")
     return node
@@ -273,7 +278,8 @@ def main():
     alias = background_alias(volume, volume_name, BACKGROUND)
     records = [(".", "bwsp", plistlib.dumps(window_settings(), fmt=plistlib.FMT_BINARY)),
                (".", "icvp", plistlib.dumps(icon_view_settings(alias), fmt=plistlib.FMT_BINARY)),
-               (".", "vSrn", 1)]
+               (".", "vSrn", 1),
+               (".", "vstl", "icnv")]
     records += [(name, "Iloc", icon_location(*xy)) for name, xy in ITEM_POSITIONS.items()]
 
     destination = os.path.join(volume, ".DS_Store")
