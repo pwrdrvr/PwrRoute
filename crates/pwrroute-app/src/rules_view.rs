@@ -10,7 +10,7 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, Context, Div, ElementId, Global, Hsla, InteractiveElement as _, IntoElement,
+    AnyElement, App, Context, Div, ElementId, Global, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
     deferred, div, px, svg,
 };
@@ -18,6 +18,7 @@ use pwrroute_engine::{Source, Stage, Step, TestFailure, TestSource, discovery};
 
 use crate::app::{PwrRoute, Selection};
 use crate::config_view::display_path;
+use crate::rule_menu::{self, MenuRow};
 use crate::rules_model::{Destination, Matcher, RowBadge, Rule};
 use crate::rules_store::{RulesStore, clock};
 use crate::theme::{self, mono, text, tracked};
@@ -274,13 +275,16 @@ pub(crate) struct RowState {
 /// `.rr`: grip, index, matchers, arrow, destination, hits, menu.
 ///
 /// `matchers` replaces the rule's own match column when given, for the
-/// catch-all row whose match is a label rather than patterns.
+/// catch-all row whose match is a label rather than patterns. `more` is
+/// the row's "⋯" and its menu (`rule_menu::more_cell`); a row without one
+/// keeps the column empty.
 pub(crate) fn rule_row(
     id: impl Into<ElementId>,
     index: &str,
     rule: &Rule,
     state: RowState,
     matchers: Option<Div>,
+    more: Option<AnyElement>,
 ) -> Stateful<Div> {
     // `.rr.off > * { opacity: .5 }`
     let dim = |cell: Div| {
@@ -400,15 +404,14 @@ pub(crate) fn rule_row(
                 cell.child(mono(rule.hits.clone(), 10.5, 500.0, theme::text_subtle()))
             }))
         })
-        .child(dim(div()
-            .w(px(column::MORE))
-            .flex_none()
-            .flex()
-            .justify_center()
-            // The catch-all of a read-only list has no menu.
-            .when(!(state.read_only && rule.matchers.is_empty()), |cell| {
-                cell.child(mono("\u{22ef}", 12.0, 600.0, theme::text_subtle()))
-            })))
+        .child(
+            div()
+                .w(px(column::MORE))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .children(more),
+        )
 }
 
 /// `.card`.
@@ -671,6 +674,62 @@ pub(crate) fn pane_frame(id: &'static str) -> Stateful<Div> {
         .overflow_y_scroll()
 }
 
+/// A rewrite's or rule's row: a click selects it for the editor, "⋯"
+/// opens its menu, and it drags within its list.
+fn editable_row(
+    app: &PwrRoute,
+    selection: Selection,
+    rule: &Rule,
+    state: RowState,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Stateful<Div> {
+    let (kind, index) = match selection {
+        Selection::Rewrite(i) => ("rewrite", i),
+        Selection::Handler(i) => ("handler", i),
+    };
+    let more = rule_menu::more_cell(
+        MenuRow::Rule(selection),
+        ElementId::named_usize(kind, index + 20_000),
+        app,
+        cx,
+    );
+    let row = rule_row(
+        ElementId::named_usize(kind, index),
+        &format!("{:02}", index + 1),
+        rule,
+        state,
+        None,
+        Some(more),
+    )
+    .debug_selector(move || format!("{kind}-{index}"))
+    .on_click(cx.listener(move |this, _, window, cx| {
+        window.focus(&this.focus, cx);
+        this.select(selection, cx);
+    }))
+    .when(rule_menu::lifted(app, selection, cx), |row| {
+        row.opacity(0.4)
+    })
+    .children(rule_menu::drop_marker(app, selection, cx));
+    rule_menu::draggable(row, selection, rule, cx)
+}
+
+/// The deleted rule's tombstone, when it was at `at`.
+fn tombstone_at(
+    app: &PwrRoute,
+    at: Selection,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Option<Stateful<Div>> {
+    let deleted = app.row_actions.deleted.as_ref().filter(|d| d.at == at)?;
+    let len = match at {
+        Selection::Rewrite(_) => app.rewrites.len(),
+        Selection::Handler(_) => app.handlers.len(),
+    };
+    let index = match at {
+        Selection::Rewrite(i) | Selection::Handler(i) => i,
+    };
+    Some(rule_menu::tombstone(deleted, len > 0 && index == len, cx))
+}
+
 /// The rewrites and handlers cards, which select a row for the editor.
 pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
     let rewrite_rules: Vec<&Rule> = app.rewrites.iter().map(|r| &r.rule).collect();
@@ -680,27 +739,30 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
         count_chip(&rewrite_rules, "rewrite"),
     ));
     let rewrites = if app.rewrites.is_empty() {
-        rewrites.child(empty_card(
-            "No rewrites",
-            "A rewrite changes a link before any handler sees it: a privacy front end, https \
+        rewrites
+            .children(tombstone_at(app, Selection::Rewrite(0), cx))
+            .child(empty_card(
+                "No rewrites",
+                "A rewrite changes a link before any handler sees it: a privacy front end, https \
              for an internal host, tracking parameters gone.",
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(tag("x.com/*"))
-                .child(arrow())
-                .child(action_tag("host", "xcancel.com")),
-            button("Add rewrite", ButtonKind::Default, true)
-                .id("empty-add-rewrite")
-                .debug_selector(|| "empty-add-rewrite".into())
-                .on_click(cx.listener(|this, _, window, cx| this.add_rewrite(window, cx))),
-        ))
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(tag("x.com/*"))
+                    .child(arrow())
+                    .child(action_tag("host", "xcancel.com")),
+                button("Add rewrite", ButtonKind::Default, true)
+                    .id("empty-add-rewrite")
+                    .debug_selector(|| "empty-add-rewrite".into())
+                    .on_click(cx.listener(|this, _, window, cx| this.add_rewrite(window, cx))),
+            ))
     } else {
         app.rewrites
             .iter()
             .enumerate()
             .fold(rewrites, |card, (index, rewrite)| {
+                let card = card.children(tombstone_at(app, Selection::Rewrite(index), cx));
                 let last = index + 1 == app.rewrites.len();
                 let examples = examples_row(app, Selection::Rewrite(index), last);
                 let state = RowState {
@@ -709,23 +771,24 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                     last: last || examples.is_some(),
                     ..RowState::default()
                 };
-                card.child(
-                    rule_row(
-                        ElementId::named_usize("rewrite", index),
-                        &format!("{:02}", index + 1),
-                        &rewrite.rule,
-                        state,
-                        None,
-                    )
-                    .debug_selector(move || format!("rewrite-{index}"))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        window.focus(&this.focus, cx);
-                        this.select(Selection::Rewrite(index), cx);
-                    })),
-                )
+                card.child(editable_row(
+                    app,
+                    Selection::Rewrite(index),
+                    &rewrite.rule,
+                    state,
+                    cx,
+                ))
                 .children(examples)
             })
+            .children(tombstone_at(
+                app,
+                Selection::Rewrite(app.rewrites.len()),
+                cx,
+            ))
     };
+    let rewrites = rewrites.when(rule_menu::dimmed_while_dragging(app, true, cx), |card| {
+        card.opacity(0.5)
+    });
 
     let handler_rules: Vec<&Rule> = app.handlers.iter().map(|h| &h.rule).collect();
     let handlers = card().child(card_header_with(
@@ -734,28 +797,30 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
         count_chip(&handler_rules, "rule"),
     ));
     let handlers = if app.handlers.is_empty() {
-        handlers.child(empty_card(
-            "No rules",
-            "A rule sends matching links to a browser, a profile or an app. The first one \
+        handlers
+            .children(tombstone_at(app, Selection::Handler(0), cx))
+            .child(empty_card(
+                "No rules",
+                "A rule sends matching links to a browser, a profile or an app. The first one \
              that matches wins, so specific rules go above general ones.",
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(tag("*.atlassian.net/*"))
-                .child(arrow())
-                .child(badge(badge_for("Google Chrome")))
-                .child(text(
-                    "Google Chrome \u{00b7} Work",
-                    10.5,
-                    500.0,
-                    theme::text_secondary(),
-                )),
-            button("Add rule", ButtonKind::Primary, true)
-                .id("empty-add-handler")
-                .debug_selector(|| "empty-add-handler".into())
-                .on_click(cx.listener(|this, _, window, cx| this.add_handler(window, cx))),
-        ))
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(tag("*.atlassian.net/*"))
+                    .child(arrow())
+                    .child(badge(badge_for("Google Chrome")))
+                    .child(text(
+                        "Google Chrome \u{00b7} Work",
+                        10.5,
+                        500.0,
+                        theme::text_secondary(),
+                    )),
+                button("Add rule", ButtonKind::Primary, true)
+                    .id("empty-add-handler")
+                    .debug_selector(|| "empty-add-handler".into())
+                    .on_click(cx.listener(|this, _, window, cx| this.add_handler(window, cx))),
+            ))
     } else {
         let hits = todays_hits(app, cx);
         app.handlers
@@ -766,6 +831,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                 if let Some(hits) = hits.get(index) {
                     rule.hits = hits.clone();
                 }
+                let card = card.children(tombstone_at(app, Selection::Handler(index), cx));
                 let last = index + 1 == app.handlers.len();
                 let examples = examples_row(app, Selection::Handler(index), last);
                 let state = RowState {
@@ -773,23 +839,24 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                     last: last || examples.is_some(),
                     ..RowState::default()
                 };
-                card.child(
-                    rule_row(
-                        ElementId::named_usize("handler", index),
-                        &format!("{:02}", index + 1),
-                        &rule,
-                        state,
-                        None,
-                    )
-                    .debug_selector(move || format!("handler-{index}"))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        window.focus(&this.focus, cx);
-                        this.select(Selection::Handler(index), cx);
-                    })),
-                )
+                card.child(editable_row(
+                    app,
+                    Selection::Handler(index),
+                    &rule,
+                    state,
+                    cx,
+                ))
                 .children(examples)
             })
+            .children(tombstone_at(
+                app,
+                Selection::Handler(app.handlers.len()),
+                cx,
+            ))
     };
+    let handlers = handlers.when(rule_menu::dimmed_while_dragging(app, false, cx), |card| {
+        card.opacity(0.5)
+    });
     // `.card-foot.bad`: which rule the file keeps an older version of.
     let not_saved: Vec<String> = app
         .rewrites
@@ -1521,8 +1588,9 @@ pub fn pane(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement 
             .debug_selector(|| "rules-blank".into())
             .child(nothing_to_route_by(app, cx));
     }
+    let more = rule_menu::more_cell(MenuRow::EverythingElse, "everything-else", app, cx);
     let everything_else = card().child(rule_row(
-        "everything-else",
+        "everything-else-row",
         "\u{221e}",
         &app.store.everything_else(),
         RowState {
@@ -1535,6 +1603,7 @@ pub fn pane(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement 
             600.0,
             theme::text_primary(),
         ))),
+        Some(more),
     ));
 
     let (dot, status) = match app.store.status() {

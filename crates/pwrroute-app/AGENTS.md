@@ -393,6 +393,26 @@ their own modules.
   Choose another file keeps the first-run context: the file picked opens
   for first run the same way, and no file picked is a cancel. The config
   file is only ever read.
+- **A Rules row's "⋯" is real (`rule_menu.rs`; design: Rule Editing 3a,
+  3b, 4b).** `rules_view::rule_row` draws only the `more` it is given
+  (`rule_menu::more_cell`), never a bare "⋯": a rule's menu moves it
+  (top, up, down, bottom; also by dragging the row and ⌥⌘↑/⌥⌘↓),
+  duplicates it (⌘D, without its examples), turns it off, tests a link
+  with it and deletes it (⌫). Moves go through `RulesStore::move_to`,
+  which keeps each entry's id, so a rule's saved version moves with it;
+  the selection, the rail and the draft notes follow by
+  `rule_menu::shifted`. A move's count re-resolves the feed's newest
+  `IMPACT_OF` full-URL records against the written file before and after
+  (`RowActions::impact`), and says nothing below `IMPACT_MIN`. Delete
+  leaves a tombstone with Undo and ⌘Z (`RulesStore::remove`/`restore`)
+  until the next `refresh`; a draft is discarded without one. Everything
+  else's menu writes `defaultBrowser`/`defaultProfile` through
+  `write_now`; a config's read-only row offers its file and the importer.
+  Previews (the importer's) pass no `more`. The rule menu's rows are an
+  exception to `menu_row` (a move shows a count and a key, and an item
+  can be dim or danger); their labels still end in an ellipsis. The keys
+  act on the row whose menu is open, else the selected row. A drop lands
+  only on the row its line is drawn on.
 - **Rules under a Finicky config (`config_view.rs`).** The banner's switch
   "Let PwrRoute's default take everything else" is `rules.json`'s
   `precedence` (`RulesStore::set_precedence`), written at once like any
@@ -449,7 +469,12 @@ their own modules.
   `mcp-agents.json`.
 - **Tray (`tray/`).** `tray-icon` owns the OS item and its native menu
   (design 1c). On macOS a left click opens `tray/dropdown.rs`, a GPUI
-  `PopUp` window (design 1a/1b); recents there are hosts only
+  `PopUp` window (design 1a/1b) under the item
+  (`macos::status_item_anchor`). macOS 27 draws status items itself, and
+  the item's own window can poke 1pt above the display or be 0x0 at the
+  primary screen's corner, so the item counts by its center, an empty one
+  not at all, and a pointer pressing the menu bar away from it wins
+  (`macos::anchor_on`). Recents there are hosts only
   (`model::host_of`), from the feed. Pause routing is
   `RouterHandle::set_paused` from `tray::toggle_pause`, with the target
   `tray::pause_target` names: `rules.json`'s `defaultBrowser` and
@@ -587,6 +612,24 @@ their own modules.
   id, and "+ app" offers the apps that sent links recently
   (`start_from::recent_senders`), the apps other rules name, and any app
   in Applications through the file panel (`pwrroute_os::app_bundle_id`).
+- **Which build this is (`build.rs`, `build_info.rs`; design: Build
+  Identity).** `build.rs` reads the checkout, branch, commit (with its
+  subject and time), the tag on HEAD and uncommitted changes from `git`
+  once per build, into `PWRROUTE_BUILD_*` env vars; nothing reads a
+  checkout at run time. It reruns when HEAD, a branch, a tag or anything
+  under `crates/` changes, never on the index alone, and `git status`
+  runs with `--no-optional-locks` so a build never rewrites what it
+  watches. CI leaves the checkout out (a runner's path) and takes the
+  branch and tag from GitHub's env when the checkout is detached or
+  shallow. A release is the release profile at exactly `v{version}` with
+  no changes (`BuildInfo::is_release`); anything else is a dev build. The
+  rail's foot draws it (`chrome::build_block`): a release's one line, or
+  a dev build's block of checkout, branch and commit rows, each a click
+  to copy its full value (`PwrRoute::copy_build`, a check for
+  `COPIED_FOR`), and a copy-all button. Settings › About's Source row and
+  Copy build info, and the top of Diagnostics' Copy, write the same
+  `BuildInfo::report`. Tests and the `screens` example set
+  `PwrRoute::build` to `BuildInfo::fixture()`, never this checkout.
 - **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
   Settings, first-run or one of Help's windows (`DocWindow`, `LogsWindow`)
   is open (`Regular`) and goes when the last closes

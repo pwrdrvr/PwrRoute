@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          .snav { flex: 0 0 208px; }
+          .snav .rail-item { font-size: 13px; }
+          .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+          .spane > .card { flex: 0 0 auto; max-width: 760px; width: 100%; }
+          .spane > .pane-head { max-width: 760px; }
+          .cmd { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font: 500 11px/1.5 var(--font-mono); color: var(--text-secondary); }
+          .cmd > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+          .cmd .btn { flex: none; }
+          .ghost { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; opacity: 0.35; }
+          .ghost .blk { border: 1px solid var(--border-faint); border-radius: 8px; background: var(--bg-panel); }
+
+          /* new in this canvas: the build block at the foot of the rail */
+          .bld { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 2px; }
+          .bld-hd { display: flex; align-items: center; gap: 6px; height: 20px; padding: 0 0 2px; }
+          .bld-k { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn-text); white-space: nowrap; }
+          .bld-v { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); white-space: nowrap; }
+          .bld-cp { margin-left: auto; width: 20px; height: 20px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); border: 1px solid transparent; }
+          .bld-cp svg { width: 12px; height: 12px; }
+          .bld-cp.hov { background: var(--bg-panel-hover); border-color: var(--border-subtle); color: var(--text-primary); }
+          .bld-cp.ok { color: var(--success-text); }
+          .br { position: relative; display: flex; align-items: center; gap: 6px; height: 20px; margin: 0 -6px; padding: 0 6px; border-radius: 5px; font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); white-space: nowrap; min-width: 0; }
+          .br svg { width: 11px; height: 11px; flex: 0 0 auto; color: var(--text-subtle); }
+          .br .x { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+          .br .m { color: var(--text-subtle); }
+          .br .w { color: var(--warn-text); }
+          .br .ic { display: none; flex: 0 0 auto; color: var(--text-muted); }
+          .br.hov { background: var(--bg-panel-hover); color: var(--text-primary); }
+          .br.hov .ic { display: inline-flex; }
+          .br.ok .ic { display: inline-flex; color: var(--success-text); }
+          .br .done { flex: 0 0 auto; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.04em; color: var(--success-text); }
+          .tip { position: absolute; z-index: 6; display: flex; flex-direction: column; gap: 4px; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); font: 500 11px/1.35 var(--font-mono); color: var(--text-primary); white-space: nowrap; }
+          .tip small { font: 400 10.5px/1.3 var(--font-sans); color: var(--text-muted); }
+          .rel { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rel.hov { color: var(--text-primary); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+
+          /* About */
+          .kv { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 6px 12px; font: 500 11px/1.5 var(--font-mono); color: var(--text-secondary); }
+          .kv > b { font: 500 10.5px/1.6 var(--font-sans); color: var(--text-muted); }
+          .sha { font: 500 11px/1.5 var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+          .subj { font: 400 11.5px/1.5 var(--font-sans); color: var(--text-secondary); }
+          .clip { white-space: pre; font: 500 10.5px/1.6 var(--font-mono); color: var(--text-secondary); background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px; }
+          .lbl { font: 600 10px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .col { display: flex; flex-direction: column; gap: 8px; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — The build at the foot of the main window's rail ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Main window &rsaquo; which build is this?</span></div>
+        <p class="dv-sub">A dev build can be any of a dozen worktrees on any branch, and the window never says which. The rail&rsquo;s foot gains a <b>build block</b> under the routing line: the checkout, the branch and the commit, each one click to copy its <b>full</b> value (the whole path, the whole branch, all 40 characters of the SHA), and a copy button that takes the three lines together. The commit is always shown, so a detached HEAD still says exactly what it is. Everything is captured when the binary is built; the app never reads a checkout at run time.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Dev build on a branch">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>A dev build from a worktree on a branch, nothing uncommitted. &ldquo;Dev build&rdquo; in the warning tone with the version and profile. The checkout shows as its last two folders (a worktree&rsquo;s id is the part that tells them apart); the commit as 8 characters and its subject, cut with an ellipsis.</span></div>
+            <div class="dv-card win" style="width: 640px; height: 560px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on">Overview</div>
+                  <div class="rail-item">Rules<span class="cnt">17</span></div>
+                  <div class="rail-item">Test a link</div>
+                  <div class="rail-item">Activity<span class="cnt">49</span></div>
+                  <div class="rail-label">Settings</div>
+                  <div class="rail-item">Open Settings&hellip;<span class="cnt">&#8984;,</span></div>
+                  <div class="rail-foot">
+                    <span class="st"><i></i>routing</span><span>reloaded 01:03</span>
+                    <div class="bld">
+                      <div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span><span class="bld-cp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span></div>
+                      <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="x">k3x9q2ab/PwrRoute</span></div>
+                      <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><path d="M6 9v6"/></svg><span class="x">feat/build-identity</span></div>
+                      <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/></svg><span class="x">5e1c07a2 <span class="m">show which build&hellip;</span></span></div>
+                    </div>
+                  </div>
+                </nav>
+                <div class="ghost"><div class="eyebrow">Where links go</div><div class="blk" style="height: 120px;"></div><div class="blk" style="height: 220px;"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Detached HEAD with uncommitted changes">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Started from a detached HEAD with edits not yet committed. The branch row says <b>detached HEAD</b> (muted), and the commit row says <b>+ changes</b> in the warning tone, so &ldquo;before or after the fix&rdquo; is answered even before the fix is committed: the tooltip and About add when it was built.</span></div>
+            <div class="dv-card win" style="width: 640px; height: 560px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item">Overview</div>
+                  <div class="rail-item on">Rules<span class="cnt">17</span></div>
+                  <div class="rail-item">Test a link</div>
+                  <div class="rail-item">Activity<span class="cnt">49</span></div>
+                  <div class="rail-label">Settings</div>
+                  <div class="rail-item">Open Settings&hellip;<span class="cnt">&#8984;,</span></div>
+                  <div class="rail-foot">
+                    <span class="st"><i style="background: var(--status-suspended);"></i>can&rsquo;t tell the default browser</span><span>reloaded 01:03</span>
+                    <div class="bld">
+                      <div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span><span class="bld-cp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span></div>
+                      <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="x">mvsnoopj/PwrRoute</span></div>
+                      <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><path d="M6 9v6"/></svg><span class="x m">detached HEAD</span></div>
+                      <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/></svg><span class="x">42a50803 <span class="w">+ changes</span></span></div>
+                    </div>
+                  </div>
+                </nav>
+                <div class="ghost"><div class="eyebrow">Run after the config</div><div class="blk" style="height: 90px;"></div><div class="blk" style="height: 250px;"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Hover, tooltip and Copied">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>The rows up close. <b>Left:</b> the pointer on the commit row lights it and shows a copy glyph; the tooltip holds the full value and what a click does. <b>Middle:</b> after a click the glyph turns to a check and the row says <b>Copied</b> for 1.5 s. <b>Right:</b> the header&rsquo;s button copies all three lines plus the version (the clipboard is shown below it); its glyph turns to a check the same way.</span></div>
+            <div class="dv-card crop" style="width: 860px; height: 300px; background: var(--bg-sidebar); padding: 18px 20px; display: flex; gap: 40px; align-items: flex-start;">
+              <div class="bld" style="width: 160px; position: relative; border-top: none; padding-top: 0;">
+                <div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span><span class="bld-cp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span></div>
+                <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="x">k3x9q2ab/PwrRoute</span></div>
+                <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><path d="M6 9v6"/></svg><span class="x">feat/build-identity</span></div>
+                <div class="br hov"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/></svg><span class="x">5e1c07a2 <span class="m">show which&hellip;</span></span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                  <div class="tip" style="left: 0; top: 26px;"><small>Click to copy the commit</small>5e1c07a2f19d4b6c08e3a7d5b2c91f40e6a8d317<small>&ldquo;show which build is running&rdquo; &middot; committed Oct 28 14:02</small></div></div>
+              </div>
+              <div class="bld" style="width: 160px; border-top: none; padding-top: 0;">
+                <div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span><span class="bld-cp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span></div>
+                <div class="br ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="x">k3x9q2ab/PwrRoute</span><span class="done">Copied</span></div>
+                <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><path d="M6 9v6"/></svg><span class="x">feat/build-identity</span></div>
+                <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/></svg><span class="x">5e1c07a2 <span class="m">show which build&hellip;</span></span></div>
+              </div>
+              <div class="col" style="width: 400px;">
+                <div class="bld" style="width: 160px; border-top: none; padding-top: 0;">
+                  <div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span><span class="bld-cp hov ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span></div>
+                  <div class="br"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="x">k3x9q2ab/PwrRoute</span></div>
+                </div>
+                <span class="lbl">On the clipboard</span>
+                <div class="clip">PwrRoute 0.5.0 (debug, aarch64)
+Checkout: /Users/you/.pwragent/worktrees/k3x9q2ab/PwrRoute
+Branch:   feat/build-identity
+Commit:   5e1c07a2f19d4b6c08e3a7d5b2c91f40e6a8d317
+          show which build is running</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1d" data-screen-label="1d A release build">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>A release (built from its <code>vX.Y.Z</code> tag with nothing uncommitted). No block and no warning tone: one muted line, <b>v0.5.0 &middot; 42a50803</b>, under the routing line. A click copies the version and full commit; hover underlines it. The checkout is never shown for a release: a CI runner&rsquo;s path says nothing.</span></div>
+            <div class="dv-card win" style="width: 420px; height: 560px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+              </div>
+              <div class="body">
+                <nav class="rail">
+                  <div class="rail-item on">Overview</div>
+                  <div class="rail-item">Rules<span class="cnt">17</span></div>
+                  <div class="rail-item">Test a link</div>
+                  <div class="rail-item">Activity<span class="cnt">49</span></div>
+                  <div class="rail-label">Settings</div>
+                  <div class="rail-item">Open Settings&hellip;<span class="cnt">&#8984;,</span></div>
+                  <div class="rail-foot">
+                    <span class="st"><i></i>routing</span><span>reloaded 01:03</span>
+                    <span class="rel">v0.5.0 &middot; 42a50803</span>
+                  </div>
+                </nav>
+                <div class="ghost"><div class="eyebrow">Where links go</div><div class="blk" style="height: 120px;"></div></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>What is a dev build.</b> Anything that is not a release: a build whose HEAD is not exactly the tag <code>v{version}</code>, or that had uncommitted changes, or that was built in the debug profile. A CI preview build is a dev build too; it shows branch and commit but no checkout (its path is the runner&rsquo;s). <b>Rows.</b> Mono 10.5 on 20px rows, glyph 11px <code>--text-subtle</code>, value <code>--text-secondary</code>; the row is the copy target, padded 6px into the rail&rsquo;s gutter so the hover fill does not touch the text. Hover: <code>--bg-panel-hover</code> fill, <code>--text-primary</code>, the copy glyph at the right. Copied: the glyph becomes a check in <code>--success-text</code> and &ldquo;Copied&rdquo; replaces the ellipsis for 1.5 s. <b>Header.</b> &ldquo;Dev build&rdquo; 9.5/600 tracked in <code>--warn-text</code>, then the version and profile in mono <code>--text-subtle</code>, then a 20px icon button. <b>Checkout.</b> <code>~</code> for home; past the rail&rsquo;s width, the last two folders. <b>Tooltip.</b> The app&rsquo;s usual one: &ldquo;Click to copy &hellip;&rdquo;, then the full value in mono, and for the commit its subject and date and, with changes, when it was built. A detached HEAD&rsquo;s branch row copies nothing; its tooltip says the commit names it. <b>Never at run time.</b> The values come from <code>git</code> when the binary is built; nothing reads the checkout while the app runs.</p>
+      </section>
+
+      <!-- ================= TURN 2 — Settings › About ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Settings &rsaquo; About &rsaquo; This copy</span></div>
+        <p class="dv-sub">About&rsquo;s &ldquo;This copy&rdquo; card spells the build out in full, with <b>Copy build info</b> in the card&rsquo;s header (the same text the rail&rsquo;s copy button writes). Each value sits in the Settings window&rsquo;s command box with its own Copy, as Local agents does with its commands. Diagnostics&rsquo; version line gains the short commit, and its Copy carries the same lines.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a About for a dev build">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>A dev build with uncommitted changes. Version keeps its two lines; Source is new: the checkout&rsquo;s full path, the branch, the full commit with its subject and date, and a warning line for the changes with the build time.</span></div>
+            <div class="dv-card win" style="width: 1060px; height: 700px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents</div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item on">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">PwrRoute</div><h1 class="ttl">About</h1><p class="help">Becomes the default browser and routes each link to a browser and profile by rules, in the Pwr family with PwrSnap, PwrGit and PwrAgnt.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">This copy</p><h2 class="card-title">PwrRoute</h2></div><span class="chip warn">Dev build</span><span class="btn sm">Copy build info</span></div>
+                    <div class="field"><div class="field-l"><span>Version</span></div><div class="field-c"><span class="field-help">PwrRoute 0.5.0</span><span class="field-help">debug build for aarch64</span></div></div>
+                    <div class="field"><div class="field-l"><span>Source</span><span class="field-sub">Where this binary was built from, read by git at build time.</span></div><div class="field-c">
+                      <div class="cmd"><span>/Users/you/.pwragent/worktrees/k3x9q2ab/PwrRoute</span><span class="btn sm">Copy</span></div>
+                      <div class="cmd"><span>feat/build-identity</span><span class="btn sm">Copy</span></div>
+                      <div class="cmd"><span>5e1c07a2f19d4b6c08e3a7d5b2c91f40e6a8d317</span><span class="btn sm">Copied</span></div>
+                      <span class="field-help">&ldquo;show which build is running&rdquo; &middot; committed Oct 28 14:02</span>
+                      <span class="field-help" style="color: var(--warn-text);">Built Oct 28 at 14:32 with uncommitted changes, so it is more than this commit.</span>
+                    </div></div>
+                    <div class="field" style="border-bottom: none;"><div class="field-l"><span>License</span><span class="field-sub">Third-party notices list every crate and bundled asset this copy ships.</span></div><div class="field-c"><span class="field-help">MIT. Includes code from Finicky, copyright John Sterling, under the MIT license; both notices are in LICENSE.</span><div class="row-actions"><span class="btn sm">View license</span><span class="btn sm">Third-party notices</span><span class="btn sm">Changelog</span></div></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b About for a release">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>A release: no chip, and Source is the tag and the commit only. The tag reads as a link to its release notes would, but stays text to copy, like the Project card&rsquo;s addresses.</span></div>
+            <div class="dv-card" style="width: 820px; padding: 18px 20px; background: var(--bg-app);">
+              <section class="card">
+                <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">This copy</p><h2 class="card-title">PwrRoute</h2></div><span class="btn sm">Copy build info</span></div>
+                <div class="field"><div class="field-l"><span>Version</span></div><div class="field-c"><span class="field-help">PwrRoute 0.5.0</span><span class="field-help">release build for aarch64</span></div></div>
+                <div class="field" style="border-bottom: none;"><div class="field-l"><span>Source</span><span class="field-sub">Where this binary was built from, read by git at build time.</span></div><div class="field-c">
+                  <div class="cmd"><span>v0.5.0</span><span class="btn sm">Copy</span></div>
+                  <div class="cmd"><span>42a50803e6b1c9d27f0a4c35e8d1b6a0f9c2e471</span><span class="btn sm">Copy</span></div>
+                  <span class="field-help">&ldquo;chore(release): v0.5.0&rdquo; &middot; committed Oct 27 18:40</span>
+                </div></div>
+              </section>
+              <div class="col" style="margin-top: 16px;">
+                <span class="lbl">Copy build info, release</span>
+                <div class="clip">PwrRoute 0.5.0 (release, aarch64)
+Tag:      v0.5.0
+Commit:   42a50803e6b1c9d27f0a4c35e8d1b6a0f9c2e471
+          chore(release): v0.5.0</div>
+                <span class="lbl" style="margin-top: 8px;">Copy build info, dev build with changes</span>
+                <div class="clip">PwrRoute 0.5.0 (debug, aarch64)
+Checkout: /Users/you/.pwragent/worktrees/k3x9q2ab/PwrRoute
+Branch:   feat/build-identity
+Commit:   5e1c07a2f19d4b6c08e3a7d5b2c91f40e6a8d317 + uncommitted changes
+          show which build is running
+Built:    2026-10-28 14:32</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>One text, three buttons.</b> The rail&rsquo;s copy button, About&rsquo;s Copy build info and the top of Diagnostics&rsquo; Copy write the same lines. The checkout is copied in full (a path you can <code>cd</code> to), never with <code>~</code>. <b>Built</b> appears only with uncommitted changes: with a clean tree the commit says it all, and a time would only make two identical builds look different. <b>Diagnostics.</b> Its Version reads &ldquo;0.5.0 &middot; debug &middot; aarch64 &middot; 5e1c07a2+&rdquo;, the <code>+</code> for changes. <b>Nothing here is a link</b> or comes from the user&rsquo;s browsing; the checkout path is the developer&rsquo;s own and shows only on their builds.</p>
+        <p class="dv-next">Try next: &ldquo;a DEV chip in the title strip&rdquo; &middot; &ldquo;the build in the tray dropdown&rsquo;s header&rdquo; &middot; &ldquo;Diagnostics with the Source rows&rdquo;</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

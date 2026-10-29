@@ -75,7 +75,7 @@ impl OpenerChoice {
     }
 
     /// Whether `written`, from a rule, names this app.
-    fn is_named(&self, written: &str) -> bool {
+    pub(crate) fn is_named(&self, written: &str) -> bool {
         self.name.eq_ignore_ascii_case(written) || self.bundle_id.eq_ignore_ascii_case(written)
     }
 }

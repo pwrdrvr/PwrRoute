@@ -91,6 +91,28 @@ const ICONS: &[(&str, &[u8])] = &[
         "pwrroute/close.svg",
         include_bytes!("../assets/icons/close.svg"),
     ),
+    // The rail's build block (design: Build Identity), drawn by
+    // `chrome::build_block`.
+    (
+        "pwrroute/folder.svg",
+        include_bytes!("../assets/icons/folder.svg"),
+    ),
+    (
+        "pwrroute/branch.svg",
+        include_bytes!("../assets/icons/branch.svg"),
+    ),
+    (
+        "pwrroute/commit.svg",
+        include_bytes!("../assets/icons/commit.svg"),
+    ),
+    (
+        "pwrroute/copy.svg",
+        include_bytes!("../assets/icons/copy.svg"),
+    ),
+    (
+        "pwrroute/check.svg",
+        include_bytes!("../assets/icons/check.svg"),
+    ),
     // The Windows strip's caption buttons (design: Windows and Linux
     // Chrome 1a), drawn by `chrome::captions`.
     (

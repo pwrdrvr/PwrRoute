@@ -18,7 +18,7 @@ use anyhow::{Result, bail};
 use dispatch2::DispatchQueue;
 use objc2::{MainThreadMarker, rc::autoreleasepool, runtime::NSObjectProtocol, sel};
 use objc2_app_kit::{NSApplication, NSRunningApplication, NSWorkspace};
-use objc2_foundation::{NSAppleEventManager, NSBundle, NSString, NSURL};
+use objc2_foundation::{NSAppleEventManager, NSBundle, NSProcessInfo, NSString, NSURL};
 use pwrroute_router::OpenerInfo;
 
 use crate::{
@@ -183,6 +183,13 @@ pub fn yield_front_to(bundle_id: &str, wait: Duration) -> Yield {
         Ok(()) => Yield::Yielded,
         Err(_) => Yield::Queued,
     }
+}
+
+/// `NSProcessInfo.systemUptime`: time awake since boot, from the same clock
+/// as `CLOCK_UPTIME_RAW` (`mach_absolute_time`). Thread-safe.
+pub fn system_uptime() -> Option<Duration> {
+    let seconds = NSProcessInfo::processInfo().systemUptime();
+    Duration::try_from_secs_f64(seconds).ok()
 }
 
 /// Whether an app with `bundle_id` is running, as AppKit's running

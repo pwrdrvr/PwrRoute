@@ -25,12 +25,29 @@ use super::model::{SendMode, TrayModel};
 pub enum TrayEvent {
     /// A left click on the icon, with the icon's position and size in
     /// physical pixels (macOS: from the primary screen's top-left).
+    /// `pointer` is where the pointer pressed it (macOS: AppKit's global
+    /// space, in points); `None` for [`NativeTray::click_here`], whose
+    /// pointer can be anywhere, and off macOS.
     Click {
         position: (f64, f64),
         size: (f64, f64),
+        pointer: Option<(f64, f64)>,
     },
     /// A native menu item.
     Command(TrayCommand),
+}
+
+/// Where the pointer is as the item is pressed, read on the main thread
+/// before the click is queued: the dropdown opens after refreshes that can
+/// take long enough for the pointer to leave the item.
+#[cfg(target_os = "macos")]
+fn pressed_at() -> Option<(f64, f64)> {
+    Some(crate::macos::pointer_location())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pressed_at() -> Option<(f64, f64)> {
+    None
 }
 
 /// One line of the native menu.
@@ -146,6 +163,7 @@ impl NativeTray {
                     let _ = events.try_send(TrayEvent::Click {
                         position: (rect.position.x, rect.position.y),
                         size: (f64::from(rect.size.width), f64::from(rect.size.height)),
+                        pointer: pressed_at(),
                     });
                 }
             }
@@ -179,6 +197,7 @@ impl NativeTray {
         Some(TrayEvent::Click {
             position: (rect.position.x, rect.position.y),
             size: (f64::from(rect.size.width), f64::from(rect.size.height)),
+            pointer: None,
         })
     }
 

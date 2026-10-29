@@ -10,12 +10,13 @@ use gpui_kit::{
 
 use crate::app::{PwrRoute, Screen};
 use crate::app_menu::Platform;
+use crate::build_info::Part;
 use crate::default_browser::DefaultState;
 use crate::e2e;
 use crate::menu_bar::MenuBar;
 use crate::overview_model::{ConfigTrouble, State, Status, plural};
 use crate::theme::{self, icon, mono, text, tracked};
-use crate::widgets::{ButtonKind, button, key_cap, status_chip};
+use crate::widgets::{ButtonKind, button, key_cap, one_line, status_chip};
 
 /// The rail's "Open Settings…" item.
 pub const OPEN_SETTINGS_ID: &str = "nav-settings";
@@ -23,6 +24,16 @@ pub const OPEN_SETTINGS_ID: &str = "nav-settings";
 /// The rail foot's way out when `rules.json` changed under unsaved edits.
 pub const RELOAD_ID: &str = "rules-reload";
 pub const OVERWRITE_ID: &str = "rules-overwrite";
+/// The rail's build block (design: Build Identity 1a-1d): copy all, then
+/// a row each for the checkout, the branch and the commit; a release's one
+/// line is `BUILD_ALL_ID`.
+pub const BUILD_ALL_ID: &str = "build-copy-all";
+pub const BUILD_CHECKOUT_ID: &str = "build-checkout";
+pub const BUILD_BRANCH_ID: &str = "build-branch";
+pub const BUILD_COMMIT_ID: &str = "build-commit";
+/// How many characters of the checkout fit a row before it is cut to its
+/// last two folders: the rail's 160px less the glyph, in Geist Mono 10.5.
+const CHECKOUT_FITS: usize = 22;
 
 /// Where the brand starts on macOS, after the traffic lights. The family
 /// spec.
@@ -538,6 +549,233 @@ pub fn foot_label(app: &PwrRoute, status: &Status) -> String {
     }
 }
 
+/// Which build this is, at the foot of the rail (design: Build Identity).
+/// A release is one muted line; a dev build is a block under a hairline:
+/// "Dev build" with the version, then the checkout, branch and commit, each
+/// a click to copy its full value, and a button that copies them all.
+fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
+    let build = &app.build;
+    let copied = app.build_copied.map(|(part, _)| part);
+    if build.is_release() {
+        return div()
+            .id(BUILD_ALL_ID)
+            .debug_selector(|| BUILD_ALL_ID.into())
+            .cursor_pointer()
+            .child(
+                mono(
+                    if copied == Some(Part::All) {
+                        "Copied".to_owned()
+                    } else {
+                        build.release_line()
+                    },
+                    10.5,
+                    500.0,
+                    if copied == Some(Part::All) {
+                        theme::success_text()
+                    } else {
+                        theme::text_subtle()
+                    },
+                )
+                .hover(|style| style.text_color(theme::text_primary())),
+            )
+            .tooltip(crate::overview::tip(
+                "Click to copy the version and commit",
+                build.commit.clone(),
+            ))
+            .on_click(cx.listener(|this, _, _, cx| this.copy_build(Part::All, cx)))
+            .into_any_element();
+    }
+    let header = div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .h(px(20.0))
+        .pb(px(2.0))
+        .child(tracked("Dev build", 9.5, 600.0, 0.12, theme::warn_text()))
+        .child(mono(
+            build.version_and_profile(),
+            10.5,
+            500.0,
+            theme::text_subtle(),
+        ))
+        .child(
+            div()
+                .id(BUILD_ALL_ID)
+                .debug_selector(|| BUILD_ALL_ID.into())
+                .ml_auto()
+                .size(px(20.0))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.0))
+                .border_1()
+                .border_color(theme::transparent())
+                .cursor_pointer()
+                .hover(|style| {
+                    style
+                        .bg(theme::bg_hover())
+                        .border_color(theme::border_subtle())
+                })
+                .child(if copied == Some(Part::All) {
+                    icon("pwrroute/check.svg", 12.0, theme::success_text())
+                } else {
+                    icon("pwrroute/copy.svg", 12.0, theme::text_muted())
+                })
+                .tooltip(crate::overview::tip(
+                    "Copy the version, checkout, branch and commit",
+                    None,
+                ))
+                .on_click(cx.listener(|this, _, _, cx| this.copy_build(Part::All, cx))),
+        );
+    let checkout = build
+        .checkout_label(app.home.as_deref(), CHECKOUT_FITS)
+        .map(|label| {
+            build_row(
+                BUILD_CHECKOUT_ID,
+                Part::Checkout,
+                "pwrroute/folder.svg",
+                value(label, theme::text_secondary()),
+                (
+                    "Click to copy the checkout\u{2019}s path",
+                    build.checkout.clone(),
+                ),
+                app,
+                cx,
+            )
+        });
+    let branch = match &build.branch {
+        Some(branch) => build_row(
+            BUILD_BRANCH_ID,
+            Part::Branch,
+            "pwrroute/branch.svg",
+            value(branch.clone(), theme::text_secondary()),
+            ("Click to copy the branch", Some(branch.clone())),
+            app,
+            cx,
+        ),
+        // Nothing to copy: the commit below names it.
+        None => build_row(
+            BUILD_BRANCH_ID,
+            Part::Branch,
+            "pwrroute/branch.svg",
+            value("detached HEAD", theme::text_subtle()),
+            ("Built from a detached HEAD: the commit names it", None),
+            app,
+            cx,
+        ),
+    };
+    let commit = build.short_commit().map(|short| {
+        let after = if build.dirty {
+            value("+ changes", theme::warn_text())
+        } else {
+            value(
+                build.subject.clone().unwrap_or_default(),
+                theme::text_subtle(),
+            )
+        };
+        let mut source = build.commit.clone().unwrap_or_default();
+        if let Some(line) = build.commit_line() {
+            source.push('\n');
+            source.push_str(&line);
+        }
+        if let Some(line) = build.changes_line() {
+            source.push('\n');
+            source.push_str(&line);
+        }
+        build_row(
+            BUILD_COMMIT_ID,
+            Part::Commit,
+            "pwrroute/commit.svg",
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .min_w_0()
+                .child(mono(short.to_owned(), 10.5, 500.0, theme::text_secondary()))
+                .child(after.flex_1())
+                .into_any_element(),
+            ("Click to copy the commit", Some(source)),
+            app,
+            cx,
+        )
+    });
+    div()
+        .mt(px(4.0))
+        .pt(px(10.0))
+        .border_t_1()
+        .border_color(theme::border_faint())
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .child(header)
+        .children(checkout)
+        .child(branch)
+        .children(commit)
+        .into_any_element()
+}
+
+/// A row's value: mono 10.5, cut with an ellipsis.
+fn value(content: impl Into<gpui_kit::SharedString>, color: gpui_kit::Hsla) -> Div {
+    one_line(content, theme::mono_family(500.0), 500.0, 10.5, 14.0, color).min_w_0()
+}
+
+/// One row of the build block: the glyph, the value, and on hover the copy
+/// glyph (a check and "Copied" once clicked). The whole row is the target;
+/// a part with nothing to copy (a detached HEAD's branch) is only shown.
+fn build_row(
+    id: &'static str,
+    part: Part,
+    glyph: &'static str,
+    content: impl gpui_kit::IntoElement,
+    (tip, source): (&'static str, Option<String>),
+    app: &PwrRoute,
+    cx: &mut Context<'_, PwrRoute>,
+) -> AnyElement {
+    let copyable = app.build.copy_text(part).is_some();
+    let done = app.build_copied.is_some_and(|(copied, _)| copied == part);
+    let row = div()
+        .id(id)
+        .debug_selector(|| id.into())
+        .group(id)
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .h(px(20.0))
+        .mx(px(-6.0))
+        .px(px(6.0))
+        .rounded(px(5.0))
+        .min_w_0()
+        .child(icon(glyph, 11.0, theme::text_subtle()))
+        .child(div().flex_1().min_w_0().child(content))
+        .tooltip(crate::overview::tip(tip, source));
+    if !copyable {
+        return row.into_any_element();
+    }
+    row.cursor_pointer()
+        .hover(|style| style.bg(theme::bg_hover()))
+        .child(if done {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(4.0))
+                .child(text("Copied", 9.5, 600.0, theme::success_text()))
+                .child(icon("pwrroute/check.svg", 11.0, theme::success_text()))
+                .into_any_element()
+        } else {
+            svg()
+                .path("pwrroute/copy.svg")
+                .flex_none()
+                .size(px(11.0))
+                .text_color(theme::transparent())
+                .group_hover(id, |style| style.text_color(theme::text_muted()))
+                .into_any_element()
+        })
+        .on_click(cx.listener(move |this, _, _, cx| this.copy_build(part, cx)))
+        .into_any_element()
+}
+
 /// `.rail`: the sections, Settings, and the routing state at the foot.
 pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>) -> Div {
     let count = |label: String| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
@@ -588,7 +826,8 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
                 })
                 .child(foot_label(app, status)),
         )
-        .children(app.store.changed_on_disk().then(|| changed_actions(cx)));
+        .children(app.store.changed_on_disk().then(|| changed_actions(cx)))
+        .child(build_block(app, cx));
     div()
         .on_children_prepainted(e2e::regions(&[
             "rail.overview",

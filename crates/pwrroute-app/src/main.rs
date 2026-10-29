@@ -19,6 +19,7 @@ mod aux_window;
 #[cfg(target_os = "windows")]
 mod browser_registration;
 mod browser_scan;
+mod build_info;
 mod chrome;
 mod config_view;
 mod default_browser;
@@ -46,6 +47,7 @@ mod overview;
 mod overview_model;
 mod placement;
 mod router;
+mod rule_menu;
 mod rule_pickers;
 mod rules_model;
 mod rules_store;

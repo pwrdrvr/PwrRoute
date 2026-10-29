@@ -655,8 +655,12 @@ impl BrowserLauncher {
     pub fn new() -> Self {
         let mut launcher = Self::with_env(crate::browser_scan::environment());
         // A profile or private launch of a running Chromium browser then
-        // hands the link over without the new instance taking focus.
-        launcher.inner = launcher.inner.with_running(pwrroute_os::app_is_running);
+        // hands the link over without the new instance taking focus, and
+        // Edge's singleton message gets the uptime it carries.
+        launcher.inner = launcher
+            .inner
+            .with_running(pwrroute_os::app_is_running)
+            .with_uptime(pwrroute_os::system_uptime);
         launcher
     }
 

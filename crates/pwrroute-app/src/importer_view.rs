@@ -1245,6 +1245,8 @@ fn becomes(item: &Item) -> Option<Div> {
                     ..RowState::default()
                 },
                 matchers,
+                // A preview: nothing here to act on yet.
+                None,
             )
             .bg(theme::accent_tint()),
         ),
@@ -1670,6 +1672,7 @@ fn place(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
                         last: i + 1 == rows,
                         ..RowState::default()
                     },
+                    None,
                     None,
                 )
                 .when(new, |row| row.bg(theme::accent_tint())),
