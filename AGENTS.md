@@ -53,7 +53,7 @@ not PwrRoute branding; the icon is by @uetchy and is not ours to reuse.
 `rust-toolchain.toml` pins Rust 1.97, and rustup installs it on first use.
 Linux also needs GPUI's system libraries: `scripts/ci/install-linux-deps.sh`.
 The lint chain needs Node.js 22 or newer for its dependency-free CI classifier
-tests, plus two cargo tools:
+tests, Python 3.9+ for mocked macOS packaging/signing checks, plus two cargo tools:
 
 ```bash
 # The versions CI installs; another cargo-about writes different notices.
@@ -75,7 +75,7 @@ cargo run -p pwrroute-engine --example resolve -- --config FILE URL...
 cargo run -p pwrroute-app --example screens -- DIR   # macOS: each screen as a PNG
 ```
 
-`cargo xtask lint` chains rustfmt → CI classifier tests → clippy
+`cargo xtask lint` chains rustfmt → CI classifier and packaging tests → clippy
 `-D warnings` → `cargo deny check`
 → the THIRD_PARTY_LICENSES check, cheapest first. CI's Typecheck job runs
 exactly this one command, so **add new repo-wide checks to the chain in

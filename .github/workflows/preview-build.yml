@@ -13,7 +13,7 @@ on:
 
 concurrency:
   # A new push to a labeled PR cancels the preview build it supersedes; both
-  # jobs run on paid GitHub-hosted runners. Adding any other label creates a
+  # packaging jobs are expensive. Adding any other label creates a
   # skipped run, so it gets its own group and cannot cancel an active build.
   # Dispatch runs group by run id and never cancel each other.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}${{ github.event.action == 'labeled' && github.event.label.name != 'build-preview' && '-unrelated-label' || '' }}
@@ -37,11 +37,14 @@ jobs:
     name: Build preview DMG (macOS universal)
     # Run when the just-applied label is build-preview (labeled event), OR when
     # build-preview is already on the PR (synchronize event), OR on dispatch.
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'build-preview') ||
-      (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'build-preview'))
-    runs-on: macos-26
+    # Fork code must never run on the persistent lab guests, even if labeled.
+    if: >-
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.action == 'labeled' && github.event.label.name == 'build-preview') ||
+       (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'build-preview')))
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     timeout-minutes: 60
     steps:
       - name: Checkout branch
@@ -63,10 +66,15 @@ jobs:
           echo "version=${preview}" >> "$GITHUB_OUTPUT"
           echo "Preview version: ${preview}"
 
+      - name: Select an Xcode with actool 26
+        id: xcode
+        uses: ./.github/actions/select-xcode-for-actool
+
       # No signing secrets here on purpose: previews are ad hoc signed and not
       # notarized.
       - name: Build preview package (ad hoc signed)
         env:
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
           PWRROUTE_VERSION: ${{ steps.version.outputs.version }}
         run: cargo xtask bundle --universal --require-icon-catalog
 

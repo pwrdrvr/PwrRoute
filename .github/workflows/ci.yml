@@ -307,15 +307,17 @@ jobs:
       - name: Test
         run: cargo xtask test
 
-      # Validate the ad hoc signed app without driving Finder to lay out a
-      # DMG: Automation access is not guaranteed on these persistent guests.
-      # Preview and release workflows still build DMGs on GitHub's runners.
-      # No --require-icon-catalog: the guests are not known to
-      # carry Xcode 26's actool, so without it this falls back to the legacy
-      # .icns with a warning. preview-build.yml and release.yml still require
-      # the catalog on GitHub's macos-26 image.
+      # CI checks the app only; preview/release jobs exercise the full DMG.
+      # All packaging uses the lab's stable Xcode 26+ without changing its
+      # global selection. A missing icon compiler is a runner prerequisite.
+      - name: Select an Xcode with actool 26
+        id: xcode
+        uses: ./.github/actions/select-xcode-for-actool
+
       - name: Bundle
-        run: cargo xtask bundle --app-only
+        env:
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
+        run: cargo xtask bundle --app-only --require-icon-catalog
 
   windows:
     # No license-notice check here: it is CPU-bound (cargo-about matches every

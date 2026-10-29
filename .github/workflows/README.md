@@ -10,14 +10,27 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 | `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, Velopack Setup.exe and MSI, uploaded as workflow artifacts. |
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
-Every job pins Rust 1.97, the same version `rust-toolchain.toml` pins. A newer
-clippy's new lints are a change to make on purpose. Right after installing
-it, every job runs `scripts/ci/prune-rust-toolchains.sh` to uninstall the
-runner image's preinstalled toolchains: `Swatinem/rust-cache` hashes every
-installed toolchain into its key, and the image's stable moves with each
-rollout, so without the prune a PR can land on an image main has not cached
-yet and compile cold. Only main saves the cache (`save-if`). Linux jobs install GPUI's
-system libraries with `scripts/ci/install-linux-deps.sh`.
+Every Rust job pins Rust 1.97, the version in `rust-toolchain.toml`.
+Hosted Linux/Windows jobs prune the image's other Rust toolchains before
+`Swatinem/rust-cache`, whose key hashes all installed toolchains. Persistent
+macOS guests never prune shared toolchains. Only main saves CI caches.
+Linux jobs install GPUI's system libraries with `scripts/ci/install-linux-deps.sh`.
+
+All macOS work uses `[self-hosted, macOS, ARM64, pwrdrvr-macos]`: CI `macos`
+and `e2e-macos`, preview `preview-macos`, release `macos-prepare` and
+`macos-sign`. There are no hosted macOS fallbacks or macOS matrix entries.
+The restricted organization runner group must allow `pwrdrvr/PwrRoute`.
+Fork PRs skip CI macOS and macOS previews, including labeled forks.
+
+The pool's capability and lifecycle source is PwrSuiteLab:
+`docs/macos-runner-xcode.md`, `macos-vm-rebuild/README.md` and
+`docs/solutions/lab-control-icon-and-dmg-graphics.md`. Packaging needs macOS
+26+, Python 3.9+ and stable Xcode with actool 26+. The local
+`select-xcode-for-actool` action follows PwrAgnt's selector and scopes
+`DEVELOPER_DIR` to the packaging step; it never runs `xcode-select` or installs
+Xcode. Missing capabilities fail the job and require the lab operator's
+normal held-runner provisioning procedure. E2E also needs the documented
+unlocked Aqua session. Jobs never change the default browser on these guests.
 
 ## ci.yml
 
@@ -29,7 +42,7 @@ Jobs and the names the "Protect main" ruleset requires:
 | `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, CI classifier tests, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
 | `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
-| `macos` | macOS (test + bundle) | self-hosted `pwrdrvr-macos` | Tests, then `cargo xtask bundle --app-only` (ad hoc signed); same-repository PRs and pushes only. |
+| `macos` | macOS (test + bundle) | self-hosted `pwrdrvr-macos` | Tests, then `cargo xtask bundle --app-only --require-icon-catalog` (ad hoc signed); same-repository PRs and pushes only. |
 | `windows` | Windows (test) | windows-2025 | The tests, which compile every module of the app. |
 | `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | `cargo xtask e2e` under Xvfb, with Mesa's software Vulkan. |
 | `e2e-macos` | macOS Desktop E2E | self-hosted `pwrdrvr-macos` | `cargo xtask e2e` on a Tart guest; same-repository PRs and pushes only. |
@@ -41,11 +54,13 @@ The required check names are pinned. Renaming the `Typecheck`, `Build` or
 `Typecheck` kept its name from the Electron scaffold; in Rust it is the lint
 chain.
 
-The self-hosted macOS job validates the app bundle, including its Info.plist
-and ad hoc signature, without creating a DMG. DMG layout drives Finder through
-AppleEvents, and Automation access is not guaranteed on the persistent Tart
-guests. Preview and release workflows still create the full DMG on
-GitHub-hosted macOS runners.
+The CI macOS job validates the app bundle, icon catalog and ad hoc signature
+without creating a DMG. Preview and release jobs create the complete DMG on
+the same pool. `dmg-layout.py` follows PwrSuiteLab's direct `.DS_Store` writer:
+the background, 660×400 window, 112-point icons, app/Applications positions and
+custom volume icon remain present without Finder AppleEvents or an Automation
+grant. The background alias records only volume-relative paths. Images mount
+at a private temporary path, so equal volume names do not collide.
 
 ### Desktop E2E
 
@@ -124,8 +139,9 @@ No override or ruleset change is needed for non-code PRs.
 
 `node --test scripts/ci/classify-changes.test.cjs` runs fixtures against the
 actual inline classifier and job conditions, without GitHub credentials or
-npm dependencies. `cargo xtask lint` includes this check; Node.js 22 or newer
-must be on `PATH` (the GitHub runners already provide it).
+npm dependencies. `cargo xtask lint` includes this check and macOS
+workflow/cleanup regression tests; Node.js 22 or newer must be on `PATH`
+(the GitHub runners already provide it).
 
 ## preview-build.yml
 
@@ -135,6 +151,8 @@ without a PR. PR builds are versioned `<base>-pr.<number>`, dispatched builds
 `<base>-dev.<run number>`. The version reaches xtask through
 `PWRROUTE_VERSION`; `Cargo.toml` is never edited, so `--locked` holds.
 
+Only same-repository PRs and manual dispatches schedule the macOS preview.
+Both architectures are built and joined with `lipo`; the icon catalog is required.
 No secrets reach this workflow. macOS previews are ad hoc signed and not
 notarized, so a downloaded copy needs "Open Anyway" once. They are
 `cargo xtask bundle` output, without Velopack's updater. The Windows zip,
@@ -171,7 +189,7 @@ version is promoted, Beta falls back to it.
 
 | Platform | Built on | Assets |
 |---|---|---|
-| macOS | macos-26, both architectures, joined with `lipo`; packed by `vpk` | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
+| macOS | self-hosted `pwrdrvr-macos`, both architectures, joined with `lipo`; packed by `vpk` | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
 | Windows | windows-2025, static C runtime; packed by `vpk` | `PwrRoute-win-Setup.exe`, `PwrRoute-win.msi`, `PwrRoute-win-Portable.zip`, `PwrRoute-<v>-full.nupkg` (and `-delta`), `releases.win.json`, `assets.win.json`, `RELEASES`, `PwrRoute-<v>-windows-SHA256SUMS` |
 | Linux | ubuntu-22.04 and ubuntu-22.04-arm, for the oldest glibc floor | `PwrRoute-<v>-linux-<arch>.tar.gz`, `.deb`, `-SHA256SUMS` |
 
@@ -195,13 +213,37 @@ runs cargo or installs project dependencies.
 | `distribution-audit` | — | Stub (see below). |
 | `typecheck` | — | `cargo xtask release-check` and `lint` on Linux. |
 | `test` | — | `cargo xtask test` on Linux, beside `typecheck`. Both restore main's CI cache, so their job ids, env and toolchain steps match `ci.yml`'s. |
-| `macos-prepare` | — | `cargo xtask bundle --universal --app-only --require-icon-catalog`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, the DMG's `background.png`, `macos-dmg.sh`, `install-vpk.sh` and the release notes. |
+| `macos-prepare` | — | `cargo xtask bundle --universal --app-only --require-icon-catalog`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, the DMG's `background.png`, `macos-dmg.sh`, `dmg-layout.py`, `macos-signing.py`, `install-vpk.sh` and the release notes. |
 | `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
 | `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1`, `PwrRoute.ico` and the release notes. |
 | `windows-sign` | windows-signing | `vpk pack` with Setup.exe and MSI; verifies. |
 | `linux` | — | `cargo xtask package-linux` on x64 and arm64. |
 | `publish` | — (`contents: write`) | Creates the Pre-release with every platform's assets. |
 | `distribution-audit-after` | — | Stub (see below). |
+
+### Persistent-guest signing cleanup
+
+`macos-sign` follows PwrAgnt's isolated signing workspace and private `mktemp`
+directory pattern. It clears only its own `release-signing` workspace before
+extracting verified input, and never checks out source. The vpk feed/tools,
+.NET installation, decoded certificate/API key and temporary keychain belong
+to that job's private directory. The prepare job also uses and removes its
+own temporary staging directory.
+
+`macos-signing.py` snapshots the exact user keychain search list and default
+before creating its keychain. It prepends that keychain for vpk, leaves the
+default unchanged, and restores both saved values during cleanup. Quoted
+paths with spaces survive. Import failures and SIGINT/SIGTERM clean up
+immediately; the workflow's `if: always()` cleanup also runs after success,
+failure or cancellation of later steps, retries restoration, deletes only
+the job's keychain and removes its private directory even if restoration
+fails. Cleanup failures fail the job. No shared keychains, tools, caches or
+runner resources are pruned. A guest power loss or forced runner termination
+cannot execute cleanup; the lab operator must inspect such a guest before
+returning it to service.
+
+`cargo xtask lint` runs workflow/fork guards and mocked signing lifecycle tests
+without signing secrets. Python 3.9+ is required for the Unix packaging tests.
 
 ### Velopack
 
@@ -245,9 +287,8 @@ shared by `windows-sign` and the preview.
 - **macOS.** `vpk` adds `UpdateMac` and `sq.version` to the app, so only the
   packed app can update; the DMG is cut from it. `macos-dmg.sh` lays the DMG
   window out like PwrSnap's (background, icon positions, volume icon, volume
-  `PwrRoute <v>-universal`) by driving Finder through `osascript`, so the
-  job needs the runner's GUI session; it retries Finder five times and fails
-  with a message rather than shipping an unstyled DMG. vpk signs with
+  `PwrRoute <v>-universal`) by writing `.DS_Store` directly, without driving
+  Finder. A failed layout fails packaging. vpk signs with
   `packaging/macos/PwrRoute.entitlements` (none): vpk's default allows JIT,
   unsigned executable memory and `DYLD_*` variables and turns off library
   validation. No `.pkg` installer (`--noInst`): it needs a Developer ID

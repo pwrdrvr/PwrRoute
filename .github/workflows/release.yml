@@ -138,7 +138,7 @@ jobs:
   macos-prepare:
     name: Build macOS universal and prepare signing input
     needs: [typecheck, test]
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     timeout-minutes: 60
     outputs:
       signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
@@ -161,8 +161,14 @@ jobs:
           # so it would only take room in the store from main's caches.
           save-if: false
 
+      - name: Select an Xcode with actool 26
+        id: xcode
+        uses: ./.github/actions/select-xcode-for-actool
+
       # Ad hoc signed; vpk re-signs it in the sign job.
       - name: Build PwrRoute.app (universal)
+        env:
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
         run: cargo xtask bundle --universal --app-only --require-icon-catalog
 
       # Everything the sign job needs, and nothing else: it has no checkout.
@@ -171,13 +177,14 @@ jobs:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          stage="$RUNNER_TEMP/macos-release-input"
-          mkdir -p "$stage"
+          stage=$(mktemp -d "$RUNNER_TEMP/pwrroute-macos-input.XXXXXX")
+          echo "PWRROUTE_MACOS_INPUT=$stage" >> "$GITHUB_ENV"
           ditto target/bundle/PwrRoute.app "$stage/PwrRoute.app"
           # macos-dmg.sh finds background.png and PwrRoute.icns beside itself.
           cp packaging/macos/PwrRoute.entitlements packaging/macos/PwrRoute.icns \
             packaging/dmg/background.png \
-            scripts/release/macos-dmg.sh scripts/release/install-vpk.sh "$stage/"
+            scripts/release/macos-dmg.sh scripts/release/dmg-layout.py \
+            scripts/release/macos-signing.py scripts/release/install-vpk.sh "$stage/"
           cargo xtask release-check --notes-file "$stage/RELEASE_NOTES.md"
 
       - name: Archive signing input
@@ -185,7 +192,7 @@ jobs:
         run: |
           set -euo pipefail
           tarball="$RUNNER_TEMP/macos-release-signing-input.tgz"
-          tar -czf "$tarball" -C "$RUNNER_TEMP/macos-release-input" .
+          tar -czf "$tarball" -C "$PWRROUTE_MACOS_INPUT" .
           sha256="$(shasum -a 256 "$tarball" | awk '{print $1}')"
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
           printf "%s  macos-release-signing-input.tgz\n" "$sha256" > "$tarball.sha256"
@@ -200,20 +207,42 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Remove macOS staging directory
+        if: always()
+        run: |
+          if [ -n "${PWRROUTE_MACOS_INPUT:-}" ]; then
+            rm -rf -- "$PWRROUTE_MACOS_INPUT"
+          fi
+
   macos-sign:
     name: Pack, sign and notarize macOS (when configured)
     # The only macOS job with Apple credentials. It does not check out source
     # or run cargo; it packs the verified app from macos-prepare.
     needs: macos-prepare
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     timeout-minutes: 90
     environment: apple-signing
+    defaults:
+      run:
+        working-directory: release-signing
     steps:
+      # As in PwrAgnt: no files from an earlier checkout may supply signing code.
+      - name: Initialize isolated signing workspace
+        working-directory: .
+        run: |
+          set -euo pipefail
+          umask 077
+          rm -rf -- release-signing
+          mkdir release-signing
+          signing_temp=$(mktemp -d "$RUNNER_TEMP/pwrroute-signing.XXXXXX")
+          echo "PWRROUTE_SIGNING_TEMP_DIR=$signing_temp" >> "$GITHUB_ENV"
+          echo "TMPDIR=$signing_temp" >> "$GITHUB_ENV"
+
       - name: Download signing input
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-release-signing-input
-          path: .release-input
+          path: release-signing/.release-input
 
       - name: Verify signing input
         env:
@@ -232,12 +261,16 @@ jobs:
         run: mkdir input && tar -xzf .release-input/macos-release-signing-input.tgz -C input
 
       - name: Install .NET for vpk
+        env:
+          DOTNET_INSTALL_DIR: ${{ env.PWRROUTE_SIGNING_TEMP_DIR }}/dotnet
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 8.0.x
 
       # From the signing input: pinned version, SHA-512-verified package.
       - name: Install vpk
+        env:
+          VPK_TEMP_ROOT: ${{ env.PWRROUTE_SIGNING_TEMP_DIR }}
         run: input/install-vpk.sh
 
       # Secrets cannot appear in `if:` expressions, so read them into env and
@@ -258,7 +291,7 @@ jobs:
           fi
 
       # A keychain of its own for the Developer ID certificate and the
-      # notarytool profile vpk and macos-dmg.sh use, gone with the runner.
+      # notarytool profile vpk and macos-dmg.sh use. Always cleaned below.
       - name: Import Developer ID certificate and notary profile
         id: keychain
         if: steps.creds.outputs.signed == 'true'
@@ -269,37 +302,7 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: T44CNHC4UH
-        run: |
-          set -euo pipefail
-          keychain="$RUNNER_TEMP/signing.keychain-db"
-          password=$(uuidgen)
-          echo "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 3600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
-          # Word splitting is the point: each existing keychain stays listed.
-          # shellcheck disable=SC2046
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          rm "$RUNNER_TEMP/cert.p12"
-
-          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n "s/.*\"\(Developer ID Application: .*($APPLE_TEAM_ID)\)\"/\1/p" | head -1)
-          if [ -z "$identity" ]; then
-            echo "::error::No Developer ID Application identity for team $APPLE_TEAM_ID in the imported certificate."
-            exit 1
-          fi
-
-          echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
-          xcrun notarytool store-credentials pwrroute-notary \
-            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
-            --keychain "$keychain"
-          rm "$RUNNER_TEMP/AuthKey.p8"
-
-          {
-            echo "path=$keychain"
-            echo "identity=$identity"
-          } >> "$GITHUB_OUTPUT"
+        run: python3 input/macos-signing.py prepare
 
       # The newest published full package, so vpk can write a delta against
       # it. The first release, or a feed that cannot be read, packs full only.
@@ -358,9 +361,9 @@ jobs:
           NOTARY_PROFILE: pwrroute-notary
         run: |
           set -euo pipefail
-          mkdir -p dist "$RUNNER_TEMP/packed"
-          ditto -x -k releases/PwrRoute-osx-Portable.zip "$RUNNER_TEMP/packed"
-          DMG_VERSION="${RELEASE_TAG#v}" input/macos-dmg.sh "$RUNNER_TEMP/packed/PwrRoute.app" \
+          mkdir -p dist packed
+          ditto -x -k releases/PwrRoute-osx-Portable.zip packed
+          DMG_VERSION="${RELEASE_TAG#v}" input/macos-dmg.sh "$PWD/packed/PwrRoute.app" \
             "dist/PwrRoute-${RELEASE_TAG#v}-universal.dmg" "$IDENTITY"
 
       - name: Verify macOS signature and notarization
@@ -369,7 +372,7 @@ jobs:
           APPLE_TEAM_ID: T44CNHC4UH
         run: |
           set -euo pipefail
-          app="$RUNNER_TEMP/packed/PwrRoute.app"
+          app="$PWD/packed/PwrRoute.app"
           codesign --verify --deep --strict --all-architectures "$app"
           details=$(codesign -dv "$app" 2>&1)
           if ! grep -qx "TeamIdentifier=$APPLE_TEAM_ID" <<< "$details"; then
@@ -387,9 +390,21 @@ jobs:
         if: steps.creds.outputs.signed != 'true'
         run: |
           set -euo pipefail
-          app="$RUNNER_TEMP/packed/PwrRoute.app"
+          app="$PWD/packed/PwrRoute.app"
           codesign --verify --deep --strict --all-architectures "$app"
           test -x "$app/Contents/MacOS/UpdateMac"
+
+      - name: Remove temporary signing credentials
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -n "${PWRROUTE_SIGNING_TEMP_DIR:-}" ]; then
+            # Even a cleanup error must not retain decoded keys or the keychain.
+            trap 'rm -rf -- "$PWRROUTE_SIGNING_TEMP_DIR"' EXIT
+            if [ -f input/macos-signing.py ]; then
+              python3 input/macos-signing.py cleanup
+            fi
+          fi
 
       # This version's packages and the osx feed only: the previous release's
       # package fetched for the delta stays in the release that owns it.
@@ -411,7 +426,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos
-          path: dist/*
+          path: release-signing/dist/*
           if-no-files-found: error
           retention-days: 90
 

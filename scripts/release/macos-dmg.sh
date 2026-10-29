@@ -11,9 +11,9 @@
 # app. `cargo xtask bundle` builds the same layout for local and preview
 # builds.
 #
-# The layout lives in the image's .DS_Store, which only Finder writes here, so
-# this drives Finder through osascript: it needs a logged-in session (a
-# GitHub macOS runner has one) and Automation access to Finder.
+# dmg-layout.py writes the image's .DS_Store directly, using PwrSuiteLab's
+# unattended packaging approach. No Finder AppleEvents or Automation grant
+# is needed, and background aliases contain no build-host paths.
 #
 # usage: macos-dmg.sh APP DMG [IDENTITY]
 #
@@ -32,17 +32,6 @@ fi
 app=$1
 dmg=$2
 identity=${3:-}
-
-# Window and icon layout: keep in sync with generate-dmg-background.swift,
-# which paints the arrow between the two icon positions (xtask's tests
-# compare the two).
-window_width=660
-window_height=400
-icon_size=112
-text_size=12
-app_x=170
-applications_x=500
-icon_y=230
 
 here=$(cd "$(dirname "$0")" && pwd)
 
@@ -86,6 +75,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # A read-write image sized to the app plus headroom for the background,
 # the volume icon, .DS_Store and HFS+ overhead.
@@ -96,12 +87,11 @@ rw=$work/PwrRoute-rw.dmg
 # -srcfolder images.
 hdiutil create -size "${size_mb}m" -fs HFS+ -type UDIF -volname "$volname" "$rw"
 
-# Not -nobrowse: Finder has to see the volume to lay out its window. A
-# mounted volume of the same name gets " 1" appended to the new one's mount
-# point, so take the device and mount point from hdiutil's output.
-attach=$(hdiutil attach -readwrite -noverify -noautoopen "$rw")
+# Mount privately: concurrent packages with the same volume name cannot collide.
+mkdir "$work/mount"
+attach=$(hdiutil attach -readwrite -noverify -noautoopen -nobrowse -mountpoint "$work/mount" "$rw")
 device=$(awk -F'\t' '/Apple_HFS/ {sub(/[[:space:]]+$/, "", $1); print $1; exit}' <<<"$attach")
-mount=$(awk -F'\t' '/Apple_HFS/ {print $NF; exit}' <<<"$attach")
+mount=$work/mount
 if [ -z "$device" ] || [ ! -d "$mount" ]; then
   echo "macos-dmg.sh: cannot find the attached volume in hdiutil's output:" >&2
   echo "$attach" >&2
@@ -113,69 +103,10 @@ ln -s /Applications "$mount/Applications"
 mkdir "$mount/.background"
 cp "$background" "$mount/.background/background.png"
 
-# Finder sometimes needs a moment to see a freshly attached volume, and an
-# AppleEvent can time out on a busy machine, so try a few times.
-layout() {
-  osascript - "$mount" <<EOF
-on run argv
-  set mountPath to item 1 of argv
-  tell application "Finder"
-    set theDisk to (POSIX file mountPath as alias)
-    open theDisk
-    set theWindow to container window of theDisk
-    set current view of theWindow to icon view
-    set toolbar visible of theWindow to false
-    set statusbar visible of theWindow to false
-    set pathbar visible of theWindow to false
-    -- bounds are the whole window, title bar included: add its height so
-    -- the window's content area is the background's size.
-    set the bounds of theWindow to {200, 120, 200 + $window_width, 120 + $window_height + 28}
-    set theOptions to the icon view options of theWindow
-    set arrangement of theOptions to not arranged
-    set icon size of theOptions to $icon_size
-    set text size of theOptions to $text_size
-    set label position of theOptions to bottom
-    set shows item info of theOptions to false
-    set shows icon preview of theOptions to false
-    set background picture of theOptions to file ".background:background.png" of theDisk
-    set position of item "PwrRoute.app" of theWindow to {$app_x, $icon_y}
-    set position of item "Applications" of theWindow to {$applications_x, $icon_y}
-    update theDisk without registering applications
-    delay 1
-    close theWindow
-  end tell
-end run
-EOF
-}
+# Preserve the complete installer layout without a GUI or TCC prompt.
+python3 "$here/dmg-layout.py" "$mount" "$volname"
 
-attempt=1
-until layout; do
-  if [ "$attempt" -ge 5 ]; then
-    echo "macos-dmg.sh: Finder could not lay out the DMG window after $attempt attempts." >&2
-    echo "It needs a logged-in GUI session and Automation access to Finder for this" >&2
-    echo "process (System Settings > Privacy & Security > Automation)." >&2
-    exit 1
-  fi
-  echo "macos-dmg.sh: Finder layout attempt $attempt failed; retrying" >&2
-  attempt=$((attempt + 1))
-  sleep 2
-done
-
-# Finder writes .DS_Store when the window closes, sometimes a moment later.
-for _ in $(seq 1 20); do
-  [ -f "$mount/.DS_Store" ] && break
-  sleep 0.5
-done
-if [ ! -f "$mount/.DS_Store" ]; then
-  echo "macos-dmg.sh: Finder did not write .DS_Store; the DMG window would have no layout" >&2
-  exit 1
-fi
-
-# The volume icon goes in after the layout: on macOS 26, Finder deleted a
-# .VolumeIcon.icns copied in before it and cleared the volume's custom-icon
-# flag. That flag (kHasCustomIcon) on the volume root is what makes Finder
-# use the file. SetFile comes with the Xcode command line tools; without it,
-# set the same bit (0x0400 in the flags at byte 8) in com.apple.FinderInfo.
+# Mark the volume's custom icon after writing its layout.
 cp "$volume_icon" "$mount/.VolumeIcon.icns"
 if command -v SetFile >/dev/null; then
   SetFile -a C "$mount"
