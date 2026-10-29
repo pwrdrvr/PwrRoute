@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          .apw { width: 480px; height: 600px; }
+          .bar { height: 38px; flex: none; position: relative; }
+          .bar .lights { top: 12px; }
+          .apb { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 4px 24px 0; }
+          .who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+          .who .id { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 11px/1 var(--font-mono); color: var(--text-subtle); }
+          .who .chip { padding: 3px 7px; font-size: 9.5px; }
+          .apb .ttl { margin: 0; font-size: 17px; }
+          .apb .lead { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-secondary); text-wrap: pretty; }
+          .slbl { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-subtle); }
+          .roles { display: flex; flex-direction: column; gap: 6px; }
+          .rc { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 10px; align-items: start; padding: 9px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel-elevated); }
+          .rc.hov { border-color: var(--border-default); background: var(--bg-panel-hover); }
+          .rc.on { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .rc.foc { outline: 2px solid var(--accent); outline-offset: 1px; }
+          .rd { width: 14px; height: 14px; margin-top: 1px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--bg-input); display: flex; align-items: center; justify-content: center; }
+          .rc.on .rd { border-color: var(--accent); }
+          .rc.on .rd::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+          .rc .rt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+          .rc .rn { display: flex; align-items: baseline; gap: 8px; font: 600 12.5px/1.2 var(--font-sans); color: var(--text-primary); }
+          .rc.on .rn { color: var(--accent-bright); }
+          .rc .rn .kbd { height: 15px; padding: 0 4px; font-size: 9px; color: var(--text-subtle); border-color: var(--border-subtle); margin-left: auto; }
+          .rc .rdsc { font: 400 10.5px/1.45 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+          .perms { padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); display: flex; flex-direction: column; gap: 8px; }
+          .perms .ph { font: 600 11px/1 var(--font-sans); color: var(--text-secondary); }
+          .pg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+          .pcol { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+          .pi { display: flex; align-items: flex-start; gap: 7px; font: 400 10.5px/1.35 var(--font-sans); color: var(--text-secondary); }
+          .pi .g { width: 12px; height: 12px; margin-top: 1px; flex: none; border-radius: 3px; display: flex; align-items: center; justify-content: center; font: 400 8px/1 var(--font-sans); background: var(--success-soft); color: var(--success-text); }
+          .pi.no { color: var(--text-subtle); }
+          .pi.no .g { background: var(--bg-panel-elevated); color: var(--text-subtle); }
+          .apf { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 24px 18px; }
+          .apf .exp { font: 500 10.5px/1.3 var(--font-mono); color: var(--text-subtle); white-space: nowrap; }
+          .apf .fill { flex: 1; }
+          .btn .kbd { height: 15px; padding: 0 4px; font-size: 9px; }
+          .btn.primary .kbd { border-color: rgba(22,10,0,0.28); color: rgba(22,10,0,0.7); }
+          .res { flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 4px 24px 0; }
+          .apw.done { height: 400px; }
+          .apw.short { height: 280px; }
+          .res .badge { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 16px/1 var(--font-sans); }
+          .res .badge.ok { background: var(--success-soft); color: var(--success-text); }
+          .res .badge.no { background: var(--danger-soft); color: var(--danger-text); }
+          .res .ttl { margin: 0; font-size: 17px; }
+          .res .lead { margin: 0; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-secondary); text-wrap: pretty; }
+          .res .lead b { font-weight: 600; color: var(--text-primary); }
+          .old { width: 480px; min-height: 400px; }
+          .old .apb { gap: 14px; padding-top: 12px; }
+          .old .rc { grid-template-columns: minmax(0, 1fr); padding: 10px 12px; }
+          .tbl2 { border-collapse: collapse; width: 100%; max-width: 900px; margin-top: 24px; font: 400 11px/1.5 var(--font-sans); color: var(--text-secondary); }
+          .tbl2 th { text-align: left; font: 600 10px/1 var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-subtle); padding: 0 12px 8px 0; border-bottom: 1px solid var(--border-subtle); }
+          .tbl2 td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--border-faint); vertical-align: top; text-wrap: pretty; }
+          .tbl2 td:first-child { white-space: nowrap; font-weight: 600; color: var(--text-primary); width: 150px; }
+          .tbl2 code { font: 500 10.5px var(--font-mono); color: var(--accent-bright); }
+        </style>
+      </helmet>
+
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Approving a local agent: pick a role, then Allow</span></div>
+        <p class="dv-sub">The first time an MCP client name connects, PwrRoute opens a small window and the agent's first call waits on it. As built, each role card approved the moment it was clicked and the window vanished: no selected state, no button that reads as the decision, nothing afterwards to say what happened. This turn makes the roles a radio group with the least role chosen, lists what the chosen role can and cannot do, puts the decision in <b>Deny</b> and <b>Allow as &lt;role&gt;</b> (Esc and Return), and keeps the window open on the outcome. It has no time limit: it stays while the agent that asked is connected, and closes when it goes. PwrSnap and PwrGit both pick first and confirm second (radio cards and a role select, then Deny and Allow access or Approve); neither has keys or an outcome, so PwrRoute adds those. Theirs expire after five minutes, the life of an OAuth login; PwrRoute's link is long-lived and it sees the agent go, so it needs no clock.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Before">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Before, for reference. Every card is a button that approves on click; Deny sits alone at the bottom right. Nothing looks selected, so a click reads as choosing, and the window closes on it.</span></div>
+            <div class="dv-card win old">
+              <div class="bar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div></div>
+              <div class="apb">
+                <h1 class="ttl" style="margin: 0; font-size: 16px;">Allow claude-code to use PwrRoute?</h1>
+                <span class="who"><span class="id">claude-code &middot; 2.1.3</span></span>
+                <p class="lead" style="font-size: 11px;">An MCP client on this computer is connecting. The name is what it sent, so a role limits what it may do; it does not prove who is calling. Links it asks about stay in memory. Change or revoke the role later in Settings &rsaquo; Local agents.</p>
+                <div class="roles">
+                  <div class="rc"><div class="rt"><span class="rn">Reader</span><span class="rdsc">Can ask where a link would go. Sees hosts, not full URLs.</span></div></div>
+                  <div class="rc"><div class="rt"><span class="rn">Opener</span><span class="rdsc">Reader, plus opening links through the router. Every open is logged against the session.</span></div></div>
+                  <div class="rc"><div class="rt"><span class="rn">Editor</span><span class="rdsc">Opener, plus changing rules.json and reading the activity journal on disk.</span></div></div>
+                </div>
+              </div>
+              <div class="apf"><span class="fill"></span><span class="btn">Deny</span></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Asking">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>As it opens. Reader, the least role, is chosen and has focus; Return allows as Reader. The list under the roles is the chosen role's permissions in two columns: on the left what every role can do, on the right what Opener and Editor add.</span></div>
+            <div class="dv-card win apw">
+              <div class="bar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div></div>
+              <div class="apb">
+                <div class="fx col gap8">
+                  <div class="eyebrow">Local agent</div>
+                  <h1 class="ttl">Allow Claude Code to use PwrRoute?</h1>
+                  <span class="who"><span class="id">claude-code &middot; 2.1.3</span><span class="chip">name sent by the client</span></span>
+                </div>
+                <p class="lead">An MCP client on this computer wants to connect. PwrRoute can't confirm who is calling, so the role is a limit on what it may do. Links it asks about stay in memory.</p>
+                <div class="fx col gap8">
+                  <span class="slbl">Role</span>
+                  <div class="roles">
+                    <div class="rc on foc"><span class="rd"></span><div class="rt"><span class="rn">Reader<span class="kbd">1</span></span><span class="rdsc">Can ask where a link would go. Sees hosts, not full URLs.</span></div></div>
+                    <div class="rc"><span class="rd"></span><div class="rt"><span class="rn">Opener<span class="kbd">2</span></span><span class="rdsc">Reader, plus opening links through the router. Every open is logged against the session.</span></div></div>
+                    <div class="rc"><span class="rd"></span><div class="rt"><span class="rn">Editor<span class="kbd">3</span></span><span class="rdsc">Opener, plus changing rules.json and reading the activity journal on disk.</span></div></div>
+                  </div>
+                </div>
+                <div class="perms">
+                  <span class="ph">Reader can</span>
+                  <div class="pg">
+                    <div class="pcol">
+                      <span class="pi"><span class="g">&#10003;</span>Ask where a link would go</span>
+                      <span class="pi"><span class="g">&#10003;</span>List browsers and profiles</span>
+                      <span class="pi"><span class="g">&#10003;</span>Read the rules</span>
+                      <span class="pi"><span class="g">&#10003;</span>See recent activity, hosts only</span>
+                    </div>
+                    <div class="pcol">
+                      <span class="pi no"><span class="g">&mdash;</span>See recent activity with full URLs</span>
+                      <span class="pi no"><span class="g">&mdash;</span>Open links through PwrRoute</span>
+                      <span class="pi no"><span class="g">&mdash;</span>Change rules.json</span>
+                      <span class="pi no"><span class="g">&mdash;</span>Read the activity journal on disk</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="apf"><span class="fill"></span><span class="btn">Deny<span class="kbd">esc</span></span><span class="btn primary">Allow as Reader<span class="kbd">&#8617;</span></span></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Editor chosen">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Editor clicked (or 3, or Down twice). The card lights, the list follows and the primary button names the role, so the click that decides is always the button.</span></div>
+            <div class="dv-card win apw">
+              <div class="bar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div></div>
+              <div class="apb">
+                <div class="fx col gap8">
+                  <div class="eyebrow">Local agent</div>
+                  <h1 class="ttl">Allow Claude Code to use PwrRoute?</h1>
+                  <span class="who"><span class="id">claude-code &middot; 2.1.3</span><span class="chip">name sent by the client</span></span>
+                </div>
+                <p class="lead">An MCP client on this computer wants to connect. PwrRoute can't confirm who is calling, so the role is a limit on what it may do. Links it asks about stay in memory.</p>
+                <div class="fx col gap8">
+                  <span class="slbl">Role</span>
+                  <div class="roles">
+                    <div class="rc"><span class="rd"></span><div class="rt"><span class="rn">Reader<span class="kbd">1</span></span><span class="rdsc">Can ask where a link would go. Sees hosts, not full URLs.</span></div></div>
+                    <div class="rc hov"><span class="rd"></span><div class="rt"><span class="rn">Opener<span class="kbd">2</span></span><span class="rdsc">Reader, plus opening links through the router. Every open is logged against the session.</span></div></div>
+                    <div class="rc on foc"><span class="rd"></span><div class="rt"><span class="rn">Editor<span class="kbd">3</span></span><span class="rdsc">Opener, plus changing rules.json and reading the activity journal on disk.</span></div></div>
+                  </div>
+                </div>
+                <div class="perms">
+                  <span class="ph">Editor can</span>
+                  <div class="pg">
+                    <div class="pcol">
+                      <span class="pi"><span class="g">&#10003;</span>Ask where a link would go</span>
+                      <span class="pi"><span class="g">&#10003;</span>List browsers and profiles</span>
+                      <span class="pi"><span class="g">&#10003;</span>Read the rules</span>
+                      <span class="pi"><span class="g">&#10003;</span>See recent activity, hosts only</span>
+                    </div>
+                    <div class="pcol">
+                      <span class="pi"><span class="g">&#10003;</span>See recent activity with full URLs</span>
+                      <span class="pi"><span class="g">&#10003;</span>Open links through PwrRoute</span>
+                      <span class="pi"><span class="g">&#10003;</span>Change rules.json</span>
+                      <span class="pi"><span class="g">&#10003;</span>Read the activity journal on disk</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="apf"><span class="fill"></span><span class="btn">Deny<span class="kbd">esc</span></span><span class="btn primary">Allow as Editor<span class="kbd">&#8617;</span></span></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1d" data-screen-label="1d Allowed">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>Allowed. The agent's waiting call goes ahead at once; the window stays to say so, with what the role can do, and closes itself after 6 seconds. The window shrinks to the outcome and keeps its top edge. Return or Done closes it now; Local agents&hellip; opens Settings on that pane.</span></div>
+            <div class="dv-card win apw done">
+              <div class="bar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div></div>
+              <div class="res">
+                <span class="badge ok">&#10003;</span>
+                <div class="fx col gap8">
+                  <h1 class="ttl">Claude Code can use PwrRoute</h1>
+                  <span class="who"><span class="id">claude-code &middot; 2.1.3</span><span class="chip ok">Editor</span></span>
+                </div>
+                <p class="lead">Its request goes ahead now. Change the role or revoke it any time in <b>Settings &rsaquo; Local agents</b>.</p>
+                <div class="perms">
+                  <span class="ph">Editor can</span>
+                  <div class="pg">
+                    <div class="pcol">
+                      <span class="pi"><span class="g">&#10003;</span>Ask where a link would go</span>
+                      <span class="pi"><span class="g">&#10003;</span>List browsers and profiles</span>
+                      <span class="pi"><span class="g">&#10003;</span>Read the rules</span>
+                      <span class="pi"><span class="g">&#10003;</span>See recent activity, hosts only</span>
+                    </div>
+                    <div class="pcol">
+                      <span class="pi"><span class="g">&#10003;</span>See recent activity with full URLs</span>
+                      <span class="pi"><span class="g">&#10003;</span>Open links through PwrRoute</span>
+                      <span class="pi"><span class="g">&#10003;</span>Change rules.json</span>
+                      <span class="pi"><span class="g">&#10003;</span>Read the activity journal on disk</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="apf"><span class="exp">Closes in 5s</span><span class="fill"></span><span class="btn">Local agents&hellip;</span><span class="btn primary">Done<span class="kbd">&#8617;</span></span></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1e" data-screen-label="1e Denied">
+            <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span>Denied, with Deny, Esc, or by closing the window while it asks. A denial lasts for this connection only, so the window says how to be asked again. It closes itself after 6 seconds, as 1d does.</span></div>
+            <div class="dv-card win apw short">
+              <div class="bar"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div></div>
+              <div class="res">
+                <span class="badge no">&#10005;</span>
+                <div class="fx col gap8">
+                  <h1 class="ttl">Claude Code was denied</h1>
+                  <span class="who"><span class="id">claude-code &middot; 2.1.3</span></span>
+                </div>
+                <p class="lead">Its calls are refused until it reconnects. To be asked again, reconnect PwrRoute's MCP server in the agent, or restart it.</p>
+              </div>
+              <div class="apf"><span class="exp">Closes in 5s</span><span class="fill"></span><span class="btn primary">Done<span class="kbd">&#8617;</span></span></div>
+            </div>
+          </div>
+        </div>
+        <table class="tbl2">
+          <tr><th>Behaviour</th><th>What it does</th></tr>
+          <tr><td>Chosen at open</td><td>Reader, always: the least role, as PwrGit preselects its reader. The focus ring is on the chosen card.</td></tr>
+          <tr><td>Changing the role</td><td>Click a card, press <code>1</code> <code>2</code> <code>3</code>, or Up and Down. The list and the primary button follow. A card never decides, and no card or button takes the keyboard from the window, so after any click Return still means the primary button. Screen readers hear the cards as a radio group.</td></tr>
+          <tr><td>Deciding</td><td><b>Allow as &lt;role&gt;</b> (Return) or <b>Deny</b> (Esc). Closing the window while it asks denies, as before. On macOS the panel shows over the agent's terminal without taking the keyboard, so a Return typed there never reaches Allow; a click on the panel gives it the keys. Windows and Linux bring the window to the front, so there keys do nothing for its first 0.8 seconds.</td></tr>
+          <tr><td>How long it asks</td><td>No time limit. The window stays while any connection under the client's name is open, and closes when the last one goes (the agent quit or dropped its MCP server), within about five seconds, without an outcome: nobody is left to answer for, and the next connection asks again. A waiting tool call still returns <code>approval_pending</code> after two minutes; the window stays up for the next one.</td></tr>
+          <tr><td>After an answer</td><td>Allowed (1d) and denied (1e) stay for 6 seconds and close; Return, Esc, Done or the close button close sooner. Closing then changes nothing: the answer was already sent.</td></tr>
+          <tr><td>Again for the same client</td><td>A new prompt for a client name first closes any window still on screen for it, so two windows never share a title. A server that stops (quit, or Local agents turned off) closes every window.</td></tr>
+          <tr><td>Size</td><td>480 &times; 600 while it asks, the same width as before; the permission list takes the extra height. On an answer it shrinks to the outcome, keeping its top edge: 400 allowed, 280 denied. These fit the content drawn here; when more is needed (a client title that wraps, a wider font) the window grows by what the body overflows, up to 680, and the body scrolls past that. It never runs under the buttons. Each prompt's window is titled <code>PwrRoute &mdash; &lt;client&gt;</code>, which is how the resize finds it and what Mission Control shows.</td></tr>
+        </table>
+        <p class="dv-note"><b>Copy.</b> The title uses the client's title when it sent one, else its name; the client chooses it, so it wraps and is cut at 80 characters. The mono line is always the name and version as sent, on one line that ends in an ellipsis when it runs long, beside &ldquo;name sent by the client&rdquo;, because approvals are filed under that name and nothing proves it. The permission labels are <code>Permission::label</code>, in <code>Permission::ALL</code>'s order, split after the four every role has. <b>Measurements.</b> Body padding 24, gaps 14; cards 9&times;12 with a 14px radio, the chosen card <code>--accent-border</code> on <code>--bg-row-active</code> with its name in <code>--accent-bright</code>; the list is a <code>--bg-panel</code> box with 12px glyph tiles (the Roles card's &#10003; and &mdash;); the footer is 14/24/18 with the countdown in mono 10.5.</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

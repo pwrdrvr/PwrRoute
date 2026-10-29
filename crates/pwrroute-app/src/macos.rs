@@ -1,7 +1,8 @@
 //! The AppKit calls GPUI does not make for us: the Dock icon (the
 //! activation policy), the screen under the menu bar item, the screen
-//! under the mouse, resizing the tray dropdown from its bottom edge, and
-//! keeping the agent approval panel up while PwrRoute is in the background.
+//! under the mouse, resizing the tray dropdown and the agent approval panel
+//! from their bottom edges, and keeping that panel up while PwrRoute is in
+//! the background.
 //!
 //! GPUI sets `NSApplicationActivationPolicyRegular` when the app finishes
 //! launching and never changes it, so a resident router would keep a Dock
@@ -11,7 +12,7 @@
 
 use gpui_kit::{Bounds, DisplayId, Pixels, Point, Size, point, px, size};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen, NSWindow};
 use objc2_foundation::NSRect;
 use objc2_foundation::{NSNumber, NSString};
 
@@ -278,6 +279,30 @@ pub fn set_dropdown_height(height: f32) -> bool {
     }) else {
         return false;
     };
+    set_content_height(&panel, height)
+}
+
+/// Make the approval panel titled `title` `height` points tall, keeping
+/// its top edge, as [`set_dropdown_height`] does for the dropdown. `false`
+/// when no such panel is open. Run it on the foreground executor, never
+/// inside an update.
+pub fn set_prompt_height(title: &str, height: f32) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let windows = NSApplication::sharedApplication(mtm).windows();
+    let Some(panel) = windows
+        .iter()
+        .find(|window| window.level() == POPUP_LEVEL && window.title().to_string() == title)
+    else {
+        return false;
+    };
+    set_content_height(&panel, height)
+}
+
+/// The frame changes by the difference from the content view's height
+/// now, so a repeated call is a no-op whatever the frame adds around it.
+fn set_content_height(panel: &NSWindow, height: f32) -> bool {
     let Some(content) = panel.contentView() else {
         return false;
     };

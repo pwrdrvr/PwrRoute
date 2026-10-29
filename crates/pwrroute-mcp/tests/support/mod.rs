@@ -80,23 +80,6 @@ impl Harness {
         .await
     }
 
-    /// A server whose approval window closes after `prompt_ttl`.
-    pub async fn start_with_ttl(
-        answer: FakeAnswer,
-        approval_wait: Duration,
-        prompt_ttl: Duration,
-    ) -> Self {
-        Self::start_in(
-            std::env::temp_dir().join(unique("pwrroute-mcp-state")),
-            Arc::new(FakeApprover::new(answer)),
-            Config {
-                prompt_ttl,
-                ..config(private_endpoint(), approval_wait)
-            },
-        )
-        .await
-    }
-
     pub async fn start_in(state_dir: PathBuf, approver: Arc<FakeApprover>, config: Config) -> Self {
         let endpoint = config.endpoint.clone();
         let agents = Agents::open(Some(&state_dir)).expect("open the state dir");
@@ -160,12 +143,11 @@ impl Harness {
     }
 }
 
-/// A server config on `endpoint` with the default prompt TTL.
+/// A server config on `endpoint`.
 pub fn config(endpoint: Endpoint, approval_wait: Duration) -> Config {
     Config {
         endpoint,
         approval_wait,
-        ..Config::default()
     }
 }
 

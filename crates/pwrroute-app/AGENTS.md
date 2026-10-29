@@ -447,7 +447,27 @@ their own modules.
   `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
   handle and an engine that follows the same files; `pwrroute mcp` in
   `main.rs` is the stdio proxy and runs before anything else. Prompts
-  become `ApprovalWindow`s on the GPUI thread; closing one denies. The
+  become `ApprovalWindow`s on the GPUI thread (design: Agent Approval):
+  the role cards are a radio group with the request's first (least) role
+  chosen, and only Allow as <role> (Return) or Deny (Esc) answers; a card
+  never does. No card or button takes focus (`focusable(false)`): keys
+  belong to the window, so Return means Allow whatever was clicked, and
+  an answer refocuses it. Closing the window while it asks denies. On
+  macOS the panel
+  opens without taking the keyboard (`focus: false`; a click makes it
+  key): an agent asks while the person types in its terminal, and a
+  Return there must not allow. Elsewhere the window comes to the front,
+  so keys wait `KEY_GRACE`. There is no time limit: the server closes the
+  prompt when every connection waiting on it has gone, and the window
+  just closes (`closed_by_server`). After an answer the window stays on
+  the outcome (allowed or denied) for `OUTCOME_FOR` and shrinks to it
+  through `macos::set_prompt_height`, which finds the panel by its title,
+  `PwrRoute — <client name>`. Each stage's height fits the design's
+  content; the body scrolls rather than run under the buttons, and while
+  it overflows (a client title wraps, a wider font) `ApprovalWindow::fit`
+  grows the window by the overflow, up to `MAX_HEIGHT`. The title wraps,
+  cut at `MAX_TITLE`; the name and version line ellipsizes: the client
+  chooses them. A new prompt closes any window for the same name. The
   pane's "Recent agent actions" is the audit: tool, agent, time, outcome,
   never an argument. The switch is `mcp.json`; approvals are
   `mcp-agents.json`.

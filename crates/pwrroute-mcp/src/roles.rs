@@ -72,7 +72,7 @@ impl Permission {
             Self::RulesRead => "Read the rules",
             Self::ActivityHosts => "See recent activity, hosts only",
             Self::ActivityUrls => "See recent activity with full URLs",
-            Self::ActivityJournal => "Read the activity journal on disk, when it is on",
+            Self::ActivityJournal => "Read the activity journal on disk",
             Self::Open => "Open links through PwrRoute",
             Self::RulesWrite => "Change rules.json",
         }
@@ -129,7 +129,7 @@ impl Role {
                 "Reader, plus opening links through the router. Every open is logged against the session."
             }
             Self::Editor => {
-                "Opener, plus writing rules.json. Refused while a Finicky config is selected."
+                "Opener, plus changing rules.json and reading the activity journal on disk."
             }
         }
     }

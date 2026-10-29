@@ -235,8 +235,8 @@ pub fn local_agents() -> LocalAgents {
                 id: role_id("editor"),
                 name: "Editor".into(),
                 built_in: true,
-                summary: "Opener, plus writing rules.json. Refused while a Finicky config is \
-                          selected."
+                summary: "Opener, plus changing rules.json and reading the activity journal \
+                          on disk."
                     .into(),
                 permissions: permissions(&[
                     ("resolve", Grant::Full),

@@ -24,16 +24,17 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex, PoisonError},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, Local};
 use gpui_kit::base::Button;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, BorrowAppContext as _, Bounds, Context, FocusHandle, Global,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px,
-    size,
+    App, AppContext as _, BorrowAppContext as _, Bounds, Context, Div, FocusHandle, Global,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 use pwrroute_engine::{
     ConfigChoice, Limits,
@@ -52,8 +53,8 @@ use crate::settings::model::{
     AgentAction, AgentRole, AgentSession, Grant, Listener, LocalAgents, Permission as Shown,
     RoleId, SessionId, SettingsRequest, Status,
 };
-use crate::theme::{self, mono, text};
-use crate::widgets::{ButtonKind, button};
+use crate::theme::{self, mono, text, tracked};
+use crate::widgets::{ButtonKind, Tone, button, chip, key_button, key_cap_in, toned_chip};
 
 /// The switch's state, in `<data dir>/mcp.json`. Sessions are kept in
 /// `mcp-agents.json` whatever the switch says.
@@ -61,13 +62,6 @@ const PREFERENCES_FILE: &str = "mcp.json";
 
 /// Tool calls the pane's "Recent agent actions" can show.
 const RECENT_ACTIONS: usize = 20;
-
-/// The approval window's size: the family's small dialog.
-const WINDOW_SIZE: (f32, f32) = (480.0, 400.0);
-
-/// Element ids the tests reach for.
-pub const APPROVE_ID_PREFIX: &str = "mcp-approve";
-pub const DENY_ID: &str = "mcp-deny";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -685,6 +679,10 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
 }
 
 // ---- The approval window --------------------------------------------------
+//
+// Design: `PwrRoute Agent Approval` 1b-1f. The roles are a radio group with
+// the least chosen; Allow and Deny decide, never a card. The window stays
+// on the outcome, shrunk to it.
 
 /// The approval window's kind. An agent connects from a terminal or an
 /// editor, which is the active app then, and since macOS 14 PwrRoute can't
@@ -696,23 +694,71 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
 /// so it stays a normal window.
 #[cfg(target_os = "macos")]
 const PROMPT_KIND: WindowKind = WindowKind::PopUp;
-/// The prompt's title; on macOS it also tells the panel apart from the
-/// tray dropdown, which is at the same level and has none.
-const PROMPT_TITLE: &str = "PwrRoute";
 #[cfg(not(target_os = "macos"))]
 const PROMPT_KIND: WindowKind = WindowKind::Normal;
 
+/// The window's width, and its height at each stage (design 1b, 1d, 1e).
+const PROMPT_WIDTH: f32 = 480.0;
+const ASKING_HEIGHT: f32 = 600.0;
+const ALLOWED_HEIGHT: f32 = 400.0;
+const SHORT_HEIGHT: f32 = 280.0;
+/// The tallest the window grows to fit its content; past it the body
+/// scrolls.
+const MAX_HEIGHT: f32 = 680.0;
+/// The longest client title and version shown, in characters. Both are
+/// the client's to choose; past these they are cut with an ellipsis.
+const MAX_TITLE: usize = 80;
+const MAX_VERSION: usize = 40;
+
+/// How long an allowed or denied window stays to say so.
+const OUTCOME_FOR: Duration = Duration::from_secs(6);
+/// Keys do nothing this long after the window opens, so a Return meant
+/// for the terminal cannot allow. On macOS the window takes the keyboard
+/// only when clicked; elsewhere it takes it as it appears.
+const KEY_GRACE: Duration = Duration::from_millis(800);
+const TICK: Duration = Duration::from_secs(1);
+
+/// Element ids the tests reach for. A role card is `mcp-role-<role>`.
+pub const ROLE_ID_PREFIX: &str = "mcp-role";
+pub const ALLOW_ID: &str = "mcp-allow";
+pub const DENY_ID: &str = "mcp-deny";
+pub const DONE_ID: &str = "mcp-done";
+pub const LOCAL_AGENTS_ID: &str = "mcp-local-agents";
+
+/// The window's title: tells the panels apart (the resize finds one by
+/// it) and from the tray dropdown, which is at the same level and has none.
+fn prompt_title(request: &ApprovalRequest) -> String {
+    format!("PwrRoute \u{2014} {}", request.client_name)
+}
+
 fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
+    // Any window still up for this client gives way to its new prompt, so
+    // two windows never share a title. One still asking belongs to a prompt
+    // the server has already closed: its reply is no answer now.
+    let open: Vec<WindowHandle<ApprovalWindow>> = cx
+        .try_global::<Prompts>()
+        .map(|prompts| prompts.0.values().copied().collect())
+        .unwrap_or_default();
+    for handle in open {
+        let _ = handle.update(cx, |this, window, _| {
+            if this.request.client_name == request.client_name {
+                this.reply = None;
+                window.remove_window();
+            }
+        });
+    }
+
     let id = request.id.clone();
     let client = request.client_name.clone();
+    let title = prompt_title(&request);
     let display = crate::placement::display_for_new_window(cx);
-    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let bounds = Bounds::centered(display, size(px(PROMPT_WIDTH), px(ASKING_HEIGHT)), cx);
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: display,
             titlebar: Some(TitlebarOptions {
-                title: Some(PROMPT_TITLE.into()),
+                title: Some(title.clone().into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(
                     px(crate::TRAFFIC_LIGHTS.0),
@@ -720,23 +766,32 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
                 )),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1))),
+            window_min_size: Some(size(px(PROMPT_WIDTH), px(SHORT_HEIGHT))),
             kind: PROMPT_KIND,
+            // On macOS the panel shows over everything without taking the
+            // keyboard: an agent asks while the person types in its
+            // terminal, and Return there must not reach Allow. A click
+            // makes it key. Elsewhere the window must come to the front to
+            // be seen at all, so `KEY_GRACE` guards its first moment.
+            focus: PROMPT_KIND == WindowKind::Normal,
             ..Default::default()
         },
-        |_, cx| cx.new(|cx| ApprovalWindow::new(request, reply, cx)),
+        |window, cx| cx.new(|cx| ApprovalWindow::new(request, reply, window, cx)),
     );
     match opened {
         Ok(window) => {
             log::info!("approval window open for agent {client:?}");
             #[cfg(target_os = "macos")]
-            crate::macos::keep_shown_while_inactive(PROMPT_TITLE);
+            crate::macos::keep_shown_while_inactive(&title);
             let _ = window.update(cx, |this, window, cx| window.focus(&this.focus, cx));
             // Off macOS the window is a normal one and needs the app in
             // front; on macOS the panel shows without it, and an activation
             // that went through would switch the person to PwrRoute's Space.
             if PROMPT_KIND == WindowKind::Normal {
                 cx.activate(true);
+            }
+            if !cx.has_global::<Prompts>() {
+                cx.set_global(Prompts::default());
             }
             cx.update_global::<Prompts, _>(|prompts, _| {
                 prompts.0.insert(id, window);
@@ -749,49 +804,267 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     }
 }
 
-/// The prompt expired or the server stopped: close its window. The server
-/// has already filed the prompt as expired, which is not a denial, so the
-/// reply dropped with the view changes nothing.
+/// The server closed the prompt: every connection waiting on it went
+/// away, or the server stopped. The server has already filed it as closed,
+/// which is not a denial.
 fn close_prompt(id: &str, cx: &mut App) {
-    let window = cx.update_global::<Prompts, _>(|prompts, _| prompts.0.remove(id));
+    let window = cx
+        .try_global::<Prompts>()
+        .and_then(|prompts| prompts.0.get(id).copied());
     if let Some(window) = window {
-        let _ = window.update(cx, |_, window, _| window.remove_window());
+        let _ = window.update(cx, |this, window, _| this.closed_by_server(window));
     }
 }
 
-/// "Allow <client> to use PwrRoute?": one window per prompt. A role button
-/// approves; Deny, or closing the window, denies.
+/// Where the window is in its one exchange.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Waiting for Allow or Deny (1b, 1c).
+    Asking,
+    /// Allowed with this role (1d).
+    Allowed(Role),
+    /// Denied (1e).
+    Denied,
+}
+
+/// "Allow <client> to use PwrRoute?": one window per prompt. The cards
+/// choose a role; Allow (Return) approves with it and Deny (Esc), or
+/// closing the window while it asks, denies. Then it says what happened.
 pub struct ApprovalWindow {
     pub request: ApprovalRequest,
     reply: Option<ApprovalReply>,
     pub focus: FocusHandle,
+    chosen: Role,
+    stage: Stage,
+    opened_at: Instant,
+    /// When an outcome closes itself.
+    closes_at: Option<Instant>,
+    /// The body above the buttons. It scrolls rather than run under them,
+    /// and while it overflows the window grows to fit.
+    scroll: ScrollHandle,
+    /// The height last asked of the window.
+    asked_height: f32,
 }
 
 impl ApprovalWindow {
-    pub fn new(request: ApprovalRequest, reply: ApprovalReply, cx: &mut Context<'_, Self>) -> Self {
+    pub fn new(
+        request: ApprovalRequest,
+        reply: ApprovalReply,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let id = request.id.clone();
+        cx.on_release(move |_, cx| {
+            if cx.has_global::<Prompts>() {
+                cx.update_global::<Prompts, _>(|prompts, _| {
+                    prompts.0.remove(&id);
+                });
+            }
+        })
+        .detach();
+        let _ = window;
+        let now = Instant::now();
         Self {
+            chosen: request.roles.first().copied().unwrap_or(Role::Reader),
+            stage: Stage::Asking,
+            opened_at: now,
+            closes_at: None,
+            scroll: ScrollHandle::new(),
+            asked_height: ASKING_HEIGHT,
             request,
             reply: Some(reply),
             focus: cx.focus_handle(),
         }
     }
 
+    /// The name the window calls the client by: its title when it sent
+    /// one, else its name.
+    fn client(&self) -> String {
+        let name = self
+            .request
+            .client_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(&self.request.client_name);
+        clip(name, MAX_TITLE)
+    }
+
+    fn choose(&mut self, role: Role, cx: &mut Context<'_, Self>) {
+        if self.stage == Stage::Asking && self.chosen != role {
+            self.chosen = role;
+            cx.notify();
+        }
+    }
+
+    /// Up and Down: the role before or after the chosen one, stopping at
+    /// the ends.
+    fn step(&mut self, forward: bool, cx: &mut Context<'_, Self>) {
+        let roles = &self.request.roles;
+        let Some(at) = roles.iter().position(|r| *r == self.chosen) else {
+            return;
+        };
+        let next = if forward {
+            (at + 1).min(roles.len() - 1)
+        } else {
+            at.saturating_sub(1)
+        };
+        self.choose(roles[next], cx);
+    }
+
     fn answer(&mut self, role: Option<Role>, window: &mut Window, cx: &mut Context<'_, Self>) {
-        if let Some(reply) = self.reply.take() {
-            match role {
-                Some(role) => reply.approve(role),
-                None => reply.deny(),
+        let Some(reply) = self.reply.take() else {
+            return;
+        };
+        // The server closed the prompt and its word to close the window is
+        // still on the way: nothing was decided, so say nothing.
+        if !reply.is_pending() {
+            self.closed_by_server(window);
+            return;
+        }
+        let (stage, height) = match role {
+            Some(role) => {
+                reply.approve(role);
+                (Stage::Allowed(role), ALLOWED_HEIGHT)
             }
+            None => {
+                reply.deny();
+                (Stage::Denied, SHORT_HEIGHT)
+            }
+        };
+        self.stage = stage;
+        self.closes_at = Some(Instant::now() + OUTCOME_FOR);
+        // Only an outcome counts down ("Closes in 5s"); a window that asks
+        // has no clock.
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(TICK).await;
+                if this
+                    .update_in(cx, |this, window, cx| this.tick(window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        // The outcome's body is new: the asking body's overflow must not
+        // grow it.
+        self.scroll = ScrollHandle::new();
+        // Return and Esc close the outcome, whatever was clicked.
+        window.focus(&self.focus, cx);
+        self.resize(height, window, cx);
+        cx.notify();
+    }
+
+    /// The server closed the prompt unanswered: every connection waiting
+    /// on it went away, or the server stopped. Nobody is left to answer
+    /// for, so the window goes. An outcome on screen stays.
+    fn closed_by_server(&mut self, window: &mut Window) {
+        if self.stage != Stage::Asking {
+            return;
         }
-        let id = self.request.id.clone();
-        if let Some(prompts) = cx.try_global::<Prompts>()
-            && prompts.0.contains_key(&id)
-        {
-            cx.update_global::<Prompts, _>(|prompts, _| {
-                prompts.0.remove(&id);
-            });
-        }
+        log::info!(
+            "approval window for agent {:?} closed: nobody is waiting on it",
+            self.request.client_name
+        );
+        // The server has moved on; the reply is no answer now.
+        self.reply = None;
         window.remove_window();
+    }
+
+    /// Size the window to `height`. macOS keeps a resized window's bottom
+    /// edge, so there AppKit does it, keeping the top, and outside any
+    /// update.
+    fn resize(&mut self, height: f32, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.asked_height = height;
+        #[cfg(target_os = "macos")]
+        {
+            let _ = window;
+            let title = prompt_title(&self.request);
+            cx.spawn(async move |_, _| {
+                if !crate::macos::set_prompt_height(&title, height) {
+                    log::debug!("the approval window was not resized: no open panel");
+                }
+            })
+            .detach();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = cx;
+            window.resize(size(px(PROMPT_WIDTH), px(height)));
+        }
+    }
+
+    /// Grows the window by what its body overflowed in the last frame: a
+    /// long client title, a wider font. The height for each stage is what
+    /// the design's content needs; this keeps the buttons clear of
+    /// anything more.
+    fn fit(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let overflow = self.scroll.max_offset().y.as_f32();
+        if overflow < 1.0 {
+            return;
+        }
+        let want = (window.viewport_size().height.as_f32() + overflow)
+            .ceil()
+            .min(MAX_HEIGHT);
+        if want <= self.asked_height + 0.5 {
+            return;
+        }
+        self.asked_height = want;
+        cx.spawn_in(window, async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| this.resize(want, window, cx));
+        })
+        .detach();
+    }
+
+    fn tick(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.closes_at.is_some_and(|at| Instant::now() >= at) {
+            window.remove_window();
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        if modifiers.platform || modifiers.control || modifiers.alt || modifiers.function {
+            return;
+        }
+        // A held key repeats: one Return allows, and its repeats must not
+        // also close the outcome.
+        if event.is_held || self.opened_at.elapsed() < KEY_GRACE {
+            return;
+        }
+        match (self.stage, keystroke.key.as_str()) {
+            (Stage::Asking, "enter") => self.answer(Some(self.chosen), window, cx),
+            (Stage::Asking, "escape") => self.answer(None, window, cx),
+            (Stage::Asking, "up") => self.step(false, cx),
+            (Stage::Asking, "down") => self.step(true, cx),
+            (Stage::Asking, digit @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")) => {
+                let index = digit.parse::<usize>().unwrap_or(0).saturating_sub(1);
+                match self.request.roles.get(index) {
+                    Some(&role) => self.choose(role, cx),
+                    None => return,
+                }
+            }
+            (_, "enter" | "escape") => window.remove_window(),
+            _ => return,
+        }
+        cx.stop_propagation();
+    }
+
+    /// Where the window is, for tests.
+    #[cfg(test)]
+    pub fn stage(&self) -> Stage {
+        self.stage
+    }
+
+    /// The role Allow would approve with, for tests.
+    #[cfg(test)]
+    pub fn chosen(&self) -> Role {
+        self.chosen
     }
 
     /// Whether the prompt still waits for an answer, for tests.
@@ -799,102 +1072,494 @@ impl ApprovalWindow {
     pub fn pending(&self) -> bool {
         self.reply.as_ref().is_some_and(ApprovalReply::is_pending)
     }
+
+    /// The height last asked of the window, for tests.
+    #[cfg(test)]
+    pub fn asked_height(&self) -> f32 {
+        self.asked_height
+    }
+
+    /// Lets keys through at once, for tests.
+    #[cfg(test)]
+    pub fn skip_key_grace(&mut self) {
+        self.opened_at = Instant::now() - KEY_GRACE;
+    }
+
+    // ---- Drawing -------------------------------------------------------------
+
+    fn asking(&self, cx: &mut Context<'_, Self>) -> Div {
+        let roles = self
+            .request
+            .roles
+            .iter()
+            .enumerate()
+            .map(|(index, &role)| role_card(index, role, role == self.chosen, cx));
+        let chosen = self.chosen;
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("mcp-approval-body")
+                    .track_scroll(&self.scroll)
+                    .overflow_y_scroll()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.0))
+                    .pt(px(4.0))
+                    .px(px(24.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(tracked("Local agent", 9.5, 600.0, 0.14, theme::accent()))
+                            .child(heading(format!("Allow {} to use PwrRoute?", self.client())))
+                            .child(who(&self.request, Some(chip("name sent by the client")))),
+                    )
+                    .child(crate::widgets::paragraph(
+                        "An MCP client on this computer wants to connect. PwrRoute can't confirm \
+                         who is calling, so the role is a limit on what it may do. Links it asks \
+                         about stay in memory.",
+                        11.5,
+                        17.8,
+                        theme::text_secondary(),
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(tracked("Role", 9.5, 600.0, 0.14, theme::text_subtle()))
+                            .child(div().flex().flex_col().gap(px(2.0)).children(roles)),
+                    )
+                    .child(permissions(chosen)),
+            )
+            .child(
+                footer()
+                    .child(div().flex_1())
+                    .child(
+                        Button::new(DENY_ID)
+                            .focusable(false)
+                            .accessibility_label("Deny")
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.answer(None, window, cx);
+                            }))
+                            .child(key_button("Deny", "esc", ButtonKind::Default)),
+                    )
+                    .child(
+                        Button::new(ALLOW_ID)
+                            .focusable(false)
+                            .accessibility_label(format!("Allow as {chosen}"))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let role = this.chosen;
+                                this.answer(Some(role), window, cx);
+                            }))
+                            .child(key_button(
+                                format!("Allow as {chosen}"),
+                                "\u{21a9}",
+                                ButtonKind::Primary,
+                            )),
+                    ),
+            )
+    }
+
+    fn outcome(&self, cx: &mut Context<'_, Self>) -> Div {
+        let client = self.client();
+        let (glyph, fill, ink, title, role_chip, lead): (_, _, _, String, _, &str) =
+            match self.stage {
+                Stage::Allowed(role) => (
+                    "\u{2713}",
+                    theme::success_soft(),
+                    theme::success_text(),
+                    format!("{client} can use PwrRoute"),
+                    Some(toned_chip(role.to_string(), Tone::Ok)),
+                    "Its request goes ahead now. Change the role or revoke it any time in \
+                     Settings \u{203a} Local agents.",
+                ),
+                Stage::Denied | Stage::Asking => (
+                    "\u{2715}",
+                    theme::danger_soft(),
+                    theme::danger_text(),
+                    format!("{client} was denied"),
+                    None,
+                    "Its calls are refused until it reconnects. To be asked again, reconnect \
+                     PwrRoute's MCP server in the agent, or restart it.",
+                ),
+            };
+        let closes = self.closes_at.map(|at| {
+            let left = at
+                .saturating_duration_since(Instant::now())
+                .as_secs_f32()
+                .ceil();
+            mono(
+                format!("Closes in {left}s"),
+                10.5,
+                500.0,
+                theme::text_subtle(),
+            )
+        });
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("mcp-approval-body")
+                    .track_scroll(&self.scroll)
+                    .overflow_y_scroll()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.0))
+                    .pt(px(4.0))
+                    .px(px(24.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(36.0))
+                            .rounded_full()
+                            .bg(fill)
+                            .child(text(glyph, 16.0, 600.0, ink)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(heading(title))
+                            .child(who(&self.request, role_chip)),
+                    )
+                    .child(crate::widgets::paragraph(
+                        lead,
+                        11.5,
+                        17.8,
+                        theme::text_secondary(),
+                    ))
+                    .when_some(
+                        match self.stage {
+                            Stage::Allowed(role) => Some(role),
+                            _ => None,
+                        },
+                        |body, role| body.child(permissions(role)),
+                    ),
+            )
+            .child(
+                footer()
+                    .children(closes)
+                    .child(div().flex_1())
+                    .when(matches!(self.stage, Stage::Allowed(_)), |row| {
+                        row.child(
+                            Button::new(LOCAL_AGENTS_ID)
+                                .focusable(false)
+                                .accessibility_label("Open Settings, Local agents")
+                                .cursor_pointer()
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    cx.defer(|cx| {
+                                        crate::settings::open(
+                                            cx,
+                                            Some(crate::settings::Pane::LocalAgents),
+                                        );
+                                    });
+                                    window.remove_window();
+                                }))
+                                .child(button("Local agents\u{2026}", ButtonKind::Default, false)),
+                        )
+                    })
+                    .child(
+                        Button::new(DONE_ID)
+                            .focusable(false)
+                            .accessibility_label("Done")
+                            .cursor_pointer()
+                            .on_click(cx.listener(|_, _, window, _| window.remove_window()))
+                            .child(key_button("Done", "\u{21a9}", ButtonKind::Primary)),
+                    ),
+            )
+    }
 }
 
 impl Render for ApprovalWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let request = &self.request;
-        let client = request
-            .client_title
-            .clone()
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| request.client_name.clone());
-        let roles = request.roles.clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        self.fit(window, cx);
+        let body = match self.stage {
+            Stage::Asking => self.asking(cx),
+            _ => self.outcome(cx),
+        };
         div()
             .id("mcp-approval")
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.key(event, window, cx);
+            }))
             .size_full()
             .flex()
             .flex_col()
-            .gap(px(14.0))
-            .pt(px(crate::chrome::STRIP_HEIGHT + 12.0))
-            .px(px(24.0))
-            .pb(px(20.0))
+            .pt(px(crate::chrome::STRIP_HEIGHT))
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
-            .child(text(
-                format!("Allow {client} to use PwrRoute?"),
-                16.0,
-                600.0,
-                theme::text_primary(),
-            ))
-            .child(div().flex().flex_col().gap(px(4.0)).child(mono(
-                format!(
-                    "{} \u{00b7} {}",
-                    request.client_name, request.client_version
-                ),
-                11.0,
-                500.0,
-                theme::text_subtle(),
-            )))
-            .child(crate::widgets::paragraph(
-                "An MCP client on this computer is connecting. The name is what it sent, so a \
-                 role limits what it may do; it does not prove who is calling. Links it asks \
-                 about stay in memory. Change or revoke the role later in Settings \u{203a} \
-                 Local agents.",
-                11.5,
-                17.0,
-                theme::text_secondary(),
-            ))
-            .child(
+            .child(body)
+    }
+}
+
+/// The window's title, wrapping: a client title is the client's to choose,
+/// and a long one must not run off the edge.
+fn heading(content: String) -> Div {
+    div()
+        .min_w_0()
+        .font_family(theme::SANS)
+        .font_weight(theme::weight(700.0))
+        .text_size(px(17.0))
+        .line_height(px(21.0))
+        .text_color(theme::text_primary())
+        .child(content)
+}
+
+/// The client as it named itself: name and version, mono, and a chip.
+fn who(request: &ApprovalRequest, chip: Option<Div>) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(8.0))
+        .child(div().min_w_0().max_w_full().child(crate::widgets::one_line(
+            format!(
+                "{} \u{00b7} {}",
+                request.client_name,
+                clip(&request.client_version, MAX_VERSION)
+            ),
+            theme::mono_family(500.0),
+            500.0,
+            11.0,
+            14.0,
+            theme::text_subtle(),
+        )))
+        .children(chip)
+}
+
+/// One role: a radio, its name, its key and what it may do. The chosen one
+/// is lit; a click chooses, never approves.
+fn role_card(index: usize, role: Role, chosen: bool, cx: &mut Context<'_, ApprovalWindow>) -> Div {
+    let name = role.to_string();
+    let id = gpui_kit::ElementId::Name(SharedString::from(format!(
+        "{ROLE_ID_PREFIX}-{}",
+        name.to_ascii_lowercase()
+    )));
+    let key = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+        .get(index)
+        .copied();
+    let radio = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .mt(px(1.0))
+        .size(px(14.0))
+        .rounded_full()
+        .border_1()
+        .border_color(if chosen {
+            theme::accent()
+        } else {
+            theme::border_strong()
+        })
+        .bg(theme::bg_input())
+        .when(chosen, |radio| {
+            radio.child(div().size(px(6.0)).rounded_full().bg(theme::accent()))
+        });
+    // Keys go to the window, never a card: the cards are a radio group
+    // that Up, Down and the digits move through.
+    let card = Button::new(id)
+        .focusable(false)
+        .selected(chosen)
+        .role(gpui_kit::Role::RadioButton)
+        .aria_toggled(if chosen {
+            gpui_kit::Toggled::True
+        } else {
+            gpui_kit::Toggled::False
+        })
+        .aria_selected(chosen)
+        .accessibility_label(format!("{name} role"))
+        .w_full()
+        .flex()
+        .items_start()
+        .gap(px(10.0))
+        .py(px(9.0))
+        .px(px(12.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(if chosen {
+            theme::accent_border()
+        } else {
+            theme::border_subtle()
+        })
+        .bg(if chosen {
+            theme::bg_row_active()
+        } else {
+            theme::bg_elevated()
+        })
+        .cursor_pointer()
+        .when(!chosen, |card| {
+            card.hover(|style| {
+                style
+                    .border_color(theme::border_default())
+                    .bg(theme::bg_hover())
+            })
+        })
+        .on_click(cx.listener(move |this, _, _, cx| this.choose(role, cx)))
+        .child(radio)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(text(
+                            name.clone(),
+                            12.5,
+                            600.0,
+                            if chosen {
+                                theme::accent_bright()
+                            } else {
+                                theme::text_primary()
+                            },
+                        ))
+                        .child(div().flex_1())
+                        .children(key.map(|key| {
+                            key_cap_in(key, 15.0, 9.0, theme::border_subtle(), theme::text_subtle())
+                        })),
+                )
+                .child(crate::widgets::paragraph(
+                    role.description(),
+                    10.5,
+                    15.2,
+                    theme::text_muted(),
+                )),
+        );
+    // The focus ring: an accent edge 1px outside the chosen card.
+    div()
+        .p(px(1.0))
+        .border_2()
+        .rounded(px(11.0))
+        .border_color(if chosen {
+            theme::accent()
+        } else {
+            theme::transparent()
+        })
+        .child(card)
+}
+
+/// `text` cut to `max` characters, with an ellipsis when cut.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('\u{2026}');
+    cut
+}
+
+/// What `role` may do, in two columns: what every role has on the left,
+/// what the larger roles add on the right.
+fn permissions(role: Role) -> Div {
+    let (every, more) = Permission::ALL.split_at(4);
+    let column = |list: &[Permission]| {
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .children(list.iter().map(|&permission| {
+                let allowed = role.allows(permission);
+                let (glyph, fill, mark, color) = if allowed {
+                    (
+                        "\u{2713}",
+                        theme::success_soft(),
+                        theme::success_text(),
+                        theme::text_secondary(),
+                    )
+                } else {
+                    (
+                        "\u{2014}",
+                        theme::bg_elevated(),
+                        theme::text_subtle(),
+                        theme::text_subtle(),
+                    )
+                };
                 div()
                     .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .children(roles.into_iter().map(|role| {
-                        let id = gpui_kit::ElementId::Name(SharedString::from(format!(
-                            "{APPROVE_ID_PREFIX}-{}",
-                            role.to_string().to_ascii_lowercase()
-                        )));
-                        Button::new(id)
-                            .accessibility_label(format!("Allow as {role}"))
-                            .w_full()
-                            .flex_col()
-                            .items_start()
-                            .gap(px(4.0))
-                            .py(px(10.0))
-                            .px(px(12.0))
-                            .rounded(px(8.0))
-                            .border_1()
-                            .border_color(theme::border_subtle())
-                            .bg(theme::bg_elevated())
-                            .cursor_pointer()
-                            .hover(|style| style.border_color(theme::border_default()))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.answer(Some(role), window, cx);
-                            }))
-                            .child(text(role.to_string(), 12.5, 600.0, theme::text_primary()))
-                            .child(crate::widgets::paragraph(
-                                role.description(),
-                                10.5,
-                                15.0,
-                                theme::text_muted(),
-                            ))
-                    })),
-            )
-            .child(
-                div().flex().justify_end().mt_auto().child(
-                    Button::new(DENY_ID)
-                        .accessibility_label("Deny")
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.answer(None, window, cx);
-                        }))
-                        .child(button("Deny", ButtonKind::Default, false)),
-                ),
-            )
-    }
+                    .items_start()
+                    .gap(px(7.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_center()
+                            .mt(px(1.0))
+                            .size(px(12.0))
+                            .rounded(px(3.0))
+                            .bg(fill)
+                            .child(text(glyph, 8.0, 400.0, mark)),
+                    )
+                    .child(div().flex_1().min_w_0().child(crate::widgets::paragraph(
+                        permission.label(),
+                        10.5,
+                        14.2,
+                        color,
+                    )))
+            }))
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .py(px(10.0))
+        .px(px(12.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme::border_subtle())
+        .bg(theme::bg_panel())
+        .child(text(
+            format!("{role} can"),
+            11.0,
+            600.0,
+            theme::text_secondary(),
+        ))
+        .child(
+            div()
+                .flex()
+                .gap(px(14.0))
+                .child(column(every))
+                .child(column(more)),
+        )
+}
+
+fn footer() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(8.0))
+        .pt(px(14.0))
+        .px(px(24.0))
+        .pb(px(18.0))
 }
 
 #[cfg(test)]
@@ -1285,30 +1950,229 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
-    #[gpui_kit::test]
-    fn the_approval_window_answers_the_prompt_once(cx: &mut TestAppContext) {
+    /// An approval window over a fresh prompt, drawn.
+    fn approval_window<'a>(
+        cx: &'a mut TestAppContext,
+        name: &str,
+    ) -> (
+        Entity<ApprovalWindow>,
+        &'a mut VisualTestContext,
+        pwrroute_mcp::ApprovalAnswer,
+    ) {
         cx.update(|cx| {
             crate::assets::load_fonts(cx);
             cx.set_global(Prompts::default());
         });
-        let (request, reply, mut answer) = prompt("claude-code");
-        let (view, cx) = cx.add_window_view(move |_, cx| ApprovalWindow::new(request, reply, cx));
+        let (request, reply, answer) = prompt(name);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| ApprovalWindow::new(request, reply, window, cx));
         draw(cx);
+        (view, cx, answer)
+    }
+
+    fn role_id(role: &str) -> SharedString {
+        SharedString::from(format!("{ROLE_ID_PREFIX}-{role}"))
+    }
+
+    #[gpui_kit::test]
+    fn a_role_card_chooses_and_allow_decides(cx: &mut TestAppContext) {
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
+        // Reader, the least role, is chosen at open.
+        assert_eq!(view.read_with(cx, |view, _| view.chosen()), Role::Reader);
+        assert!(visible(cx, ALLOW_ID));
+
+        // A card only chooses.
+        click(cx, role_id("editor"));
+        draw(cx);
+        assert_eq!(view.read_with(cx, |view, _| view.chosen()), Role::Editor);
         assert!(view.read_with(cx, |view, _| view.pending()));
-        let opener = SharedString::from(format!("{APPROVE_ID_PREFIX}-opener"));
-        assert!(visible(cx, opener.clone()));
-        click(cx, opener);
+        assert_eq!(answer.get(), None);
+
+        // Allow approves with the chosen role, once, and the window stays
+        // to say so.
+        click(cx, ALLOW_ID);
+        draw(cx);
         assert_eq!(
             answer.get(),
-            Some(pwrroute_mcp::ApprovalDecision::Approve { role: Role::Opener })
+            Some(pwrroute_mcp::ApprovalDecision::Approve { role: Role::Editor })
         );
-        assert!(!view.read_with(cx, |view, _| view.pending()));
+        assert_eq!(
+            view.read_with(cx, |view, _| view.stage()),
+            Stage::Allowed(Role::Editor)
+        );
+        assert!(visible(cx, DONE_ID));
+        assert!(visible(cx, LOCAL_AGENTS_ID));
+        assert!(!visible(cx, ALLOW_ID));
+    }
 
-        let (request, reply, mut answer) = prompt("codex");
-        let (_view, cx) = cx.add_window_view(move |_, cx| ApprovalWindow::new(request, reply, cx));
-        draw(cx);
+    #[gpui_kit::test]
+    fn deny_denies_and_says_so(cx: &mut TestAppContext) {
+        let (view, cx, mut answer) = approval_window(cx, "codex");
         click(cx, DENY_ID);
+        draw(cx);
         assert_eq!(answer.get(), Some(pwrroute_mcp::ApprovalDecision::Deny));
+        assert_eq!(view.read_with(cx, |view, _| view.stage()), Stage::Denied);
+        assert!(visible(cx, DONE_ID));
+        assert!(!visible(cx, LOCAL_AGENTS_ID));
+    }
+
+    #[gpui_kit::test]
+    fn keys_choose_and_decide_after_the_grace(cx: &mut TestAppContext) {
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
+        view.update_in(cx, |view, window, cx| window.focus(&view.focus, cx));
+
+        // A Return meant for the terminal the window opened over.
+        cx.simulate_keystrokes("enter");
+        assert!(view.read_with(cx, |view, _| view.pending()));
+
+        view.update(cx, |view, _| view.skip_key_grace());
+        cx.simulate_keystrokes("2");
+        assert_eq!(view.read_with(cx, |view, _| view.chosen()), Role::Opener);
+        cx.simulate_keystrokes("down down up");
+        assert_eq!(view.read_with(cx, |view, _| view.chosen()), Role::Opener);
+        cx.simulate_keystrokes("3 enter");
+        assert_eq!(
+            answer.get(),
+            Some(pwrroute_mcp::ApprovalDecision::Approve { role: Role::Editor })
+        );
+
+        let (view, cx, mut answer) = approval_window(cx, "codex");
+        view.update_in(cx, |view, window, cx| {
+            window.focus(&view.focus, cx);
+            view.skip_key_grace();
+        });
+        cx.simulate_keystrokes("escape");
+        assert_eq!(answer.get(), Some(pwrroute_mcp::ApprovalDecision::Deny));
+        assert_eq!(view.read_with(cx, |view, _| view.stage()), Stage::Denied);
+    }
+
+    /// A click leaves the keys with the window: no card or button takes
+    /// them, so Return after a click on Allow closes the outcome, and a
+    /// held key's repeats do nothing.
+    #[gpui_kit::test]
+    fn keys_stay_with_the_window_after_a_click(cx: &mut TestAppContext) {
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
+        view.update(cx, |view, _| view.skip_key_grace());
+        click(cx, role_id("editor"));
+        cx.simulate_keystrokes("1");
+        assert_eq!(view.read_with(cx, |view, _| view.chosen()), Role::Reader);
+
+        click(cx, ALLOW_ID);
+        draw(cx);
+        assert_eq!(
+            answer.get(),
+            Some(pwrroute_mcp::ApprovalDecision::Approve { role: Role::Reader })
+        );
+        assert!(view.update_in(cx, |view, window, _| view.focus.is_focused(window)));
+
+        let windows = cx.windows().len();
+        cx.simulate_event(KeyDownEvent {
+            keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+            is_held: true,
+            prefer_character_input: false,
+        });
+        assert_eq!(cx.windows().len(), windows);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(cx.windows().len(), windows - 1);
+    }
+
+    /// Allow on a prompt the server already closed decides nothing: the
+    /// window goes rather than say the agent can use PwrRoute.
+    #[gpui_kit::test]
+    fn allow_on_a_closed_prompt_claims_no_outcome(cx: &mut TestAppContext) {
+        let (view, cx, answer) = approval_window(cx, "claude-code");
+        drop(answer);
+        let windows = cx.windows().len();
+        click(cx, ALLOW_ID);
+        assert_eq!(view.read_with(cx, |view, _| view.stage()), Stage::Asking);
+        assert_eq!(cx.windows().len(), windows - 1);
+    }
+
+    /// A new prompt for a name closes the window still up for it, and that
+    /// window's prompt gets no answer from it.
+    #[gpui_kit::test]
+    fn a_new_prompt_replaces_the_window_for_its_name(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::assets::load_fonts(cx);
+            cx.set_global(Prompts::default());
+        });
+        let (first, reply, mut first_answer) = prompt("claude-code");
+        cx.update(|cx| open_prompt(first, reply, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+
+        let (mut second, reply, _second_answer) = prompt("claude-code");
+        second.id = "approval-again".to_owned();
+        cx.update(|cx| open_prompt(second, reply, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(first_answer.get(), None);
+        let ids: Vec<String> = cx.update(|cx| cx.global::<Prompts>().0.keys().cloned().collect());
+        assert_eq!(ids, ["approval-again"]);
+    }
+
+    /// A title or version the client chose is cut, not drawn at any length.
+    #[gpui_kit::test]
+    fn a_long_client_title_is_cut(cx: &mut TestAppContext) {
+        let (view, cx, _answer) = approval_window(cx, "claude-code");
+        view.update(cx, |view, _| {
+            view.request.client_title = Some("Agent ".repeat(40));
+        });
+        let client = view.read_with(cx, |view, _| view.client());
+        assert!(client.chars().count() <= MAX_TITLE, "{client}");
+        assert!(client.ends_with('\u{2026}'), "{client}");
+        assert_eq!(clip("Claude Code", MAX_TITLE), "Claude Code");
+    }
+
+    #[gpui_kit::test]
+    fn a_prompt_the_server_closes_is_no_answer_and_an_outcome_stays(cx: &mut TestAppContext) {
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
+        view.update_in(cx, |view, window, _| view.closed_by_server(window));
+        // Nobody waits on it any more: no decision was sent.
+        assert_eq!(answer.get(), None);
+
+        let (view, cx, _answer) = approval_window(cx, "codex");
+        click(cx, ALLOW_ID);
+        view.update_in(cx, |view, window, _| view.closed_by_server(window));
+        draw(cx);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.stage()),
+            Stage::Allowed(Role::Reader)
+        );
+        assert!(visible(cx, DONE_ID));
+    }
+
+    /// A client title that wraps onto more lines grows the window, so the
+    /// buttons stay clear of the body.
+    #[gpui_kit::test]
+    fn the_window_grows_rather_than_crowd_the_buttons(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::assets::load_fonts(cx);
+            cx.set_global(Prompts::default());
+        });
+        let mut heights = Vec::new();
+        for title in [
+            None,
+            Some("An Agent With A Title Long Enough To Wrap Twice ".repeat(3)),
+        ] {
+            let (mut request, reply, _answer) = prompt("claude-code");
+            request.client_title = title;
+            let (view, cx) = cx
+                .add_window_view(move |window, cx| ApprovalWindow::new(request, reply, window, cx));
+            cx.simulate_resize(size(px(PROMPT_WIDTH), px(ASKING_HEIGHT)));
+            for _ in 0..3 {
+                draw(cx);
+                cx.run_until_parked();
+            }
+            heights.push(view.read_with(cx, |view, _| view.asked_height()));
+        }
+        // The test's text system measures its own way, so compare the two
+        // rather than hold the first to the design's height.
+        assert!(heights[0] >= ASKING_HEIGHT);
+        assert!(
+            heights[1] > heights[0],
+            "a long title asks for more: {heights:?}"
+        );
     }
 
     /// A prompt and the answer its reply lands on.
