@@ -339,7 +339,8 @@ it packs anyway, unsigned (ad hoc on macOS), and says so in a warning.
   scripts/release/upload-azure-signing-from-1password.sh` reads the
   "PwrRoute - Windows Azure Trusted Signing" item in the "PwrDrvr LLC" vault,
   one field per name above, and sets them on the `windows-signing`
-  environment. Rerun it after rotating the client secret.
+  environment, which must exist first with its reviewer and `v*` tag rules.
+  Rerun it after rotating the client secret.
 
 Optional repository secret `RELEASES_PAT` overrides `github.token` for creating
 the release. The sign jobs read the previous release with `github.token`.

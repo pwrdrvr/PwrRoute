@@ -150,7 +150,13 @@ item_json="$(op item get "$item_id" --account "$OP_ACCOUNT" --vault "$vault_id" 
 # Fields are matched by label anywhere in the item, sections included.
 read_field() {
   local field_name="$1"
+  local count
   local value
+  count="$(jq --arg label "$field_name" '[.fields[]? | select(.label == $label)] | length' <<<"$item_json")"
+  if [[ "$count" -gt 1 ]]; then
+    echo "Item '$item_title' has $count fields labeled '$field_name'; keep one." >&2
+    return 1
+  fi
   value="$(
     jq -r --arg label "$field_name" \
       'first(.fields[]? | select(.label == $label) | .value // empty) // empty' <<<"$item_json"
@@ -162,23 +168,47 @@ read_field() {
   printf "%s" "$value"
 }
 
-# Read everything before uploading anything, so a missing field leaves the
-# environment as it was.
+guid_pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+# Catches the usual Entra mix-ups before they surface as a failed release.
+check_field() {
+  local field_name="$1"
+  local value="$2"
+  case "$field_name" in
+    AZURE_TENANT_ID | AZURE_CLIENT_ID)
+      if [[ ! "$value" =~ $guid_pattern ]]; then
+        echo "$field_name on item '$item_title' is not a GUID." >&2
+        return 1
+      fi
+      ;;
+    AZURE_CLIENT_SECRET)
+      if [[ "$value" =~ $guid_pattern ]]; then
+        echo "AZURE_CLIENT_SECRET on item '$item_title' looks like the Secret ID;" >&2
+        echo "it must be the secret's Value, shown once when the secret is created." >&2
+        return 1
+      fi
+      ;;
+  esac
+}
+
+# Read everything before uploading anything, so a missing or wrong field
+# leaves the environment as it was.
 # Indexed arrays only: macOS ships bash 3.2, which has no associative arrays.
-variable_values=()
-for field in "${variable_fields[@]}"; do
-  if ! value="$(read_field "$field")"; then
-    exit 1
-  fi
-  variable_values+=("$value")
-done
-secret_values=()
-for field in "${secret_fields[@]}"; do
-  if ! value="$(read_field "$field")"; then
-    exit 1
-  fi
-  secret_values+=("$value")
-done
+read_fields() {
+  local field
+  local value
+  for field in "$@"; do
+    value="$(read_field "$field")" || exit 1
+    check_field "$field" "$value" || exit 1
+    field_values+=("$value")
+  done
+}
+field_values=()
+read_fields "${variable_fields[@]}"
+variable_values=("${field_values[@]}")
+field_values=()
+read_fields "${secret_fields[@]}"
+secret_values=("${field_values[@]}")
 
 for i in "${!variable_fields[@]}"; do
   gh variable set "${variable_fields[$i]}" --repo "$repo" --env "$environment" --body "${variable_values[$i]}"
