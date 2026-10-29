@@ -332,6 +332,14 @@ it packs anyway, unsigned (ad hoc on macOS), and says so in a warning.
   `pwrroute.exe`, `Update.exe` and the launcher stub before packing, then
   `PwrRoute-win-Setup.exe` and `PwrRoute-win.msi`. The job checks each one's
   Authenticode status and signer.
+  The service principal is the Entra app `pwrroute-release-signing`, with
+  the Artifact Signing Certificate Profile Signer role on account
+  `pwrdrvrsigning`; its name never appears in a signature. Upload all seven
+  from 1Password: `OP_ACCOUNT=<user id from op account list>
+  scripts/release/upload-azure-signing-from-1password.sh` reads the
+  "PwrRoute - Windows Azure Trusted Signing" item in the "PwrDrvr LLC" vault,
+  one field per name above, and sets them on the `windows-signing`
+  environment. Rerun it after rotating the client secret.
 
 Optional repository secret `RELEASES_PAT` overrides `github.token` for creating
 the release. The sign jobs read the previous release with `github.token`.
