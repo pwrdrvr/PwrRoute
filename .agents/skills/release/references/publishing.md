@@ -1,43 +1,36 @@
 # Publishing and recovery
 
-Read after the release PR merges, or when monitoring an existing release.
-Replace `X.Y.Z` with the concrete version in commands handed to the user.
-The agent verifies and monitors; the user merges, pushes or moves tags,
-approves signing, changes environment policies and promotes.
+Read after the verified release preparation is pushed directly to main, or
+when monitoring an existing release. The agent creates the initial release
+tag and monitors the run. The user approves signing, changes environment
+policies, moves existing tags, executes recovery reruns and promotes.
 
-## Hand off the tag
+## Create the release tag
 
-Confirm the release PR is merged, required checks passed, and fresh
-`origin/main` is the intended release commit. The command below tags the tip of
-main: if main advanced beyond the release commit, explain that and resolve the
-target with the user before handing it off. If the tag already exists, inspect
-its target and the existing run rather than creating or moving it.
+Confirm preparation checks passed and the release commit is present on
+`origin/main`. Pull clean main with `git pull --ff-only origin main`, then
+verify its exact commit, workspace version and nonempty changelog section.
+If main advanced beyond the verified release commit, reconcile the additional
+changes and verify them before releasing. If the tag already exists, inspect
+its target and existing run; never move or repush it automatically.
 
-For the standard main clone when main still points to the release commit,
-give the user this exact command with the version substituted; do not execute it:
+Create an annotated tag at the verified full release commit SHA, then push
+only that tag. Substitute concrete values; do not tag an unverified moving ref:
 
 ```bash
-git -C ~/pwrdrvr/PwrRoute fetch origin && git -C ~/pwrdrvr/PwrRoute tag -a vX.Y.Z origin/main -m "vX.Y.Z" && git -C ~/pwrdrvr/PwrRoute push origin vX.Y.Z
+git tag -a vX.Y.Z RELEASE_COMMIT_SHA -m "vX.Y.Z"
+git push origin refs/tags/vX.Y.Z
 ```
 
-If main advanced and the user selects the earlier release commit, replace only
-the tag command's `origin/main` target with that verified full commit SHA and
-explain the selected target. If the user wants the later commits included,
-prepare a follow-up release-prep PR with reconciled changelog coverage and
-rerun the preparation checks. Wait for the user to merge it, then treat that
-new release-prep merge commit as the release target throughout verification.
+The authenticated operator's push may print `Bypassed rule violations` about
+restricted tag creation. This has accompanied successful releases; verify the
+remote tag instead of treating the notice alone as a failure. If policy or
+permission review rejects the push, report it and stop. Do not change rules
+or retry through another mechanism. The annotated-tag command preserves the
+operator's established release process; do not silently change signing policy.
 
-The user's push may print `Bypassed rule violations` about restricted tag
-creation; this has been expected for the user's permitted tag creation. It is
-not an instruction for the agent to bypass a rule. If tag signing or another
-policy rejects the command, report it and leave the policy decision to the
-user. The ruleset includes required signatures and the workflow README calls
-for signed tags; the supplied `-a` command intentionally preserves the user's
-handoff (v0.2.2 was an unsigned annotated tag under the user's bypass). Do not
-assume another operator has that bypass or silently change signing policy.
-
-After the user pushes, fetch and verify the remote tag's peeled commit against
-the merged PR commit; inspect its subject and embedded workspace version:
+Verify the remote tag's peeled commit against the exact release commit;
+inspect its subject and embedded workspace version:
 
 ```bash
 git fetch origin --tags
@@ -46,8 +39,8 @@ git show vX.Y.Z:Cargo.toml
 git ls-remote origin 'refs/tags/vX.Y.Z*'
 ```
 
-Expect `chore(release): vX.Y.Z (#N)` and workspace version `X.Y.Z`. A mismatch
-stops the handoff; do not force-fetch, retag or repush to conceal it.
+Expect `chore(release): vX.Y.Z` and workspace version `X.Y.Z`. A mismatch
+stops publication; do not force-fetch, retag or repush to conceal it.
 
 ## Monitor the release run
 
