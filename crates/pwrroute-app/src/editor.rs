@@ -381,60 +381,28 @@ fn editable(
         return div().id(ElementId::Name(selector.into()));
     };
     let focused = text_field.focus.is_focused(window);
-    let (family, weight, size) = if look.mono {
-        (theme::mono_family(500.0), 500.0, 12.0)
-    } else {
-        (theme::SANS, 400.0, 12.5)
+    let shown = crate::text_field::Look {
+        mono: look.mono,
+        placeholder: look.placeholder,
     };
-    let content = if text_field.text.is_empty() {
-        div()
-            .text_color(theme::text_subtle())
-            .child(look.placeholder)
-    } else {
-        div()
-            .text_color(theme::text_primary())
-            .when(text_field.selected, |text| text.bg(theme::accent_soft()))
-            .child(text_field.shared())
-    };
-    let content = content
-        .min_w_0()
-        .whitespace_nowrap()
-        .map(|text| {
-            if focused {
-                text.text_ellipsis_start()
-            } else {
-                text.text_ellipsis()
-            }
+    let mut inner = input_box()
+        .w_full()
+        .gap(px(8.0))
+        .when(look.error, |input| {
+            input.border_color(theme::status_error())
         })
-        .font_family(family)
-        .font_weight(theme::weight(weight))
-        .text_size(px(size))
-        .line_height(px(size));
-    let content = crate::widgets::clip_x(content, size, size);
-    let caret_bar = || div().flex_none().w(px(1.0)).h(px(14.0)).bg(theme::accent());
-    let mut inner = input_box().w_full().gap(px(8.0)).when(look.error, |input| {
-        input.border_color(theme::status_error())
-    });
-    if text_field.text.is_empty() && focused {
-        inner = inner.child(caret_bar());
-    }
-    inner = inner.child(content);
-    if !text_field.text.is_empty() && focused && !text_field.selected {
-        inner = inner.child(caret_bar().ml(px(-8.0)));
-    }
+        .child(crate::text_field::text(text_field, shown, focused));
     inner = inner.when_some(trailing, |input, trailing| {
         input.pr(px(6.0)).child(div().ml_auto().child(trailing))
     });
     let boxed = if focused { focus_ring(inner) } else { inner };
-    let focus = text_field.focus.clone();
     let id: SharedString = selector.into();
-    div()
+    let area = div()
         .id(ElementId::Name(id.clone()))
-        .debug_selector(move || id.to_string())
-        .track_focus(&focus)
+        .debug_selector(move || id.to_string());
+    crate::text_field::hit_area(area, text_field)
         .w_full()
         .min_w_0()
-        .cursor_text()
         .child(boxed)
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
             let taken = match field {

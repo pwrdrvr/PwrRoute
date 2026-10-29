@@ -556,6 +556,12 @@ their own modules.
   in an ellipsis; a browser row's hint is `profiles_hint` (two names, then
   a count). A field's value is `field_label`, never `theme::text`, which
   does not shrink.
+- **Every editable field is a `text_field::TextField`.** It owns the caret
+  and selection (arrows, ⌥/⌘ moves, Shift, click, drag, double-click) and
+  draws through `text_field::field`, or `text_field::text` inside a
+  caller's own `.inp` box made a `text_field::hit_area` (the rule editor,
+  Activity's sheet). Never draw a field's text as a plain div: it loses
+  the caret. Write the text only through `set`, so the caret follows.
 - **Never clip text at its line box.** `theme::text` and most one-line
   helpers set the line height to the font size, and Geist's glyphs are
   taller than that (1.14em, Geist Mono 1.3em), so `overflow_hidden` on
