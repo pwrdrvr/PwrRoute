@@ -83,6 +83,31 @@ Workspace lints (root `Cargo.toml`) deny `unsafe_code` and `clippy::all`.
 clippy::pedantic is not on yet; turning it on is its own change, with its
 allow-list written down.
 
+### Verification on Sandboxer
+
+- When the thread has the Sandboxer MCP (`create_sandbox` and `exec`
+  tools), do not run these on the local machine:
+  - `cargo xtask lint` or any part of it: clippy, `cargo deny`, the
+    THIRD_PARTY_LICENSES check.
+  - `cargo xtask licenses` or `cargo about`: cargo-about alone takes every
+    core for minutes.
+  - `cargo xtask test`, `cargo test`, `cargo build --release`.
+  - Linux Desktop E2E (`cargo xtask e2e`).
+- Run them in a sandbox with the
+  [Sandboxer verification skill](.agents/skills/sandboxer-verification/SKILL.md).
+  This rule applies wherever repository guidance says to run one of them.
+- Sandboxer is Ubuntu x64. It verifies Linux behavior only. macOS work
+  (`cargo xtask bundle`, `scripts/dev/start.sh`, the `screens` example,
+  macOS E2E) still runs on the laptop, in CI or through PwrSuiteLab.
+- Verify a commit, not a dirty tree. Use one sandbox per thread, started
+  from the `pwrroute-base-us-east` snapshot in the `us-east` region with
+  `noEnv: true`. Stop it after each run.
+- Attach the thread's PR and watch it with `notifyOn: ["merged", "closed"]`.
+  PwrAgent releases the thread's sandboxes when its PRs merge or close.
+- Use only the Sandboxer MCP tools. Do not run the `sbx` CLI.
+- Report the sandbox ID, the commit, and each check's exit status.
+- Without the Sandboxer MCP, run the checks locally as this file describes.
+
 ## Licenses
 
 `deny.toml` is the gate: its `[licenses] allow` list judges every crate that
@@ -94,7 +119,8 @@ family's shared list; ids the Rust port needed follow, each with its reason.
 (`about.toml`, `licenses/about.hbs`) plus `licenses/bundled.txt`, which lists
 what ships but is not a crate: the npm packages inside Finicky's config API
 bundle, the Geist fonts and Velopack's native binaries. After a dependency
-change run `cargo xtask licenses` and commit the result; when a bundled asset
+change run `cargo xtask licenses` (in a sandbox when the thread has
+Sandboxer; see above) and commit the result; when a bundled asset
 changes, edit `licenses/bundled.txt` by hand. Keep `about.toml`'s `accepted`
 list in step with `deny.toml`.
 

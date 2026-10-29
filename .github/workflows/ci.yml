@@ -169,6 +169,10 @@ jobs:
           # compiles cold for 35+ minutes. PRs restore main's cache instead.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # This pin decides the cargo-deny and cargo-about releases (0.20.2 and
+      # 0.9.2 at v2.87.29). scripts/sandboxer/verify.sh installs the same
+      # ones; move its pins with this one, as cargo-about's output changes
+      # between releases.
       - name: Install cargo-deny and cargo-about
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
