@@ -13,15 +13,21 @@ const jobs = file => [...read(`.github/workflows/${file}`).split('\njobs:\n')[1]
 const release = jobs('release.yml');
 const signing = release.find(job => job.id === 'macos-sign').body;
 
-test('all five macOS jobs select the lab pool; no hosted macOS in matrices or reusable workflows', () => {
+test('only release macOS signing is hosted; all other macOS jobs select the lab pool', () => {
   const audited = [];
   for (const file of workflows) {
     const source = read(`.github/workflows/${file}`);
-    assert.doesNotMatch(source, /\bmacos-(?:latest|\d[\w.-]*)\b/i, file);
+    // Permit hosted macOS only inside this one credentialed release job.
+    const otherJobs = file === 'release.yml' ? source.replace(signing, '') : source;
+    assert.doesNotMatch(otherJobs, /\bmacos-(?:latest|\d[\w.-]*)\b/i, file);
     for (const { id, body } of jobs(file)) {
       if (!/runs-on:.*macOS/i.test(body)) continue;
-      assert.match(body, /runs-on: \[self-hosted, macOS, ARM64, pwrdrvr-macos\]/, id);
-      assert.doesNotMatch(body.replace(/^ *#.*$/gm, ''), /prune-rust-toolchains|PWRROUTE_E2E_DISPOSABLE/, id);
+      if (file === 'release.yml' && id === 'macos-sign') {
+        assert.match(body, /^    runs-on: macos-26$/m, id);
+      } else {
+        assert.match(body, /runs-on: \[self-hosted, macOS, ARM64, pwrdrvr-macos\]/, id);
+        assert.doesNotMatch(body.replace(/^ *#.*$/gm, ''), /prune-rust-toolchains|PWRROUTE_E2E_DISPOSABLE/, id);
+      }
       audited.push(`${file}/${id}`);
     }
   }

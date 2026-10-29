@@ -16,9 +16,11 @@ Hosted Linux/Windows jobs prune the image's other Rust toolchains before
 macOS guests never prune shared toolchains. Only main saves CI caches.
 Linux jobs install GPUI's system libraries with `scripts/ci/install-linux-deps.sh`.
 
-All macOS work uses `[self-hosted, macOS, ARM64, pwrdrvr-macos]`: CI `macos`
-and `e2e-macos`, preview `preview-macos`, release `macos-prepare` and
-`macos-sign`. There are no hosted macOS fallbacks or macOS matrix entries.
+CI `macos` and `e2e-macos`, preview `preview-macos`, and release
+`macos-prepare` use `[self-hosted, macOS, ARM64, pwrdrvr-macos]`. Only the
+credentialed release `macos-sign` job uses GitHub-hosted `macos-26`: certificate
+import failed on the self-hosted guests in [run 40904812733](https://github.com/pwrdrvr/PwrRoute/actions/runs/40904812733/job/123563958316).
+That job packs, signs, notarizes and verifies the prepared app and DMG.
 The restricted organization runner group must allow `pwrdrvr/PwrRoute`.
 Fork PRs skip CI macOS and macOS previews, including labeled forks.
 
@@ -55,8 +57,9 @@ The required check names are pinned. Renaming the `Typecheck`, `Build` or
 chain.
 
 The CI macOS job validates the app bundle, icon catalog and ad hoc signature
-without creating a DMG. Preview and release jobs create the complete DMG on
-the same pool. `dmg-layout.py` follows PwrSuiteLab's direct `.DS_Store` writer:
+without creating a DMG. Previews create the complete DMG on the lab pool;
+release signing creates it on the hosted runner. `dmg-layout.py` follows
+PwrSuiteLab's direct `.DS_Store` writer:
 the background, 660×400 window, 112-point icons, app/Applications positions and
 custom volume icon remain present without Finder AppleEvents or an Automation
 grant. The background alias records only volume-relative paths. Images mount
@@ -189,7 +192,7 @@ version is promoted, Beta falls back to it.
 
 | Platform | Built on | Assets |
 |---|---|---|
-| macOS | self-hosted `pwrdrvr-macos`, both architectures, joined with `lipo`; packed by `vpk` | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
+| macOS | Built on self-hosted `pwrdrvr-macos`, both architectures joined with `lipo`; packed and signed on GitHub-hosted `macos-26` | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
 | Windows | windows-2025, static C runtime; packed by `vpk` | `PwrRoute-win-Setup.exe`, `PwrRoute-win.msi`, `PwrRoute-win-Portable.zip`, `PwrRoute-<v>-full.nupkg` (and `-delta`), `releases.win.json`, `assets.win.json`, `RELEASES`, `PwrRoute-<v>-windows-SHA256SUMS` |
 | Linux | ubuntu-22.04 and ubuntu-22.04-arm, for the oldest glibc floor | `PwrRoute-<v>-linux-<arch>.tar.gz`, `.deb`, `-SHA256SUMS` |
 
@@ -214,14 +217,14 @@ runs cargo or installs project dependencies.
 | `typecheck` | — | `cargo xtask release-check` and `lint` on Linux. |
 | `test` | — | `cargo xtask test` on Linux, beside `typecheck`. Both restore main's CI cache, so their job ids, env and toolchain steps match `ci.yml`'s. |
 | `macos-prepare` | — | `cargo xtask bundle --universal --app-only --require-icon-catalog`; archives `PwrRoute.app`, `PwrRoute.entitlements`, `PwrRoute.icns`, the DMG's `background.png`, `macos-dmg.sh`, `dmg-layout.py`, `macos-signing.py`, `install-vpk.sh` and the release notes. |
-| `macos-sign` | apple-signing | `vpk pack`, then the DMG from the packed app; verifies. |
+| `macos-sign` | apple-signing | On GitHub-hosted `macos-26`: `vpk pack`, then the DMG from the packed app; signs, notarizes and verifies. |
 | `windows-prepare` | — | `cargo build --release`; archives `pwrroute.exe`, README, LICENSE, THIRD_PARTY_LICENSES, `install-vpk.sh`, `vpk-pack-windows.ps1`, `PwrRoute.ico` and the release notes. |
 | `windows-sign` | windows-signing | `vpk pack` with Setup.exe and MSI; verifies. |
 | `linux` | — | `cargo xtask package-linux` on x64 and arm64. |
 | `publish` | — (`contents: write`) | Creates the Pre-release with every platform's assets. |
 | `distribution-audit-after` | — | Stub (see below). |
 
-### Persistent-guest signing cleanup
+### Signing credential cleanup
 
 `macos-sign` follows PwrAgnt's isolated signing workspace and private `mktemp`
 directory pattern. It clears only its own `release-signing` workspace before
@@ -238,9 +241,8 @@ immediately; the workflow's `if: always()` cleanup also runs after success,
 failure or cancellation of later steps, retries restoration, deletes only
 the job's keychain and removes its private directory even if restoration
 fails. Cleanup failures fail the job. No shared keychains, tools, caches or
-runner resources are pruned. A guest power loss or forced runner termination
-cannot execute cleanup; the lab operator must inspect such a guest before
-returning it to service.
+runner resources are pruned. Forced runner termination cannot execute cleanup;
+the signing runner is disposable.
 
 `cargo xtask lint` runs workflow/fork guards and mocked signing lifecycle tests
 without signing secrets. Python 3.9+ is required for the Unix packaging tests.

@@ -219,7 +219,9 @@ jobs:
     # The only macOS job with Apple credentials. It does not check out source
     # or run cargo; it packs the verified app from macos-prepare.
     needs: macos-prepare
-    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    # Certificate import/signing runs on a disposable hosted runner. Builds
+    # and all other macOS work stay on the persistent lab pool.
+    runs-on: macos-26
     timeout-minutes: 90
     environment: apple-signing
     defaults:
