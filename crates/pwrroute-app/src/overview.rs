@@ -3233,17 +3233,19 @@ fn browser_card(
         .border_color(theme::border_faint())
         .children(drawn);
 
-    let frame = card_frame(
-        div()
-            .debug_selector(move || format!("overview-card-frame-{index}"))
-            .flex()
-            .flex_col(),
-        card,
-        lit,
-        warm,
-    )
-    .child(header)
-    .child(nodes);
+    // GPUI paints a div's border after its children, so a frame holding the
+    // nodes would stroke its edge through their ports. The frame's fill,
+    // border and shadow are an underlay painted first; the 1px padding
+    // keeps the border's room, and the ports paint over it.
+    let frame = div()
+        .debug_selector(move || format!("overview-card-frame-{index}"))
+        .relative()
+        .flex()
+        .flex_col()
+        .p(px(1.0))
+        .child(card_frame(div().absolute().inset_0(), card, lit, warm))
+        .child(header)
+        .child(nodes);
     let element = div()
         .relative()
         .flex_none()
