@@ -37,13 +37,13 @@ case "${1:-}" in
     sha="$(git rev-parse HEAD)"
     mkdir -p .local/sandboxer
     bundle=".local/sandboxer/$sha.bundle"
+    trap 'rm -f "$bundle"' EXIT
     git bundle create -q "$bundle" HEAD
     code="$(curl -fsS --retry 3 -o /dev/null -w '%{http_code}' -T "$bundle" "$(file_url "$2" "$sha.bundle")")"
     if [[ "$code" != 201 ]]; then
       echo "upload answered HTTP $code, not 201" >&2
       exit 1
     fi
-    rm -f "$bundle"
     echo "$sha"
     ;;
   get)

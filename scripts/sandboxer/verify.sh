@@ -8,7 +8,8 @@
 #                                          Node 22+, CI's cargo-deny and cargo-about, cargo fetch
 #   scripts/sandboxer/verify.sh lint       cargo xtask lint (CI's Typecheck job)
 #   scripts/sandboxer/verify.sh test [args]
-#                                          cargo xtask test (CI's Test job); args go to cargo test
+#                                          cargo xtask test (CI's Test job); with args,
+#                                          cargo test --locked ARGS instead
 #   scripts/sandboxer/verify.sh build      cargo build --release (CI's Build job)
 #   scripts/sandboxer/verify.sh e2e [args] cargo xtask e2e under Xvfb (CI's Linux Desktop E2E)
 #   scripts/sandboxer/verify.sh licenses   cargo xtask licenses: regenerates THIRD_PARTY_LICENSES
@@ -112,7 +113,8 @@ run_step() {
   case "$step" in
     setup) setup ;;
     lint) cargo xtask lint ;;
-    test) cargo xtask test "$@" ;;
+    # xtask's test task takes no arguments, so a filtered run calls cargo.
+    test) if (($#)); then cargo test --locked "$@"; else cargo xtask test; fi ;;
     build) cargo build --release --locked --workspace ;;
     # Same display as CI. PWRROUTE_E2E_DISPOSABLE stays unset, so the
     # scenarios that make PwrRoute the default browser skip (e2e/AGENTS.md).

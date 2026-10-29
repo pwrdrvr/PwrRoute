@@ -56,7 +56,9 @@ The lint chain needs Node.js 22 or newer for its dependency-free CI classifier
 tests, plus two cargo tools:
 
 ```bash
-cargo install --locked cargo-deny cargo-about   # or: brew install cargo-deny cargo-about
+# The versions CI installs; another cargo-about writes different notices.
+cargo install --locked cargo-deny@0.20.2
+cargo install --locked --features cli cargo-about@0.9.2
 ```
 
 ## Common commands

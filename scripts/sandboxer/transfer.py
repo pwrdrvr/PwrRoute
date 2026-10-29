@@ -14,6 +14,7 @@ passing through the agent's context. The procedure is in
 import http.server
 import os
 import sys
+import tempfile
 
 ROOT = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/pwrroute/files"))
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8722
@@ -34,8 +35,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path is None or length < 0:
             self.send_error(400)
             return
-        partial = path + ".partial"
-        with open(partial, "wb") as out:
+        # A file of its own per request, so overlapping uploads never mix.
+        fd, partial = tempfile.mkstemp(dir=ROOT, prefix=".partial-")
+        with os.fdopen(fd, "wb") as out:
             remaining = length
             while remaining > 0:
                 chunk = self.rfile.read(min(remaining, 1 << 20))

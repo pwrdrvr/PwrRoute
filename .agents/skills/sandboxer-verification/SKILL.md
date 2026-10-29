@@ -101,8 +101,10 @@ git checkout -q --detach "$sha"
 rm "../files/$sha.bundle"
 ```
 
-Never check out while a check runs: `verify.sh` holds a lock while it runs,
-and `.local/sandboxer/status` has no `all ` or step line yet.
+Never check out while a check runs. `git checkout` does not take
+`verify.sh`'s lock, so wait for the run's last status line first: `all `
+for `all`, or the step's own line for a single step. Earlier step lines
+appear while `all` is still running.
 
 ## 4. Run the checks
 
