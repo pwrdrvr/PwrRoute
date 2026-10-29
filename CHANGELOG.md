@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.7.0 - 2026-10-29
+
+- Text editing - Move the caret with the arrow keys or a click in rule patterns, browser and profile fields, Test a link, Activity and Logs searches, and Settings › Privacy. Select text with Shift, a drag or a double-click, then replace, copy, cut or delete the selection. Word and line navigation and deletion work with the platform’s keyboard shortcuts, and long focused values scroll to keep the caret visible instead of forcing every edit to the end.
+
 ## v0.6.0 - 2026-10-28
 
 - Send links - Temporarily send the next link, the next 1–99 links, or all links to a chosen browser, profile or private window. The macOS tray's Send links controls offer a countdown and an optional one-hour limit; Windows and Linux have Next link and All links in the tray menu. Overview shows the destination, offers Next link here on its nodes and Back to rules, and dims the rules while All links is active. Activity and traces label sent links and name the rule they skipped. Rewrites still run, private-window links are kept at most host-only, and quitting returns to Rules. Help and agent-opened links count toward Next link; Test a link does not. Send links and Pause routing replace one another.
