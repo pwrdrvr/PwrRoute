@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.8.0 - 2026-10-29
+
+- Text editing - Move the caret with the arrow keys or a click in rule patterns, browser and profile fields, Test a link, Activity and Logs searches, and Settings › Privacy. Select text with Shift, a drag or a double-click, then replace, copy, cut or delete the selection. Word and line navigation and deletion work with the platform’s keyboard shortcuts, and long focused values scroll to keep the caret visible instead of forcing every edit to the end.
+- macOS installers - Moves app and DMG signing and notarization to GitHub-hosted Macs after v0.7.0 failed during certificate setup. This release carries forward v0.7.0’s text-editing improvements for Mac users.
+
 ## v0.7.0 - 2026-10-29
 
 - Text editing - Move the caret with the arrow keys or a click in rule patterns, browser and profile fields, Test a link, Activity and Logs searches, and Settings › Privacy. Select text with Shift, a drag or a double-click, then replace, copy, cut or delete the selection. Word and line navigation and deletion work with the platform’s keyboard shortcuts, and long focused values scroll to keep the caret visible instead of forcing every edit to the end.
