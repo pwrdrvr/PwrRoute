@@ -824,7 +824,6 @@ pub struct ApprovalWindow {
     pub request: ApprovalRequest,
     reply: Option<ApprovalReply>,
     pub focus: FocusHandle,
-    title: String,
     chosen: Role,
     stage: Stage,
     opened_at: Instant,
@@ -863,7 +862,6 @@ impl ApprovalWindow {
         .detach();
         let now = Instant::now();
         Self {
-            title: prompt_title(&request),
             chosen: request.roles.first().copied().unwrap_or(Role::Reader),
             stage: Stage::Asking,
             opened_at: now,
@@ -959,7 +957,7 @@ impl ApprovalWindow {
         #[cfg(target_os = "macos")]
         {
             let _ = window;
-            let title = self.title.clone();
+            let title = prompt_title(&self.request);
             cx.spawn(async move |_, _| {
                 if !crate::macos::set_prompt_height(&title, height) {
                     log::debug!("the approval window was not resized: no open panel");
