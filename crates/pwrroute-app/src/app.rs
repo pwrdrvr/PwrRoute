@@ -767,7 +767,7 @@ impl PwrRoute {
         self.rebuild_rail_kept(cx);
         if let Some(rail) = &mut self.rail {
             if let Some(field) = rail.patterns.first_mut() {
-                field.selected = !field.text.is_empty();
+                field.select_all();
             }
             rail.sample.set(url);
             rail.sample_edited = true;

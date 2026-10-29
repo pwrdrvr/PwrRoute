@@ -531,10 +531,11 @@ impl AddRule {
                 None => "No other recent link matches this pattern.".into(),
             };
         }
-        let mut head = format!(
-            "Would also catch these {n} recent {}",
-            plural(n, "link", "links")
-        );
+        let mut head = if n == 1 {
+            "Would also catch 1 recent link".to_owned()
+        } else {
+            format!("Would also catch these {n} recent links")
+        };
         if let Some(app) = app {
             head = format!("{head} from {app}");
         }
@@ -594,7 +595,8 @@ impl AddRule {
             ));
         }
         if parts.is_empty() {
-            format!("{head} \u{00b7} all unrouted, nothing changes hands")
+            let unrouted = plural(n, "unrouted", "all unrouted");
+            format!("{head} \u{00b7} {unrouted}, nothing changes hands")
         } else {
             format!("{head} \u{00b7} {}", parts.join("; "))
         }
@@ -1677,36 +1679,14 @@ fn pattern_field(
     cx: &mut Context<'_, PwrRoute>,
 ) -> Stateful<Div> {
     let focused = sheet.pattern.focus.is_focused(window);
-    let content = if sheet.pattern.text.is_empty() {
-        div()
-            .text_color(theme::text_subtle())
-            .child("example.com/*")
-    } else {
-        div()
-            .text_color(theme::text_primary())
-            .when(sheet.pattern.selected, |text| text.bg(theme::accent_soft()))
-            .child(sheet.pattern.shared())
+    let look = crate::text_field::Look {
+        mono: true,
+        placeholder: "example.com/*",
     };
-    let content = content
-        .min_w_0()
-        .whitespace_nowrap()
-        .text_ellipsis()
-        .font_family(theme::mono_family(500.0))
-        .font_weight(theme::weight(500.0))
-        .text_size(px(12.0))
-        .line_height(px(12.0));
-    let content = crate::widgets::clip_x(content, 12.0, 12.0);
-    let mut inner = input_box().w_full().child(content);
-    if focused && !sheet.pattern.selected {
-        inner = inner.child(
-            div()
-                .flex_none()
-                .w(px(1.0))
-                .h(px(14.0))
-                .bg(theme::accent())
-                .ml(px(-8.0)),
-        );
-    }
+    let mut inner =
+        input_box()
+            .w_full()
+            .child(crate::text_field::text(&sheet.pattern, look, focused));
     if sheet.any_from {
         inner = inner.child(text("any link", 10.5, 500.0, theme::text_muted()).ml(px(2.0)));
     }
@@ -1727,6 +1707,7 @@ fn pattern_field(
         .track_focus(&focus)
         .w_full()
         .cursor_text()
+        .on_mouse_down(gpui_kit::MouseButton::Left, sheet.pattern.on_press())
         .child(boxed)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
             if this.add_rule_key(event, cx) {
@@ -2314,7 +2295,7 @@ mod tests {
         }];
         assert_eq!(
             sheet.collision_caption(),
-            "Would also catch these 1 recent link \u{00b7} all unrouted, nothing changes hands"
+            "Would also catch 1 recent link \u{00b7} unrouted, nothing changes hands"
         );
     }
 
@@ -2587,7 +2568,7 @@ mod tests {
         sheet.collisions = vec![hit(Took::Unknown)];
         assert_eq!(
             sheet.collision_caption(),
-            "Would also catch these 1 recent link \u{00b7} 1 stays with an earlier rule or \
+            "Would also catch 1 recent link \u{00b7} 1 stays with an earlier rule or \
              ~/.finicky.ts's handlers, which run first"
         );
         sheet.position = Position::Top;

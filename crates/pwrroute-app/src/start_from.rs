@@ -552,7 +552,7 @@ impl PwrRoute {
             .as_mut()
             .and_then(|rail| rail.patterns.first_mut())
         {
-            field.selected = !field.text.is_empty();
+            field.select_all();
         }
     }
 }

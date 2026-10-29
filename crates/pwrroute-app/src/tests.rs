@@ -1647,6 +1647,67 @@ fn activity_adds_a_rule_from_a_row_in_one_click(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("activity-quick-rule-6").is_none());
 }
 
+/// The sheet's pattern is edited where the caret is, not only at its end:
+/// a click at the start, then Delete, trims the host's first label (the
+/// way `mcp.linear.app/*` becomes `linear.app/*`).
+#[gpui_kit::test]
+fn add_rule_pattern_edits_at_the_caret(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-caret");
+    cx.update(|cx| activity::install_feed(Feed::from_records(fixtures::activity()), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    let pattern = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let sheet = app.actions.sheet.as_ref().expect("the sheet is open");
+            (sheet.pattern.text.clone(), sheet.pattern.cursor())
+        })
+    };
+    assert_eq!(pattern(cx).0, "github.com/pwrdrvr/*");
+
+    // A click left of the text puts the caret before it.
+    let field = cx
+        .debug_bounds("add-rule-pattern")
+        .expect("the pattern field");
+    cx.simulate_click(
+        point(field.left() + px(4.0), field.center().y),
+        Modifiers::default(),
+    );
+    draw(cx);
+    assert_eq!(pattern(cx), ("github.com/pwrdrvr/*".into(), 0));
+    cx.simulate_keystrokes("delete delete delete delete delete delete delete");
+    draw(cx);
+    assert_eq!(pattern(cx), ("com/pwrdrvr/*".into(), 0));
+    cx.simulate_input("example.");
+    draw(cx);
+    assert_eq!(pattern(cx), ("example.com/pwrdrvr/*".into(), 8));
+
+    // ⌥← and ⌥⇧→ by word, then typing over the selection.
+    cx.simulate_keystrokes("cmd-right alt-left alt-shift-right");
+    draw(cx);
+    cx.simulate_input("acme");
+    draw(cx);
+    assert_eq!(pattern(cx).0, "example.com/acme/*");
+    // The collisions follow an edit in the middle, as they do at the end.
+    let caption = view.read_with(cx, |app, _| {
+        app.actions.sheet.as_ref().unwrap().collision_caption()
+    });
+    assert_eq!(caption, "No other recent link matches this pattern.");
+
+    // A click right of the text puts the caret at its end.
+    cx.simulate_keystrokes("home");
+    let field = cx
+        .debug_bounds("add-rule-pattern")
+        .expect("the pattern field");
+    cx.simulate_click(
+        point(field.right() - px(60.0), field.center().y),
+        Modifiers::default(),
+    );
+    draw(cx);
+    assert_eq!(pattern(cx), ("example.com/acme/*".into(), 18));
+}
+
 #[gpui_kit::test]
 fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     let dir = scratch("add-rule");
@@ -1829,7 +1890,7 @@ fn activity_adds_a_rule_for_any_link_from_the_app(cx: &mut TestAppContext) {
     assert!(any_from && only_from);
     assert_eq!(collisions, [fixtures::TEST_URL], "{caption}");
     assert!(
-        caption.starts_with("Would also catch these 1 recent link from Slack"),
+        caption.starts_with("Would also catch 1 recent link from Slack"),
         "{caption}"
     );
 
@@ -4747,7 +4808,7 @@ fn test_a_link_adds_a_rule_for_the_link(cx: &mut TestAppContext) {
             app.selection,
             app.handlers[7].clone(),
             (rail.sample.text.clone(), rail.sample_edited),
-            rail.patterns[0].selected,
+            rail.patterns[0].all_selected(),
         )
     });
     assert_eq!(screen, Screen::Rules);
@@ -5235,7 +5296,9 @@ fn a_new_rule_starts_from_the_last_link(cx: &mut TestAppContext) {
     // and the link in Try it.
     assert_eq!(handler(cx).rule.badge, RowBadge::Draft);
     assert_eq!(handler(cx).patterns, ["git.example.com/acme/*"]);
-    assert!(view.read_with(cx, |app, _| app.rail.as_ref().unwrap().patterns[0].selected));
+    assert!(view.read_with(cx, |app, _| {
+        app.rail.as_ref().unwrap().patterns[0].all_selected()
+    }));
     assert_eq!(sample(cx), "https://git.example.com/acme/widgets/pull/128");
     assert!(cx.debug_bounds("start-from").is_some());
     assert!(cx.debug_bounds("start-suggestions").is_some());
