@@ -9,6 +9,7 @@
 
 use gpui_kit::SharedString;
 
+use crate::build_info::BuildInfo;
 use crate::widgets::AppBadge;
 
 pub use crate::default_browser::DefaultState;
@@ -514,6 +515,8 @@ pub struct Diagnostics {
     pub log: SharedString,
     /// There is a log file, so Help › Logs has something to show.
     pub log_exists: bool,
+    /// Which build this is: the report's first lines.
+    pub build: BuildInfo,
 }
 
 impl Diagnostics {
@@ -525,26 +528,33 @@ impl Diagnostics {
             ""
         };
         format!(
-            "PwrRoute {}\nOS: {}\nData folder: {}\nRouter: {}\nRouting: {}{dry_run}\nLocal agents: {}\nLog: {}\n",
-            self.version, self.os, self.data_dir, self.router, self.routing, self.agents, self.log
+            "{}OS: {}\nData folder: {}\nRouter: {}\nRouting: {}{dry_run}\nLocal agents: {}\nLog: {}\n",
+            self.build.report(),
+            self.os,
+            self.data_dir,
+            self.router,
+            self.routing,
+            self.agents,
+            self.log
         )
     }
 }
 
 // ---- About ----------------------------------------------------------------
 
-/// Settings › About: the version, the license and where to find the
+/// Settings › About: the build, the license and where to find the
 /// project, as plain text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct About {
-    pub version: SharedString,
-    /// "release build for arm64".
-    pub build: SharedString,
     /// The license line: "MIT. Includes code from Finicky, …".
     pub license: SharedString,
     /// Where to find the project: each a label and the address as text.
     /// Help's rows open them; here they are words to copy.
     pub links: Vec<(SharedString, SharedString)>,
+    /// This copy: the Version row ("PwrRoute 0.5.0", "debug build for
+    /// aarch64"), the Source row and Copy build info (design: Build
+    /// Identity 2a, 2b).
+    pub source: BuildInfo,
 }
 
 // ---- Requests -------------------------------------------------------------

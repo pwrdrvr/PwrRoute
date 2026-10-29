@@ -592,6 +592,24 @@ their own modules.
   id, and "+ app" offers the apps that sent links recently
   (`start_from::recent_senders`), the apps other rules name, and any app
   in Applications through the file panel (`pwrroute_os::app_bundle_id`).
+- **Which build this is (`build.rs`, `build_info.rs`; design: Build
+  Identity).** `build.rs` reads the checkout, branch, commit (with its
+  subject and time), the tag on HEAD and uncommitted changes from `git`
+  once per build, into `PWRROUTE_BUILD_*` env vars; nothing reads a
+  checkout at run time. It reruns when HEAD, a branch, a tag or anything
+  under `crates/` changes, never on the index alone, and `git status`
+  runs with `--no-optional-locks` so a build never rewrites what it
+  watches. CI leaves the checkout out (a runner's path) and takes the
+  branch and tag from GitHub's env when the checkout is detached or
+  shallow. A release is the release profile at exactly `v{version}` with
+  no changes (`BuildInfo::is_release`); anything else is a dev build. The
+  rail's foot draws it (`chrome::build_block`): a release's one line, or
+  a dev build's block of checkout, branch and commit rows, each a click
+  to copy its full value (`PwrRoute::copy_build`, a check for
+  `COPIED_FOR`), and a copy-all button. Settings › About's Source row and
+  Copy build info, and the top of Diagnostics' Copy, write the same
+  `BuildInfo::report`. Tests and the `screens` example set
+  `PwrRoute::build` to `BuildInfo::fixture()`, never this checkout.
 - **Dock (`dock.rs`, `macos.rs`).** The Dock icon shows while the main,
   Settings, first-run or one of Help's windows (`DocWindow`, `LogsWindow`)
   is open (`Regular`) and goes when the last closes

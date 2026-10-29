@@ -6,14 +6,15 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, Render, Styled as _, Subscription, Window, div,
+    App, ClipboardItem, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, Render, Styled as _, Subscription, Window, div,
 };
 
 use pwrroute_engine::{Description, Engine, Limits, NativeHost, discovery};
 
 use crate::activity::Activity;
 use crate::activity_actions::{self, Actions, BrowserChoice};
+use crate::build_info::{BuildInfo, Part};
 use crate::config_view::{self, ConfigInCharge};
 use crate::editor::{Field, Rail};
 use crate::importer::ImportModel;
@@ -35,6 +36,9 @@ pub const ROOT_ID: &str = "pwrroute-root";
 /// How long after the last edit the file is written: long enough to take a
 /// typed word in one write, short enough that the router follows along.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
+
+/// How long a copied row of the rail's build block shows its check.
+pub const COPIED_FOR: Duration = Duration::from_millis(1500);
 
 /// The rail's sections. Overview is where every open lands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -125,6 +129,12 @@ pub struct PwrRoute {
     /// When this window last read the config in charge, for the rail
     /// foot's "reloaded".
     pub config_loaded: SystemTime,
+    /// Which build this is, for the rail's build block (`build_info.rs`);
+    /// a test or screenshot sets its own.
+    pub build: BuildInfo,
+    /// The build block's row that was just copied, and the copy's number:
+    /// its check shows until [`COPIED_FOR`] passes with no later copy.
+    pub build_copied: Option<(Part, u64)>,
     /// A debounced save is on its way.
     save_scheduled: bool,
     /// Pausing from the tray redraws the Overview.
@@ -200,6 +210,8 @@ impl PwrRoute {
             installed: Vec::new(),
             described,
             config_loaded: SystemTime::now(),
+            build: BuildInfo::current(),
+            build_copied: None,
             save_scheduled: false,
             _tray: tray,
         };
@@ -552,6 +564,28 @@ impl PwrRoute {
         let sample = rail.sample.text.clone();
         rail.try_result = (!problems && !sample.trim().is_empty())
             .then(|| self.probe.run(&sample, opener.as_deref(), selection));
+    }
+
+    /// Copies a part of the build (the rail's build block) and shows its
+    /// check for [`COPIED_FOR`].
+    pub fn copy_build(&mut self, part: Part, cx: &mut Context<'_, Self>) {
+        let Some(text) = self.build.copy_text(part) else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        let copy = self.build_copied.map_or(0, |(_, copy)| copy + 1);
+        self.build_copied = Some((part, copy));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COPIED_FOR).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.build_copied.is_some_and(|(_, last)| last == copy) {
+                    this.build_copied = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Writes the file once nothing has been typed for [`SAVE_DEBOUNCE`].

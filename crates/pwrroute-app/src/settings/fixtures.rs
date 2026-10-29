@@ -4,6 +4,8 @@
 //! shipped app builds every pane from `live.rs`, and these draw the design
 //! canvas (the `screens` example) and the window's tests.
 
+use crate::build_info::BuildInfo;
+
 use super::model::{
     About, AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, Configuration,
     DefaultBrowser, DefaultState, Diagnostics, FinickyConfig, Grant, ImportCandidate, ImportPlan,
@@ -75,7 +77,7 @@ pub fn updates() -> Updates {
 /// Diagnostics for a contrived machine; nothing here is read from this one.
 pub fn diagnostics() -> Diagnostics {
     Diagnostics {
-        version: "0.2.0 \u{00b7} release \u{00b7} arm64".into(),
+        version: "0.2.0 \u{00b7} debug \u{00b7} aarch64 \u{00b7} 5e1c07a2+".into(),
         os: "macOS 15.6 (arm64)".into(),
         data_dir: "~/Library/Application Support/PwrRoute".into(),
         data_dir_exists: true,
@@ -87,14 +89,25 @@ pub fn diagnostics() -> Diagnostics {
         agents: "Listening on ~/Library/Application Support/PwrRoute/mcp.sock".into(),
         log: "~/Library/Logs/PwrRoute/main.log".into(),
         log_exists: true,
+        build: build(),
+    }
+}
+
+/// A contrived dev build of 0.2.0: a worktree on a branch, built with
+/// uncommitted changes (design: Build Identity 2a).
+pub fn build() -> BuildInfo {
+    BuildInfo {
+        version: "0.2.0".to_owned(),
+        dirty: true,
+        built_at: Some(1_793_197_920),
+        ..BuildInfo::fixture()
     }
 }
 
 /// About for the contrived 0.2.0 copy.
 pub fn about() -> About {
     About {
-        version: "0.2.0".into(),
-        build: "release build for arm64".into(),
+        source: build(),
         license: "MIT. Includes code from Finicky, copyright John Sterling, under the MIT \
                   license; see LICENSE."
             .into(),

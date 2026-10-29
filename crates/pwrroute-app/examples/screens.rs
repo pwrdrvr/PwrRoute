@@ -42,6 +42,9 @@ mod assets;
 #[path = "../src/browser_scan.rs"]
 mod browser_scan;
 #[cfg(target_os = "macos")]
+#[path = "../src/build_info.rs"]
+mod build_info;
+#[cfg(target_os = "macos")]
 #[path = "../src/chrome.rs"]
 mod chrome;
 #[cfg(target_os = "macos")]
@@ -281,7 +284,7 @@ mod help {
     pub fn install(_: &mut gpui_kit::App) {}
 
     pub fn diagnostics_report(_: &mut gpui_kit::App) -> String {
-        "PwrRoute 0.2.0 \u{00b7} release \u{00b7} arm64\n".to_owned()
+        "PwrRoute 0.2.0 (debug, aarch64)\n".to_owned()
     }
 }
 #[cfg(target_os = "macos")]
@@ -388,7 +391,11 @@ fn main() {
             .expect("open a headless window");
         cx.update_window(handle.into(), |view, window, cx| {
             let view = view.downcast::<PwrRoute>().expect("the PwrRoute view");
-            view.update(cx, |app, cx| prepare(app, window, cx));
+            view.update(cx, |app, cx| {
+                // Contrived: the PNGs never show this checkout.
+                app.build = build_info::BuildInfo::fixture();
+                prepare(app, window, cx);
+            });
         })
         .expect("prepare the window");
         // Icons load as assets: draw until they have arrived.
@@ -2095,6 +2102,7 @@ fn main() {
             cx.update_window(handle.into(), |view, _, cx| {
                 let view = view.downcast::<PwrRoute>().expect("the PwrRoute view");
                 view.update(cx, |app, cx| {
+                    app.build = build_info::BuildInfo::fixture();
                     if let Some(config) = &mut app.config {
                         config.path = "~/.finicky.ts".into();
                     }

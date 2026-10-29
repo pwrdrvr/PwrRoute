@@ -27,6 +27,10 @@ env:
   # `0.0.1-pr.12` on a PR, `0.0.1-dev.34` on dispatch. xtask stamps packages
   # with it; Cargo.toml is left alone so `--locked` still holds.
   PREVIEW_SUFFIX: ${{ github.event.pull_request.number && format('pr.{0}', github.event.pull_request.number) || format('dev.{0}', github.run_number) }}
+  # The PR's head commit for the app's build block (crates/pwrroute-app/
+  # build.rs): a pull_request checkout is GitHub's merge commit, on no
+  # branch. Empty on dispatch, where HEAD is the branch's own commit.
+  PWRROUTE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || '' }}
 
 jobs:
   preview-macos:

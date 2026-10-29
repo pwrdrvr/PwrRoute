@@ -52,8 +52,11 @@ the family's panes in the same controls. General is a placeholder.
   redraws the pane when it finishes). `system_host`: Diagnostics (version,
   OS from its files, data folder, the router's socket and `listening()`,
   what routes links, the MCP door from the Local agents model) and About
-  (version, license, addresses as text; its License, notices and
-  Changelog buttons and Diagnostics' Open Logs ask for Help's windows).
+  (version, the build's Source and Copy build info from
+  `crate::build_info`, license, addresses as text; its License, notices
+  and Changelog buttons and Diagnostics' Open Logs ask for Help's
+  windows). Diagnostics' Version carries the short commit ("+" for
+  uncommitted changes) and its Copy starts with `BuildInfo::report`.
   A producer that reports back asks `settings::is_open` first, so a
   closed window reads no file.
 - **Privacy (`privacy.rs`, `privacy_host.rs`).** The view keeps the two

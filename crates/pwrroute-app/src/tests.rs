@@ -5360,6 +5360,91 @@ fn a_rewritten_link_starts_a_rule_for_where_it_went(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The rail's build block (design: Build Identity): each row copies its
+/// full value, the header's button the whole report, and a copy's check
+/// goes after `COPIED_FOR`.
+#[gpui_kit::test]
+fn the_rail_build_block_copies_each_part_and_the_whole(cx: &mut TestAppContext) {
+    use crate::build_info::{BuildInfo, Part};
+    use crate::chrome::{BUILD_ALL_ID, BUILD_BRANCH_ID, BUILD_CHECKOUT_ID, BUILD_COMMIT_ID};
+    let (view, cx) = open(cx);
+    let build = BuildInfo::fixture();
+    view.update(cx, |app, cx| {
+        app.build = build.clone();
+        cx.notify();
+    });
+    draw(cx);
+    let copied = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+    };
+    click(cx, BUILD_CHECKOUT_ID);
+    assert_eq!(copied(cx), build.checkout.clone());
+    click(cx, BUILD_BRANCH_ID);
+    assert_eq!(copied(cx).as_deref(), Some("feat/build-identity"));
+    click(cx, BUILD_COMMIT_ID);
+    assert_eq!(
+        copied(cx).as_deref(),
+        Some("5e1c07a2f19d4b6c08e3a7d5b2c91f40e6a8d317")
+    );
+    assert_eq!(
+        view.read_with(cx, |app, _| app.build_copied.map(|(part, _)| part)),
+        Some(Part::Commit)
+    );
+    click(cx, BUILD_ALL_ID);
+    assert_eq!(copied(cx), Some(build.report()));
+    cx.executor().advance_clock(crate::app::COPIED_FOR);
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |app, _| app.build_copied), None);
+}
+
+/// A detached HEAD's branch row says so and copies nothing; a release is
+/// one line that copies the report.
+#[gpui_kit::test]
+fn a_detached_build_and_a_release_in_the_rail(cx: &mut TestAppContext) {
+    use crate::build_info::BuildInfo;
+    use crate::chrome::{BUILD_ALL_ID, BUILD_BRANCH_ID, BUILD_CHECKOUT_ID, BUILD_COMMIT_ID};
+    let (view, cx) = open(cx);
+    view.update(cx, |app, cx| {
+        app.build = BuildInfo {
+            branch: None,
+            dirty: true,
+            built_at: Some(1_793_197_920),
+            ..BuildInfo::fixture()
+        };
+        cx.notify();
+    });
+    draw(cx);
+    cx.update(|_, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into())));
+    click(cx, BUILD_BRANCH_ID);
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some("before")
+    );
+    assert_eq!(view.read_with(cx, |app, _| app.build_copied), None);
+
+    let release = BuildInfo {
+        profile: "release",
+        tag: Some(format!("v{}", BuildInfo::fixture().version)),
+        checkout: None,
+        branch: None,
+        ..BuildInfo::fixture()
+    };
+    view.update(cx, |app, cx| {
+        app.build = release.clone();
+        cx.notify();
+    });
+    draw(cx);
+    for row in [BUILD_CHECKOUT_ID, BUILD_BRANCH_ID, BUILD_COMMIT_ID] {
+        assert!(cx.debug_bounds(row).is_none(), "{row} shows for a release");
+    }
+    click(cx, BUILD_ALL_ID);
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some(release.report())
+    );
+}
+
 // --- the Rules rows' "⋯" menus (design: Rule Editing 3b, 4b) ---------------
 
 /// The patterns of the saved rules, in order: what a move changed.

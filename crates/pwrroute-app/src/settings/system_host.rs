@@ -12,6 +12,7 @@ use std::{
 use gpui_kit::{App, SharedString};
 
 use super::model::{About, Diagnostics, Listener, LocalAgents, SettingsRequest};
+use crate::build_info::BuildInfo;
 use crate::config_view::display_path;
 use crate::router::{self, RoutingSource};
 use crate::{settings, settings_store};
@@ -37,6 +38,8 @@ pub struct Facts {
     pub agents: Option<(Listener, SharedString)>,
     /// The diagnostic log, when `diag_log` found a folder for it.
     pub log: Option<PathBuf>,
+    /// Which build this is.
+    pub build: BuildInfo,
 }
 
 /// The Diagnostics pane as things stand. `agents` is the Local agents
@@ -63,6 +66,7 @@ fn facts(cx: &App) -> Facts {
         dry_run,
         agents: None,
         log: crate::diag_log::path().map(Path::to_path_buf),
+        build: BuildInfo::current(),
     }
 }
 
@@ -92,7 +96,7 @@ pub fn build_diagnostics(facts: &Facts) -> Diagnostics {
         None => "Not installed".to_owned(),
     };
     Diagnostics {
-        version: version_line().into(),
+        version: version_line(&facts.build).into(),
         os: facts.os.clone().into(),
         data_dir: facts
             .data_dir
@@ -118,6 +122,7 @@ pub fn build_diagnostics(facts: &Facts) -> Diagnostics {
             )
             .into(),
         log_exists: facts.log.as_deref().is_some_and(Path::exists),
+        build: facts.build.clone(),
     }
 }
 
@@ -151,22 +156,17 @@ fn routing(source: &RoutingSource, home: Option<&Path>) -> String {
     sentence
 }
 
-/// "0.5.0 · release · arm64".
-fn version_line() -> String {
-    format!(
+/// "0.5.0 · release · arm64 · 42a50803", the commit marked "+" when the
+/// build had uncommitted changes.
+fn version_line(build: &BuildInfo) -> String {
+    let mut line = format!(
         "{} \u{00b7} {} \u{00b7} {}",
-        env!("CARGO_PKG_VERSION"),
-        build_kind(),
-        std::env::consts::ARCH
-    )
-}
-
-fn build_kind() -> &'static str {
-    if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
+        build.version, build.profile, build.arch
+    );
+    if let Some(commit) = build.short_commit_marked() {
+        line.push_str(&format!(" \u{00b7} {commit}"));
     }
+    line
 }
 
 /// The OS and its version, from the files that name it; the family's
@@ -215,8 +215,7 @@ pub fn os_release_name(text: &str) -> Option<String> {
 /// The About pane for this copy.
 pub fn about() -> About {
     About {
-        version: env!("CARGO_PKG_VERSION").into(),
-        build: format!("{} build for {}", build_kind(), std::env::consts::ARCH).into(),
+        source: BuildInfo::current(),
         license: LICENSE.into(),
         links: vec![
             ("Source".into(), "github.com/pwrdrvr/PwrRoute".into()),
@@ -288,6 +287,7 @@ mod tests {
             log: Some(PathBuf::from(
                 "/Users/someone/Library/Logs/PwrRoute/main.log",
             )),
+            build: BuildInfo::fixture(),
         }
     }
 
@@ -299,10 +299,10 @@ mod tests {
     #[test]
     fn diagnostics_show_the_version_the_paths_and_the_router_without_a_url() {
         let model = build_diagnostics(&facts());
-        assert!(
-            model.version.starts_with(env!("CARGO_PKG_VERSION")),
-            "{}",
-            model.version
+        // The fixture build's version, profile, arch and short commit.
+        assert_eq!(
+            model.version,
+            "0.5.0 \u{00b7} debug \u{00b7} aarch64 \u{00b7} 5e1c07a2"
         );
         assert_eq!(model.os, "macOS 15.6 (arm64)");
         assert_eq!(model.data_dir, "~/Library/Application Support/PwrRoute");
@@ -332,7 +332,12 @@ mod tests {
         }
         let report = model.report();
         no_url(&report);
-        assert!(report.starts_with(&format!("PwrRoute {}\n", model.version)));
+        // The build's lines first, as the rail and About copy them.
+        assert!(
+            report.starts_with(&BuildInfo::fixture().report()),
+            "{report}"
+        );
+
         assert!(report.contains("\nRouter: Listening on"));
         assert!(!report.contains("Dry run"));
     }
@@ -443,10 +448,11 @@ mod tests {
     #[test]
     fn about_shows_the_version_and_the_license_without_a_url() {
         let model = about();
-        assert_eq!(model.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(model.source.version, env!("CARGO_PKG_VERSION"));
         assert!(
             model
-                .build
+                .source
+                .build_line()
                 .ends_with(&format!("build for {}", std::env::consts::ARCH))
         );
         assert!(model.license.contains("Finicky"));
