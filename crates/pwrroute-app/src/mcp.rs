@@ -862,18 +862,7 @@ impl ApprovalWindow {
             }
         })
         .detach();
-        cx.spawn_in(window, async move |this, cx| {
-            loop {
-                cx.background_executor().timer(TICK).await;
-                if this
-                    .update_in(cx, |this, window, cx| this.tick(window, cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
+        let _ = window;
         let now = Instant::now();
         Self {
             chosen: request.roles.first().copied().unwrap_or(Role::Reader),
@@ -927,6 +916,12 @@ impl ApprovalWindow {
         let Some(reply) = self.reply.take() else {
             return;
         };
+        // The server closed the prompt and its word to close the window is
+        // still on the way: nothing was decided, so say nothing.
+        if !reply.is_pending() {
+            self.closed_by_server(window);
+            return;
+        }
         let (stage, height) = match role {
             Some(role) => {
                 reply.approve(role);
@@ -939,6 +934,20 @@ impl ApprovalWindow {
         };
         self.stage = stage;
         self.closes_at = Some(Instant::now() + OUTCOME_FOR);
+        // Only an outcome counts down ("Closes in 5s"); a window that asks
+        // has no clock.
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(TICK).await;
+                if this
+                    .update_in(cx, |this, window, cx| this.tick(window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         // The outcome's body is new: the asking body's overflow must not
         // grow it.
         self.scroll = ScrollHandle::new();
@@ -1012,10 +1021,7 @@ impl ApprovalWindow {
     fn tick(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         if self.closes_at.is_some_and(|at| Instant::now() >= at) {
             window.remove_window();
-            return;
-        }
-        // Only an outcome counts down ("Closes in 5s").
-        if self.closes_at.is_some() {
+        } else {
             cx.notify();
         }
     }
@@ -2068,6 +2074,41 @@ mod tests {
         assert_eq!(cx.windows().len(), windows);
         cx.simulate_keystrokes("enter");
         assert_eq!(cx.windows().len(), windows - 1);
+    }
+
+    /// Allow on a prompt the server already closed decides nothing: the
+    /// window goes rather than say the agent can use PwrRoute.
+    #[gpui_kit::test]
+    fn allow_on_a_closed_prompt_claims_no_outcome(cx: &mut TestAppContext) {
+        let (view, cx, answer) = approval_window(cx, "claude-code");
+        drop(answer);
+        let windows = cx.windows().len();
+        click(cx, ALLOW_ID);
+        assert_eq!(view.read_with(cx, |view, _| view.stage()), Stage::Asking);
+        assert_eq!(cx.windows().len(), windows - 1);
+    }
+
+    /// A new prompt for a name closes the window still up for it, and that
+    /// window's prompt gets no answer from it.
+    #[gpui_kit::test]
+    fn a_new_prompt_replaces_the_window_for_its_name(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::assets::load_fonts(cx);
+            cx.set_global(Prompts::default());
+        });
+        let (first, reply, mut first_answer) = prompt("claude-code");
+        cx.update(|cx| open_prompt(first, reply, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+
+        let (mut second, reply, _second_answer) = prompt("claude-code");
+        second.id = "approval-again".to_owned();
+        cx.update(|cx| open_prompt(second, reply, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(first_answer.get(), None);
+        let ids: Vec<String> = cx.update(|cx| cx.global::<Prompts>().0.keys().cloned().collect());
+        assert_eq!(ids, ["approval-again"]);
     }
 
     /// A title or version the client chose is cut, not drawn at any length.

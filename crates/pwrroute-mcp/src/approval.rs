@@ -128,7 +128,6 @@ pub(crate) type Answer = watch::Receiver<Option<Verdict>>;
 /// and the claim that keeps the window up. When the last connection
 /// holding one goes away, nobody is left to answer for, and the window
 /// closes.
-#[derive(Clone)]
 pub(crate) struct Waiting {
     pub(crate) answer: Answer,
     _held: mpsc::Sender<()>,

@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     agents::{Agents, Standing, clean_name},
-    approval::{ApprovalDecision, Approvals, Verdict, Waiting},
+    approval::{Answer as Decision, ApprovalDecision, Approvals, Verdict, Waiting},
     audit::{AuditRecord, AuditSink, Outcome},
     backend::{
         ActivityEntry, ActivityOutcome, ActivitySource, AgentRef, Backends, ConsoleLine,
@@ -61,7 +61,8 @@ pwrroute_rules_test runs the saved examples and tests against a proposal without
 pwrroute_rules_apply writes a JSON Merge Patch, naming the revision you read, and refuses a change that fails a saved example or test unless force is true. \
 Links that pass through these tools stay in memory; only the examples and tests you write into rules.json are saved. \
 The first call from a new client waits while the user approves it in PwrRoute's window; \
-the window stays up while this connection is open, so after approval_pending simply call again. \
+the window stays up while this connection is open, so after approval_pending simply call again; \
+if it closes unanswered (approval_closed, when PwrRoute stops serving agents), calling again reopens it. \
 A denial (access_denied) lasts for this connection: reconnect the MCP server to be asked again. \
 Which tools work depends on the role the user chose; a refused call names the permission it needs.";
 
@@ -355,11 +356,7 @@ impl Connection {
     /// forgotten in Settings, or a window that closed unanswered, is an
     /// empty slot: the person is asked again. `None` when no prompt could
     /// be raised.
-    fn answer(
-        &self,
-        approvals: &Arc<Approvals>,
-        client: &Implementation,
-    ) -> Option<tokio::sync::watch::Receiver<Option<Verdict>>> {
+    fn answer(&self, approvals: &Arc<Approvals>, client: &Implementation) -> Option<Decision> {
         let mut slot = self
             .answer
             .lock()
