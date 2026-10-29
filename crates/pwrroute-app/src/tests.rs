@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    Bounds, Entity, InputEvent, Modifiers, Pixels, Point, ScrollDelta, ScrollWheelEvent,
-    TestAppContext, VisualTestContext, point, px,
+    Bounds, Entity, InputEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, Point, ScrollDelta,
+    ScrollWheelEvent, TestAppContext, VisualTestContext, point, px,
 };
 use pwrroute_engine::{Privacy, PrivacySetting, RouteTest, RulesFile, TestSource};
 use pwrroute_router::{
@@ -1706,6 +1706,43 @@ fn add_rule_pattern_edits_at_the_caret(cx: &mut TestAppContext) {
     );
     draw(cx);
     assert_eq!(pattern(cx), ("example.com/acme/*".into(), 18));
+
+    // The mouse selects: a double-click a word, a drag and a Shift-click
+    // from the caret to where they land.
+    let selection = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            app.actions.sheet.as_ref().unwrap().pattern.selection()
+        })
+    };
+    let start = point(field.left() + px(4.0), field.center().y);
+    let end = point(field.right() - px(60.0), field.center().y);
+    for click_count in [1, 2] {
+        cx.simulate_event(MouseDownEvent {
+            position: start,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+    }
+    draw(cx);
+    assert_eq!(selection(cx), 0..7);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert_eq!(selection(cx), 0..18);
+    cx.simulate_click(start, Modifiers::default());
+    draw(cx);
+    cx.simulate_click(end, Modifiers::shift());
+    draw(cx);
+    assert_eq!(selection(cx), 0..18);
+    // Typing replaces what the mouse selected.
+    cx.simulate_input("x");
+    draw(cx);
+    assert_eq!(pattern(cx), ("x".into(), 1));
 }
 
 #[gpui_kit::test]

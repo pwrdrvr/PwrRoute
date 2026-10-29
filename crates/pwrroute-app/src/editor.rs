@@ -396,16 +396,13 @@ fn editable(
         input.pr(px(6.0)).child(div().ml_auto().child(trailing))
     });
     let boxed = if focused { focus_ring(inner) } else { inner };
-    let focus = text_field.focus.clone();
     let id: SharedString = selector.into();
-    div()
+    let area = div()
         .id(ElementId::Name(id.clone()))
-        .debug_selector(move || id.to_string())
-        .track_focus(&focus)
+        .debug_selector(move || id.to_string());
+    crate::text_field::hit_area(area, text_field)
         .w_full()
         .min_w_0()
-        .cursor_text()
-        .on_mouse_down(gpui_kit::MouseButton::Left, text_field.on_press())
         .child(boxed)
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
             let taken = match field {

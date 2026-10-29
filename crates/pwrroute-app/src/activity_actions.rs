@@ -1700,14 +1700,11 @@ fn pattern_field(
     } else {
         inner
     };
-    let focus = sheet.pattern.focus.clone();
-    div()
+    let area = div()
         .id("add-rule-pattern")
-        .debug_selector(|| "add-rule-pattern".into())
-        .track_focus(&focus)
+        .debug_selector(|| "add-rule-pattern".into());
+    crate::text_field::hit_area(area, &sheet.pattern)
         .w_full()
-        .cursor_text()
-        .on_mouse_down(gpui_kit::MouseButton::Left, sheet.pattern.on_press())
         .child(boxed)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
             if this.add_rule_key(event, cx) {

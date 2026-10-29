@@ -558,8 +558,8 @@ their own modules.
   does not shrink.
 - **Every editable field is a `text_field::TextField`.** It owns the caret
   and selection (arrows, ⌥/⌘ moves, Shift, click, drag, double-click) and
-  draws through `text_field::field`, or `text_field::text` plus
-  `TextField::on_press` inside a caller's own `.inp` box (the rule editor,
+  draws through `text_field::field`, or `text_field::text` inside a
+  caller's own `.inp` box made a `text_field::hit_area` (the rule editor,
   Activity's sheet). Never draw a field's text as a plain div: it loses
   the caret. Write the text only through `set`, so the caret follows.
 - **Never clip text at its line box.** `theme::text` and most one-line

@@ -303,7 +303,7 @@ impl TextField {
     /// The box's mouse-down handler: a press places the caret where it
     /// lands (Shift extends the selection), a double-click selects a word,
     /// a triple-click the text, and a drag from the press selects.
-    pub fn on_press(&self) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    fn on_press(&self) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
         let caret = self.caret.clone();
         move |event, window, _| {
             let mut caret = caret.borrow_mut();
@@ -446,19 +446,24 @@ pub fn field_with(
             )
         });
     let boxed = if focused { focus_ring(inner) } else { inner };
-    div()
-        .id(id)
-        .debug_selector(|| id.into())
-        .track_focus(&field.focus)
+    hit_area(div().id(id).debug_selector(|| id.into()), field)
         .flex_1()
         .min_w_0()
-        .cursor_text()
-        .on_mouse_down(MouseButton::Left, field.on_press())
         .child(boxed)
 }
 
-/// The field's text with its caret and selection, for an `.inp` box: the
-/// box adds [`TextField::on_press`] for the mouse.
+/// Makes `element`, the box around a field, its hit area: a press there
+/// focuses the field and places the caret (see [`TextField::on_press`]),
+/// under the text cursor.
+pub fn hit_area(element: Stateful<Div>, field: &TextField) -> Stateful<Div> {
+    element
+        .track_focus(&field.focus)
+        .cursor_text()
+        .on_mouse_down(MouseButton::Left, field.on_press())
+}
+
+/// The field's text with its caret and selection, for an `.inp` box made a
+/// [`hit_area`].
 pub fn text(field: &TextField, look: Look, focused: bool) -> FieldText {
     let (family, weight, size) = if look.mono {
         (theme::mono_family(500.0), 500.0, 12.0)
@@ -584,11 +589,8 @@ impl Element for FieldText {
         let mut caret = self.caret.borrow_mut();
         let len = self.text.len();
         let (anchor, head) = (caret.anchor.min(len), caret.head.min(len));
-        if self.text.is_empty() {
-            caret.painted = None;
-            caret.scroll = px(0.);
-        }
         let (line, scroll) = if self.text.is_empty() {
+            caret.painted = None;
             let run = self.run(self.placeholder.len(), theme::text_subtle());
             let (_, shown) = self.fitted(self.placeholder.clone(), run, width, window);
             (shown, px(0.))
@@ -667,7 +669,7 @@ impl Element for FieldText {
             if let Some(selection) = laid.selection {
                 window.paint_quad(fill(selection, theme::accent_soft()));
             }
-            let _ = laid.line.paint(
+            let painted = laid.line.paint(
                 point(laid.origin_x, bounds.top()),
                 self.size,
                 TextAlign::Left,
@@ -675,6 +677,10 @@ impl Element for FieldText {
                 window,
                 cx,
             );
+            if painted.is_err() {
+                // Never the error: it can quote the field's text.
+                log::warn!("a text field's line failed to paint");
+            }
             if let Some(caret) = laid.caret {
                 window.paint_quad(fill(caret, theme::accent()));
             }
