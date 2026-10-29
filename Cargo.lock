@@ -5978,7 +5978,7 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "pwrroute-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -6008,7 +6008,7 @@ dependencies = [
 
 [[package]]
 name = "pwrroute-browsers"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "pwrroute-engine",
  "roxmltree 0.21.1",
@@ -6021,7 +6021,7 @@ dependencies = [
 
 [[package]]
 name = "pwrroute-e2e"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "interprocess",
@@ -6033,7 +6033,7 @@ dependencies = [
 
 [[package]]
 name = "pwrroute-engine"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "objc2 0.6.5",
@@ -6051,7 +6051,7 @@ dependencies = [
 
 [[package]]
 name = "pwrroute-mcp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "log",
@@ -6071,7 +6071,7 @@ dependencies = [
 
 [[package]]
 name = "pwrroute-os"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -6088,7 +6088,7 @@ dependencies = [
 
 [[package]]
 name = "pwrroute-router"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "interprocess",
@@ -9895,7 +9895,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
 ]
