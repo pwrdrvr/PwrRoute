@@ -129,7 +129,7 @@ impl Role {
                 "Reader, plus opening links through the router. Every open is logged against the session."
             }
             Self::Editor => {
-                "Opener, plus writing rules.json. Refused while a Finicky config is selected."
+                "Opener, plus changing rules.json and reading the activity journal on disk."
             }
         }
     }

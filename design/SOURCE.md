@@ -176,11 +176,14 @@ the project and re-export here.
   (`PwrRoute Agent Approval.dc.html`): the approval window as it was, then
   the roles as a radio group with Reader chosen, the chosen role's
   permissions listed, Deny and Allow as <role> (Esc and Return, 1 2 3 to
-  pick), the prompt's expiry counting down, and the window kept open on
-  the outcome (allowed, denied, expired), shrunk to it. PwrSnap's and
-  PwrGit's consent windows were read first; both pick then confirm.
-  Written to the project, then compared by size with the file here. The
-  other canvases, `pwrroute.css` and `support.js` are unchanged.
+  pick), and the window kept open on the outcome (allowed, denied),
+  shrunk to it. PwrSnap's and PwrGit's consent windows were read first;
+  both pick then confirm. Revised the same day after review: no time
+  limit, so the countdown and the expired outcome are gone (the window
+  stays while the agent waits and closes when it goes), and the Editor
+  role's description is corrected. Written to the project, then compared
+  by size with the file here. The other canvases, `pwrroute.css` and
+  `support.js` are unchanged.
 
 ## Files
 

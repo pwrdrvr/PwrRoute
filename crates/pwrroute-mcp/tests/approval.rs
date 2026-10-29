@@ -141,50 +141,99 @@ async fn an_unanswered_window_reports_pending_then_works_once_answered() {
 }
 
 #[tokio::test]
-async fn an_expired_window_is_asked_again_on_the_next_call() {
-    let h = Harness::start_with_ttl(
-        FakeAnswer::Hold,
-        Duration::from_secs(10),
-        Duration::from_millis(200),
-    )
-    .await;
+async fn a_window_closes_when_its_caller_goes_and_is_asked_again_on_return() {
+    let h = Harness::start_with(FakeAnswer::Hold, Duration::from_millis(200)).await;
     let client = h.client("claude-code").await;
-    // The window goes up as the client connects and closes unanswered
-    // while the call waits: the call is told so, and nothing is remembered.
+    let approver = h.approver.clone();
+    eventually(|| approver.asked().len() == 1).await;
+    // No time limit: a call that gives up waiting leaves the window up.
     let result = call(&client, "pwrroute_resolve", json!({ "url": LINK })).await;
-    assert_eq!(result.is_error, Some(true));
     assert!(
-        text(&result).starts_with("approval_expired") && text(&result).contains("call again"),
+        text(&result).starts_with("approval_pending"),
         "{}",
         text(&result)
     );
-    let asked = h.approver.asked();
-    assert_eq!(asked.len(), 1);
-    assert_eq!(h.approver.cancelled(), [asked[0].id.clone()]);
-    assert!(h.agents.agents().is_empty(), "an expiry is not remembered");
-    let held = h.approver.take_pending();
-    assert_eq!(held.len(), 1);
+    assert!(h.approver.cancelled().is_empty());
 
-    // The next call on the same connection asks again, and the answer
-    // holds: an expiry was never a denial.
+    // The caller goes away: nobody is left to answer for, so it closes.
+    client.cancel().await.unwrap();
+    let id = h.approver.asked()[0].id.clone();
+    eventually(|| approver.cancelled() == [id.clone()]).await;
+    assert!(h.agents.agents().is_empty(), "a closed window is no answer");
+
+    // A late reply to the closed window changes nothing.
+    for (_, reply) in h.approver.take_pending() {
+        reply.approve(Role::Editor);
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(h.agents.agents().is_empty());
+
+    // Back again, it is asked again, and the answer holds: a closed window
+    // was never a denial.
     h.approver.set(FakeAnswer::Approve(Role::Reader));
+    let client = h.client("claude-code").await;
     let result = call(&client, "pwrroute_resolve", json!({ "url": LINK })).await;
     assert_eq!(result.is_error, Some(false), "{}", text(&result));
     assert_eq!(h.approver.asked().len(), 2);
     assert_eq!(h.agents.agents()[0].role, Role::Reader);
-    // The late reply to the expired window changes nothing.
-    for (_, reply) in held {
-        reply.approve(Role::Editor);
-    }
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(h.agents.agents()[0].role, Role::Reader);
-    assert!(
-        h.audit
-            .records()
-            .iter()
-            .any(|r| r.outcome == Outcome::Denied)
-    );
     client.cancel().await.unwrap();
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_window_closes_when_its_caller_goes_mid_call() {
+    // The call is still waiting when the client goes: rmcp cancels it once
+    // its drain gives up (5 s), and the window closes with it.
+    let h = Harness::start_with(FakeAnswer::Hold, Duration::from_secs(60)).await;
+    let client = h.client("claude-code").await;
+    let approver = h.approver.clone();
+    eventually(|| approver.asked().len() == 1).await;
+    let peer = client.peer().clone();
+    let waiting = tokio::spawn(async move {
+        let _ = peer
+            .call_tool(
+                rmcp::model::CallToolRequestParams::new("pwrroute_resolve")
+                    .with_arguments(json!({ "url": LINK }).as_object().unwrap().clone()),
+            )
+            .await;
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    client.cancel().await.unwrap();
+    let id = h.approver.asked()[0].id.clone();
+    let closed = tokio::time::timeout(Duration::from_secs(15), async {
+        while approver.cancelled() != [id.clone()] {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the window stayed up after its caller left");
+    waiting.abort();
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_window_stays_while_any_caller_under_the_name_waits() {
+    let h = Harness::start_with(FakeAnswer::Hold, Duration::from_millis(200)).await;
+    let first = h.client("claude-code").await;
+    let second = h.client("claude-code").await;
+    let approver = h.approver.clone();
+    eventually(|| approver.asked().len() == 1).await;
+    // One prompt for the name, shared.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.approver.asked().len(), 1);
+
+    first.cancel().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(h.approver.cancelled().is_empty(), "the second still waits");
+
+    // The person answers for the one still here.
+    let (_, reply) = h.approver.take_pending().pop().unwrap();
+    reply.approve(Role::Opener);
+    let result = call(&second, "pwrroute_resolve", json!({ "url": LINK })).await;
+    assert_eq!(result.is_error, Some(false), "{}", text(&result));
+    assert_eq!(h.agents.agents()[0].role, Role::Opener);
+    assert!(h.approver.cancelled().is_empty());
+    second.cancel().await.unwrap();
     h.finish().await;
 }
 

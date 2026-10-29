@@ -1,8 +1,10 @@
 //! The in-app approval step. The first time a client name connects, the app
 //! shows PwrRoute's approval window and the person picks a role or denies.
 //! The answer is remembered per name in [`Agents`]; nothing an agent sends
-//! can approve. A window that closes unanswered ([`Verdict::Expired`]) is
-//! not a denial: the next call asks again.
+//! can approve. The window has no time limit: it stays up while any
+//! connection under the name is waiting on it, and closes when the last one
+//! goes away or the server stops ([`Verdict::Closed`]). That is not a
+//! denial: the next connection asks again.
 
 use std::{
     collections::HashMap,
@@ -10,12 +12,11 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use rmcp::model::Implementation;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -23,11 +24,6 @@ use crate::{
     roles::Role,
 };
 
-/// How long a prompt stays open, unless [`Config::prompt_ttl`] says
-/// otherwise. An expired prompt is not a denial: the next call asks again.
-///
-/// [`Config::prompt_ttl`]: crate::Config::prompt_ttl
-pub const DEFAULT_PROMPT_TTL: Duration = Duration::from_secs(5 * 60);
 /// Approval windows open at once, one per client name. More are denied.
 const MAX_PROMPTS: usize = 8;
 
@@ -45,9 +41,6 @@ pub struct ApprovalRequest {
     pub client_version: String,
     /// The roles to choose from, least first.
     pub roles: Vec<Role>,
-    /// How long the prompt waits for an answer from when it is raised;
-    /// then it expires and the window should say so.
-    pub expires_in: Duration,
 }
 
 /// The person's answer.
@@ -65,8 +58,8 @@ pub trait Approver: Send + Sync + 'static {
     /// any thread, through `reply`. Dropping `reply` unanswered denies.
     fn request(&self, request: ApprovalRequest, reply: ApprovalReply);
 
-    /// The prompt expired or the server stopped: close its window. A late
-    /// answer through its reply is ignored.
+    /// Nobody is left waiting on the prompt, or the server stopped: close
+    /// its window. A late answer through its reply is ignored.
     fn cancel(&self, id: &str) {
         let _ = id;
     }
@@ -86,7 +79,7 @@ impl ApprovalReply {
     }
 
     pub fn send(self, decision: ApprovalDecision) {
-        // The prompt may have expired; there is no one to tell then.
+        // The prompt may have closed; there is no one to tell then.
         let _ = self.0.send(decision);
     }
 
@@ -122,35 +115,45 @@ pub(crate) enum Verdict {
     /// The person answered, or the app dropped the reply (its window
     /// closed): a denial.
     Answered(ApprovalDecision),
-    /// Nobody answered before the prompt's TTL ran out, or the server
-    /// stopped. Not a denial: a connection that sees this asks again.
-    Expired,
+    /// The window closed unanswered: every connection waiting on it went
+    /// away, or the server stopped. Not a denial: a connection that sees
+    /// this asks again.
+    Closed,
 }
 
 /// The current answer for a client name: `None` while the window is up.
 pub(crate) type Answer = watch::Receiver<Option<Verdict>>;
+
+/// A connection's hold on the prompt for its name: the answer it waits on,
+/// and the claim that keeps the window up. When the last connection
+/// holding one goes away, nobody is left to answer for, and the window
+/// closes.
+#[derive(Clone)]
+pub(crate) struct Waiting {
+    pub(crate) answer: Answer,
+    _held: mpsc::Sender<()>,
+}
 
 /// Raises at most one prompt per client name and shares its answer with
 /// every connection waiting on it.
 pub(crate) struct Approvals {
     approver: Arc<dyn Approver>,
     agents: Agents,
-    pending: Mutex<HashMap<String, Answer>>,
+    /// The prompt up for each name: its answer, and a weak handle on the
+    /// claims its connections hold.
+    pending: Mutex<HashMap<String, (Answer, mpsc::WeakSender<()>)>>,
     next_id: AtomicU64,
     closed: CancellationToken,
-    /// How long a prompt stays open before it expires.
-    ttl: Duration,
 }
 
 impl Approvals {
-    pub(crate) fn new(approver: Arc<dyn Approver>, agents: Agents, ttl: Duration) -> Self {
+    pub(crate) fn new(approver: Arc<dyn Approver>, agents: Agents) -> Self {
         Self {
             approver,
             agents,
             pending: Mutex::default(),
             next_id: AtomicU64::new(1),
             closed: CancellationToken::new(),
-            ttl,
         }
     }
 
@@ -158,26 +161,33 @@ impl Approvals {
     /// is up yet. `None` when no prompt can be raised: too many are open,
     /// or the server is stopping. Nobody was asked then, so it is not a
     /// denial.
-    pub(crate) fn ask(self: &Arc<Self>, client: &Implementation) -> Option<Answer> {
+    pub(crate) fn ask(self: &Arc<Self>, client: &Implementation) -> Option<Waiting> {
         let name = clean_name(&client.name);
-        let (tx, rx) = {
+        let (tx, rx, held, mut released) = {
             let mut pending = self
                 .pending
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // A prompt answered a moment ago is not this connection's.
-            if let Some(answer) = pending.get(&name)
+            // A prompt answered a moment ago is not this connection's, nor
+            // one whose callers all just left: it is closing.
+            if let Some((answer, claims)) = pending.get(&name)
                 && answer.borrow().is_none()
+                && let Some(held) = claims.upgrade()
             {
-                return Some(answer.clone());
+                return Some(Waiting {
+                    answer: answer.clone(),
+                    _held: held,
+                });
             }
             pending.remove(&name);
             if pending.len() >= MAX_PROMPTS || self.closed.is_cancelled() {
                 return None;
             }
             let (tx, rx) = watch::channel(None);
-            pending.insert(name.clone(), rx.clone());
-            (tx, rx)
+            // Nothing is ever sent: `recv` returns when every claim is gone.
+            let (held, released) = mpsc::channel(1);
+            pending.insert(name.clone(), (rx.clone(), held.downgrade()));
+            (tx, rx, held, released)
         };
 
         let id = format!("approval-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
@@ -189,21 +199,20 @@ impl Approvals {
                 client_title: client.title.clone(),
                 client_version: client.version.clone(),
                 roles: Role::ALL.to_vec(),
-                expires_in: self.ttl,
             },
             ApprovalReply(reply),
         );
 
         let this = Arc::clone(self);
-        let ttl = self.ttl;
         tokio::spawn(async move {
             let decision = tokio::select! {
-                answer = tokio::time::timeout(ttl, answer) => match answer {
-                    Ok(Ok(decision)) => Some(decision),
+                answer = answer => match answer {
+                    Ok(decision) => Some(decision),
                     // The app dropped the reply: a denial.
-                    Ok(Err(_)) => Some(ApprovalDecision::Deny),
-                    Err(_) => None,
+                    Err(_) => Some(ApprovalDecision::Deny),
                 },
+                // Every connection waiting on it went away.
+                _ = released.recv() => None,
                 () = this.closed.cancelled() => None,
             };
             let verdict = match decision {
@@ -213,11 +222,11 @@ impl Approvals {
                     Err(_) => Verdict::Answered(ApprovalDecision::Deny),
                 },
                 Some(ApprovalDecision::Deny) => Verdict::Answered(ApprovalDecision::Deny),
-                // Nobody answered: close the window, and let the next call
-                // ask again.
+                // Nobody is left to answer for: close the window, and let
+                // the next connection ask again.
                 None => {
                     this.approver.cancel(&id);
-                    Verdict::Expired
+                    Verdict::Closed
                 }
             };
             // Answer the waiters, then drop the prompt unless a newer one
@@ -229,15 +238,18 @@ impl Approvals {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if pending
                 .get(&name)
-                .is_some_and(|a| a.same_channel(&tx.subscribe()))
+                .is_some_and(|(a, _)| a.same_channel(&tx.subscribe()))
             {
                 pending.remove(&name);
             }
         });
-        Some(rx)
+        Some(Waiting {
+            answer: rx,
+            _held: held,
+        })
     }
 
-    /// Closes every open prompt. The waiters see it expire, not a denial.
+    /// Closes every open prompt. The waiters see it close, not a denial.
     pub(crate) fn close(&self) {
         self.closed.cancel();
     }

@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     agents::Agents,
-    approval::{Approvals, Approver, DEFAULT_PROMPT_TTL},
+    approval::{Approvals, Approver},
     audit::AuditSink,
     backend::Backends,
     link::{Endpoint, Listener},
@@ -34,10 +34,6 @@ pub struct Config {
     /// How long a tool call from a client not yet approved waits for the
     /// approval window before answering `approval_pending`.
     pub approval_wait: Duration,
-    /// How long the approval window stays open. When it closes unanswered
-    /// the waiting call gets `approval_expired`, not a denial, and the next
-    /// call opens it again.
-    pub prompt_ttl: Duration,
 }
 
 impl Default for Config {
@@ -45,7 +41,6 @@ impl Default for Config {
         Self {
             endpoint: Endpoint::for_user(),
             approval_wait: Duration::from_secs(120),
-            prompt_ttl: DEFAULT_PROMPT_TTL,
         }
     }
 }
@@ -79,7 +74,7 @@ impl McpServer {
     ) -> Result<Self> {
         let mut listener = Listener::bind(config.endpoint.path())
             .with_context(|| format!("listening for local agents at {}", config.endpoint))?;
-        let approvals = Arc::new(Approvals::new(approver, agents.clone(), config.prompt_ttl));
+        let approvals = Arc::new(Approvals::new(approver, agents.clone()));
         let shutdown = CancellationToken::new();
         let tools = Tools {
             backends,

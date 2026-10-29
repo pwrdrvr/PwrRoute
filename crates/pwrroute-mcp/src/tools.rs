@@ -29,10 +29,11 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     agents::{Agents, Standing, clean_name},
-    approval::{Answer as Decision, ApprovalDecision, Approvals, Verdict},
+    approval::{ApprovalDecision, Approvals, Verdict, Waiting},
     audit::{AuditRecord, AuditSink, Outcome},
     backend::{
         ActivityEntry, ActivityOutcome, ActivitySource, AgentRef, Backends, ConsoleLine,
@@ -60,7 +61,7 @@ pwrroute_rules_test runs the saved examples and tests against a proposal without
 pwrroute_rules_apply writes a JSON Merge Patch, naming the revision you read, and refuses a change that fails a saved example or test unless force is true. \
 Links that pass through these tools stay in memory; only the examples and tests you write into rules.json are saved. \
 The first call from a new client waits while the user approves it in PwrRoute's window; \
-if that window closes unanswered (approval_expired), calling again reopens it. \
+the window stays up while this connection is open, so after approval_pending simply call again. \
 A denial (access_denied) lasts for this connection: reconnect the MCP server to be asked again. \
 Which tools work depends on the role the user chose; a refused call names the permission it needs.";
 
@@ -317,7 +318,9 @@ pub(crate) struct Connection {
     id: u64,
     agents: Agents,
     name: OnceLock<String>,
-    answer: Mutex<Option<Decision>>,
+    /// The prompt this connection waits on or got. Held for the life of the
+    /// connection: while it is open, the window stays up.
+    answer: Mutex<Option<Waiting>>,
     denied: AtomicBool,
 }
 
@@ -352,20 +355,24 @@ impl Connection {
     /// forgotten in Settings, or a window that closed unanswered, is an
     /// empty slot: the person is asked again. `None` when no prompt could
     /// be raised.
-    fn answer(&self, approvals: &Arc<Approvals>, client: &Implementation) -> Option<Decision> {
+    fn answer(
+        &self,
+        approvals: &Arc<Approvals>,
+        client: &Implementation,
+    ) -> Option<tokio::sync::watch::Receiver<Option<Verdict>>> {
         let mut slot = self
             .answer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let kept = slot.as_ref().filter(|answer| {
+        let kept = slot.as_ref().filter(|waiting| {
             matches!(
-                *answer.borrow(),
+                *waiting.answer.borrow(),
                 None | Some(Verdict::Answered(ApprovalDecision::Deny))
             )
         });
         match kept {
-            Some(answer) => Some(answer.clone()),
-            None => Some(slot.insert(approvals.ask(client)?).clone()),
+            Some(waiting) => Some(waiting.answer.clone()),
+            None => Some(slot.insert(approvals.ask(client)?).answer.clone()),
         }
     }
 }
@@ -394,7 +401,13 @@ enum Answer {
 
 impl Handler {
     /// The agent's role now, asking the person first if its name is new.
-    async fn authorize(&self, client: &Implementation) -> Result<Role, String> {
+    /// The wait ends with the call (`cancelled`): a call the client gave up
+    /// on, or one whose connection closed, must not keep the window up.
+    async fn authorize(
+        &self,
+        client: &Implementation,
+        cancelled: &CancellationToken,
+    ) -> Result<Role, String> {
         let name = self.connection.identify(client);
         match self.tools.agents.standing(&name) {
             Standing::Allowed(role) => return Ok(role),
@@ -413,16 +426,23 @@ impl Handler {
                 "approval_pending: PwrRoute cannot ask about {name} now (too many approval windows are open); call again later"
             ));
         };
-        let decided =
-            tokio::time::timeout(self.tools.approval_wait, answer.wait_for(Option::is_some))
-                .await
-                .map(|seen| seen.ok().and_then(|d| *d));
+        let decided = tokio::select! {
+            seen = tokio::time::timeout(
+                self.tools.approval_wait,
+                answer.wait_for(Option::is_some),
+            ) => seen.map(|seen| seen.ok().and_then(|d| *d)),
+            () = cancelled.cancelled() => {
+                return Err(format!(
+                    "approval_pending: the call was cancelled before the user answered for {name}"
+                ));
+            }
+        };
         match decided {
             Ok(Some(Verdict::Answered(ApprovalDecision::Approve { role }))) => Ok(role),
-            // Nobody was asked to decide: not a denial, so the next call
-            // on this connection asks again.
-            Ok(Some(Verdict::Expired)) => Err(format!(
-                "approval_expired: PwrRoute's approval window for {name} closed unanswered; call again to reopen it"
+            // Nobody decided (the server is stopping): not a denial, so the
+            // next call asks again.
+            Ok(Some(Verdict::Closed)) => Err(format!(
+                "approval_closed: PwrRoute's approval window for {name} closed unanswered; call again to reopen it"
             )),
             Ok(_) => {
                 self.connection.denied.store(true, Ordering::Relaxed);
@@ -881,7 +901,7 @@ impl ServerHandler for Handler {
             connection: self.connection.id,
         };
         let args = Value::Object(request.arguments.unwrap_or_default());
-        let Reply { answer, note } = match self.authorize(&client).await {
+        let Reply { answer, note } = match self.authorize(&client, &context.ct).await {
             Ok(role) => self.run(&request.name, args, &agent, role).await,
             Err(message) => Reply::of(Answer::Denied(message)),
         };

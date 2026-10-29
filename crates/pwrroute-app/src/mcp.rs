@@ -704,19 +704,18 @@ const ALLOWED_HEIGHT: f32 = 400.0;
 const SHORT_HEIGHT: f32 = 280.0;
 /// The tallest the window grows to fit its content; past it the body
 /// scrolls.
-const MAX_HEIGHT: f32 = 860.0;
+const MAX_HEIGHT: f32 = 680.0;
+/// The longest client title and version shown, in characters. Both are
+/// the client's to choose; past these they are cut with an ellipsis.
+const MAX_TITLE: usize = 80;
+const MAX_VERSION: usize = 40;
 
 /// How long an allowed or denied window stays to say so.
 const OUTCOME_FOR: Duration = Duration::from_secs(6);
-/// The countdown turns amber below this.
-const EXPIRY_WARNING: Duration = Duration::from_secs(30);
-/// Keys do nothing this long after the window opens. Off macOS it takes
-/// key focus as it appears, and a Return meant for the terminal must not
-/// allow.
+/// Keys do nothing this long after the window opens, so a Return meant
+/// for the terminal cannot allow. On macOS the window takes the keyboard
+/// only when clicked; elsewhere it takes it as it appears.
 const KEY_GRACE: Duration = Duration::from_millis(800);
-/// A cancel this close to the deadline is the prompt expiring; earlier, the
-/// server stopped.
-const EXPIRY_SLACK: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_secs(1);
 
 /// Element ids the tests reach for. A role card is `mcp-role-<role>`.
@@ -733,15 +732,17 @@ fn prompt_title(request: &ApprovalRequest) -> String {
 }
 
 fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
-    // An outcome still on screen for this client gives way to its new
-    // prompt, so two windows never share a title.
+    // Any window still up for this client gives way to its new prompt, so
+    // two windows never share a title. One still asking belongs to a prompt
+    // the server has already closed: its reply is no answer now.
     let open: Vec<WindowHandle<ApprovalWindow>> = cx
         .try_global::<Prompts>()
         .map(|prompts| prompts.0.values().copied().collect())
         .unwrap_or_default();
     for handle in open {
         let _ = handle.update(cx, |this, window, _| {
-            if this.request.client_name == request.client_name && this.stage != Stage::Asking {
+            if this.request.client_name == request.client_name {
+                this.reply = None;
                 window.remove_window();
             }
         });
@@ -803,14 +804,15 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     }
 }
 
-/// The server closed the prompt: it expired, or the server stopped. The
-/// server has already filed it as expired, which is not a denial.
+/// The server closed the prompt: every connection waiting on it went
+/// away, or the server stopped. The server has already filed it as closed,
+/// which is not a denial.
 fn close_prompt(id: &str, cx: &mut App) {
     let window = cx
         .try_global::<Prompts>()
         .and_then(|prompts| prompts.0.get(id).copied());
     if let Some(window) = window {
-        let _ = window.update(cx, |this, window, cx| this.closed_by_server(window, cx));
+        let _ = window.update(cx, |this, window, _| this.closed_by_server(window));
     }
 }
 
@@ -823,8 +825,6 @@ pub enum Stage {
     Allowed(Role),
     /// Denied (1e).
     Denied,
-    /// Nobody answered in time (1f). Not a denial.
-    Expired,
 }
 
 /// "Allow <client> to use PwrRoute?": one window per prompt. The cards
@@ -837,7 +837,6 @@ pub struct ApprovalWindow {
     chosen: Role,
     stage: Stage,
     opened_at: Instant,
-    deadline: Instant,
     /// When an outcome closes itself.
     closes_at: Option<Instant>,
     /// The body above the buttons. It scrolls rather than run under them,
@@ -880,7 +879,6 @@ impl ApprovalWindow {
             chosen: request.roles.first().copied().unwrap_or(Role::Reader),
             stage: Stage::Asking,
             opened_at: now,
-            deadline: now + request.expires_in,
             closes_at: None,
             scroll: ScrollHandle::new(),
             asked_height: ASKING_HEIGHT,
@@ -893,11 +891,14 @@ impl ApprovalWindow {
     /// The name the window calls the client by: its title when it sent
     /// one, else its name.
     fn client(&self) -> String {
-        self.request
+        let name = self
+            .request
             .client_title
-            .clone()
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| self.request.client_name.clone())
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(&self.request.client_name);
+        clip(name, MAX_TITLE)
     }
 
     fn choose(&mut self, role: Role, cx: &mut Context<'_, Self>) {
@@ -938,34 +939,29 @@ impl ApprovalWindow {
         };
         self.stage = stage;
         self.closes_at = Some(Instant::now() + OUTCOME_FOR);
+        // The outcome's body is new: the asking body's overflow must not
+        // grow it.
+        self.scroll = ScrollHandle::new();
+        // Return and Esc close the outcome, whatever was clicked.
+        window.focus(&self.focus, cx);
         self.resize(height, window, cx);
         cx.notify();
     }
 
-    fn closed_by_server(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// The server closed the prompt unanswered: every connection waiting
+    /// on it went away, or the server stopped. Nobody is left to answer
+    /// for, so the window goes. An outcome on screen stays.
+    fn closed_by_server(&mut self, window: &mut Window) {
         if self.stage != Stage::Asking {
             return;
         }
-        let left = self.deadline.saturating_duration_since(Instant::now());
-        if left > EXPIRY_SLACK {
-            // The server stopped (the switch, or quitting): nothing to
-            // ask again for.
-            log::info!(
-                "approval window for agent {:?} closed: the server stopped",
-                self.request.client_name
-            );
-            window.remove_window();
-            return;
-        }
         log::info!(
-            "approval window for agent {:?}: expired unanswered",
+            "approval window for agent {:?} closed: nobody is waiting on it",
             self.request.client_name
         );
-        // Dropping the reply now changes nothing: the server has moved on.
+        // The server has moved on; the reply is no answer now.
         self.reply = None;
-        self.stage = Stage::Expired;
-        self.resize(SHORT_HEIGHT, window, cx);
-        cx.notify();
+        window.remove_window();
     }
 
     /// Size the window to `height`. macOS keeps a resized window's bottom
@@ -1018,7 +1014,8 @@ impl ApprovalWindow {
             window.remove_window();
             return;
         }
-        if self.stage == Stage::Asking || self.closes_at.is_some() {
+        // Only an outcome counts down ("Closes in 5s").
+        if self.closes_at.is_some() {
             cx.notify();
         }
     }
@@ -1029,7 +1026,9 @@ impl ApprovalWindow {
         if modifiers.platform || modifiers.control || modifiers.alt || modifiers.function {
             return;
         }
-        if self.opened_at.elapsed() < KEY_GRACE {
+        // A held key repeats: one Return allows, and its repeats must not
+        // also close the outcome.
+        if event.is_held || self.opened_at.elapsed() < KEY_GRACE {
             return;
         }
         match (self.stage, keystroke.key.as_str()) {
@@ -1048,11 +1047,6 @@ impl ApprovalWindow {
             _ => return,
         }
         cx.stop_propagation();
-    }
-
-    /// The prompt's time left, as the footer shows it.
-    fn time_left(&self) -> Duration {
-        self.deadline.saturating_duration_since(Instant::now())
     }
 
     /// Where the window is, for tests.
@@ -1094,17 +1088,6 @@ impl ApprovalWindow {
             .iter()
             .enumerate()
             .map(|(index, &role)| role_card(index, role, role == self.chosen, cx));
-        let expires = self.time_left();
-        let countdown = mono(
-            format!("Expires in {}", minutes_seconds(expires)),
-            10.5,
-            500.0,
-            if expires < EXPIRY_WARNING {
-                theme::warn_text()
-            } else {
-                theme::text_subtle()
-            },
-        );
         let chosen = self.chosen;
         div()
             .flex_1()
@@ -1152,10 +1135,10 @@ impl ApprovalWindow {
             )
             .child(
                 footer()
-                    .child(countdown)
                     .child(div().flex_1())
                     .child(
                         Button::new(DENY_ID)
+                            .focusable(false)
                             .accessibility_label("Deny")
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1165,6 +1148,7 @@ impl ApprovalWindow {
                     )
                     .child(
                         Button::new(ALLOW_ID)
+                            .focusable(false)
                             .accessibility_label(format!("Allow as {chosen}"))
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1193,7 +1177,7 @@ impl ApprovalWindow {
                     "Its request goes ahead now. Change the role or revoke it any time in \
                      Settings \u{203a} Local agents.",
                 ),
-                Stage::Denied => (
+                Stage::Denied | Stage::Asking => (
                     "\u{2715}",
                     theme::danger_soft(),
                     theme::danger_text(),
@@ -1202,24 +1186,7 @@ impl ApprovalWindow {
                     "Its calls are refused until it reconnects. To be asked again, reconnect \
                      PwrRoute's MCP server in the agent, or restart it.",
                 ),
-                Stage::Expired | Stage::Asking => (
-                    "!",
-                    theme::warn_soft(),
-                    theme::warn_text(),
-                    "This request expired".to_owned(),
-                    None,
-                    "",
-                ),
             };
-        let lead = if self.stage == Stage::Expired {
-            format!(
-                "{client} waited {} without an answer, so nothing was allowed or denied. \
-                 Its next call to PwrRoute opens this window again.",
-                spoken(self.request.expires_in)
-            )
-        } else {
-            lead.to_owned()
-        };
         let closes = self.closes_at.map(|at| {
             let left = at
                 .saturating_duration_since(Instant::now())
@@ -1232,11 +1199,6 @@ impl ApprovalWindow {
                 theme::text_subtle(),
             )
         });
-        let done_label = if self.stage == Stage::Expired {
-            "Close"
-        } else {
-            "Done"
-        };
         div()
             .flex_1()
             .min_h_0()
@@ -1293,6 +1255,7 @@ impl ApprovalWindow {
                     .when(matches!(self.stage, Stage::Allowed(_)), |row| {
                         row.child(
                             Button::new(LOCAL_AGENTS_ID)
+                                .focusable(false)
                                 .accessibility_label("Open Settings, Local agents")
                                 .cursor_pointer()
                                 .on_click(cx.listener(|_, _, window, cx| {
@@ -1309,10 +1272,11 @@ impl ApprovalWindow {
                     })
                     .child(
                         Button::new(DONE_ID)
-                            .accessibility_label(done_label)
+                            .focusable(false)
+                            .accessibility_label("Done")
                             .cursor_pointer()
                             .on_click(cx.listener(|_, _, window, _| window.remove_window()))
-                            .child(key_button(done_label, "\u{21a9}", ButtonKind::Primary)),
+                            .child(key_button("Done", "\u{21a9}", ButtonKind::Primary)),
                     ),
             )
     }
@@ -1362,15 +1326,18 @@ fn who(request: &ApprovalRequest, chip: Option<Div>) -> Div {
         .flex_wrap()
         .items_center()
         .gap(px(8.0))
-        .child(mono(
+        .child(div().min_w_0().max_w_full().child(crate::widgets::one_line(
             format!(
                 "{} \u{00b7} {}",
-                request.client_name, request.client_version
+                request.client_name,
+                clip(&request.client_version, MAX_VERSION)
             ),
-            11.0,
+            theme::mono_family(500.0),
             500.0,
+            11.0,
+            14.0,
             theme::text_subtle(),
-        ))
+        )))
         .children(chip)
 }
 
@@ -1403,8 +1370,18 @@ fn role_card(index: usize, role: Role, chosen: bool, cx: &mut Context<'_, Approv
         .when(chosen, |radio| {
             radio.child(div().size(px(6.0)).rounded_full().bg(theme::accent()))
         });
+    // Keys go to the window, never a card: the cards are a radio group
+    // that Up, Down and the digits move through.
     let card = Button::new(id)
+        .focusable(false)
         .selected(chosen)
+        .role(gpui_kit::Role::RadioButton)
+        .aria_toggled(if chosen {
+            gpui_kit::Toggled::True
+        } else {
+            gpui_kit::Toggled::False
+        })
+        .aria_selected(chosen)
         .accessibility_label(format!("{name} role"))
         .w_full()
         .flex()
@@ -1478,6 +1455,17 @@ fn role_card(index: usize, role: Role, chosen: bool, cx: &mut Context<'_, Approv
             theme::transparent()
         })
         .child(card)
+}
+
+/// `text` cut to `max` characters, with an ellipsis when cut.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('\u{2026}');
+    cut
 }
 
 /// What `role` may do, in two columns: what every role has on the left,
@@ -1566,23 +1554,6 @@ fn footer() -> Div {
         .pt(px(14.0))
         .px(px(24.0))
         .pb(px(18.0))
-}
-
-/// `4:58`.
-fn minutes_seconds(left: Duration) -> String {
-    let secs = left.as_secs_f32().ceil() as u64;
-    format!("{}:{:02}", secs / 60, secs % 60)
-}
-
-/// "five minutes", "90 seconds": the prompt's lifetime in words.
-fn spoken(span: Duration) -> String {
-    let secs = span.as_secs();
-    match (secs / 60, secs % 60) {
-        (1, 0) => "a minute".to_owned(),
-        (5, 0) => "five minutes".to_owned(),
-        (minutes, 0) => format!("{minutes} minutes"),
-        _ => format!("{secs} seconds"),
-    }
 }
 
 #[cfg(test)]
@@ -1977,7 +1948,6 @@ mod tests {
     fn approval_window<'a>(
         cx: &'a mut TestAppContext,
         name: &str,
-        expires_in: Duration,
     ) -> (
         Entity<ApprovalWindow>,
         &'a mut VisualTestContext,
@@ -1987,8 +1957,7 @@ mod tests {
             crate::assets::load_fonts(cx);
             cx.set_global(Prompts::default());
         });
-        let (mut request, reply, answer) = prompt(name);
-        request.expires_in = expires_in;
+        let (request, reply, answer) = prompt(name);
         let (view, cx) =
             cx.add_window_view(move |window, cx| ApprovalWindow::new(request, reply, window, cx));
         draw(cx);
@@ -2001,7 +1970,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_role_card_chooses_and_allow_decides(cx: &mut TestAppContext) {
-        let (view, cx, mut answer) = approval_window(cx, "claude-code", Duration::from_secs(300));
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
         // Reader, the least role, is chosen at open.
         assert_eq!(view.read_with(cx, |view, _| view.chosen()), Role::Reader);
         assert!(visible(cx, ALLOW_ID));
@@ -2032,7 +2001,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn deny_denies_and_says_so(cx: &mut TestAppContext) {
-        let (view, cx, mut answer) = approval_window(cx, "codex", Duration::from_secs(300));
+        let (view, cx, mut answer) = approval_window(cx, "codex");
         click(cx, DENY_ID);
         draw(cx);
         assert_eq!(answer.get(), Some(pwrroute_mcp::ApprovalDecision::Deny));
@@ -2043,7 +2012,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn keys_choose_and_decide_after_the_grace(cx: &mut TestAppContext) {
-        let (view, cx, mut answer) = approval_window(cx, "claude-code", Duration::from_secs(300));
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
         view.update_in(cx, |view, window, cx| window.focus(&view.focus, cx));
 
         // A Return meant for the terminal the window opened over.
@@ -2061,7 +2030,7 @@ mod tests {
             Some(pwrroute_mcp::ApprovalDecision::Approve { role: Role::Editor })
         );
 
-        let (view, cx, mut answer) = approval_window(cx, "codex", Duration::from_secs(300));
+        let (view, cx, mut answer) = approval_window(cx, "codex");
         view.update_in(cx, |view, window, cx| {
             window.focus(&view.focus, cx);
             view.skip_key_grace();
@@ -2071,15 +2040,64 @@ mod tests {
         assert_eq!(view.read_with(cx, |view, _| view.stage()), Stage::Denied);
     }
 
+    /// A click leaves the keys with the window: no card or button takes
+    /// them, so Return after a click on Allow closes the outcome, and a
+    /// held key's repeats do nothing.
     #[gpui_kit::test]
-    fn an_expired_prompt_says_so_and_is_not_a_denial(cx: &mut TestAppContext) {
-        let (view, cx, mut answer) = approval_window(cx, "claude-code", Duration::ZERO);
-        view.update_in(cx, |view, window, cx| view.closed_by_server(window, cx));
+    fn keys_stay_with_the_window_after_a_click(cx: &mut TestAppContext) {
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
+        view.update(cx, |view, _| view.skip_key_grace());
+        click(cx, role_id("editor"));
+        cx.simulate_keystrokes("1");
+        assert_eq!(view.read_with(cx, |view, _| view.chosen()), Role::Reader);
+
+        click(cx, ALLOW_ID);
         draw(cx);
-        assert_eq!(view.read_with(cx, |view, _| view.stage()), Stage::Expired);
-        assert!(!view.read_with(cx, |view, _| view.pending()));
-        // The reply was dropped after the server moved on: no decision.
+        assert_eq!(
+            answer.get(),
+            Some(pwrroute_mcp::ApprovalDecision::Approve { role: Role::Reader })
+        );
+        assert!(view.update_in(cx, |view, window, _| view.focus.is_focused(window)));
+
+        let windows = cx.windows().len();
+        cx.simulate_event(KeyDownEvent {
+            keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+            is_held: true,
+            prefer_character_input: false,
+        });
+        assert_eq!(cx.windows().len(), windows);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(cx.windows().len(), windows - 1);
+    }
+
+    /// A title or version the client chose is cut, not drawn at any length.
+    #[gpui_kit::test]
+    fn a_long_client_title_is_cut(cx: &mut TestAppContext) {
+        let (view, cx, _answer) = approval_window(cx, "claude-code");
+        view.update(cx, |view, _| {
+            view.request.client_title = Some("Agent ".repeat(40));
+        });
+        let client = view.read_with(cx, |view, _| view.client());
+        assert!(client.chars().count() <= MAX_TITLE, "{client}");
+        assert!(client.ends_with('\u{2026}'), "{client}");
+        assert_eq!(clip("Claude Code", MAX_TITLE), "Claude Code");
+    }
+
+    #[gpui_kit::test]
+    fn a_prompt_the_server_closes_is_no_answer_and_an_outcome_stays(cx: &mut TestAppContext) {
+        let (view, cx, mut answer) = approval_window(cx, "claude-code");
+        view.update_in(cx, |view, window, _| view.closed_by_server(window));
+        // Nobody waits on it any more: no decision was sent.
         assert_eq!(answer.get(), None);
+
+        let (view, cx, _answer) = approval_window(cx, "codex");
+        click(cx, ALLOW_ID);
+        view.update_in(cx, |view, window, _| view.closed_by_server(window));
+        draw(cx);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.stage()),
+            Stage::Allowed(Role::Reader)
+        );
         assert!(visible(cx, DONE_ID));
     }
 
@@ -2116,17 +2134,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_countdown_and_lifetime_read_as_time() {
-        assert_eq!(minutes_seconds(Duration::from_secs(300)), "5:00");
-        assert_eq!(minutes_seconds(Duration::from_millis(298_200)), "4:59");
-        assert_eq!(minutes_seconds(Duration::from_secs(24)), "0:24");
-        assert_eq!(minutes_seconds(Duration::ZERO), "0:00");
-        assert_eq!(spoken(Duration::from_secs(300)), "five minutes");
-        assert_eq!(spoken(Duration::from_secs(120)), "2 minutes");
-        assert_eq!(spoken(Duration::from_secs(90)), "90 seconds");
-    }
-
     /// A prompt and the answer its reply lands on.
     fn prompt(name: &str) -> (ApprovalRequest, ApprovalReply, pwrroute_mcp::ApprovalAnswer) {
         let (reply, rx) = ApprovalReply::pair();
@@ -2137,7 +2144,6 @@ mod tests {
                 client_title: None,
                 client_version: "1.0.0".to_owned(),
                 roles: Role::ALL.to_vec(),
-                expires_in: Duration::from_secs(300),
             },
             reply,
             rx,
