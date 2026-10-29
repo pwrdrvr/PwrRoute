@@ -160,8 +160,9 @@ their own modules.
   a hover only notifies. A port sits on a border and must paint after it:
   GPUI paints a div's border after its children, unlike CSS, so a row's
   or one-node card's port is the frame's sibling, and a browser card's
-  fill, border and shadow are an underlay under its nodes. A row click pins (Edit ›, a double-click or
-  Return opens Rules); Esc, Clear or the empty ground lets go. A ƒ row
+  fill, border and shadow are an underlay under its nodes. A row click
+  pins (Edit ›, a double-click or Return opens Rules); Esc, Clear or the
+  empty ground lets go. A ƒ row
   reads `function_excerpt` of the function's source, a guard's condition
   when it returns a literal; a `finicky.matchHostnames` function reads as
   its hostnames (`FunctionSpec::hostnames`, from the engine). A browser
