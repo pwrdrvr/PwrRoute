@@ -426,13 +426,19 @@ their own modules.
   become `ApprovalWindow`s on the GPUI thread (design: Agent Approval):
   the role cards are a radio group with the request's first (least) role
   chosen, and only Allow as <role> (Return) or Deny (Esc) answers; a card
-  never does. Closing the window while it asks denies. Keys wait
-  `KEY_GRACE` after it opens: the panel takes key focus as it appears, and
-  a Return meant for the terminal must not allow. The footer counts down
-  the request's `expires_in`. After an answer the window stays on the
-  outcome (allowed or denied for `OUTCOME_FOR`; expired until dismissed)
-  and shrinks to it through `macos::set_prompt_height`, which finds the
-  panel by its title, `PwrRoute — <client name>`. A server cancel near the
+  never does. Closing the window while it asks denies. On macOS the panel
+  opens without taking the keyboard (`focus: false`; a click makes it
+  key): an agent asks while the person types in its terminal, and a
+  Return there must not allow. Elsewhere the window comes to the front,
+  so keys wait `KEY_GRACE`. The footer counts down the request's
+  `expires_in`. After an answer the window stays on the outcome (allowed
+  or denied for `OUTCOME_FOR`; expired until dismissed) and shrinks to it
+  through `macos::set_prompt_height`, which finds the panel by its title,
+  `PwrRoute — <client name>`. Each stage's height fits the design's
+  content; the body scrolls rather than run under the buttons, and while
+  it overflows (a client title wraps, a wider font) `ApprovalWindow::fit`
+  grows the window by the overflow, up to `MAX_HEIGHT`. The title wraps:
+  the client chooses it. A server cancel near the
   deadline is the expired state; earlier, the server stopped and the
   window just closes. A new prompt closes an outcome for the same name. The
   pane's "Recent agent actions" is the audit: tool, agent, time, outcome,

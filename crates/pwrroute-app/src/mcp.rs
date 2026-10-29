@@ -32,9 +32,9 @@ use gpui_kit::base::Button;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, BorrowAppContext as _, Bounds, Context, Div, FocusHandle, Global,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    Styled as _, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    div, point, px, size,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 use pwrroute_engine::{
     ConfigChoice, Limits,
@@ -702,13 +702,17 @@ const PROMPT_WIDTH: f32 = 480.0;
 const ASKING_HEIGHT: f32 = 600.0;
 const ALLOWED_HEIGHT: f32 = 400.0;
 const SHORT_HEIGHT: f32 = 280.0;
+/// The tallest the window grows to fit its content; past it the body
+/// scrolls.
+const MAX_HEIGHT: f32 = 860.0;
 
 /// How long an allowed or denied window stays to say so.
 const OUTCOME_FOR: Duration = Duration::from_secs(6);
 /// The countdown turns amber below this.
 const EXPIRY_WARNING: Duration = Duration::from_secs(30);
-/// Keys do nothing this long after the window opens: it takes key focus
-/// as it appears, and a Return meant for the terminal must not allow.
+/// Keys do nothing this long after the window opens. Off macOS it takes
+/// key focus as it appears, and a Return meant for the terminal must not
+/// allow.
 const KEY_GRACE: Duration = Duration::from_millis(800);
 /// A cancel this close to the deadline is the prompt expiring; earlier, the
 /// server stopped.
@@ -763,6 +767,12 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
             app_id: Some("pwrroute".to_owned()),
             window_min_size: Some(size(px(PROMPT_WIDTH), px(SHORT_HEIGHT))),
             kind: PROMPT_KIND,
+            // On macOS the panel shows over everything without taking the
+            // keyboard: an agent asks while the person types in its
+            // terminal, and Return there must not reach Allow. A click
+            // makes it key. Elsewhere the window must come to the front to
+            // be seen at all, so `KEY_GRACE` guards its first moment.
+            focus: PROMPT_KIND == WindowKind::Normal,
             ..Default::default()
         },
         |window, cx| cx.new(|cx| ApprovalWindow::new(request, reply, window, cx)),
@@ -830,6 +840,11 @@ pub struct ApprovalWindow {
     deadline: Instant,
     /// When an outcome closes itself.
     closes_at: Option<Instant>,
+    /// The body above the buttons. It scrolls rather than run under them,
+    /// and while it overflows the window grows to fit.
+    scroll: ScrollHandle,
+    /// The height last asked of the window.
+    asked_height: f32,
 }
 
 impl ApprovalWindow {
@@ -867,6 +882,8 @@ impl ApprovalWindow {
             opened_at: now,
             deadline: now + request.expires_in,
             closes_at: None,
+            scroll: ScrollHandle::new(),
+            asked_height: ASKING_HEIGHT,
             request,
             reply: Some(reply),
             focus: cx.focus_handle(),
@@ -951,9 +968,11 @@ impl ApprovalWindow {
         cx.notify();
     }
 
-    /// Shrink to the outcome. macOS keeps a resized window's bottom edge,
-    /// so there AppKit does it, keeping the top, and outside any update.
-    fn resize(&self, height: f32, window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// Size the window to `height`. macOS keeps a resized window's bottom
+    /// edge, so there AppKit does it, keeping the top, and outside any
+    /// update.
+    fn resize(&mut self, height: f32, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.asked_height = height;
         #[cfg(target_os = "macos")]
         {
             let _ = window;
@@ -970,6 +989,28 @@ impl ApprovalWindow {
             let _ = cx;
             window.resize(size(px(PROMPT_WIDTH), px(height)));
         }
+    }
+
+    /// Grows the window by what its body overflowed in the last frame: a
+    /// long client title, a wider font. The height for each stage is what
+    /// the design's content needs; this keeps the buttons clear of
+    /// anything more.
+    fn fit(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let overflow = self.scroll.max_offset().y.as_f32();
+        if overflow < 1.0 {
+            return;
+        }
+        let want = (window.viewport_size().height.as_f32() + overflow)
+            .ceil()
+            .min(MAX_HEIGHT);
+        if want <= self.asked_height + 0.5 {
+            return;
+        }
+        self.asked_height = want;
+        cx.spawn_in(window, async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| this.resize(want, window, cx));
+        })
+        .detach();
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -1032,6 +1073,12 @@ impl ApprovalWindow {
         self.reply.as_ref().is_some_and(ApprovalReply::is_pending)
     }
 
+    /// The height last asked of the window, for tests.
+    #[cfg(test)]
+    pub fn asked_height(&self) -> f32 {
+        self.asked_height
+    }
+
     /// Lets keys through at once, for tests.
     #[cfg(test)]
     pub fn skip_key_grace(&mut self) {
@@ -1066,6 +1113,9 @@ impl ApprovalWindow {
             .flex_col()
             .child(
                 div()
+                    .id("mcp-approval-body")
+                    .track_scroll(&self.scroll)
+                    .overflow_y_scroll()
                     .flex_1()
                     .min_h_0()
                     .flex()
@@ -1079,12 +1129,7 @@ impl ApprovalWindow {
                             .flex_col()
                             .gap(px(8.0))
                             .child(tracked("Local agent", 9.5, 600.0, 0.14, theme::accent()))
-                            .child(text(
-                                format!("Allow {} to use PwrRoute?", self.client()),
-                                17.0,
-                                700.0,
-                                theme::text_primary(),
-                            ))
+                            .child(heading(format!("Allow {} to use PwrRoute?", self.client())))
                             .child(who(&self.request, Some(chip("name sent by the client")))),
                     )
                     .child(crate::widgets::paragraph(
@@ -1199,6 +1244,9 @@ impl ApprovalWindow {
             .flex_col()
             .child(
                 div()
+                    .id("mcp-approval-body")
+                    .track_scroll(&self.scroll)
+                    .overflow_y_scroll()
                     .flex_1()
                     .min_h_0()
                     .flex()
@@ -1221,7 +1269,7 @@ impl ApprovalWindow {
                             .flex()
                             .flex_col()
                             .gap(px(8.0))
-                            .child(text(title, 17.0, 700.0, theme::text_primary()))
+                            .child(heading(title))
                             .child(who(&self.request, role_chip)),
                     )
                     .child(crate::widgets::paragraph(
@@ -1271,7 +1319,8 @@ impl ApprovalWindow {
 }
 
 impl Render for ApprovalWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        self.fit(window, cx);
         let body = match self.stage {
             Stage::Asking => self.asking(cx),
             _ => self.outcome(cx),
@@ -1291,6 +1340,19 @@ impl Render for ApprovalWindow {
             .font_family(theme::SANS)
             .child(body)
     }
+}
+
+/// The window's title, wrapping: a client title is the client's to choose,
+/// and a long one must not run off the edge.
+fn heading(content: String) -> Div {
+    div()
+        .min_w_0()
+        .font_family(theme::SANS)
+        .font_weight(theme::weight(700.0))
+        .text_size(px(17.0))
+        .line_height(px(21.0))
+        .text_color(theme::text_primary())
+        .child(content)
 }
 
 /// The client as it named itself: name and version, mono, and a chip.
@@ -2019,6 +2081,39 @@ mod tests {
         // The reply was dropped after the server moved on: no decision.
         assert_eq!(answer.get(), None);
         assert!(visible(cx, DONE_ID));
+    }
+
+    /// A client title that wraps onto more lines grows the window, so the
+    /// buttons stay clear of the body.
+    #[gpui_kit::test]
+    fn the_window_grows_rather_than_crowd_the_buttons(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::assets::load_fonts(cx);
+            cx.set_global(Prompts::default());
+        });
+        let mut heights = Vec::new();
+        for title in [
+            None,
+            Some("An Agent With A Title Long Enough To Wrap Twice ".repeat(3)),
+        ] {
+            let (mut request, reply, _answer) = prompt("claude-code");
+            request.client_title = title;
+            let (view, cx) = cx
+                .add_window_view(move |window, cx| ApprovalWindow::new(request, reply, window, cx));
+            cx.simulate_resize(size(px(PROMPT_WIDTH), px(ASKING_HEIGHT)));
+            for _ in 0..3 {
+                draw(cx);
+                cx.run_until_parked();
+            }
+            heights.push(view.read_with(cx, |view, _| view.asked_height()));
+        }
+        // The test's text system measures its own way, so compare the two
+        // rather than hold the first to the design's height.
+        assert!(heights[0] >= ASKING_HEIGHT);
+        assert!(
+            heights[1] > heights[0],
+            "a long title asks for more: {heights:?}"
+        );
     }
 
     #[test]
