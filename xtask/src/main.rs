@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result, bail, ensure};
 const USAGE: &str = "\
 usage: cargo xtask <task>
 
-  lint                 rustfmt --check, CI classifier tests, clippy, cargo-deny, notices
+  lint                 rustfmt --check, CI and packaging tests, clippy, cargo-deny, notices
   test                 every workspace test
   fmt                  format in place
   licenses [--check]   write THIRD_PARTY_LICENSES, or check it is current
@@ -67,13 +67,32 @@ fn main() -> Result<()> {
 fn lint() -> Result<()> {
     cargo(&["fmt", "--all", "--", "--check"])?;
     let mut node = Command::new("node");
-    node.args(["--test", "scripts/ci/classify-changes.test.cjs"]);
+    node.args([
+        "--test",
+        "scripts/ci/classify-changes.test.cjs",
+        "scripts/ci/macos-workflows.test.cjs",
+    ]);
     // Start's subprocess mocks require Bash and POSIX executable permissions.
     if cfg!(unix) {
         node.arg("scripts/dev/start.test.cjs");
     }
     run(node.current_dir(root()))
         .context("Node.js is required to run the repository's JavaScript tests")?;
+    if cfg!(unix) {
+        run(Command::new("python3")
+            .args([
+                "-B",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "scripts/release",
+                "-p",
+                "*_test.py",
+            ])
+            .current_dir(root()))
+        .context("Python 3 is required to test macOS signing cleanup and DMG layout")?;
+    }
     cargo(&[
         "clippy",
         "--workspace",

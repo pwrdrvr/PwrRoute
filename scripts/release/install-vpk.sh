@@ -18,8 +18,9 @@ set -euo pipefail
 VPK_VERSION=1.2.161
 VPK_SHA512=359f48f056f0973e1b1cf971bd67862b1dd35c21147f801d3c78541e2769a6033708a56dd5b1801c7add0630a36344b5ba892997ad2f03cf3dc00ccedbf8b19b
 
-feed="${RUNNER_TEMP:?}/vpk-feed"
-tools="$RUNNER_TEMP/vpk"
+temp_root=${VPK_TEMP_ROOT:-${RUNNER_TEMP:?}}
+feed="$temp_root/vpk-feed"
+tools="$temp_root/vpk"
 mkdir -p "$feed"
 package="$feed/vpk.$VPK_VERSION.nupkg"
 curl -fsSL --retry 3 -o "$package" \

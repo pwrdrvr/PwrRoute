@@ -649,24 +649,21 @@ mod tests {
         );
     }
 
-    /// macos-dmg.sh places the icons and generate-dmg-background.swift paints
+    /// dmg-layout.py places the icons and generate-dmg-background.swift paints
     /// the arrow between them; the committed PNG is the size of the window.
     #[test]
     fn the_dmg_layout_matches_its_background() {
-        let script = read(&root().join(DMG_SCRIPT)).unwrap();
+        let layout = read(&root().join("scripts/release/dmg-layout.py")).unwrap();
         let swift = read(&root().join("scripts/release/generate-dmg-background.swift")).unwrap();
-        for (shell, swift_name, value) in [
-            ("window_width", "width", 660),
-            ("window_height", "height", 400),
-            ("icon_size", "iconSize", 112),
-            ("app_x", "appIconX", 170),
-            ("applications_x", "applicationsX", 500),
-            ("icon_y", "iconY", 230),
+        for (python, swift_name, value) in [
+            ("WINDOW_SIZE = (660, 400)", "width", 660),
+            ("WINDOW_SIZE = (660, 400)", "height", 400),
+            ("ICON_SIZE = 112", "iconSize", 112),
+            ("\"PwrRoute.app\": (170, 230)", "appIconX", 170),
+            ("\"Applications\": (500, 230)", "applicationsX", 500),
+            ("\"PwrRoute.app\": (170, 230)", "iconY", 230),
         ] {
-            assert!(
-                script.lines().any(|l| l == format!("{shell}={value}")),
-                "macos-dmg.sh: {shell} is not {value}"
-            );
+            assert!(layout.contains(python), "dmg-layout.py: missing {python}");
             assert!(
                 swift
                     .lines()
