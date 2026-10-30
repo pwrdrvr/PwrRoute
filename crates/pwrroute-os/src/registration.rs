@@ -493,6 +493,14 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let plist = std::fs::read_to_string(root.join("packaging/macos/Info.plist.in")).unwrap();
         assert!(plist.contains(&format!("<string>{BUNDLE_ID}</string>")));
+        // macOS lists only apps that claim HTML documents as web browsers,
+        // in System Settings and in its consent prompt.
+        for claim in ["http", "https", "public.html", "public.xhtml"] {
+            assert!(
+                plist.contains(&format!("<string>{claim}</string>")),
+                "Info.plist.in must claim {claim}"
+            );
+        }
         assert!(root.join("packaging/linux").join(DESKTOP_ID).exists());
     }
 }
