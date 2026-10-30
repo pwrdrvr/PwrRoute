@@ -2,9 +2,10 @@
 // (github.com/johnste/finicky/wiki), joined into one config: the general
 // options, every matching method, every way to select a browser, every
 // rewrite method, and the complete example's rules. Hosts are kept apart so
-// each link exercises one example.
+// each link exercises one example. Hosts, top-level domains and app names
+// are neutral stand-ins for the wiki's.
 export default {
-  defaultBrowser: "Google Chrome",
+  defaultBrowser: "Work Browser",
   options: {
     checkForUpdates: true,
     logRequests: false,
@@ -16,7 +17,7 @@ export default {
     { match: "example.org/*", url: "http://example.com" },
     // Rewriting urls: simple string replacement, URL instance, dynamic
     // modification, complex transformation
-    { match: "string.example.org/*", url: "https://gitlab.com" },
+    { match: "string.example.org/*", url: "https://code.example" },
     { match: "instance.example.org/*", url: new URL("https://example.com") },
     {
       match: "dynamic.example.org/*",
@@ -47,7 +48,7 @@ export default {
   ],
   handlers: [
     // General options
-    { match: "apple.com/*", browser: "Safari" },
+    { match: "vendor.example/*", browser: "Home Browser" },
     // Matching urls
     { match: "http://match.example.com/*", browser: "String Wildcard" },
     { match: "*.sub.example.com/*", browser: "Subdomain Wildcard" },
@@ -58,41 +59,41 @@ export default {
     {
       match: [
         "https://combined.example.com",
-        /^http:\/\/combined.(org|com)\/.*/,
+        /^http:\/\/example.(org|com)\/.*/,
         (url) => url.pathname.includes("/hello"),
       ],
       browser: "Combined",
     },
     // Selecting a browser
-    { match: (url) => url.host.endsWith("simple.example.org"), browser: "Firefox" },
-    { match: "byname.example/*", browser: "Google Chrome" },
-    { match: "bybundle.example/*", browser: "com.google.Chrome" },
-    { match: "bypath.example/*", browser: "/Applications/Firefox.app" },
-    { match: "profile-string.example/*", browser: "Google Chrome:Personal" },
-    { match: "profile-object.example/*", browser: { name: "Google Chrome", profile: "Personal" } },
+    { match: (url) => url.host.endsWith("simple.example.org"), browser: "Personal Browser" },
+    { match: "byname.example/*", browser: "Work Browser" },
+    { match: "bybundle.example/*", browser: "com.example.WorkBrowser" },
+    { match: "bypath.example/*", browser: "/Applications/Personal Browser.app" },
+    { match: "profile-string.example/*", browser: "Work Browser:Personal" },
+    { match: "profile-object.example/*", browser: { name: "Work Browser", profile: "Personal" } },
     {
       match: "advanced.example/*",
-      browser: { name: "Google Chrome", appType: "appName", openInBackground: true, profile: "Work" },
+      browser: { name: "Work Browser", appType: "appName", openInBackground: true, profile: "Work" },
     },
     {
       match: "dynamic.example/*",
       browser: (url) => {
-        if (url.host === "example.com") return "Google Chrome";
-        if (url.host === "work.example.com") return "Firefox";
-        return "Safari";
+        if (url.host === "example.com") return "Work Browser";
+        if (url.host === "work.example.com") return "Personal Browser";
+        return "Home Browser";
       },
     },
     {
-      match: "*facebook*",
-      browser: (url) => ({ name: "Google Chrome", openInBackground: url.href.includes("facebook") }),
+      match: "*social*",
+      browser: (url) => ({ name: "Work Browser", openInBackground: url.href.includes("social") }),
     },
     // Complete example
     {
       match: "work.example.com/*",
-      browser: { name: "Google Chrome", profile: "Work", openInBackground: true },
+      browser: { name: "Work Browser", profile: "Work", openInBackground: true },
     },
-    { match: "personal.example.com/*", browser: "Google Chrome:Personal" },
-    { match: "safari.example.com/*", browser: "Safari" },
-    { match: (url) => url.host.endsWith(".dev"), browser: "Firefox" },
+    { match: "personal.example.com/*", browser: "Work Browser:Personal" },
+    { match: "home.example.com/*", browser: "Home Browser" },
+    { match: (url) => url.host.endsWith(".test"), browser: "Personal Browser" },
   ],
 };

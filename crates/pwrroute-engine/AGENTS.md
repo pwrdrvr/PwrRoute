@@ -55,7 +55,9 @@ crate docs map the modules.
   each to its PwrRoute test.** Its config API unit tests live in
   `tests/configs/finicky-unit.js`, which `tests/finicky_suite.rs` runs
   through `Engine::evaluate` (a test-only hook, like `resolve_plain`) and
-  `record.py --eval-oracle` runs in goja; keep Finicky's describe/it names.
+  `record.py --eval-oracle` runs in goja; keep Finicky's describe/it names,
+  and use neutral hosts and app names (`*.example`, `Work Browser`), never a
+  real company's.
   Its Go tests, `testdata/` and wiki examples are suites under
   `tests/configs/finicky/`. When Finicky adds a test or a documented
   feature, port it and add its row to the map.

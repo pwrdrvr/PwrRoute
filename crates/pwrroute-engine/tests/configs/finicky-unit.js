@@ -4,7 +4,9 @@
 // (tests/finicky_suite.rs) and in the Go host's goja VM
 // (tests/oracle/evaloracle.go), so both hosts run the same cases.
 //
-// Each `it` keeps Finicky's describe/it names and its expectations. vitest's
+// Each `it` keeps Finicky's describe/it names and its expectations, with
+// neutral hosts and app names in place of the real ones Finicky's tests use
+// (so an `it` named after its URL names the neutral URL). vitest's
 // `vi.spyOn(console, "warn")` becomes a swap of `console.warn` for the case.
 // The API does not export FinickyURL or matchWildcard; a FinickyURL comes from
 // `rewriteUrl(string)`, which constructs one, and `matchWildcard(p, s)` is
@@ -156,22 +158,22 @@ var finickyUnit = (function () {
 
     describe("handlers", function () {
       var handlerConfig = {
-        defaultBrowser: "Firefox",
+        defaultBrowser: "Personal Browser",
         handlers: [
-          { match: "browser.spotify.com*", browser: "Spotify" },
-          { match: ["github.com*", /amazon/], browser: "Google Chrome" },
-          { match: ["figma.com*", "sketch.com*"], browser: { name: "Google Chrome", profile: "Design" } },
-          { match: function (url) { return url.pathname.includes("docs"); }, browser: "Google Chrome" },
+          { match: "player.music.example*", browser: "Music App" },
+          { match: ["code.example*", /shop/], browser: "Work Browser" },
+          { match: ["design.example*", "draw.example*"], browser: { name: "Work Browser", profile: "Design" } },
+          { match: function (url) { return url.pathname.includes("docs"); }, browser: "Work Browser" },
         ],
       };
       [
-        { url: "https://example.com", expected: "Firefox" },
-        { url: "https://browser.spotify.com/track/123", expected: "Spotify" },
-        { url: "https://github.com/some-repo", expected: "Google Chrome" },
-        { url: "https://amazon.com/product", expected: "Google Chrome" },
-        { url: "https://figma.com/file/123", expected: { name: "Google Chrome", profile: "Design" } },
-        { url: "https://sketch.com/dashboard", expected: { name: "Google Chrome", profile: "Design" } },
-        { url: "https://example.com/docs", expected: "Google Chrome" },
+        { url: "https://example.com", expected: "Personal Browser" },
+        { url: "https://player.music.example/track/123", expected: "Music App" },
+        { url: "https://code.example/some-repo", expected: "Work Browser" },
+        { url: "https://shop.example/product", expected: "Work Browser" },
+        { url: "https://design.example/file/123", expected: { name: "Work Browser", profile: "Design" } },
+        { url: "https://draw.example/dashboard", expected: { name: "Work Browser", profile: "Design" } },
+        { url: "https://example.com/docs", expected: "Work Browser" },
       ].forEach(function (c) {
         it("handles " + c.url, function () {
           var result = api.openUrl(c.url, mockProcessInfo, null, handlerConfig);
@@ -180,45 +182,45 @@ var finickyUnit = (function () {
       });
       it("works with null opener", function () {
         var result = api.openUrl("https://example.com", null, null, handlerConfig);
-        expect(result.browser).toMatchObject({ name: "Firefox" });
+        expect(result.browser).toMatchObject({ name: "Personal Browser" });
       });
     });
 
     describe("rewrites", function () {
       var rewriteConfig = {
-        defaultBrowser: "Safari",
+        defaultBrowser: "Home Browser",
         rewrite: [
-          { match: "https://slack-redir.net/link?url=*", url: function (url) { return url.href; } },
-          { match: /^https:\/\/t\.co\/.+/, url: function (url) { return url.href.replace("t.co", "twitter.com"); } },
+          { match: "https://redirect.example/link?url=*", url: function (url) { return url.href; } },
+          { match: /^https:\/\/s\.example\/.+/, url: function (url) { return url.href.replace("s.example", "social.example"); } },
           { match: function (url) { return url.href.includes("shortened"); }, url: function (url) { return url.href + "/expanded"; } },
           { match: function (url) { return url.href.includes("use-url-object"); }, url: function () { return new URL("https://example.com"); } },
         ],
       };
       [
-        { input: "https://slack-redir.net/link?url=https://example.com", expectedUrl: "https://slack-redir.net/link?url=https://example.com" },
-        { input: "https://t.co/abc123", expectedUrl: "https://twitter.com/abc123" },
-        { input: "https://my.shortened.url/123", expectedUrl: "https://my.shortened.url/123/expanded" },
-        { input: "https://www.use-url-object.com", expectedUrl: "https://example.com/" },
+        { input: "https://redirect.example/link?url=https://example.com", expectedUrl: "https://redirect.example/link?url=https://example.com" },
+        { input: "https://s.example/abc123", expectedUrl: "https://social.example/abc123" },
+        { input: "https://my.shortened.example/123", expectedUrl: "https://my.shortened.example/123/expanded" },
+        { input: "https://www.use-url-object.example", expectedUrl: "https://example.com/" },
       ].forEach(function (c) {
         it("rewrites " + c.input, function () {
           var result = api.openUrl(c.input, mockProcessInfo, null, rewriteConfig);
-          expect(result.browser).toMatchObject({ name: "Safari", url: c.expectedUrl });
+          expect(result.browser).toMatchObject({ name: "Home Browser", url: c.expectedUrl });
         });
       });
     });
 
     describe("wildcards", function () {
       var wildcardConfig = {
-        defaultBrowser: "Safari",
+        defaultBrowser: "Home Browser",
         handlers: [
-          { match: "*.example.com*", browser: "Chrome" },
-          { match: ["*.google.*", "mail.*.com*"], browser: "Chrome" },
+          { match: "*.example.com*", browser: "Browser A" },
+          { match: ["*.search.*", "mail.*.example*"], browser: "Browser A" },
         ],
       };
       [
-        { urls: ["https://sub1.example.com", "https://sub2.example.com/path"], expected: "Chrome" },
-        { urls: ["https://mail.google.com", "https://docs.google.co.uk", "https://mail.yahoo.com"], expected: "Chrome" },
-        { urls: ["https://example.com", "https://google.com"], expected: "Safari" },
+        { urls: ["https://sub1.example.com", "https://sub2.example.com/path"], expected: "Browser A" },
+        { urls: ["https://mail.search.example", "https://docs.search.example.org", "https://mail.provider.example"], expected: "Browser A" },
+        { urls: ["https://example.com", "https://search.example"], expected: "Home Browser" },
       ].forEach(function (c) {
         c.urls.forEach(function (url) {
           it(c.expected + " handles " + url, function () {
@@ -231,17 +233,17 @@ var finickyUnit = (function () {
 
     describe("edge cases", function () {
       var edgeCaseConfig = {
-        defaultBrowser: "Safari",
+        defaultBrowser: "Home Browser",
         handlers: [
-          { match: "", browser: "Chrome" },
-          { match: "https://*", browser: "Firefox" },
-          { match: "*?param=value*", browser: "Edge" },
+          { match: "", browser: "Browser A" },
+          { match: "https://*", browser: "Personal Browser" },
+          { match: "*?param=value*", browser: "Browser B" },
         ],
       };
       [
-        { url: "http://example.com", expected: "Safari" },
-        { url: "https://example.com", expected: "Firefox" },
-        { url: "http://example.com/?param=value&other=123", expected: "Edge" },
+        { url: "http://example.com", expected: "Home Browser" },
+        { url: "https://example.com", expected: "Personal Browser" },
+        { url: "http://example.com/?param=value&other=123", expected: "Browser B" },
       ].forEach(function (c) {
         it(c.expected + " handles " + c.url, function () {
           var result = api.openUrl(c.url, mockProcessInfo, null, edgeCaseConfig);
@@ -268,7 +270,7 @@ var finickyUnit = (function () {
       it("does not match non-matching domains", function () {
         var pattern = "example.com*";
         expect(matchWildcard(pattern, "https://notexample.com")).toBe(false);
-        expect(matchWildcard(pattern, "https://sub.different.com")).toBe(false);
+        expect(matchWildcard(pattern, "https://sub.different.example")).toBe(false);
       });
     });
 
@@ -330,16 +332,16 @@ var finickyUnit = (function () {
         expect(matchWildcard(pattern, "http://example.com")).toBe(false);
       });
       it("handles multiple TLD wildcards", function () {
-        var pattern = "*.google.*";
-        expect(matchWildcard(pattern, "https://mail.google.com")).toBe(true);
-        expect(matchWildcard(pattern, "https://docs.google.co.uk")).toBe(true);
-        expect(matchWildcard(pattern, "https://google.com")).toBe(false);
+        var pattern = "*.search.*";
+        expect(matchWildcard(pattern, "https://mail.search.example")).toBe(true);
+        expect(matchWildcard(pattern, "https://docs.search.example.org")).toBe(true);
+        expect(matchWildcard(pattern, "https://search.example")).toBe(false);
       });
       it("handles complex subdomain patterns", function () {
-        var pattern = "https://*.github.io/*";
-        expect(matchWildcard(pattern, "https://user1.github.io/repo")).toBe(true);
-        expect(matchWildcard(pattern, "https://org.github.io/docs/api")).toBe(true);
-        expect(matchWildcard(pattern, "https://github.io/test")).toBe(false);
+        var pattern = "https://*.pages.example/*";
+        expect(matchWildcard(pattern, "https://user1.pages.example/repo")).toBe(true);
+        expect(matchWildcard(pattern, "https://org.pages.example/docs/api")).toBe(true);
+        expect(matchWildcard(pattern, "https://pages.example/test")).toBe(false);
       });
     });
   });
@@ -454,7 +456,7 @@ var finickyUnit = (function () {
     describe("string patterns", function () {
       it("matches exact strings", function () {
         expect(api.isMatch("https://example.com/path?query=value#fragment", mockUrl, mockOptions)).toBe(true);
-        expect(api.isMatch("https://different.com", mockUrl, mockOptions)).toBe(false);
+        expect(api.isMatch("https://different.example", mockUrl, mockOptions)).toBe(false);
       });
       it("matches wildcard patterns", function () {
         expect(api.isMatch("example.com*", mockUrl, mockOptions)).toBe(true);
@@ -470,13 +472,13 @@ var finickyUnit = (function () {
       it("matches regex patterns", function () {
         expect(api.isMatch(/example\.com/, mockUrl, mockOptions)).toBe(true);
         expect(api.isMatch(/example\.com\/path\?query=value/, mockUrl, mockOptions)).toBe(true);
-        expect(api.isMatch(/different\.com/, mockUrl, mockOptions)).toBe(false);
+        expect(api.isMatch(/different\.example/, mockUrl, mockOptions)).toBe(false);
       });
     });
     describe("function patterns", function () {
       it("matches function patterns", function () {
         expect(api.isMatch(function (url) { return url.hostname === "example.com"; }, mockUrl, mockOptions)).toBe(true);
-        expect(api.isMatch(function (url) { return url.hostname === "different.com"; }, mockUrl, mockOptions)).toBe(false);
+        expect(api.isMatch(function (url) { return url.hostname === "different.example"; }, mockUrl, mockOptions)).toBe(false);
       });
       it("passes options to function patterns", function () {
         var matchFn = function (url, options) { return options.opener && options.opener.name === "TestApp"; };
@@ -485,13 +487,13 @@ var finickyUnit = (function () {
     });
     describe("array patterns", function () {
       it("matches if any pattern in array matches", function () {
-        expect(api.isMatch(["different.com", "example.com*"], mockUrl, mockOptions)).toBe(true);
-        expect(api.isMatch([/different\.com/, /example\.com/], mockUrl, mockOptions)).toBe(true);
-        expect(api.isMatch(["different.com", /different\.org/], mockUrl, mockOptions)).toBe(false);
+        expect(api.isMatch(["different.example", "example.com*"], mockUrl, mockOptions)).toBe(true);
+        expect(api.isMatch([/different\.example/, /example\.com/], mockUrl, mockOptions)).toBe(true);
+        expect(api.isMatch(["different.example", /different\.org/], mockUrl, mockOptions)).toBe(false);
       });
       it("handles mixed pattern types in arrays", function () {
         var matchFn = function (url) { return url.hostname === "example.com"; };
-        expect(api.isMatch(["different.com", /example\.com/, matchFn], mockUrl, mockOptions)).toBe(true);
+        expect(api.isMatch(["different.example", /example\.com/, matchFn], mockUrl, mockOptions)).toBe(true);
       });
     });
   });
@@ -499,84 +501,84 @@ var finickyUnit = (function () {
   describe("rewriteUrl", function () {
     var mockUrl = finickyURL("https://example.com/path?query=value#fragment");
     it("handles string rewrites", function () {
-      var result = api.rewriteUrl("https://rewritten.com", mockUrl, mockOptions);
+      var result = api.rewriteUrl("https://rewritten.example", mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://rewritten.com/");
+      expect(result.href).toBe("https://rewritten.example/");
     });
     it("handles URL object rewrites", function () {
-      var result = api.rewriteUrl(new URL("https://rewritten.com/newpath"), mockUrl, mockOptions);
+      var result = api.rewriteUrl(new URL("https://rewritten.example/newpath"), mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://rewritten.com/newpath");
+      expect(result.href).toBe("https://rewritten.example/newpath");
     });
     it("handles FinickyURL object rewrites", function () {
-      var newUrl = finickyURL("https://rewritten.com/newpath", mockProcessInfo);
+      var newUrl = finickyURL("https://rewritten.example/newpath", mockProcessInfo);
       var result = api.rewriteUrl(newUrl, mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://rewritten.com/newpath");
+      expect(result.href).toBe("https://rewritten.example/newpath");
     });
     it("handles function rewrites that return strings", function () {
-      var result = api.rewriteUrl(function () { return "https://rewritten.com/function"; }, mockUrl, mockOptions);
+      var result = api.rewriteUrl(function () { return "https://rewritten.example/function"; }, mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://rewritten.com/function");
+      expect(result.href).toBe("https://rewritten.example/function");
     });
     it("handles function rewrites that return URL objects", function () {
-      var result = api.rewriteUrl(function () { return new URL("https://rewritten.com/function-url"); }, mockUrl, mockOptions);
+      var result = api.rewriteUrl(function () { return new URL("https://rewritten.example/function-url"); }, mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://rewritten.com/function-url");
+      expect(result.href).toBe("https://rewritten.example/function-url");
     });
     it("handles function rewrites that return FinickyURL objects", function () {
-      var result = api.rewriteUrl(function () { return finickyURL("https://rewritten.com/function-finicky"); }, mockUrl, mockOptions);
+      var result = api.rewriteUrl(function () { return finickyURL("https://rewritten.example/function-finicky"); }, mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://rewritten.com/function-finicky");
+      expect(result.href).toBe("https://rewritten.example/function-finicky");
     });
     // vitest mocks isLegacyURLObject and legacyURLObjectToString; neither is
     // exported. Unmocked, an object without `username` is still a legacy URL
     // object, and the API writes the missing username as "undefined".
     it("handles legacy URL object rewrites", function () {
-      var legacyUrl = { host: "legacy.com", protocol: "https", pathname: "/legacy-path", search: "query=value", hash: "fragment" };
+      var legacyUrl = { host: "legacy.example", protocol: "https", pathname: "/legacy-path", search: "query=value", hash: "fragment" };
       var result = api.rewriteUrl(legacyUrl, mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://undefinedlegacy.com/legacy-path?query=value#fragment");
-      var withUser = { username: "", host: "legacy.com", protocol: "https", pathname: "/legacy-path", search: "query=value", hash: "fragment" };
-      expect(api.rewriteUrl(withUser, mockUrl, mockOptions).href).toBe("https://legacy.com/legacy-path?query=value#fragment");
+      expect(result.href).toBe("https://undefinedlegacy.example/legacy-path?query=value#fragment");
+      var withUser = { username: "", host: "legacy.example", protocol: "https", pathname: "/legacy-path", search: "query=value", hash: "fragment" };
+      expect(api.rewriteUrl(withUser, mockUrl, mockOptions).href).toBe("https://legacy.example/legacy-path?query=value#fragment");
     });
     it("returns the original URL for unsupported rewrite types", function () {
       expect(api.rewriteUrl(123, mockUrl, mockOptions)).toBe(mockUrl);
     });
     it("simulates chained function rewrites", function () {
-      var result = api.rewriteUrl(function () { return "https://chained-rewritten.com"; }, mockUrl, mockOptions);
+      var result = api.rewriteUrl(function () { return "https://chained-rewritten.example"; }, mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://chained-rewritten.com/");
+      expect(result.href).toBe("https://chained-rewritten.example/");
     });
     it("handles recursive URL transformations", function () {
-      var firstResult = api.rewriteUrl(function () { return new URL("https://first-transform.com"); }, mockUrl, mockOptions);
-      expect(firstResult.href).toBe("https://first-transform.com/");
-      var secondResult = api.rewriteUrl(function () { return "https://second-transform.com"; }, firstResult, mockOptions);
-      expect(secondResult.href).toBe("https://second-transform.com/");
+      var firstResult = api.rewriteUrl(function () { return new URL("https://first-transform.example"); }, mockUrl, mockOptions);
+      expect(firstResult.href).toBe("https://first-transform.example/");
+      var secondResult = api.rewriteUrl(function () { return "https://second-transform.example"; }, firstResult, mockOptions);
+      expect(secondResult.href).toBe("https://second-transform.example/");
     });
     // vitest mocks isLegacyURLObject to false; a string result never reaches it.
     it("handles function rewrites that return legacy URL objects via mocking", function () {
-      var result = api.rewriteUrl(function () { return "https://function-legacy.com/from-function"; }, mockUrl, mockOptions);
+      var result = api.rewriteUrl(function () { return "https://function-legacy.example/from-function"; }, mockUrl, mockOptions);
       expect(result).toBeFinickyURL();
-      expect(result.href).toBe("https://function-legacy.com/from-function");
+      expect(result.href).toBe("https://function-legacy.example/from-function");
     });
   });
 
   describe("autodetectAppStringType", function () {
     it("detects app names", function () {
-      expect(api.autodetectAppStringType("Google Chrome")).toBe("appName");
-      expect(api.autodetectAppStringType("Firefox")).toBe("appName");
-      expect(api.autodetectAppStringType("Safari")).toBe("appName");
-      expect(api.autodetectAppStringType("Chrome 123")).toBe("appName");
+      expect(api.autodetectAppStringType("Work Browser")).toBe("appName");
+      expect(api.autodetectAppStringType("Personal")).toBe("appName");
+      expect(api.autodetectAppStringType("Browser")).toBe("appName");
+      expect(api.autodetectAppStringType("Browser 123")).toBe("appName");
     });
     it("detects bundle IDs", function () {
-      expect(api.autodetectAppStringType("com.google.Chrome")).toBe("bundleId");
-      expect(api.autodetectAppStringType("org.mozilla.firefox")).toBe("bundleId");
-      expect(api.autodetectAppStringType("com.apple.Safari")).toBe("bundleId");
+      expect(api.autodetectAppStringType("com.example.WorkBrowser")).toBe("bundleId");
+      expect(api.autodetectAppStringType("org.example.browser")).toBe("bundleId");
+      expect(api.autodetectAppStringType("net.example.home-browser")).toBe("bundleId");
     });
     it("detects app paths", function () {
-      expect(api.autodetectAppStringType("/Applications/Google Chrome.app")).toBe("path");
-      expect(api.autodetectAppStringType("~/Applications/Firefox.app")).toBe("path");
+      expect(api.autodetectAppStringType("/Applications/Work Browser.app")).toBe("path");
+      expect(api.autodetectAppStringType("~/Applications/Personal Browser.app")).toBe("path");
       expect(api.autodetectAppStringType("/Users/username/Applications/Custom Browser.app")).toBe("path");
     });
     it("handles null input", function () {
@@ -591,26 +593,26 @@ var finickyUnit = (function () {
   describe("resolveBrowser", function () {
     var mockUrl = finickyURL("https://example.com");
     it("resolves string browser specifications", function () {
-      expect(api.resolveBrowser("Firefox", mockUrl, mockOptions)).toMatchObject({ name: "Firefox", appType: "appName", url: "https://example.com/" });
+      expect(api.resolveBrowser("Personal Browser", mockUrl, mockOptions)).toMatchObject({ name: "Personal Browser", appType: "appName", url: "https://example.com/" });
     });
     it("resolves browser specifications with profiles", function () {
-      expect(api.resolveBrowser("Chrome:Work", mockUrl, mockOptions)).toMatchObject({ name: "Chrome", profile: "Work", url: "https://example.com/" });
+      expect(api.resolveBrowser("Browser:Work", mockUrl, mockOptions)).toMatchObject({ name: "Browser", profile: "Work", url: "https://example.com/" });
     });
     it("resolves object browser specifications", function () {
-      var browserConfig = { name: "Google Chrome", profile: "Personal", openInBackground: true };
+      var browserConfig = { name: "Work Browser", profile: "Personal", openInBackground: true };
       expect(api.resolveBrowser(browserConfig, mockUrl, mockOptions)).toMatchObject({
-        name: "Google Chrome",
+        name: "Work Browser",
         profile: "Personal",
         openInBackground: true,
         url: "https://example.com/",
       });
     });
     it("resolves function browser specifications that return strings", function () {
-      expect(api.resolveBrowser(function () { return "Firefox"; }, mockUrl, mockOptions)).toMatchObject({ name: "Firefox", url: "https://example.com/" });
+      expect(api.resolveBrowser(function () { return "Personal Browser"; }, mockUrl, mockOptions)).toMatchObject({ name: "Personal Browser", url: "https://example.com/" });
     });
     it("resolves function browser specifications that return objects", function () {
-      var browserFn = function () { return { name: "Google Chrome", profile: "Work" }; };
-      expect(api.resolveBrowser(browserFn, mockUrl, mockOptions)).toMatchObject({ name: "Google Chrome", profile: "Work", url: "https://example.com/" });
+      var browserFn = function () { return { name: "Work Browser", profile: "Work" }; };
+      expect(api.resolveBrowser(browserFn, mockUrl, mockOptions)).toMatchObject({ name: "Work Browser", profile: "Work", url: "https://example.com/" });
     });
     it("resolves null browser specifications to empty browser with 'none' type", function () {
       expect(api.resolveBrowser(null, mockUrl, mockOptions)).toMatchObject({ name: "", appType: "none", url: "https://example.com/" });
@@ -622,8 +624,8 @@ var finickyUnit = (function () {
       expect(function () { api.resolveBrowser(123, mockUrl, mockOptions); }).toThrow();
     });
     it("passes options to function browser specifications", function () {
-      var browserFn = function (url, options) { return options.opener && options.opener.name === "TestApp" ? "Firefox" : "Chrome"; };
-      expect(api.resolveBrowser(browserFn, mockUrl, mockOptions)).toMatchObject({ name: "Firefox", url: "https://example.com/" });
+      var browserFn = function (url, options) { return options.opener && options.opener.name === "TestApp" ? "Personal Browser" : "Browser"; };
+      expect(api.resolveBrowser(browserFn, mockUrl, mockOptions)).toMatchObject({ name: "Personal Browser", url: "https://example.com/" });
     });
   });
 
@@ -632,7 +634,7 @@ var finickyUnit = (function () {
   describe("candidate validation", function () {
     it("reports the failing configuration field", function () {
       expect(function () {
-        api.assertValidConfig({ defaultBrowser: "Safari", handlers: [{ match: 123, browser: "Firefox" }] });
+        api.assertValidConfig({ defaultBrowser: "Home Browser", handlers: [{ match: 123, browser: "Personal Browser" }] });
       }).toThrow("handlers");
     });
     it("validates callbacks without running them for synthetic inputs", function () {

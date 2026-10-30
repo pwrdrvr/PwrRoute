@@ -1,12 +1,14 @@
 // Recipes from Finicky's wiki page "Configuration ideas"
-// (github.com/johnste/finicky/wiki), as written there. Many are Finicky 3
-// recipes: `({ url })` and `({ opener })` destructure the URL argument, which
-// Finicky 4 still answers through FinickyURL's legacy `url` and `opener`
-// getters (with a deprecation warning). Recipes that do not validate under
-// Finicky 4 (a rewrite `url` object such as `{ host: "smile.amazon.com" }`)
-// or never parse are left out; tests/finicky_suite.rs covers those.
+// (github.com/johnste/finicky/wiki), with each recipe's code kept and its
+// hosts, URL schemes and app names replaced by neutral stand-ins. Many are
+// Finicky 3 recipes: `({ url })` and `({ opener })` destructure the URL
+// argument, which Finicky 4 still answers through FinickyURL's legacy `url`
+// and `opener` getters (with a deprecation warning). Recipes that do not
+// validate under Finicky 4 (a rewrite `url` object such as
+// `{ host: "smile.shop.example" }`), never parse, or pick a random host are
+// left out; tests/finicky_suite.rs covers the first two.
 export default {
-  defaultBrowser: "Safari",
+  defaultBrowser: "Home Browser",
   rewrite: [
     // Force https for all urls
     {
@@ -50,14 +52,14 @@ export default {
         return url.href;
       },
     },
-    // Redirect google links to duckduckgo.com
+    // Redirect a search engine's links to another
     {
-      match: finicky.matchDomains(["google.com"]),
-      url: "https://duckduckgo.com",
+      match: finicky.matchDomains(["search.example"]),
+      url: "https://private-search.example",
     },
-    // Open Zoom links in Zoom app with or without password
+    // Open meeting links in the meeting app, with or without a password
     {
-      match: (url) => url.host.includes("zoom.us") && url.pathname.includes("/j/"),
+      match: (url) => url.host.includes("meet.example") && url.pathname.includes("/j/"),
       url: (url) => {
         try {
           const match = url.search.match(/pwd=(\w*)/);
@@ -69,97 +71,97 @@ export default {
         var conf = "confno=" + (pathMatch ? pathMatch[1] : "");
         url.search = conf + pass;
         url.pathname = "/join";
-        url.protocol = "zoommtg";
+        url.protocol = "meetapp";
         return url;
       },
     },
-    // Skip vk.com link tracking (vk.com/away.php)
+    // Skip a social site's link tracking (away.php)
     {
-      match: /vk\.com\/away.php/,
+      match: /social\.example\/away.php/,
       url: ({ url }) => {
         const match = url.search.match(/to=(.+)/);
         return !match ? url : decodeURIComponent(decodeURIComponent(match[1]));
       },
     },
-    // Open links in the ClickUp desktop app
+    // Open links in a task tracker's desktop app
     {
-      match: "https://app.clickup.com/*",
+      match: "https://app.tasks.example/*",
       url: ({ url }) => ({
         ...url,
-        protocol: "clickup",
+        protocol: "tasks",
         host: "",
         pathname: url.pathname.slice(1),
       }),
     },
   ],
   handlers: [
-    // Open links in the ClickUp desktop app
-    { match: ({ url }) => url.protocol === "clickup", browser: "ClickUp" },
-    // Open Zoom links in Zoom app
-    { match: /zoom\.us\/join/, browser: "us.zoom.xos" },
+    // Open links in a task tracker's desktop app
+    { match: ({ url }) => url.protocol === "tasks", browser: "Tasks App" },
+    // Open meeting links in the meeting app
+    { match: /meet\.example\/join/, browser: "com.example.meetings" },
     // Matching an array of multiple apps
     {
-      match: (_url, { opener }) => ["com.apple.mail", "com.microsoft.Outlook"].includes(opener?.bundleId ?? ""),
-      browser: "Google Chrome",
+      match: (_url, { opener }) => ["com.example.mail", "com.example.calendar"].includes(opener?.bundleId ?? ""),
+      browser: "Work Browser",
     },
     // Match multiple conditions
     {
-      match: ({ opener, url }) => opener.bundleId === "com.tinyspeck.slackmacgap" && url.host.includes("drive.google.com"),
-      browser: "Firefox",
+      match: ({ opener, url }) => opener.bundleId === "com.example.chat" && url.host.includes("drive.example"),
+      browser: "Personal Browser",
     },
     // Open links of example.com including 'Finicky' in the path
     {
       match: ({ url }) => url.host.includes("example.com") && url.pathname.includes("Finicky"),
-      browser: "Firefox",
+      browser: "Personal Browser",
     },
-    // Open Trello links in Trello app (a handler's `url` is not Finicky 4
+    // Open board links in the boards app (a handler's `url` is not Finicky 4
     // API: the handler validates and the key is ignored)
     {
-      match: finicky.matchDomains(["trello.com"]),
-      url: ({ url }) => ({ ...url, protocol: "trello" }),
-      browser: "Trello",
+      match: finicky.matchDomains(["boards.example"]),
+      url: ({ url }) => ({ ...url, protocol: "boards" }),
+      browser: "Boards App",
     },
-    // Open Spotify links in Spotify app
-    { match: finicky.matchDomains("open.spotify.com"), browser: "Spotify" },
-    // Open Microsoft Teams links in the native app
+    // Open music links in the music app
+    { match: finicky.matchDomains("open.music.example"), browser: "Music App" },
+    // Open team chat links in the native app
     {
-      match: finicky.matchHostnames(["teams.microsoft.com"]),
-      browser: "com.microsoft.teams",
-      url: ({ url }) => ({ ...url, protocol: "msteams" }),
+      match: finicky.matchHostnames(["teamchat.example"]),
+      browser: "com.example.teamchat",
+      url: ({ url }) => ({ ...url, protocol: "teamchat" }),
     },
-    // Open Figma links in Figma app
-    { match: "https://www.figma.com/file/*", browser: "Figma" },
-    // Open Discord links in Discord app
-    { match: "https://discord.com/*", url: { protocol: "discord" }, browser: "Discord" },
-    // Open Jitsi links in Jitsi desktop app
+    // Open design links in the design app
+    { match: "https://www.design.example/file/*", browser: "Design App" },
+    // Open community links in the community app
+    { match: "https://community.example/*", url: { protocol: "community" }, browser: "Community App" },
+    // Open video meeting links in the video app
     {
-      match: ({ url }) => url.host.includes("jitsi.your-selfhosted-server.com") || url.host.includes("meet.jit.si"),
-      url: ({ url }) => ({ ...url, protocol: "jitsi-meet", host: url.host, pathname: url.pathname }),
-      browser: "/Applications/Jitsi\ Meet.app",
+      match: ({ url }) => url.host.includes("video.your-selfhosted-server.example") || url.host.includes("video.example"),
+      url: ({ url }) => ({ ...url, protocol: "video-meet", host: url.host, pathname: url.pathname }),
+      browser: "/Applications/Video\ Meet.app",
     },
-    // Open links clicked in Telegram in specific Profile in Edge
+    // Open links clicked in a messenger in a specific browser profile
     {
-      match: ({ opener }) => ["Telegram"].includes(opener.name),
-      browser: { name: "Microsoft Edge", profile: "Profile 1" },
+      match: ({ opener }) => ["Messenger"].includes(opener.name),
+      browser: { name: "Client Browser", profile: "Profile 1" },
     },
-    // Open Chrome PWA apps with the correct URL
+    // Open browser web apps with the correct URL
     {
-      match: /^https?:\/\/meet\.google\.com\//,
+      match: /^https?:\/\/calls\.example\//,
       browser: (url) => ({
-        name: "Google Chrome",
+        name: "Work Browser",
         profile: "Default",
-        args: ["--app-id=kjgfgldnnfoeklkmfkjfagphfepbbdan", `--app-launch-url-for-shortcuts-menu-item=${url.toString()}`],
+        args: ["--app-id=abcdefghijklmnopabcdefghijklmnop", `--app-launch-url-for-shortcuts-menu-item=${url.toString()}`],
       }),
     },
     // Match only one of multiple conditions
     {
       match: (url) => {
-        const chromeDomains = ["office.com", "box.com", "microsoft.com"];
-        return chromeDomains.some((domain) => url.host.endsWith(domain));
+        const workDomains = ["office.example", "files.example", "corp.example"];
+        return workDomains.some((domain) => url.host.endsWith(domain));
       },
-      browser: "Google Chrome",
+      browser: "Work Browser",
     },
-    // Open Apple Music links in the Music app
-    { match: ["music.apple.com*", "geo.music.apple.com*"], url: { protocol: "itmss" }, browser: "Music" },
+    // Open music store links in the music app
+    { match: ["store.music.example*", "geo.store.music.example*"], url: { protocol: "musicstore" }, browser: "Music App" },
   ],
 };

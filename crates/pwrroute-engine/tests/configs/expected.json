@@ -1236,8 +1236,8 @@
           "input": "https://example.com/",
           "opener": {
             "name": "Mail",
-            "bundleId": "com.apple.mail",
-            "path": "/System/Applications/Mail.app/Contents/MacOS/Mail",
+            "bundleId": "com.example.mail",
+            "path": "/Applications/Mail.app",
             "windowTitle": "Inbox"
           },
           "url": "https://example.com/",
@@ -1333,72 +1333,72 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "https://example.com/",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://browser.spotify.com/track/123",
+          "input": "https://player.music.example/track/123",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://browser.spotify.com/track/123",
-          "browser": "Spotify",
+          "url": "https://player.music.example/track/123",
+          "browser": "Music App",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://github.com/some-repo",
+          "input": "https://code.example/some-repo",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://github.com/some-repo",
-          "browser": "Google Chrome",
+          "url": "https://code.example/some-repo",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://amazon.com/product",
+          "input": "https://shop.example/product",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://amazon.com/product",
-          "browser": "Google Chrome",
+          "url": "https://shop.example/product",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://figma.com/file/123",
+          "input": "https://design.example/file/123",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://figma.com/file/123",
-          "browser": "Google Chrome",
+          "url": "https://design.example/file/123",
+          "browser": "Work Browser",
           "profile": "Design",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://sketch.com/dashboard",
+          "input": "https://draw.example/dashboard",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://sketch.com/dashboard",
-          "browser": "Google Chrome",
+          "url": "https://draw.example/dashboard",
+          "browser": "Work Browser",
           "profile": "Design",
           "args": [],
           "openInBackground": false
@@ -1411,7 +1411,7 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "https://example.com/docs",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1419,7 +1419,7 @@
         {
           "input": "https://example.com",
           "url": "https://example.com/",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1431,53 +1431,53 @@
       "config": "finicky/config-test-rewrites.js",
       "cases": [
         {
-          "input": "https://slack-redir.net/link?url=https://example.com",
+          "input": "https://redirect.example/link?url=https://example.com",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://slack-redir.net/link?url=https://example.com",
-          "browser": "Safari",
+          "url": "https://redirect.example/link?url=https://example.com",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://t.co/abc123",
+          "input": "https://s.example/abc123",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://twitter.com/abc123",
-          "browser": "Safari",
+          "url": "https://social.example/abc123",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://my.shortened.url/123",
+          "input": "https://my.shortened.example/123",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://my.shortened.url/123/expanded",
-          "browser": "Safari",
+          "url": "https://my.shortened.example/123/expanded",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://www.use-url-object.com",
+          "input": "https://www.use-url-object.example",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
           "url": "https://example.com/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1496,7 +1496,7 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "https://sub1.example.com/",
-          "browser": "Chrome",
+          "browser": "Browser A",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1509,46 +1509,46 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "https://sub2.example.com/path",
-          "browser": "Chrome",
+          "browser": "Browser A",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://mail.google.com",
+          "input": "https://mail.search.example",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://mail.google.com/",
-          "browser": "Chrome",
+          "url": "https://mail.search.example/",
+          "browser": "Browser A",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://docs.google.co.uk",
+          "input": "https://docs.search.example.org",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://docs.google.co.uk/",
-          "browser": "Chrome",
+          "url": "https://docs.search.example.org/",
+          "browser": "Browser A",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://mail.yahoo.com",
+          "input": "https://mail.provider.example",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://mail.yahoo.com/",
-          "browser": "Chrome",
+          "url": "https://mail.provider.example/",
+          "browser": "Browser A",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1561,20 +1561,20 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "https://example.com/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://google.com",
+          "input": "https://search.example",
           "opener": {
             "name": "TestApp",
             "bundleId": "com.test.app",
             "path": "/Applications/TestApp.app"
           },
-          "url": "https://google.com/",
-          "browser": "Safari",
+          "url": "https://search.example/",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1593,7 +1593,7 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "http://example.com/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1606,7 +1606,7 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "https://example.com/",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1619,7 +1619,7 @@
             "path": "/Applications/TestApp.app"
           },
           "url": "http://example.com/?param=value&other=123",
-          "browser": "Edge",
+          "browser": "Browser B",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1631,25 +1631,25 @@
       "config": "finicky/resolver-test-js.js",
       "cases": [
         {
-          "input": "https://github.com/johnste/finicky",
-          "url": "https://github.com/johnste/finicky",
-          "browser": "Firefox",
+          "input": "https://code.example/johnste/finicky",
+          "url": "https://code.example/johnste/finicky",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://gist.github.com/foo",
-          "url": "https://gist.github.com/foo",
-          "browser": "Firefox",
+          "input": "https://gist.code.example/foo",
+          "url": "https://gist.code.example/foo",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://linear.app/team/issue/123",
-          "url": "https://linear.app/team/issue/123",
-          "browser": "Google Chrome",
+          "input": "https://tracker.example/team/issue/123",
+          "url": "https://tracker.example/team/issue/123",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1657,7 +1657,7 @@
         {
           "input": "https://example.com",
           "url": "https://example.com/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1669,17 +1669,17 @@
       "rules": "finicky/resolver-test-rules-only.json",
       "cases": [
         {
-          "input": "https://github.com/johnste/finicky",
-          "url": "https://github.com/johnste/finicky",
-          "browser": "Google Chrome",
+          "input": "https://code.example/johnste/finicky",
+          "url": "https://code.example/johnste/finicky",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://linear.app/team/issue/123",
-          "url": "https://linear.app/team/issue/123",
-          "browser": "Safari",
+          "input": "https://tracker.example/team/issue/123",
+          "url": "https://tracker.example/team/issue/123",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1687,7 +1687,7 @@
         {
           "input": "https://example.com",
           "url": "https://example.com/",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1699,9 +1699,9 @@
       "rules": "finicky/resolver-test-rules-profile.json",
       "cases": [
         {
-          "input": "https://github.com/foo",
-          "url": "https://github.com/foo",
-          "browser": "Google Chrome",
+          "input": "https://code.example/foo",
+          "url": "https://code.example/foo",
+          "browser": "Work Browser",
           "profile": "Work",
           "args": [],
           "openInBackground": false
@@ -1713,9 +1713,9 @@
       "config": "finicky/resolver-test-merged.js",
       "cases": [
         {
-          "input": "https://github.com/foo",
-          "url": "https://github.com/foo",
-          "browser": "Firefox",
+          "input": "https://code.example/foo",
+          "url": "https://code.example/foo",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1723,7 +1723,7 @@
         {
           "input": "https://example.com",
           "url": "https://example.com/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1736,17 +1736,17 @@
       "rules": "finicky/resolver-test-cached-rules.json",
       "cases": [
         {
-          "input": "https://github.com/foo",
-          "url": "https://github.com/foo",
-          "browser": "Firefox",
+          "input": "https://code.example/foo",
+          "url": "https://code.example/foo",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://linear.app/team/issue/1",
-          "url": "https://linear.app/team/issue/1",
-          "browser": "Google Chrome",
+          "input": "https://tracker.example/team/issue/1",
+          "url": "https://tracker.example/team/issue/1",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1754,7 +1754,7 @@
         {
           "input": "https://example.com",
           "url": "https://example.com/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1769,11 +1769,11 @@
           "input": "https://example.com",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
+            "bundleId": "com.example.terminal",
             "path": "/Applications/Utilities/Terminal.app"
           },
           "url": "https://example.com/",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1781,12 +1781,12 @@
         {
           "input": "https://example.com",
           "opener": {
-            "name": "Finder",
-            "bundleId": "com.apple.finder",
-            "path": "/System/Library/CoreServices/Finder.app"
+            "name": "Files",
+            "bundleId": "com.example.files",
+            "path": "/System/Library/CoreServices/Files.app"
           },
           "url": "https://example.com/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1798,9 +1798,9 @@
       "config": "finicky/resolver-test-rewrite.js",
       "cases": [
         {
-          "input": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-          "url": "https://youtu.be/?v=dQw4w9WgXcQ",
-          "browser": "Safari",
+          "input": "https://www.video.example/watch?v=abc123",
+          "url": "https://vid.example/?v=abc123",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1812,17 +1812,17 @@
       "rules": "finicky/rules-test-handlers.json",
       "cases": [
         {
-          "input": "https://github.com/johnste/finicky",
-          "url": "https://github.com/johnste/finicky",
-          "browser": "Google Chrome",
+          "input": "https://code.example/johnste/finicky",
+          "url": "https://code.example/johnste/finicky",
+          "browser": "Work Browser",
           "profile": "Personal",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://linear.app/team/issue/1",
-          "url": "https://linear.app/team/issue/1",
-          "browser": "Firefox",
+          "input": "https://tracker.example/team/issue/1",
+          "url": "https://tracker.example/team/issue/1",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1830,7 +1830,7 @@
         {
           "input": "https://example.com/",
           "url": "https://example.com/",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "Work",
           "args": [],
           "openInBackground": false
@@ -1844,23 +1844,23 @@
         {
           "input": "https://example.com/a",
           "url": "https://example.com/a",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://github.com/johnste/finicky",
-          "url": "https://github.com/johnste/finicky",
-          "browser": "Safari",
+          "input": "https://code.example/johnste/finicky",
+          "url": "https://code.example/johnste/finicky",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://linear.app/team/issue/1",
-          "url": "https://linear.app/team/issue/1",
-          "browser": "Google Chrome",
+          "input": "https://tracker.example/team/issue/1",
+          "url": "https://tracker.example/team/issue/1",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1868,7 +1868,7 @@
         {
           "input": "https://other.example/",
           "url": "https://other.example/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1882,23 +1882,23 @@
         {
           "input": "https://example.com/a",
           "url": "https://example.com/a",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://github.com/johnste/finicky",
-          "url": "https://github.com/johnste/finicky",
-          "browser": "Google Chrome",
+          "input": "https://code.example/johnste/finicky",
+          "url": "https://code.example/johnste/finicky",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://linear.app/team/issue/1",
-          "url": "https://linear.app/team/issue/1",
-          "browser": "Firefox",
+          "input": "https://tracker.example/team/issue/1",
+          "url": "https://tracker.example/team/issue/1",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1906,7 +1906,7 @@
         {
           "input": "https://other.example/",
           "url": "https://other.example/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1921,23 +1921,23 @@
         {
           "input": "https://example.com/a",
           "url": "https://example.com/a",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://github.com/johnste/finicky",
-          "url": "https://github.com/johnste/finicky",
-          "browser": "Google Chrome",
+          "input": "https://code.example/johnste/finicky",
+          "url": "https://code.example/johnste/finicky",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://linear.app/team/issue/1",
-          "url": "https://linear.app/team/issue/1",
-          "browser": "Firefox",
+          "input": "https://tracker.example/team/issue/1",
+          "url": "https://tracker.example/team/issue/1",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1945,7 +1945,7 @@
         {
           "input": "https://other.example/",
           "url": "https://other.example/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1959,15 +1959,15 @@
         {
           "input": "https://example.org/page",
           "url": "http://example.com/",
-          "browser": "Google Chrome",
+          "browser": "Combined",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
           "input": "https://string.example.org/x",
-          "url": "https://gitlab.com/",
-          "browser": "Google Chrome",
+          "url": "https://code.example/",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1975,7 +1975,7 @@
         {
           "input": "https://instance.example.org/",
           "url": "https://example.com/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1991,7 +1991,7 @@
         {
           "input": "https://old.example.com/path?q=1",
           "url": "https://new.example.com/path?q=1",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -1999,7 +1999,7 @@
         {
           "input": "https://old.example.net/a",
           "url": "https://new.example.net/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2007,15 +2007,15 @@
         {
           "input": "https://redirect.example.com/p?q=1",
           "url": "https://target.example.com/p",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://apple.com/mac",
-          "url": "https://apple.com/mac",
-          "browser": "Safari",
+          "input": "https://vendor.example/mac",
+          "url": "https://vendor.example/mac",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2047,7 +2047,7 @@
         {
           "input": "https://x.dev.example.com",
           "url": "https://x.dev.example.com/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2071,14 +2071,14 @@
         {
           "input": "https://combined.example.com",
           "url": "https://combined.example.com/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "http://combined.org/x",
-          "url": "http://combined.org/x",
+          "input": "http://example.com/x",
+          "url": "http://example.com/x",
           "browser": "Combined",
           "profile": "",
           "args": [],
@@ -2087,7 +2087,7 @@
         {
           "input": "https://simple.example.org/",
           "url": "https://simple.example.org/",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2095,7 +2095,7 @@
         {
           "input": "https://byname.example/",
           "url": "https://byname.example/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2103,7 +2103,7 @@
         {
           "input": "https://bybundle.example/",
           "url": "https://bybundle.example/",
-          "browser": "com.google.Chrome",
+          "browser": "com.example.WorkBrowser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2111,7 +2111,7 @@
         {
           "input": "https://bypath.example/",
           "url": "https://bypath.example/",
-          "browser": "/Applications/Firefox.app",
+          "browser": "/Applications/Personal Browser.app",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2119,7 +2119,7 @@
         {
           "input": "https://profile-string.example/",
           "url": "https://profile-string.example/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "Personal",
           "args": [],
           "openInBackground": false
@@ -2127,7 +2127,7 @@
         {
           "input": "https://profile-object.example/",
           "url": "https://profile-object.example/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "Personal",
           "args": [],
           "openInBackground": false
@@ -2135,7 +2135,7 @@
         {
           "input": "https://advanced.example/",
           "url": "https://advanced.example/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "Work",
           "args": [],
           "openInBackground": true
@@ -2143,15 +2143,15 @@
         {
           "input": "https://dynamic.example/",
           "url": "https://dynamic.example/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://www.facebook.com/",
-          "url": "https://www.facebook.com/",
-          "browser": "Google Chrome",
+          "input": "https://www.social.example/",
+          "url": "https://www.social.example/",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": true
@@ -2159,7 +2159,7 @@
         {
           "input": "https://work.example.com/",
           "url": "https://work.example.com/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "Work",
           "args": [],
           "openInBackground": true
@@ -2167,23 +2167,23 @@
         {
           "input": "https://personal.example.com/",
           "url": "https://personal.example.com/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "Personal",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://safari.example.com/",
-          "url": "https://safari.example.com/",
-          "browser": "Safari",
+          "input": "https://home.example.com/",
+          "url": "https://home.example.com/",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://site.dev/",
-          "url": "https://site.dev/",
-          "browser": "Firefox",
+          "input": "https://app.example.test/",
+          "url": "https://app.example.test/",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2198,11 +2198,11 @@
           "input": "http://plain.example/x",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
           "url": "https://plain.example/x",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2211,63 +2211,63 @@
           "input": "https://example.com/?utm_source=x&fbclid=y&keep=1&source=share",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
           "url": "https://example.com/?keep=1",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://google.com/search?q=1",
+          "input": "https://search.example/search?q=1",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://duckduckgo.com/",
-          "browser": "Safari",
+          "url": "https://private-search.example/",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://acme.zoom.us/j/123456789?pwd=abc",
+          "input": "https://acme.meet.example/j/123456789?pwd=abc",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://acme.zoom.us/join?confno=123456789&pwd=abc",
-          "browser": "us.zoom.xos",
+          "url": "https://acme.meet.example/join?confno=123456789&pwd=abc",
+          "browser": "com.example.meetings",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://vk.com/away.php?to=https%253A%252F%252Fexample.org%252F",
+          "input": "https://social.example/away.php?to=https%253A%252F%252Fexample.org%252F",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
           "url": "https://example.org/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://app.clickup.com/t/86c1au25p",
+          "input": "https://app.tasks.example/t/86c1au25p",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "clickup://t/86c1au25p",
-          "browser": "ClickUp",
+          "url": "tasks://t/86c1au25p",
+          "browser": "Tasks App",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2276,11 +2276,11 @@
           "input": "https://example.com/",
           "opener": {
             "name": "Mail",
-            "bundleId": "com.apple.mail",
-            "path": "/System/Applications/Mail.app/Contents/MacOS/Mail"
+            "bundleId": "com.example.mail",
+            "path": "/Applications/Mail.app"
           },
           "url": "https://example.com/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2288,38 +2288,38 @@
         {
           "input": "https://example.com/",
           "opener": {
-            "name": "Microsoft Outlook",
-            "bundleId": "com.microsoft.Outlook",
-            "path": "/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook"
+            "name": "Calendar",
+            "bundleId": "com.example.calendar",
+            "path": "/Applications/Calendar.app"
           },
           "url": "https://example.com/",
-          "browser": "Google Chrome",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://drive.google.com/x",
+          "input": "https://drive.example/x",
           "opener": {
-            "name": "Slack",
-            "bundleId": "com.tinyspeck.slackmacgap",
-            "path": "/Applications/Slack.app/Contents/MacOS/Slack"
+            "name": "Chat",
+            "bundleId": "com.example.chat",
+            "path": "/Applications/Chat.app"
           },
-          "url": "https://drive.google.com/x",
-          "browser": "Firefox",
+          "url": "https://drive.example/x",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://drive.google.com/x",
+          "input": "https://drive.example/x",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://drive.google.com/x",
-          "browser": "Safari",
+          "url": "https://drive.example/x",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2328,89 +2328,89 @@
           "input": "https://www.example.com/Finicky-docs",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
           "url": "https://www.example.com/Finicky-docs",
-          "browser": "Firefox",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://trello.com/b/1",
+          "input": "https://boards.example/b/1",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://trello.com/b/1",
-          "browser": "Trello",
+          "url": "https://boards.example/b/1",
+          "browser": "Boards App",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://open.spotify.com/track/1",
+          "input": "https://open.music.example/track/1",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://open.spotify.com/track/1",
-          "browser": "Spotify",
+          "url": "https://open.music.example/track/1",
+          "browser": "Music App",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://teams.microsoft.com/l/1",
+          "input": "https://teamchat.example/l/1",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://teams.microsoft.com/l/1",
-          "browser": "com.microsoft.teams",
+          "url": "https://teamchat.example/l/1",
+          "browser": "com.example.teamchat",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://www.figma.com/file/abc",
+          "input": "https://www.design.example/file/abc",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://www.figma.com/file/abc",
-          "browser": "Figma",
+          "url": "https://www.design.example/file/abc",
+          "browser": "Design App",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://discord.com/channels/1",
+          "input": "https://community.example/channels/1",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://discord.com/channels/1",
-          "browser": "Discord",
+          "url": "https://community.example/channels/1",
+          "browser": "Community App",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://meet.jit.si/room",
+          "input": "https://video.example/room",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://meet.jit.si/room",
-          "browser": "/Applications/Jitsi Meet.app",
+          "url": "https://video.example/room",
+          "browser": "/Applications/Video Meet.app",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2418,54 +2418,54 @@
         {
           "input": "https://example.org/",
           "opener": {
-            "name": "Telegram",
-            "bundleId": "ru.keepcoder.Telegram",
-            "path": "/Applications/Telegram.app"
+            "name": "Messenger",
+            "bundleId": "com.example.messenger",
+            "path": "/Applications/Messenger.app"
           },
           "url": "https://example.org/",
-          "browser": "Microsoft Edge",
+          "browser": "Client Browser",
           "profile": "Profile 1",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://meet.google.com/abc-defg-hij",
+          "input": "https://calls.example/abc-defg-hij",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://meet.google.com/abc-defg-hij",
-          "browser": "Google Chrome",
+          "url": "https://calls.example/abc-defg-hij",
+          "browser": "Work Browser",
           "profile": "Default",
           "args": [
-            "--app-id=kjgfgldnnfoeklkmfkjfagphfepbbdan",
-            "--app-launch-url-for-shortcuts-menu-item=https://meet.google.com/abc-defg-hij"
+            "--app-id=abcdefghijklmnopabcdefghijklmnop",
+            "--app-launch-url-for-shortcuts-menu-item=https://calls.example/abc-defg-hij"
           ],
           "openInBackground": false
         },
         {
-          "input": "https://www.office.com/",
+          "input": "https://www.office.example/",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://www.office.com/",
-          "browser": "Google Chrome",
+          "url": "https://www.office.example/",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://music.apple.com/us/album/1",
+          "input": "https://store.music.example/us/album/1",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
-          "url": "https://music.apple.com/us/album/1",
-          "browser": "Music",
+          "url": "https://store.music.example/us/album/1",
+          "browser": "Music App",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2474,11 +2474,11 @@
           "input": "https://unrouted.example/",
           "opener": {
             "name": "Terminal",
-            "bundleId": "com.apple.Terminal",
-            "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+            "bundleId": "com.example.terminal",
+            "path": "/Applications/Utilities/Terminal.app"
           },
           "url": "https://unrouted.example/",
-          "browser": "Safari",
+          "browser": "Home Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2486,48 +2486,48 @@
       ]
     },
     {
-      "name": "Finicky wiki Slack recipe",
-      "config": "finicky/wiki-slack.js",
+      "name": "Finicky wiki chat deep-link recipe",
+      "config": "finicky/wiki-chat.js",
       "cases": [
         {
-          "input": "https://acme.slack.com/archives/C0123/p1700000000123456",
-          "url": "slack://channel?team=T0ACME&id=C0123&message=1700000000.123456",
-          "browser": "Slack",
+          "input": "https://acme.chat.example/archives/C0123/p1700000000123456",
+          "url": "chat://channel?team=T0ACME&id=C0123&message=1700000000.123456",
+          "browser": "Chat App",
           "profile": "",
           "args": [],
           "openInBackground": false,
           "goHost": "Go host differs: goja leaves RegExp named groups undefined, so the rewrite throws reading a group and the link falls to the default browser. Finicky 4 runs configs in goja too, so this recipe from Finicky 3 fails there as well."
         },
         {
-          "input": "https://app.slack.com/client/T999/C888",
-          "url": "slack://channel?team=T999&id=C888",
-          "browser": "Slack",
+          "input": "https://app.chat.example/client/T999/C888",
+          "url": "chat://channel?team=T999&id=C888",
+          "browser": "Chat App",
           "profile": "",
           "args": [],
           "openInBackground": false,
           "goHost": "Go host differs: goja leaves RegExp named groups undefined, so the rewrite throws reading a group and the link falls to the default browser. Finicky 4 runs configs in goja too, so this recipe from Finicky 3 fails there as well."
         },
         {
-          "input": "https://acme.enterprise.slack.com/files/U1/F123",
-          "url": "slack://file?team=E0ACME&id=F123",
-          "browser": "Slack",
+          "input": "https://acme.enterprise.chat.example/files/U1/F123",
+          "url": "chat://file?team=E0ACME&id=F123",
+          "browser": "Chat App",
           "profile": "",
           "args": [],
           "openInBackground": false,
           "goHost": "Go host differs: goja leaves RegExp named groups undefined, so the rewrite throws reading a group and the link falls to the default browser. Finicky 4 runs configs in goja too, so this recipe from Finicky 3 fails there as well."
         },
         {
-          "input": "https://other.slack.com/archives/C1",
-          "url": "https://other.slack.com/archives/C1",
-          "browser": "Google Chrome",
+          "input": "https://other.chat.example/archives/C1",
+          "url": "https://other.chat.example/archives/C1",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
         },
         {
-          "input": "https://acme.slack.com/",
-          "url": "https://acme.slack.com/",
-          "browser": "Google Chrome",
+          "input": "https://acme.chat.example/",
+          "url": "https://acme.chat.example/",
+          "browser": "Work Browser",
           "profile": "",
           "args": [],
           "openInBackground": false
@@ -2535,7 +2535,7 @@
         {
           "input": "https://example.com/",
           "url": "https://example.com/",
-          "browser": "Google Chrome",
+          "browser": "Personal Browser",
           "profile": "",
           "args": [],
           "openInBackground": false

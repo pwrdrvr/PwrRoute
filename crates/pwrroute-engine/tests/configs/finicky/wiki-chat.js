@@ -1,45 +1,43 @@
-// The "Open Slack link in Slack App" recipe from Finicky's wiki page
-// "Configuration ideas" (github.com/johnste/finicky/wiki), as written there,
-// with one workspace and one enterprise grid filled into its mappings. A
+// The wiki's recipe for opening a team chat's web links in its desktop app
+// (Finicky's wiki page "Configuration ideas", github.com/johnste/finicky/wiki),
+// with its code kept and the chat service's hosts and scheme replaced by
+// neutral stand-ins (`*.chat.example`, `chat://`, so the host slice is 13
+// characters). One workspace and one enterprise grid fill its mappings. A
 // CommonJS config whose callbacks use Finicky 3's `({ url })` argument.
-// Based on @opalelement's answer https://github.com/johnste/finicky/issues/96#issuecomment-844571182
-// Team ID can be found in the browser URL : https://slack.com/help/articles/221769328-Locate-your-Slack-URL-or-ID
-// Free, Pro, and Business+ plans => Team or workspace ID starts with a T in https://app.slack.com/client/TXXXXXXX/CXXXXXXX
-// Enterprise grid plans => Org ID starts with an E in https://app.slack.com/client/EXXXXXXX/CXXXXXXX
-const workSlackTeamMapping = {
+// Team IDs start with a T (E for an enterprise grid) in the web client's URL,
+// https://app.chat.example/client/TXXXXXXX/CXXXXXXX.
+const workChatTeamMapping = {
   // 'subdomain': 'TXXXXXXX',
   acme: "T0ACME",
-  // 'acmecorp.enterprise': 'EXXXXXXX',
-  // 'acmecorp': 'EXXXXXXX',
 };
 
-const personalSlackMapping = {
-  // personal slacks
+const personalChatMapping = {
+  // personal workspaces
   "acme.enterprise": "E0ACME",
 };
 
-const slackSubdomainMapping = {
-  ...workSlackTeamMapping,
-  ...personalSlackMapping,
+const chatSubdomainMapping = {
+  ...workChatTeamMapping,
+  ...personalChatMapping,
 };
 
-const slackRewriter = {
-  match: ["*.slack.com/*"],
+const chatRewriter = {
+  match: ["*.chat.example/*"],
   url: function (urlObj) {
-    const subdomain = urlObj.host.slice(0, -10); // before .slack.com
+    const subdomain = urlObj.host.slice(0, -13); // before .chat.example
     const pathParts = urlObj.pathname.split("/");
 
     let team,
       patterns = {};
     if (subdomain != "app") {
-      if (!Object.keys(slackSubdomainMapping).includes(subdomain)) {
+      if (!Object.keys(chatSubdomainMapping).includes(subdomain)) {
         console.log(
-          `No Slack team ID found for ${urlObj.host}`,
-          `Add a correct team ID to ~/.finicky.js to allow direct linking to Slack.`
+          `No team ID found for ${urlObj.host}`,
+          `Add a correct team ID to ~/.finicky.js to allow direct linking to the chat app.`
         );
         return urlObj;
       }
-      team = slackSubdomainMapping[subdomain];
+      team = chatSubdomainMapping[subdomain];
 
       if (subdomain.slice(-11) == ".enterprise") {
         patterns = {
@@ -85,9 +83,9 @@ const slackRewriter = {
             search += `&message=${message}`;
           }
 
-          let outputStr = `slack://${host}?${search}`;
+          let outputStr = `chat://${host}?${search}`;
           console.log(
-            `Rewrote Slack URL ${urlObj.href} to deep link ${outputStr}`
+            `Rewrote chat URL ${urlObj.href} to deep link ${outputStr}`
           );
           
           return new URL(outputStr);
@@ -100,24 +98,24 @@ const slackRewriter = {
 };
 
 module.exports = {
-  defaultBrowser: "Google Chrome",
-  rewrite: [slackRewriter],
+  defaultBrowser: "Personal Browser",
+  rewrite: [chatRewriter],
   handlers: [
     {
       match: ({ url }) => {
-        // Check for both 'slack:' and 'slack' since the property might not include the colon
-        return url.protocol === "slack:" || url.protocol === "slack";
+        // Check for both 'chat:' and 'chat' since the property might not include the colon
+        return url.protocol === "chat:" || url.protocol === "chat";
       },
-      browser: "Slack",
+      browser: "Chat App",
     },
     {
       // Optional. If these work url cannot be converted, open them is work browser
       // Login in work workspace unfortunately lands on the personal browser, just copy the link to the work browser
       match: ({ url }) => {
-        const workDomains = Object.keys(workSlackTeamMapping).map(subdomain => subdomain + ".slack.com");
+        const workDomains = Object.keys(workChatTeamMapping).map(subdomain => subdomain + ".chat.example");
         return workDomains.includes(url.host);
       },
-      browser: "Google Chrome", // your work browser
+      browser: "Work Browser", // your work browser
     },
   ],
 };
