@@ -355,12 +355,12 @@ async fn activity_keeps_each_record_at_its_level_and_says_where_it_is_kept() {
 #[tokio::test]
 async fn activity_finds_the_links_that_were_not_opened() {
     let h = Harness::start(FakeAnswer::Approve(Role::Editor)).await;
-    h.router.record(UNROUTED, "Slack").unwrap();
+    h.router.record(UNROUTED, "Chat").unwrap();
     h.router
         .record_not_opened("https://ads.example.net/click?id=7", "Mail")
         .unwrap();
     h.router
-        .record("https://docs.example.org/page", "Slack")
+        .record("https://docs.example.org/page", "Chat")
         .unwrap();
     let client = h.client("test-agent").await;
 
