@@ -695,8 +695,10 @@ fn hold_does_not_turn_on_while_nothing_is_kept(cx: &mut TestAppContext) {
     opened.cx.update(|_, cx| super::set_mode(Mode::Hold, cx));
     assert_eq!(handle.override_in_force(), None);
 
+    // Kept again: Hold reads it before it starts (the segment stays drawn
+    // off until the tray reads it).
     handle.set_retention(Retention::default()).unwrap();
-    click(&mut opened, HOLD);
+    opened.cx.update(|_, cx| super::set_mode(Mode::Hold, cx));
     assert!(matches!(
         handle.override_in_force(),
         Some(Override::Holding(_))
