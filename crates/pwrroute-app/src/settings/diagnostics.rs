@@ -7,14 +7,13 @@ use gpui_kit::{Context, Div, IntoElement, ParentElement as _, div};
 
 use super::controls::{
     Kind, Tone, button_when, chip, command_box, field, field_help, field_sub, heading, pane_head,
-    row_actions, switch,
+    row_actions,
 };
 use super::model::SettingsRequest;
 use super::{SettingsWindow, request_button};
 
 pub const OPEN_DATA_ID: &str = "diagnostics-open-data";
 pub const OPEN_LOGS_ID: &str = "diagnostics-open-logs";
-pub const YIELD_FOCUS_ID: &str = "diagnostics-yield-browser-focus";
 
 /// The Copy button's slot in the window's copied state, past the connect
 /// commands' indexes; its element id follows from it.
@@ -34,29 +33,6 @@ pub fn pane(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> Div 
         ))
         .child(this_copy_card(this, cx))
         .child(router_card(this, cx))
-        .when_some(this.model.diagnostics.yield_browser_focus, |pane, enabled| {
-            pane.child(this.disclosure(
-                "diagnostics-experimental",
-                heading("Optional behavior", "Experimental"),
-                None,
-                vec![field(
-                    "Yield focus to browsers",
-                    Some(field_sub("Let a running browser bring its destination window forward. Off by default; applies to the next link.")),
-                    [switch(YIELD_FOCUS_ID, enabled)
-                        .accessibility_label("Yield focus to browsers")
-                        .on_change({
-                            let set = cx.listener(|this, enabled: &bool, window, cx| {
-                                this.model.diagnostics.yield_browser_focus = Some(*enabled);
-                                this.request(SettingsRequest::SetYieldBrowserFocus(*enabled), window, cx);
-                                cx.notify();
-                            });
-                            move |enabled, _, window, cx| set(&enabled, window, cx)
-                        })
-                        .into_any_element()],
-                )],
-                cx,
-            ))
-        })
 }
 
 fn this_copy_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {

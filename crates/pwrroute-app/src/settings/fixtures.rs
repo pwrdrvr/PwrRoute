@@ -20,6 +20,9 @@ pub fn model() -> SettingsModel {
         privacy: privacy(),
         browsers: browsers(),
         updates: updates(),
+        experimental: super::model::Experimental {
+            yield_browser_focus: Some(false),
+        },
         diagnostics: diagnostics(),
         about: about(),
     }

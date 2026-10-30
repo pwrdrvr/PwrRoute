@@ -24,6 +24,7 @@ pub struct SettingsModel {
     pub privacy: Privacy,
     pub browsers: Browsers,
     pub updates: Updates,
+    pub experimental: Experimental,
     pub diagnostics: Diagnostics,
     pub about: About,
 }
@@ -485,6 +486,14 @@ pub enum UpdateState {
     Failed(SharedString),
     /// This copy cannot update itself, and the text says who does.
     NotUpdatable(SharedString),
+}
+
+// ---- Experimental ---------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Experimental {
+    /// macOS only; absent on platforms without this experiment.
+    pub yield_browser_focus: Option<bool>,
 }
 
 // ---- Diagnostics ----------------------------------------------------------

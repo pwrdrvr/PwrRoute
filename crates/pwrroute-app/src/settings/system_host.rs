@@ -11,7 +11,7 @@ use std::{
 
 use gpui_kit::{App, SharedString};
 
-use super::model::{About, Diagnostics, Listener, LocalAgents, SettingsRequest};
+use super::model::{About, Diagnostics, Experimental, Listener, LocalAgents, SettingsRequest};
 use crate::build_info::BuildInfo;
 use crate::config_view::display_path;
 use crate::router::{self, RoutingSource};
@@ -51,6 +51,15 @@ pub fn diagnostics(cx: &App, agents: &LocalAgents) -> Diagnostics {
     build_diagnostics(&facts)
 }
 
+pub fn experimental(cx: &App) -> Experimental {
+    Experimental {
+        yield_browser_focus: cfg!(target_os = "macos").then(|| {
+            settings_store::store(cx)
+                .is_some_and(|store| store.read(cx).settings().experimental.yield_browser_focus)
+        }),
+    }
+}
+
 /// Everything but the MCP door, read from this process and the OS.
 fn facts(cx: &App) -> Facts {
     let dry_run = settings_store::router(cx)
@@ -68,10 +77,7 @@ fn facts(cx: &App) -> Facts {
         agents: None,
         log: crate::diag_log::path().map(Path::to_path_buf),
         build: BuildInfo::current(),
-        yield_browser_focus: cfg!(target_os = "macos").then(|| {
-            settings_store::store(cx)
-                .is_some_and(|store| store.read(cx).settings().experimental.yield_browser_focus)
-        }),
+        yield_browser_focus: experimental(cx).yield_browser_focus,
     }
 }
 
@@ -272,6 +278,7 @@ pub fn refresh_diagnostics(cx: &mut App) {
     settings::update(cx, move |model| {
         let agents = &model.local_agents;
         facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
+        model.experimental.yield_browser_focus = facts.yield_browser_focus;
         model.diagnostics = build_diagnostics(&facts);
     });
 }

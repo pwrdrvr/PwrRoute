@@ -1311,7 +1311,8 @@ fn main() {
         ("settings-privacy", settings::Pane::Privacy, 1560.0),
         // The family's panes, at a height that holds their cards.
         ("settings-updates", settings::Pane::Updates, 760.0),
-        ("settings-diagnostics", settings::Pane::Diagnostics, 1100.0),
+        ("settings-experimental", settings::Pane::Experimental, 760.0),
+        ("settings-diagnostics", settings::Pane::Diagnostics, 900.0),
         ("settings-about", settings::Pane::About, 700.0),
     ] {
         let mut cx = HeadlessAppContext::with_platform(
