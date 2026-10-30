@@ -2218,6 +2218,83 @@ pub fn sheet(
     ))
 }
 
+/// Open in…'s lanes under a not-opened row (design: Not Opened 2b): the
+/// tray's compact lanes over the scan, no pill on, and a pill opens the
+/// link there at once.
+pub fn open_in_lanes(
+    app: &PwrRoute,
+    index: usize,
+    key: RowKey,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let lanes = destinations::lanes(
+        &app.browsers,
+        &app.installed,
+        &Choice::default(),
+        None,
+        crate::editor::scanned(app, cx),
+        false,
+    );
+    div()
+        .debug_selector(move || format!("activity-open-in-lanes-{index}"))
+        .mt(px(4.0))
+        .w(px(320.0))
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(theme::border_default())
+        .bg(theme::bg_elevated())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(text(
+                    "Open this link in",
+                    11.5,
+                    600.0,
+                    theme::text_primary(),
+                ))
+                .child(text(
+                    "once \u{00b7} rules unchanged",
+                    10.0,
+                    500.0,
+                    theme::text_subtle(),
+                )),
+        )
+        .child(destinations::draw(
+            "activity-open-in",
+            &lanes,
+            destinations::Density::Compact,
+            move |this: &mut PwrRoute, choice, _, cx| {
+                let destination = Destination {
+                    browser: choice.browser,
+                    profile: choice.profile,
+                    private: choice.private,
+                };
+                this.open_not_opened(key, OpenAs::In(destination), cx);
+            },
+            cx,
+        ))
+        .when(app.browsers.is_empty(), |list| {
+            list.child(paragraph(
+                "No browsers found. Rescan in Settings \u{203a} Browsers.",
+                10.5,
+                15.2,
+                theme::text_subtle(),
+            ))
+        })
+        .child(paragraph(
+            "Add a rule to send links like this somewhere every time.",
+            10.5,
+            15.2,
+            theme::text_subtle(),
+        ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::SystemTime;
@@ -2668,81 +2745,4 @@ mod tests {
              takes the link ahead of the config."
         );
     }
-}
-
-/// Open in…'s lanes under a not-opened row (design: Not Opened 2b): the
-/// tray's compact lanes over the scan, no pill on, and a pill opens the
-/// link there at once.
-pub fn open_in_lanes(
-    app: &PwrRoute,
-    index: usize,
-    key: RowKey,
-    cx: &mut Context<'_, PwrRoute>,
-) -> Div {
-    let lanes = destinations::lanes(
-        &app.browsers,
-        &app.installed,
-        &Choice::default(),
-        None,
-        crate::editor::scanned(app, cx),
-        false,
-    );
-    div()
-        .debug_selector(move || format!("activity-open-in-lanes-{index}"))
-        .mt(px(4.0))
-        .w(px(320.0))
-        .p(px(8.0))
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(theme::border_default())
-        .bg(theme::bg_elevated())
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(text(
-                    "Open this link in",
-                    11.5,
-                    600.0,
-                    theme::text_primary(),
-                ))
-                .child(text(
-                    "once \u{00b7} rules unchanged",
-                    10.0,
-                    500.0,
-                    theme::text_subtle(),
-                )),
-        )
-        .child(destinations::draw(
-            "activity-open-in",
-            &lanes,
-            destinations::Density::Compact,
-            move |this: &mut PwrRoute, choice, _, cx| {
-                let destination = Destination {
-                    browser: choice.browser,
-                    profile: choice.profile,
-                    private: choice.private,
-                };
-                this.open_not_opened(key, OpenAs::In(destination), cx);
-            },
-            cx,
-        ))
-        .when(app.browsers.is_empty(), |list| {
-            list.child(paragraph(
-                "No browsers found. Rescan in Settings \u{203a} Browsers.",
-                10.5,
-                15.2,
-                theme::text_subtle(),
-            ))
-        })
-        .child(paragraph(
-            "Add a rule to send links like this somewhere every time.",
-            10.5,
-            15.2,
-            theme::text_subtle(),
-        ))
 }

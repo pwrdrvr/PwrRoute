@@ -740,7 +740,7 @@ impl ActivityRow {
             took: took_label(record.timings.total_us).into(),
             rewritten: is_rewritten(record),
             default: is_unrouted(record),
-            sent: sent_by(&record.steps).is_some(),
+            sent: sent_by(&record.steps).is_some() || opened_by_user(&record.steps),
             dry_run: record
                 .steps
                 .iter()
@@ -881,6 +881,12 @@ fn rule_label(steps: &[Step]) -> String {
     } else if unnumbered {
         parts.push("rw".into());
     }
+    // Opened from Activity where the user picked (design: Not Opened 2c):
+    // the user decided, so the chip says so in the accent, as a send's.
+    if opened_by_user(steps) {
+        parts.push("opened".into());
+        return parts.join(" \u{00b7} ");
+    }
     let sent = sent_by(steps);
     let paused = sent.is_some() || steps.iter().any(|step| matches!(step, Step::Paused { .. }));
     if let Some(sent) = sent {
@@ -948,6 +954,14 @@ fn matched_line(by: Matched, config: Option<&str>) -> String {
         Matched::Default { owner: None } => "default \u{00b7} no handler matched".to_owned(),
         Matched::Unreported => "a rule or handler matched".to_owned(),
     }
+}
+
+/// A not-opened link the user opened later, to a destination they picked
+/// (`Step::Released { chosen: true }`).
+fn opened_by_user(steps: &[Step]) -> bool {
+    steps
+        .iter()
+        .any(|step| matches!(step, Step::Released { chosen: true, .. }))
 }
 
 /// Where each not-opened dispatch went when it was opened later: by the
@@ -2635,6 +2649,10 @@ mod tests {
             .unwrap();
         assert_eq!(opened.released_from(), Some(held.id));
         assert_eq!(launcher.launched().len(), 1);
+        // The new row says the user opened it, in the accent.
+        let new_row = ActivityRow::build(&opened, false, None);
+        assert_eq!(new_row.rule.as_ref(), "opened");
+        assert!(new_row.sent);
         feed.push(opened);
         let rows = rows_now(&feed);
         let old = rows.iter().find(|row| row.key.id == held.id).unwrap();
@@ -3077,7 +3095,7 @@ mod tests {
                 Step::Launched { dry_run: false },
             ],
         );
-        let rows = [&rule, &default, &handler, &opened].map(|r| ActivityRow::from_record(r));
+        let rows = [&rule, &default, &handler, &opened].map(ActivityRow::from_record);
         let kept: Vec<bool> = rows
             .iter()
             .map(|row| row.passes(Filter::NotOpened, ""))

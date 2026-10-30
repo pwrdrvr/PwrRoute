@@ -1931,6 +1931,8 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     assert_eq!(test.expect.browser, "Google Chrome");
     assert_eq!(test.expect.profile.as_deref(), Some("Work"));
 
+    // Open in's Don't open lane makes the sheet taller than the window.
+    scroll_to(cx, "add-rule-save");
     click(cx, "add-rule-save");
     assert!(cx.debug_bounds("add-rule-sheet").is_none());
     assert!(cx.debug_bounds("activity-action-note").is_some());
@@ -4727,7 +4729,9 @@ fn open_in_and_profile_pick_from_the_scan(cx: &mut TestAppContext) {
                 .is_some()
         );
     }
-    assert!(cx.debug_bounds("destination-lane-5").is_none());
+    // Then Don't open, last (design: Not Opened 1a), and nothing more.
+    assert!(cx.debug_bounds("destination-lane-5").is_some());
+    assert!(cx.debug_bounds("destination-lane-6").is_none());
     // Edge: Default, its four profiles, then InPrivate.
     click(cx, "destination-4-4");
     assert_eq!(rule(cx), ("Microsoft Edge".into(), "Travel".into(), false));
@@ -5844,6 +5848,75 @@ fn everything_else_and_config_rows_have_working_menus(cx: &mut TestAppContext) {
     click(cx, "config-handler-0-more");
     assert!(cx.debug_bounds("config-menu-open").is_some());
     assert!(cx.debug_bounds("config-menu-import").is_some());
+}
+
+/// Everything else's menu ends with Don't open (design: Not Opened 1b):
+/// it writes `"none"`, clears the profile, and the card says what it means.
+#[gpui_kit::test]
+fn everything_else_can_be_dont_open(cx: &mut TestAppContext) {
+    let dir = scratch("row-menu-dont-open");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    view.update(cx, |app, _| {
+        app.browsers = vec![BrowserChoice {
+            name: "Firefox".into(),
+            profiles: Vec::new(),
+        }];
+    });
+    assert!(cx.debug_bounds("everything-else-dont-open-note").is_none());
+    scroll_to(cx, "everything-else-more");
+    click(cx, "everything-else-more");
+    click(cx, "everything-else-dont-open");
+    assert!(cx.debug_bounds("rule-menu").is_none());
+    let file = RulesFile::load(&path).unwrap();
+    assert_eq!(file.default_browser, "none");
+    assert_eq!(file.default_profile, "");
+    scroll_to(cx, "everything-else-dont-open-note");
+    assert!(cx.debug_bounds("everything-else-dont-open-note").is_some());
+    // The row names it in words, never as an app called "none".
+    let (_, name) = view.read_with(cx, |app, _| app.store.default_browser());
+    assert_eq!(name.as_ref(), "Don't open");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The rule editor's Open in ends with the Don't open lane; its pill
+/// writes `"none"` and clears the profile and private window (design: Not
+/// Opened 1a).
+#[gpui_kit::test]
+fn a_rule_can_be_set_to_dont_open(cx: &mut TestAppContext) {
+    let dir = scratch("editor-dont-open");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    view.update(cx, |app, cx| {
+        app.browsers = vec![BrowserChoice {
+            name: "Firefox".into(),
+            profiles: vec!["Work".into()],
+        }];
+        app.select(Selection::Handler(0), cx);
+    });
+    let last = view.read_with(cx, |app, cx| {
+        let handler = &app.handlers[0];
+        crate::destinations::lanes(
+            &app.browsers,
+            &app.installed,
+            &crate::destinations::Choice::of(handler),
+            None,
+            crate::editor::scanned(app, cx),
+            true,
+        )
+        .len()
+            - 1
+    });
+    let selector: &'static str = format!("destination-{last}-0").leak();
+    scroll_to(cx, selector);
+    click(cx, selector);
+    let file = RulesFile::load(&path).unwrap();
+    assert_eq!(file.rules[0].browser, "none");
+    assert_eq!(file.rules[0].profile, "");
+    assert!(!file.rules[0].private);
+    // Never a missing browser: no warning under Open in.
+    assert!(cx.debug_bounds("browser-warning").is_none());
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[gpui_kit::test]

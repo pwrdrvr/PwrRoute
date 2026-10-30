@@ -1605,6 +1605,35 @@ pub fn pane(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement 
         ))),
         Some(more),
     ));
+    // Everything else on Don't open (design: Not Opened 1b): say what that
+    // means under the card, with today's count of links it kept.
+    let everything_else = if pwrroute_engine::is_dont_open(&app.store.edited().default_browser) {
+        let kept = crate::activity::feed(cx)
+            .map(|feed| feed.read(cx).today(std::time::SystemTime::now()).not_opened)
+            .unwrap_or(0);
+        let line = match kept {
+            0 => "Only links your rules choose open. Others wait in Activity under Not opened."
+                .to_owned(),
+            1 => "Only links your rules choose open. 1 link today was not opened; it waits in \
+                  Activity."
+                .to_owned(),
+            n => format!(
+                "Only links your rules choose open. {n} links today were not opened; they wait \
+                 in Activity."
+            ),
+        };
+        everything_else.child(
+            div()
+                .debug_selector(|| "everything-else-dont-open-note".into())
+                .px(px(12.0))
+                .py(px(9.0))
+                .border_t_1()
+                .border_color(theme::border_faint())
+                .child(text(line, 10.5, 500.0, theme::text_subtle())),
+        )
+    } else {
+        everything_else
+    };
 
     let (dot, status) = match app.store.status() {
         crate::rules_store::Status::Failed(_) | crate::rules_store::Status::Changed => {
