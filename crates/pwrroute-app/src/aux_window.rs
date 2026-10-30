@@ -60,7 +60,7 @@ pub fn open<V: Render + 'static>(
                 traffic_light_position: Some(point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(crate::zoom::window_size(display, frame.min, cx)),
+            window_min_size: Some(crate::zoom::min_size(display, frame.min, cx)),
             ..Default::default()
         },
         |window, cx| cx.new(|cx| build(window, cx)),

@@ -583,8 +583,10 @@ their own modules.
   `settings.json`'s `view.zoom`). A measured length goes back through
   `theme::css` before it meets a constant. Screen geometry (`macos.rs`)
   and tests keep `gpui_kit::px`. A window opens at `zoom::window_size`,
-  its design size zoomed and capped to the display. Layouts reflow rather
-  than clip (`app::Layout`): below 960 design px the rail is icons; Rules
+  its design size zoomed and capped to the display; its minimum is
+  `zoom::min_size`, never zoomed (GPUI fixes it at open). Layouts reflow rather
+  than clip (`app::Layout`): below 960 design px the rail is icons
+  (full while its foot offers Reload and Overwrite); Rules
   shows the list or the editor (with "‹ All rules") when both do not fit;
   Activity's table scrolls sideways past `column::TABLE_MIN`; Today's
   tiles go in pairs. The `screens` example takes `--light`,

@@ -436,11 +436,11 @@ fn captions(window: &Window) -> Div {
         ))
 }
 
-/// `.rail-item`; `.on` when `selected`.
 /// The nav rail's width, and its width as icons (`app::Layout`).
 pub const RAIL_WIDTH: f32 = 196.0;
 pub const RAIL_COMPACT: f32 = 56.0;
 
+/// `.rail-item`; `.on` when `selected`; the icon alone when `compact`.
 fn rail_item(
     id: &'static str,
     icon_path: &'static str,
@@ -800,16 +800,15 @@ fn build_row(
 }
 
 /// `.rail`: the sections, Settings, and the routing state at the foot.
-/// The rail: the screens, Settings and the foot. `compact` draws it as
-/// icons (`app::Layout`), with the foot's routing line as its dot, except
-/// while the foot asks to Reload or Overwrite `rules.json`.
+/// `compact` draws it as icons, with the foot's routing line as its dot;
+/// `app::Layout` keeps it full while the foot asks to Reload or Overwrite
+/// `rules.json`.
 pub fn nav_rail(
     app: &PwrRoute,
     status: &Status,
     compact: bool,
     cx: &mut Context<'_, PwrRoute>,
 ) -> Div {
-    let compact = compact && !app.store.changed_on_disk();
     let count = |label: String| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
     // Rewrites plus rules plus the config's, across both sources; a config
     // that did not load is a warning dot instead.

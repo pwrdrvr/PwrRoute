@@ -761,11 +761,7 @@ pub fn pane(
 ) -> Stateful<Div> {
     let overview = build(app, status, cx);
     let width = theme::css(window.viewport_size().width);
-    let rail = if crate::app::Layout::of_width(width).compact_rail {
-        crate::chrome::RAIL_COMPACT
-    } else {
-        crate::chrome::RAIL_WIDTH
-    };
+    let rail = crate::app::Layout::of(app, window).rail_width();
     let widths = MapWidths::of_content(width - rail - 1.0 - PANE_X - MAP_X);
     pane_frame(PANE_ID)
         .debug_selector(|| PANE_ID.into())

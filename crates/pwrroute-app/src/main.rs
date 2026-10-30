@@ -490,7 +490,7 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
                     traffic_light_position: Some(point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
                 }),
                 app_id: Some("pwrroute".to_owned()),
-                window_min_size: Some(zoom::window_size(display, (1000.0, 600.0), cx)),
+                window_min_size: Some(zoom::min_size(display, (1000.0, 600.0), cx)),
                 ..Default::default()
             },
             |window, cx| {

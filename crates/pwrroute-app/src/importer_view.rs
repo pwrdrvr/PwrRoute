@@ -254,7 +254,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
                 traffic_light_position: Some(point(px(16.0), px(13.0))),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(crate::zoom::window_size(display, (980.0, 560.0), cx)),
+            window_min_size: Some(crate::zoom::min_size(display, (980.0, 560.0), cx)),
             ..Default::default()
         },
         |_, cx| {

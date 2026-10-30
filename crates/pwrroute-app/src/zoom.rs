@@ -10,25 +10,23 @@
 //! Every view sizes through `theme::px`, so the zoom scales text, boxes,
 //! gaps and rules together, the way a page zooms. A window already open
 //! keeps its size; one opened later starts at its design size zoomed, as
-//! large as the display allows ([`window_size`]).
+//! large as the display allows ([`window_size`]). A window's minimum is
+//! never zoomed ([`min_size`]): GPUI fixes it when the window opens, and a
+//! zoomed one would keep a window as large as the display after zooming
+//! back out. Layouts reflow instead (`app::Layout`).
 
 use gpui_kit::{App, DisplayId, Pixels, Size, size};
 
 use crate::theme;
 
-/// The zoom in force: one of `theme::ZOOM_STEPS`.
-pub fn current() -> f32 {
-    theme::zoom()
-}
-
 /// Steps the zoom by `by` (1 in, -1 out), or back to 100% with `None`, then
 /// saves it and redraws every window.
 pub fn step(by: Option<i32>, cx: &mut App) {
     let to = match by {
-        Some(by) => theme::zoom_step(current(), by),
+        Some(by) => theme::zoom_step(theme::zoom(), by),
         None => 1.0,
     };
-    if (to - current()).abs() < f32::EPSILON {
+    if (to - theme::zoom()).abs() < f32::EPSILON {
         return;
     }
     set(to, cx);
@@ -58,7 +56,16 @@ pub fn percent(zoom: f32) -> u16 {
 /// visible area (the primary display's when `None`): at 200% a window
 /// drawn for 1240 points would not fit a laptop.
 pub fn window_size(display: Option<DisplayId>, css: (f32, f32), cx: &App) -> Size<Pixels> {
-    let wanted = size(theme::px(css.0), theme::px(css.1));
+    capped(display, size(theme::px(css.0), theme::px(css.1)), cx)
+}
+
+/// A window's minimum: the design's, in screen points whatever the zoom,
+/// and never larger than `display`'s visible area.
+pub fn min_size(display: Option<DisplayId>, css: (f32, f32), cx: &App) -> Size<Pixels> {
+    capped(display, size(gpui_kit::px(css.0), gpui_kit::px(css.1)), cx)
+}
+
+fn capped(display: Option<DisplayId>, wanted: Size<Pixels>, cx: &App) -> Size<Pixels> {
     let area = display
         .and_then(|id| cx.find_display(id))
         .or_else(|| cx.primary_display())

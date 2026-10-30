@@ -1112,11 +1112,7 @@ pub fn open(
                 )),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(crate::zoom::window_size(
-                display,
-                (WINDOW_SIZE.0, 560.0),
-                cx,
-            )),
+            window_min_size: Some(crate::zoom::min_size(display, (WINDOW_SIZE.0, 560.0), cx)),
             ..Default::default()
         },
         |_, cx| cx.new(|cx| FirstRun::new(model, hooks, cx)),

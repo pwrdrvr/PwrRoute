@@ -771,7 +771,7 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
                 )),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(crate::zoom::window_size(
+            window_min_size: Some(crate::zoom::min_size(
                 display,
                 (PROMPT_WIDTH, SHORT_HEIGHT),
                 cx,
@@ -1015,9 +1015,15 @@ impl ApprovalWindow {
         if overflow < 1.0 {
             return;
         }
+        // Zoomed, MAX_HEIGHT can be taller than the display: the body
+        // scrolls past what the display holds.
+        let display = window.display(cx).map_or(f32::MAX, |display| {
+            theme::css(display.visible_bounds().size.height)
+        });
         let want = (theme::css(window.viewport_size().height) + overflow)
             .ceil()
-            .min(MAX_HEIGHT);
+            .min(MAX_HEIGHT)
+            .min(display.floor());
         if want <= self.asked_height + 0.5 {
             return;
         }

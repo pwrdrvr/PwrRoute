@@ -1014,7 +1014,7 @@ impl PwrRoute {
                     }
                     ("up", Some(_)) => self.step(-1, cx),
                     ("down", Some(_)) => self.step(1, cx),
-                    ("escape", Some(_)) if Layout::of(window).stacked => self.deselect(cx),
+                    ("escape", Some(_)) if Layout::of(self, window).stacked => self.deselect(cx),
                     _ => {}
                 }
             }
@@ -1065,21 +1065,33 @@ impl Layout {
     /// The rules list's least width beside the editor.
     pub const LIST_MIN: f32 = 428.0;
 
-    pub fn of_width(width: f32) -> Self {
-        let compact_rail = width < Self::COMPACT_RAIL_BELOW;
-        let rail = if compact_rail {
+    /// The layout at `width`. `full_rail`: the rail keeps its labels
+    /// however narrow, while its foot asks to Reload or Overwrite
+    /// `rules.json`.
+    pub fn of_width(width: f32, full_rail: bool) -> Self {
+        let compact_rail = width < Self::COMPACT_RAIL_BELOW && !full_rail;
+        let mut layout = Self {
+            compact_rail,
+            stacked: false,
+        };
+        layout.stacked = width - layout.rail_width() < Self::LIST_MIN + editor::WIDTH;
+        layout
+    }
+
+    pub fn of(app: &PwrRoute, window: &Window) -> Self {
+        Self::of_width(
+            theme::css(window.viewport_size().width),
+            app.store.changed_on_disk(),
+        )
+    }
+
+    /// The nav rail's width, without its border.
+    pub fn rail_width(self) -> f32 {
+        if self.compact_rail {
             crate::chrome::RAIL_COMPACT
         } else {
             crate::chrome::RAIL_WIDTH
-        };
-        Self {
-            compact_rail,
-            stacked: width - rail < Self::LIST_MIN + editor::WIDTH,
         }
-    }
-
-    pub fn of(window: &Window) -> Self {
-        Self::of_width(theme::css(window.viewport_size().width))
     }
 }
 
@@ -1096,7 +1108,7 @@ impl PwrRoute {
 
 impl Render for PwrRoute {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let layout = Layout::of(window);
+        let layout = Layout::of(self, window);
         // One reading of the routing state for the strip, the rail foot and
         // the Overview, so they agree.
         let status = overview::status(self, cx);
