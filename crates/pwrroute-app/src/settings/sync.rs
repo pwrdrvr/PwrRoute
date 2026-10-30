@@ -11,7 +11,6 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Div, InteractiveElement as _, IntoElement, KeyDownEvent,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    px,
 };
 
 use super::SettingsWindow;
@@ -25,6 +24,7 @@ use super::model::{
 use super::style::{self, para};
 use crate::destinations::{self, Density};
 use crate::text_field::{self, Edit, Look, TextField};
+use crate::theme::px;
 use crate::theme::{self, mono, text};
 
 pub const SYNC_NOW_ID: &str = "sync-now";

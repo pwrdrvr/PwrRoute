@@ -49,8 +49,16 @@ fn write_config(name: &str, source: &str) -> PathBuf {
 }
 
 fn engine_for(config: Option<PathBuf>, rules: RulesFile, host: Rc<dyn Host>) -> Engine {
-    Engine::from_sources(&Sources { config, rules }, host, Limits::default())
-        .unwrap_or_else(|e| panic!("{e:#}"))
+    Engine::from_sources(
+        &Sources {
+            config,
+            rules,
+            ..Default::default()
+        },
+        host,
+        Limits::default(),
+    )
+    .unwrap_or_else(|e| panic!("{e:#}"))
 }
 
 fn rules_only(rules: RulesFile) -> Engine {
