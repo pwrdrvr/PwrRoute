@@ -4,6 +4,7 @@ description = "PwrRoute's desktop window: the rules list and its editor, drawn w
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false

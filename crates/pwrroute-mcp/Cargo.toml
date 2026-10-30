@@ -4,6 +4,7 @@ description = "PwrRoute's local-agent door: MCP served by the app over a per-use
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false

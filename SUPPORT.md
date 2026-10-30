@@ -3,8 +3,8 @@
 PwrRoute is built by [PwrDrvr LLC](https://pwrdrvr.com). Support is
 best-effort and happens on GitHub — there is no ticket queue and no SLA.
 
-PwrRoute is pre-release. There is no build to install yet, so most questions
-today are about the design or the port.
+PwrRoute is pre-release. Builds for macOS, Windows and Linux are on
+[GitHub Releases](https://github.com/pwrdrvr/PwrRoute/releases).
 
 ## Where to go
 
@@ -12,12 +12,13 @@ today are about the design or the port.
 | --- | --- |
 | Report something broken | [New bug report](https://github.com/pwrdrvr/PwrRoute/issues/new?template=bug_report.yml) |
 | Request a specific capability | [New feature request](https://github.com/pwrdrvr/PwrRoute/issues/new?template=feature_request.yml) |
+| Ask how to do something | Check [README.md](README.md) and the app's Help first, then open an issue |
 | Report a security vulnerability | **Not** in public — follow [SECURITY.md](SECURITY.md) |
 
 ## What makes a report answerable
 
-1. **Your version and OS** — Help → About, plus the macOS, Windows or Linux
-   version.
+1. **Your version and OS** — Settings › About, plus the macOS, Windows or
+   Linux version.
 2. **Which configuration is in charge** — visual rules, or a Finicky `.js` /
    `.ts` config.
 3. **The trace.** Test a link shows each rewrite and handler that fired.

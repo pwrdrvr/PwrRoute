@@ -116,6 +116,9 @@ path, including `previous_filename` on a rename, matches one of:
   scripts and other skill assets. These files are agent resources, not app
   or CI inputs. If a build or workflow starts consuming them, update the
   classifier before introducing that dependency.
+- `design/**`, the Claude Design mirror (`design/SOURCE.md`). Nothing
+  builds, embeds or tests it. If code starts reading a file there, update
+  the classifier first.
 - `.github/ISSUE_TEMPLATE/**`, `.github/PULL_REQUEST_TEMPLATE/**`, or exactly
   `.github/dependabot.yml`.
 

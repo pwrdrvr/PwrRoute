@@ -54,6 +54,9 @@ for (const [name, paths] of [
     '.agents/skills/example/assets/icon.png',
   ]],
   ['documentation and diagrams', ['README.md', 'crates/pwrroute-app/README.MD', 'docs/routing.svg']],
+  ['design mirror', [
+    'design/PwrRoute Send Links.dc.html', 'design/pwrroute.css', 'design/support.js', 'design/SOURCE.md',
+  ]],
   ['Dependabot configuration', ['.github/dependabot.yml']],
   ['issue and PR templates', ['.github/ISSUE_TEMPLATE/bug_report.yml', '.github/PULL_REQUEST_TEMPLATE/custom.yml']],
   ['mixed non-code categories', [...releaseSkill, 'docs/example.json', '.github/dependabot.yml']],
@@ -71,7 +74,7 @@ for (const path of [
   'scripts/ci/classify-changes.test.cjs', 'packaging/macos/Info.plist.in',
   'licenses/bundled.txt', 'LICENSE', 'THIRD_PARTY_LICENSES', 'CHANGELOG.md',
   '.gitattributes', '.gitignore', '.agents/config.toml', '.agents/skills-other/script.sh',
-  'unknown.yaml',
+  'unknown.yaml', 'crates/pwrroute-app/design/canvas.html', 'designs/canvas.html',
 ]) {
   test(`${path} alone or mixed with skills runs full CI`, async () => {
     for (const paths of [[path], [...releaseSkill, path]]) {
@@ -83,6 +86,8 @@ for (const path of [
 for (const [previous_filename, filename, full] of [
   ['.agents/skills/old/openai.yaml', '.agents/skills/new/agents/openai.yaml', false],
   ['docs/old.svg', 'docs/new.svg', false],
+  ['design/Old.dc.html', 'design/New.dc.html', false],
+  ['design/canvas.html', 'crates/pwrroute-app/assets/canvas.html', true],
   ['scripts/release/check.sh', '.agents/skills/release/scripts/check.sh', true],
   ['.agents/skills/release/scripts/check.sh', 'scripts/release/check.sh', true],
   ['Cargo.toml', 'docs/old-manifest.md', true],
