@@ -38,8 +38,8 @@ use gpui_kit::{
     Styled as _, Subscription, Window, div, px,
 };
 use pwrroute_router::{
-    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, Options, Outcome, Owner,
-    Privacy, RetentionInfo, RouterHandle, Step,
+    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, NotOpenedReason, Options,
+    Outcome, Owner, Privacy, RetentionInfo, RouterHandle, Step,
 };
 
 use crate::app::{PwrRoute, Screen};
@@ -907,7 +907,9 @@ fn skipped(steps: &[Step]) -> Option<Skipped> {
         _ => None,
     });
     let paused = steps.iter().find_map(|step| match step {
-        Step::Paused { skipped } | Step::Sent { skipped, .. } => *skipped,
+        Step::Paused { skipped } | Step::Sent { skipped, .. } | Step::Held { skipped, .. } => {
+            *skipped
+        }
         _ => None,
     });
     match (matched, paused) {
@@ -1047,6 +1049,26 @@ fn trace_lines(record: &DispatchRecord, config: Option<&str>) -> Vec<ActivitySte
             Step::Sent { sent, .. } => (
                 StepMark::Hit(number),
                 held_line(&sent.label(), &record.steps),
+            ),
+            Step::Held { held, .. } => (
+                StepMark::Miss(number),
+                held_line(&format!("held \u{00b7} {}", held.label()), &record.steps),
+            ),
+            Step::Released { from, chosen } => (
+                StepMark::Hit(number),
+                format!(
+                    "opened later \u{00b7} not opened as link {} \u{00b7} {}",
+                    from.0,
+                    if *chosen {
+                        "where you chose"
+                    } else {
+                        "by the rules"
+                    }
+                ),
+            ),
+            Step::NotOpened if record.not_opened_reason() == Some(NotOpenedReason::Hold) => (
+                StepMark::Miss(number),
+                "not opened \u{00b7} waiting for you".to_owned(),
             ),
             Step::NotOpened => (
                 StepMark::Miss(number),

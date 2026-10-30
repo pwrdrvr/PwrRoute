@@ -305,6 +305,29 @@ pub fn trace_of(record: &DispatchRecord, config: Option<&str>) -> Trace {
                     *skipped,
                 ));
             }
+            Step::Held { held, skipped, .. } => {
+                let why = format!("the user held this link ({})", held.label());
+                steps.push(held_step(
+                    &why,
+                    "nothing opened; it waits to be opened",
+                    matched,
+                    *skipped,
+                ));
+            }
+            Step::Released { from, chosen } => steps.push(step(
+                StepKind::Default,
+                None,
+                format!(
+                    "not opened as dispatch {}; opened later {}",
+                    from.0,
+                    if *chosen {
+                        "where the user chose"
+                    } else {
+                        "as the rules say now"
+                    }
+                ),
+                None,
+            )),
             Step::LaunchFailed { message } => {
                 launch_failed = true;
                 error.get_or_insert_with(|| message.clone());

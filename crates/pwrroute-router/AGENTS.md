@@ -72,15 +72,42 @@ runs on every platform.
   SendTo))` sends links to a user's `Destination` (browser, profile,
   private) for `SendScope::Next { left, of }` or `All { until }`, applied
   where a pause is and traced as `Step::Sent { sent, skipped }`. One
-  `Hold` slot holds a pause or a send: setting one ends the other, and
-  clearing one (`None`) leaves the other alone. A `Next` is counted in
-  `Worker::take_hold`, under the slot's lock, once per dispatched link
+  `Override` slot holds a pause, a send or a hold: setting one ends the
+  others, and clearing one (`None`) leaves the others alone. A `Next` is counted in
+  `Worker::take_override`, under the slot's lock, once per dispatched link
   (forwarded and agent links included, a rejected link or a test not),
   and the slot clears when it reaches zero; an `All` past `until` clears
   without taking the link, and `send_to()` never returns one. A private
   destination keeps the record at most `Host`. `retarget_send` and
   `add_to_next` change a send in force under the same lock. Memory only:
   nothing about a send is saved.
+- **Hold is the slot's third tenant.** The slot is the public `Override`
+  (`Paused`, `Sending(SendTo)`, `Holding(SendScope)`); `set_override`,
+  `override_in_force`, `rescope` and `step_next` work on whichever is on
+  (each ends one whose time ran out first, `live_slot`),
+  and `set_paused`, `set_send_to` and `set_hold` keep their "set one ends
+  the others, `None` ends only mine" rule. A held link is resolved, then
+  traced `Step::Held { held, skipped, browser }` (`browser` is where the
+  rules would have opened it) and `Step::NotOpened`, with
+  `Outcome::NotOpened`, the outcome a rule that opens nothing has too.
+  `DispatchRecord::not_opened_reason()` (`rule`, `default`, `hold`) reads
+  which from the steps; never store it. Counted as a send is, in
+  `Worker::take_override`, which ends a hold instead of taking a link
+  while the retention keeps nothing: the link would have nowhere to wait.
+  Memory only: a new router starts on the rules.
+- **A link that was not opened waits, in memory, to be opened.**
+  `Worker::record` hands `RecentDispatches::push_waiting` the whole link
+  (URL and opener) of every `NotOpened` record that keeps anything; it
+  waits beside its record and leaves with it (count, age, Clear, a
+  retention of nothing), so nothing waits that Activity cannot show. This
+  is the one exception to "a `Host` record never held the full URL outside
+  the dispatch thread": its whole link stays in the buffer's memory, never
+  on disk, so Open can open it. A `None` record keeps nothing waiting.
+  `RouterHandle::open_not_opened(id, OpenAs)` takes it on the dispatch
+  thread and dispatches it again past any override, with its source and
+  opener and `Step::Released { from, chosen }`: `OpenAs::Rules` (the
+  fallback, with `Step::Fallback`, when the rules still open nothing) or
+  `OpenAs::In(Destination)`. `pending()` lists what still waits.
 - **Short links expand on the dispatch thread, before the resolver.**
   `Worker::expand` reads `Resolver::short_links()` (the engine's list, as
   the config in charge set it), then follows a short link through

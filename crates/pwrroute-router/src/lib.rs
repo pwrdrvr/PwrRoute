@@ -19,7 +19,11 @@
 //!   after its rewrites, with [`Step::Paused`] in the trace, until resumed.
 //!   [`RouterHandle::set_send_to`] does the same for a [`Destination`] the
 //!   user chose, for the next few links or all of them ([`SendTo`]), with
-//!   [`Step::Sent`]; the two share one slot.
+//!   [`Step::Sent`]. [`RouterHandle::set_hold`] records links and opens
+//!   none, with [`Step::Held`]. The three share one [`Override`] slot.
+//! - A link that was not opened (held, or a rule that opens nothing) waits
+//!   in Activity: [`RouterHandle::open_not_opened`] opens it later, as a
+//!   new dispatch with [`Step::Released`].
 //! - [`instance`] keeps one router per user: a second launch forwards its
 //!   links over a local socket ([`ipc`]) and exits.
 //!
@@ -45,17 +49,18 @@ mod recent;
 mod trace;
 
 pub use dispatch::{
-    Destination, DispatchCallback, FALLBACK_BROWSER, FallbackSource, MAX_NEXT, Options,
-    PauseTarget, ReceivedCallback, Resolved, Resolver, ResolverFactory, RetentionInfo, Router,
-    RouterGone, RouterHandle, RouterStatus, SLOW_DISPATCH, SendScope, SendTo,
+    Destination, DispatchCallback, FALLBACK_BROWSER, FallbackSource, MAX_NEXT, OpenAs,
+    OpenLaterError, Options, Override, PauseTarget, ReceivedCallback, Resolved, Resolver,
+    ResolverFactory, RetentionInfo, Router, RouterGone, RouterHandle, RouterStatus, SLOW_DISPATCH,
+    SendScope, SendTo,
 };
 pub use journal::{JournalConfig, JournalMode, JournalStamp, read_recent as read_journal};
 pub use launcher::{DryRunLauncher, Launcher};
 pub use link::{Link, LinkError, MAX_URL_LEN, OpenerInfo, Source, normalize_url};
 pub use recent::{RecentDispatches, Retention};
 pub use trace::{
-    DispatchId, DispatchRecord, DispatchTiming, Matched, Outcome, Owner, Privacy, PrivacyExt, Sent,
-    Step, Timings, WITHHELD, host_only,
+    DispatchId, DispatchRecord, DispatchTiming, Matched, NotOpenedReason, Outcome, Owner, Privacy,
+    PrivacyExt, Sent, Step, Timings, WITHHELD, host_only,
 };
 
 /// Re-exported so a launcher or UI can name the engine's types without a
