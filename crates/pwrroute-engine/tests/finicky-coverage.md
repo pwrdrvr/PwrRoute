@@ -58,7 +58,7 @@ Where the tests run:
 | `TestToJSConfigScript_DefaultBrowserFallback` | `finicky_suite.rs::an_empty_rules_file_falls_back_to_safari`; `rules.rs::base_config_follows_go_to_js_config_script` |
 | `TestToJSConfigScript_ExplicitDefaultBrowser` | `finicky_suite.rs::rules_keep_their_browser_profile_and_order`; suite "Finicky resolver_test.go JSON rules only" |
 | `TestToJSConfigScript_NamespaceIsUsed` | not applicable: the namespace is internal (`finickyConfig`), not part of the file |
-| `TestLoadSave_RoundTrip` | `finicky_suite.rs::a_go_rules_file_round_trips_byte_for_byte_in_shape`; `rules.rs::writes_what_the_go_host_writes_when_no_extension_is_used` |
+| `TestLoadSave_RoundTrip` | `finicky_suite.rs::a_go_rules_file_round_trips_in_gos_shape`; `rules.rs::writes_what_the_go_host_writes_when_no_extension_is_used` |
 | `TestLoad_MissingFile`, `TestLoad_EmptyRulesNotNil` | `finicky_suite.rs::a_missing_file_or_absent_rules_load_empty`; `rules.rs::null_rules_are_empty` |
 
 ## testdata/ and example-config/

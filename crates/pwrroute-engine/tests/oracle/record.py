@@ -352,8 +352,19 @@ SUITES = [
 ]
 
 
-# An unreachable proxy: the Go host's short-link requests fail fast.
-OFFLINE = dict(os.environ, HTTP_PROXY="http://127.0.0.1:9", HTTPS_PROXY="http://127.0.0.1:9", NO_PROXY="")
+# An unreachable proxy: the Go host's short-link requests fail fast. Go reads
+# each variable in upper then lower case and takes the first that is set, so
+# both spellings are overridden (a caller's `no_proxy=*` would skip the proxy).
+DEAD_PROXY = "http://127.0.0.1:9"
+OFFLINE = dict(
+    os.environ,
+    HTTP_PROXY=DEAD_PROXY,
+    http_proxy=DEAD_PROXY,
+    HTTPS_PROXY=DEAD_PROXY,
+    https_proxy=DEAD_PROXY,
+    NO_PROXY="",
+    no_proxy="",
+)
 
 
 def check_unit(evaloracle):

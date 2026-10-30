@@ -76,11 +76,10 @@ struct UnitResult {
     error: Option<String>,
 }
 
-/// Every `it` in Finicky's four config API test files (79 at upstream
-/// `main`) and the two PwrFinicky added for the bundle's validation, run
-/// against the bundle in the engine's context.
-#[test]
-fn finickys_config_api_unit_tests_pass_in_the_engine() {
+/// Runs `configs/finicky-unit.js` (after `edit`) in an engine with no config.
+/// All 81 cases run in one evaluation, so the deadline is far above the
+/// router's.
+fn run_unit_cases(edit: impl FnOnce(String) -> String) -> Vec<UnitResult> {
     let engine = Engine::from_sources(
         &Sources::default(),
         Rc::new(DefaultHost),
@@ -90,9 +89,17 @@ fn finickys_config_api_unit_tests_pass_in_the_engine() {
         },
     )
     .unwrap();
-    let script = fs::read_to_string(configs().join("finicky-unit.js")).unwrap();
+    let script = edit(fs::read_to_string(configs().join("finicky-unit.js")).unwrap());
     let value = engine.evaluate(&script, "finickyUnit.run()").unwrap();
-    let results: Vec<UnitResult> = serde_json::from_value(value).unwrap();
+    serde_json::from_value(value).unwrap()
+}
+
+/// Every `it` in Finicky's four config API test files (79 at upstream
+/// `main`) and the two PwrFinicky added for the bundle's validation, run
+/// against the bundle in the engine's context.
+#[test]
+fn finickys_config_api_unit_tests_pass_in_the_engine() {
+    let results = run_unit_cases(|script| script);
 
     let mut per_file = BTreeMap::<&str, usize>::new();
     for r in &results {
@@ -128,15 +135,12 @@ fn finickys_config_api_unit_tests_pass_in_the_engine() {
 /// swallowed.
 #[test]
 fn the_unit_harness_reports_a_wrong_expectation() {
-    let engine = rules_only(RulesFile::default());
-    let script = fs::read_to_string(configs().join("finicky-unit.js"))
-        .unwrap()
-        .replace(
+    let results = run_unit_cases(|script| {
+        script.replace(
             r#"expect(url.port).toBe("8080");"#,
             r#"expect(url.port).toBe("8081");"#,
-        );
-    let value = engine.evaluate(&script, "finickyUnit.run()").unwrap();
-    let results: Vec<UnitResult> = serde_json::from_value(value).unwrap();
+        )
+    });
     let failed: Vec<&UnitResult> = results.iter().filter(|r| !r.ok).collect();
     assert_eq!(failed.len(), 1);
     assert!(
@@ -269,7 +273,7 @@ fn incomplete_rules_are_skipped_and_the_rest_route() {
 #[test]
 fn rules_keep_their_browser_profile_and_order() {
     let engine = rules_only(RulesFile {
-        default_browser: "Firefox".into(),
+        default_browser: "Arc".into(),
         rules: vec![
             rule(&["*github.com/*"], "Firefox", ""),
             rule(&["https://linear.app/*"], "Google Chrome", "Work"),
@@ -297,14 +301,15 @@ fn rules_keep_their_browser_profile_and_order() {
         .resolve("https://other.example/", None)
         .unwrap()
         .browser;
-    assert_eq!(other.name, "Firefox");
+    assert_eq!(other.name, "Arc");
 }
 
 /// TestLoadSave_RoundTrip, on Go's own field names: what Go wrote loads, and
-/// what PwrRoute saves from it is what Go wrote (a single pattern as a
-/// string, `profile` and `defaultProfile` only when set).
+/// what PwrRoute saves from it has Go's shape (a single pattern as a string,
+/// `profile` and `defaultProfile` only when set). The JSON values are
+/// compared, not the bytes: whitespace may differ.
 #[test]
-fn a_go_rules_file_round_trips_byte_for_byte_in_shape() {
+fn a_go_rules_file_round_trips_in_gos_shape() {
     let go_written = serde_json::json!({
         "defaultBrowser": "Firefox",
         "defaultProfile": "Work",
@@ -345,9 +350,9 @@ fn a_missing_file_or_absent_rules_load_empty() {
     assert_eq!(file.default_browser, "Safari");
 }
 
-/// Finicky's `testdata/rules.json`, read from disk exactly as Finicky 4.4's
-/// visual editor saved it, loads unchanged; `finicky_compat` checks how it
-/// routes against the Go host.
+/// Finicky's `testdata/rules.json`, the fixture its Go tests read in the
+/// schema Finicky 4.4's visual editor writes, loads unchanged;
+/// `finicky_compat` checks how it routes against the Go host.
 #[test]
 fn finickys_testdata_rules_json_loads_unchanged() {
     let file = RulesFile::load(&configs().join("finicky/testdata-rules.json")).unwrap();
