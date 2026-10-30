@@ -249,6 +249,18 @@ the project and re-export here.
   project, then fetched back and compared with the files here.
   `support.js` is unchanged.
 
+- Updated **2026-10-30**: one canvas added for the Settings sections and
+  the Finicky config across machines (`PwrRoute Settings Sections.dc.html`).
+  Turn 1: Configuration becomes Config Files, Sync becomes Cloud Sync and
+  Short Links becomes its own section; the nav takes PwrAgent's Settings
+  shape (group labels, and a caret with one child row per cloud folder or
+  config file, each with a status dot and an OFF or NOT USED chip). Turn 2:
+  Also sync is on by default while a Finicky config is in charge, a Mac
+  without a config can take the folder's with Use it on this Mac, and a
+  folder whose rules.json ran after a config that is not syncing says so.
+  Written to the project from the file here. The other canvases,
+  `pwrroute.css` and `support.js` are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -281,6 +293,7 @@ the project and re-export here.
 | `PwrRoute Incoming Links.dc.html` | What the next links do: the Rules / Send / Hold / Pause switch with its For row and live line, in the dropdown (held links first, their actions, Pause, keyboard, the native menu) and the Overview hero; held links in Activity; how Hold behaves (where it applies, how long a held link waits, restart, words, agents) |
 | `PwrRoute Synced Rules.dc.html` | Settings › Sync (turn 1): what syncs and who can read it, Sync to with the folders found and Choose a folder…, folders set up with their state chip and line, Sync now, the Finicky config switch, a conflict with both sides and backups, joining a folder that already has rules, the macOS permission step and its denied state, and every folder row state |
 | `PwrRoute Synced Rules Machine.dc.html` | Synced rules on each machine (turns 2 to 4): the This machine card with named destinations (synced or this Mac, a browser not installed) and rule sets on or off here; the Destinations lane and Rule set select in the rule editor and set headings on Rules; sync status in the rail foot, strip and menu bar dropdown; the Sync pane on Linux and Windows |
+| `PwrRoute Settings Sections.dc.html` | The Settings nav in groups with child rows for cloud folders and config files (turn 1: Config Files, Short Links, Cloud Sync); the Finicky config across machines (turn 2: on by default, Use it on this Mac, a config that is not syncing) |
 | `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
