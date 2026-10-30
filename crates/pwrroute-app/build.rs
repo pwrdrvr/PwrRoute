@@ -96,6 +96,75 @@ fn main() {
     emit("PWRROUTE_BUILD_TIME", built_at.as_deref());
 
     watch(&manifest, parsed.get(2), parsed.get(3));
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        windows_resources(&manifest);
+    }
+}
+
+/// Embeds PwrRoute's icon in `pwrroute.exe` as icon resource 1, which GPUI
+/// loads for every window (the taskbar, Alt+Tab) and Explorer shows for the
+/// file, plus the version block Task Manager and the file's Properties
+/// name it by. GPUI's own resources (its manifest) are separate.
+fn windows_resources(manifest: &Path) {
+    // Joined part by part and never canonicalized: canonicalize's `\\?\`
+    // prefix is not a path rc reads, and stripping it breaks a UNC
+    // checkout (a network or VM shared folder).
+    let icon = ["..", "..", "packaging", "windows", "PwrRoute.ico"]
+        .iter()
+        .fold(manifest.to_path_buf(), |path, part| path.join(part));
+    println!("cargo:rerun-if-changed={}", icon.display());
+    // An .rc string escapes backslashes.
+    let icon = icon.display().to_string().replace('\\', r"\\");
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    // FILEVERSION wants four numbers; a pre-release suffix is dropped.
+    let mut numbers: Vec<u16> = version
+        .split(['-', '+'])
+        .next()
+        .unwrap_or_default()
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0))
+        .collect();
+    numbers.resize(4, 0);
+    let numeric = numbers
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let rc = format!(
+        r#"1 ICON "{icon}"
+
+1 VERSIONINFO
+FILEVERSION {numeric}
+PRODUCTVERSION {numeric}
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "PwrRoute"
+      VALUE "ProductName", "PwrRoute"
+      VALUE "FileVersion", "{version}"
+      VALUE "ProductVersion", "{version}"
+      VALUE "OriginalFilename", "pwrroute.exe"
+      VALUE "InternalName", "pwrroute"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+"#
+    );
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let rc_path = out.join("pwrroute.rc");
+    std::fs::write(&rc_path, rc).expect("write pwrroute.rc");
+    embed_resource::compile_for(&rc_path, ["pwrroute"], embed_resource::NONE)
+        .manifest_required()
+        .expect("embed PwrRoute's icon in pwrroute.exe");
 }
 
 fn emit(name: &str, value: Option<&str>) {
