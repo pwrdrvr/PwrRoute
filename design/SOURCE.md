@@ -207,6 +207,19 @@ the project and re-export here.
   project, then compared by size with the file here. The other canvases,
   `pwrroute.css` and `support.js` are unchanged.
 
+- Updated **2026-10-29**: one canvas added for contrast and text size
+  (`PwrRoute Contrast and Scale.dc.html`): dimmed content as a token step
+  instead of opacity, with the ratios before and after (turn 1); the four
+  palettes, dark, light and each with Increase Contrast, with every
+  token's lowest ratio and the light block's corrections (turn 2); View ›
+  Zoom and the layouts that reflow at 200% (turn 3); the first
+  accessibility pass's control edge, selected edge and focus ring (turn
+  4). `pwrroute.css` gains the full light block, `.hc`, `.light.hc`,
+  `.dim`, `--border-control`, `--focus-ring` and `--log-target`, and its
+  `.inp` and `.sw` edges use `--border-control`. Both written to the
+  project, then fetched back and compared with the files here.
+  `support.js` is unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -235,6 +248,7 @@ the project and re-export here.
 | `PwrRoute Build Identity.dc.html` | Which build is running: the rail foot's build block (checkout, branch, commit, each click-to-copy, and copy all) for a dev build, a detached HEAD with changes and a release, and Settings › About's Source row with Copy build info |
 | `PwrRoute Agent Approval.dc.html` | The local-agent approval window: before, a role chosen (Reader at open) with its permissions and Deny / Allow as <role>, keys, and the allowed and denied outcomes; no time limit |
 | `PwrRoute Not Opened.dc.html` | Don't open as a rule's destination and Everything else (the last lane of Open in, Everything else's menu), Activity's Not opened filter and rows, Open in… on a not-opened row, a row opened later or not openable, Test a link, the tray's recents and the Overview's Not opened card, and how it behaves |
+| `PwrRoute Contrast and Scale.dc.html` | Contrast and text size: dimmed text as a token step (off rules, missed steps, the paused map) with its ratios; dark, light and each with Increase Contrast, every token's lowest ratio, and the light block's corrections; View › Zoom and the reflow at 200% (icon rail, Rules list and editor in turn, Activity's table scrolling, Today's tiles in pairs); the control edge, selected edge and focus ring |
 | `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 

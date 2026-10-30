@@ -11,7 +11,8 @@
   --border-default: rgba(247,243,235,0.14); --border-strong: rgba(247,243,235,0.2);
   --text-primary: #f7f3eb; --text-secondary: #b8b0a5; --text-muted: #8c857a; --text-subtle: rgba(247,243,235,0.54);
   --accent: #ff8a1f; --accent-bright: #ffb35c; --accent-on: #160a00;
-  --accent-soft: rgba(255,138,31,0.12); --accent-tint: rgba(255,138,31,0.08); --accent-border: rgba(255,138,31,0.42);
+  --accent-soft: rgba(255,138,31,0.12); --accent-tint: rgba(255,138,31,0.08); --accent-border: rgba(255,138,31,0.56);
+  --border-control: rgba(247,243,235,0.4); --focus-ring: #ff8a1f; --log-target: #7fcfc4;
   --danger-base: #b94232; --danger-soft: rgba(185,66,50,0.24); --danger-text: #ffb0a1;
   --success-soft: rgba(74,148,92,0.18); --success-text: #9ce5b3;
   --info-soft: rgba(86,137,196,0.16); --info-text: #9fc8ff;
@@ -20,16 +21,46 @@
   --radius-sm: 5px; --radius-md: 7px; --radius-lg: 10px; --radius-xl: 14px;
   --shadow-popover: 0 18px 48px rgba(0,0,0,0.42);
 }
+/* ---- palettes (design: Contrast and Scale). theme.rs holds the same four;
+   its tests pin every pair's ratio. .light and .hc may sit on any subtree. ---- */
 .light {
   --bg-app: #ffffff; --bg-titlebar: #f7f4ef; --bg-sidebar: #f7f4ef; --bg-panel: #fdfcfa; --bg-input: #ffffff;
   --bg-panel-elevated: #ffffff; --bg-panel-hover: #f4f0e8; --bg-hover-strong: #ebe5da; --bg-row-active: #fff5e9;
-  --border-faint: rgba(0,0,0,0.05); --border-subtle: rgba(0,0,0,0.08); --border-default: rgba(0,0,0,0.12); --border-strong: rgba(0,0,0,0.18);
-  --text-primary: #1a1612; --text-secondary: #524a40; --text-muted: #736c64; --text-subtle: rgba(26,22,18,0.68);
-  --accent: #b74c00; --accent-bright: #994c00; --accent-on: #ffffff;
-  --accent-soft: rgba(183,76,0,0.12); --accent-border: rgba(183,76,0,0.42);
-  --status-ok: #2e7d3c; --status-warning: #805200; --status-error: #a8472a;
-  --success-text: #1a5c2e; --success-soft: rgba(46,110,64,0.14); --danger-text: #8a1f12; --info-text: #1a4f8a;
+  --border-faint: rgba(0,0,0,0.05); --border-subtle: rgba(0,0,0,0.08); --border-default: rgba(0,0,0,0.12);
+  --border-strong: rgba(0,0,0,0.18); --border-control: rgba(0,0,0,0.45); --text-primary: #1a1612;
+  --text-secondary: #524a40; --text-muted: #6a635b; --text-subtle: rgba(26,22,18,0.68); --accent: #a64400;
+  --accent-bright: #994c00; --accent-on: #ffffff; --accent-soft: rgba(166,68,0,0.1); --accent-tint: rgba(166,68,0,0.06);
+  --accent-border: rgba(166,68,0,0.8); --focus-ring: #a64400; --danger-soft: rgba(138,31,18,0.12);
+  --danger-text: #8a1f12; --success-soft: rgba(46,110,64,0.14); --success-text: #1a5c2e;
+  --info-soft: rgba(54,102,165,0.12); --info-text: #1a4f8a; --status-ok: #2e7d3c; --status-error: #a8472a;
+  --status-warning: #805200; --warn-soft: rgba(168,107,0,0.14); --warn-text: #6b4700; --status-suspended: #7a746c;
+  --log-target: #1f6f66;
 }
+/* --danger-base stays a fill; text on light uses --danger-text. */
+.light { --danger-base: #8a1f12; }
+.hc {
+  --border-faint: rgba(247,243,235,0.24); --border-subtle: rgba(247,243,235,0.36);
+  --border-default: rgba(247,243,235,0.44); --border-strong: rgba(247,243,235,0.52);
+  --border-control: rgba(247,243,235,0.62); --text-secondary: #d3cbbf; --text-muted: #b8b0a5; --text-subtle: #b8b0a5;
+  --accent-bright: #ffc27a; --accent-border: #ff8a1f; --danger-text: #ffc8bd; --success-text: #b8f0ca;
+  --info-text: #bcd9ff; --status-ok: #74c47f; --status-error: #e0714e; --status-warning: #e8b060; --warn-text: #f2dab0;
+  --status-suspended: #8c857a; --log-target: #a3e3da;
+}
+.light.hc, .light .hc, .hc .light {
+  --border-faint: rgba(0,0,0,0.16); --border-subtle: rgba(0,0,0,0.26); --border-default: rgba(0,0,0,0.36);
+  --border-strong: rgba(0,0,0,0.45); --border-control: rgba(0,0,0,0.62); --text-secondary: #3d362e;
+  --text-muted: #524a40; --text-subtle: #524a40; --accent: #8f3a00; --accent-bright: #803500; --accent-border: #8f3a00;
+  --focus-ring: #8f3a00; --danger-text: #6e170c; --success-text: #124722; --info-text: #123d6e; --status-ok: #24672f;
+  --status-error: #8f3a20; --status-warning: #6b4700; --warn-text: #553800; --status-suspended: #5f5951;
+  --log-target: #175a52;
+}
+/* Dimmed (a rule that is off, a step the link missed): the neutral text
+   ramp one step down, never opacity on text. Muted is the floor. */
+.dim { --text-primary: #b8b0a5; --text-secondary: #8c857a; --text-subtle: #8c857a; }
+.hc .dim, .dim.hc { --text-primary: #d3cbbf; --text-secondary: #b8b0a5; --text-subtle: #b8b0a5; }
+.light .dim, .dim.light { --text-primary: #524a40; --text-secondary: #6a635b; --text-subtle: #6a635b; }
+.light.hc .dim, .light .hc .dim, .hc .light .dim { --text-primary: #3d362e; --text-secondary: #524a40; --text-subtle: #524a40; }
+.dim .bi, .dim .badge-img { opacity: .45; }
 
 * { box-sizing: border-box; }
 body { margin: 0; background: #050505; font-family: var(--font-sans); color: var(--text-primary); -webkit-font-smoothing: antialiased; }
@@ -127,12 +158,12 @@ button, input, select, textarea { font-family: inherit; }
 .btn.sm { padding: 5px 9px; font-size: 11px; }
 .btn.ic { padding: 6px; }
 .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.inp { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; background: var(--bg-input); border: 1px solid var(--border-default); border-radius: var(--radius-md); font: 400 12.5px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; }
+.inp { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; background: var(--bg-input); border: 1px solid var(--border-control); border-radius: var(--radius-md); font: 400 12.5px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; }
 .inp.mono { font: 500 12px/1 var(--font-mono); }
 .inp .ph { color: var(--text-subtle); }
-.inp.focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.inp.focus { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .inp .caret { color: var(--text-subtle); margin-left: auto; font-size: 10px; }
-.sw { width: 30px; height: 18px; border-radius: 999px; background: var(--bg-hover-strong); border: 1px solid var(--border-default); position: relative; flex: 0 0 auto; }
+.sw { width: 30px; height: 18px; border-radius: 999px; background: var(--bg-hover-strong); border: 1px solid var(--border-control); position: relative; flex: 0 0 auto; }
 .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-muted); }
 .sw.on { background: var(--accent); border-color: transparent; }
 .sw.on::after { left: 14px; background: var(--accent-on); }

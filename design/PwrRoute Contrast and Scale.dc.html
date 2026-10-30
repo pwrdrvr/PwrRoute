@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+.spec { width: 470px; }
+.spec .sh { display:flex; align-items:center; justify-content:space-between; padding: 10px 14px; border-bottom:1px solid var(--border-subtle); background: var(--bg-titlebar); }
+.spec .sp { padding: 14px; display:flex; flex-direction:column; gap: 12px; background: var(--bg-app); }
+.mcard { display:flex; flex-direction:column; gap:4px; }
+.mrow { position:relative; display:flex; align-items:center; gap:8px; height:40px; padding:0 12px 0 10px; border:1px solid var(--border-faint); border-radius:8px; background: var(--bg-panel-elevated); }
+.mrow.lit { border-color: var(--accent-border); background: var(--bg-row-active); }
+.mrow.ghost { border-style: dashed; border-color: var(--border-default); background: transparent; }
+.mrow.fade40 { opacity: .4; }
+.mrow .ix { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); width: 18px; }
+.mrow .pats { flex:1; min-width:0; display:flex; gap:5px; align-items:center; }
+.mrow .tag { color: var(--text-primary); }
+.mrow .dst { font: 500 12px/1 var(--font-sans); color: var(--text-primary); }
+.mrow .prof { font: 500 11px/1 var(--font-mono); color: var(--text-muted); }
+.mrow .hits { width: 30px; text-align:right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+.chip.offc { padding: 3px 7px; color: var(--text-secondary); }
+.trace { border:1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); }
+.ts { display:flex; gap:12px; padding:10px 14px; border-bottom:1px solid var(--border-faint); align-items:flex-start; }
+.ts:last-child { border-bottom: 0; }
+.ts .num { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font:600 9.5px/1 var(--font-mono); background: var(--bg-panel-elevated); border:1px solid var(--border-default); color: var(--text-muted); flex:none; }
+.ts.hit .num { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-bright); }
+.ts.fade55 > .tcol, .ts.fade55 > .tb { opacity: .55; }
+.ts .tcol { width: 130px; display:flex; flex-direction:column; gap:3px; }
+.ts .tt { font: 600 11.5px/1.4 var(--font-sans); color: var(--text-secondary); }
+.ts .td { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); }
+.ts .tb { flex:1; font: 400 11.5px/1.5 var(--font-sans); color: var(--text-muted); }
+.ts .acc { color: var(--accent-bright); font-weight: 500; }
+.ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.ctl .inp { flex: 1; min-width: 150px; border-color: var(--border-control); }
+.inp.focus { outline: 2px solid var(--focus-ring, var(--accent)); }
+.ramp { display:flex; flex-wrap:wrap; gap: 6px 14px; font: 500 12px/1.2 var(--font-sans); }
+.sw { border-color: var(--border-control); }
+.sw8 { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:7px; vertical-align:-1px; box-shadow: 0 0 0 1px rgba(127,127,127,.45); }
+.tbl .ok { color: var(--success-text) !important; } .tbl .bad { color: var(--danger-text) !important; font-weight: 600; }
+.tbl .mono { font: 500 10.5px/1.5 var(--font-mono); }
+.ttok { grid-template-columns: 190px 196px 64px 128px 64px; }
+.t16 { grid-template-columns: 130px 170px 120px 180px 120px; max-width: 760px; }
+.t13 { grid-template-columns: 250px 64px repeat(6, 82px); max-width: 960px; }
+.tz { grid-template-columns: 170px 300px 420px; max-width: 900px; }
+.tblwrap { display:flex; flex-direction:column; gap:8px; }
+.tcap { font: 600 11px/1 var(--font-sans); color: var(--text-secondary); }
+.pair { display:flex; gap: 14px; align-items:flex-start; }
+.pair .lab { font: 600 9.5px/1 var(--font-sans); letter-spacing:.14em; text-transform:uppercase; color: var(--text-muted); margin: 0 0 6px; }
+.mini { width: 470px; padding: 14px; background: var(--bg-app); display:flex; flex-direction:column; gap: 8px; }
+.zbox { display:flex; flex-direction:column; gap: 8px; }
+.zcap { font: 600 11px/1 var(--font-sans); color: var(--text-secondary); }
+.zwin { width: 756px; height: 472px; zoom: 2; }
+.zstrip { height: 41px; }
+.crail { flex: 0 0 56px; background: var(--bg-sidebar); border-right:1px solid var(--border-subtle); padding: 10px; display:flex; flex-direction:column; gap: 2px; align-items:stretch; }
+.crail .ri { height: 30px; border-radius: 7px; display:flex; align-items:center; justify-content:center; color: var(--text-muted); font-size: 13px; position: relative; }
+.crail .ri.on { background: var(--bg-row-active); color: var(--accent); }
+.crail .ri.on::before { content:""; position:absolute; left:-10px; top:7px; bottom:7px; width:3px; border-radius:0 2px 2px 0; background: var(--accent); }
+.crail .rsep { height:1px; margin: 10px 6px 6px; background: var(--border-subtle); }
+.crail .rfoot { margin-top:auto; display:flex; justify-content:center; padding: 6px 0; }
+.crail .rfoot i { width:6px; height:6px; border-radius:50%; background: var(--status-ok); }
+.zp { gap: 10px; padding: 14px 18px; }
+.zp .back { font: 500 12px/1 var(--font-sans); color: var(--accent-bright); }
+.ztitle { font: 600 14px/1.2 var(--font-sans); color: var(--text-primary); margin-top: 4px; }
+.zsec { font: 600 9.5px/1 var(--font-sans); letter-spacing:.14em; text-transform:uppercase; color: var(--text-muted); margin-top: 4px; }
+.zp .inp { border-color: var(--border-control); }
+.lane { display:flex; gap:6px; align-items:center; padding: 8px; border:1px solid var(--accent-border); border-radius: 8px; }
+.pill { padding: 5px 10px; border-radius: 999px; border:1px solid var(--border-subtle); font: 500 11px/1 var(--font-sans); color: var(--text-secondary); }
+.pill.on { background: var(--accent); color: var(--accent-on); border-color: transparent; }
+.zt { border:1px solid var(--border-subtle); border-radius: 8px; overflow:hidden; width: 760px; background: var(--bg-panel); }
+.ztr { display:grid; grid-template-columns: 50px 170px 64px 90px 140px 44px; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border-faint); font: 500 11px/1.3 var(--font-sans); color: var(--text-secondary); align-items:center; white-space: nowrap; }
+.ztr.head { font: 600 9px/1 var(--font-sans); letter-spacing:.12em; text-transform: uppercase; color: var(--text-muted); background: var(--bg-panel-elevated); }
+.ztr span:nth-child(2) { font-family: var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; }
+.hscroll { height: 4px; border-radius: 2px; background: var(--border-subtle); position: relative; }
+.hscroll i { position:absolute; left:0; top:0; bottom:0; width: 82%; border-radius: 2px; background: rgba(140,133,122,0.46); }
+.tiles { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tile { border:1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); padding: 12px 14px; display:flex; flex-direction:column; gap: 9px; }
+.tile span { font: 600 9.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+.tile b { font: 700 22px/1 var(--font-sans); color: var(--text-primary); }
+.focusdemo { display:flex; gap: 12px; align-items:center; flex-wrap: wrap; }
+.btn.ring { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 1px; }
+.btn.primary.ring { outline-color: var(--text-primary); }
+</style>
+      </helmet>
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Dimmed content keeps its contrast (PWR-13)</span></div>
+        <p class="dv-sub">Every text token already clears 4.5:1, so the failures come from <code>.opacity()</code> on boxes that hold text: a rule that is off, a step the link missed, a step to come, the paused map. Muted text is the floor, so it has no room to fade. <b>One dim level survives, and it is a token swap:</b> inside <code>theme::dimmed</code> primary text drops to secondary, secondary and subtle drop to muted, and colored text keeps its color. What says "off" is something other than faintness: the <code>off</code> chip, a strike, a dashed frame (the map's own word for "does not run", already used for a browser that is not installed), the switch. Opacity stays for what is not text (badges, icons and route lines at 0.45) and for passing states the reader caused or can end: a drag lift (0.4), the hover spotlight (0.45), a disabled control (0.5), all named in <code>theme</code>.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="1a" data-screen-label="1a Off rule">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Overview, rule 06 is off. Before: the whole row at 40%, its pattern 1.8:1. After: the dashed frame, no count and no port say it does not run; the text is one step down.</span></div>
+            <div class="pair">
+              <div><div class="lab">Before</div><div class="dv-card mini"><div class="mrow"><span class="ix">05</span><span class="pats"><span class="tag">news.example.org/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Firefox</span><span class="prof">Private window</span><span class="hits">9</span></div><div class="mrow fade40"><span class="ix">06</span><span class="pats"><span class="tag">billing.example.com/*</span><span class="chip offc">off</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Personal</span></div></div></div>
+              <div><div class="lab">After</div><div class="dv-card mini"><div class="mrow"><span class="ix">05</span><span class="pats"><span class="tag">news.example.org/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Firefox</span><span class="prof">Private window</span><span class="hits">9</span></div><div class="mrow ghost dim"><span class="ix">06</span><span class="pats"><span class="tag">billing.example.com/*</span><span class="chip offc">off</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Personal</span></div></div></div>
+            </div>
+          </div>
+          <div class="dv-opt" id="1b" data-screen-label="1b Missed step">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Test a link, a rewrite the link missed. It explains the decision, so it stays readable; its hollow circle and "No match." already say it did not apply.</span></div>
+            <div class="pair">
+              <div><div class="lab">Before</div><div class="dv-card mini"><div class="trace"><div class="ts hit"><span class="num">2</span><div class="tcol"><span class="tt">Rewrite 2</span><span class="td">matched *</span></div><div class="tb"><span class="tag">drop <b class="acc">utm_*</b></span></div></div><div class="ts fade55"><span class="num">3</span><div class="tcol"><span class="tt">Rewrite 3</span><span class="td">http://*.internal/*</span></div><div class="tb">No match.</div></div></div></div></div>
+              <div><div class="lab">After</div><div class="dv-card mini"><div class="trace"><div class="ts hit"><span class="num">2</span><div class="tcol"><span class="tt">Rewrite 2</span><span class="td">matched *</span></div><div class="tb"><span class="tag">drop <b class="acc">utm_*</b></span></div></div><div class="ts dim"><span class="num">3</span><div class="tcol"><span class="tt">Rewrite 3</span><span class="td">http://*.internal/*</span></div><div class="tb">No match.</div></div></div></div></div>
+            </div>
+          </div>
+        </div>
+        <p class="dv-note"><b>Ratios.</b> Each case as built (dark, on <code>bg_panel</code>), then the token it becomes. The light and Increase Contrast palettes step down the same way and are held to 4.5:1 by <code>theme::tests::text_meets_4_5_to_1</code>, which runs every text token inside <code>dimmed</code> too.</p>
+        <div style="margin-top:16px"><div class="tbl t13"><div class="tr head"><span>Where (dark, on bg_panel)</span><span>Opacity</span><span>Primary</span><span>Secondary</span><span>Muted</span><span>&rarr; primary</span><span>&rarr; secondary</span><span>&rarr; muted</span></div><div class="tr"><span>Disabled rule row (Rules)</span><span class="mono">0.5</span><span class="mono ok">4.92</span><span class="mono bad">3.03</span><span class="mono bad">2.16</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>Struck destination (Rules under a config)</span><span class="mono">0.54</span><span class="mono ok">5.58</span><span class="mono bad">3.35</span><span class="mono bad">2.34</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>Test a link, missed step</span><span class="mono">0.55</span><span class="mono ok">5.76</span><span class="mono bad">3.44</span><span class="mono bad">2.38</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>First run, step to come</span><span class="mono">0.6</span><span class="mono ok">6.69</span><span class="mono bad">3.89</span><span class="mono bad">2.63</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>Editor picker, dim row</span><span class="mono">0.6</span><span class="mono ok">6.69</span><span class="mono bad">3.89</span><span class="mono bad">2.63</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>Start from, "No links yet"</span><span class="mono">0.55</span><span class="mono ok">5.76</span><span class="mono bad">3.44</span><span class="mono bad">2.38</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>Overview, rule nothing runs</span><span class="mono">0.45</span><span class="mono bad">4.17</span><span class="mono bad">2.66</span><span class="mono bad">1.96</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>Overview, paused map</span><span class="mono">0.4</span><span class="mono bad">3.52</span><span class="mono bad">2.33</span><span class="mono bad">1.78</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div><div class="tr"><span>Overview, rule that is off</span><span class="mono">0.4</span><span class="mono bad">3.52</span><span class="mono bad">2.33</span><span class="mono bad">1.78</span><span class="mono ok">9.23</span><span class="mono ok">5.42</span><span class="mono ok">5.42</span></div></div></div>
+        <p class="dv-note"><b>Paused and Send all links.</b> The map used to go to 40%. Now its text steps down, its badges fade and its routes fade to 0.45; the hero and the "When routing resumes" header carry the state, as before. A hidden browser in Settings &rsaquo; Browsers and a dim row in the editor's pickers step down the same way, and the Start from box with no links is a quiet field edge with muted words.</p>
+      </section>
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Four palettes: dark, light, and each with Increase Contrast (PWR-15, PWR-16)</span></div>
+        <p class="dv-sub">The same specimen in each palette: Overview rows (selected, at rest, off), a trace with a hit and a miss, fields with and without the focus ring, buttons, switches, a segmented control, chips and the status dots. <b>Increase Contrast</b> (macOS's switch, Windows high contrast) strengthens ink and edges and never the tints: every card, divider and field gets an edge you can see without its fill (the borders rise to 0.24&ndash;0.62), quiet text becomes opaque and one step brighter, the selected edge and focus ring are solid, and the status dots brighten. Raising the tints instead would lower text on them (accent on its tint falls from 7.2 to 6.2). <b>Light</b> is the design's light block with its gaps closed; the app draws it only as a preview (<code>PWRROUTE_APPEARANCE=light</code>, and the <code>screens</code> example's <code>--light</code>) until it follows the OS's appearance.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="2a" data-screen-label="2a Dark">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Dark. Lowest text ratio on any surface: 4.73.</span></div>
+            <div class="dv-card win spec ">
+  <div class="sh"><span class="eyebrow">Dark</span><span class="st"><i></i>routing</span></div>
+  <div class="sp">
+    <div class="mcard">
+      <div class="mrow lit"><span class="ix">01</span><span class="pats"><span class="tag">*.docs.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">214</span></div>
+      <div class="mrow"><span class="ix">02</span><span class="pats"><span class="tag">chat.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">88</span></div>
+      <div class="mrow ghost dim"><span class="ix">06</span><span class="pats"><span class="tag">billing.example.com/*</span><span class="chip offc">off</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Personal</span></div>
+    </div>
+    <div class="trace">
+      <div class="ts hit"><span class="num">2</span><div class="tcol"><span class="tt">Rewrite 2</span><span class="td">matched *</span></div><div class="tb"><span class="tag">drop <b class="acc">utm_*</b></span></div></div>
+      <div class="ts dim"><span class="num">3</span><div class="tcol"><span class="tt">Rewrite 3</span><span class="td">http://*.internal/*</span></div><div class="tb"><span class="pl">No match.</span></div></div>
+    </div>
+    <div class="ctl">
+      <span class="inp mono">meet.example.com/*</span>
+      <span class="inp mono focus">https://</span>
+    </div>
+    <div class="ctl">
+      <span class="btn primary">Add rule</span><span class="btn">Add rewrite</span>
+      <span class="sw"></span><span class="sw on"></span>
+      <span class="seg"><span class="on">Full link</span><span>Host only</span></span>
+    </div>
+    <div class="ctl">
+      <span class="chip ok">imports</span><span class="chip warn">needs JS</span><span class="chip bad">not saved</span><span class="chip acc">Everything else</span>
+    </div>
+    <div class="ramp">
+      <span style="color:var(--text-primary)">Primary</span><span style="color:var(--text-secondary)">Secondary</span>
+      <span style="color:var(--text-muted)">Muted</span><span style="color:var(--text-subtle)">Subtle</span>
+      <span class="st"><i></i>ok</span><span class="st warn"><i></i>warning</span><span class="st bad"><i></i>error</span><span class="st off"><i></i>paused</span>
+    </div>
+  </div>
+</div>
+          </div>
+          <div class="dv-opt" id="2b" data-screen-label="2b Dark · Increase Contrast">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>Dark · Increase Contrast. Lowest text ratio on any surface: 7.33.</span></div>
+            <div class="dv-card win spec hc">
+  <div class="sh"><span class="eyebrow">Dark · Increase Contrast</span><span class="st"><i></i>routing</span></div>
+  <div class="sp">
+    <div class="mcard">
+      <div class="mrow lit"><span class="ix">01</span><span class="pats"><span class="tag">*.docs.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">214</span></div>
+      <div class="mrow"><span class="ix">02</span><span class="pats"><span class="tag">chat.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">88</span></div>
+      <div class="mrow ghost dim"><span class="ix">06</span><span class="pats"><span class="tag">billing.example.com/*</span><span class="chip offc">off</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Personal</span></div>
+    </div>
+    <div class="trace">
+      <div class="ts hit"><span class="num">2</span><div class="tcol"><span class="tt">Rewrite 2</span><span class="td">matched *</span></div><div class="tb"><span class="tag">drop <b class="acc">utm_*</b></span></div></div>
+      <div class="ts dim"><span class="num">3</span><div class="tcol"><span class="tt">Rewrite 3</span><span class="td">http://*.internal/*</span></div><div class="tb"><span class="pl">No match.</span></div></div>
+    </div>
+    <div class="ctl">
+      <span class="inp mono">meet.example.com/*</span>
+      <span class="inp mono focus">https://</span>
+    </div>
+    <div class="ctl">
+      <span class="btn primary">Add rule</span><span class="btn">Add rewrite</span>
+      <span class="sw"></span><span class="sw on"></span>
+      <span class="seg"><span class="on">Full link</span><span>Host only</span></span>
+    </div>
+    <div class="ctl">
+      <span class="chip ok">imports</span><span class="chip warn">needs JS</span><span class="chip bad">not saved</span><span class="chip acc">Everything else</span>
+    </div>
+    <div class="ramp">
+      <span style="color:var(--text-primary)">Primary</span><span style="color:var(--text-secondary)">Secondary</span>
+      <span style="color:var(--text-muted)">Muted</span><span style="color:var(--text-subtle)">Subtle</span>
+      <span class="st"><i></i>ok</span><span class="st warn"><i></i>warning</span><span class="st bad"><i></i>error</span><span class="st off"><i></i>paused</span>
+    </div>
+  </div>
+</div>
+          </div>
+          <div class="dv-opt" id="2c" data-screen-label="2c Light">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>Light. Lowest text ratio on any surface: 4.72.</span></div>
+            <div class="dv-card win spec light">
+  <div class="sh"><span class="eyebrow">Light</span><span class="st"><i></i>routing</span></div>
+  <div class="sp">
+    <div class="mcard">
+      <div class="mrow lit"><span class="ix">01</span><span class="pats"><span class="tag">*.docs.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">214</span></div>
+      <div class="mrow"><span class="ix">02</span><span class="pats"><span class="tag">chat.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">88</span></div>
+      <div class="mrow ghost dim"><span class="ix">06</span><span class="pats"><span class="tag">billing.example.com/*</span><span class="chip offc">off</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Personal</span></div>
+    </div>
+    <div class="trace">
+      <div class="ts hit"><span class="num">2</span><div class="tcol"><span class="tt">Rewrite 2</span><span class="td">matched *</span></div><div class="tb"><span class="tag">drop <b class="acc">utm_*</b></span></div></div>
+      <div class="ts dim"><span class="num">3</span><div class="tcol"><span class="tt">Rewrite 3</span><span class="td">http://*.internal/*</span></div><div class="tb"><span class="pl">No match.</span></div></div>
+    </div>
+    <div class="ctl">
+      <span class="inp mono">meet.example.com/*</span>
+      <span class="inp mono focus">https://</span>
+    </div>
+    <div class="ctl">
+      <span class="btn primary">Add rule</span><span class="btn">Add rewrite</span>
+      <span class="sw"></span><span class="sw on"></span>
+      <span class="seg"><span class="on">Full link</span><span>Host only</span></span>
+    </div>
+    <div class="ctl">
+      <span class="chip ok">imports</span><span class="chip warn">needs JS</span><span class="chip bad">not saved</span><span class="chip acc">Everything else</span>
+    </div>
+    <div class="ramp">
+      <span style="color:var(--text-primary)">Primary</span><span style="color:var(--text-secondary)">Secondary</span>
+      <span style="color:var(--text-muted)">Muted</span><span style="color:var(--text-subtle)">Subtle</span>
+      <span class="st"><i></i>ok</span><span class="st warn"><i></i>warning</span><span class="st bad"><i></i>error</span><span class="st off"><i></i>paused</span>
+    </div>
+  </div>
+</div>
+          </div>
+          <div class="dv-opt" id="2d" data-screen-label="2d Light · Increase Contrast">
+            <div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a><span>Light · Increase Contrast. Lowest text ratio on any surface: 6.04.</span></div>
+            <div class="dv-card win spec light hc">
+  <div class="sh"><span class="eyebrow">Light · Increase Contrast</span><span class="st"><i></i>routing</span></div>
+  <div class="sp">
+    <div class="mcard">
+      <div class="mrow lit"><span class="ix">01</span><span class="pats"><span class="tag">*.docs.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">214</span></div>
+      <div class="mrow"><span class="ix">02</span><span class="pats"><span class="tag">chat.example.com/*</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Work</span><span class="hits">88</span></div>
+      <div class="mrow ghost dim"><span class="ix">06</span><span class="pats"><span class="tag">billing.example.com/*</span><span class="chip offc">off</span></span><span class="arrow">&rarr;</span><span class="bi">Ch</span><span class="dst">Google Chrome</span><span class="prof">Personal</span></div>
+    </div>
+    <div class="trace">
+      <div class="ts hit"><span class="num">2</span><div class="tcol"><span class="tt">Rewrite 2</span><span class="td">matched *</span></div><div class="tb"><span class="tag">drop <b class="acc">utm_*</b></span></div></div>
+      <div class="ts dim"><span class="num">3</span><div class="tcol"><span class="tt">Rewrite 3</span><span class="td">http://*.internal/*</span></div><div class="tb"><span class="pl">No match.</span></div></div>
+    </div>
+    <div class="ctl">
+      <span class="inp mono">meet.example.com/*</span>
+      <span class="inp mono focus">https://</span>
+    </div>
+    <div class="ctl">
+      <span class="btn primary">Add rule</span><span class="btn">Add rewrite</span>
+      <span class="sw"></span><span class="sw on"></span>
+      <span class="seg"><span class="on">Full link</span><span>Host only</span></span>
+    </div>
+    <div class="ctl">
+      <span class="chip ok">imports</span><span class="chip warn">needs JS</span><span class="chip bad">not saved</span><span class="chip acc">Everything else</span>
+    </div>
+    <div class="ramp">
+      <span style="color:var(--text-primary)">Primary</span><span style="color:var(--text-secondary)">Secondary</span>
+      <span style="color:var(--text-muted)">Muted</span><span style="color:var(--text-subtle)">Subtle</span>
+      <span class="st"><i></i>ok</span><span class="st warn"><i></i>warning</span><span class="st bad"><i></i>error</span><span class="st off"><i></i>paused</span>
+    </div>
+  </div>
+</div>
+          </div>
+        </div>
+        <div class="dv-opts" style="margin-top:28px">
+          <div class="dv-opt"><div class="tblwrap"><div class="tcap">Dark</div><div class="tbl ttok"><div class="tr head"><span>Token</span><span>Value</span><span>Lowest</span><span>On</span><span>Floor</span></div><div class="tr"><span><i class="sw8" style="background:#f7f3eb"></i><code>text_primary</code></span><span class="mono">#f7f3eb</span><span class="ok mono">15.62</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#b8b0a5"></i><code>text_secondary</code></span><span class="mono">#b8b0a5</span><span class="ok mono">8.06</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#8c857a"></i><code>text_muted</code></span><span class="mono">#8c857a</span><span class="ok mono">4.73</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:rgba(247,243,235,0.54)"></i><code>text_subtle</code></span><span class="mono">rgba(247,243,235,0.54)</span><span class="ok mono">5.39</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#ff8a1f"></i><code>accent</code></span><span class="mono">#ff8a1f</span><span class="ok mono">7.33</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#ffb35c"></i><code>accent_bright</code></span><span class="mono">#ffb35c</span><span class="ok mono">9.76</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#ffb0a1"></i><code>danger_text</code></span><span class="mono">#ffb0a1</span><span class="ok mono">9.86</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#9ce5b3"></i><code>success_text</code></span><span class="mono">#9ce5b3</span><span class="ok mono">11.75</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#9fc8ff"></i><code>info_text</code></span><span class="mono">#9fc8ff</span><span class="ok mono">10.03</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#e8c890"></i><code>warn_text</code></span><span class="mono">#e8c890</span><span class="ok mono">10.78</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#7fcfc4"></i><code>log_target</code></span><span class="mono">#7fcfc4</span><span class="ok mono">9.57</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:rgba(247,243,235,0.4)"></i><code>border_control</code></span><span class="mono">rgba(247,243,235,0.4)</span><span class="ok mono">3.41</span><span class="mono">bg_app</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:rgba(255,138,31,0.56)"></i><code>accent_border</code></span><span class="mono">rgba(255,138,31,0.56)</span><span class="ok mono">3.17</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#ff8a1f"></i><code>focus_ring</code></span><span class="mono">#ff8a1f</span><span class="ok mono">7.33</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#5fa969"></i><code>status_ok</code></span><span class="mono">#5fa969</span><span class="ok mono">6.06</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#c45a3a"></i><code>status_error</code></span><span class="mono">#c45a3a</span><span class="ok mono">4.01</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#d99a3d"></i><code>status_warning</code></span><span class="mono">#d99a3d</span><span class="ok mono">7.11</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#6b6660"></i><code>status_suspended</code></span><span class="mono">#6b6660</span><span class="ok mono">3.04</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div></div></div></div>
+          <div class="dv-opt"><div class="tblwrap"><div class="tcap">Dark · Increase Contrast</div><div class="tbl ttok"><div class="tr head"><span>Token</span><span>Value</span><span>Lowest</span><span>On</span><span>Floor</span></div><div class="tr"><span><i class="sw8" style="background:#f7f3eb"></i><code>text_primary</code></span><span class="mono">#f7f3eb</span><span class="ok mono">15.62</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#d3cbbf"></i><code>text_secondary</code></span><span class="mono">#d3cbbf</span><span class="ok mono">10.75</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#b8b0a5"></i><code>text_muted</code></span><span class="mono">#b8b0a5</span><span class="ok mono">8.06</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#b8b0a5"></i><code>text_subtle</code></span><span class="mono">#b8b0a5</span><span class="ok mono">8.06</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#ff8a1f"></i><code>accent</code></span><span class="mono">#ff8a1f</span><span class="ok mono">7.33</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#ffc27a"></i><code>accent_bright</code></span><span class="mono">#ffc27a</span><span class="ok mono">10.91</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#ffc8bd"></i><code>danger_text</code></span><span class="mono">#ffc8bd</span><span class="ok mono">11.73</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#b8f0ca"></i><code>success_text</code></span><span class="mono">#b8f0ca</span><span class="ok mono">13.46</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#bcd9ff"></i><code>info_text</code></span><span class="mono">#bcd9ff</span><span class="ok mono">11.94</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#f2dab0"></i><code>warn_text</code></span><span class="mono">#f2dab0</span><span class="ok mono">12.70</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#a3e3da"></i><code>log_target</code></span><span class="mono">#a3e3da</span><span class="ok mono">11.98</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:rgba(247,243,235,0.62)"></i><code>border_control</code></span><span class="mono">rgba(247,243,235,0.62)</span><span class="ok mono">6.69</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#ff8a1f"></i><code>accent_border</code></span><span class="mono">#ff8a1f</span><span class="ok mono">7.33</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#ff8a1f"></i><code>focus_ring</code></span><span class="mono">#ff8a1f</span><span class="ok mono">7.33</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#74c47f"></i><code>status_ok</code></span><span class="mono">#74c47f</span><span class="ok mono">8.19</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#e0714e"></i><code>status_error</code></span><span class="mono">#e0714e</span><span class="ok mono">5.47</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#e8b060"></i><code>status_warning</code></span><span class="mono">#e8b060</span><span class="ok mono">8.90</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#8c857a"></i><code>status_suspended</code></span><span class="mono">#8c857a</span><span class="ok mono">4.73</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div></div></div></div>
+          <div class="dv-opt"><div class="tblwrap"><div class="tcap">Light</div><div class="tbl ttok"><div class="tr head"><span>Token</span><span>Value</span><span>Lowest</span><span>On</span><span>Floor</span></div><div class="tr"><span><i class="sw8" style="background:#1a1612"></i><code>text_primary</code></span><span class="mono">#1a1612</span><span class="ok mono">14.35</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#524a40"></i><code>text_secondary</code></span><span class="mono">#524a40</span><span class="ok mono">6.94</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#6a635b"></i><code>text_muted</code></span><span class="mono">#6a635b</span><span class="ok mono">4.72</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:rgba(26,22,18,0.68)"></i><code>text_subtle</code></span><span class="mono">rgba(26,22,18,0.68)</span><span class="ok mono">5.60</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#a64400"></i><code>accent</code></span><span class="mono">#a64400</span><span class="ok mono">4.86</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#994c00"></i><code>accent_bright</code></span><span class="mono">#994c00</span><span class="ok mono">4.94</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#8a1f12"></i><code>danger_text</code></span><span class="mono">#8a1f12</span><span class="ok mono">7.33</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#1a5c2e"></i><code>success_text</code></span><span class="mono">#1a5c2e</span><span class="ok mono">6.41</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#1a4f8a"></i><code>info_text</code></span><span class="mono">#1a4f8a</span><span class="ok mono">6.62</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#6b4700"></i><code>warn_text</code></span><span class="mono">#6b4700</span><span class="ok mono">6.63</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#1f6f66"></i><code>log_target</code></span><span class="mono">#1f6f66</span><span class="ok mono">4.75</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:rgba(0,0,0,0.45)"></i><code>border_control</code></span><span class="mono">rgba(0,0,0,0.45)</span><span class="ok mono">3.23</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:rgba(166,68,0,0.8)"></i><code>accent_border</code></span><span class="mono">rgba(166,68,0,0.8)</span><span class="ok mono">3.49</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#a64400"></i><code>focus_ring</code></span><span class="mono">#a64400</span><span class="ok mono">4.86</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#2e7d3c"></i><code>status_ok</code></span><span class="mono">#2e7d3c</span><span class="ok mono">4.07</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#a8472a"></i><code>status_error</code></span><span class="mono">#a8472a</span><span class="ok mono">4.65</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#805200"></i><code>status_warning</code></span><span class="mono">#805200</span><span class="ok mono">5.36</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#7a746c"></i><code>status_suspended</code></span><span class="mono">#7a746c</span><span class="ok mono">3.69</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div></div></div></div>
+          <div class="dv-opt"><div class="tblwrap"><div class="tcap">Light · Increase Contrast</div><div class="tbl ttok"><div class="tr head"><span>Token</span><span>Value</span><span>Lowest</span><span>On</span><span>Floor</span></div><div class="tr"><span><i class="sw8" style="background:#1a1612"></i><code>text_primary</code></span><span class="mono">#1a1612</span><span class="ok mono">14.35</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#3d362e"></i><code>text_secondary</code></span><span class="mono">#3d362e</span><span class="ok mono">9.49</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#524a40"></i><code>text_muted</code></span><span class="mono">#524a40</span><span class="ok mono">6.94</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#524a40"></i><code>text_subtle</code></span><span class="mono">#524a40</span><span class="ok mono">6.94</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#8f3a00"></i><code>accent</code></span><span class="mono">#8f3a00</span><span class="ok mono">6.04</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#803500"></i><code>accent_bright</code></span><span class="mono">#803500</span><span class="ok mono">6.90</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#6e170c"></i><code>danger_text</code></span><span class="mono">#6e170c</span><span class="ok mono">9.35</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#124722"></i><code>success_text</code></span><span class="mono">#124722</span><span class="ok mono">8.59</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#123d6e"></i><code>info_text</code></span><span class="mono">#123d6e</span><span class="ok mono">8.73</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#553800"></i><code>warn_text</code></span><span class="mono">#553800</span><span class="ok mono">8.58</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:#175a52"></i><code>log_target</code></span><span class="mono">#175a52</span><span class="ok mono">6.39</span><span class="mono">bg_hover_strong</span><span class="mono">4.5</span></div><div class="tr"><span><i class="sw8" style="background:rgba(0,0,0,0.62)"></i><code>border_control</code></span><span class="mono">rgba(0,0,0,0.62)</span><span class="ok mono">5.74</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#8f3a00"></i><code>accent_border</code></span><span class="mono">#8f3a00</span><span class="ok mono">6.04</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#8f3a00"></i><code>focus_ring</code></span><span class="mono">#8f3a00</span><span class="ok mono">6.04</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#24672f"></i><code>status_ok</code></span><span class="mono">#24672f</span><span class="ok mono">5.48</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#8f3a20"></i><code>status_error</code></span><span class="mono">#8f3a20</span><span class="ok mono">6.00</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#6b4700"></i><code>status_warning</code></span><span class="mono">#6b4700</span><span class="ok mono">6.63</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div><div class="tr"><span><i class="sw8" style="background:#5f5951"></i><code>status_suspended</code></span><span class="mono">#5f5951</span><span class="ok mono">5.52</span><span class="mono">bg_hover_strong</span><span class="mono">3</span></div></div></div></div>
+        </div>
+        <p class="dv-note"><b>Light, against the design's block (PWR-16).</b> The design's light block kept dark's warning text and log target, and its accent and muted text pass on white but not on <code>bg_hover_strong</code>. The audit's replacements hold up by eye: the warning brown reads as the same family as the status dot, the teal stays a log target, and <code>#a64400</code> is the same burnt orange a shade deeper, so the wordmark and the primary button keep their weight. The control edge is black at 0.45 and the selected edge the accent at 0.80. The block also gains the tokens it lacked (<code>--info-soft</code>, <code>--warn-soft</code>, <code>--danger-base</code>, <code>--status-suspended</code>, <code>--accent-tint</code>, <code>--log-target</code>), so nothing dark carries over onto white.</p>
+        <div style="margin-top:16px"><div class="tbl t16"><div class="tr head"><span>Token</span><span>Design light</span><span>White / lowest</span><span>Proposed</span><span>White / lowest</span></div><div class="tr"><span><code>warn_text</code></span><span class="mono">#e8c890</span><span class="mono bad">1.60 / 1.28</span><span class="mono"><i class="sw8" style="background:#6b4700"></i>#6b4700</span><span class="mono ok">8.31 / 6.63</span></div><div class="tr"><span><code>log_target</code></span><span class="mono">#7fcfc4</span><span class="mono bad">1.81 / 1.44</span><span class="mono"><i class="sw8" style="background:#1f6f66"></i>#1f6f66</span><span class="mono ok">5.96 / 4.75</span></div><div class="tr"><span><code>accent</code></span><span class="mono">#b74c00</span><span class="mono bad">5.19 / 4.14</span><span class="mono"><i class="sw8" style="background:#a64400"></i>#a64400</span><span class="mono ok">6.09 / 4.86</span></div><div class="tr"><span><code>text_muted</code></span><span class="mono">#736c64</span><span class="mono bad">5.17 / 4.13</span><span class="mono"><i class="sw8" style="background:#6a635b"></i>#6a635b</span><span class="mono ok">5.92 / 4.72</span></div><div class="tr"><span><code>border_control</code></span><span class="mono">rgba(0,0,0,0.12)</span><span class="mono bad">1.32 / 1.31</span><span class="mono"><i class="sw8" style="background:rgba(0,0,0,0.45)"></i>rgba(0,0,0,0.45)</span><span class="mono ok">3.35 / 3.23</span></div><div class="tr"><span><code>accent_border</code></span><span class="mono">rgba(183,76,0,0.42)</span><span class="mono bad">1.89 / 1.76</span><span class="mono"><i class="sw8" style="background:rgba(166,68,0,0.8)"></i>rgba(166,68,0,0.8)</span><span class="mono ok">4.10 / 3.49</span></div></div></div>
+      </section>
+      <section class="dv-turn" id="t3">
+        <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Text scaling: View &rsaquo; Zoom, and layouts that reflow (PWR-14)</span></div>
+        <p class="dv-sub"><b>The model is an in-app zoom.</b> View &rsaquo; Actual Size, Zoom In and Zoom Out (&#8984;0, &#8984;+ or &#8984;=, &#8984;&minus;; Ctrl elsewhere) step through 100, 110, 125, 150, 175 and 200%, kept in <code>settings.json</code> as <code>view.zoom</code>. Every window follows at once, the tray card included. macOS has no text size an AppKit app can read, so following the OS would do nothing for most of PwrRoute's users; Windows' Text size and GNOME's text scaling factor can feed the same zoom later. Zoom scales boxes with their text, as a page zooms, so nothing is cut at a fixed width; what changes is the room. A window opened zoomed starts at its design size times the zoom, as large as the display allows. The frames below are a 14-inch laptop at 200%: 756 by 472 design pixels.</p>
+        <div class="dv-opts">
+          <div class="dv-opt" id="3a" data-screen-label="3a Rules at 200%"><div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>Rules at 200%. Below 960 the rail is icons, each named by its tooltip, with the routing dot at its foot. When the list and the 372-wide editor cannot sit side by side (the list needs 428), they take turns: a selected rule fills the pane under "&lsaquo; All rules", which Esc also does.</span></div><div class="zbox"><div class="zcap">Rules, a rule selected</div><div class="dv-card win zwin"><div class="strip zstrip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><span class="strip-gutter"></span><span class="wordmark">Pwr<b>Route</b></span><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span></div><div class="body"><div class="crail"><span class="ri">&#9638;</span><span class="ri on">&#8801;</span><span class="ri">&#9878;</span><span class="ri">&#9719;</span><span class="rsep"></span><span class="ri">&#9881;</span><span class="rfoot"><i></i></span></div><div class="pane zp"><span class="back">&lsaquo; All rules</span>
+<div><div class="card-eyebrow">Rule &middot; 1 of 7</div><div class="ztitle">meet.example.com/*</div></div>
+<div class="zsec">Match</div><span class="inp mono">meet.example.com/*</span><span class="inp mono">*.example.com/*</span>
+<div class="zsec">Open in</div><div class="lane"><span class="tag app">Google Chrome</span><span class="pill">Default</span><span class="pill on">Work</span></div></div></div></div></div></div>
+          <div class="dv-opt" id="3b" data-screen-label="3b Activity at 200%"><div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a><span>Activity at 200%. The filters wrap under the search; the table keeps its columns and scrolls sideways once the link would fall under 160 (a table is exempt from reflow, and squeezing the link to "https&hellip;" lost it).</span></div><div class="zbox"><div class="zcap">Activity</div><div class="dv-card win zwin"><div class="strip zstrip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><span class="strip-gutter"></span><span class="wordmark">Pwr<b>Route</b></span><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Activity</span></div><div class="body"><div class="crail"><span class="ri">&#9638;</span><span class="ri">&#8801;</span><span class="ri">&#9878;</span><span class="ri on">&#9719;</span><span class="rsep"></span><span class="ri">&#9881;</span><span class="rfoot"><i></i></span></div><div class="pane zp"><div class="ztitle">Activity</div>
+<div class="row-actions"><span class="inp" style="width:200px">Search URL, app, browser</span><span class="seg"><span class="on">All 8</span><span>Everything else 1</span><span>Failed 1</span></span></div>
+<div class="zt"><div class="ztr head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span>Took</span></div>
+<div class="ztr"><span>22:34</span><span>https://example.atlass&hellip;</span><span>Slack</span><span class="tag">cfg h 2</span><span>Google Chrome</span><span>4 ms</span></div>
+<div class="ztr"><span>22:33</span><span>https://x.example/pwrd&hellip;</span><span>Slack</span><span class="tag">rw 1, 2</span><span>Firefox</span><span>6 ms</span></div></div>
+<div class="hscroll"><i></i></div></div></div></div></div></div>
+          <div class="dv-opt" id="3c" data-screen-label="3c Overview at 200%"><div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a><span>Overview at 200%. Today's tiles pair up and wrap two by two, never three and one, so "Took everything else" is never cut. The map's columns keep their minimums; a row's patterns end in "+N" as they already do when narrow.</span></div><div class="zbox"><div class="zcap">Overview</div><div class="dv-card win zwin"><div class="strip zstrip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><span class="strip-gutter"></span><span class="wordmark">Pwr<b>Route</b></span><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span></div><div class="body"><div class="crail"><span class="ri on">&#9638;</span><span class="ri">&#8801;</span><span class="ri">&#9878;</span><span class="ri">&#9719;</span><span class="rsep"></span><span class="ri">&#9881;</span><span class="rfoot"><i></i></span></div><div class="pane zp"><div class="card-eyebrow">Today</div><div class="tiles">
+<div class="tile"><span>Links today</span><b>1,412</b></div><div class="tile"><span>Took everything else</span><b>642</b></div>
+<div class="tile"><span>Rewritten</span><b>1,108</b></div><div class="tile"><span>Failed</span><b>0</b></div></div></div></div></div></div></div>
+        </div>
+        <div class="tbl tz" style="margin-top:24px">
+          <div class="tr head"><span>Where</span><span>Rule</span><span>Why</span></div>
+          <div class="tr"><span>Every size</span><span><code>theme::px</code> = design px &times; zoom</span><span>Views never call <code>gpui_kit::px</code>; screen geometry (<code>macos.rs</code>) and tests do. Measured lengths go back to design px through <code>theme::css</code> before they meet a constant.</span></div>
+          <div class="tr"><span>Nav rail</span><span>Icons below 960 wide</span><span>196 of 756 was a quarter of the window. Stays full while the foot asks to Reload or Overwrite <code>rules.json</code>.</span></div>
+          <div class="tr"><span>Rules</span><span>List and editor take turns below 428 + 372 beside the rail</span><span>The list was squeezed to one letter per line.</span></div>
+          <div class="tr"><span>Activity</span><span>Toolbar wraps; table min width, link &ge; 160</span><span>The link column went to zero.</span></div>
+          <div class="tr"><span>Overview</span><span>Tiles in pairs, each &ge; 190</span><span>"Took everything else" was cut mid-word.</span></div>
+          <div class="tr"><span>Windows</span><span>Design size &times; zoom, capped to the display</span><span>Settings, first run, the importer, Help's windows, the approval window and its fit.</span></div>
+          <div class="tr"><span>Tray card</span><span>Height measured zoomed</span><span>The window still matches the card; past the display it scrolls, as before.</span></div>
+        </div>
+        <p class="dv-note"><b>Not changed.</b> The design's smallest text (9&ndash;10.5px eyebrows, key caps and chips) stays: at 125% and up it is 11px or more, and raising it at 100% would redraw every canvas. 100% and 125% lay out exactly as before.</p>
+      </section>
+      <section class="dv-turn" id="t4">
+        <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">The first pass's tokens and focus rings, by eye</span></div>
+        <p class="dv-sub">The first accessibility pass added <code>--border-control</code> (bone at 0.40) for edges that alone say "this is a field", raised <code>--accent-border</code> from 0.42 to 0.56 and drew the focus ring as a solid 2px accent outline, bone on a filled accent button. Seen on the screens they hold up: the field edge reads as an input without looking like a button, 0.56 is the same orange and still quieter than the ring, and the ring is unmistakable on every surface. They are now the design's values too (this stylesheet's <code>.inp</code> and <code>.sw</code> draw in <code>--border-control</code>). One change: with Increase Contrast the selected edge goes solid, so a lit row and a focused one stay told apart by the ring's 2px and offset, not by alpha.</p>
+        <div class="dv-opts">
+          <div class="dv-opt"><div class="dv-card mini focusdemo"><span class="inp mono focus" style="border-color:var(--border-control)">https://</span><span class="btn ring">Add rewrite</span><span class="btn primary ring">Add rule</span></div></div>
+          <div class="dv-opt"><div class="dv-card mini focusdemo light"><span class="inp mono focus" style="border-color:var(--border-control)">https://</span><span class="btn ring">Add rewrite</span><span class="btn primary ring">Add rule</span></div></div>
+          <div class="dv-opt"><div class="dv-card mini focusdemo hc"><span class="inp mono focus" style="border-color:var(--border-control)">https://</span><span class="btn ring">Add rewrite</span><span class="btn primary ring">Add rule</span></div></div>
+        </div>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
