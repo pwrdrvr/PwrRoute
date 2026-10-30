@@ -2683,24 +2683,6 @@ fn a_hold_of_all_links_lasts_until_its_time_runs_out_or_it_is_ended() {
 }
 
 #[test]
-fn a_hold_takes_no_link_while_activity_keeps_nothing() {
-    let (_dir, router, launcher) = engine_router(Options::default());
-    let handle = router.handle();
-    handle
-        .set_retention(Retention { count: 0, hours: 0 })
-        .unwrap();
-    handle.set_hold(Some(SendScope::All { until: None }));
-    // A held link would have nowhere to wait: it opens, and the hold ends.
-    let record = handle
-        .dispatch_and_wait(link("https://example.org/1"))
-        .unwrap();
-    assert_eq!(record.outcome, Outcome::DryRun);
-    assert_eq!(held_step(&record), None);
-    assert_eq!(launcher.launched().len(), 1);
-    assert_eq!(handle.hold(), None);
-}
-
-#[test]
 fn hold_send_and_pause_share_one_slot() {
     let (_dir, router, _launcher) = engine_router(Options::default());
     let handle = router.handle();
@@ -2892,19 +2874,25 @@ fn a_host_only_held_link_keeps_its_whole_url_in_memory_so_it_can_open() {
 
 #[test]
 fn with_nothing_kept_nothing_waits_and_clear_forgets_what_did() {
-    let (_dir, router, _launcher) = engine_router(Options {
+    let (_dir, router, launcher) = engine_router(Options {
         retention: Retention { count: 0, hours: 0 },
         ..Options::default()
     });
     let handle = router.handle();
-    handle.set_hold(Some(SendScope::next(1)));
-    let held = handle
+    handle.set_hold(Some(SendScope::All { until: None }));
+    // A held link would have nowhere to wait: it opens, and the hold ends.
+    let opened = handle
         .dispatch_and_wait(link("https://example.org/"))
         .unwrap();
-    assert_eq!(held.outcome, Outcome::NotOpened);
+    assert_eq!(opened.outcome, Outcome::DryRun);
+    assert_eq!(held_step(&opened), None);
+    assert_eq!(launcher.launched().len(), 1);
+    assert_eq!(handle.hold(), None);
     assert!(handle.pending().is_empty());
     assert_eq!(
-        handle.open_not_opened(held.id, OpenAs::Rules).unwrap_err(),
+        handle
+            .open_not_opened(opened.id, OpenAs::Rules)
+            .unwrap_err(),
         OpenLaterError::NotPending
     );
 
