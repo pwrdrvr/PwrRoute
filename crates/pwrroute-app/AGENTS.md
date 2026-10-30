@@ -534,8 +534,9 @@ their own modules.
   the rail's Activity count "2 held"; the Held tile in Failed's place while
   links wait and none failed, opening Not opened; All links or every link
   held dims the rule column only, under "When rules decide again"). The
-  hero's switch and For row are tab stops before the map's rows
-  (`OverviewState::hero_stops`, `hero_key`). It marks the node
+  hero's switch, For row and stepper are tab stops, reached by the
+  window's Tab (`app_menu::FocusNext`) in draw order; `hero_key` gives
+  them their arrows (`OverviewState::hero_stops`). It marks the node
   `Sending::is_node` names with a pill and offers Next link here on a
   hovered node (`tray::send_next_to`, always one link). Activity's Rule
   column says "next link" / "all links" in an accent chip with the arrow,

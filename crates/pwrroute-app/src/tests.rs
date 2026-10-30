@@ -3720,17 +3720,29 @@ fn the_heros_switch_holds_links_and_back_to_rules_ends_it(cx: &mut TestAppContex
         Routing::Active
     );
 
-    // The keyboard: Tab from the window lands on the switch; Right is
-    // Send.
+    // The keyboard: Tab (the window's, `app_menu::FocusNext`) reaches the
+    // switch; Right is Send.
+    cx.update(|_, cx| crate::app_menu::install(cx));
+    cx.update(|window, _| window.activate_window());
     view.update_in(cx, |app, window, cx| window.focus(&app.focus, cx));
-    cx.simulate_keystrokes("tab");
-    let on_switch = view.update_in(cx, |app, window, _| {
-        app.overview
-            .hero_stops
-            .as_ref()
-            .is_some_and(|stops| stops.switch.is_focused(window))
-    });
-    assert!(on_switch, "Tab reaches the hero's switch first");
+    let on_switch = |cx: &mut VisualTestContext| {
+        view.update_in(cx, |app, window, _| {
+            app.overview
+                .hero_stops
+                .as_ref()
+                .is_some_and(|stops| stops.switch.is_focused(window))
+        })
+    };
+    let mut reached = false;
+    for _ in 0..50 {
+        cx.simulate_keystrokes("tab");
+        draw(cx);
+        if on_switch(cx) {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab reaches the hero's switch");
     cx.simulate_keystrokes("right");
     assert_eq!(model.read_with(cx, |model, _| model.mode()), Mode::Send);
     assert!(handle.send_to().is_some());
