@@ -14,13 +14,14 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Bounds, ClipboardItem, ContentMask, DispatchPhase, Div, Element, ElementId,
     FocusHandle, Font, GlobalElementId, InspectorElementId, InteractiveElement as _, IntoElement,
     Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement as _, Pixels, ShapedLine, SharedString, Stateful, Style, Styled as _, TextAlign,
-    TextRun, TruncateFrom, Window, div, fill, font, point, px, relative,
+    TextRun, TruncateFrom, Window, div, fill, font, point, relative,
 };
 
 use crate::theme;

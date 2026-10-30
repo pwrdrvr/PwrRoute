@@ -5,11 +5,12 @@
 //! `Switch`, `Radio`), which own focus, keyboard activation and
 //! accessibility; these functions only dress them in the tokens.
 
+use crate::theme::px;
 use gpui_kit::base::{Button, Radio, Switch};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Div, ElementId, Hsla, InteractiveElement as _, ParentElement as _, SharedString,
-    Styled as _, div, px,
+    Styled as _, div,
 };
 
 use super::model::Status;
@@ -90,7 +91,7 @@ pub fn button_when(
             if enabled {
                 button.cursor_pointer().hover(move |style| style.bg(hover))
             } else {
-                button.opacity(0.6)
+                button.opacity(theme::DISABLED)
             }
         })
         .child(text(label, size, 550.0, foreground))

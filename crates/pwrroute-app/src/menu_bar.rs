@@ -18,12 +18,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Action, AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, HighlightStyle,
     InteractiveElement as _, IntoElement, Keystroke, MenuItem, MouseButton, MouseDownEvent,
     ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    StyledText, Subscription, UnderlineStyle, WeakEntity, Window, deferred, div, px,
+    StyledText, Subscription, UnderlineStyle, WeakEntity, Window, deferred, div,
 };
 
 use crate::app_menu::{self, Platform};
@@ -823,7 +824,7 @@ impl Render for MenuBar {
         // Under the strip, down to 8px above the window's bottom edge; past
         // that the card scrolls.
         let max_height =
-            (f32::from(window.viewport_size().height) - crate::chrome::STRIP_HEIGHT - 11.0)
+            (theme::css(window.viewport_size().height) - crate::chrome::STRIP_HEIGHT - 11.0)
                 .max(120.0);
         // Only the open menu's rows are built (shortcuts, Window's list);
         // the rest of the time the bar is five words.

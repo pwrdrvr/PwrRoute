@@ -11,10 +11,11 @@
 //! the rule's browser gets a lane of its own, first, drawn as missing once
 //! the scan ran.
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Div, ElementId, InteractiveElement as _, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, px, svg,
+    StatefulInteractiveElement as _, Styled as _, Window, div, svg,
 };
 
 use crate::activity_actions::BrowserChoice;

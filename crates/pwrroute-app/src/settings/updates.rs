@@ -5,9 +5,10 @@
 //! PwrSnap, PwrGit and PwrAgnt): four slots, Stable or Beta by Latest or
 //! Prerelease, each with the release it would install.
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, div, px,
+    AnyElement, Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, div,
 };
 
 use super::controls::{

@@ -31,13 +31,14 @@ pub mod updates_host;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::theme::px;
 use gpui_kit::base::{Button, TestSupportExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
     FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
     Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point,
 };
 
 use self::controls::{Heading, Kind, button, card, separated};
@@ -223,7 +224,11 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
         |host| (host.model.clone(), host.on_request.clone()),
     );
     let display = crate::placement::display_for_new_window(cx);
-    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let bounds = Bounds::centered(
+        display,
+        crate::zoom::window_size(display, WINDOW_SIZE, cx),
+        cx,
+    );
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -234,7 +239,7 @@ pub fn open(cx: &mut App, pane: Option<Pane>) {
                 traffic_light_position: Some(point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(size(px(MIN_SIZE.0), px(MIN_SIZE.1))),
+            window_min_size: Some(crate::zoom::window_size(display, MIN_SIZE, cx)),
             ..Default::default()
         },
         |window, cx| {

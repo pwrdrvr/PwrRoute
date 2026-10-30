@@ -24,12 +24,13 @@
 
 use std::time::SystemTime;
 
+use crate::theme::px;
 use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, HighlightStyle, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Window, deferred, div, px,
+    Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{
     self as engine, Expectation, Opener, Precedence, Privacy, RouteTest, Source, Stage,
@@ -2137,7 +2138,7 @@ pub fn sheet(
             let add = button(label, ButtonKind::Primary, false)
                 .id("add-rule-save")
                 .debug_selector(|| "add-rule-save".into())
-                .when(!ready, |add| add.opacity(0.5))
+                .when(!ready, |add| add.opacity(theme::DISABLED))
                 .on_click(cx.listener(|this, _, _, cx| this.add_rule_from_sheet(cx)));
             (
                 sheet_body(app, sheet, window, cx),

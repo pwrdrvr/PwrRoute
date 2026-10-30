@@ -18,12 +18,12 @@
 
 use std::collections::HashMap;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, AnyElement, App, AppContext as _, Context, Div, DragMoveEvent, ElementId,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div, point,
-    px,
 };
 use pwrroute_engine::Opener;
 use pwrroute_router::Privacy;

@@ -1014,6 +1014,7 @@ impl PwrRoute {
                     }
                     ("up", Some(_)) => self.step(-1, cx),
                     ("down", Some(_)) => self.step(1, cx),
+                    ("escape", Some(_)) if Layout::of(window).stacked => self.deselect(cx),
                     _ => {}
                 }
             }
@@ -1045,8 +1046,57 @@ pub fn sync_rules_windows(cx: &mut App) {
     }
 }
 
+/// How the main window lays out at its width, in the design's pixels, so
+/// that View › Zoom reflows rather than clips (design: Contrast and Scale
+/// 3). At 100% and 125% nothing changes; zoomed past what the display
+/// holds, the rail goes to icons, then Rules shows the list or the rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// The nav rail as icons, each named by its tooltip.
+    pub compact_rail: bool,
+    /// Rules' list and editor take turns: with a rule selected the editor
+    /// fills the pane, and "All rules" (or Esc) goes back.
+    pub stacked: bool,
+}
+
+impl Layout {
+    /// Below this the nav rail is icons: 175% and 200% on a laptop.
+    pub const COMPACT_RAIL_BELOW: f32 = 960.0;
+    /// The rules list's least width beside the editor.
+    pub const LIST_MIN: f32 = 428.0;
+
+    pub fn of_width(width: f32) -> Self {
+        let compact_rail = width < Self::COMPACT_RAIL_BELOW;
+        let rail = if compact_rail {
+            crate::chrome::RAIL_COMPACT
+        } else {
+            crate::chrome::RAIL_WIDTH
+        };
+        Self {
+            compact_rail,
+            stacked: width - rail < Self::LIST_MIN + editor::WIDTH,
+        }
+    }
+
+    pub fn of(window: &Window) -> Self {
+        Self::of_width(theme::css(window.viewport_size().width))
+    }
+}
+
+impl PwrRoute {
+    /// Back to the list with nothing selected: the stacked layout's "All
+    /// rules" and Esc.
+    pub fn deselect(&mut self, cx: &mut Context<'_, Self>) {
+        if self.selection.take().is_some() {
+            self.rebuild_rail(cx);
+            cx.notify();
+        }
+    }
+}
+
 impl Render for PwrRoute {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        let layout = Layout::of(window);
         // One reading of the routing state for the strip, the rail foot and
         // the Overview, so they agree.
         let status = overview::status(self, cx);
@@ -1057,7 +1107,11 @@ impl Render for PwrRoute {
             (Screen::TestLink, _) => test_link::pane(self, window, cx).into_any_element(),
             (Screen::Activity, _) => activity::pane(self, window, cx).into_any_element(),
         };
-        let rail = self.editing().then(|| editor::rail(self, window, cx));
+        let rail = self
+            .editing()
+            .then(|| editor::rail(self, layout.stacked, window, cx));
+        // Stacked, the rule being edited takes the list's place.
+        let pane = (rail.is_none() || !layout.stacked).then_some(pane);
         // Activity's Add a rule sheet, over everything.
         let sheet = activity_actions::sheet(self, window, cx);
         div()
@@ -1085,8 +1139,8 @@ impl Render for PwrRoute {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(chrome::nav_rail(self, &status, cx))
-                    .child(pane)
+                    .child(chrome::nav_rail(self, &status, layout.compact_rail, cx))
+                    .children(pane)
                     .children(rail),
             )
             .children(sheet)
