@@ -402,6 +402,9 @@ impl RulesStore {
         if rule.browser.trim().is_empty() {
             return Err("Choose where the rule opens first.".into());
         }
+        if engine::is_dont_open(&rule.browser) {
+            return Err("A rule that does not open its links has no place to name.".into());
+        }
         let binding = engine::Binding {
             browser: rule.browser.clone(),
             profile: rule.profile.clone(),
