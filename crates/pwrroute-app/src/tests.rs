@@ -3663,6 +3663,91 @@ fn next_link_here_sends_the_next_link_and_back_to_rules_ends_it(cx: &mut TestApp
     assert!(cx.debug_bounds("overview-node-sent-0-2").is_none());
 }
 
+/// Incoming Links 3a-3b: the hero's switch holds links from the Overview,
+/// the hero says so in Hold's words with the For row under the switch,
+/// and its Back to rules ends the hold. Tab from the window reaches the
+/// switch first, and Right moves it.
+#[gpui_kit::test]
+fn the_heros_switch_holds_links_and_back_to_rules_ends_it(cx: &mut TestAppContext) {
+    use crate::overview::{HERO_FOR_IDS, HERO_MODE_IDS};
+    use crate::overview_model::State;
+    use crate::tray::model::{Mode, Routing, TrayModel};
+    use pwrroute_router::{DryRunLauncher, Options, Override, Router, SendScope};
+
+    let router = Router::spawn(Options::default(), None, DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
+    let model = cx.update(|cx| {
+        crate::tray::install_for_test(
+            TrayModel::fixture(std::time::SystemTime::now()),
+            Some(handle.clone()),
+            cx,
+        )
+    });
+    let (view, cx, _) = open_overview(
+        cx,
+        None,
+        fixtures::overview_rules(),
+        fixtures::overview_rules_day(),
+    );
+    view.update(cx, |app, _| {
+        app.overview.status = None;
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds(HERO_FOR_IDS[0]).is_none(),
+        "no For row at rest"
+    );
+
+    click(cx, HERO_MODE_IDS[2]);
+    assert_eq!(
+        handle.override_in_force(),
+        Some(Override::Holding(SendScope::Next { left: 1, of: 1 }))
+    );
+    let state = cx.update(|_, cx| crate::overview::status(view.read(cx), cx).state());
+    assert_eq!(state, State::Holding);
+    draw(cx);
+    assert!(cx.debug_bounds(HERO_FOR_IDS[0]).is_some(), "the For row");
+    click(cx, crate::overview::HERO_STEP_UP_ID);
+    assert_eq!(
+        handle.override_in_force(),
+        Some(Override::Holding(SendScope::Next { left: 2, of: 2 }))
+    );
+
+    click(cx, crate::overview::HERO_ACTION_ID);
+    assert_eq!(handle.override_in_force(), None);
+    assert_eq!(
+        model.read_with(cx, |model, _| model.routing),
+        Routing::Active
+    );
+
+    // The keyboard: Tab (the window's, `app_menu::FocusNext`) reaches the
+    // switch; Right is Send.
+    cx.update(|_, cx| crate::app_menu::install(cx));
+    cx.update(|window, _| window.activate_window());
+    view.update_in(cx, |app, window, cx| window.focus(&app.focus, cx));
+    let on_switch = |cx: &mut VisualTestContext| {
+        view.update_in(cx, |app, window, _| {
+            app.overview
+                .hero_stops
+                .as_ref()
+                .is_some_and(|stops| stops.switch.is_focused(window))
+        })
+    };
+    let mut reached = false;
+    for _ in 0..50 {
+        cx.simulate_keystrokes("tab");
+        draw(cx);
+        if on_switch(cx) {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab reaches the hero's switch");
+    cx.simulate_keystrokes("right");
+    assert_eq!(model.read_with(cx, |model, _| model.mode()), Mode::Send);
+    assert!(handle.send_to().is_some());
+}
+
 /// Rule 5 opens a private Firefox window: hovering Firefox's private
 /// node lights its route, which ends there and not at the profile.
 #[gpui_kit::test]
@@ -4988,6 +5073,7 @@ fn a_deleted_rules_try_it_link_stays_with_it(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("https://meet.google.com/typed-here");
     draw(cx);
+    scroll_to(cx, "rail-delete");
     click(cx, "rail-delete");
     let (selection, sample, edited) = view.read_with(cx, |app, _| {
         let rail = app.rail.as_ref().expect("the editor");

@@ -1120,7 +1120,7 @@ fn matcher_words(rule: &Rule) -> impl Iterator<Item = String> + '_ {
         Matcher::App { name, .. } => Some(format!("from {name}")),
         Matcher::Function(_) => Some("function".into()),
         Matcher::Label(label) => Some((*label).to_owned()),
-        Matcher::Off | Matcher::Privacy(_) => None,
+        Matcher::Off | Matcher::OffHere | Matcher::Privacy(_) => None,
     })
 }
 

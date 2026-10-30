@@ -124,6 +124,21 @@ pub const STRIP_HEIGHT: f32 = 40.0;
 
 /// The strip's status chips for what is on screen.
 fn strip_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
+    let mut chips = screen_chips(app, status);
+    // Only a sync conflict or pause earns a chip (design: Synced Rules 3b).
+    if let Some(line) = &app.sync_line
+        && let Some(chip) = line.chip
+    {
+        let dot = match line.tone {
+            crate::sync::Tone::Bad => theme::status_error(),
+            _ => theme::status_warning(),
+        };
+        chips.push(status_chip(chip, dot));
+    }
+    chips
+}
+
+fn screen_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
     match (app.screen, &app.config) {
         (Screen::Overview, _) => overview_chips(app, status),
         // The config's chip, as Overview draws it (design 5a/5b).
@@ -210,6 +225,11 @@ fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
     let source = source_chip(app, status);
     let state = if status.paused.is_some() {
         status_chip("paused", theme::status_warning())
+    } else if let Some(holding) = &status.holding {
+        status_chip(
+            holding.short(std::time::SystemTime::now()),
+            theme::info_text(),
+        )
     } else if let Some(sending) = &status.sending {
         status_chip(
             format!("{} \u{00b7} {}", sending.short(), sending.name),
@@ -245,6 +265,13 @@ pub fn routing_line(status: &Status) -> (gpui_kit::Hsla, String) {
                     .as_ref()
                     .map_or("", |pause| pause.name.as_str())
             ),
+        ),
+        State::Holding => (
+            theme::info_text(),
+            match status.held {
+                0 => "holding".to_owned(),
+                held => format!("holding \u{00b7} {held} held"),
+            },
         ),
         State::Sending => (
             theme::accent(),
@@ -573,6 +600,35 @@ pub fn foot_label(app: &PwrRoute, status: &Status) -> String {
     }
 }
 
+/// The element id of the rail foot's sync line.
+pub const SYNC_LINE_ID: &str = "rail-sync";
+
+/// Sync's line under the routing state (design: Synced Rules 3a): mono and
+/// lower case like its neighbours, quiet when all is well, a click to
+/// Settings › Sync.
+fn sync_line(line: &crate::sync::Line, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
+    let color = match line.tone {
+        crate::sync::Tone::Quiet => theme::text_subtle(),
+        crate::sync::Tone::Warn => theme::status_warning(),
+        crate::sync::Tone::Bad => theme::status_error(),
+    };
+    div()
+        .id(SYNC_LINE_ID)
+        .debug_selector(|| SYNC_LINE_ID.into())
+        .cursor_pointer()
+        .font_family(theme::mono_family(500.0))
+        .font_weight(theme::weight(500.0))
+        .text_size(px(10.5))
+        .line_height(px(14.7))
+        .text_color(color)
+        .hover(|style| style.text_color(theme::text_secondary()))
+        .child(line.text.clone())
+        .on_click(cx.listener(|_, _, _, cx| {
+            cx.defer(|cx| crate::settings::open(cx, Some(crate::settings::Pane::Sync)));
+        }))
+        .into_any_element()
+}
+
 /// Which build this is, at the foot of the rail (design: Build Identity).
 /// A release is one muted line; a dev build is a block under a hairline:
 /// "Dev build" with the version, then the checkout, branch and commit, each
@@ -868,6 +924,7 @@ pub fn nav_rail(
                 .child(foot_label(app, status)),
         )
         .children(app.store.changed_on_disk().then(|| changed_actions(cx)))
+        .children(app.sync_line.as_ref().map(|line| sync_line(line, cx)))
         .child(build_block(app, cx));
     div()
         .on_children_prepainted(e2e::regions(&[
@@ -897,7 +954,26 @@ pub fn nav_rail(
             app,
             cx,
             Screen::Activity,
-            app.activity.today.compact().map(count),
+            // Held links that wait say so first (design: Incoming Links
+            // 3b), in Hold's blue.
+            if status.held > 0 {
+                Some(
+                    div()
+                        .px(px(6.0))
+                        .py(px(1.0))
+                        .rounded(px(4.0))
+                        .bg(theme::info_soft())
+                        .child(mono(
+                            format!("{} held", status.held),
+                            10.5,
+                            600.0,
+                            theme::info_text(),
+                        ))
+                        .into_any_element(),
+                )
+            } else {
+                app.activity.today.compact().map(count)
+            },
             false,
         ))
         .child(div().mt(px(10.0)).mx(px(8.0)).mb(px(4.0)).child(tracked(

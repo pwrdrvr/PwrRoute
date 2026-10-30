@@ -95,6 +95,7 @@ impl Resolver for FakeResolver {
 #[derive(Debug, Default)]
 pub struct FakeRouter {
     opened: Mutex<Vec<(AgentRef, ActivityEntry)>>,
+    hold: Mutex<Option<crate::backend::Hold>>,
 }
 
 impl FakeRouter {
@@ -148,6 +149,28 @@ impl FakeRouter {
         Ok(())
     }
 
+    /// Records a link the user held: the rules' trace, not opened, the
+    /// hold's reason.
+    pub fn record_held(&self, url: &str, via: &str) -> anyhow::Result<()> {
+        let trace = FakeResolver.resolve(url, None)?;
+        let mut entry = entry_of(self.next_id(), Some(via.to_owned()), trace);
+        entry.outcome = ActivityOutcome::NotOpened;
+        entry.reason = Some(crate::backend::NotOpenedReason::Hold);
+        lock(&self.opened).push((
+            AgentRef {
+                name: String::new(),
+                connection: 0,
+            },
+            entry,
+        ));
+        Ok(())
+    }
+
+    /// Holds links, or stops (`None`), as the tray would.
+    pub fn set_hold(&self, hold: Option<crate::backend::Hold>) {
+        *lock(&self.hold) = hold;
+    }
+
     fn next_id(&self) -> u64 {
         lock(&self.opened).len() as u64 + 1
     }
@@ -185,6 +208,7 @@ fn entry_of(id: u64, via: Option<String>, trace: Trace) -> ActivityEntry {
         rewritten,
         private,
         reason: None,
+        waiting: false,
         trace,
     }
 }
@@ -211,6 +235,20 @@ impl ActivityLog for FakeActivity {
 
     fn retention(&self) -> String {
         "Kept in memory only: the last 500 links or 24 hours, cleared when PwrRoute quits.".into()
+    }
+
+    /// Every not-opened entry waits: nothing here opens one.
+    fn waiting(&self) -> Vec<u64> {
+        self.0
+            .opened()
+            .into_iter()
+            .filter(|(_, entry)| entry.outcome == ActivityOutcome::NotOpened)
+            .map(|(_, entry)| entry.id)
+            .collect()
+    }
+
+    fn hold(&self) -> Option<crate::backend::Hold> {
+        *lock(&self.0.hold)
     }
 }
 
@@ -360,8 +398,11 @@ impl RulesStore for FakeRules {
 /// A rules document as a [`RulesFile`] with no problems, re-serialized so
 /// the store holds exactly what the file would.
 pub(crate) fn validate(rules: Value) -> Result<Value, RulesError> {
-    let file: RulesFile =
+    let mut file: RulesFile =
         serde_json::from_value(rules).map_err(|e| RulesError::Invalid(e.to_string()))?;
+    // A rule that names a destination carries its synced browser too, for
+    // readers that ignore names (the Go host), as the editor writes it.
+    file.mirror_destinations();
     let problems = file.problems();
     if let Some(problem) = problems.first() {
         return Err(RulesError::Invalid(format!(

@@ -1166,3 +1166,26 @@ mod everything_else {
         assert!(!visible(cx, PROBLEM_ID));
     }
 }
+
+#[gpui_kit::test]
+fn the_sync_pane_resolves_a_conflict_only_from_its_buttons(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |model| model.sync = fixtures::sync_conflict());
+    // The conflict marks Sync's nav item from any pane.
+    assert!(visible(cx, super::SYNC_DOT_ID));
+    click(cx, Pane::Sync.nav_id());
+    draw(cx);
+    let root = view.read_with(cx, |view, _| view.model.sync.folders[0].root.clone());
+    click(cx, ("sync-keep", 0_usize));
+    click(cx, ("sync-take", 0_usize));
+    click(cx, super::sync::SYNC_NOW_ID);
+    let resolve = |keep_local| SettingsRequest::ResolveSync {
+        root: root.clone(),
+        file: "rules.json".into(),
+        remote_sha: "0123abcd".into(),
+        keep_local,
+    };
+    assert_eq!(
+        *requests.borrow(),
+        [resolve(true), resolve(false), SettingsRequest::SyncNow]
+    );
+}

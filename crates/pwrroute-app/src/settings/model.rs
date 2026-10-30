@@ -21,6 +21,7 @@ pub use crate::update_channel::Slot;
 pub struct SettingsModel {
     pub local_agents: LocalAgents,
     pub configuration: Configuration,
+    pub sync: Sync,
     pub privacy: Privacy,
     pub browsers: Browsers,
     pub updates: Updates,
@@ -438,7 +439,7 @@ pub enum Usage {
 /// what the updater last said.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
-    /// "0.8.0".
+    /// "0.9.0".
     pub version: SharedString,
     /// "Stable · Latest": the release channel slot this copy follows.
     pub channel: SharedString,
@@ -502,7 +503,7 @@ pub struct Experimental {
 /// and states, never a link.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostics {
-    /// "0.8.0 · release · arm64".
+    /// "0.9.0 · release · arm64".
     pub version: SharedString,
     /// "macOS 15.6 (arm64)".
     pub os: SharedString,
@@ -559,6 +560,128 @@ impl Diagnostics {
     }
 }
 
+// ---- Sync -----------------------------------------------------------------
+
+/// Settings › Sync (design: Synced Rules): the folders `rules.json` syncs
+/// with, how each stands, this machine's name, and what the synced
+/// destinations and rule sets mean here.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Sync {
+    /// This machine's name in sync status and manifests.
+    pub machine_name: SharedString,
+    /// The computer's own name: what an empty name falls back to.
+    pub computer_name: SharedString,
+    pub folders: Vec<SyncFolder>,
+    /// Cloud folders found on this machine and not synced yet.
+    pub offered: Vec<SyncPlace>,
+    /// The Finicky config in charge, as shown ("~/.finicky.ts"), when one
+    /// is; and whether it syncs too.
+    pub config: Option<SharedString>,
+    pub config_on: bool,
+    /// "Synced 09:41", "Not synced yet", or the worst folder's state, for
+    /// the pane head's chip.
+    pub summary: SharedString,
+    pub summary_tone: SyncTone,
+    /// When every folder last agreed: "09:41", "never".
+    pub last_synced: SharedString,
+    /// How many earlier versions are kept.
+    pub backups: usize,
+    pub destinations: Vec<DestinationRow>,
+    pub sets: Vec<RuleSetRow>,
+    /// Why the last change was not made.
+    pub problem: Option<SharedString>,
+}
+
+impl Sync {
+    /// Whether a folder is in conflict (or joining), which needs the reader.
+    pub fn has_conflict(&self) -> bool {
+        self.folders.iter().any(|f| f.conflict.is_some())
+    }
+}
+
+/// A chip's tone, as the producer judges it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SyncTone {
+    #[default]
+    Neutral,
+    Ok,
+    Warn,
+    Bad,
+}
+
+/// A cloud folder the Sync to card offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncPlace {
+    /// "Google Drive · jo@example.com".
+    pub label: SharedString,
+    /// The folder sync would use, shown: "~/Library/CloudStorage/Dropbox/PwrRoute".
+    pub shown: SharedString,
+    pub root: std::path::PathBuf,
+}
+
+/// One folder rules sync with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncFolder {
+    pub label: SharedString,
+    pub shown: SharedString,
+    pub root: std::path::PathBuf,
+    /// "in sync", "waiting", "unavailable", "conflict".
+    pub chip: SharedString,
+    pub tone: SyncTone,
+    /// "In sync · 09:41 · saved by MacBook Air".
+    pub line: SharedString,
+    pub conflict: Option<SyncConflict>,
+}
+
+/// Two versions that both changed, until the reader picks one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncConflict {
+    /// `rules.json` or the config's name.
+    pub file: SharedString,
+    /// "Both changed since the last sync", or the join's sentence.
+    pub headline: SharedString,
+    /// "14 rules · this Mac".
+    pub mine: SharedString,
+    /// "15 rules · saved 09:20".
+    pub theirs: SharedString,
+    /// Who saved the folder's version: "MacBook Air", else the folder.
+    pub theirs_name: SharedString,
+    /// What differs, a line each: "+ rule 15 *.example.org/* → Work 2".
+    pub differences: Vec<SharedString>,
+    /// The folder's version as shown, so a choice applies to it only.
+    pub remote_sha: SharedString,
+    /// This machine had never synced with the folder.
+    pub join: bool,
+}
+
+/// One named destination and what it means on this machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DestinationRow {
+    pub name: SharedString,
+    /// "Google Chrome · Work".
+    pub here: SharedString,
+    /// Bound on this machine (`machine.json`) rather than synced.
+    pub this_machine: bool,
+    /// Rules (and Everything else) that open in it.
+    pub uses: usize,
+    /// "Arc isn't installed on this Mac", when the binding cannot open.
+    pub warning: Option<SharedString>,
+    /// The pickers' lanes, the current binding lit.
+    pub lanes: Vec<crate::destinations::Lane>,
+}
+
+/// One rule set and whether it is on here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleSetRow {
+    pub name: SharedString,
+    /// Rules and rewrites in it.
+    pub entries: usize,
+    pub on: bool,
+    /// The synced default, and whether this machine overrides it.
+    pub synced_on: bool,
+    pub overridden: bool,
+}
+
 // ---- About ----------------------------------------------------------------
 
 /// Settings › About: the build, the license and where to find the
@@ -570,7 +693,7 @@ pub struct About {
     /// Where to find the project: each a label and the address as text.
     /// Help's rows open them; here they are words to copy.
     pub links: Vec<(SharedString, SharedString)>,
-    /// This copy: the Version row ("PwrRoute 0.8.0", "debug build for
+    /// This copy: the Version row ("PwrRoute 0.9.0", "debug build for
     /// aarch64"), the Source row and Copy build info (design: Build
     /// Identity 2a, 2b).
     pub source: BuildInfo,
@@ -658,4 +781,37 @@ pub enum SettingsRequest {
     /// Privacy: write the links in memory, each at its level, to a file the
     /// reader picks.
     ExportActivity,
+    /// Sync: run a pass now.
+    SyncNow,
+    /// Sync: start syncing with this cloud folder.
+    AddSyncFolder(std::path::PathBuf),
+    /// Sync: pick any folder with the OS's folder panel.
+    ChooseSyncFolder,
+    RemoveSyncFolder(std::path::PathBuf),
+    RevealSyncFolder(std::path::PathBuf),
+    /// Sync: settle a conflict; `keep_local` keeps this machine's version.
+    ResolveSync {
+        root: std::path::PathBuf,
+        file: SharedString,
+        remote_sha: SharedString,
+        keep_local: bool,
+    },
+    SetMachineName(SharedString),
+    /// Sync: "Also sync" the Finicky config in charge.
+    SetSyncConfig(bool),
+    RevealSyncBackups,
+    /// Sync: bind a named destination on this machine.
+    BindDestination {
+        name: SharedString,
+        browser: SharedString,
+        profile: SharedString,
+        private: bool,
+    },
+    /// Sync: drop this machine's binding; the synced one applies.
+    UseSyncedBinding(SharedString),
+    /// Sync: turn a rule set on or off on this machine.
+    SetRuleSetHere {
+        name: SharedString,
+        on: bool,
+    },
 }

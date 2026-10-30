@@ -566,6 +566,12 @@ pub struct ActivityRow {
     /// The user sent it ("next link", "all links"): the chip is accent,
     /// not amber.
     pub sent: bool,
+    /// The user held it (design: Incoming Links 4): the chip is Hold's
+    /// info blue.
+    pub held: bool,
+    /// Where the rules would have opened a held link ("Google Chrome ·
+    /// Work"): its expanded row offers that first.
+    pub held_rules: Option<SharedString>,
     /// Resolved and recorded, nothing opened (`--dry-run`).
     pub dry_run: bool,
     /// The trace, for the expanded row.
@@ -687,6 +693,32 @@ fn is_held(steps: &[Step]) -> bool {
         .any(|step| matches!(step, Step::Paused { .. } | Step::Sent { .. }))
 }
 
+/// The hold that kept the link, when the user held it.
+pub fn held_by(steps: &[Step]) -> Option<pwrroute_router::Sent> {
+    steps.iter().find_map(|step| match step {
+        Step::Held { held, .. } => Some(*held),
+        _ => None,
+    })
+}
+
+/// Where the rules would have opened a held link, as the reader knows it.
+fn held_rules(steps: &[Step]) -> Option<String> {
+    steps.iter().find_map(|step| match step {
+        Step::Held {
+            browser: Some(browser),
+            ..
+        } => {
+            let name = crate::default_browser::browser_name(&browser.name);
+            Some(if browser.profile.is_empty() {
+                name
+            } else {
+                format!("{name} \u{00b7} {}", browser.profile)
+            })
+        }
+        _ => None,
+    })
+}
+
 /// The send that took the link, when the user sent it.
 pub fn sent_by(steps: &[Step]) -> Option<pwrroute_router::Sent> {
     steps.iter().find_map(|step| match step {
@@ -747,6 +779,8 @@ impl ActivityRow {
             rewritten: is_rewritten(record),
             default: is_unrouted(record),
             sent: sent_by(&record.steps).is_some() || opened_by_user(&record.steps),
+            held: held_by(&record.steps).is_some(),
+            held_rules: held_rules(&record.steps).map(Into::into),
             dry_run: record
                 .steps
                 .iter()
@@ -894,9 +928,18 @@ fn rule_label(steps: &[Step]) -> String {
         return parts.join(" \u{00b7} ");
     }
     let sent = sent_by(steps);
-    let paused = sent.is_some() || steps.iter().any(|step| matches!(step, Step::Paused { .. }));
+    let held = held_by(steps);
+    let paused = sent.is_some()
+        || held.is_some()
+        || steps.iter().any(|step| matches!(step, Step::Paused { .. }));
     if let Some(sent) = sent {
         parts.push(sent.short().to_owned());
+    } else if let Some(held) = held {
+        // "held", "held 2 of 3": the hold's words, as the trace line's.
+        parts.push(match held {
+            pwrroute_router::Sent::Next { nth, of } if of > 1 => format!("held {nth} of {of}"),
+            _ => "held".to_owned(),
+        });
     } else if paused {
         // What the pause passed over, never what routed the link: "skipped
         // rule 2" (the amber chip and the trace line's "paused · skipped
@@ -1727,10 +1770,12 @@ fn row(
     // ends in an ellipsis, and the expanded row says it in full.
     let (tone, rule_color) = if row.sent {
         (Tone::Accent, theme::accent_bright())
+    } else if row.held {
+        (Tone::Info, theme::info_text())
     } else {
         (Tone::Warn, theme::warn_text())
     };
-    let rule = if row.default {
+    let rule = if row.default || row.held {
         toned_chip("", tone)
             .flex_shrink(1.0)
             .max_w_full()
@@ -1990,14 +2035,33 @@ fn expansion(
             let not_opened = matches!(row.opened, Opened::Nowhere);
             let open_in = not_opened && row.waiting;
             let why = not_opened.then(|| not_opened_why(app, row)).flatten();
+            // A held link leads with where the rules send it (design:
+            // Incoming Links 4); Open in… picks somewhere else.
+            let by_rules = row.held_rules.clone().filter(|_| open_in && row.held);
             div()
                 .mt(px(2.0))
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .when(open_in, |actions| {
+                .when_some(by_rules.clone(), |actions, rules| {
                     actions.child(
-                        button("Open in\u{2026}", ButtonKind::Primary, true)
+                        button(format!("Open in {rules}"), ButtonKind::Primary, true)
+                            .id(("activity-open-by-rules", index))
+                            .debug_selector(move || format!("activity-open-by-rules-{index}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.open_not_opened(key, pwrroute_router::OpenAs::Rules, cx);
+                            })),
+                    )
+                })
+                .when(open_in, |actions| {
+                    let kind = if by_rules.is_some() {
+                        ButtonKind::Default
+                    } else {
+                        ButtonKind::Primary
+                    };
+                    actions.child(
+                        button("Open in\u{2026}", kind, true)
                             .id(("activity-open-in", index))
                             .debug_selector(move || format!("activity-open-in-{index}"))
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -2638,6 +2702,7 @@ mod tests {
                 let sources = Sources {
                     config: None,
                     rules,
+                    ..Default::default()
                 };
                 let engine =
                     Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())?;

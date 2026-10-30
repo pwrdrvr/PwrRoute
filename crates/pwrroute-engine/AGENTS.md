@@ -47,6 +47,17 @@ crate docs map the modules.
   own `browser: null`, so the result is the API's `appType: "none"`; a test
   expecting `"none"` passes only for that, and the importer writes a
   config's `browser: null` as it.
+  Synced rules add named `destinations`, `rules[].destination`,
+  `defaultDestination` and rule `sets`; a saved file mirrors each
+  destination's binding into `browser`/`profile`, so a reader that knows
+  no names still routes.
+- **`machine.json` is the layer that never syncs (`src/machine.rs`).** It
+  sits beside `rules.json` (the `Reloader` watches it) and binds
+  destinations and switches sets for this machine. `Sources::machine`
+  carries it and the engine routes with `RulesFile::for_machine` applied,
+  which keeps every entry in place so rule numbers mean the same. Saved
+  examples and tests run on the synced rules (`Engine::test_rules(None)`),
+  so a test passes or fails alike on every machine.
 - **`tests/finicky_compat.rs` is the gate.** `tests/configs/expected.json`
   was recorded from the PwrFinicky Go host (goja), one URL per process.
   `configs` holds the original cases; `suites` (config, `rules.json`,

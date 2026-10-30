@@ -25,6 +25,9 @@ router resolves every link, opens it through `pwrroute-browsers`' launcher
   OS; the one crate with `unsafe`. See its `AGENTS.md`.
 - `crates/pwrroute-mcp` — the MCP server for local agents, served by the
   running app and reached through `pwrroute mcp`. See its `AGENTS.md`.
+- `crates/pwrroute-sync` — copies `rules.json` (and, if asked, the Finicky
+  config) to and from cloud-drive folders, with three-way conflict
+  detection and backups. See its `AGENTS.md`.
 - `crates/pwrroute-app` — the GPUI shell (binary `pwrroute`). It hosts the
   router and the MCP server and draws the design's screens over live data:
   Rules edits the real `rules.json`, Test a link runs the real engine,

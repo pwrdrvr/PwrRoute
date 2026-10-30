@@ -1537,6 +1537,7 @@ fn rules_factory(rules: RulesFile) -> ResolverFactory {
         let sources = Sources {
             config: None,
             rules,
+            ..Default::default()
         };
         let engine = Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())?;
         Ok(Box::new(engine) as Box<dyn Resolver>)
@@ -2309,6 +2310,7 @@ fn config_and_rules_router(rules: RulesFile) -> (tempfile::TempDir, Router, DryR
         let sources = Sources {
             config: Some(path),
             rules,
+            ..Default::default()
         };
         let engine = Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())?;
         Ok(Box::new(engine) as Box<dyn Resolver>)

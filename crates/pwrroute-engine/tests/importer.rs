@@ -161,6 +161,7 @@ fn rules_json_alone_has_nothing_to_review() {
         &Sources {
             config: None,
             rules: RulesFile::default(),
+            ..Default::default()
         },
         Rc::new(DefaultHost),
         Limits::default(),
@@ -189,6 +190,7 @@ fn an_imported_rule_routes_as_the_config_did() {
         &Sources {
             config: None,
             rules,
+            ..Default::default()
         },
         Rc::new(DefaultHost),
         Limits::default(),

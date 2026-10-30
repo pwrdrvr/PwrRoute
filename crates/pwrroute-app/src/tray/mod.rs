@@ -7,12 +7,15 @@
 //! ([`follow_default_browser`]). Pausing from either surface pauses the
 //! router ([`RouterHandle::set_paused`]) with the target the dropdown
 //! names, read from the files each time the dropdown opens or a pause
-//! begins ([`pause_target`]). Send links ([`set_send_mode`] and the
-//! rest, design: Send Links) sends the next few links, or all of them, to
-//! a destination the user picks; the router counts them down
-//! ([`RouterHandle::set_send_to`]) and the model follows it after every
-//! dispatch ([`sync_send`]). A pause and a send share the router's one
-//! slot, so turning one on turns the other off.
+//! begins ([`pause_target`]). The Incoming links switch ([`set_mode`] and
+//! the rest, design: Incoming Links) also sends the next few links, or all
+//! of them for a while, to a destination the user picks, or holds them:
+//! records them and opens none until the user opens them ([`open_held`]).
+//! The router counts them down ([`RouterHandle::set_send_to`],
+//! [`RouterHandle::set_hold`]) and the model follows it after every
+//! dispatch and every second while a time runs ([`sync_override`]). A
+//! pause, a send and a hold share the router's one slot, so turning one on
+//! turns the others off.
 
 mod dropdown;
 mod icon;
@@ -29,11 +32,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 use gpui_kit::{App, AppContext as _, Entity, Global, WindowHandle};
 use pwrroute_engine::{AppType, BrowserSpec, Engine, Limits, NativeHost, RulesFile, discovery};
-use pwrroute_router::{FALLBACK_BROWSER, PauseTarget, RouterHandle, SendScope};
+use pwrroute_router::{
+    DispatchId, FALLBACK_BROWSER, OpenAs, Override, PauseTarget, RouterHandle, SendScope, SendTo,
+};
 
 use self::dropdown::Dropdown;
 use self::model::{
-    BrowserLabel, DestinationChoices, Dispatched, Routing, SendDestination, SendMode, TrayModel,
+    BrowserLabel, DestinationChoices, Dispatched, ForKind, Mode, Routing, SendDestination,
+    TIME_STEPS, TrayModel,
 };
 use self::native::{NativeTray, TrayEvent};
 use crate::activity::{self, Feed};
@@ -51,23 +57,30 @@ pub enum TrayCommand {
     Settings,
     About,
     TogglePause,
-    /// Send links: back to the rules (ends a pause too).
+    /// Incoming links: back to the rules (ends a pause, a send or a hold).
     SendRules,
-    /// Send links: the next link to the destination.
+    /// The native menu's "Send next link → …": the next link to the
+    /// destination.
     SendNext,
-    /// Send links: all links to the destination.
-    SendAll,
-    /// The native menu's "Choose where…": the Overview, whose nodes offer
-    /// Next link here.
+    /// The native menu's "Hold next link".
+    HoldNext,
+    /// The native menu's "Hold for 1 hour".
+    HoldHour,
+    /// The native menu's "Choose…": the Overview, whose hero has the whole
+    /// switch and whose nodes offer Next link here.
     ChooseWhere,
+    /// The native menu's "Held links (N)…": Activity, where they wait.
+    HeldLinks,
     /// Ask the OS to make PwrRoute the default browser: the dropdown's row
     /// while another app has it.
     MakeDefault,
+    /// Sync's row: Settings › Sync.
+    Sync,
     Quit,
 }
 
 impl TrayCommand {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 16] = [
         Self::OpenMain,
         Self::TestLink,
         Self::Rules,
@@ -77,9 +90,12 @@ impl TrayCommand {
         Self::TogglePause,
         Self::SendRules,
         Self::SendNext,
-        Self::SendAll,
+        Self::HoldNext,
+        Self::HoldHour,
         Self::ChooseWhere,
+        Self::HeldLinks,
         Self::MakeDefault,
+        Self::Sync,
         Self::Quit,
     ];
 
@@ -96,9 +112,12 @@ impl TrayCommand {
             Self::TogglePause => "pwrroute.pause",
             Self::SendRules => "pwrroute.send-rules",
             Self::SendNext => "pwrroute.send-next",
-            Self::SendAll => "pwrroute.send-all",
+            Self::HoldNext => "pwrroute.hold-next",
+            Self::HoldHour => "pwrroute.hold-hour",
             Self::ChooseWhere => "pwrroute.send-choose",
+            Self::HeldLinks => "pwrroute.held",
             Self::MakeDefault => "pwrroute.make-default",
+            Self::Sync => "pwrroute.sync",
             Self::Quit => "pwrroute.quit",
         }
     }
@@ -141,9 +160,8 @@ struct Tray {
         allow(dead_code, reason = "only macOS has the dropdown")
     )]
     dropdown_closed_at: Option<Instant>,
-    /// Ticks while All links runs for an hour ([`follow_send_clock`]);
-    /// dropped, it stops.
-    send_clock: Option<gpui_kit::Task<()>>,
+    /// Ticks every second while a send or a hold has a time left.
+    clock: Option<gpui_kit::Task<()>>,
 }
 
 impl Global for Tray {}
@@ -166,6 +184,7 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
     });
     if live {
         follow_feed(&model, cx);
+        follow_sync(&model, cx);
     }
     let (events, received) = async_channel::unbounded();
     let native = match NativeTray::create(model.read(cx), events) {
@@ -190,7 +209,7 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
         native,
         dropdown: None,
         dropdown_closed_at: None,
-        send_clock: None,
+        clock: None,
     });
     cx.spawn(async move |cx| {
         while let Ok(event) = received.recv().await {
@@ -331,7 +350,7 @@ fn refresh_pause_target(model: &Entity<TrayModel>, cx: &mut App) {
     };
     model.update(cx, |model, cx| {
         if model.pause_target != target {
-            // Until the user picks one, Send links offers the Everything
+            // Until the user picks one, Send offers the Everything
             // else browser.
             if !model.destination_chosen && model.sending().is_none() {
                 model.destination = SendDestination::profile(target.clone());
@@ -371,15 +390,44 @@ pub fn follow_default_browser(cx: &mut App) {
     .detach();
 }
 
-/// `PWRROUTE_TRAY_FIXTURE=routing` draws the design's 1a and `paused` its
-/// 1b, for screenshots and manual checks; the model then ignores the feed
-/// and the OS.
+/// `PWRROUTE_TRAY_FIXTURE=routing` draws the design's 1a, `paused` its
+/// 1b and `holding` Incoming Links 2c, for screenshots and manual checks;
+/// the model then ignores the feed and the OS.
 fn fixture(now: SystemTime) -> Option<TrayModel> {
     match std::env::var("PWRROUTE_TRAY_FIXTURE").as_deref() {
         Ok("routing") => Some(TrayModel::fixture(now)),
         Ok("paused") => Some(TrayModel::paused_fixture(now)),
+        Ok("holding") => Some(TrayModel::holding_fixture(now)),
         _ => None,
     }
+}
+
+/// Keep the sync row at what the last pass found, and its age current
+/// each time the dropdown opens.
+fn follow_sync(model: &Entity<TrayModel>, cx: &mut App) {
+    let Some(feed) = crate::sync::feed(cx) else {
+        return;
+    };
+    refresh_sync(model, cx);
+    let model = model.clone();
+    cx.observe(&feed, move |_, cx| refresh_sync(&model, cx))
+        .detach();
+}
+
+fn refresh_sync(model: &Entity<TrayModel>, cx: &mut App) {
+    let Some(feed) = crate::sync::feed(cx) else {
+        return;
+    };
+    let row = crate::sync::tray_row_of(
+        &feed.read(cx).status,
+        pwrroute_sync::Clock::now(&pwrroute_sync::SystemClock),
+    );
+    model.update(cx, |model, cx| {
+        if model.sync != row {
+            model.sync = row;
+            cx.notify();
+        }
+    });
 }
 
 /// Keep the recents and the count at what the router has dispatched.
@@ -387,19 +435,24 @@ fn follow_feed(model: &Entity<TrayModel>, cx: &mut App) {
     let Some(feed) = activity::feed(cx) else {
         return;
     };
-    fn sync(model: &Entity<TrayModel>, feed: &Entity<Feed>, cx: &mut App) {
-        let dispatched = Dispatched::of(feed.read(cx), SystemTime::now());
-        model.update(cx, |model, cx| {
-            model.sync(dispatched);
-            cx.notify();
-        });
-        // A dispatch may have used up the last of Next link.
-        sync_send(model, cx);
-    }
-    sync(model, &feed, cx);
+    sync_feed(model, &feed, cx);
     let model = model.clone();
-    cx.observe(&feed, move |feed, cx| sync(&model, &feed, cx))
+    cx.observe(&feed, move |feed, cx| sync_feed(&model, &feed, cx))
         .detach();
+}
+
+/// The recents, the held links and the count from the feed. It changes on
+/// every dispatch and after Settings changes the retention, so whether
+/// Hold can keep anything is read again here too.
+fn sync_feed(model: &Entity<TrayModel>, feed: &Entity<Feed>, cx: &mut App) {
+    let dispatched = Dispatched::of(feed.read(cx), SystemTime::now());
+    model.update(cx, |model, cx| {
+        model.sync(dispatched);
+        cx.notify();
+    });
+    refresh_can_hold(model, cx);
+    // A dispatch may have used up the last of a count.
+    sync_override(model, cx);
 }
 
 fn handle(event: TrayEvent, cx: &mut App) {
@@ -429,13 +482,22 @@ fn click(position: (f64, f64), size: (f64, f64), pointer: Option<(f64, f64)>, cx
         return;
     }
     let model = tray.model.clone();
+    let live = tray.live;
     // The chip and the Make default row draw what the OS says now, not what
     // it said at the last tick.
     default_browser::refresh(false, cx);
     // The pause row names where links would go now, not at launch.
     refresh_pause_target(&model, cx);
     refresh_destinations(&model, cx);
-    sync_send(&model, cx);
+    // A held link the router has since dropped by age is gone from the
+    // list.
+    if let Some(feed) = activity::feed(cx) {
+        sync_feed(&model, &feed, cx);
+    }
+    // "Rules synced 2 min ago" counts from now.
+    if live {
+        refresh_sync(&model, cx);
+    }
     let anchor = crate::macos::status_item_anchor(position, size, pointer);
     let (origin, display, max_height) = match &anchor {
         Some(anchor) => {
@@ -483,6 +545,7 @@ pub fn run(command: TrayCommand, cx: &mut App) {
         TrayCommand::OpenMain => crate::show_main_window(cx),
         TrayCommand::About => crate::settings::open(cx, Some(crate::settings::Pane::About)),
         TrayCommand::Settings => crate::settings::open(cx, None),
+        TrayCommand::Sync => crate::settings::open(cx, Some(crate::settings::Pane::Sync)),
         TrayCommand::Rules => show_screen(Screen::Rules, cx),
         TrayCommand::TestLink => show_screen(Screen::TestLink, cx),
         TrayCommand::Activity => show_screen(Screen::Activity, cx),
@@ -491,11 +554,20 @@ pub fn run(command: TrayCommand, cx: &mut App) {
                 toggle_pause(&model, cx);
             }
         }
-        TrayCommand::SendRules => set_send_mode(SendMode::Rules, cx),
-        // The native menu's rows: one link, and the hour as last set.
-        TrayCommand::SendNext => start_send(SendMode::Next, Some(1), cx),
-        TrayCommand::SendAll => set_send_mode(SendMode::All, cx),
+        TrayCommand::SendRules => set_mode(Mode::Rules, cx),
+        // The native menu's rows: one link, or an hour.
+        TrayCommand::SendNext => start(Mode::Send, Some(ForKind::Links), Some(1), cx),
+        TrayCommand::HoldNext => start(Mode::Hold, Some(ForKind::Links), Some(1), cx),
+        TrayCommand::HoldHour => {
+            if let Some(model) = model(cx) {
+                model.update(cx, |model, _| {
+                    model.time_step = model::DEFAULT_TIME_STEP;
+                });
+            }
+            start(Mode::Hold, Some(ForKind::Time), None, cx);
+        }
         TrayCommand::ChooseWhere => show_screen(Screen::Overview, cx),
+        TrayCommand::HeldLinks => show_screen(Screen::Activity, cx),
         // A click, as the Settings button is: the one way to the OS.
         TrayCommand::MakeDefault => {
             default_browser::handle_settings_request(
@@ -530,20 +602,11 @@ pub fn show_screen_on(screen: Screen, display: Option<gpui_kit::DisplayId>, cx: 
 /// keeps it until resumed.
 fn toggle_pause(model: &Entity<TrayModel>, cx: &mut App) {
     let pausing = !model.read(cx).is_paused();
-    if pausing {
-        refresh_pause_target(model, cx);
-    }
-    if let Some(router) = cx.try_global::<Tray>().and_then(|tray| tray.router.clone()) {
-        router.set_paused(pausing.then(|| target_of(&model.read(cx).pause_target)));
-    }
-    model.update(cx, |model, cx| {
-        model.set_paused(pausing);
-        cx.notify();
-    });
+    set_mode(if pausing { Mode::Pause } else { Mode::Rules }, cx);
 }
 
 /// The tray over `model` and `router`, without an icon or the files: for
-/// window tests that drive Send links through the Overview.
+/// window tests that drive Incoming links through the Overview.
 #[cfg(test)]
 pub fn install_for_test(
     model: TrayModel,
@@ -559,56 +622,75 @@ pub fn install_for_test(
         native: None,
         dropdown: None,
         dropdown_closed_at: None,
-        send_clock: None,
+        clock: None,
     });
     model
 }
 
-/// The router Send links drives, when the app has one.
+/// The router the switch drives, when the app has one.
 fn router(cx: &App) -> Option<RouterHandle> {
     cx.try_global::<Tray>().and_then(|tray| tray.router.clone())
 }
 
-/// Turn Send links to `mode`: Rules ends a send and a pause; Next link and
-/// All links send to the model's destination, with the stepper's count or
-/// the hour, ending a pause. The router first, then the model.
-pub fn set_send_mode(mode: SendMode, cx: &mut App) {
-    start_send(mode, None, cx);
+/// A segment of the Incoming links switch: Rules, Send, Hold or Pause,
+/// with the destination and the For row as they stand. The router first,
+/// then the model.
+pub fn set_mode(mode: Mode, cx: &mut App) {
+    start(mode, None, None, cx);
 }
 
-/// [`set_send_mode`], with Next link taking `next` links instead of the
-/// stepper's count, which stays as the user set it.
-fn start_send(mode: SendMode, next: Option<u32>, cx: &mut App) {
+/// Turns `mode` on, with `kind` and a count of `next` in place of the For
+/// row's when given (the native menu's fixed rows).
+fn start(mode: Mode, kind: Option<ForKind>, next: Option<u32>, cx: &mut App) {
     let Some(model) = model(cx) else {
         return;
     };
-    let mut send = model.read(cx).send_for(mode, SystemTime::now());
-    if let (Some(send), Some(n)) = (send.as_mut(), next)
-        && matches!(send.scope, SendScope::Next { .. })
-    {
-        send.scope = SendScope::Next { left: n, of: n };
-    }
-    if let Some(router) = router(cx) {
-        match &send {
-            Some(send) => router.set_send_to(Some(send.clone())),
-            None => {
-                router.set_send_to(None);
-                router.set_paused(None);
-            }
+    if mode == Mode::Hold {
+        refresh_can_hold(&model, cx);
+        if !model.read(cx).can_hold {
+            return;
         }
     }
-    model.update(cx, |model, cx| {
-        model.routing = match send {
-            Some(send) => Routing::Sending(send.scope),
-            None => Routing::Active,
+    if mode == Mode::Pause {
+        refresh_pause_target(&model, cx);
+    }
+    let now = SystemTime::now();
+    let (routing, wanted) = {
+        let model = model.read(cx);
+        let scope = match (kind.unwrap_or(model.for_kind), next) {
+            (ForKind::Links, Some(n)) => SendScope::Next { left: n, of: n },
+            (kind, _) => model.scope_for(kind, now),
         };
+        match mode {
+            Mode::Rules => (Routing::Active, None),
+            Mode::Pause => (
+                Routing::Paused,
+                Some(Override::Paused(target_of(&model.pause_target))),
+            ),
+            Mode::Send => (
+                Routing::Sending(scope),
+                Some(Override::Sending(SendTo {
+                    destination: model.destination.target(),
+                    scope,
+                })),
+            ),
+            Mode::Hold => (Routing::Holding(scope), Some(Override::Holding(scope))),
+        }
+    };
+    if let Some(router) = router(cx) {
+        router.set_override(wanted);
+    }
+    model.update(cx, |model, cx| {
+        model.routing = routing;
+        if let Some(kind) = kind {
+            model.for_kind = kind;
+        }
         cx.notify();
     });
-    follow_send_clock(&model, cx);
+    follow_clock(&model, cx);
 }
 
-/// Send the next link to `destination`: the Overview's Next link here
-/// (design: Send Links 2c). Always one link, whatever the stepper says.
+/// The Overview node's Next link here: always the one next link.
 pub fn send_next_to(destination: SendDestination, cx: &mut App) {
     let Some(model) = model(cx) else {
         return;
@@ -617,11 +699,9 @@ pub fn send_next_to(destination: SendDestination, cx: &mut App) {
         model.destination = destination;
         model.destination_chosen = true;
     });
-    start_send(SendMode::Next, Some(1), cx);
+    start(Mode::Send, Some(ForKind::Links), Some(1), cx);
 }
 
-/// Pick where Send links sends links. A send in force goes there from the
-/// next link on, keeping its count or time.
 pub fn choose_destination(destination: SendDestination, cx: &mut App) {
     let Some(model) = model(cx) else {
         return;
@@ -636,67 +716,115 @@ pub fn choose_destination(destination: SendDestination, cx: &mut App) {
     });
 }
 
-/// The stepper: while Next link is on, more or fewer links left (the
-/// router changes the count under its lock); otherwise how many it will
-/// take.
-pub fn step_next(delta: i64, cx: &mut App) {
+/// A For choice. While Send or Hold is on it applies from the next link:
+/// a count starts again, a time from now.
+pub fn set_for(kind: ForKind, cx: &mut App) {
     let Some(model) = model(cx) else {
         return;
     };
-    let running = matches!(model.read(cx).sending(), Some(SendScope::Next { .. }));
-    let router = router(cx);
     model.update(cx, |model, cx| {
-        let shown = i64::from(model.next_shown());
-        let wanted = (shown + delta).clamp(1, i64::from(pwrroute_router::MAX_NEXT));
-        let wanted = u32::try_from(wanted).unwrap_or(1);
-        model.next_count = wanted;
-        if running {
-            let scope = match router.and_then(|router| router.add_to_next(delta)) {
-                Some(send) => send.scope,
-                // No router (the window harness): the model counts alone,
-                // as the router would.
-                None => match model.sending() {
-                    Some(scope) => scope.stepped(delta),
-                    None => return,
-                },
-            };
-            model.routing = Routing::Sending(scope);
-        }
+        model.for_kind = kind;
         cx.notify();
     });
+    let scope = model.read(cx).scope_for(kind, SystemTime::now());
+    rescope(&model, scope, cx);
 }
 
-/// All links' length: until switched back, or for [`model::ALL_FOR`]. While
-/// All links is on, the hour starts again from now.
-pub fn set_all_for_hour(for_hour: bool, cx: &mut App) {
+/// The stepper, or Up and Down on it: a count of links, or a time. A
+/// running count keeps what was used (1 of 3 used, stepped to 5, is 4 of 5
+/// left); a running time starts again from now.
+pub fn step(delta: i64, cx: &mut App) {
     let Some(model) = model(cx) else {
         return;
     };
-    let running = matches!(model.read(cx).sending(), Some(SendScope::All { .. }));
-    model.update(cx, |model, cx| {
-        model.all_for_hour = for_hour;
-        cx.notify();
-    });
-    if running {
-        set_send_mode(SendMode::All, cx);
+    let (kind, running) = {
+        let model = model.read(cx);
+        (model.for_shown(), model.scope())
+    };
+    match kind {
+        ForKind::Links => {
+            let stepped = match running {
+                Some(scope @ SendScope::Next { .. }) => {
+                    let stepped = router(cx)
+                        .and_then(|router| router.step_next(delta))
+                        .and_then(|now| now.scope())
+                        .unwrap_or_else(|| scope.stepped(delta));
+                    model.update(cx, |model, _| set_scope(model, stepped));
+                    stepped
+                }
+                _ => {
+                    let shown = i64::from(model.read(cx).next_count);
+                    let n = (shown + delta).clamp(1, i64::from(pwrroute_router::MAX_NEXT));
+                    let n = u32::try_from(n).unwrap_or(1);
+                    SendScope::Next { left: n, of: n }
+                }
+            };
+            if let SendScope::Next { of, .. } = stepped {
+                model.update(cx, |model, cx| {
+                    model.next_count = of;
+                    cx.notify();
+                });
+            }
+        }
+        ForKind::Time => {
+            model.update(cx, |model, cx| {
+                let last = i64::try_from(TIME_STEPS.len() - 1).unwrap_or(0);
+                let at = i64::try_from(model.time_step).unwrap_or(0);
+                model.time_step = usize::try_from((at + delta).clamp(0, last)).unwrap_or(0);
+                cx.notify();
+            });
+            if running.is_some() {
+                let scope = model.read(cx).scope_for(ForKind::Time, SystemTime::now());
+                rescope(&model, scope, cx);
+            }
+        }
+        ForKind::UntilOff => {}
     }
 }
 
-/// Bring the model's send up to date with the router's: a Next link
-/// counted down by a dispatch, used up, or an hour that ran out. A fixture
-/// or a tray without a router keeps its own.
-pub fn sync_send(model: &Entity<TrayModel>, cx: &mut App) {
+/// Gives the send or hold in force `scope`, when one is on.
+fn rescope(model: &Entity<TrayModel>, scope: SendScope, cx: &mut App) {
+    if model.read(cx).scope().is_none() {
+        return;
+    }
+    let scope = router(cx)
+        .and_then(|router| router.rescope(scope))
+        .and_then(|now| now.scope())
+        .unwrap_or(scope);
+    model.update(cx, |model, cx| {
+        set_scope(model, scope);
+        cx.notify();
+    });
+    follow_clock(model, cx);
+}
+
+fn set_scope(model: &mut TrayModel, scope: SendScope) {
+    match &mut model.routing {
+        Routing::Sending(running) | Routing::Holding(running) => *running = scope,
+        Routing::Active | Routing::Paused => {}
+    }
+}
+
+/// What the router's slot holds, as the tray draws it.
+fn routing_of(slot: Option<&Override>) -> Routing {
+    match slot {
+        None => Routing::Active,
+        Some(Override::Paused(_)) => Routing::Paused,
+        Some(Override::Sending(send)) => Routing::Sending(send.scope),
+        Some(Override::Holding(scope)) => Routing::Holding(*scope),
+    }
+}
+
+/// Reads the router's slot back: it counts links down and ends a time that
+/// ran out.
+pub fn sync_override(model: &Entity<TrayModel>, cx: &mut App) {
     if !cx.try_global::<Tray>().is_some_and(|tray| tray.live) {
         return;
     }
     let Some(router) = router(cx) else {
         return;
     };
-    let routing = match (router.send_to(), router.paused()) {
-        (Some(send), _) => Routing::Sending(send.scope),
-        (None, Some(_)) => Routing::Paused,
-        (None, None) => Routing::Active,
-    };
+    let routing = routing_of(router.override_in_force().as_ref());
     model.update(cx, |model, cx| {
         if model.routing != routing {
             model.routing = routing;
@@ -705,13 +833,34 @@ pub fn sync_send(model: &Entity<TrayModel>, cx: &mut App) {
     });
 }
 
-/// While All links runs for an hour, check every second so the line
-/// counts down and every surface goes back to Rules within a second of the
-/// hour running out (design: Send Links 3a). The clock runs only then: it
-/// stops itself, and any other mode drops it.
-fn follow_send_clock(model: &Entity<TrayModel>, cx: &mut App) {
+/// Hold needs somewhere to keep what it holds: with Activity keeping
+/// nothing in memory, a held link could never be opened. A hold in force
+/// then ends now, as the router would end it at the next link.
+fn refresh_can_hold(model: &Entity<TrayModel>, cx: &mut App) {
+    let Some(router) = router(cx) else {
+        return;
+    };
+    let can_hold = router.retention().memory.count > 0;
+    if !can_hold {
+        router.set_hold(None);
+    }
+    model.update(cx, |model, cx| {
+        if model.can_hold != can_hold {
+            model.can_hold = can_hold;
+            cx.notify();
+        }
+        if !can_hold && model.holding().is_some() {
+            model.routing = Routing::Active;
+            cx.notify();
+        }
+    });
+}
+
+/// Every second while a send or a hold has a time left: the countdown,
+/// and the end of it.
+fn follow_clock(model: &Entity<TrayModel>, cx: &mut App) {
     let timed =
-        |model: &TrayModel| matches!(model.sending(), Some(SendScope::All { until: Some(_) }));
+        |model: &TrayModel| matches!(model.scope(), Some(SendScope::All { until: Some(_) }));
     let live = cx.try_global::<Tray>().is_some_and(|tray| tray.live);
     let clock = (live && timed(model.read(cx))).then(|| {
         let model = model.clone();
@@ -719,7 +868,7 @@ fn follow_send_clock(model: &Entity<TrayModel>, cx: &mut App) {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let ticking = cx.update(|cx| {
-                    sync_send(&model, cx);
+                    sync_override(&model, cx);
                     model.update(cx, |_, cx| cx.notify());
                     timed(model.read(cx))
                 });
@@ -730,7 +879,74 @@ fn follow_send_clock(model: &Entity<TrayModel>, cx: &mut App) {
         })
     });
     if cx.has_global::<Tray>() {
-        cx.global_mut::<Tray>().send_clock = clock;
+        cx.global_mut::<Tray>().clock = clock;
+    }
+}
+
+/// Opens a held link: where the rules send it now, or where the user
+/// picked. The router does it on its own thread; the feed then says it no
+/// longer waits.
+pub fn open_held(id: DispatchId, how: OpenAs, cx: &mut App) {
+    open_held_all(vec![(id, how)], cx);
+}
+
+/// Open all: every held link the tray lists, each where the rules send it.
+pub fn open_all_held(cx: &mut App) {
+    let Some(model) = model(cx) else {
+        return;
+    };
+    let ids = model
+        .read(cx)
+        .held
+        .iter()
+        .map(|held| (held.id, OpenAs::Rules))
+        .collect();
+    open_held_all(ids, cx);
+}
+
+fn open_held_all(links: Vec<(DispatchId, OpenAs)>, cx: &mut App) {
+    let Some(router) = router(cx) else {
+        return;
+    };
+    cx.background_executor()
+        .spawn(async move {
+            for (id, how) in links {
+                if let Err(error) = router.open_not_opened(id, how) {
+                    log::warn!("could not open held link {}: {error}", id.0);
+                }
+            }
+        })
+        .detach();
+}
+
+/// Make a rule…: the main window on Activity, with Add a rule open for the
+/// held link's record.
+pub fn make_rule_for(id: DispatchId, cx: &mut App) {
+    show_screen(Screen::Activity, cx);
+    let main = cx
+        .windows()
+        .iter()
+        .find_map(|window| window.downcast::<PwrRoute>());
+    if let Some(main) = main {
+        let key = crate::activity::RowKey {
+            id,
+            journaled: false,
+        };
+        let _ = main.update(cx, |app, window, cx| app.add_rule(key, window, cx));
+    }
+}
+
+/// Copy link: the held link as its record keeps it.
+pub fn copy_held(id: DispatchId, cx: &mut App) {
+    let url = activity::feed(cx).and_then(|feed| {
+        feed.read(cx)
+            .records()
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| record.link.url.clone())
+    });
+    if let Some(url) = url {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(url));
     }
 }
 
@@ -850,14 +1066,10 @@ mod target_tests {
         let target = pause_target(Some(&rules("com.microsoft.edgemac", "")), None, &mut cache);
         let mut model = TrayModel::fixture(SystemTime::now());
         model.pause_target = target.clone();
-        assert_eq!(
-            model.pause_detail(),
-            "Send every link to Microsoft Edge until switched back."
-        );
         model.set_paused(true);
         assert_eq!(
-            model.pause_detail(),
-            "Everything goes to Microsoft Edge. Rewrites still run."
+            model::runs_text(&model.live(SystemTime::now()).unwrap().runs),
+            "Every link to Microsoft Edge. Rewrites still run."
         );
         assert!(
             !model.tooltip().contains("com.microsoft"),

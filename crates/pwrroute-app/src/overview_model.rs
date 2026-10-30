@@ -25,6 +25,7 @@ use pwrroute_engine::{
 
 use crate::activity::{Counts, Filter, HitKey, Tally, thousands};
 use crate::default_browser::DefaultState;
+use crate::tray::model::{ForKind, Mode};
 use crate::widgets::{AppBadge, badge_for};
 
 /// A routed card shows every profile that has a route, then idle ones
@@ -149,6 +150,55 @@ impl Sending {
     }
 }
 
+/// Links are held: recorded and not opened (design: Incoming Links 3b).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Holding {
+    /// The next few, or for a while.
+    pub scope: pwrroute_router::SendScope,
+}
+
+impl Holding {
+    /// "holding · 1 of 3 left", "holding · 41:52 left", "holding".
+    pub fn short(&self, now: SystemTime) -> String {
+        match self.scope {
+            pwrroute_router::SendScope::Next { left, of } if of > 1 => {
+                format!("holding \u{00b7} {left} of {of} left")
+            }
+            pwrroute_router::SendScope::All { until: Some(until) } => format!(
+                "holding \u{00b7} {} left",
+                crate::tray::model::countdown(until.duration_since(now).unwrap_or_default())
+            ),
+            _ => "holding".to_owned(),
+        }
+    }
+}
+
+/// The Incoming links switch as the hero draws it (design: Incoming Links
+/// 3a-3c): which mode is on, and Send's and Hold's For row. In
+/// [`Status::incoming`] only the For row's choice, the stepper and
+/// `can_hold` count, as the tray has them; [`Status::switch`] fills in the
+/// rest from the slot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Incoming {
+    pub mode: Mode,
+    pub for_kind: ForKind,
+    /// The stepper's value; `None` for Until off.
+    pub stepper: Option<String>,
+    /// Hold can turn on: Activity keeps links in memory.
+    pub can_hold: bool,
+}
+
+impl Default for Incoming {
+    fn default() -> Self {
+        Self {
+            mode: Mode::Rules,
+            for_kind: ForKind::Links,
+            stepper: Some("1".to_owned()),
+            can_hold: true,
+        }
+    }
+}
+
 /// The config in charge is in trouble, as the router reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfigTrouble {
@@ -182,6 +232,12 @@ pub struct Status {
     pub paused: Option<Pause>,
     /// Links sent without a rule; never with `paused` (one slot).
     pub sending: Option<Sending>,
+    /// Links held; never with a pause or a send (one slot).
+    pub holding: Option<Holding>,
+    /// Held links that still wait, whether or not a hold is on.
+    pub held: usize,
+    /// The switch, for the hero.
+    pub incoming: Incoming,
     pub default: DefaultState,
     /// The config in charge did not load, or did not reload.
     pub config_error: Option<ConfigTrouble>,
@@ -197,14 +253,51 @@ impl Status {
         Self {
             paused: None,
             sending: None,
+            holding: None,
+            held: 0,
+            incoming: Incoming::default(),
             default: DefaultState::PwrRoute,
             config_error: None,
         }
     }
 
+    /// The switch as the slot has it: the mode on, and the For row's
+    /// choice and stepper (a running count's links in all), else the
+    /// tray's.
+    pub fn switch(&self) -> Incoming {
+        let scope = self
+            .sending
+            .as_ref()
+            .map(|sending| sending.scope)
+            .or(self.holding.as_ref().map(|holding| holding.scope));
+        let mode = if self.paused.is_some() {
+            Mode::Pause
+        } else if self.holding.is_some() {
+            Mode::Hold
+        } else if self.sending.is_some() {
+            Mode::Send
+        } else {
+            Mode::Rules
+        };
+        let for_kind = scope.map_or(self.incoming.for_kind, ForKind::of);
+        let stepper = match (for_kind, scope) {
+            (ForKind::UntilOff, _) => None,
+            (ForKind::Links, Some(pwrroute_router::SendScope::Next { of, .. })) => {
+                Some(of.to_string())
+            }
+            _ => self.incoming.stepper.clone(),
+        };
+        Incoming {
+            mode,
+            for_kind,
+            stepper,
+            can_hold: self.incoming.can_hold,
+        }
+    }
+
     /// The hero's state, highest priority first: the config did not load
-    /// (or reload), paused, sending, not the default browser, unknown,
-    /// routing.
+    /// (or reload), paused, holding, sending, not the default browser,
+    /// unknown, routing.
     pub fn state(&self) -> State {
         if let Some(trouble) = &self.config_error {
             match trouble {
@@ -213,6 +306,8 @@ impl Status {
             }
         } else if self.paused.is_some() {
             State::Paused
+        } else if self.holding.is_some() {
+            State::Holding
         } else if self.sending.is_some() {
             State::Sending
         } else {
@@ -234,6 +329,8 @@ pub enum State {
     /// Its last reload failed: the version that loaded before still runs.
     ConfigStale,
     Paused,
+    /// The user holds links: they are recorded and wait to be opened.
+    Holding,
     /// The user sent links somewhere: Next link or All links.
     Sending,
     NotDefault,
@@ -248,6 +345,8 @@ pub enum Tone {
     Warn,
     Neutral,
     Danger,
+    /// Hold's info blue: the user chose it, nothing is wrong.
+    Info,
 }
 
 /// What a button does.
@@ -258,7 +357,7 @@ pub enum Action {
     MakeDefault,
     OpenBrowsersSettings,
     TestLink,
-    /// End a send: the rules decide again.
+    /// End a send or a hold: the rules decide again.
     BackToRules,
 }
 
@@ -1578,6 +1677,9 @@ pub const CHANGE_IN_RULES: &str = "Change in Rules \u{203a}";
 #[derive(Clone, Debug, PartialEq)]
 pub struct Overview {
     pub hero: Hero,
+    /// The hero's switch; `None` while the config is in trouble, when the
+    /// hero's one button is the way out.
+    pub incoming: Option<Incoming>,
     pub setup: Option<Setup>,
     pub tiles: [Tile; 4],
     pub map: Map,
@@ -1798,6 +1900,39 @@ pub fn sending_sentence(sending: &Sending) -> String {
         pwrroute_router::SendScope::All { .. } => "All links".to_owned(),
     };
     format!("{what} \u{2192} {}.", sending.display)
+}
+
+/// The hero's sentence while links are held (design: Incoming Links 3b):
+/// "Holding the next link.", "Holding the next 3 links.", "Holding every
+/// link."
+pub fn holding_sentence(holding: &Holding) -> String {
+    match holding.scope {
+        pwrroute_router::SendScope::Next { of: 1, .. } => "Holding the next link.".to_owned(),
+        pwrroute_router::SendScope::Next { of, .. } => format!("Holding the next {of} links."),
+        pwrroute_router::SendScope::All { .. } => "Holding every link.".to_owned(),
+    }
+}
+
+/// The line under it: what is left, then how many wait.
+pub fn holding_detail(holding: &Holding, held: usize, now: SystemTime) -> Vec<String> {
+    let left = match holding.scope {
+        pwrroute_router::SendScope::Next { of: 1, .. } => {
+            "It waits in Activity, then your rules decide again".to_owned()
+        }
+        pwrroute_router::SendScope::Next { left, of } => {
+            format!("{left} of {of} left, then your rules decide again")
+        }
+        pwrroute_router::SendScope::All { until: Some(until) } => format!(
+            "{} left, then your rules decide again",
+            crate::tray::model::countdown(until.duration_since(now).unwrap_or_default())
+        ),
+        pwrroute_router::SendScope::All { until: None } => "Until you go back to rules".to_owned(),
+    };
+    let mut detail = vec![left];
+    if held > 0 {
+        detail.push(format!("{held} held in Activity"));
+    }
+    detail
 }
 
 /// The hero's line under it: what happens after, and that rewrites run.
@@ -2757,21 +2892,27 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             .map(|shown| format!("Import from {shown}\u{2026}")),
     });
 
+    // Every link sent elsewhere or held: the rules wait.
     let all_sent = matches!(
-        status.sending.as_ref().map(|sending| sending.scope),
+        status
+            .sending
+            .as_ref()
+            .map(|sending| sending.scope)
+            .or(status.holding.as_ref().map(|holding| holding.scope)),
         Some(pwrroute_router::SendScope::All { .. })
     );
     let map = Map {
         caption: match state {
             State::Paused => Caption::WhenResumes,
-            State::Sending if all_sent => Caption::WhenRulesDecide,
+            State::Sending | State::Holding if all_sent => Caption::WhenRulesDecide,
             State::NotDefault => Caption::WhatWillHappen,
             _ => Caption::InOrder,
         },
         counts,
         // Paused, or every link sent elsewhere: the rules wait. Next link
         // leaves them lit, since they are back after it.
-        dimmed: state == State::Paused || (state == State::Sending && all_sent),
+        dimmed: state == State::Paused
+            || (matches!(state, State::Sending | State::Holding) && all_sent),
         in_use: in_use_line,
         also,
         rewrites: (rewrites > 0).then(|| {
@@ -2896,6 +3037,16 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             )],
             action: Some(Action::Resume),
         },
+        State::Holding => {
+            let holding = status.holding.as_ref().expect("Holding has a hold");
+            Hero {
+                state,
+                tone: Tone::Info,
+                sentence: holding_sentence(holding),
+                detail: holding_detail(holding, status.held, SystemTime::now()),
+                action: Some(Action::BackToRules),
+            }
+        }
         State::Sending => {
             let sending = status.sending.as_ref().expect("Sending has a send");
             Hero {
@@ -2948,14 +3099,21 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         danger: false,
     };
     let today = inputs.today;
+    // Held links take Failed's tile while they wait, unless a link
+    // failed (design: Incoming Links 3b).
+    let last = if status.held > 0 && today.failed == 0 {
+        tile("Held", status.held as u64, Filter::NotOpened)
+    } else {
+        Tile {
+            danger: today.failed > 0,
+            ..tile("Failed", today.failed, Filter::Failed)
+        }
+    };
     let tiles = [
         tile("Links today", today.routed, Filter::All),
         tile("Took Everything else", today.unrouted, Filter::Unrouted),
         tile("Rewritten", today.rewritten, Filter::Rewritten),
-        Tile {
-            danger: today.failed > 0,
-            ..tile("Failed", today.failed, Filter::Failed)
-        },
+        last,
     ];
 
     // The callout: only while a config that loaded is in charge, and
@@ -3064,6 +3222,8 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     });
 
     Overview {
+        incoming: (!matches!(state, State::ConfigError | State::ConfigStale))
+            .then(|| status.switch()),
         hero,
         setup,
         tiles,

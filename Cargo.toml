@@ -7,6 +7,7 @@ members = [
     "crates/pwrroute-mcp",
     "crates/pwrroute-os",
     "crates/pwrroute-router",
+    "crates/pwrroute-sync",
     "e2e",
     "xtask",
 ]
@@ -14,7 +15,7 @@ members = [
 [workspace.package]
 # The release version. `cargo xtask release-check` compares it with the tag
 # and CHANGELOG.md, so bump all three together.
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -26,6 +27,7 @@ pwrroute-browsers = { path = "crates/pwrroute-browsers" }
 pwrroute-engine = { path = "crates/pwrroute-engine" }
 pwrroute-os = { path = "crates/pwrroute-os" }
 pwrroute-router = { path = "crates/pwrroute-router" }
+pwrroute-sync = { path = "crates/pwrroute-sync" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

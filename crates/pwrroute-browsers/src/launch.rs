@@ -1306,6 +1306,7 @@ mod tests {
                         default_profile: "Personal".into(),
                         ..RulesFile::default()
                     },
+                    ..Default::default()
                 },
                 Rc::new(DefaultHost),
                 Limits::default(),

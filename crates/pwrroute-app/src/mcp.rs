@@ -138,7 +138,11 @@ impl AuditSink for AppAudit {
 pub(crate) fn follow_rules_writes(rules_written: async_channel::Receiver<()>, cx: &mut App) {
     cx.spawn(async move |cx| {
         while rules_written.recv().await.is_ok() {
-            cx.update(crate::app::sync_rules_windows);
+            cx.update(|cx| {
+                crate::app::sync_rules_windows(cx);
+                // An agent's write syncs like any other save, at once.
+                crate::sync::wake(cx);
+            });
         }
     })
     .detach();

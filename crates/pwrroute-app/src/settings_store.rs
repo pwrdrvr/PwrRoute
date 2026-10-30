@@ -3,9 +3,10 @@
 //! journal (Settings › Privacy), the browsers hidden from the pickers
 //! (Settings › Browsers), the rules source the importer's Choose source
 //! picked, with the config notices dismissed (`source`), and the release
-//! channel picked in Settings › Updates (`updates`) and the Logs window's
+//! channel picked in Settings › Updates (`updates`), the Logs window's
 //! view (`logs`: Wrap, Filter or Highlight, Context, Include diagnostics
-//! and the levels); other panes join as their producers land.
+//! and the levels) and the folders rules sync with (`sync`); other panes
+//! join as their producers land.
 //!
 //! [`Settings::load`] reads the file (absent means the defaults) and
 //! [`Settings::save`] writes it through a sibling file and a rename, like
@@ -63,6 +64,10 @@ pub struct Settings {
     /// View › Zoom. Left out at Actual Size.
     #[serde(skip_serializing_if = "ViewSettings::is_default")]
     pub view: ViewSettings,
+    /// Settings › Sync: the folders `rules.json` syncs with. Left out
+    /// while nothing syncs.
+    #[serde(skip_serializing_if = "SyncSettings::is_default")]
+    pub sync: SyncSettings,
     #[serde(skip_serializing_if = "ExperimentalSettings::is_default")]
     pub experimental: ExperimentalSettings,
 }
@@ -100,6 +105,24 @@ impl ViewSettings {
     /// The zoom as a factor, snapped to one of `theme::ZOOM_STEPS`.
     pub fn zoom(&self) -> f32 {
         crate::theme::snap_zoom(f32::from(self.zoom) / 100.0)
+    }
+}
+
+/// Which cloud folders this machine syncs its rules with, and whether the
+/// Finicky config syncs too. Paths of folders, never a link.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SyncSettings {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<pwrroute_sync::Target>,
+    /// "Also sync" the Finicky config in charge.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub config: bool,
+}
+
+impl SyncSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 

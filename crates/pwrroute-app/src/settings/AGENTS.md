@@ -4,7 +4,8 @@ The Settings window: its own window, one at a time (`open`), as in PwrSnap
 and PwrGit. Drawn from `design/PwrRoute Settings.dc.html` (1a Local agents,
 1b Configuration, 1c Browsers), `design/PwrRoute Activity Privacy and
 Route Tests.dc.html` turn 1 (Privacy) and `design/PwrRoute Updates and
-Default Browser.dc.html` 1a/1b (Updates); Diagnostics and About follow
+Default Browser.dc.html` 1a/1b (Updates), `design/PwrRoute Synced
+Rules.dc.html` and its Machine file (Sync); Diagnostics and About follow
 the family's panes in the same controls. There is no General pane until
 there is something to put in it; About leads the nav, Browsers opens first.
 
@@ -46,7 +47,14 @@ there is something to put in it; About leads the nav, Browsers opens first.
   saved comes back as the `.errl` line "Not saved: {reason}." and the
   control shows what the file still says.
   `follow` reads the pane again when the window comes to the front and
-  the router's source or either file's time changed. `updates_host`:
+  the router's source or either file's time changed. `sync_host`: the
+  sync service's `Status` (`crate::sync::feed`), the places
+  `pwrroute_sync::detect` finds, `machine.json` and the synced
+  destinations and sets; a folder is added only from Add or Choose…, a
+  conflict resolves only from its buttons (naming the hash it showed), and
+  binding a destination or switching a set writes `machine.json` through
+  `sync::edit_machine`. Its copy says plainly what goes to the cloud.
+  `updates_host`:
   `updater::installation` and
   `updater::state`; a dev build reads "not updatable", no check reads
   "never checked", and Check now is the menu's check (`updater::install`

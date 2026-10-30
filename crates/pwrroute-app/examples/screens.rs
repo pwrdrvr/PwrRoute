@@ -152,6 +152,10 @@ mod settings_store;
 #[cfg(target_os = "macos")]
 #[path = "../src/start_from.rs"]
 mod start_from;
+
+#[cfg(target_os = "macos")]
+#[path = "../src/sync.rs"]
+mod sync;
 #[cfg(target_os = "macos")]
 #[path = "../src/test_link.rs"]
 mod test_link;
@@ -187,8 +191,13 @@ mod tray {
         None
     }
 
-    /// Overview's Back to rules and Next link here: drawn only.
-    pub fn set_send_mode(_: crate::tray_model::SendMode, _: &mut gpui_kit::App) {}
+    /// Overview's switch, For row, Back to rules and Next link here:
+    /// drawn only.
+    pub fn set_mode(_: crate::tray_model::Mode, _: &mut gpui_kit::App) {}
+
+    pub fn set_for(_: crate::tray_model::ForKind, _: &mut gpui_kit::App) {}
+
+    pub fn step(_: i64, _: &mut gpui_kit::App) {}
 
     pub fn send_next_to(_: crate::tray_model::SendDestination, _: &mut gpui_kit::App) {}
 
@@ -219,18 +228,29 @@ enum TrayCommand {
     Settings,
     TogglePause,
     MakeDefault,
+    HeldLinks,
+    Sync,
     Quit,
 }
 
 #[cfg(target_os = "macos")]
-fn toggle_pause(_: &gpui_kit::Entity<tray_model::TrayModel>, _: &mut gpui_kit::App) {}
-
-#[cfg(target_os = "macos")]
 fn dropdown_closed(_: &mut gpui_kit::App) {}
 
-// The dropdown's Send links controls: drawn only.
+// The dropdown's Incoming links controls and held links: drawn only.
 #[cfg(target_os = "macos")]
-fn set_send_mode(_: tray_model::SendMode, _: &mut gpui_kit::App) {}
+use tray::{set_for, set_mode, step};
+
+#[cfg(target_os = "macos")]
+fn open_held(_: pwrroute_router::DispatchId, _: pwrroute_router::OpenAs, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn open_all_held(_: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn make_rule_for(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn copy_held(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn choose_destination(_: tray_model::SendDestination, _: &mut gpui_kit::App) {}
@@ -239,12 +259,6 @@ fn choose_destination(_: tray_model::SendDestination, _: &mut gpui_kit::App) {}
 fn destination_of(choice: &destinations::Choice) -> tray_model::SendDestination {
     tray::destination(&choice.browser, &choice.profile, choice.private)
 }
-
-#[cfg(target_os = "macos")]
-fn step_next(_: i64, _: &mut gpui_kit::App) {}
-
-#[cfg(target_os = "macos")]
-fn set_all_for_hour(_: bool, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn run(_: TrayCommand, _: &mut gpui_kit::App) {}
@@ -964,12 +978,16 @@ fn main() {
     // The tray dropdown (Tray and First Run 1a; Popovers and Overflow 2a)
     // with the window sized as `dropdown::open` sizes it, over the design's
     // fixture with a rules.json default saved as a bundle id and a recent
-    // link to a profile with a long name; then Send links (Send Links 1b,
-    // 1d, 1e): the destination list open, three next links with one used,
-    // and all links for an hour.
+    // link to a profile with a long name; then Incoming links (Incoming
+    // Links 2b-2e): the destination list open, three next links with one
+    // used, all links for an hour, holding with two held and one row's
+    // actions open, and paused.
     {
         use pwrroute_router::{SendScope, Sent};
-        use tray::model::{BrowserLabel, Recent, RecentRoute, Routing, SendDestination, TrayModel};
+        use tray::dropdown::Unfolded;
+        use tray::model::{
+            BrowserLabel, ForKind, Recent, RecentRoute, Routing, SendDestination, TrayModel,
+        };
 
         let now = std::time::SystemTime::now();
         let mut model = TrayModel::fixture(now);
@@ -991,6 +1009,7 @@ fn main() {
         let mut next = base.clone();
         next.routing = Routing::Sending(SendScope::Next { left: 2, of: 3 });
         next.next_count = 3;
+        next.for_kind = ForKind::Links;
         next.recents.insert(
             0,
             Recent::from_urls(
@@ -1009,18 +1028,53 @@ fn main() {
         all.routing = Routing::Sending(SendScope::All {
             until: Some(now + Duration::from_secs(52 * 60)),
         });
-        all.all_for_hour = true;
+        all.for_kind = ForKind::Time;
         all.destination = SendDestination {
             browser: BrowserLabel::new("Ed", "Microsoft Edge", None),
             private: Some("InPrivate".into()),
         };
+        let mut choose = base.clone();
+        choose.routing = Routing::Sending(SendScope::Next { left: 1, of: 1 });
+        let holding = TrayModel::holding_fixture(now);
+        let first_held = holding.held[0].id;
+        let mut hold_next = base.clone();
+        hold_next.routing = Routing::Holding(SendScope::Next { left: 1, of: 1 });
+        let mut synced = model.clone();
+        synced.sync = Some(tray::model::SyncRow {
+            title: "Rules synced 2 min ago".into(),
+            sub: Some("Dropbox, iCloud".into()),
+            tone: tray::model::SyncTone::Ok,
+        });
         let shots = [
-            ("tray-1a", model, false),
-            ("tray-send-choose", base, true),
-            ("tray-send-next", next, false),
-            ("tray-send-all", all, false),
+            ("tray-1a", model, Unfolded::default()),
+            ("tray-synced", synced, Unfolded::default()),
+            (
+                "tray-send-choose",
+                choose,
+                Unfolded {
+                    destinations: true,
+                    ..Unfolded::default()
+                },
+            ),
+            ("tray-send-next", next, Unfolded::default()),
+            ("tray-send-all", all, Unfolded::default()),
+            ("tray-hold", holding.clone(), Unfolded::default()),
+            (
+                "tray-hold-actions",
+                holding,
+                Unfolded {
+                    held: Some(first_held),
+                    ..Unfolded::default()
+                },
+            ),
+            ("tray-hold-next", hold_next, Unfolded::default()),
+            (
+                "tray-paused",
+                TrayModel::paused_fixture(now),
+                Unfolded::default(),
+            ),
         ];
-        for (name, model, choosing) in shots {
+        for (name, model, unfolded) in shots {
             let mut cx = HeadlessAppContext::with_platform(
                 gpui_kit::platform::current_platform(true).text_system(),
                 Arc::new(assets::Assets),
@@ -1030,7 +1084,7 @@ fn main() {
             let height = cx.update(|cx| {
                 tray::dropdown::fitted_height(
                     &model,
-                    choosing,
+                    unfolded,
                     &cx.text_system().clone(),
                     px(f32::MAX),
                 )
@@ -1048,7 +1102,7 @@ fn main() {
                                 window,
                                 cx,
                             );
-                            dropdown.choosing = choosing;
+                            dropdown.unfolded = unfolded;
                             dropdown
                         })
                     },
@@ -1309,6 +1363,9 @@ fn main() {
         ("settings-1b", settings::Pane::Configuration, 1315.0),
         ("settings-1c", settings::Pane::Browsers, 880.0),
         ("settings-privacy", settings::Pane::Privacy, 1560.0),
+        // Synced Rules 1b and 1c, with 2a's machine card.
+        ("settings-sync", settings::Pane::Sync, 1500.0),
+        ("settings-sync-conflict", settings::Pane::Sync, 1300.0),
         // The family's panes, at a height that holds their cards.
         ("settings-updates", settings::Pane::Updates, 760.0),
         ("settings-experimental", settings::Pane::Experimental, 760.0),
@@ -1327,11 +1384,12 @@ fn main() {
         let handle = cx
             .open_window(win(1058.0, height), |_, cx| {
                 cx.new(|cx| {
-                    let mut view = settings::SettingsWindow::new(
-                        settings::fixtures::model(),
-                        std::rc::Rc::new(|_, _, _| {}),
-                        cx,
-                    );
+                    let mut model = settings::fixtures::model();
+                    if name == "settings-sync-conflict" {
+                        model.sync = settings::fixtures::sync_conflict();
+                    }
+                    let mut view =
+                        settings::SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx);
                     view.pane = pane;
                     view
                 })
@@ -1805,7 +1863,7 @@ fn main() {
     // 1a-3f) over its example.com fixtures, with the routing state set by
     // hand and motion off so each shot is the settled frame.
     {
-        use overview_model::{ConfigTrouble, FocusKey, Pause, RowSource, Sending, Status};
+        use overview_model::{ConfigTrouble, FocusKey, Holding, Pause, RowSource, Sending, Status};
         use pwrroute_engine::{Precedence, RulesFile};
 
         type Day = fn() -> Vec<pwrroute_router::DispatchRecord>;
@@ -2044,6 +2102,24 @@ fn main() {
                 },
                 prepare: |_| {},
             },
+            // Incoming links (design: Incoming Links 3b): holding the next
+            // 3 links, one used, two held; the Held tile, the rail's count.
+            Shot {
+                name: "app-0-overview-holding",
+                width: 1000.0,
+                config: None,
+                rules: fixtures::overview_paused_rules,
+                exists: true,
+                day: Some(fixtures::overview_paused_day),
+                status: Status {
+                    holding: Some(Holding {
+                        scope: pwrroute_router::SendScope::Next { left: 2, of: 3 },
+                    }),
+                    held: 2,
+                    ..routing()
+                },
+                prepare: |_| {},
+            },
             Shot {
                 name: "app-0-overview-not-default",
                 width: 1000.0,
@@ -2276,6 +2352,71 @@ fn main() {
                 app.navigate(Screen::Rules, window, cx);
             },
         );
+    }
+
+    // Synced Rules 2b and 3a: the Rules list with set headings, rows that
+    // open a named destination, the editor's Destinations lane, Rule set
+    // and Name it, and the rail foot's sync line. Contrived names and
+    // example hosts, in a scratch directory.
+    {
+        let scratch = std::env::temp_dir().join("pwrroute-screens-synced");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let rules = scratch.join("rules.json");
+        std::fs::write(
+            &rules,
+            r#"{
+  "defaultBrowser": "Safari",
+  "defaultProfile": "Personal",
+  "defaultDestination": "Personal",
+  "destinations": [
+    { "name": "Work 1", "browser": "Google Chrome", "profile": "Profile 3" },
+    { "name": "Work 2", "browser": "Google Chrome", "profile": "Work 2" },
+    { "name": "Personal", "browser": "Safari", "profile": "Personal" },
+    { "name": "PwrDrvr", "browser": "Arc" }
+  ],
+  "sets": [{ "name": "PwrDrvr", "enabled": false }],
+  "rules": [
+    { "match": "news.example.com/*", "browser": "Safari", "profile": "Personal", "destination": "Personal" },
+    { "match": "mail.example.com/*", "browser": "Google Chrome", "profile": "Profile 3", "destination": "Work 1" },
+    { "match": "*.example.net/*", "browser": "Google Chrome", "profile": "Work 2", "destination": "Work 2", "set": "Work 2" },
+    { "match": "tickets.example.net/*", "browser": "Google Chrome", "profile": "Work 2", "destination": "Work 2", "set": "Work 2" },
+    { "match": "docs.example.net/*", "browser": "Google Chrome", "profile": "Work 2", "destination": "Work 2", "set": "Work 2" },
+    { "match": "app.example.dev/*", "browser": "Arc", "destination": "PwrDrvr", "set": "PwrDrvr" },
+    { "match": "admin.example.dev/*", "browser": "Arc", "destination": "PwrDrvr", "set": "PwrDrvr" },
+    { "match": "status.example.org/*", "browser": "Firefox" }
+  ]
+}
+"#,
+        )
+        .expect("write the rules");
+        let canvas = move |app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>| {
+            let file = pwrroute_engine::RulesFile::load(&rules).expect("read the rules");
+            app.store = rules_store::RulesStore::from_file(
+                Some(rules.clone()),
+                file,
+                true,
+                Some(std::time::SystemTime::now()),
+            );
+            app.sync_line = Some(sync::Line {
+                text: "synced \u{00b7} 2 min ago".into(),
+                tone: sync::Tone::Quiet,
+                chip: None,
+                tip: None,
+            });
+            app.refresh(cx);
+        };
+        let canvas = std::rc::Rc::new(canvas);
+        let named = canvas.clone();
+        shoot("app-synced-rules", None, &move |app, window, cx| {
+            named(app, cx);
+            app.navigate(Screen::Rules, window, cx);
+            app.select(Selection::Handler(3), cx);
+        });
+        shoot("app-synced-rules-name-it", None, &move |app, window, cx| {
+            canvas(app, cx);
+            app.navigate(Screen::Rules, window, cx);
+            app.select(Selection::Handler(7), cx);
+        });
     }
 
     // Settings Everything else (WP-F): Configuration while ~/.finicky.ts is

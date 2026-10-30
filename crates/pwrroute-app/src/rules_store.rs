@@ -327,15 +327,108 @@ impl RulesStore {
     /// The rows of the handlers card.
     pub fn handlers(&self) -> Vec<Handler> {
         let problems = self.problems();
+        let machine = crate::sync::machine();
+        // What each rule opens on this machine: a named destination's
+        // binding here (design: Synced Rules 2b).
+        let here = self.edited().for_machine(&machine);
         self.rules
             .iter()
             .enumerate()
             .map(|(i, entry)| {
                 let problems = problems.at(Place::Rule(i));
                 let badge = self.badge(&problems, self.saved_rules.contains_key(&entry.id));
-                rules_model::handler(&entry.value, badge, problems)
+                let shown = match (&entry.value.destination, here.rules.get(i)) {
+                    (Some(_), Some(routed)) => engine::Rule {
+                        browser: routed.browser.clone(),
+                        profile: routed.profile.clone(),
+                        ..entry.value.clone()
+                    },
+                    _ => entry.value.clone(),
+                };
+                let mut handler = rules_model::handler(&shown, badge, problems);
+                if entry.value.enabled
+                    && let Some(set) = &entry.value.set
+                    && !self.base.set_enabled_on(set, &machine)
+                {
+                    handler.rule.matchers.push(rules_model::Matcher::OffHere);
+                }
+                handler
             })
             .collect()
+    }
+
+    /// The named destinations `rules.json` defines, in its order.
+    pub fn destinations(&self) -> &[engine::Destination] {
+        &self.base.destinations
+    }
+
+    /// Opens the handler in a named destination: `destination` is written
+    /// and the synced binding copied into `browser`/`profile`, so a reader
+    /// that ignores names routes the same way. `None` clears the name and
+    /// keeps the browser it had.
+    pub fn set_destination(&mut self, handler: usize, name: Option<&str>) {
+        let binding = name.and_then(|n| self.base.destination(n).cloned());
+        let Some(rule) = self.rule_mut(handler) else {
+            return;
+        };
+        let name = name.map(str::to_owned);
+        if rule.destination == name && binding.as_ref().is_none_or(|b| b.browser == rule.browser) {
+            return;
+        }
+        rule.destination = name;
+        if let Some(binding) = binding {
+            rule.browser = binding.browser;
+            rule.profile = binding.profile;
+        }
+        self.touch();
+    }
+
+    /// Names what the handler opens: a new `destinations[]` entry bound to
+    /// its browser, profile and private window, which the handler then
+    /// opens by name. A name already taken opens that destination instead.
+    /// Returns the name used, or why there is none.
+    pub fn name_destination(&mut self, handler: usize, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Type a name first.".into());
+        }
+        if self.base.destination(name).is_some() {
+            self.set_destination(handler, Some(name));
+            return Ok(name.to_owned());
+        }
+        let Some(rule) = self.rule_mut(handler) else {
+            return Err("No rule is selected.".into());
+        };
+        if rule.browser.trim().is_empty() {
+            return Err("Choose where the rule opens first.".into());
+        }
+        if engine::is_dont_open(&rule.browser) {
+            return Err("A rule that does not open its links has no place to name.".into());
+        }
+        let binding = engine::Binding {
+            browser: rule.browser.clone(),
+            profile: rule.profile.clone(),
+            private: rule.private,
+        };
+        rule.destination = Some(name.to_owned());
+        self.base.destinations.push(engine::Destination {
+            name: name.to_owned(),
+            binding,
+        });
+        self.touch();
+        Ok(name.to_owned())
+    }
+
+    /// Puts the handler in a rule set by name; blank takes it out of any.
+    pub fn set_rule_set(&mut self, handler: usize, name: &str) {
+        let name = name.trim();
+        let set = (!name.is_empty()).then(|| name.to_owned());
+        if let Some(rule) = self.rule_mut(handler)
+            && rule.set != set
+        {
+            rule.set = set;
+            self.touch();
+        }
     }
 
     fn badge(&self, problems: &[String], saved: bool) -> RowBadge {
@@ -614,11 +707,14 @@ impl RulesStore {
         }
     }
 
+    /// Sets the handler's browser. A browser picked or typed by hand
+    /// replaces a named destination, which would otherwise decide.
     pub fn set_browser(&mut self, handler: usize, text: &str) {
         if let Some(rule) = self.rule_mut(handler)
             && rule.browser != text
         {
             rule.browser = text.to_owned();
+            rule.destination = None;
             self.touch();
         }
     }
@@ -628,6 +724,7 @@ impl RulesStore {
             && rule.profile != text
         {
             rule.profile = text.to_owned();
+            rule.destination = None;
             self.touch();
         }
     }
@@ -1059,6 +1156,41 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&text).unwrap(),
             serde_json::to_value(&file).unwrap()
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn naming_what_a_rule_opens_makes_a_destination_it_opens_by_name() {
+        let dir = scratch("name-destination");
+        let path = dir.join("rules.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"{ "defaultBrowser": "Safari",
+                 "rules": [{ "match": "work.example.com/*", "browser": "Google Chrome", "profile": "Work" },
+                           { "match": "docs.example.com/*", "browser": "Firefox" }] }"#,
+        )
+        .unwrap();
+        let mut store = RulesStore::load(Some(path.clone()));
+        assert!(store.name_destination(0, "  ").is_err());
+        assert_eq!(
+            store.name_destination(0, " Work 1 ").as_deref(),
+            Ok("Work 1")
+        );
+        assert_eq!(store.destinations().len(), 1);
+        assert_eq!(store.destinations()[0].binding.browser, "Google Chrome");
+        assert_eq!(store.destinations()[0].binding.profile, "Work");
+        // A name already taken opens that destination, and is not added twice.
+        assert_eq!(store.name_destination(1, "Work 1").as_deref(), Ok("Work 1"));
+        assert_eq!(store.destinations().len(), 1);
+        let handlers = store.handlers();
+        assert_eq!(handlers[1].destination.as_deref(), Some("Work 1"));
+        assert_eq!(handlers[1].browser, "Google Chrome");
+        assert!(handlers.iter().all(|h| h.problems.is_empty()));
+        store.save().unwrap();
+        let saved = RulesFile::load(&path).unwrap();
+        assert_eq!(saved.destinations.len(), 1);
+        assert_eq!(saved.rules[0].destination.as_deref(), Some("Work 1"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

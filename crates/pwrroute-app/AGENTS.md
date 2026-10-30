@@ -121,7 +121,7 @@ their own modules.
   item; Rules opens as a list with nothing selected (a click or Down
   selects). `overview_model::build` is plain data over the edited
   `rules.json`, the config's `describe()`, the routing `Status` (config
-  error > paused > sending > not default > unknown > routing), the scan
+  error > paused > holding > sending > not default > unknown > routing), the scan
   (`PwrRoute::installed`; a target is drawn missing only once the scan ran)
   and the feed's counts and `Tally`. The map is a graph from rows to
   profile nodes: one card per browser with a node per profile (routed
@@ -201,6 +201,30 @@ their own modules.
   (`RulesFile::owns_default`), never the precedence alone. Rules
   and Test a link reuse Overview's source chip. Leaving Overview
   (`OverviewState::leave`) drops its fades and the callout's hand-off.
+- **Synced rules (`sync.rs`; design: Synced Rules, Synced Rules
+  Machine).** `sync::install` runs `pwrroute_sync::Service` over
+  `rules.json` (and the config in charge when `settings.json`'s
+  `sync.config` is on) and the folders in `sync.targets`; it wakes on
+  window activation and after an agent's `pwrroute_rules_apply`, and a
+  pull is followed by `app::sync_rules_windows`, so every writer goes
+  through the same path. `sync::machine()` is this machine's
+  `machine.json`; every engine that resolves a link takes it as
+  `Sources::machine`, and `edit_machine` is the one writer (it refuses a
+  `machine.json` that does not parse rather than save over it);
+  `reload_machine` follows hand edits on window activation. The files
+  that sync are re-read on every wake and pass (`follow_items`), since
+  the router publishes the config in charge after launch.
+  `sync::overall` is the one reading of how sync stands: `line_of` makes
+  the rail foot's line and the strip's chip (`chrome.rs`) from it, and
+  `tray_row_of` the tray's row (`TrayModel::sync`: the dropdown's row
+  under Incoming links, and the native menu's first row, enabled only for
+  a conflict); each opens Settings › Sync. The editor offers named
+  destinations above the lanes, Name it (Return makes a `destinations[]`
+  entry from the rule's browser, `RulesStore::name_destination`) and a
+  Rule set field. The Rules list heads each run of rules in one set
+  (`set_heading`) and draws a named destination by its name and what it
+  opens here; a rule whose set is off here is dimmed and reads "off on
+  this Mac" (`Matcher::OffHere`). Folders are added only from a click.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
   (`activity.keep`, `activity.journal`, `activity.journalDays`), the
@@ -486,8 +510,9 @@ their own modules.
   primary screen's corner, so the item counts by its center, an empty one
   not at all, and a pointer pressing the menu bar away from it wins
   (`macos::anchor_on`). Recents there are hosts only
-  (`model::host_of`), from the feed. Pause routing is
-  `RouterHandle::set_paused` from `tray::toggle_pause`, with the target
+  (`model::host_of`), from the feed. Pause is the switch's fourth
+  segment (`tray::set_mode(Mode::Pause)`, `Override::Paused`), with the
+  target
   `tray::pause_target` names: `rules.json`'s `defaultBrowser` and
   `defaultProfile`, else the config's own `defaultBrowser` when it is not
   a function (evaluated once per change of the file, `ConfigDefault`),
@@ -499,34 +524,61 @@ their own modules.
   with "paused · skipped rule 2" in the expanded row; which list comes
   from the record's `Matched` step, else the `Paused` step's `skipped`
   (the config's handlers).
-- **Send links (`tray/mod.rs`, design: Send Links).** The dropdown's
-  section above Pause routing is a three-way switch (Rules, Next link,
-  All links), the destination row with the editor's lanes in place
-  (`destinations::draw` at `Density::Compact`, over
-  `TrayModel::choices`: the scan, which already leaves out PwrRoute and
-  every other link router, less hidden apps; a pill
-  is the destination, `destination_of`), and the line
-  for the mode on: the stepper (`step_next`) or Until switched back / For
-  1 hour (`set_all_for_hour`). `set_send_mode` writes the router first
-  (Rules ends a pause too), then `TrayModel::routing`
-  (`Routing::Sending(SendScope)`); `choose_destination` retargets a send
-  in force. The router counts, and the tray reads it back after every
-  dispatch and every second while an hour runs (`sync_send`,
-  `follow_send_clock`, which runs only then). The
-  destination is the last chosen this session, else the pause target;
-  nothing about it is saved. The native menu has radio rows naming the
-  destination and Choose where… (the Overview). The Overview reads the
-  state as `Status::sending` (hero `State::Sending`, after paused and
-  before not default, with Back to rules; strip chip and rail foot "next
-  link · {browser}"; All links dims the rule column only, under "When
-  rules decide again"), marks the node `Sending::is_node` names with a
-  pill, and offers Next link here on a hovered node
-  (`tray::send_next_to`, always one link). Activity's Rule column says
-  "next link" / "all links" in an accent chip with the arrow, the
-  expanded row "next link 1 of 3 · skipped rule 2", the tray's recents
-  the same; a sent link is unrouted and counts for its browser only, as
-  a paused one does. Window tests install the tray with
-  `tray::install_for_test`.
+- **Incoming links (`tray/mod.rs`, design: Incoming Links, which
+  supersedes Send Links turn 1).** One switch says what the next links do:
+  Rules, Send, Hold, Pause (`model::Mode`), drawn the same in the
+  dropdown and the Overview's hero, in its tone (Send accent, Hold info
+  blue, Pause warning). `tray::set_mode` writes the router's one
+  `Override` slot first (`set_override`), then `TrayModel::routing`
+  (`Routing::Sending` / `Holding` / `Paused`). Send and Hold take the For
+  row (`ForKind`: Links with the stepper's count, Time from `TIME_STEPS`,
+  Until off), the last chosen this session; `set_for` and `step` apply to
+  a running one from the next link (`rescope`, `step_next`: a count keeps
+  what was used, a time restarts from now). Send adds the To row: the
+  editor's lanes in place (`destinations::draw` at `Density::Compact`,
+  over `TrayModel::choices`: the scan less PwrRoute, every other link
+  router and hidden apps; a pill is the destination, `destination_of`);
+  `choose_destination` retargets a send in force. At rest a hint says
+  where Send goes and what Hold does; while on, the live line says what
+  is left and has the one-click way back (Back to rules, or Resume). The
+  router counts, and the tray reads its slot back after every dispatch and
+  every second while a time runs (`sync_override`, `follow_clock`). Hold
+  is refused while Activity keeps nothing in memory (`can_hold`, read
+  again on every feed change and before Hold starts; a hold on then
+  ends). Held links come from the feed (`HeldLink::from_record`: a hold's
+  record not yet released, at least host level, that the router's
+  `pending()` still holds) and lead the dropdown with their host
+  and path, where they came from and where the rules would open them:
+  Open (`tray::open_held`, `OpenAs::Rules`), "···" for Open in… (the
+  lanes, `OpenAs::In`), Make a rule… (Activity's sheet) and Copy link, and
+  Open all; they are not in Recent, and Quit says how many will be lost.
+  Nothing about it is saved. The dropdown is keyboard-operable: Tab walks
+  the card in draw order (its rows, then the switch as one stop, To,
+  For, the stepper and the live button),
+  Left/Right move the switch and For, Up/Down step, and the focused stop
+  wears `.foc`'s ring only while the keyboard drives
+  (`last_input_was_keyboard`). A key the focused stop does not take goes
+  to the menu's own Up/Down/Home/End (`accessibility::move_focus`), and
+  Esc folds what is open before it closes. The switch and For are radio
+  groups to a screen reader, one tab stop each. The native menu has check rows (Route by
+  rules, Send next link → destination, Hold next link, Hold for 1 hour,
+  Pause routing), Choose… (the Overview) and Held links (N)… (Activity).
+  The Overview reads it as `Status::{paused, holding, sending}` (hero
+  `State::Holding` after paused and before sending, in `Tone::Info`, with
+  Back to rules; the strip chip "holding · 1 of 3 left", the rail foot and
+  the rail's Activity count "2 held"; the Held tile in Failed's place while
+  links wait and none failed, opening Not opened; All links or every link
+  held dims the rule column only, under "When rules decide again"). The
+  hero's switch, For row and stepper are tab stops, reached by the
+  window's Tab (`app_menu::FocusNext`) in draw order; `hero_key` gives
+  them their arrows (`OverviewState::hero_stops`). It marks the node
+  `Sending::is_node` names with a pill and offers Next link here on a
+  hovered node (`tray::send_next_to`, always one link). Activity's Rule
+  column says "next link" / "all links" in an accent chip with the arrow,
+  and "held 2 of 3" in an info chip for a held link, whose expanded row
+  leads with Open in <the rules' browser>; a sent link is unrouted and
+  counts for its browser only, as a paused one does. Window tests install
+  the tray with `tray::install_for_test`.
 - **The dropdown's window is its card** (design: Popovers and Overflow
   2a). A transparent window taller than the card is not invisible: macOS
   draws its frame and shadow at the window's size. It opens at
@@ -641,7 +693,7 @@ their own modules.
   `NOT_OPENED_BADGE`, so a row, a tooltip or a label never shows an app
   called "none", and no picker ever calls it missing. It is the last lane
   of Open in where a rule is picked (`destinations::lanes(.., dont_open:
-  true)`: the editor and Activity's sheet; never the tray's Send links,
+  true)`: the editor and Activity's sheet; never the tray's Send,
   which is Hold's business) and the last row of Everything else's menu,
   not the setup card or first run. The Overview draws it on its Not
   opened card (`overview_model::resolve`), and `Tally` counts the links a
@@ -659,7 +711,7 @@ their own modules.
   can't be opened (`not_opened_why`). Hold's rows use the same action.
 - **Open in is lanes, Sent from is chips (`destinations.rs`; design:
   Destination and App Pickers).** The editor, Activity's sheet and the
-  tray's Send links destination draw the same `destinations::lanes`
+  tray's Send destination and held links' Open in… draw the same `destinations::lanes`
   (the tray at `Density::Compact`; it sizes its card before drawing, so
   `destinations::height` measures the wrapped pills and `tray/tests.rs`
   holds it to the laid-out lanes): a lane per browser in the scan, in its order
@@ -772,7 +824,8 @@ their own modules.
   on quit.
 - **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
-  sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`
-  or `=paused` draws the design's tray fixture instead of the feed. A second
+  sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`,
+  `=paused` or `=holding` draws the design's tray fixture instead of the
+  feed. A second
   router on the machine takes the launch: give the build its own `HOME`
   while another one runs.

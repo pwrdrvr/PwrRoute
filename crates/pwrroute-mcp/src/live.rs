@@ -120,6 +120,14 @@ impl ActivityLog for LiveRouter {
     fn retention(&self) -> String {
         self.handle.retention().description
     }
+
+    fn waiting(&self) -> Vec<u64> {
+        self.handle.pending().into_iter().map(|id| id.0).collect()
+    }
+
+    fn hold(&self) -> Option<crate::backend::Hold> {
+        self.handle.hold().map(crate::backend::Hold::of)
+    }
 }
 
 fn opener_info(opener: &Opener) -> OpenerInfo {
@@ -179,6 +187,7 @@ pub fn entry_of(
         rewritten,
         private,
         reason: record.not_opened_reason().map(Into::into),
+        waiting: false,
         trace,
     }
 }
@@ -792,6 +801,7 @@ mod tests {
                     &pwrroute_engine::Sources {
                         config: None,
                         rules,
+                        ..Default::default()
                     },
                     std::rc::Rc::new(pwrroute_engine::DefaultHost),
                     pwrroute_engine::Limits::default(),

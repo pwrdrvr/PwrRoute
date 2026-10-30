@@ -17,6 +17,7 @@ pub fn model() -> SettingsModel {
     SettingsModel {
         local_agents: local_agents(),
         configuration: configuration(),
+        sync: sync(),
         privacy: privacy(),
         browsers: browsers(),
         updates: updates(),
@@ -26,6 +27,130 @@ pub fn model() -> SettingsModel {
         diagnostics: diagnostics(),
         about: about(),
     }
+}
+
+/// Sync as the design's 1b draws it (Synced Rules): two folders, one
+/// waiting for iCloud, Google Drive offered, and the machine card's
+/// destinations and sets from 2a. Contrived throughout.
+pub fn sync() -> super::model::Sync {
+    use super::model::{DestinationRow, RuleSetRow, Sync, SyncFolder, SyncPlace, SyncTone};
+    use std::path::PathBuf;
+    let row = |name: &str, here: &str, this_machine: bool, uses: usize, warning: Option<&str>| {
+        DestinationRow {
+            name: name.to_owned().into(),
+            here: here.to_owned().into(),
+            this_machine,
+            uses,
+            warning: warning.map(|w| w.to_owned().into()),
+            lanes: Vec::new(),
+        }
+    };
+    Sync {
+        machine_name: "Studio Mac".into(),
+        computer_name: "Studio Mac".into(),
+        folders: vec![
+            SyncFolder {
+                label: "Dropbox".into(),
+                shown: "~/Library/CloudStorage/Dropbox/PwrRoute".into(),
+                root: PathBuf::from("/Users/jo/Library/CloudStorage/Dropbox"),
+                chip: "In sync".into(),
+                tone: SyncTone::Ok,
+                line: "09:41 \u{00b7} saved by MacBook Air".into(),
+                conflict: None,
+            },
+            SyncFolder {
+                label: "iCloud Drive".into(),
+                shown: "~/Library/Mobile Documents/com~apple~CloudDocs/PwrRoute".into(),
+                root: PathBuf::from("/Users/jo/Library/Mobile Documents/com~apple~CloudDocs"),
+                chip: "Waiting".into(),
+                tone: SyncTone::Neutral,
+                line: "Waiting for iCloud to download rules.json".into(),
+                conflict: None,
+            },
+        ],
+        offered: vec![SyncPlace {
+            label: "Google Drive \u{00b7} jo@example.com".into(),
+            shown: "~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute".into(),
+            root: PathBuf::from(
+                "/Users/jo/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive",
+            ),
+        }],
+        config: Some("~/.finicky.ts".into()),
+        config_on: true,
+        summary: "2 folders".into(),
+        summary_tone: SyncTone::Neutral,
+        last_synced: "09:41".into(),
+        backups: 3,
+        destinations: vec![
+            row("Work 1", "Google Chrome \u{00b7} Profile 3", true, 4, None),
+            row("Work 2", "Google Chrome \u{00b7} Work 2", false, 4, None),
+            row("Personal", "Safari \u{00b7} Personal", false, 2, None),
+            row(
+                "PwrDrvr",
+                "Arc",
+                false,
+                3,
+                Some(
+                    "Arc isn\u{2019}t installed on this Mac. Links for PwrDrvr open in the fallback browser, Safari, until you choose a browser here.",
+                ),
+            ),
+        ],
+        sets: vec![
+            RuleSetRow {
+                name: "Work 2".into(),
+                entries: 4,
+                on: true,
+                synced_on: true,
+                overridden: false,
+            },
+            RuleSetRow {
+                name: "PwrDrvr".into(),
+                entries: 3,
+                on: false,
+                synced_on: true,
+                overridden: true,
+            },
+        ],
+        problem: None,
+    }
+}
+
+/// Synced Rules 1c: Dropbox in conflict with MacBook Air, iCloud in sync.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "for the window's tests and the screens example")
+)]
+pub fn sync_conflict() -> super::model::Sync {
+    use super::model::{SyncConflict, SyncTone};
+    let mut sync = sync();
+    sync.offered.clear();
+    sync.summary = "1 conflict".into();
+    sync.summary_tone = SyncTone::Bad;
+    sync.last_synced = "09:12".into();
+    let dropbox = &mut sync.folders[0];
+    dropbox.chip = "Conflict".into();
+    dropbox.tone = SyncTone::Bad;
+    dropbox.line = "Both changed since the last sync".into();
+    dropbox.conflict = Some(SyncConflict {
+        file: "rules.json".into(),
+        headline: "Links keep routing with this Mac\u{2019}s rules until you choose. Nothing is \
+                   written to Dropbox meanwhile."
+            .into(),
+        mine: "14 rules \u{00b7} this Mac".into(),
+        theirs: "15 rules \u{00b7} saved 09:20".into(),
+        theirs_name: "MacBook Air".into(),
+        differences: vec![
+            "+ rule 15 *.example.org/* \u{2192} Work 2".into(),
+            "\u{2212} rule 3 tickets.example.net/* \u{2192} Work 1".into(),
+        ],
+        remote_sha: "0123abcd".into(),
+        join: false,
+    });
+    let icloud = &mut sync.folders[1];
+    icloud.chip = "In sync".into();
+    icloud.tone = SyncTone::Ok;
+    icloud.line = "09:12 \u{00b7} saved by Studio Mac".into();
+    sync
 }
 
 /// Updates as the design's 1a draws it: a release downloaded and waiting.
