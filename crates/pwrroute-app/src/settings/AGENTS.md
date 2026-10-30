@@ -87,6 +87,13 @@ something to put in it; About leads the nav, Browsers opens first.
   uncommitted changes) and its Copy starts with `BuildInfo::report`.
   A producer that reports back asks `settings::is_open` first, so a
   closed window reads no file.
+  Experimental is a top-level sidebar entry before Diagnostics, following
+  PwrAgent's dedicated Experimental page. `experimental.rs` offers the
+  macOS-only "Yield focus to browsers" switch; other platforms show an
+  empty state. `system_host` builds its model and saves
+  `experimental.yieldBrowserFocus` through the store; its shared atomic
+  updates the launcher's next hand-off. Diagnostics still includes its value
+  in copied reports.
 - **Privacy (`privacy.rs`, `privacy_host.rs`).** The view keeps the two
   number fields (applied on Return, clamped to `COUNT_RANGE` /
   `HOURS_RANGE`) and the open sheet; Full URLs and the journal's Clear now

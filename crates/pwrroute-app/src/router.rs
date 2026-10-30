@@ -439,7 +439,9 @@ fn spawn_router(
     let launcher: Box<dyn Launcher> = if args.dry_run {
         Box::new(DryRunLauncher::new())
     } else {
-        Box::new(BrowserLauncher::new())
+        let mut launcher = BrowserLauncher::new();
+        launcher.yield_browser_focus = settings.yield_browser_focus();
+        Box::new(launcher)
     };
     let slot = crate::handoff::HandleSlot::default();
     let watcher = slot.clone();
@@ -649,6 +651,7 @@ fn describe_source(
 /// free of it, and `open`'s stderr, which may quote it, stays unread.
 pub struct BrowserLauncher {
     inner: pwrroute_browsers::Launcher,
+    yield_browser_focus: Arc<AtomicBool>,
 }
 
 impl BrowserLauncher {
@@ -671,6 +674,7 @@ impl BrowserLauncher {
     pub fn with_env(env: Env) -> Self {
         Self {
             inner: pwrroute_browsers::Launcher::with_env(env, LaunchOptions::default()),
+            yield_browser_focus: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -679,6 +683,16 @@ impl BrowserLauncher {
     #[cfg(test)]
     fn plan(&self, browser: &Browser) -> anyhow::Result<Option<pwrroute_browsers::Plan>> {
         self.inner.plan(browser).map_err(launch_error)
+    }
+
+    fn yield_front_to(
+        &self,
+        target: Option<&str>,
+        yield_to: impl FnOnce(&str) -> pwrroute_os::Yield,
+    ) -> Option<pwrroute_os::Yield> {
+        target
+            .filter(|_| self.yield_browser_focus.load(Ordering::Relaxed))
+            .map(yield_to)
     }
 }
 
@@ -696,7 +710,7 @@ impl Launcher for BrowserLauncher {
         observe("planning begin");
         let planned = self.inner.plan(browser);
         let plan_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let Some(plan) = planned.map_err(|error| {
+        let Some(mut plan) = planned.map_err(|error| {
             observe(&format!("planning failed after {plan_ms:.1}ms"));
             launch_error(error)
         })?
@@ -704,6 +718,9 @@ impl Launcher for BrowserLauncher {
             observe("planning returned no launch");
             return Ok(());
         };
+        if !self.yield_browser_focus.load(Ordering::Relaxed) {
+            plan.hand_off_to = None;
+        }
         observe(&format!(
             "planned in {plan_ms:.1}ms; {}; profile_requested={} private_requested={} custom_args={}",
             plan.diagnostic_summary(),
@@ -715,12 +732,13 @@ impl Launcher for BrowserLauncher {
             observe(describe_note(note));
         }
         let started = std::time::Instant::now();
-        let yielded = plan.hand_off_to.as_deref().map(|id| {
+        let yielded = self.yield_front_to(plan.hand_off_to.as_deref(), |id| {
             observe("yield begin");
             pwrroute_os::yield_front_to(id, YIELD_WAIT)
         });
         observe(&format!(
-            "yield={yielded:?} after {:.1}ms",
+            "yield_enabled={}; yield={yielded:?} after {:.1}ms",
+            self.yield_browser_focus.load(Ordering::Relaxed),
             started.elapsed().as_secs_f64() * 1000.0,
         ));
         let launched = self
@@ -769,6 +787,52 @@ mod tests {
     use super::*;
 
     const URL: &str = "https://secret.example.com/path?token=abc";
+
+    #[test]
+    fn focus_yield_is_opt_in_and_follows_settings_without_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = SettingsStore::load(Some(dir.path().to_path_buf()));
+        let mut launcher = BrowserLauncher::with_env(Env::fixture(Platform::MacOs, dir.path()));
+        launcher.yield_browser_focus = settings.yield_browser_focus();
+        let target = Some("com.example.Browser");
+        assert_eq!(
+            launcher.yield_front_to(target, |_| panic!("off by default")),
+            None
+        );
+
+        settings
+            .update(|settings| settings.experimental.yield_browser_focus = true)
+            .unwrap();
+        assert_eq!(
+            launcher.yield_front_to(target, |id| {
+                assert_eq!(id, "com.example.Browser");
+                pwrroute_os::Yield::Yielded
+            }),
+            Some(pwrroute_os::Yield::Yielded)
+        );
+        assert_eq!(
+            launcher.yield_front_to(None, |_| panic!("background launch")),
+            None
+        );
+        assert!(
+            SettingsStore::load(Some(dir.path().to_path_buf()))
+                .yield_browser_focus()
+                .load(Ordering::Relaxed)
+        );
+
+        settings
+            .update(|settings| settings.experimental.yield_browser_focus = false)
+            .unwrap();
+        assert_eq!(
+            launcher.yield_front_to(target, |_| panic!("disabled again")),
+            None
+        );
+        let saved = fs::read_to_string(dir.path().join("settings.json")).unwrap();
+        assert!(
+            !saved.contains("experimental"),
+            "default settings stay omitted"
+        );
+    }
 
     #[test]
     fn cached_profile_diagnostics_do_not_expose_profile_names() {

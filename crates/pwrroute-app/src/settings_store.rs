@@ -20,6 +20,10 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result};
@@ -64,6 +68,20 @@ pub struct Settings {
     /// while nothing syncs.
     #[serde(skip_serializing_if = "SyncSettings::is_default")]
     pub sync: SyncSettings,
+    #[serde(skip_serializing_if = "ExperimentalSettings::is_default")]
+    pub experimental: ExperimentalSettings,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExperimentalSettings {
+    pub yield_browser_focus: bool,
+}
+
+impl ExperimentalSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// View's settings: the zoom (`zoom.rs`), in percent.
@@ -345,6 +363,7 @@ pub struct SettingsStore {
     /// is saved and the journal cannot be turned on.
     dir: Option<PathBuf>,
     settings: Settings,
+    yield_browser_focus: Arc<AtomicBool>,
 }
 
 impl SettingsStore {
@@ -360,7 +379,13 @@ impl SettingsStore {
             }
             None => Settings::default(),
         };
-        Self { dir, settings }
+        let yield_browser_focus =
+            Arc::new(AtomicBool::new(settings.experimental.yield_browser_focus));
+        Self {
+            dir,
+            settings,
+            yield_browser_focus,
+        }
     }
 
     pub fn dir(&self) -> Option<&Path> {
@@ -369,6 +394,11 @@ impl SettingsStore {
 
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    /// The dispatch thread follows Settings changes without reading disk per link.
+    pub fn yield_browser_focus(&self) -> Arc<AtomicBool> {
+        self.yield_browser_focus.clone()
     }
 
     /// The router's retention, as set.
@@ -392,6 +422,10 @@ impl SettingsStore {
     /// agree; the error says the next launch will not.
     pub fn update(&mut self, edit: impl FnOnce(&mut Settings)) -> Result<()> {
         edit(&mut self.settings);
+        self.yield_browser_focus.store(
+            self.settings.experimental.yield_browser_focus,
+            Ordering::Relaxed,
+        );
         match &self.dir {
             Some(dir) => self.settings.save(dir),
             None => Err(anyhow::anyhow!("no data directory: settings are not saved")),

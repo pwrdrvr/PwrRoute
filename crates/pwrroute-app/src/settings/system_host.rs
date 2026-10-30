@@ -11,7 +11,7 @@ use std::{
 
 use gpui_kit::{App, SharedString};
 
-use super::model::{About, Diagnostics, Listener, LocalAgents, SettingsRequest};
+use super::model::{About, Diagnostics, Experimental, Listener, LocalAgents, SettingsRequest};
 use crate::build_info::BuildInfo;
 use crate::config_view::display_path;
 use crate::router::{self, RoutingSource};
@@ -40,6 +40,7 @@ pub struct Facts {
     pub log: Option<PathBuf>,
     /// Which build this is.
     pub build: BuildInfo,
+    pub yield_browser_focus: Option<bool>,
 }
 
 /// The Diagnostics pane as things stand. `agents` is the Local agents
@@ -48,6 +49,15 @@ pub fn diagnostics(cx: &App, agents: &LocalAgents) -> Diagnostics {
     let mut facts = facts(cx);
     facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
     build_diagnostics(&facts)
+}
+
+pub fn experimental(cx: &App) -> Experimental {
+    Experimental {
+        yield_browser_focus: cfg!(target_os = "macos").then(|| {
+            settings_store::store(cx)
+                .is_some_and(|store| store.read(cx).settings().experimental.yield_browser_focus)
+        }),
+    }
 }
 
 /// Everything but the MCP door, read from this process and the OS.
@@ -67,6 +77,7 @@ fn facts(cx: &App) -> Facts {
         agents: None,
         log: crate::diag_log::path().map(Path::to_path_buf),
         build: BuildInfo::current(),
+        yield_browser_focus: experimental(cx).yield_browser_focus,
     }
 }
 
@@ -123,6 +134,7 @@ pub fn build_diagnostics(facts: &Facts) -> Diagnostics {
             .into(),
         log_exists: facts.log.as_deref().is_some_and(Path::exists),
         build: facts.build.clone(),
+        yield_browser_focus: facts.yield_browser_focus,
     }
 }
 
@@ -236,6 +248,20 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
         SettingsRequest::OpenLicense => doc_window::open(Doc::License, cx),
         SettingsRequest::OpenThirdPartyNotices => doc_window::open(Doc::ThirdPartyNotices, cx),
         SettingsRequest::OpenLogs => crate::logs_window::open(cx),
+        SettingsRequest::SetYieldBrowserFocus(enabled) => {
+            if cfg!(target_os = "macos") {
+                if let Some(store) = settings_store::store(cx) {
+                    let result = store.update(cx, |store, _| {
+                        store
+                            .update(|settings| settings.experimental.yield_browser_focus = *enabled)
+                    });
+                    if let Err(error) = result {
+                        log::warn!("cannot save experimental focus setting: {error:#}");
+                    }
+                }
+                refresh_diagnostics(cx);
+            }
+        }
         _ => return false,
     }
     true
@@ -252,6 +278,7 @@ pub fn refresh_diagnostics(cx: &mut App) {
     settings::update(cx, move |model| {
         let agents = &model.local_agents;
         facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
+        model.experimental.yield_browser_focus = facts.yield_browser_focus;
         model.diagnostics = build_diagnostics(&facts);
     });
 }
@@ -288,6 +315,7 @@ mod tests {
                 "/Users/someone/Library/Logs/PwrRoute/main.log",
             )),
             build: BuildInfo::fixture(),
+            yield_browser_focus: Some(false),
         }
     }
 

@@ -12,8 +12,8 @@ use gpui_kit::{
 use super::local_agents::{ACCESS_SWITCH_ID, COLLAPSE_ALL_ID};
 use super::model::{DefaultState, RoleId, SessionId, SettingsRequest, UpdateState};
 use super::{
-    Pane, SettingsHost, SettingsWindow, about, browsers, configuration, diagnostics, fixtures,
-    updates,
+    Pane, SettingsHost, SettingsWindow, about, browsers, configuration, diagnostics, experimental,
+    fixtures, updates,
 };
 use crate::app::PwrRoute;
 use crate::chrome::OPEN_SETTINGS_ID;
@@ -129,6 +129,7 @@ fn the_nav_switches_panes(cx: &mut TestAppContext) {
         Pane::Configuration,
         Pane::LocalAgents,
         Pane::Updates,
+        Pane::Experimental,
         Pane::Diagnostics,
         Pane::About,
         Pane::Browsers,
@@ -418,6 +419,36 @@ fn the_updates_pane_checks_now_and_restarts_into_a_download(cx: &mut TestAppCont
     draw(cx);
     assert!(!visible(cx, updates::CHECK_ID));
     assert!(!visible(cx, updates::RESTART_ID));
+}
+
+#[gpui_kit::test]
+fn experimental_focus_yield_switch_is_off_and_can_be_toggled(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Diagnostics.nav_id());
+    assert!(!visible(cx, experimental::YIELD_FOCUS_ID));
+    click(cx, Pane::Experimental.nav_id());
+    assert!(visible(cx, Pane::Experimental.pane_id()));
+    assert!(visible(cx, experimental::YIELD_FOCUS_ID));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.model.experimental.yield_browser_focus),
+        Some(false)
+    );
+    click(cx, experimental::YIELD_FOCUS_ID);
+    click(cx, experimental::YIELD_FOCUS_ID);
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::SetYieldBrowserFocus(true),
+            SettingsRequest::SetYieldBrowserFocus(false)
+        ]
+    );
+    view.update(cx, |view, cx| {
+        view.model.experimental.yield_browser_focus = None;
+        cx.notify();
+    });
+    draw(cx);
+    assert!(!visible(cx, experimental::YIELD_FOCUS_ID));
+    assert!(visible(cx, Pane::Experimental.pane_id()));
 }
 
 #[gpui_kit::test]

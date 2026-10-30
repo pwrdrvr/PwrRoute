@@ -25,6 +25,7 @@ pub struct SettingsModel {
     pub privacy: Privacy,
     pub browsers: Browsers,
     pub updates: Updates,
+    pub experimental: Experimental,
     pub diagnostics: Diagnostics,
     pub about: About,
 }
@@ -540,6 +541,14 @@ pub enum UpdateState {
     NotUpdatable(SharedString),
 }
 
+// ---- Experimental ---------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Experimental {
+    /// macOS only; absent on platforms without this experiment.
+    pub yield_browser_focus: Option<bool>,
+}
+
 // ---- Diagnostics ----------------------------------------------------------
 
 /// Settings › Diagnostics: where things are and whether they run. Paths
@@ -570,6 +579,8 @@ pub struct Diagnostics {
     pub log_exists: bool,
     /// Which build this is: the report's first lines.
     pub build: BuildInfo,
+    /// macOS only; absent where cooperative focus yielding is unavailable.
+    pub yield_browser_focus: Option<bool>,
 }
 
 impl Diagnostics {
@@ -580,8 +591,16 @@ impl Diagnostics {
         } else {
             ""
         };
+        let experimental = self
+            .yield_browser_focus
+            .map_or_else(String::new, |enabled| {
+                format!(
+                    "Experimental yield browser focus: {}\n",
+                    if enabled { "on" } else { "off" }
+                )
+            });
         format!(
-            "{}OS: {}\nData folder: {}\nRouter: {}\nRouting: {}{dry_run}\nLocal agents: {}\nLog: {}\n",
+            "{}OS: {}\nData folder: {}\nRouter: {}\nRouting: {}{dry_run}\nLocal agents: {}\nLog: {}\n{experimental}",
             self.build.report(),
             self.os,
             self.data_dir,
@@ -772,6 +791,7 @@ pub struct About {
 /// the window acts on the OS itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsRequest {
+    SetYieldBrowserFocus(bool),
     SetAgentAccess(bool),
     SetSessionRole {
         session: SessionId,
