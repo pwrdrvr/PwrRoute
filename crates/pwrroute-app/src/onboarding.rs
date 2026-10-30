@@ -377,7 +377,9 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
         precedence: facts.precedence,
         rules: facts.rules,
         current_default: match &facts.handler {
-            DefaultState::Other(_) => Some(facts.handler.current_name()),
+            DefaultState::Other(_) | DefaultState::OtherCopy(_) => {
+                Some(facts.handler.current_name())
+            }
             DefaultState::PwrRoute | DefaultState::Unknown => None,
         },
         is_default: facts.handler.is_default(),

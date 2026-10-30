@@ -960,6 +960,7 @@ mod tests {
                 is_default: false,
                 http: Some("com.apple.Safari".into()),
                 https: Some("com.apple.Safari".into()),
+                other_copy: None,
             })
         });
         let list = browsers.browsers().unwrap();

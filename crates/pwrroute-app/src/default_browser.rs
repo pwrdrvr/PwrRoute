@@ -64,6 +64,10 @@ pub enum DefaultState {
     /// Another app does, by the name the reader knows ("Google Chrome"),
     /// or by the id the OS gave when the catalog does not know it.
     Other(SharedString),
+    /// Another copy of PwrRoute (same bundle id, another path: an older dev
+    /// build, a mounted DMG) gets the links instead of this one. Its path,
+    /// with the home folder as `~`.
+    OtherCopy(SharedString),
     /// The OS did not say: no handler is set, or the query failed.
     Unknown,
 }
@@ -91,7 +95,10 @@ impl DefaultState {
             .find(|id| !ours(id))
         {
             Some(id) => Self::Other(handler_name(id, app_name).into()),
-            None => Self::Unknown,
+            None => match &status.other_copy {
+                Some(path) => Self::OtherCopy(tilde(path).into()),
+                None => Self::Unknown,
+            },
         }
     }
 
@@ -104,9 +111,20 @@ impl DefaultState {
     pub fn current_name(&self) -> String {
         match self {
             Self::Other(name) => name.to_string(),
+            Self::OtherCopy(_) => "another copy of PwrRoute".to_owned(),
             Self::PwrRoute | Self::Unknown => "your current browser".to_owned(),
         }
     }
+}
+
+/// `path` with the home folder written `~`.
+fn tilde(path: &str) -> String {
+    std::env::var_os("HOME")
+        .and_then(|home| {
+            let rest = std::path::Path::new(path).strip_prefix(home).ok()?;
+            Some(format!("~/{}", rest.display()))
+        })
+        .unwrap_or_else(|| path.to_owned())
 }
 
 /// A browser or app as `rules.json`, a config or the router names it
@@ -298,6 +316,9 @@ impl Registrar {
             (None, true, DefaultState::Other(name)) => {
                 Some(format!("{name} is still the default.").into())
             }
+            (None, true, DefaultState::OtherCopy(path)) => {
+                Some(format!("The copy at {path} is still the default.").into())
+            }
             _ => None,
         };
         DefaultBrowser {
@@ -323,6 +344,9 @@ fn waiting_note(request: DefaultRequest) -> &'static str {
              PwrRoute for HTTP and for HTTPS."
         }
         DefaultRequest::Set => "Set with xdg-settings; reading it back.",
+        DefaultRequest::TookOverFromCopy => {
+            "Took the default from another copy of PwrRoute; reading it back."
+        }
     }
 }
 
@@ -506,6 +530,10 @@ pub fn chip() -> Div {
     let (label, dot) = match snapshot() {
         DefaultState::PwrRoute => ("default browser".to_owned(), theme::status_ok()),
         DefaultState::Other(name) => (format!("{name} is default"), theme::status_warning()),
+        DefaultState::OtherCopy(_) => (
+            "another PwrRoute is default".to_owned(),
+            theme::status_warning(),
+        ),
         DefaultState::Unknown => (
             "default browser unknown".to_owned(),
             theme::status_suspended(),
@@ -552,7 +580,36 @@ mod tests {
             is_default: ours(http) && ours(https),
             http: http.map(str::to_owned),
             https: https.map(str::to_owned),
+            other_copy: None,
         }
+    }
+
+    #[test]
+    fn another_copy_of_pwrroute_is_named_by_its_path() {
+        let none: &AppName = &|_| None;
+        let home = std::env::var("HOME").unwrap_or_default();
+        let held = DefaultStatus {
+            is_default: false,
+            http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            https: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            other_copy: Some(format!("{home}/src/PwrRoute/target/dev/PwrRoute.app")),
+        };
+        let state = DefaultState::from_status(Some(&held), none);
+        assert_eq!(
+            state,
+            DefaultState::OtherCopy("~/src/PwrRoute/target/dev/PwrRoute.app".into())
+        );
+        assert!(!state.is_default());
+        assert_eq!(state.current_name(), "another copy of PwrRoute");
+        // Another browser on one scheme is named first: it is the one to fix.
+        let split = DefaultStatus {
+            https: Some("com.google.Chrome".to_owned()),
+            ..held
+        };
+        assert_eq!(
+            DefaultState::from_status(Some(&split), none),
+            DefaultState::Other("Google Chrome".into())
+        );
     }
 
     #[test]

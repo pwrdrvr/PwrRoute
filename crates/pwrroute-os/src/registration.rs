@@ -40,6 +40,10 @@ pub struct DefaultStatus {
     /// file id.
     pub http: Option<String>,
     pub https: Option<String>,
+    /// macOS: another copy of PwrRoute (same bundle id, another path, such
+    /// as an older dev build) that LaunchServices hands links to instead of
+    /// the running one. Its bundle's path.
+    pub other_copy: Option<String>,
 }
 
 /// What [`set_default_browser`] set in motion. In every case the OS has the
@@ -52,6 +56,10 @@ pub enum DefaultRequest {
     OpenedSettings,
     /// Linux: `xdg-settings` made PwrRoute the default.
     Set,
+    /// macOS: another copy of PwrRoute held the default. The other copies
+    /// were taken out of LaunchServices, so links reach this one with no
+    /// prompt to answer.
+    TookOverFromCopy,
 }
 
 /// Makes the OS list PwrRoute as a browser. Idempotent; never changes the
@@ -304,6 +312,7 @@ mod imp {
             is_default: http.as_deref() == Some(PROG_ID) && https.as_deref() == Some(PROG_ID),
             http,
             https,
+            other_copy: None,
         })
     }
 }
@@ -405,6 +414,7 @@ mod imp {
             is_default: http.as_deref() == Some(DESKTOP_ID) && https.as_deref() == Some(DESKTOP_ID),
             http,
             https,
+            other_copy: None,
         })
     }
 }

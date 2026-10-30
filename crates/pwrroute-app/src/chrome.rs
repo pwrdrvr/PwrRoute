@@ -238,7 +238,9 @@ fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
     } else {
         match status.default {
             DefaultState::PwrRoute => status_chip("default browser", theme::status_ok()),
-            DefaultState::Other(_) => status_chip("not default", theme::status_warning()),
+            DefaultState::Other(_) | DefaultState::OtherCopy(_) => {
+                status_chip("not default", theme::status_warning())
+            }
             DefaultState::Unknown => status_chip("default unknown", theme::status_suspended()),
         }
     };

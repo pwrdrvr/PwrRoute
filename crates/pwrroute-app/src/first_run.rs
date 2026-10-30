@@ -1308,7 +1308,7 @@ impl FirstRun {
     ) {
         let is_default = state.is_default();
         let current = match state {
-            DefaultState::Other(_) => Some(state.current_name()),
+            DefaultState::Other(_) | DefaultState::OtherCopy(_) => Some(state.current_name()),
             DefaultState::PwrRoute | DefaultState::Unknown => None,
         };
         if self.model.is_default == is_default
