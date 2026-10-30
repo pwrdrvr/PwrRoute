@@ -213,6 +213,11 @@ their own modules.
   router's handle the globals Settings › Privacy edits, saving first and
   applying through `set_retention` / `set_journal`. The file carries
   numbers, switches and a level, never a link or a log line.
+  Diagnostics › Experimental's macOS-only "Yield focus to browsers" saves
+  `experimental.yieldBrowserFocus`, off by default. The store shares an
+  atomic switch with the dispatch thread, so it applies to the next link
+  without a restart. It gates only `yield_front_to`; the launcher's running
+  browser detection and direct singleton delivery stay enabled.
 - **The Rules screen follows `rules.json`'s other writers.** The store
   (`rules_store.rs`) stamps the bytes it last read or wrote, and
   `RulesStore::check_disk` compares the file to them: changed with nothing

@@ -421,6 +421,37 @@ fn the_updates_pane_checks_now_and_restarts_into_a_download(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn experimental_focus_yield_switch_is_off_and_can_be_toggled(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Diagnostics.nav_id());
+    view.update(cx, |view, cx| {
+        view.scroll
+            .set_offset(gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(-2000.0)));
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.model.diagnostics.yield_browser_focus),
+        Some(false)
+    );
+    click(cx, diagnostics::YIELD_FOCUS_ID);
+    click(cx, diagnostics::YIELD_FOCUS_ID);
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::SetYieldBrowserFocus(true),
+            SettingsRequest::SetYieldBrowserFocus(false)
+        ]
+    );
+    view.update(cx, |view, cx| {
+        view.model.diagnostics.yield_browser_focus = None;
+        cx.notify();
+    });
+    draw(cx);
+    assert!(!visible(cx, diagnostics::YIELD_FOCUS_ID));
+}
+
+#[gpui_kit::test]
 fn the_diagnostics_pane_copies_the_report_and_opens_the_data_folder(cx: &mut TestAppContext) {
     let (view, cx, requests) = settings(cx, |_| {});
     click(cx, Pane::Diagnostics.nav_id());

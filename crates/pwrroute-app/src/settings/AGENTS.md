@@ -60,6 +60,9 @@ there is something to put in it; About leads the nav, Browsers opens first.
   uncommitted changes) and its Copy starts with `BuildInfo::report`.
   A producer that reports back asks `settings::is_open` first, so a
   closed window reads no file.
+  Diagnostics also offers the macOS-only Experimental "Yield focus to
+  browsers" switch. `system_host` saves `experimental.yieldBrowserFocus`
+  through the store; its shared atomic updates the launcher's next hand-off.
 - **Privacy (`privacy.rs`, `privacy_host.rs`).** The view keeps the two
   number fields (applied on Return, clamped to `COUNT_RANGE` /
   `HOURS_RANGE`) and the open sheet; Full URLs and the journal's Clear now
