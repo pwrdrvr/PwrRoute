@@ -235,7 +235,7 @@ the project and re-export here.
 | `PwrRoute Build Identity.dc.html` | Which build is running: the rail foot's build block (checkout, branch, commit, each click-to-copy, and copy all) for a dev build, a detached HEAD with changes and a release, and Settings › About's Source row with Copy build info |
 | `PwrRoute Agent Approval.dc.html` | The local-agent approval window: before, a role chosen (Reader at open) with its permissions and Deny / Allow as <role>, keys, and the allowed and denied outcomes; no time limit |
 | `PwrRoute Not Opened.dc.html` | Don't open as a rule's destination and Everything else (the last lane of Open in, Everything else's menu), Activity's Not opened filter and rows, Open in… on a not-opened row, a row opened later or not openable, Test a link, the tray's recents and the Overview's Not opened card, and how it behaves |
-| `pwrroute.css` | Shared tokens and chrome for all twenty-three canvases: family title strip, rail, cards, chips, controls |
+| `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.

@@ -936,7 +936,16 @@ pub fn label_for(browsers: &[BrowserChoice], value: &str, profile: &str) -> Brow
                 || choice.label.name.eq_ignore_ascii_case(value)
         })
         .map_or_else(
-            || BrowserLabel::new(badge_for(value), value, None),
+            || {
+                // Don't open (`"none"`, from an imported `browser: null`)
+                // by its words, never as an app called "none".
+                let name = if pwrroute_engine::is_dont_open(value) {
+                    crate::widgets::DONT_OPEN
+                } else {
+                    value
+                };
+                BrowserLabel::new(badge_for(value), name, None)
+            },
             |choice| choice.label.clone(),
         );
     label.profile = Some(profile.to_owned()).filter(|profile| !profile.is_empty());

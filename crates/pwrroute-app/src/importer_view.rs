@@ -1264,10 +1264,12 @@ fn suggestion(model: &ImportModel, index: usize, cx: &mut Context<'_, Importer>)
         return None;
     };
     let rule = &suggested.rule;
-    let to = if rule.profile.is_empty() {
-        rule.browser.clone()
+    // Named as the reader knows it; Don't open (`"none"`) has no profile.
+    let name = crate::default_browser::browser_name(&rule.browser);
+    let to = if rule.profile.is_empty() || pwrroute_engine::is_dont_open(&rule.browser) {
+        name
     } else {
-        format!("{} \u{00b7} {}", rule.browser, rule.profile)
+        format!("{name} \u{00b7} {}", rule.profile)
     };
     let patterns = rule
         .patterns

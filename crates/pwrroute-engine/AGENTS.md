@@ -40,7 +40,13 @@ crate docs map the modules.
 - **`rules.json` is Go's schema plus optional fields.** Every extension
   (`rewrites`, `opener`, `enabled`) defaults to what the Go host did, so a Go
   file loads unchanged. A file using an extension behaves differently under
-  Go, which ignores unknown fields; `src/rules.rs` has the table.
+  Go, which ignores unknown fields; `src/rules.rs` has the table. Don't
+  open is the browser word `"none"` (`DONT_OPEN`, `is_dont_open`: a rule's
+  `browser` or `defaultBrowser`), never `null`, which a JSON Merge Patch
+  cannot write and Go reads as `""`. `browser_spec` plans it to Finicky's
+  own `browser: null`, so the result is the API's `appType: "none"`; a test
+  expecting `"none"` passes only for that, and the importer writes a
+  config's `browser: null` as it.
 - **`tests/finicky_compat.rs` is the gate.** `tests/configs/expected.json`
   was recorded from the PwrFinicky Go host (goja), one URL per process.
   `configs` holds the original cases; `suites` (config, `rules.json`,
