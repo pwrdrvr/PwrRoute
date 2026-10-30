@@ -1,7 +1,7 @@
 //! The bounded, in-memory list of recent dispatches behind Activity.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     sync::{Mutex, MutexGuard, PoisonError},
     time::{Duration, SystemTime},
 };
@@ -70,11 +70,14 @@ impl Inner {
     /// Drops what the retention no longer keeps, and the links of records
     /// that went.
     fn sweep(&mut self, now: SystemTime) {
+        let before = self.records.len();
         self.records.truncate(self.retention.count);
         sweep(&mut self.records, self.retention, now);
-        let records = &self.records;
-        self.waiting
-            .retain(|(id, _)| records.iter().any(|record| record.id == *id));
+        // Only when a record went: this runs on every read.
+        if self.records.len() < before && !self.waiting.is_empty() {
+            let kept: HashSet<DispatchId> = self.records.iter().map(|record| record.id).collect();
+            self.waiting.retain(|(id, _)| kept.contains(id));
+        }
     }
 }
 
@@ -132,7 +135,8 @@ impl RecentDispatches {
     }
 
     /// Whether `id` is still waiting to be opened.
-    pub fn is_pending(&self, id: DispatchId) -> bool {
+    #[cfg(test)]
+    fn is_pending(&self, id: DispatchId) -> bool {
         self.lock()
             .waiting
             .iter()

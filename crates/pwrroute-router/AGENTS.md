@@ -83,7 +83,8 @@ runs on every platform.
   nothing about a send is saved.
 - **Hold is the slot's third tenant.** The slot is the public `Override`
   (`Paused`, `Sending(SendTo)`, `Holding(SendScope)`); `set_override`,
-  `override_in_force`, `rescope` and `step_next` work on whichever is on,
+  `override_in_force`, `rescope` and `step_next` work on whichever is on
+  (each ends one whose time ran out first, `live_slot`),
   and `set_paused`, `set_send_to` and `set_hold` keep their "set one ends
   the others, `None` ends only mine" rule. A held link is resolved, then
   traced `Step::Held { held, skipped, browser }` (`browser` is where the
@@ -91,7 +92,9 @@ runs on every platform.
   `Outcome::NotOpened`, the outcome a rule that opens nothing has too.
   `DispatchRecord::not_opened_reason()` (`rule`, `default`, `hold`) reads
   which from the steps; never store it. Counted as a send is, in
-  `Worker::take_override`. Memory only: a new router starts on the rules.
+  `Worker::take_override`, which ends a hold instead of taking a link
+  while the retention keeps nothing: the link would have nowhere to wait.
+  Memory only: a new router starts on the rules.
 - **A link that was not opened waits, in memory, to be opened.**
   `Worker::record` hands `RecentDispatches::push_waiting` the whole link
   (URL and opener) of every `NotOpened` record that keeps anything; it

@@ -417,8 +417,23 @@ pub enum SendScope {
 impl SendScope {
     /// The next `n` links, between one and [`MAX_NEXT`].
     pub fn next(n: u32) -> Self {
-        let n = n.clamp(1, MAX_NEXT);
-        Self::Next { left: n, of: n }
+        Self::Next { left: n, of: n }.clamped()
+    }
+
+    /// The same scope within bounds: a `Next` keeps one to [`MAX_NEXT`]
+    /// links left, and asks for at least as many as are left. An `All` is
+    /// unchanged.
+    fn clamped(self) -> Self {
+        match self {
+            Self::Next { left, of } => {
+                let left = left.clamp(1, MAX_NEXT);
+                Self::Next {
+                    left,
+                    of: of.clamp(left, MAX_NEXT),
+                }
+            }
+            all => all,
+        }
     }
 
     /// Whether an `All` with a time limit has run out at `now`.
@@ -866,27 +881,18 @@ impl RouterHandle {
     /// The override in force, or `None` while the rules decide. A send or
     /// a hold whose time ran out is ended here, so a reader never sees it.
     pub fn override_in_force(&self) -> Option<Override> {
-        let mut slot = self.slot();
-        if slot.as_ref().is_some_and(|o| o.expired(SystemTime::now())) {
-            *slot = None;
-        }
-        slot.clone()
+        self.live_slot().clone()
     }
 
     /// Changes the scope of the send or hold in force (another count, a
     /// later time), keeping what it does, under the slot's lock. Returns
     /// the override as it is now; `None`, and nothing changed, while the
-    /// rules decide or routing is paused.
+    /// rules decide or routing is paused. One whose time ran out is ended,
+    /// not given a new scope.
     pub fn rescope(&self, scope: SendScope) -> Option<Override> {
-        let mut slot = self.slot();
+        let mut slot = self.live_slot();
         let current = slot.as_mut()?;
-        *current.scope_mut()? = match scope {
-            SendScope::Next { left, of } => SendScope::Next {
-                left: left.clamp(1, MAX_NEXT),
-                of: of.clamp(left.clamp(1, MAX_NEXT), MAX_NEXT),
-            },
-            all => all,
-        };
+        *current.scope_mut()? = scope.clamped();
         Some(current.clone())
     }
 
@@ -895,7 +901,7 @@ impl RouterHandle {
     /// under one lock, so a link dispatched meanwhile is never counted
     /// twice. Returns the override as it is now.
     pub fn step_next(&self, delta: i64) -> Option<Override> {
-        let mut slot = self.slot();
+        let mut slot = self.live_slot();
         let current = slot.as_mut()?;
         let scope = current.scope_mut()?;
         *scope = scope.stepped(delta);
@@ -975,7 +981,7 @@ impl RouterHandle {
     /// Points the send in force at `destination`, keeping its count or
     /// time. `false` when nothing is being sent.
     pub fn retarget_send(&self, destination: Destination) -> bool {
-        match &mut *self.slot() {
+        match &mut *self.live_slot() {
             Some(Override::Sending(send)) => {
                 send.destination = destination;
                 true
@@ -989,7 +995,7 @@ impl RouterHandle {
     /// one lock, so a link dispatched meanwhile is never counted twice.
     /// Returns the send as it is now.
     pub fn add_to_next(&self, delta: i64) -> Option<SendTo> {
-        match &mut *self.slot() {
+        match &mut *self.live_slot() {
             Some(Override::Sending(send)) => {
                 send.scope = send.scope.stepped(delta);
                 Some(send.clone())
@@ -1030,6 +1036,16 @@ impl RouterHandle {
 
     fn slot(&self) -> std::sync::MutexGuard<'_, Option<Override>> {
         self.slot.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The slot with a send or hold whose time ran out already ended, for
+    /// everything that reads it or changes one in force.
+    fn live_slot(&self) -> std::sync::MutexGuard<'_, Option<Override>> {
+        let mut slot = self.slot();
+        if slot.as_ref().is_some_and(|o| o.expired(SystemTime::now())) {
+            *slot = None;
+        }
+        slot
     }
 
     fn journal_config(&self) -> Option<JournalConfig> {
@@ -1548,10 +1564,15 @@ impl Worker {
 
     /// What takes this link from the rules, if anything. A `Next` send or
     /// hold counts the link here, under the lock, and ends when it reaches
-    /// zero; an `All` whose time ran out ends without taking it.
+    /// zero; an `All` whose time ran out ends without taking it. A hold
+    /// also ends without taking it while Activity keeps nothing: a held
+    /// link would have nowhere to wait, and would be lost.
     fn take_override(&self) -> Option<Took> {
+        let keeps_nothing = self.recent.retention().count == 0;
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.as_ref().is_some_and(|o| o.expired(SystemTime::now())) {
+        if slot.as_ref().is_some_and(|o| {
+            o.expired(SystemTime::now()) || (keeps_nothing && matches!(o, Override::Holding(_)))
+        }) {
             *slot = None;
         }
         let (took, used_up) = match slot.as_mut()? {

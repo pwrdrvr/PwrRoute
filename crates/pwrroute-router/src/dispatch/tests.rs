@@ -2669,6 +2669,35 @@ fn a_hold_of_all_links_lasts_until_its_time_runs_out_or_it_is_ended() {
     assert_eq!(record.outcome, Outcome::DryRun);
     assert_eq!(launcher.launched().len(), 2);
     assert_eq!(handle.pending().len(), 3, "ending a hold opens nothing");
+
+    // A hold whose time ran out unseen is ended, not given a new scope.
+    handle.set_hold(Some(SendScope::All { until: Some(later) }));
+    assert!(
+        handle
+            .rescope(SendScope::All { until: Some(past) })
+            .is_some()
+    );
+    assert_eq!(handle.rescope(SendScope::next(2)), None);
+    assert_eq!(handle.step_next(1), None);
+    assert_eq!(handle.override_in_force(), None);
+}
+
+#[test]
+fn a_hold_takes_no_link_while_activity_keeps_nothing() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle
+        .set_retention(Retention { count: 0, hours: 0 })
+        .unwrap();
+    handle.set_hold(Some(SendScope::All { until: None }));
+    // A held link would have nowhere to wait: it opens, and the hold ends.
+    let record = handle
+        .dispatch_and_wait(link("https://example.org/1"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(held_step(&record), None);
+    assert_eq!(launcher.launched().len(), 1);
+    assert_eq!(handle.hold(), None);
 }
 
 #[test]

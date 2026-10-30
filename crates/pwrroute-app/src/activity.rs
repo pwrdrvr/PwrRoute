@@ -1057,7 +1057,7 @@ fn trace_lines(record: &DispatchRecord, config: Option<&str>) -> Vec<ActivitySte
             Step::Released { from, chosen } => (
                 StepMark::Hit(number),
                 format!(
-                    "opened later \u{00b7} held as link {} \u{00b7} {}",
+                    "opened later \u{00b7} not opened as link {} \u{00b7} {}",
                     from.0,
                     if *chosen {
                         "where you chose"
