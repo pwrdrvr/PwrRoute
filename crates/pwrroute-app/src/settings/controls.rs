@@ -15,7 +15,7 @@ use gpui_kit::{
 use super::model::Status;
 use super::style::{self, ch, para};
 use crate::theme::{self, mono, text, tracked};
-use crate::widgets::{AppBadge, icon_or, tag_frame};
+use crate::widgets::{AppBadge, focus_visible, icon_or, tag_frame};
 
 /// `.btn` and its modifiers.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub fn button_when(
         ),
     };
     let size = if small { 11.0 } else { 11.5 };
-    Button::new(id)
+    focus_visible(Button::new(id), kind == Kind::Primary)
         .flex_none()
         .gap(px(6.0))
         .map(|button| {
@@ -103,11 +103,11 @@ pub fn switch(id: impl Into<ElementId>, on: bool) -> Switch {
     } else {
         (
             theme::bg_hover_strong(),
-            theme::border_default(),
+            theme::border_control(),
             theme::text_muted(),
         )
     };
-    Switch::new(id)
+    focus_visible(Switch::new(id), on)
         .checked(on)
         .relative()
         .flex_none()
@@ -135,13 +135,13 @@ pub fn radio_dot(on: bool) -> Div {
     if on {
         dot.border(px(4.0)).border_color(theme::accent())
     } else {
-        dot.border_1().border_color(theme::border_strong())
+        dot.border_1().border_color(theme::border_control())
     }
 }
 
 /// `.slot`: a selectable tile on gpui-kit's `Radio`.
 pub fn slot(id: impl Into<ElementId>, selected: bool) -> Radio {
-    Radio::new(id)
+    focus_visible(Radio::new(id), false)
         .checked(selected)
         .flex_1()
         .min_w_0()

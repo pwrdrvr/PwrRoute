@@ -95,7 +95,8 @@ impl TextField {
         let end = text.len();
         Self {
             text,
-            focus: cx.focus_handle(),
+            // Every field is in its window's Tab order.
+            focus: cx.focus_handle().tab_stop(true),
             caret: Rc::new(RefCell::new(Caret {
                 anchor: end,
                 head: end,

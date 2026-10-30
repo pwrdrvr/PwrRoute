@@ -1,57 +1,17 @@
-//! The tokens Settings needs that the main window does not draw yet, and the
-//! wrapping-text helpers its cards are made of.
-//!
-//! Values from `design/pwrroute.css`. If the main window comes to need one
-//! of these, move it into `theme` rather than copying it.
+//! The wrapping-text helpers Settings' cards are made of, and the tokens
+//! its panes name through `style::`, which are `theme`'s: never a copy.
 
 use gpui_kit::{
     Div, Font, Hsla, ParentElement as _, SharedString, Styled as _, StyledText, TextRun, div, font,
-    px, rgb,
+    px,
 };
 
 use crate::theme;
 
-fn rgba(value: u32, alpha: f32) -> Hsla {
-    let mut color: Hsla = rgb(value).into();
-    color.a = alpha;
-    color
-}
-
-pub fn accent_soft() -> Hsla {
-    rgba(0xff8a1f, 0.12)
-}
-
-pub fn accent_border() -> Hsla {
-    rgba(0xff8a1f, 0.42)
-}
-
-pub fn success_soft() -> Hsla {
-    rgba(0x4a945c, 0.18)
-}
-
-pub fn success_text() -> Hsla {
-    rgb(0x9ce5b3).into()
-}
-
-pub fn warn_soft() -> Hsla {
-    rgba(0xd99a3d, 0.14)
-}
-
-pub fn warn_text() -> Hsla {
-    rgb(0xe8c890).into()
-}
-
-pub fn danger_soft() -> Hsla {
-    rgba(0xb94232, 0.24)
-}
-
-pub fn status_error() -> Hsla {
-    rgb(0xc45a3a).into()
-}
-
-pub fn status_suspended() -> Hsla {
-    rgb(0x6b6660).into()
-}
+pub use theme::{
+    accent_border, accent_soft, danger_soft, status_error, status_suspended, success_soft,
+    success_text, warn_soft, warn_text,
+};
 
 /// CSS `ch` for Geist: its "0" is 0.663em in Chrome.
 pub fn ch(count: f32, size: f32) -> f32 {

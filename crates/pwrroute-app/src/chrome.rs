@@ -4,8 +4,8 @@
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Div, Entity, Global, HighlightStyle, InteractiveElement as _,
-    IntoElement as _, ParentElement as _, Stateful, StatefulInteractiveElement as _, Styled as _,
-    StyledText, Window, WindowControlArea, div, px, svg,
+    IntoElement as _, ParentElement as _, Role, Stateful, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Window, WindowControlArea, div, px, svg,
 };
 
 use crate::app::{PwrRoute, Screen};
@@ -16,7 +16,7 @@ use crate::e2e;
 use crate::menu_bar::MenuBar;
 use crate::overview_model::{ConfigTrouble, State, Status, plural};
 use crate::theme::{self, icon, mono, text, tracked};
-use crate::widgets::{ButtonKind, button, key_cap, one_line, status_chip};
+use crate::widgets::{ButtonKind, button, key_cap, keyboard_control, one_line, status_chip};
 
 /// The rail's "Open Settings…" item.
 pub const OPEN_SETTINGS_ID: &str = "nav-settings";
@@ -448,15 +448,22 @@ fn rail_item(
     } else {
         (theme::text_secondary(), theme::text_muted())
     };
-    div()
+    // A Tab stop; its 1px edge is the focus ring's, out of the design's
+    // 8/10 padding.
+    keyboard_control(div(), false)
         .id(id)
         .debug_selector(|| id.into())
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_selected(selected)
         .relative()
         .flex()
         .items_center()
         .gap(px(9.0))
-        .px(px(10.0))
-        .py(px(8.0))
+        .px(px(9.0))
+        .py(px(7.0))
+        .border_1()
+        .border_color(theme::transparent())
         .rounded(px(7.0))
         .cursor_pointer()
         .when(!selected, |item| {

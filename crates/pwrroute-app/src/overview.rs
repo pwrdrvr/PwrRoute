@@ -409,18 +409,13 @@ impl PwrRoute {
         self.draft_link = Some((index, None));
     }
 
-    /// A key on Overview while the window has the keyboard. Up, Down and
-    /// Tab (Shift-Tab back) step through the rows, Everything else and the
-    /// nodes, which trace as the pointer does; Return opens the row the
-    /// keyboard is on, or pins the node; Esc lets go of the pin and the
-    /// keyboard.
-    pub fn overview_key(
-        &mut self,
-        key: &str,
-        shift: bool,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
+    /// A key on Overview while the window has the keyboard. Up and Down
+    /// step through the rows, Everything else and the nodes, which trace as
+    /// the pointer does; Return opens the row the keyboard is on, or pins
+    /// the node; Esc lets go of the pin and the keyboard. Tab is the
+    /// window's (`app_menu::FocusNext`): it moves to the next control, so
+    /// it never keeps the keyboard in the map.
+    pub fn overview_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<'_, Self>) {
         match key {
             "escape" => {
                 let unpinned = self.overview.pin(None);
@@ -429,7 +424,7 @@ impl PwrRoute {
                     cx.notify();
                 }
             }
-            "up" | "down" | "tab" => {
+            "up" | "down" => {
                 let status = status(self, cx);
                 let map = build(self, &status, cx).map;
                 let expanded = &self.overview.expanded;
@@ -437,7 +432,7 @@ impl PwrRoute {
                 if order.is_empty() {
                     return;
                 }
-                let back = key == "up" || (key == "tab" && shift);
+                let back = key == "up";
                 let at = self
                     .overview
                     .keyed

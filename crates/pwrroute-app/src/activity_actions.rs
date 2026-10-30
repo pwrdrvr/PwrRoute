@@ -1392,7 +1392,7 @@ fn choice_row(
         .size(px(13.0))
         .rounded_full()
         .border_1()
-        .border_color(theme::border_strong())
+        .border_color(theme::border_control())
         .when(selected, |radio| {
             radio.border_4().border_color(theme::accent())
         });

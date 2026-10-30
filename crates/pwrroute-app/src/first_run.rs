@@ -38,8 +38,8 @@ use crate::menu_bar::MenuBar;
 use crate::theme::{self, icon, mono, text, tracked};
 use crate::tray::model::BrowserLabel;
 use crate::widgets::{
-    AppBadge, badge, badge_for, caret, field_label, icon_or, input_box, menu_card, menu_row,
-    profiles_hint, segment, segmented, switch,
+    AppBadge, badge, badge_for, caret, field_label, icon_or, input_box, keyboard_control,
+    menu_card, menu_row, profiles_hint, segment, segmented, switch,
 };
 
 /// The element id of the window's root, for tests and the inspector.
@@ -2670,7 +2670,7 @@ fn button(id: &'static str, label: impl Into<SharedString>, kind: Kind) -> State
         Kind::QuietSmall => (5.0, 9.0, 11.0),
         _ => (7.0, 12.0, 11.5),
     };
-    div()
+    keyboard_control(div(), matches!(kind, Kind::Primary))
         .id(id)
         .debug_selector(move || id.into())
         .flex()

@@ -58,6 +58,10 @@ mod menu_actions {
             ShowRules,
             ShowTestLink,
             ShowActivity,
+            /// Tab and Shift-Tab: the next or previous control. GPUI has
+            /// no Tab order of its own until a window binds it.
+            FocusNext,
+            FocusPrevious,
             /// Alt or F10 off macOS: put the keyboard on the strip's menu
             /// bar, or take it off again (`menu_bar.rs`).
             FocusMenuBar,
@@ -140,6 +144,12 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
     cx.on_action(move |_: &ShowRules, cx| show(Screen::Rules, cx));
     cx.on_action(move |_: &ShowTestLink, cx| show(Screen::TestLink, cx));
     cx.on_action(move |_: &ShowActivity, cx| show(Screen::Activity, cx));
+    // Focus moves inside the window the key was pressed in, once its
+    // dispatch is done (as `in_front_window` says).
+    cx.on_action(|_: &FocusNext, cx| in_front_window(cx, |window, cx| window.focus_next(cx)));
+    cx.on_action(|_: &FocusPrevious, cx| {
+        in_front_window(cx, |window, cx| window.focus_prev(cx));
+    });
 
     let platform = chrome.menus();
     let modifier = match platform {
@@ -155,6 +165,11 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
         KeyBinding::new(&key("c"), Copy, Some(MENU_ONLY)),
         KeyBinding::new(&key("v"), Paste, Some(MENU_ONLY)),
         KeyBinding::new(&key("a"), SelectAll, Some(MENU_ONLY)),
+        // Every window's Tab order: the controls built on
+        // `widgets::keyboard_control`, gpui-kit's controls and the text
+        // fields, in the order they are drawn.
+        KeyBinding::new("tab", FocusNext, None),
+        KeyBinding::new("shift-tab", FocusPrevious, None),
     ]);
     if platform == Platform::Mac {
         cx.on_action(|_: &Hide, cx| cx.hide());

@@ -206,6 +206,71 @@ fn arrow_keys_move_through_rewrites_and_handlers(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn tab_reaches_the_rail_and_comes_back_to_the_list(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let (view, cx) = open(cx);
+    // Focus moves in the window in front, as the menus' actions do.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let screen = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.screen);
+    let list_has_keys = |cx: &mut VisualTestContext| {
+        let focus = view.read_with(cx, |app, _| app.focus.clone());
+        cx.update(|window, _| focus.is_focused(window))
+    };
+    assert!(list_has_keys(cx));
+
+    // The first stop after the window's own is the rail's first item, and
+    // Return opens it as a click does.
+    cx.simulate_keystrokes("tab");
+    draw(cx);
+    assert!(!list_has_keys(cx));
+    // GPUI clicks a focused control when Return comes back up; the
+    // harness's keystrokes are only the press.
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").expect("a keystroke"),
+    });
+    draw(cx);
+    assert_eq!(screen(cx), Screen::Overview);
+    // A screen opened gives the keys to its list, as a click does.
+    assert!(list_has_keys(cx));
+
+    // Shift-Tab from the window wraps to the last control, and Tab from
+    // there comes back to it.
+    cx.simulate_keystrokes("shift-tab");
+    draw(cx);
+    assert!(!list_has_keys(cx));
+    cx.simulate_keystrokes("tab");
+    draw(cx);
+    assert!(list_has_keys(cx));
+
+    // Tab never traps: it comes back round to the window.
+    let mut back = false;
+    for _ in 0..100 {
+        cx.simulate_keystrokes("tab");
+        draw(cx);
+        if list_has_keys(cx) {
+            back = true;
+            break;
+        }
+    }
+    assert!(back, "Tab never came back to the window");
+}
+
+#[gpui_kit::test]
+fn a_click_on_a_button_leaves_the_keys_with_the_list(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let list_has_keys = |cx: &mut VisualTestContext| {
+        let focus = view.read_with(cx, |app, _| app.focus.clone());
+        cx.update(|window, _| focus.is_focused(window))
+    };
+    // A rail item is a Tab stop now; a pointer press still leaves the
+    // keyboard where it was, as a native button does.
+    click(cx, "nav-rules");
+    assert!(list_has_keys(cx));
+}
+
+#[gpui_kit::test]
 fn the_rail_switches_screens(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let screen = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.screen);

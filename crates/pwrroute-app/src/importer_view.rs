@@ -794,7 +794,7 @@ fn checkbox(checked: bool, available: bool) -> Div {
                     .border_color(theme::transparent())
                     .child(text("\u{2713}", 9.0, 700.0, theme::accent_on()))
             } else {
-                box_.border_color(theme::border_strong())
+                box_.border_color(theme::border_control())
             }
         })
         .when(!available, |box_| box_.opacity(0.35))
@@ -1509,7 +1509,7 @@ fn slot(
                                 if selected {
                                     radio.border_4().border_color(theme::accent())
                                 } else {
-                                    radio.border_1().border_color(theme::border_strong())
+                                    radio.border_1().border_color(theme::border_control())
                                 }
                             }),
                     ),
