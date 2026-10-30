@@ -184,8 +184,13 @@ mod tray {
         None
     }
 
-    /// Overview's Back to rules and Next link here: drawn only.
-    pub fn set_send_mode(_: crate::tray_model::SendMode, _: &mut gpui_kit::App) {}
+    /// Overview's switch, For row, Back to rules and Next link here:
+    /// drawn only.
+    pub fn set_mode(_: crate::tray_model::Mode, _: &mut gpui_kit::App) {}
+
+    pub fn set_for(_: crate::tray_model::ForKind, _: &mut gpui_kit::App) {}
+
+    pub fn step(_: i64, _: &mut gpui_kit::App) {}
 
     pub fn send_next_to(_: crate::tray_model::SendDestination, _: &mut gpui_kit::App) {}
 
@@ -216,18 +221,28 @@ enum TrayCommand {
     Settings,
     TogglePause,
     MakeDefault,
+    HeldLinks,
     Quit,
 }
 
 #[cfg(target_os = "macos")]
-fn toggle_pause(_: &gpui_kit::Entity<tray_model::TrayModel>, _: &mut gpui_kit::App) {}
-
-#[cfg(target_os = "macos")]
 fn dropdown_closed(_: &mut gpui_kit::App) {}
 
-// The dropdown's Send links controls: drawn only.
+// The dropdown's Incoming links controls and held links: drawn only.
 #[cfg(target_os = "macos")]
-fn set_send_mode(_: tray_model::SendMode, _: &mut gpui_kit::App) {}
+use tray::{set_for, set_mode, step};
+
+#[cfg(target_os = "macos")]
+fn open_held(_: pwrroute_router::DispatchId, _: pwrroute_router::OpenAs, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn open_all_held(_: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn make_rule_for(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn copy_held(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn choose_destination(_: tray_model::SendDestination, _: &mut gpui_kit::App) {}
@@ -236,12 +251,6 @@ fn choose_destination(_: tray_model::SendDestination, _: &mut gpui_kit::App) {}
 fn destination_of(choice: &destinations::Choice) -> tray_model::SendDestination {
     tray::destination(&choice.browser, &choice.profile, choice.private)
 }
-
-#[cfg(target_os = "macos")]
-fn step_next(_: i64, _: &mut gpui_kit::App) {}
-
-#[cfg(target_os = "macos")]
-fn set_all_for_hour(_: bool, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn run(_: TrayCommand, _: &mut gpui_kit::App) {}
@@ -961,12 +970,16 @@ fn main() {
     // The tray dropdown (Tray and First Run 1a; Popovers and Overflow 2a)
     // with the window sized as `dropdown::open` sizes it, over the design's
     // fixture with a rules.json default saved as a bundle id and a recent
-    // link to a profile with a long name; then Send links (Send Links 1b,
-    // 1d, 1e): the destination list open, three next links with one used,
-    // and all links for an hour.
+    // link to a profile with a long name; then Incoming links (Incoming
+    // Links 2b-2e): the destination list open, three next links with one
+    // used, all links for an hour, holding with two held and one row's
+    // actions open, and paused.
     {
         use pwrroute_router::{SendScope, Sent};
-        use tray::model::{BrowserLabel, Recent, RecentRoute, Routing, SendDestination, TrayModel};
+        use tray::dropdown::Unfolded;
+        use tray::model::{
+            BrowserLabel, ForKind, Recent, RecentRoute, Routing, SendDestination, TrayModel,
+        };
 
         let now = std::time::SystemTime::now();
         let mut model = TrayModel::fixture(now);
@@ -988,6 +1001,7 @@ fn main() {
         let mut next = base.clone();
         next.routing = Routing::Sending(SendScope::Next { left: 2, of: 3 });
         next.next_count = 3;
+        next.for_kind = ForKind::Links;
         next.recents.insert(
             0,
             Recent::from_urls(
@@ -1006,18 +1020,46 @@ fn main() {
         all.routing = Routing::Sending(SendScope::All {
             until: Some(now + Duration::from_secs(52 * 60)),
         });
-        all.all_for_hour = true;
+        all.for_kind = ForKind::Time;
         all.destination = SendDestination {
             browser: BrowserLabel::new("Ed", "Microsoft Edge", None),
             private: Some("InPrivate".into()),
         };
+        let mut choose = base.clone();
+        choose.routing = Routing::Sending(SendScope::Next { left: 1, of: 1 });
+        let holding = TrayModel::holding_fixture(now);
+        let first_held = holding.held[0].id;
+        let mut hold_next = base.clone();
+        hold_next.routing = Routing::Holding(SendScope::Next { left: 1, of: 1 });
         let shots = [
-            ("tray-1a", model, false),
-            ("tray-send-choose", base, true),
-            ("tray-send-next", next, false),
-            ("tray-send-all", all, false),
+            ("tray-1a", model, Unfolded::default()),
+            (
+                "tray-send-choose",
+                choose,
+                Unfolded {
+                    destinations: true,
+                    ..Unfolded::default()
+                },
+            ),
+            ("tray-send-next", next, Unfolded::default()),
+            ("tray-send-all", all, Unfolded::default()),
+            ("tray-hold", holding.clone(), Unfolded::default()),
+            (
+                "tray-hold-actions",
+                holding,
+                Unfolded {
+                    held: Some(first_held),
+                    ..Unfolded::default()
+                },
+            ),
+            ("tray-hold-next", hold_next, Unfolded::default()),
+            (
+                "tray-paused",
+                TrayModel::paused_fixture(now),
+                Unfolded::default(),
+            ),
         ];
-        for (name, model, choosing) in shots {
+        for (name, model, unfolded) in shots {
             let mut cx = HeadlessAppContext::with_platform(
                 gpui_kit::platform::current_platform(true).text_system(),
                 Arc::new(assets::Assets),
@@ -1027,7 +1069,7 @@ fn main() {
             let height = cx.update(|cx| {
                 tray::dropdown::fitted_height(
                     &model,
-                    choosing,
+                    unfolded,
                     &cx.text_system().clone(),
                     px(f32::MAX),
                 )
@@ -1045,7 +1087,7 @@ fn main() {
                                 window,
                                 cx,
                             );
-                            dropdown.choosing = choosing;
+                            dropdown.unfolded = unfolded;
                             dropdown
                         })
                     },
@@ -1801,7 +1843,7 @@ fn main() {
     // 1a-3f) over its example.com fixtures, with the routing state set by
     // hand and motion off so each shot is the settled frame.
     {
-        use overview_model::{ConfigTrouble, FocusKey, Pause, RowSource, Sending, Status};
+        use overview_model::{ConfigTrouble, FocusKey, Holding, Pause, RowSource, Sending, Status};
         use pwrroute_engine::{Precedence, RulesFile};
 
         type Day = fn() -> Vec<pwrroute_router::DispatchRecord>;
@@ -2036,6 +2078,24 @@ fn main() {
                         profile: None,
                         private: true,
                     }),
+                    ..routing()
+                },
+                prepare: |_| {},
+            },
+            // Incoming links (design: Incoming Links 3b): holding the next
+            // 3 links, one used, two held; the Held tile, the rail's count.
+            Shot {
+                name: "app-0-overview-holding",
+                width: 1000.0,
+                config: None,
+                rules: fixtures::overview_paused_rules,
+                exists: true,
+                day: Some(fixtures::overview_paused_day),
+                status: Status {
+                    holding: Some(Holding {
+                        scope: pwrroute_router::SendScope::Next { left: 2, of: 3 },
+                    }),
+                    held: 2,
                     ..routing()
                 },
                 prepare: |_| {},

@@ -22,23 +22,24 @@ use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Bounds,
-    BoxShadow, ClickEvent, Context, Div, ElementId, Font, HighlightStyle, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement as _, PathBuilder, Pixels, Point, Render,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledText, TextRun,
-    Window, WindowTextSystem, anchored, canvas, deferred, div, ease_out_quint, font,
-    linear_color_stop, linear_gradient, point,
+    BoxShadow, ClickEvent, Context, Div, ElementId, FocusHandle, Font, HighlightStyle, Hsla,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, PathBuilder, Pixels,
+    Point, Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    StyledText, TextRun, Window, WindowTextSystem, anchored, canvas, deferred, div, ease_out_quint,
+    font, linear_color_stop, linear_gradient, point,
 };
 
 use crate::app::{PwrRoute, Screen, Selection};
 use crate::overview_model::{
     self, Action, CHANGE_IN_RULES, Callout, Caption, Card, CardKind, ConfigInputs, ConfigTrouble,
-    DONE_TITLE, End, EverythingElse, Focus, FocusKey, GUTTER_MIN, Inputs, Installed, Item, Lit,
-    Map, MapWidths, Node, NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener, Overview, Pattern, Pause,
-    Private, Route, Row, RowMatch, RowSource, Sending, Setup, SetupStep, Share, State, Status,
-    Target, Tone, fit_tags,
+    DONE_TITLE, End, EverythingElse, Focus, FocusKey, GUTTER_MIN, Holding, Incoming, Inputs,
+    Installed, Item, Lit, Map, MapWidths, Node, NodeRef, OFFER_BUTTON, OFFER_TITLE, Opener,
+    Overview, Pattern, Pause, Private, Route, Row, RowMatch, RowSource, Sending, Setup, SetupStep,
+    Share, State, Status, Target, Tone, fit_tags,
 };
 use crate::rules_view::pane_frame;
 use crate::theme::{self, icon, mono, text, tracked};
+use crate::tray::model::{ForKind, Mode};
 use crate::widgets::{
     ButtonKind, add_button, badge, button, caret, field_label, input_box, key_cap, menu_card,
     menu_row, one_line, paragraph, profiles_hint, tag_frame,
@@ -142,9 +143,56 @@ pub struct OverviewState {
     /// Tests and screenshots: the routing state to draw in place of the
     /// router's, the tray's and the OS's.
     pub status: Option<Status>,
+    /// The hero's switch, For choice and stepper: tab stops the window's
+    /// Tab reaches in draw order (design: Incoming Links 3a). Made with
+    /// the window.
+    pub hero_stops: Option<HeroStops>,
 }
 
+/// The hero's keyboard stops, in order.
+#[derive(Debug)]
+pub struct HeroStops {
+    pub switch: FocusHandle,
+    pub for_row: FocusHandle,
+    pub stepper: FocusHandle,
+}
+
+impl HeroStops {
+    pub fn new(cx: &mut App) -> Self {
+        let stop = |cx: &mut App| cx.focus_handle().tab_stop(true);
+        Self {
+            switch: stop(cx),
+            for_row: stop(cx),
+            stepper: stop(cx),
+        }
+    }
+}
+
+/// The hero's switch and its segments, For choices and stepper.
+pub const HERO_SWITCH_ID: &str = "overview-switch";
+pub const HERO_MODE_IDS: [&str; 4] = [
+    "overview-mode-rules",
+    "overview-mode-send",
+    "overview-mode-hold",
+    "overview-mode-pause",
+];
+pub const HERO_FOR_IDS: [&str; 3] = [
+    "overview-for-links",
+    "overview-for-time",
+    "overview-for-until-off",
+];
+pub const HERO_STEP_DOWN_ID: &str = "overview-step-down";
+pub const HERO_STEP_UP_ID: &str = "overview-step-up";
+
 impl OverviewState {
+    /// At rest, with the hero's keyboard stops.
+    pub fn new(cx: &mut App) -> Self {
+        Self {
+            hero_stops: Some(HeroStops::new(cx)),
+            ..Self::default()
+        }
+    }
+
     /// What is traced: the pin, else the keyboard, else the pointer.
     pub fn focus(&self) -> Option<FocusKey> {
         self.pinned
@@ -292,9 +340,28 @@ pub fn status(app: &PwrRoute, cx: &App) -> Status {
     let config_error = app.config.as_ref().and_then(|config| {
         config_trouble(crate::router::routing_source(), config.problem.as_deref())
     });
+    let (holding, held, incoming) = crate::tray::model(cx).map_or_else(
+        || (None, 0, Incoming::default()),
+        |model| {
+            let model = model.read(cx);
+            (
+                model.holding().map(|scope| Holding { scope }),
+                model.held.len(),
+                Incoming {
+                    mode: model.mode(),
+                    for_kind: model.for_kind,
+                    stepper: model.stepper(),
+                    can_hold: model.can_hold,
+                },
+            )
+        },
+    );
     Status {
         paused,
         sending,
+        holding,
+        held,
+        incoming,
         default: crate::default_browser::state(cx),
         config_error,
     }
@@ -407,6 +474,53 @@ impl PwrRoute {
         // browser set, a pattern would make the rule whole, and it would
         // save before the person chose it.
         self.draft_link = Some((index, None));
+    }
+
+    /// A key on one of the hero's controls (design: Incoming Links 2f, as
+    /// the tray's): Left and Right move the switch or the For choice and
+    /// turn the new one on, Up and Down step the stepper. Tab is the
+    /// window's (`app_menu::FocusNext`), as everywhere.
+    fn hero_key(&mut self, stop: HeroStop, event: &KeyDownEvent, cx: &mut Context<'_, Self>) {
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.secondary() || keystroke.modifiers.alt {
+            return;
+        }
+        let incoming = status(self, cx).switch();
+        match (keystroke.key.as_str(), stop) {
+            ("left" | "right", HeroStop::Switch) => {
+                let usable: Vec<Mode> = Mode::ALL
+                    .into_iter()
+                    .filter(|mode| *mode != Mode::Hold || incoming.can_hold)
+                    .collect();
+                let here = usable
+                    .iter()
+                    .position(|mode| *mode == incoming.mode)
+                    .unwrap_or(0);
+                let next = if keystroke.key == "left" {
+                    here.saturating_sub(1)
+                } else {
+                    (here + 1).min(usable.len() - 1)
+                };
+                crate::tray::set_mode(usable[next], cx);
+            }
+            ("left" | "right", HeroStop::For) => {
+                let here = ForKind::ALL
+                    .iter()
+                    .position(|kind| *kind == incoming.for_kind)
+                    .unwrap_or(0);
+                let next = if keystroke.key == "left" {
+                    here.saturating_sub(1)
+                } else {
+                    (here + 1).min(ForKind::ALL.len() - 1)
+                };
+                crate::tray::set_for(ForKind::ALL[next], cx);
+            }
+            ("up", HeroStop::Stepper) => crate::tray::step(1, cx),
+            ("down", HeroStop::Stepper) => crate::tray::step(-1, cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
     }
 
     /// A key on Overview while the window has the keyboard. Up and Down
@@ -556,7 +670,7 @@ impl PwrRoute {
                 cx.notify();
             }
             Action::BackToRules => {
-                crate::tray::set_send_mode(crate::tray::model::SendMode::Rules, cx);
+                crate::tray::set_mode(crate::tray::model::Mode::Rules, cx);
                 cx.notify();
             }
             Action::MakeDefault => {
@@ -772,7 +886,7 @@ pub fn pane(
                 cx.notify();
             }
         }))
-        .child(hero(&overview, cx))
+        .child(hero(&overview, app.overview.hero_stops.as_ref(), window, cx))
         .children(
             overview
                 .setup
@@ -813,7 +927,12 @@ pub const SETUP_REFUSED_ID: &str = "overview-setup-refused";
 
 // --- the hero ------------------------------------------------------------
 
-fn hero(overview: &Overview, cx: &mut Context<'_, PwrRoute>) -> Div {
+fn hero(
+    overview: &Overview,
+    stops: Option<&HeroStops>,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
     let hero = &overview.hero;
     let (border, wash, orb_fg, orb_bg, orb_border) = match hero.tone {
         Tone::Accent => (
@@ -844,9 +963,17 @@ fn hero(overview: &Overview, cx: &mut Context<'_, PwrRoute>) -> Div {
             theme::danger_soft(),
             theme::transparent(),
         ),
+        Tone::Info => (
+            alpha(theme::info_text(), 0.3),
+            Some(theme::info_text()),
+            theme::info_text(),
+            theme::info_soft(),
+            alpha(theme::info_text(), 0.3),
+        ),
     };
     let orb_icon = match hero.state {
         State::Paused => "pwrroute/pause.svg",
+        State::Holding => "pwrroute/hold.svg",
         State::Sending => "pwrroute/forward.svg",
         State::ConfigError | State::ConfigStale => "pwrroute/alert.svg",
         _ => "pwrroute/mark.svg",
@@ -951,7 +1078,272 @@ fn hero(overview: &Overview, cx: &mut Context<'_, PwrRoute>) -> Div {
         .bg(background)
         .child(orb)
         .child(words)
+        .children(
+            overview
+                .incoming
+                .as_ref()
+                .map(|incoming| hero_switch(incoming, stops, window, cx)),
+        )
         .children(action)
+}
+
+/// The hero's Incoming links switch and, while Send or Hold is on, its For
+/// row (design: Incoming Links 3a-3c): the tray's controls, so the
+/// Overview changes what the next links do without the menu bar. Send
+/// goes to the tray's destination; a node's Next link here picks another.
+fn hero_switch(
+    incoming: &Incoming,
+    stops: Option<&HeroStops>,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let keyboard = window.last_input_was_keyboard();
+    let ringed = |handle: Option<&FocusHandle>| {
+        keyboard && handle.is_some_and(|handle| handle.is_focused(window))
+    };
+    let mut switch = div()
+        .id(HERO_SWITCH_ID)
+        .debug_selector(|| HERO_SWITCH_ID.into())
+        .relative()
+        .w(px(300.0))
+        .h(px(30.0))
+        .p(px(2.0))
+        .flex()
+        .gap(px(1.0))
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(theme::border_subtle())
+        .bg(theme::bg_input())
+        .when_some(stops, |switch, stops| {
+            switch.track_focus(&stops.switch).on_key_down(cx.listener(
+                |this, event: &KeyDownEvent, _, cx| {
+                    this.hero_key(HeroStop::Switch, event, cx);
+                },
+            ))
+        });
+    for (mode, id) in Mode::ALL.into_iter().zip(HERO_MODE_IDS) {
+        let on = mode == incoming.mode;
+        let usable = mode != Mode::Hold || incoming.can_hold;
+        let (fill, border, color) = if !on {
+            (
+                theme::transparent(),
+                theme::transparent(),
+                if usable {
+                    theme::text_secondary()
+                } else {
+                    theme::text_subtle()
+                },
+            )
+        } else {
+            mode_colors(mode)
+        };
+        switch = switch.child(
+            div()
+                .id(id)
+                .debug_selector(|| id.into())
+                .flex_1()
+                .h(px(24.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.0))
+                .border_1()
+                .border_color(border)
+                .bg(fill)
+                .when(usable && !on, |button| {
+                    button.hover(|button| button.bg(theme::bg_hover()))
+                })
+                .when(usable, |button| {
+                    button.cursor_pointer().on_click(cx.listener(
+                        move |_, _: &ClickEvent, _, cx| {
+                            crate::tray::set_mode(mode, cx);
+                            cx.notify();
+                        },
+                    ))
+                })
+                .child(text(mode.label(), 11.0, 550.0, color)),
+        );
+    }
+    let switch = switch.when(ringed(stops.map(|stops| &stops.switch)), |switch| {
+        switch.child(focus_ring_over(7.0))
+    });
+    let mut column = div()
+        .flex()
+        .flex_none()
+        .flex_col()
+        .items_end()
+        .gap(px(8.0))
+        .child(switch);
+    if matches!(incoming.mode, Mode::Send | Mode::Hold) {
+        column = column.child(hero_for_row(incoming, stops, &ringed, cx));
+    }
+    column
+}
+
+/// For: Links, Time or Until off, and the stepper.
+fn hero_for_row(
+    incoming: &Incoming,
+    stops: Option<&HeroStops>,
+    ringed: &dyn Fn(Option<&FocusHandle>) -> bool,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let (lit_fill, _, lit_text) = mode_colors(incoming.mode);
+    let mut choices = div()
+        .id("overview-for")
+        .relative()
+        .flex()
+        .flex_none()
+        .gap(px(1.0))
+        .p(px(2.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(theme::border_subtle())
+        .bg(theme::bg_input())
+        .when_some(stops, |choices, stops| {
+            choices.track_focus(&stops.for_row).on_key_down(cx.listener(
+                |this, event: &KeyDownEvent, _, cx| {
+                    this.hero_key(HeroStop::For, event, cx);
+                },
+            ))
+        });
+    for (choice, id) in ForKind::ALL.into_iter().zip(HERO_FOR_IDS) {
+        let on = choice == incoming.for_kind;
+        choices = choices.child(
+            div()
+                .id(id)
+                .debug_selector(|| id.into())
+                .px(px(7.0))
+                .py(px(4.0))
+                .rounded(px(4.0))
+                .cursor_pointer()
+                .when(on, |option| option.bg(lit_fill))
+                .when(!on, |option| {
+                    option.hover(|option| option.bg(theme::bg_hover()))
+                })
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    crate::tray::set_for(choice, cx);
+                    cx.notify();
+                }))
+                .child(text(
+                    choice.label(),
+                    10.5,
+                    550.0,
+                    if on {
+                        lit_text
+                    } else {
+                        theme::text_secondary()
+                    },
+                )),
+        );
+    }
+    let choices = choices.when(ringed(stops.map(|stops| &stops.for_row)), |choices| {
+        choices.child(focus_ring_over(6.0))
+    });
+    let stepper = incoming.stepper.clone().map(|value| {
+        let step =
+            |id: &'static str, glyph: &'static str, delta: i64, cx: &mut Context<'_, PwrRoute>| {
+                div()
+                    .id(id)
+                    .debug_selector(|| id.into())
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .hover(|button| button.bg(theme::bg_hover()))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        crate::tray::step(delta, cx);
+                        cx.notify();
+                    }))
+                    .child(text(glyph, 12.0, 600.0, theme::text_secondary()))
+            };
+        div()
+            .id("overview-stepper")
+            .relative()
+            .flex()
+            .flex_none()
+            .items_center()
+            .border_1()
+            .border_color(theme::border_default())
+            .rounded(px(6.0))
+            .bg(theme::bg_panel())
+            .when_some(stops, |stepper, stops| {
+                stepper.track_focus(&stops.stepper).on_key_down(cx.listener(
+                    |this, event: &KeyDownEvent, _, cx| {
+                        this.hero_key(HeroStop::Stepper, event, cx);
+                    },
+                ))
+            })
+            .child(step(HERO_STEP_DOWN_ID, "\u{2212}", -1, cx))
+            .child(div().min_w(px(30.0)).flex().justify_center().child(mono(
+                value,
+                11.0,
+                600.0,
+                theme::text_primary(),
+            )))
+            .child(step(HERO_STEP_UP_ID, "+", 1, cx))
+            .when(ringed(stops.map(|stops| &stops.stepper)), |stepper| {
+                stepper.child(focus_ring_over(6.0))
+            })
+    });
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(tracked("For", 9.5, 600.0, 0.1, theme::text_subtle()))
+        .child(choices)
+        .children(stepper)
+}
+
+/// A lit segment's fill, edge and words in its mode's tone: Rules
+/// neutral, Send the accent, Hold info blue, Pause the warning.
+fn mode_colors(mode: Mode) -> (Hsla, Hsla, Hsla) {
+    match mode {
+        Mode::Rules => (
+            theme::bg_hover_strong(),
+            theme::border_default(),
+            theme::text_primary(),
+        ),
+        Mode::Send => (
+            theme::bg_row_active(),
+            theme::accent_border(),
+            theme::accent_bright(),
+        ),
+        Mode::Hold => (
+            theme::info_soft(),
+            alpha(theme::info_text(), 0.42),
+            theme::info_text(),
+        ),
+        Mode::Pause => (
+            theme::warn_soft(),
+            alpha(theme::warn_text(), 0.42),
+            theme::warn_text(),
+        ),
+    }
+}
+
+/// `.foc`: the 2px accent ring 1px outside a control, over it. Its parent
+/// must be `relative`.
+fn focus_ring_over(radius: f32) -> Div {
+    div()
+        .absolute()
+        .top(px(-3.0))
+        .left(px(-3.0))
+        .right(px(-3.0))
+        .bottom(px(-3.0))
+        .border_2()
+        .border_color(theme::accent())
+        .rounded(px(radius + 3.0))
+}
+
+/// Which hero stop a key landed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeroStop {
+    Switch,
+    For,
+    Stepper,
 }
 
 // --- the setup card --------------------------------------------------------

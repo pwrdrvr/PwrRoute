@@ -210,6 +210,11 @@ fn overview_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
     let source = source_chip(app, status);
     let state = if status.paused.is_some() {
         status_chip("paused", theme::status_warning())
+    } else if let Some(holding) = &status.holding {
+        status_chip(
+            holding.short(std::time::SystemTime::now()),
+            theme::info_text(),
+        )
     } else if let Some(sending) = &status.sending {
         status_chip(
             format!("{} \u{00b7} {}", sending.short(), sending.name),
@@ -245,6 +250,13 @@ pub fn routing_line(status: &Status) -> (gpui_kit::Hsla, String) {
                     .as_ref()
                     .map_or("", |pause| pause.name.as_str())
             ),
+        ),
+        State::Holding => (
+            theme::info_text(),
+            match status.held {
+                0 => "holding".to_owned(),
+                held => format!("holding \u{00b7} {held} held"),
+            },
         ),
         State::Sending => (
             theme::accent(),
@@ -891,7 +903,26 @@ pub fn nav_rail(
             app,
             cx,
             Screen::Activity,
-            app.activity.today.compact().map(count),
+            // Held links that wait say so first (design: Incoming Links
+            // 3b), in Hold's blue.
+            if status.held > 0 {
+                Some(
+                    div()
+                        .px(px(6.0))
+                        .py(px(1.0))
+                        .rounded(px(4.0))
+                        .bg(theme::info_soft())
+                        .child(mono(
+                            format!("{} held", status.held),
+                            10.5,
+                            600.0,
+                            theme::info_text(),
+                        ))
+                        .into_any_element(),
+                )
+            } else {
+                app.activity.today.compact().map(count)
+            },
             false,
         ))
         .child(div().mt(px(10.0)).mx(px(8.0)).mb(px(4.0)).child(tracked(

@@ -207,7 +207,7 @@ impl PwrRoute {
             last_import: None,
             found_config: None,
             row_actions: crate::rule_menu::RowActions::default(),
-            overview: OverviewState::default(),
+            overview: OverviewState::new(cx),
             installed: Vec::new(),
             described,
             config_loaded: SystemTime::now(),
