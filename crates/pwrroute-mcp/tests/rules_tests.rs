@@ -403,10 +403,10 @@ async fn activity_finds_the_links_the_user_held_and_the_hold_in_force() {
         .record_not_opened("https://ads.example.net/click?id=7", "Mail")
         .unwrap();
     h.router
-        .record_held("https://chat.example.com/r/team-7", "Slack")
+        .record_held("https://chat.example.com/r/team-7", "Chat")
         .unwrap();
     h.router
-        .record("https://docs.example.org/page", "Slack")
+        .record("https://docs.example.org/page", "Chat")
         .unwrap();
     h.router
         .set_hold(Some(pwrroute_mcp::Hold::Next { left: 1, of: 3 }));
@@ -420,7 +420,7 @@ async fn activity_finds_the_links_the_user_held_and_the_hold_in_force() {
     let entries = held["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1, "{held}");
     assert_eq!(entries[0]["reason"], "hold");
-    assert_eq!(entries[0]["via"], "Slack");
+    assert_eq!(entries[0]["via"], "Chat");
     assert_eq!(entries[0]["waiting"], true);
 
     // Held is a part of not opened.

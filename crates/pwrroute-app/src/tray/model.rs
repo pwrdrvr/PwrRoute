@@ -599,8 +599,8 @@ impl HeldLink {
         })
     }
 
-    /// The second line: "from Slack · rules:" before the rules' browser,
-    /// or "from Slack · the rules open nothing".
+    /// The second line: "from Chat · rules:" before the rules' browser,
+    /// or "from Chat · the rules open nothing".
     pub fn detail(&self) -> String {
         let mut parts = Vec::new();
         if let Some(from) = &self.from {
@@ -850,7 +850,7 @@ impl TrayModel {
                 9002,
                 "chat.example.com",
                 "/r/team-7?ref=bot",
-                "Slack",
+                "Chat",
                 BrowserLabel::new("Ch", "Google Chrome", Some("Work")),
                 1,
             ),
@@ -1783,7 +1783,7 @@ mod tests {
             received_at: now(),
             privacy,
             link: Link::new(url, Source::AppleEvent).with_opener(Some(OpenerInfo {
-                name: "Slack".into(),
+                name: "Chat".into(),
                 ..OpenerInfo::default()
             })),
             forwarded: false,
@@ -1807,12 +1807,12 @@ mod tests {
         let full = HeldLink::from_record(&held(1, Privacy::Full)).expect("a held link");
         assert_eq!(full.host, "chat.example.com");
         assert_eq!(full.rest, "/r/team-7?ref=bot#top");
-        assert_eq!(full.from.as_deref(), Some("Slack"));
+        assert_eq!(full.from.as_deref(), Some("Chat"));
         let rules = full.rules.clone().expect("where the rules would open it");
         assert_eq!(rules.name, "Google Chrome");
         assert_eq!(rules.app(), "com.google.Chrome");
         assert_eq!(rules.profile.as_deref(), Some("Work"));
-        assert_eq!(full.detail(), "from Slack \u{00b7} rules:");
+        assert_eq!(full.detail(), "from Chat \u{00b7} rules:");
 
         let mut host_only = held(2, Privacy::Host);
         host_only.link.url = "https://chat.example.com".into();
