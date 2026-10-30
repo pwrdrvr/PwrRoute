@@ -8,19 +8,27 @@ Use [GitHub Issues](https://github.com/pwrdrvr/PwrRoute/issues) for
 reproducible bugs and focused feature proposals. Do not report vulnerabilities
 publicly; follow [SECURITY.md](SECURITY.md) instead.
 
-PwrRoute is pre-release, and app code is still being ported in. Read
-[AGENTS.md](AGENTS.md) before starting a change.
+PwrRoute is pre-release: expect the rules format and screens to keep
+changing until 1.0. Read [AGENTS.md](AGENTS.md) before starting a change;
+it and the `AGENTS.md` beside each crate hold the rules each part of the
+code keeps.
+
+For anything bigger than a small fix, open an issue first so we can agree on
+the shape before you spend time on it. The design in [design/](design/)
+decides how screens look and behave.
 
 ## Development setup
 
 PwrRoute is a Cargo workspace. `rust-toolchain.toml` pins Rust 1.97, and rustup
-installs it on first use. The lint chain needs cargo-deny, cargo-about and
-Node.js 22 or newer for the dependency-free CI classifier tests.
+installs it on first use. The lint chain needs cargo-deny, cargo-about,
+Node.js 22 or newer for the dependency-free CI classifier tests, and
+Python 3.9 or newer for the mocked macOS packaging checks.
 
 ```bash
 git clone https://github.com/pwrdrvr/PwrRoute.git
 cd PwrRoute
-cargo install --locked cargo-deny cargo-about
+cargo install --locked cargo-deny@0.20.2
+cargo install --locked --features cli cargo-about@0.9.2
 cargo run -p pwrroute-app
 ```
 
@@ -50,8 +58,18 @@ indexes, browsing history or credentials. Delete the file to forget it.
 
 ## Repository map
 
-- `crates/pwrroute-app` — the GPUI window, binary `pwrroute`.
-- `crates/pwrroute-engine` — the rules engine: Finicky v4 configs in QuickJS.
+- `crates/pwrroute-app` — the GPUI window, tray and first-run window;
+  binary `pwrroute`. It hosts the router and the MCP server.
+- `crates/pwrroute-engine` — the rules engine: Finicky v4 configs in QuickJS,
+  `rules.json`, the trace and the Finicky importer.
+- `crates/pwrroute-router` — the dispatch pipeline, recent dispatches,
+  single instance and IPC.
+- `crates/pwrroute-browsers` — the browser catalog, detection, profiles and
+  launching.
+- `crates/pwrroute-os` — link receipt and default-browser registration per
+  OS.
+- `crates/pwrroute-mcp` — the MCP server for local agents.
+- `e2e` — Desktop E2E against the built app.
 - `xtask` — lint, test, license notices, release checks and packaging.
 - `packaging` — the macOS `Info.plist` template and the Linux desktop entry.
 - `licenses`, `about.toml`, `deny.toml` — license gate and notice generation.
@@ -65,10 +83,9 @@ indexes, browsing history or credentials. Delete the file to forget it.
 | Desktop app | Rust + GPUI (gpui-kit) | `crates/pwrroute-app/` |
 | Rules engine | Rust + QuickJS (rquickjs) + oxc, running Finicky's config API | `crates/pwrroute-engine/` |
 | Resident router | Rust: dispatch, trace buffer, single instance, IPC | `crates/pwrroute-router/` |
+| Browsers | Rust: catalog, profiles, launch plans, Chromium's singleton socket | `crates/pwrroute-browsers/` |
 | OS edge | Rust + objc2 (macOS), registry (Windows), xdg (Linux) | `crates/pwrroute-os/` |
-| Local agent access | MCP over OAuth-protected loopback HTTP | not ported yet |
-
-The browser launcher and the MCP server are not ported yet.
+| Local agent access | MCP over a per-user socket (a named pipe on Windows), with per-agent roles | `crates/pwrroute-mcp/` |
 
 ## Checks
 
