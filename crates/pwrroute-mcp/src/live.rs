@@ -338,6 +338,11 @@ pub fn trace_of(record: &DispatchRecord, config: Option<&str>) -> Trace {
             Step::Browser { .. } | Step::NotOpened | Step::Launched { .. } => {}
         }
     }
+    if record.outcome == Outcome::NotOpened
+        && let Some(step) = steps.iter_mut().rev().find(|s| s.kind != StepKind::Rewrite)
+    {
+        step.summary.push_str(crate::engine::NOT_OPENED);
+    }
     let browser = record.browser.clone().unwrap_or_else(|| Browser {
         name: String::new(),
         app_type: AppType::None,

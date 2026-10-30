@@ -1415,3 +1415,179 @@ fn a_proposal_is_tested_under_its_own_precedence() {
     assert!(e.test_rules(Some(&moved)).unwrap().is_ok());
     std::fs::remove_file(&config).unwrap();
 }
+
+// Don't open: `"browser": "none"` in rules.json, a rule's or the default.
+// The Go host had no such word (it would look for an app called `none`);
+// the engine hands Finicky `browser: null`, which a config could always
+// write, so the result is the API's own not-opened browser.
+
+#[test]
+fn a_dont_open_rule_resolves_to_a_browser_that_opens_nothing() {
+    let rules = RulesFile {
+        default_browser: "Firefox".into(),
+        rules: vec![
+            rule(&["https://ads.example.com/*"], "none"),
+            rule(&["https://*.example.com/*"], "Safari"),
+        ],
+        ..RulesFile::default()
+    };
+    let e = engine(None, rules);
+    let trace = e
+        .trace(&Link::new("https://ads.example.com/banner"), None)
+        .unwrap();
+    // The rule decided, as any rule does: the trace names it.
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Rules, 0));
+    assert_eq!(trace.resolution.browser.app_type, AppType::None);
+    assert_eq!(trace.resolution.browser.name, "");
+    // Its neighbours are untouched.
+    let other = e.resolve("https://www.example.com/", None).unwrap();
+    assert_eq!(other.browser.name, "Safari");
+    assert_eq!(
+        e.resolve("https://elsewhere.example.org/", None)
+            .unwrap()
+            .browser
+            .name,
+        "Firefox"
+    );
+}
+
+#[test]
+fn a_dont_open_default_leaves_unclaimed_links_unopened() {
+    let rules = RulesFile {
+        default_browser: "none".into(),
+        rules: vec![rule(&["https://work.example.com/*"], "Firefox")],
+        ..RulesFile::default()
+    };
+    let e = engine(None, rules);
+    // Only what a rule routes reaches a browser.
+    let routed = e.resolve("https://work.example.com/a", None).unwrap();
+    assert_eq!(routed.browser.name, "Firefox");
+    let trace = e
+        .trace(&Link::new("https://unknown.example.org/"), None)
+        .unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Default, Source::Rules, 0));
+    assert_eq!(trace.resolution.browser.app_type, AppType::None);
+}
+
+#[test]
+fn a_dont_open_default_follows_precedence_beside_a_config() {
+    let rules = RulesFile {
+        default_browser: "none".into(),
+        rules: vec![rule(&["https://both.example.com/*"], "Arc")],
+        ..RulesFile::default()
+    };
+    let unmatched = Link::new("https://unmatched.example/");
+    // The Go order: the config keeps its default, so the word changes
+    // nothing for links the config's default takes.
+    let go = precedence_engine("dont-open-go", "\"Safari\"", rules.clone());
+    let trace = go.trace(&unmatched, None).unwrap();
+    assert_eq!(winner_of(&trace).1, Source::Config);
+    assert_eq!(trace.resolution.browser.name, "Safari");
+    // The config's handlers still win the links they claim.
+    assert_eq!(
+        go.resolve("https://both.example.com/x", None)
+            .unwrap()
+            .browser
+            .name,
+        "Firefox"
+    );
+
+    // "pwrroute": rules.json's Don't open takes everything else from the
+    // config's default, and its rules go first.
+    let first = precedence_engine("dont-open-pwrroute", "\"Safari\"", pwrroute(rules));
+    let trace = first.trace(&unmatched, None).unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Default, Source::Rules, 0));
+    assert_eq!(trace.resolution.browser.app_type, AppType::None);
+    assert_eq!(
+        first
+            .resolve("https://both.example.com/x", None)
+            .unwrap()
+            .browser
+            .name,
+        "Arc"
+    );
+    // A config handler that claims a link still opens it.
+    assert_eq!(
+        first
+            .resolve("https://config.example.com/x", None)
+            .unwrap()
+            .browser
+            .name,
+        "Safari"
+    );
+}
+
+#[test]
+fn a_rule_after_a_dont_open_default_under_the_go_order_still_runs() {
+    // rules.json's handlers follow the config's in the Go order; a Don't
+    // open rule there decides only the links the config's handlers pass.
+    let rules = RulesFile {
+        rules: vec![rule(&["https://*.example.com/*"], "none")],
+        ..RulesFile::default()
+    };
+    let e = precedence_engine("dont-open-after", "\"Safari\"", rules);
+    assert_eq!(
+        e.resolve("https://both.example.com/x", None)
+            .unwrap()
+            .browser
+            .name,
+        "Firefox"
+    );
+    let trace = e
+        .trace(&Link::new("https://other.example.com/x"), None)
+        .unwrap();
+    assert_eq!(winner_of(&trace), (Stage::Handler, Source::Rules, 0));
+    assert_eq!(trace.resolution.browser.app_type, AppType::None);
+}
+
+#[test]
+fn examples_and_tests_can_expect_a_link_not_to_open() {
+    let rules = RulesFile {
+        default_browser: "Firefox".into(),
+        rules: vec![Rule {
+            examples: vec!["https://ads.example.com/a".into()],
+            ..rule(&["https://ads.example.com/*"], "none")
+        }],
+        tests: vec![
+            RouteTest {
+                url: "https://ads.example.com/b".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "none".into(),
+                    ..Expectation::default()
+                },
+            },
+            // Fails: this one opens.
+            RouteTest {
+                url: "https://news.example.com/".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "None".into(),
+                    ..Expectation::default()
+                },
+            },
+            // Fails: this one does not open.
+            RouteTest {
+                url: "https://ads.example.com/c".into(),
+                opener: None,
+                expect: Expectation {
+                    browser: "Firefox".into(),
+                    ..Expectation::default()
+                },
+            },
+        ],
+        ..RulesFile::default()
+    };
+    let e = engine(None, rules);
+    let report = e.test_rules(None).unwrap();
+    assert_eq!((report.total, report.passed), (4, 2), "{report:?}");
+    let failed: Vec<(&str, &str)> = report
+        .failures
+        .iter()
+        .map(|f| (f.expected.as_str(), f.actual.as_str()))
+        .collect();
+    assert_eq!(failed[0].0, "not opened");
+    assert!(failed[0].1.starts_with("Firefox"), "{failed:?}");
+    assert_eq!(failed[1].0, "Firefox");
+    assert!(failed[1].1.starts_with("not opened"), "{failed:?}");
+}
