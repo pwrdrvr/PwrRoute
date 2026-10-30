@@ -8,7 +8,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::trace::{DispatchId, DispatchRecord};
+use crate::{
+    link::Link,
+    trace::{DispatchId, DispatchRecord},
+};
 
 /// How long dispatches stay in memory: the newest `count`, each for at most
 /// `hours`. Zero `count` keeps nothing; zero `hours` means no age limit.
@@ -56,6 +59,23 @@ pub struct RecentDispatches {
 struct Inner {
     retention: Retention,
     records: VecDeque<DispatchRecord>,
+    /// The whole link of each record that was not opened and can still be,
+    /// newest first: a host-only record keeps its full URL here, in memory,
+    /// so Open works. Never more than `records` holds: an entry goes when
+    /// its record does, when it is opened, or on Clear.
+    waiting: VecDeque<(DispatchId, Link)>,
+}
+
+impl Inner {
+    /// Drops what the retention no longer keeps, and the links of records
+    /// that went.
+    fn sweep(&mut self, now: SystemTime) {
+        self.records.truncate(self.retention.count);
+        sweep(&mut self.records, self.retention, now);
+        let records = &self.records;
+        self.waiting
+            .retain(|(id, _)| records.iter().any(|record| record.id == *id));
+    }
 }
 
 impl RecentDispatches {
@@ -64,6 +84,7 @@ impl RecentDispatches {
             inner: Mutex::new(Inner {
                 retention,
                 records: VecDeque::with_capacity(retention.count.min(1024)),
+                waiting: VecDeque::new(),
             }),
         }
     }
@@ -82,19 +103,50 @@ impl RecentDispatches {
     pub(crate) fn set_retention(&self, retention: Retention) {
         let mut inner = self.lock();
         inner.retention = retention;
-        inner.records.truncate(retention.count);
-        sweep(&mut inner.records, retention, SystemTime::now());
+        inner.sweep(SystemTime::now());
     }
 
+    #[cfg(test)]
     pub(crate) fn push(&self, record: DispatchRecord) {
+        self.push_waiting(record, None);
+    }
+
+    /// Adds a record, with the whole link when it was not opened and can
+    /// still be. Nothing is kept, the link included, while the retention
+    /// keeps nothing.
+    pub(crate) fn push_waiting(&self, record: DispatchRecord, link: Option<Link>) {
         let mut inner = self.lock();
-        let retention = inner.retention;
-        if retention.count == 0 {
+        if inner.retention.count == 0 {
             return;
         }
+        if let Some(link) = link {
+            inner.waiting.push_front((record.id, link));
+        }
         inner.records.push_front(record);
-        inner.records.truncate(retention.count);
-        sweep(&mut inner.records, retention, SystemTime::now());
+        inner.sweep(SystemTime::now());
+    }
+
+    /// The records still waiting to be opened, newest first.
+    pub fn pending(&self) -> Vec<DispatchId> {
+        self.lock().waiting.iter().map(|(id, _)| *id).collect()
+    }
+
+    /// Whether `id` is still waiting to be opened.
+    pub fn is_pending(&self, id: DispatchId) -> bool {
+        self.lock()
+            .waiting
+            .iter()
+            .any(|(waiting, _)| *waiting == id)
+    }
+
+    /// The whole link of a record waiting to be opened; it waits no more.
+    pub(crate) fn take_pending(&self, id: DispatchId) -> Option<Link> {
+        let mut inner = self.lock();
+        let at = inner
+            .waiting
+            .iter()
+            .position(|(waiting, _)| *waiting == id)?;
+        inner.waiting.remove(at).map(|(_, link)| link)
     }
 
     /// Every record, newest first.
@@ -114,17 +166,19 @@ impl RecentDispatches {
         self.lock().records.is_empty()
     }
 
-    /// Forget every record, for Activity's Clear.
+    /// Forget every record, and every link waiting to be opened, for
+    /// Activity's Clear.
     pub fn clear(&self) {
-        self.lock().records.clear();
+        let mut inner = self.lock();
+        inner.records.clear();
+        inner.waiting.clear();
     }
 
     /// The state with everything past its age dropped.
     fn lock(&self) -> MutexGuard<'_, Inner> {
         // A panic mid-push leaves the deque intact; keep serving it.
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        let retention = inner.retention;
-        sweep(&mut inner.records, retention, SystemTime::now());
+        inner.sweep(SystemTime::now());
         inner
     }
 }
@@ -232,6 +286,45 @@ mod tests {
         assert!(recent.is_empty());
         recent.push(record(6, now));
         assert!(recent.is_empty());
+    }
+
+    #[test]
+    fn a_waiting_link_leaves_with_its_record() {
+        let recent = RecentDispatches::new(Retention { count: 2, hours: 1 });
+        let now = SystemTime::now();
+        let link = |n: u32| Link::new(format!("https://example.com/{n}"), Source::CommandLine);
+        recent.push_waiting(record(1, now), Some(link(1)));
+        recent.push_waiting(record(2, now), None);
+        recent.push_waiting(record(3, now), Some(link(3)));
+        // 1 went by count, and its link with it.
+        assert_eq!(recent.pending(), vec![DispatchId(3)]);
+        assert_eq!(recent.take_pending(DispatchId(1)), None);
+        // Taken once: the link is the whole one, then it waits no more.
+        assert_eq!(
+            recent.take_pending(DispatchId(3)).map(|l| l.url),
+            Some("https://example.com/3".to_owned())
+        );
+        assert!(!recent.is_pending(DispatchId(3)));
+        assert!(recent.get(DispatchId(3)).is_some(), "the record stays");
+
+        // By age, and on Clear.
+        recent.push_waiting(record(4, now), Some(link(4)));
+        recent
+            .inner
+            .lock()
+            .unwrap()
+            .records
+            .iter_mut()
+            .for_each(|r| r.received_at = now - Duration::from_secs(2 * 60 * 60));
+        assert!(recent.pending().is_empty());
+        recent.push_waiting(record(5, now), Some(link(5)));
+        recent.clear();
+        assert!(recent.pending().is_empty());
+
+        // Nothing kept means nothing waits either.
+        recent.set_retention(Retention { count: 0, hours: 0 });
+        recent.push_waiting(record(6, now), Some(link(6)));
+        assert!(recent.pending().is_empty());
     }
 
     #[test]

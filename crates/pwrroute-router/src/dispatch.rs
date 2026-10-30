@@ -405,7 +405,7 @@ impl Destination {
     }
 }
 
-/// How many links a send takes.
+/// How many links a send or a hold takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendScope {
     /// The next `left` links, of `of` asked for; then the rules again.
@@ -415,6 +415,31 @@ pub enum SendScope {
 }
 
 impl SendScope {
+    /// The next `n` links, between one and [`MAX_NEXT`].
+    pub fn next(n: u32) -> Self {
+        let n = n.clamp(1, MAX_NEXT);
+        Self::Next { left: n, of: n }
+    }
+
+    /// Whether an `All` with a time limit has run out at `now`.
+    pub fn expired(self, now: SystemTime) -> bool {
+        matches!(self, Self::All { until: Some(until) } if until <= now)
+    }
+
+    /// Takes one link: which of the scope's links it is, and whether the
+    /// scope is used up after it. An `All` is never used up here; its time
+    /// is checked before a link is taken.
+    fn take(&mut self) -> (crate::trace::Sent, bool) {
+        match self {
+            Self::All { .. } => (crate::trace::Sent::All, false),
+            Self::Next { left, of } => {
+                let nth = of.saturating_sub(*left) + 1;
+                *left = left.saturating_sub(1);
+                (crate::trace::Sent::Next { nth, of: *of }, *left == 0)
+            }
+        }
+    }
+
     /// A `Next` with `delta` more or fewer links left, never below one or
     /// past [`MAX_NEXT`], and the number asked for moved with it. An `All`
     /// is unchanged.
@@ -451,25 +476,94 @@ impl SendTo {
 
     /// Whether an `All` with a time limit has run out at `now`.
     pub fn expired(&self, now: SystemTime) -> bool {
-        matches!(self.scope, SendScope::All { until: Some(until) } if until <= now)
+        self.scope.expired(now)
     }
 }
 
-/// What takes links from the rules, when something does: a pause or a
-/// send. One slot, so turning one on turns the other off.
+/// What takes links from the rules, when something does: what the next
+/// link does instead of what the rules say. One slot, so turning one on
+/// turns the others off. In memory only: a new router starts on the rules.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Hold {
+pub enum Override {
+    /// Every link goes to the pause target until resumed.
     Paused(PauseTarget),
+    /// Links go to the user's destination, for the scope's links.
     Sending(SendTo),
+    /// Links are recorded and not opened, for the scope's links, so the
+    /// user can see them first and open them from Activity
+    /// ([`RouterHandle::open_not_opened`]).
+    Holding(SendScope),
 }
 
-/// The hold the handle writes and the dispatch thread reads.
-type Held = Arc<Mutex<Option<Hold>>>;
+impl Override {
+    /// The scope of a send or a hold; a pause has none.
+    pub fn scope(&self) -> Option<SendScope> {
+        match self {
+            Self::Paused(_) => None,
+            Self::Sending(send) => Some(send.scope),
+            Self::Holding(scope) => Some(*scope),
+        }
+    }
 
-/// What the dispatch thread took from the hold for one link.
+    fn scope_mut(&mut self) -> Option<&mut SendScope> {
+        match self {
+            Self::Paused(_) => None,
+            Self::Sending(send) => Some(&mut send.scope),
+            Self::Holding(scope) => Some(scope),
+        }
+    }
+
+    /// Whether a send's or a hold's time ran out at `now`.
+    pub fn expired(&self, now: SystemTime) -> bool {
+        self.scope().is_some_and(|scope| scope.expired(now))
+    }
+}
+
+/// The override the handle writes and the dispatch thread reads.
+type Slot = Arc<Mutex<Option<Override>>>;
+
+/// What the dispatch thread took from the override for one link.
 enum Took {
     Paused(PauseTarget),
     Sent(Destination, crate::trace::Sent),
+    Held(crate::trace::Sent),
+}
+
+/// How [`RouterHandle::open_not_opened`] opens a link that was not opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenAs {
+    /// Where the rules send it now. Any override is passed over. When the
+    /// rules still open nothing (a "Don't open" rule or default), the link
+    /// goes to the fallback browser, traced as [`Step::Fallback`].
+    Rules,
+    /// To this destination, after the rewrites, as a send would.
+    In(Destination),
+}
+
+/// Why [`RouterHandle::open_not_opened`] opened nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenLaterError {
+    /// The dispatch is not waiting: it was opened already, it left
+    /// Activity's retention, it was cleared, or it was counted only.
+    NotPending,
+    Gone(RouterGone),
+}
+
+impl std::fmt::Display for OpenLaterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotPending => f.write_str("that link is no longer waiting to be opened"),
+            Self::Gone(gone) => gone.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for OpenLaterError {}
+
+impl From<RouterGone> for OpenLaterError {
+    fn from(gone: RouterGone) -> Self {
+        Self::Gone(gone)
+    }
 }
 
 enum Command {
@@ -480,6 +574,13 @@ enum Command {
     Test {
         request: Queued,
         reply: mpsc::Sender<DispatchRecord>,
+    },
+    Release {
+        from: DispatchId,
+        how: OpenAs,
+        received: Instant,
+        received_at: SystemTime,
+        reply: mpsc::Sender<std::result::Result<DispatchRecord, OpenLaterError>>,
     },
     Replace {
         factory: ResolverFactory,
@@ -536,8 +637,10 @@ impl Router {
         let worker_recent = Arc::clone(&recent);
         let journal = Arc::new(Mutex::new(options.journal.clone()));
         let worker_journal = Arc::clone(&journal);
-        let held: Held = Arc::default();
-        let worker_held = Arc::clone(&held);
+        let slot: Slot = Arc::default();
+        let worker_slot = Arc::clone(&slot);
+        let next_id = Arc::new(AtomicU64::new(1));
+        let worker_next_id = Arc::clone(&next_id);
         let thread = thread::Builder::new()
             .name("pwrroute-dispatch".into())
             .spawn(move || {
@@ -551,7 +654,8 @@ impl Router {
                     recent: worker_recent,
                     journal: options.journal.clone().map(Journal::new),
                     journal_config: worker_journal,
-                    held: worker_held,
+                    slot: worker_slot,
+                    next_id: worker_next_id,
                     network,
                     options,
                 }
@@ -562,8 +666,8 @@ impl Router {
                 tx,
                 recent,
                 journal,
-                held,
-                next_id: Arc::new(AtomicU64::new(1)),
+                slot,
+                next_id,
                 on_received,
                 diagnostic_log,
             },
@@ -606,12 +710,11 @@ pub struct RouterHandle {
     /// [`journal`](Self::journal) describe. The dispatch thread writes it
     /// when [`set_journal`](Self::set_journal) takes effect.
     journal: Arc<Mutex<Option<JournalConfig>>>,
-    /// A pause or a send, when one is on. Read by the dispatch thread for
-    /// each link; written by [`set_paused`] and [`set_send_to`].
+    /// A pause, a send or a hold, when one is on. Read by the dispatch
+    /// thread for each link; written by [`set_override`] and its wrappers.
     ///
-    /// [`set_paused`]: Self::set_paused
-    /// [`set_send_to`]: Self::set_send_to
-    held: Held,
+    /// [`set_override`]: Self::set_override
+    slot: Slot,
     next_id: Arc<AtomicU64>,
     on_received: Option<ReceivedCallback>,
     diagnostic_log: Option<PathBuf>,
@@ -754,25 +857,70 @@ impl RouterHandle {
         rx.recv().map_err(|_| RouterGone)
     }
 
+    /// What the next link does instead of what the rules say: a pause, a
+    /// send or a hold, or `None` for the rules. Replaces whatever was on.
+    pub fn set_override(&self, next: Option<Override>) {
+        *self.slot() = next;
+    }
+
+    /// The override in force, or `None` while the rules decide. A send or
+    /// a hold whose time ran out is ended here, so a reader never sees it.
+    pub fn override_in_force(&self) -> Option<Override> {
+        let mut slot = self.slot();
+        if slot.as_ref().is_some_and(|o| o.expired(SystemTime::now())) {
+            *slot = None;
+        }
+        slot.clone()
+    }
+
+    /// Changes the scope of the send or hold in force (another count, a
+    /// later time), keeping what it does, under the slot's lock. Returns
+    /// the override as it is now; `None`, and nothing changed, while the
+    /// rules decide or routing is paused.
+    pub fn rescope(&self, scope: SendScope) -> Option<Override> {
+        let mut slot = self.slot();
+        let current = slot.as_mut()?;
+        *current.scope_mut()? = match scope {
+            SendScope::Next { left, of } => SendScope::Next {
+                left: left.clamp(1, MAX_NEXT),
+                of: of.clamp(left.clamp(1, MAX_NEXT), MAX_NEXT),
+            },
+            all => all,
+        };
+        Some(current.clone())
+    }
+
+    /// Changes how many links a `Next` send or hold has left by `delta`,
+    /// never below one, and the number asked for with it. Read and written
+    /// under one lock, so a link dispatched meanwhile is never counted
+    /// twice. Returns the override as it is now.
+    pub fn step_next(&self, delta: i64) -> Option<Override> {
+        let mut slot = self.slot();
+        let current = slot.as_mut()?;
+        let scope = current.scope_mut()?;
+        *scope = scope.stepped(delta);
+        Some(current.clone())
+    }
+
     /// Pauses routing: from the next dispatch on, every link goes to
     /// `target` after its rewrites, with [`Step::Paused`] in its trace
     /// naming the handler it skipped. `None` resumes. The record keeps the
     /// privacy level the rules gave it, since the rewrites still ran and a
     /// rule that keeps less of a link keeps less of it paused too.
-    /// Pausing ends a send; resuming leaves a send alone.
+    /// Pausing ends a send or a hold; resuming leaves them alone.
     pub fn set_paused(&self, target: Option<PauseTarget>) {
-        let mut held = self.held();
+        let mut slot = self.slot();
         match target {
-            Some(target) => *held = Some(Hold::Paused(target)),
-            None if matches!(*held, Some(Hold::Paused(_))) => *held = None,
+            Some(target) => *slot = Some(Override::Paused(target)),
+            None if matches!(*slot, Some(Override::Paused(_))) => *slot = None,
             None => {}
         }
     }
 
     /// Where links go while paused, or `None` while routing.
     pub fn paused(&self) -> Option<PauseTarget> {
-        match &*self.held() {
-            Some(Hold::Paused(target)) => Some(target.clone()),
+        match self.override_in_force() {
+            Some(Override::Paused(target)) => Some(target),
             _ => None,
         }
     }
@@ -782,12 +930,12 @@ impl RouterHandle {
     /// each link goes there after its rewrites, with [`Step::Sent`] in its
     /// trace, and a `Next` counts down one per link on the dispatch thread
     /// (forwarded links included) until the rules decide again. Sending
-    /// ends a pause; `None` ends a send and leaves a pause alone.
+    /// ends a pause or a hold; `None` ends a send and leaves them alone.
     pub fn set_send_to(&self, send: Option<SendTo>) {
-        let mut held = self.held();
+        let mut slot = self.slot();
         match send {
-            Some(send) => *held = Some(Hold::Sending(send)),
-            None if matches!(*held, Some(Hold::Sending(_))) => *held = None,
+            Some(send) => *slot = Some(Override::Sending(send)),
+            None if matches!(*slot, Some(Override::Sending(_))) => *slot = None,
             None => {}
         }
     }
@@ -795,13 +943,31 @@ impl RouterHandle {
     /// The send in force, or `None`. An `All` whose time ran out is ended
     /// here, so a reader never sees it.
     pub fn send_to(&self) -> Option<SendTo> {
-        let mut held = self.held();
-        match &*held {
-            Some(Hold::Sending(send)) if send.expired(SystemTime::now()) => {
-                *held = None;
-                None
-            }
-            Some(Hold::Sending(send)) => Some(send.clone()),
+        match self.override_in_force() {
+            Some(Override::Sending(send)) => Some(send),
+            _ => None,
+        }
+    }
+
+    /// Holds links: from the next dispatch on, each link in `scope` is
+    /// resolved and recorded but not opened, with [`Step::Held`] in its
+    /// trace and [`Outcome::NotOpened`], and waits in Activity until
+    /// [`open_not_opened`](Self::open_not_opened) opens it. A `Next` counts
+    /// down as a send's does. Holding ends a pause or a send; `None` ends a
+    /// hold and leaves them alone. Links already held stay held.
+    pub fn set_hold(&self, scope: Option<SendScope>) {
+        let mut slot = self.slot();
+        match scope {
+            Some(scope) => *slot = Some(Override::Holding(scope)),
+            None if matches!(*slot, Some(Override::Holding(_))) => *slot = None,
+            None => {}
+        }
+    }
+
+    /// The hold in force, or `None`. One whose time ran out is ended here.
+    pub fn hold(&self) -> Option<SendScope> {
+        match self.override_in_force() {
+            Some(Override::Holding(scope)) => Some(scope),
             _ => None,
         }
     }
@@ -809,8 +975,8 @@ impl RouterHandle {
     /// Points the send in force at `destination`, keeping its count or
     /// time. `false` when nothing is being sent.
     pub fn retarget_send(&self, destination: Destination) -> bool {
-        match &mut *self.held() {
-            Some(Hold::Sending(send)) => {
+        match &mut *self.slot() {
+            Some(Override::Sending(send)) => {
                 send.destination = destination;
                 true
             }
@@ -823,8 +989,8 @@ impl RouterHandle {
     /// one lock, so a link dispatched meanwhile is never counted twice.
     /// Returns the send as it is now.
     pub fn add_to_next(&self, delta: i64) -> Option<SendTo> {
-        match &mut *self.held() {
-            Some(Hold::Sending(send)) => {
+        match &mut *self.slot() {
+            Some(Override::Sending(send)) => {
                 send.scope = send.scope.stepped(delta);
                 Some(send.clone())
             }
@@ -832,8 +998,38 @@ impl RouterHandle {
         }
     }
 
-    fn held(&self) -> std::sync::MutexGuard<'_, Option<Hold>> {
-        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Opens a link that was recorded and not opened (held, or a rule or
+    /// default that opens nothing), while it still waits in Activity
+    /// ([`pending`](Self::pending)): `how` says where. The link goes
+    /// through the dispatch thread as a new dispatch, past any override,
+    /// with its source and opener, and [`Step::Released`] naming the one it
+    /// came from. It stops waiting whether or not the launch works. Waits
+    /// for the new record.
+    pub fn open_not_opened(
+        &self,
+        id: DispatchId,
+        how: OpenAs,
+    ) -> std::result::Result<DispatchRecord, OpenLaterError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Command::Release {
+            from: id,
+            how,
+            received: Instant::now(),
+            received_at: SystemTime::now(),
+            reply,
+        })?;
+        rx.recv().map_err(|_| OpenLaterError::Gone(RouterGone))?
+    }
+
+    /// The dispatches that were not opened and can still be
+    /// ([`open_not_opened`](Self::open_not_opened)), newest first. Each is
+    /// also in [`recent`](Self::recent), and leaves when its record does.
+    pub fn pending(&self) -> Vec<DispatchId> {
+        self.recent.pending()
+    }
+
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<Override>> {
+        self.slot.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn journal_config(&self) -> Option<JournalConfig> {
@@ -912,17 +1108,47 @@ struct Worker {
     /// `journal` so a reader never sees a journal that is not the one being
     /// written.
     journal_config: Arc<Mutex<Option<JournalConfig>>>,
-    /// The handle's pause or send, read once per dispatch.
-    held: Held,
+    /// The handle's pause, send or hold, read once per dispatch.
+    slot: Slot,
+    /// The handle's counter: a link opened later gets a new id.
+    next_id: Arc<AtomicU64>,
     /// `Options::network`, or the real one once a short link needed it.
     network: OnceLock<Arc<dyn Network + Send + Sync>>,
     options: Options,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Mode {
     Dispatch,
     Test,
+    /// Opening a link that was not opened: past any override, as `how`
+    /// says.
+    Release {
+        from: DispatchId,
+        how: OpenAs,
+    },
+}
+
+impl Worker {
+    /// Records a dispatch: reduced once, here, before anything outside this
+    /// thread sees it, so the buffer, the journal, the callback and the
+    /// reply all get the same record. A link that was not opened waits in
+    /// the buffer with its whole link, so it can still be opened, unless
+    /// its record keeps nothing.
+    fn record(&mut self, mut record: DispatchRecord) -> DispatchRecord {
+        let waiting = (record.outcome == Outcome::NotOpened && record.privacy != Privacy::None)
+            .then(|| record.link.clone());
+        record.reduce(record.privacy);
+        self.log(&record);
+        self.recent.push_waiting(record.clone(), waiting);
+        if let Some(journal) = &mut self.journal {
+            journal.append(&record);
+        }
+        if let Some(callback) = &self.options.on_dispatch {
+            callback(&record);
+        }
+        record
+    }
 }
 
 impl Worker {
@@ -930,25 +1156,37 @@ impl Worker {
         while let Ok(command) = rx.recv() {
             match command {
                 Command::Dispatch { request, reply } => {
-                    let mut record = self.process(request, Mode::Dispatch);
-                    // Reduced once, here, before anything outside this
-                    // thread sees it: the buffer, the journal, the callback
-                    // and the reply all get the same record.
-                    record.reduce(record.privacy);
-                    self.log(&record);
-                    self.recent.push(record.clone());
-                    if let Some(journal) = &mut self.journal {
-                        journal.append(&record);
-                    }
-                    if let Some(callback) = &self.options.on_dispatch {
-                        callback(&record);
-                    }
+                    let record = self.process(request, &Mode::Dispatch);
+                    let record = self.record(record);
                     if let Some(reply) = reply {
                         let _ = reply.send(record);
                     }
                 }
                 Command::Test { request, reply } => {
-                    let _ = reply.send(self.process(request, Mode::Test));
+                    let _ = reply.send(self.process(request, &Mode::Test));
+                }
+                Command::Release {
+                    from,
+                    how,
+                    received,
+                    received_at,
+                    reply,
+                } => {
+                    let result = match self.recent.take_pending(from) {
+                        Some(link) => {
+                            let request = Queued {
+                                id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)),
+                                link,
+                                forwarded: false,
+                                received,
+                                received_at,
+                            };
+                            let record = self.process(request, &Mode::Release { from, how });
+                            Ok(self.record(record))
+                        }
+                        None => Err(OpenLaterError::NotPending),
+                    };
+                    let _ = reply.send(result);
                 }
                 Command::Replace { factory, reply } => {
                     let result = match build(Some(factory)) {
@@ -1011,7 +1249,7 @@ impl Worker {
         log::log!(target: "pwrroute::link", level, "{}", record.log_line());
     }
 
-    fn process(&mut self, request: Queued, mode: Mode) -> DispatchRecord {
+    fn process(&mut self, request: Queued, mode: &Mode) -> DispatchRecord {
         let dequeued = Instant::now();
         let mut record = DispatchRecord {
             id: request.id,
@@ -1040,15 +1278,22 @@ impl Worker {
             }
         };
         record.steps.push(Step::Received { url: url.clone() });
+        if let Mode::Release { from, how } = mode {
+            record.steps.push(Step::Released {
+                from: *from,
+                chosen: matches!(how, OpenAs::In(_)),
+            });
+        }
 
         let (mut browser, privacy) =
             self.resolve(&url, &record.link, &mut record.steps, &mut record.timings);
-        // Paused: the rules ran (so the rewrites and the privacy level
-        // stand), and the pause target takes the link from whatever they
-        // chose. A test still reports what the rules say.
+        // An override takes the link after the rules ran (so the rewrites
+        // and the privacy level stand), from whatever they chose. A test
+        // still reports what the rules say.
         let mut privacy = privacy;
-        if mode == Mode::Dispatch {
-            match self.take_hold() {
+        let mut held = false;
+        match mode {
+            Mode::Dispatch => match self.take_override() {
                 Some(Took::Paused(target)) => {
                     record.steps.push(Step::Paused {
                         skipped: skipped_handler(&record.steps),
@@ -1063,7 +1308,33 @@ impl Worker {
                     browser = destination.browser_for(&browser.url, privacy);
                     privacy = browser.privacy;
                 }
+                Some(Took::Held(sent)) => {
+                    record.steps.push(Step::Held {
+                        held: sent,
+                        skipped: skipped_handler(&record.steps),
+                        browser: (browser.app_type != AppType::None).then(|| browser.clone()),
+                    });
+                    held = true;
+                }
                 None => {}
+            },
+            Mode::Test => {}
+            Mode::Release {
+                how: OpenAs::In(destination),
+                ..
+            } => {
+                browser = destination.browser_for(&browser.url, privacy);
+                privacy = browser.privacy;
+            }
+            Mode::Release {
+                how: OpenAs::Rules, ..
+            } => {
+                if browser.app_type == AppType::None {
+                    record.steps.push(Step::Fallback {
+                        reason: "the rules open nothing for this link".into(),
+                    });
+                    browser = self.fallback(&browser.url);
+                }
             }
         }
         record.timings.resolve_us = Timings::micros(dequeued.elapsed());
@@ -1072,7 +1343,7 @@ impl Worker {
         // when it is tested.
         record.privacy = privacy;
 
-        if browser.app_type == AppType::None {
+        if held || browser.app_type == AppType::None {
             record.steps.push(Step::NotOpened);
             record.outcome = Outcome::NotOpened;
         } else {
@@ -1082,7 +1353,7 @@ impl Worker {
             let mut opened = None;
             record.outcome = match mode {
                 Mode::Test => Outcome::Tested,
-                Mode::Dispatch => {
+                Mode::Dispatch | Mode::Release { .. } => {
                     let launch = Instant::now();
                     let launched = self.launch(&browser, &mut record.steps, record.id);
                     record.timings.launch_us = Timings::micros(launch.elapsed());
@@ -1275,35 +1546,29 @@ impl Worker {
         }
     }
 
-    /// What takes this link from the rules, if anything. A `Next` send
-    /// counts the link here, under the lock, and ends when it reaches
+    /// What takes this link from the rules, if anything. A `Next` send or
+    /// hold counts the link here, under the lock, and ends when it reaches
     /// zero; an `All` whose time ran out ends without taking it.
-    fn take_hold(&self) -> Option<Took> {
-        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        match &mut *held {
-            None => None,
-            Some(Hold::Paused(target)) => Some(Took::Paused(target.clone())),
-            Some(Hold::Sending(send)) if send.expired(SystemTime::now()) => {
-                *held = None;
-                None
-            }
-            Some(Hold::Sending(send)) => {
-                let destination = send.destination.clone();
-                let sent = match &mut send.scope {
-                    SendScope::All { .. } => crate::trace::Sent::All,
-                    SendScope::Next { left, of } => {
-                        let nth = of.saturating_sub(*left) + 1;
-                        let of = *of;
-                        *left = left.saturating_sub(1);
-                        if *left == 0 {
-                            *held = None;
-                        }
-                        crate::trace::Sent::Next { nth, of }
-                    }
-                };
-                Some(Took::Sent(destination, sent))
-            }
+    fn take_override(&self) -> Option<Took> {
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.as_ref().is_some_and(|o| o.expired(SystemTime::now())) {
+            *slot = None;
         }
+        let (took, used_up) = match slot.as_mut()? {
+            Override::Paused(target) => (Took::Paused(target.clone()), false),
+            Override::Sending(send) => {
+                let (sent, used_up) = send.scope.take();
+                (Took::Sent(send.destination.clone(), sent), used_up)
+            }
+            Override::Holding(scope) => {
+                let (held, used_up) = scope.take();
+                (Took::Held(held), used_up)
+            }
+        };
+        if used_up {
+            *slot = None;
+        }
+        Some(took)
     }
 
     /// The fallback browser with `url`: [`Options::fallback`] as it is now,

@@ -164,11 +164,32 @@ pub enum Step {
         sent: Sent,
         skipped: Option<usize>,
     },
+    /// The user held this link (the tray's or the Overview's Hold): it was
+    /// recorded and not opened, after the rewrites, and waits in Activity.
+    /// `held` says which hold; `skipped` is as [`Paused`](Self::Paused)'s;
+    /// `browser` is where the rules would have opened it, `None` when they
+    /// open nothing. [`NotOpened`](Self::NotOpened) follows.
+    Held {
+        held: Sent,
+        skipped: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        browser: Option<Browser>,
+    },
+    /// This link was not opened when it arrived, as dispatch `from`, and
+    /// the user opened it later from Activity, the tray or an agent:
+    /// where the rules send it now, or, `chosen`, where the user picked.
+    Released {
+        from: DispatchId,
+        chosen: bool,
+    },
     /// The chosen browser.
     Browser {
         browser: Browser,
     },
-    /// `browser: null` in the config: the link is deliberately not opened.
+    /// The link was deliberately not opened: the rule or default that
+    /// chose it opens nothing (`browser: null`, "Don't open"), or it was
+    /// [`Held`](Self::Held). [`DispatchRecord::not_opened_reason`] says
+    /// which.
     NotOpened,
     /// The launcher was asked to open it.
     Launched {
@@ -183,7 +204,20 @@ pub enum Step {
     },
 }
 
-/// Which send took a link: the `nth` of `of` next links, or all links.
+/// Why a dispatch was recorded and not opened ([`Outcome::NotOpened`]).
+/// Serialized `rule`, `default` or `hold`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotOpenedReason {
+    /// A config handler or a `rules.json` rule opens nothing.
+    Rule,
+    /// No rule matched and the default opens nothing.
+    Default,
+    /// The user held it ([`Step::Held`]).
+    Hold,
+}
+
+/// Which send or hold took a link: the `nth` of `of` next links, or all links.
 /// Serialized inside [`Step::Sent`] as `{"kind":"next","nth":1,"of":3}` or
 /// `{"kind":"all"}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -372,6 +406,34 @@ impl DispatchRecord {
         record
     }
 
+    /// Why this dispatch was not opened, when it was not: read from its
+    /// steps, as who decided always is, so a record journaled before the
+    /// reason existed reads the same. `None` for any other outcome, and for
+    /// a counted-only record, which keeps no steps.
+    pub fn not_opened_reason(&self) -> Option<NotOpenedReason> {
+        if self.outcome != Outcome::NotOpened {
+            return None;
+        }
+        let mut reason = None;
+        for step in &self.steps {
+            match step {
+                Step::Held { .. } => return Some(NotOpenedReason::Hold),
+                Step::Matched { by } if by.is_default() => reason = Some(NotOpenedReason::Default),
+                Step::Matched { .. } => reason = Some(NotOpenedReason::Rule),
+                _ => {}
+            }
+        }
+        reason
+    }
+
+    /// The dispatch this one opened later ([`Step::Released`]), if any.
+    pub fn released_from(&self) -> Option<DispatchId> {
+        self.steps.iter().find_map(|step| match step {
+            Step::Released { from, .. } => Some(*from),
+            _ => None,
+        })
+    }
+
     /// The URL-free view of this dispatch, for logs.
     pub fn timing(&self) -> DispatchTiming {
         DispatchTiming {
@@ -428,6 +490,11 @@ impl DispatchRecord {
                     Sent::Next { .. } => " sent=next",
                     Sent::All => " sent=all",
                 }),
+                Step::Held { held, .. } => line.push_str(match held {
+                    Sent::Next { .. } => " held=next",
+                    Sent::All => " held=all",
+                }),
+                Step::Released { from, .. } => line.push_str(&format!(" released={}", from.0)),
                 Step::ConfigError { .. } => line.push_str(" config-error"),
                 Step::LaunchFailed { .. } => line.push_str(" launch-failed"),
                 _ => {}
@@ -513,7 +580,11 @@ fn reduce_step(step: &mut Step) {
         Step::Received { url } | Step::Expanded { url } | Step::Rewrite { url, .. } => {
             *url = host_only(url);
         }
-        Step::Browser { browser } => reduce_browser(browser),
+        Step::Browser { browser }
+        | Step::Held {
+            browser: Some(browser),
+            ..
+        } => reduce_browser(browser),
         Step::ConfigError { message } | Step::LaunchFailed { message } => {
             *message = WITHHELD.to_owned();
         }
@@ -522,6 +593,8 @@ fn reduce_step(step: &mut Step) {
         | Step::RefusedLoop { .. }
         | Step::Paused { .. }
         | Step::Sent { .. }
+        | Step::Held { .. }
+        | Step::Released { .. }
         | Step::NotOpened
         | Step::Launched { .. }
         | Step::Rejected { .. } => {}
