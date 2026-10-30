@@ -1394,6 +1394,10 @@ fn main() {
                 cx.new(|cx| {
                     let mut model = settings::fixtures::model();
                     match name {
+                        "settings-short-links" => {
+                            model.configuration =
+                                settings::fixtures::configuration_everything_else();
+                        }
                         "settings-sync-conflict" => {
                             model.sync = settings::fixtures::sync_conflict();
                         }

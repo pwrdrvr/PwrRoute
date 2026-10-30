@@ -542,22 +542,21 @@ pub fn configuration() -> Configuration {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            source: ShortLinksSource::BuiltIn {
-                config: Some("~/.finicky.ts".into()),
-            },
+            source: ShortLinksSource::BuiltIn { config: None },
         },
+        // Visual rules are in charge, so neither config runs.
         config_files: vec![
             ConfigFile {
                 shown: "~/.finicky.ts".into(),
                 path: "/Users/jo/.finicky.ts".into(),
-                state: ConfigFileState::InCharge,
-                line: "Loaded \u{00b7} edited yesterday.".into(),
+                state: ConfigFileState::NotUsed,
+                line: "Not used: rules.json alone is in charge.".into(),
             },
             ConfigFile {
                 shown: "~/.config/finicky/finicky.js".into(),
                 path: "/Users/jo/.config/finicky/finicky.js".into(),
                 state: ConfigFileState::NotUsed,
-                line: "~/.finicky.ts comes first, so this one never runs.".into(),
+                line: "Not used: rules.json alone is in charge.".into(),
             },
         ],
         rules_path: "~/Library/Application Support/PwrRoute/rules.json".into(),
@@ -743,6 +742,26 @@ pub fn configuration_everything_else() -> Configuration {
             profile: Some("Personal".into()),
             problem: None,
         }),
+        short_links: ShortLinks {
+            source: ShortLinksSource::BuiltIn {
+                config: Some("~/.finicky.ts".into()),
+            },
+            ..configuration().short_links
+        },
+        config_files: vec![
+            ConfigFile {
+                shown: "~/.finicky.ts".into(),
+                path: "/Users/jo/.finicky.ts".into(),
+                state: ConfigFileState::InCharge,
+                line: "Loaded \u{00b7} edited 4 min ago.".into(),
+            },
+            ConfigFile {
+                shown: "~/.config/finicky/finicky.js".into(),
+                path: "/Users/jo/.config/finicky/finicky.js".into(),
+                state: ConfigFileState::NotUsed,
+                line: "~/.finicky.ts is in charge, so this one never runs.".into(),
+            },
+        ],
         ..configuration()
     }
 }
