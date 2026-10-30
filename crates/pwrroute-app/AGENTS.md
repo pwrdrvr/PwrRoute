@@ -217,7 +217,7 @@ their own modules.
   `sync::overall` is the one reading of how sync stands: `line_of` makes
   the rail foot's line and the strip's chip (`chrome.rs`) from it, and
   `tray_row_of` the tray's row (`TrayModel::sync`: the dropdown's row
-  under Pause routing, and the native menu's first row, enabled only for
+  under Incoming links, and the native menu's first row, enabled only for
   a conflict); each opens Settings › Sync. The editor offers named
   destinations above the lanes, Name it (Return makes a `destinations[]`
   entry from the rule's browser, `RulesStore::name_destination`) and a

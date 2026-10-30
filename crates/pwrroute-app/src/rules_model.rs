@@ -97,6 +97,7 @@ impl Rule {
                 Matcher::App { name, .. } => name.to_string(),
                 Matcher::Function(_) => "JavaScript matcher".to_owned(),
                 Matcher::Off => "Off".to_owned(),
+                Matcher::OffHere => "Off on this machine".to_owned(),
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -112,6 +113,12 @@ impl Rule {
                 .join(", "),
             Destination::Function(_) => "JavaScript destination".to_owned(),
             Destination::Unset(value) => (*value).to_owned(),
+        };
+        // A named destination reads as the row draws it: the name, then
+        // what it opens here.
+        let destination = match &self.named {
+            Some(name) => format!("{name}, {destination}"),
+            None => destination,
         };
         format!(
             "{patterns}, {destination}, {}",

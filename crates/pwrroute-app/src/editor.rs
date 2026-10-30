@@ -438,6 +438,8 @@ fn editable(
             Field::Sample => "Try this link".into(),
             Field::Example => "Example link".into(),
             Field::Becomes => "Expected rewritten link".into(),
+            Field::Set => "Rule set".into(),
+            Field::Name => "Destination name".into(),
         })
         .aria_placeholder(look.placeholder)
         .w_full()

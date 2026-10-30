@@ -212,10 +212,10 @@ fn losing_the_default_shows_the_make_default_row(cx: &mut TestAppContext) {
 }
 
 /// Rules start syncing while the dropdown is open: sync's row comes in
-/// between Pause routing and the commands, and the window follows.
+/// between Incoming links and the commands, and the window follows.
 #[gpui_kit::test]
 fn the_sync_row_comes_and_goes_with_the_card(cx: &mut TestAppContext) {
-    use super::dropdown::SYNC_ID;
+    use super::dropdown::{SWITCH_ID, SYNC_ID};
     use super::model::{SyncRow, SyncTone};
     let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
     assert!(opened.cx.debug_bounds(SYNC_ID).is_none());
@@ -229,8 +229,8 @@ fn the_sync_row_comes_and_goes_with_the_card(cx: &mut TestAppContext) {
         });
     });
     let row = opened.cx.debug_bounds(SYNC_ID).expect("the sync row");
-    let pause = opened.cx.debug_bounds(PAUSE_ID).expect("Pause routing");
-    assert!(row.top() > pause.bottom(), "under Pause routing");
+    let switch = opened.cx.debug_bounds(SWITCH_ID).expect("Incoming links");
+    assert!(row.top() > switch.bottom(), "under Incoming links");
     assert_card_fits(&mut opened);
     assert!(opened.window_height() > before);
 
