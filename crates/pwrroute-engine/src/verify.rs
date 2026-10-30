@@ -151,7 +151,11 @@ impl RulesFile {
         }
         for (i, test) in self.tests.iter().enumerate() {
             let opener = test.opener.as_deref().map(opener_named);
-            let trace = engine.trace(&Link::new(&test.url), opener.as_ref())?;
+            let link = Link {
+                url: test.url.clone(),
+                original_url: test.original_url.as_ref().unwrap_or(&test.url).clone(),
+            };
+            let trace = engine.trace(&link, opener.as_ref())?;
             report.print(&trace);
             let outcome = if test.expect.is_met_by(&trace.resolution.browser) {
                 None

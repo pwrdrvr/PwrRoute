@@ -144,7 +144,7 @@ pub struct TestLink {
     /// test after any of them changes builds it again.
     loaded: Vec<(PathBuf, Option<SystemTime>)>,
     run: Option<Run>,
-    generation: u64,
+    request_token: Rc<()>,
     pub expanding: bool,
     /// Tests inject a network; the real client is created off the UI thread.
     pub(crate) network: Option<Arc<dyn Network + Send + Sync>>,
@@ -184,7 +184,7 @@ impl TestLink {
             loaded: engine.as_ref().map(stamps).unwrap_or_default(),
             engine,
             run: None,
-            generation: 0,
+            request_token: Rc::new(()),
             expanding: false,
             network: None,
             outcome: None,
@@ -233,7 +233,7 @@ impl TestLink {
     /// Resolves the field's URL and records the trace. An empty field is
     /// nothing to test, not an error.
     pub fn run(&mut self, cx: &mut Context<'_, PwrRoute>) {
-        self.generation += 1;
+        self.request_token = Rc::new(());
         self.expanding = false;
         self.copied = false;
         self.saved_as = None;
@@ -270,7 +270,7 @@ impl TestLink {
         self.run = None;
         self.outcome = None;
         self.expanding = true;
-        let generation = self.generation;
+        let request_token = Rc::clone(&self.request_token);
         let field = self.url.text.clone();
         let loaded = self.loaded.clone();
         let network = self.network.clone();
@@ -281,7 +281,7 @@ impl TestLink {
         cx.spawn(async move |this, cx| {
             let link = expanded.await;
             let _ = this.update(cx, |this, cx| {
-                if this.test.generation == generation {
+                if Rc::ptr_eq(&this.test.request_token, &request_token) {
                     this.test.expanding = false;
                     if this.test.url.text == field && this.test.opener() == opener {
                         if loaded.iter().any(|(path, at)| modified(path) != *at) {
@@ -390,6 +390,8 @@ impl TestLink {
             }
         });
         Some(RouteTest {
+            original_url: (run.trace.original_url != run.trace.url)
+                .then(|| run.trace.original_url.clone()),
             url: run.trace.url.clone(),
             opener,
             expect: Expectation {
@@ -419,7 +421,7 @@ impl TestLink {
             return;
         }
         self.rules = rules;
-        self.generation += 1;
+        self.request_token = Rc::new(());
         self.expanding = false;
         // An app only the old rules named is gone from the picker.
         if self.opener >= self.openers().len() {
@@ -1006,6 +1008,12 @@ fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>)
                     .child(button("Open now", ButtonKind::Primary, false)),
                 ),
         )
+        .when(proposed.as_ref().is_some_and(|test| test.original_url.is_some()), |card| {
+            card.child(paragraph(
+                "Save as test stores both links in rules.json and replays this expansion without contacting the shortener.",
+                11.0, 16.5, theme::text_secondary(),
+            ).px(px(16.0)).pb(px(10.0)))
+        })
         .children(saved.map(|(test, index)| saved_banner(&test, index, cx)))
 }
 

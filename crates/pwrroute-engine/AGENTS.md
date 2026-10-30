@@ -106,6 +106,9 @@ crate docs map the modules.
   (and `RulesFile::run_tests`) resolve every example and test through the
   JS config and `rules.json` together, so a change to either is caught; a
   proposed file is tested on a temporary engine built from the same config.
+  A saved test's optional `originalUrl` preserves the clicked URL while
+  `url` pins the expanded input, before rewrites. Replay that pair without
+  network expansion; without `originalUrl`, both inputs are `url`.
   `suggest_rule` only shapes candidate patterns; whether one matches is
   always the API's `isMatch`, through `Engine::collisions`.
 - **The importer reads what the config produced (`src/import.rs`).**

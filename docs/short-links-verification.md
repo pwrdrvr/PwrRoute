@@ -93,3 +93,17 @@ custom draft while the pane remains open.
 This is designed in the PwrRoute Claude Design project and mirrored in
 `design/PwrRoute Short Links.dc.html`. It is a proposal for a follow-up;
 this verification fix does not add the schema or Settings controls.
+
+## Saved expansion snapshots and source changes
+
+A saved test can include `originalUrl` alongside `url`. `url` is the captured
+post-expansion input before any rewrites; `originalUrl` is the clicked link.
+The expected URL remains the output after rewrites. This preserves Finicky
+callbacks that depend on either input, while replay remains offline even if
+the shortener later stops working. Existing tests without `originalUrl` use
+`url` for both inputs. This is a routing snapshot, not an availability test
+for the shortener; the manual network probe covers that separate concern.
+
+Test a link and Activity's Save as test both retain captured originals.
+Pending window requests use tokens unique to the TestLink instance and run,
+so switching config sources cannot revive a request from the old instance.

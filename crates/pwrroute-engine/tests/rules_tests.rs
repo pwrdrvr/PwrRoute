@@ -44,6 +44,7 @@ fn rule(patterns: &[&str], browser: &str) -> Rule {
 
 fn test(url: &str, browser: &str) -> RouteTest {
     RouteTest {
+        original_url: None,
         url: url.into(),
         opener: None,
         expect: Expectation {
@@ -629,4 +630,80 @@ fn collisions_say_what_else_a_pattern_would_catch() {
     }
     assert!(e.collisions("", &recent).unwrap().is_empty());
     assert!(e.collisions("github.com/*", &[]).unwrap().is_empty());
+}
+
+#[test]
+fn captured_expansions_replay_original_url_through_rewrites_and_handlers_offline() {
+    for extension in ["js", "ts"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(format!("config.{extension}"));
+        std::fs::write(&config, r#"export default {
+            defaultBrowser: "Safari",
+            rewrite: [{
+                match: (url, { originalUrl }) => url.hostname === "example.com" && originalUrl.hostname === "go.example.com",
+                url: url => { url.pathname = "/rewritten"; return url; },
+            }],
+            handlers: [{
+                match: (url, { originalUrl }) => url.pathname === "/rewritten" && originalUrl.hostname === "go.example.com",
+                browser: "Firefox",
+            }],
+        };"#).unwrap();
+        let file: RulesFile = serde_json::from_value(serde_json::json!({
+            "defaultBrowser": "Safari",
+            "tests": [{
+                "url": "https://example.com/landing",
+                "originalUrl": "https://go.example.com/neutral",
+                "expect": { "browser": "Firefox", "url": "https://example.com/rewritten" }
+            }]
+        }))
+        .unwrap();
+        let path = dir.path().join("rules.json");
+        file.save(&path).unwrap();
+        let file = RulesFile::load(&path).unwrap();
+        assert!(file.problems().is_empty());
+        let engine = Engine::from_sources(
+            &Sources {
+                config: Some(config),
+                rules: file.clone(),
+                ..Sources::default()
+            },
+            Rc::new(pwrroute_engine::NativeHost::new()),
+            Limits::default(),
+        )
+        .unwrap();
+        let report = file.run_tests(&engine).unwrap();
+        assert_eq!((report.total, report.passed), (1, 1));
+        let mut without_original = file.clone();
+        without_original.tests[0].original_url = None;
+        let report = without_original.run_tests(&engine).unwrap();
+        assert_eq!(
+            (report.total, report.passed),
+            (1, 0),
+            "originalUrl changes routing"
+        );
+        assert!(report.failures[0].actual.contains("Safari"));
+    }
+}
+
+#[test]
+fn legacy_saved_tests_omit_original_url_and_invalid_captures_are_flagged() {
+    let legacy = serde_json::json!({
+        "url": "https://example.com/landing",
+        "expect": { "browser": "Safari" }
+    });
+    let mut test: RouteTest = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(test.original_url.is_none());
+    assert_eq!(serde_json::to_value(&test).unwrap(), legacy);
+    test.original_url = Some("not a full URL".into());
+    let file = RulesFile {
+        default_browser: "Safari".into(),
+        tests: vec![test],
+        ..RulesFile::default()
+    };
+    assert!(
+        file.problems()
+            .iter()
+            .any(|p| p.place == Place::Test(0)
+                && p.message == "The original URL must be a full URL.")
+    );
 }

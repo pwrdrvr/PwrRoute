@@ -524,6 +524,7 @@ fn a_test_report_carries_the_console_lines_of_every_run() {
     let rules = RulesFile {
         tests: vec![
             RouteTest {
+                original_url: None,
                 url: "https://a.example/one".into(),
                 opener: None,
                 expect: Expectation {
@@ -532,6 +533,7 @@ fn a_test_report_carries_the_console_lines_of_every_run() {
                 },
             },
             RouteTest {
+                original_url: None,
                 url: "https://a.example/two".into(),
                 opener: None,
                 expect: Expectation {
@@ -1353,6 +1355,7 @@ fn privacy_comes_from_a_winning_rule_and_pwrroutes_default_keeps_everything() {
 #[test]
 fn a_proposal_is_tested_under_its_own_precedence() {
     let expects = |browser: &str| RouteTest {
+        original_url: None,
         url: "https://both.example.com/x".into(),
         opener: None,
         expect: Expectation {
@@ -1361,6 +1364,7 @@ fn a_proposal_is_tested_under_its_own_precedence() {
         },
     };
     let unmatched = |browser: &str| RouteTest {
+        original_url: None,
         url: "https://unmatched.example.com/".into(),
         ..expects(browser)
     };
@@ -1553,6 +1557,7 @@ fn examples_and_tests_can_expect_a_link_not_to_open() {
         }],
         tests: vec![
             RouteTest {
+                original_url: None,
                 url: "https://ads.example.com/b".into(),
                 opener: None,
                 expect: Expectation {
@@ -1562,6 +1567,7 @@ fn examples_and_tests_can_expect_a_link_not_to_open() {
             },
             // Fails: this one opens.
             RouteTest {
+                original_url: None,
                 url: "https://news.example.com/".into(),
                 opener: None,
                 expect: Expectation {
@@ -1571,6 +1577,7 @@ fn examples_and_tests_can_expect_a_link_not_to_open() {
             },
             // Fails: this one does not open.
             RouteTest {
+                original_url: None,
                 url: "https://ads.example.com/c".into(),
                 opener: None,
                 expect: Expectation {
@@ -1634,6 +1641,7 @@ fn a_machine_layer_routes_links_while_saved_tests_stay_synced() {
             },
         ],
         tests: vec![RouteTest {
+            original_url: None,
             url: "https://work.example.com/b".into(),
             opener: None,
             expect: Expectation {

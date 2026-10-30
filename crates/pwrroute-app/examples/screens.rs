@@ -597,6 +597,7 @@ fn main() {
         ]);
         file.rules[3].private = true;
         file.tests.push(pwrroute_engine::RouteTest {
+            original_url: None,
             url: "https://docs.google.com/document/d/1".into(),
             opener: Some("Slack:com.tinyspeck.slackmacgap".into()),
             expect: pwrroute_engine::Expectation {

@@ -1502,6 +1502,7 @@ mod tests {
         );
         assert_eq!(store.add_rewrite_example(r, "https://x.com/a", ""), None);
         let t = store.add_test(RouteTest {
+            original_url: None,
             url: "https://bank.example/".into(),
             opener: None,
             expect: engine::Expectation {

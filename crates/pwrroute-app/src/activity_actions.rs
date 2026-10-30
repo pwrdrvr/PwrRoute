@@ -480,6 +480,7 @@ impl AddRule {
         let rule = self.rule()?;
         let from = self.from.as_ref().filter(|_| self.only_from)?;
         Some(RouteTest {
+            original_url: None,
             url: self.url.clone(),
             opener: opener_spec(from),
             expect: Expectation {
@@ -697,13 +698,27 @@ fn same_rule(a: &engine::Rule, b: &engine::Rule) -> bool {
 }
 
 /// A test that pins where this record went, from the URL the rules saw:
-/// a saved test does not expand short links.
+/// a saved test replays a captured expansion without a network request.
 fn test_for(record: &DispatchRecord) -> Option<RouteTest> {
     let browser = record.browser.as_ref()?;
     if browser.name.trim().is_empty() {
         return None;
     }
     Some(RouteTest {
+        original_url: record
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::Expanded { .. }))
+            .then(|| {
+                record
+                    .steps
+                    .iter()
+                    .find_map(|step| match step {
+                        Step::Received { url } => Some(url.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| record.link.url.clone())
+            }),
         url: matched_url(record).to_owned(),
         opener: record.link.opener.as_ref().and_then(opener_spec),
         expect: Expectation {
@@ -2575,8 +2590,8 @@ mod tests {
     }
 
     /// A short link the router expanded: the rules matched where it landed,
-    /// and Test a link and the saved tests do not expand, so everything
-    /// saved from the row uses the landing URL.
+    /// and saved tests pin both that input and the original URL. Suggested
+    /// patterns and examples still use the landing URL.
     #[gpui_kit::test]
     fn an_expanded_record_saves_and_suggests_the_landing_url(cx: &mut gpui_kit::TestAppContext) {
         let short = "https://bit.ly/gh";
@@ -2614,6 +2629,7 @@ mod tests {
         // Save as test pins the landing URL, and it passes as saved.
         let test = test_for(&record).expect("a test");
         assert_eq!(test.url, landed);
+        assert_eq!(test.original_url.as_deref(), Some(short));
         assert_eq!(test.expect.url.as_deref(), Some(landed));
         let mut rules = crate::fixtures::rules_file();
         rules.tests = vec![test];
