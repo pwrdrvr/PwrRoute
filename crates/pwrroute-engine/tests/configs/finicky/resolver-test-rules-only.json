@@ -1,0 +1,7 @@
+{
+  "defaultBrowser": "Firefox",
+  "rules": [
+    { "match": "*github.com/*", "browser": "Google Chrome" },
+    { "match": "https://linear.app/*", "browser": "Safari" }
+  ]
+}

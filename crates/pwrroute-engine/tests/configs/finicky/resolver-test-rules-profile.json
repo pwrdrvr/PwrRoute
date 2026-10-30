@@ -1,0 +1,6 @@
+{
+  "defaultBrowser": "Safari",
+  "rules": [
+    { "match": "*github.com/*", "browser": "Google Chrome", "profile": "Work" }
+  ]
+}
