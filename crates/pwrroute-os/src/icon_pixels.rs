@@ -41,6 +41,15 @@ pub(crate) fn png_from_rgba(rgba: &[u8], width: u32, height: u32) -> Option<Vec<
     Some(png)
 }
 
+/// Width and height from a PNG's IHDR chunk, for the tests here and in
+/// each platform's `app_icon`.
+#[cfg(test)]
+pub(crate) fn png_size(png: &[u8]) -> (u32, u32) {
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "not a PNG");
+    let word = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+    (word(16), word(20))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,9 +76,7 @@ mod tests {
     #[test]
     fn the_png_has_the_size_given() {
         let png = png_from_rgba(&[0; 2 * 3 * 4], 2, 3).expect("a PNG");
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-        let word = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
-        assert_eq!((word(16), word(20)), (2, 3));
+        assert_eq!(png_size(&png), (2, 3));
         assert_eq!(png_from_rgba(&[0; 4], 2, 2), None, "too few pixels");
         assert_eq!(png_from_rgba(&[], 0, 0), None);
     }

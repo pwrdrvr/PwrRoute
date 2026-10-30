@@ -74,9 +74,10 @@ impl DetectedApp {
     }
 }
 
-/// Reads `env`'s machine: the installed browsers and their profiles.
+/// Reads `env`'s machine: the installed browsers and their profiles. Each
+/// scan, the first and every rescan, logs what it found.
 pub fn scan(env: &Env) -> Vec<DetectedApp> {
-    detect_installed(env)
+    let apps: Vec<DetectedApp> = detect_installed(env)
         .into_iter()
         .map(|installed| {
             let read = installed
@@ -93,7 +94,9 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
                 location: installed.location,
             }
         })
-        .collect()
+        .collect();
+    log_scan(&apps);
+    apps
 }
 
 /// The scan, once it has run, and the machine it reads.
@@ -162,16 +165,14 @@ pub fn reread(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() {
         return scan(&environment());
     }
-    let apps = cx.update_global(|global: &mut ScanGlobal, _| {
+    cx.update_global(|global: &mut ScanGlobal, _| {
         let apps = scan(&global.env);
         global.apps = Some(apps.clone());
         apps
-    });
-    log_scan(&apps);
-    apps
+    })
 }
 
-/// What a rescan found, for the diagnostic log: each app's name and how
+/// What a scan found, for the diagnostic log: each app's name and how
 /// many profiles it has, never their names.
 fn log_scan(apps: &[DetectedApp]) {
     let found: Vec<String> = apps

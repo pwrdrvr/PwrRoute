@@ -54,7 +54,9 @@ pub fn read_profiles(browser: &BrowserInfo, env: &Env) -> Result<Vec<Profile>, P
     read_with(browser, env, |path| fs::read_to_string(path))
 }
 
-type ProfileParser = fn(&str) -> Option<Vec<Profile>>;
+/// Reads a profile index's text; the index's path places anything it reads
+/// beside it.
+type ProfileParser = fn(&Path, &str) -> Option<Vec<Profile>>;
 
 fn read_with(
     browser: &BrowserInfo,
@@ -65,19 +67,13 @@ fn read_with(
         return Ok(Vec::new());
     };
     let (path, parse): (_, ProfileParser) = match browser.profile_flag() {
-        ProfileFlag::Chromium => (dir.join("Local State"), parse_chromium),
-        ProfileFlag::Firefox => (dir.join("profiles.ini"), parse_firefox),
+        ProfileFlag::Chromium => (dir.join("Local State"), chromium_profiles_on_disk),
+        ProfileFlag::Firefox => (dir.join("profiles.ini"), |_, ini| parse_firefox(ini)),
         ProfileFlag::None => return Ok(Vec::new()),
     };
     match read(&path) {
         Ok(text) => {
-            let mut profiles = parse(&text);
-            if browser.profile_flag() == ProfileFlag::Chromium
-                && let Some(listed) = &mut profiles
-            {
-                let unlisted = unlisted_chromium_profiles(&dir, &text, listed);
-                listed.extend(unlisted);
-            }
+            let profiles = parse(&path, &text);
             if let (Some(cache), Some(profiles)) = (env.profile_cache(), &profiles) {
                 // An unwritable cache must never prevent a live profile launch.
                 let _ = profile_cache::remember(cache, &browser.id, &path, profiles);
@@ -145,11 +141,23 @@ pub(crate) fn resolve(browser: &BrowserInfo, env: &Env, wanted: &str) -> Profile
 /// `profile.profiles_order` when present, then by directory.
 #[cfg(test)]
 fn chromium_profiles(local_state: &str) -> Vec<Profile> {
-    parse_chromium(local_state).unwrap_or_default()
+    serde_json::from_str(local_state)
+        .ok()
+        .and_then(|state| listed_chromium_profiles(&state))
+        .unwrap_or_default()
 }
 
-fn parse_chromium(local_state: &str) -> Option<Vec<Profile>> {
+/// The profiles in the `Local State` at `path`, then the profile folders
+/// beside it that it does not list yet.
+fn chromium_profiles_on_disk(path: &Path, local_state: &str) -> Option<Vec<Profile>> {
     let state: serde_json::Value = serde_json::from_str(local_state).ok()?;
+    let mut profiles = listed_chromium_profiles(&state)?;
+    let unlisted = unlisted_chromium_profiles(path, &state, &profiles);
+    profiles.extend(unlisted);
+    Some(profiles)
+}
+
+fn listed_chromium_profiles(state: &serde_json::Value) -> Option<Vec<Profile>> {
     let profile = &state["profile"];
     let cache = profile["info_cache"].as_object()?;
     let last_used = profile["last_used"].as_str();
@@ -184,15 +192,29 @@ fn parse_chromium(local_state: &str) -> Option<Vec<Profile>> {
     Some(profiles)
 }
 
-/// Profile folders a Chromium browser has made that its `Local State` does
-/// not list yet. The browser writes that file a while after a change, so a
-/// profile added a moment ago may only be on disk; a Rescan then still finds
-/// it. Only `Default` and `Profile N` folders count; each is named as its
-/// own `Preferences` (`profile.name`) names it, and one without a name there
-/// is left out, as is one the browser is deleting
-/// (`profiles.profiles_deleted`). In folder-number order, after the listed
-/// ones, never the default.
-fn unlisted_chromium_profiles(dir: &Path, local_state: &str, listed: &[Profile]) -> Vec<Profile> {
+/// Profile folders a Chromium browser has made that its `Local State` (at
+/// `path`) does not list yet. The browser writes that file a while after a
+/// change, so a profile added a moment ago may only be on disk; a Rescan
+/// then still finds it. Only `Default` and `Profile N` folders count; each
+/// is named as its own `Preferences` (`profile.name`) names it. A folder
+/// whose `Preferences` is older than `Local State` is left out: the browser
+/// has written its list since, so the folder is a profile it removed whose
+/// files stayed behind, and opening it would bring that profile back. So is
+/// a folder without a name, or one the browser is deleting
+/// (`profiles.profiles_deleted`). The age check is a `stat`, so a launch
+/// never parses a stale folder's `Preferences`. In folder-number order,
+/// after the listed ones, never the default.
+fn unlisted_chromium_profiles(
+    path: &Path,
+    state: &serde_json::Value,
+    listed: &[Profile],
+) -> Vec<Profile> {
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    let Some(listed_at) = modified(path) else {
+        return Vec::new();
+    };
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -205,13 +227,17 @@ fn unlisted_chromium_profiles(dir: &Path, local_state: &str, listed: &[Profile])
     if folders.is_empty() {
         return Vec::new();
     }
-    let deleted = deleted_chromium_profiles(local_state);
+    let deleted = deleted_chromium_profiles(state);
     folders.retain(|(_, name)| !deleted.contains(name));
     folders.sort();
     folders
         .into_iter()
         .filter_map(|(_, folder)| {
-            let prefs = fs::read(dir.join(&folder).join("Preferences")).ok()?;
+            let prefs = dir.join(&folder).join("Preferences");
+            if modified(&prefs)? < listed_at {
+                return None;
+            }
+            let prefs = fs::read(prefs).ok()?;
             let prefs: serde_json::Value = serde_json::from_slice(&prefs).ok()?;
             let name = prefs["profile"]["name"].as_str()?.trim();
             (!name.is_empty()).then(|| Profile {
@@ -238,10 +264,7 @@ fn profile_folder_number(folder: &str) -> Option<u32> {
 
 /// The folder names in `Local State`'s `profiles.profiles_deleted`: full
 /// paths of profiles the browser removes at its next start.
-fn deleted_chromium_profiles(local_state: &str) -> Vec<String> {
-    let Ok(state) = serde_json::from_str::<serde_json::Value>(local_state) else {
-        return Vec::new();
-    };
+fn deleted_chromium_profiles(state: &serde_json::Value) -> Vec<String> {
     state["profiles"]["profiles_deleted"]
         .as_array()
         .map(|paths| {
@@ -253,6 +276,11 @@ fn deleted_chromium_profiles(local_state: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// When the file at `path` was last written.
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
 /// The `[ProfileN]` sections of a Firefox `profiles.ini`, in file order. The

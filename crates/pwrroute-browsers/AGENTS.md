@@ -37,7 +37,10 @@ behind its own trait; keep the public API in `src/lib.rs` small.
   `read_profiles` also lists `Default` and `Profile N` folders the file does
   not name yet, by their own `Preferences`' `profile.name` (none there, or
   in `profiles.profiles_deleted`, and the folder is skipped), after the
-  listed ones and never as the default.
+  listed ones and never as the default. Only a `Preferences` written no
+  earlier than `Local State` counts: an older one is a removed profile's
+  leftovers, which a launch would bring back. That check is a `stat`, so
+  the launcher's per-link read parses nothing extra.
 - **URLs are private.** Nothing here logs. `Plan` holds the URL;
   `LaunchError`'s `Display` and `Note`s never do.
   `Plan::diagnostic_summary` and `Launcher::run_observed` expose only

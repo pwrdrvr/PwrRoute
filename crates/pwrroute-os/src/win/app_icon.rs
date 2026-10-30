@@ -140,13 +140,7 @@ impl Drop for Bitmap {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Width and height from a PNG's IHDR chunk.
-    fn png_size(png: &[u8]) -> (u32, u32) {
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "not a PNG");
-        let word = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
-        (word(16), word(20))
-    }
+    use crate::icon_pixels::png_size;
 
     fn explorer() -> PathBuf {
         let windir = std::env::var_os("WINDIR").expect("WINDIR");

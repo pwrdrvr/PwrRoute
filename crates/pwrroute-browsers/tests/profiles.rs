@@ -3,6 +3,10 @@
 
 mod common;
 
+use std::fs::File;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
+
 use common::{Fixture, LOCAL_STATE, PROFILES_INI};
 use pwrroute_browsers::{Catalog, Platform, Profile, list_profiles, read_profiles};
 
@@ -124,13 +128,14 @@ fn browsers_without_a_profile_flag_list_nothing() {
 
 /// A profile the browser has made but not yet written to `Local State` is
 /// found by its folder, named by its own `Preferences`; other folders, a
-/// folder without a name and one being deleted are not profiles.
+/// folder without a name, one being deleted and one older than `Local State`
+/// (a removed profile's leftovers) are not profiles.
 #[test]
 fn chromium_profile_folders_not_yet_in_local_state_are_listed() {
     let edge = Catalog::builtin().find("edge").unwrap();
     let fx = Fixture::new(Platform::Windows);
     let rel = "home/AppData/Local/Microsoft/Edge/User Data";
-    fx.write(
+    let local_state = fx.write(
         &format!("{rel}/Local State"),
         r#"{
           "profile": {
@@ -147,6 +152,7 @@ fn chromium_profile_folders_not_yet_in_local_state_are_listed() {
         ("Profile 10", "Later"),
         ("Profile 2", "Example Work"),
         ("Profile 4", "Being Deleted"),
+        ("Profile 5", "Removed Long Ago"),
         ("Guest Profile", "Guest"),
         ("System Profile", "System"),
     ] {
@@ -155,6 +161,19 @@ fn chromium_profile_folders_not_yet_in_local_state_are_listed() {
     }
     // A folder with no Preferences has no name to show.
     fx.write(&format!("{rel}/Profile 3/Cache"), "");
+    // Local State was written an hour ago, the removed profile's files a day
+    // ago; the others just now.
+    let ago = |hours: u64| SystemTime::now() - Duration::from_secs(hours * 3600);
+    let set_modified = |path: PathBuf, at: SystemTime| {
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    };
+    set_modified(local_state, ago(1));
+    set_modified(fx.path(&format!("{rel}/Profile 5/Preferences")), ago(24));
     assert_eq!(
         names(&list_profiles(edge, &fx.env)),
         [

@@ -107,16 +107,15 @@ fn main() {
 /// file, plus the version block Task Manager and the file's Properties
 /// name it by. GPUI's own resources (its manifest) are separate.
 fn windows_resources(manifest: &Path) {
-    let icon = manifest.join("../../packaging/windows/PwrRoute.ico");
+    // Joined part by part and never canonicalized: canonicalize's `\\?\`
+    // prefix is not a path rc reads, and stripping it breaks a UNC
+    // checkout (a network or VM shared folder).
+    let icon = ["..", "..", "packaging", "windows", "PwrRoute.ico"]
+        .iter()
+        .fold(manifest.to_path_buf(), |path, part| path.join(part));
     println!("cargo:rerun-if-changed={}", icon.display());
-    let icon = icon
-        .canonicalize()
-        .unwrap_or(icon)
-        .display()
-        .to_string()
-        // A path from canonicalize carries `\\?\`, which rc does not read.
-        .trim_start_matches(r"\\?\")
-        .replace('\\', r"\\");
+    // An .rc string escapes backslashes.
+    let icon = icon.display().to_string().replace('\\', r"\\");
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     // FILEVERSION wants four numbers; a pre-release suffix is dropped.
     let mut numbers: Vec<u16> = version
