@@ -1194,8 +1194,12 @@ fn config_files_lists_each_config_and_reveals_it(cx: &mut TestAppContext) {
     use super::nav::child_id;
     let (view, cx, requests) = settings(cx, |_| {});
     click(cx, child_id(Pane::Configuration, 1));
-    // One frame takes the anchor and scrolls; the next draws the row there.
-    draw(cx);
+    // A frame draws the row with the anchor, the next two scroll to it,
+    // and the last draws the pane there.
+    for _ in 0..3 {
+        draw(cx);
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+    }
     draw(cx);
     assert_eq!(view.read_with(cx, |view, _| view.pane), Pane::Configuration);
     click(cx, gpui_kit::ElementId::Name("config-file-reveal-1".into()));

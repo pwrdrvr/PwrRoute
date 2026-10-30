@@ -369,9 +369,14 @@ impl SettingsWindow {
         self.show(pane, cx);
         self.target = Some(key);
         cx.notify();
-        // The row takes the anchor in the next frame; scroll after it.
+        // The row takes the anchor when this frame draws; the anchor scrolls
+        // on the frame after (it waits a frame itself), then a redraw shows
+        // the pane there.
         let anchor = self.anchor.clone();
-        window.on_next_frame(move |window, cx| anchor.scroll_to(window, cx));
+        window.on_next_frame(move |window, cx| {
+            anchor.scroll_to(window, cx);
+            window.on_next_frame(|window, _| window.refresh());
+        });
     }
 
     /// `row` as the target row when `key` is the one a nav child chose:
