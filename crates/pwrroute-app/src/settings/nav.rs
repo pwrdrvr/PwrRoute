@@ -36,9 +36,22 @@ pub struct Child {
     /// The row it brings into view: [`config_key`] or [`folder_key`].
     pub key: SharedString,
     pub label: SharedString,
+    /// The account, on its own small line under the label: a folder's
+    /// "Google Drive · jo@example.com" draws as "Google Drive" over
+    /// "jo@example.com", so two accounts of one drive tell apart.
+    pub account: Option<SharedString>,
     pub dot: Dot,
     /// "OFF", "NOT USED".
     pub chip: Option<&'static str>,
+}
+
+/// A cloud folder's label as the nav draws it: the drive, and the account
+/// after its " · ", if any.
+fn split_label(label: &str) -> (SharedString, Option<SharedString>) {
+    match label.split_once(" \u{00b7} ") {
+        Some((drive, account)) => (drive.to_owned().into(), Some(account.to_owned().into())),
+        None => (label.to_owned().into(), None),
+    }
 }
 
 /// The target key of a config file's row in Config Files.
@@ -75,6 +88,7 @@ pub fn children(model: &SettingsModel, pane: Pane) -> Vec<Child> {
                 .map(|file| Child {
                     key: config_key(&file.path),
                     label: file.shown.clone(),
+                    account: None,
                     dot: match file.state {
                         ConfigFileState::InCharge => Dot::Ok,
                         ConfigFileState::Failed => Dot::Warn,
@@ -86,6 +100,7 @@ pub fn children(model: &SettingsModel, pane: Pane) -> Vec<Child> {
             rows.push(Child {
                 key: RULES_KEY.into(),
                 label: "rules.json".into(),
+                account: None,
                 dot: match configuration.rules_loaded {
                     Some(true) => Dot::Ok,
                     Some(false) => Dot::Warn,
@@ -97,26 +112,34 @@ pub fn children(model: &SettingsModel, pane: Pane) -> Vec<Child> {
         }
         Pane::Sync => {
             let sync = &model.sync;
-            let folders = sync.folders.iter().map(|folder| Child {
-                key: folder_key(&folder.root),
-                label: folder.label.clone(),
-                dot: if folder.conflict.is_some() {
-                    Dot::Bad
-                } else {
-                    match folder.tone {
-                        SyncTone::Ok => Dot::Ok,
-                        SyncTone::Warn => Dot::Warn,
-                        SyncTone::Bad => Dot::Bad,
-                        SyncTone::Neutral => Dot::Off,
-                    }
-                },
-                chip: None,
+            let folders = sync.folders.iter().map(|folder| {
+                let (label, account) = split_label(&folder.label);
+                Child {
+                    key: folder_key(&folder.root),
+                    label,
+                    account,
+                    dot: if folder.conflict.is_some() {
+                        Dot::Bad
+                    } else {
+                        match folder.tone {
+                            SyncTone::Ok => Dot::Ok,
+                            SyncTone::Warn => Dot::Warn,
+                            SyncTone::Bad => Dot::Bad,
+                            SyncTone::Neutral => Dot::Off,
+                        }
+                    },
+                    chip: None,
+                }
             });
-            let offered = sync.offered.iter().map(|place| Child {
-                key: folder_key(&place.root),
-                label: place.label.clone(),
-                dot: Dot::Off,
-                chip: Some("OFF"),
+            let offered = sync.offered.iter().map(|place| {
+                let (label, account) = split_label(&place.label);
+                Child {
+                    key: folder_key(&place.root),
+                    label,
+                    account,
+                    dot: Dot::Off,
+                    chip: Some("OFF"),
+                }
             });
             folders.chain(offered).collect()
         }
@@ -164,7 +187,7 @@ pub fn draw(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl
                     children
                         .into_iter()
                         .enumerate()
-                        .fold(div().flex().flex_col().gap(px(2.0)).mt(px(2.0)).mb(px(4.0)), {
+                        .fold(div().flex().flex_col().mt(px(1.0)).mb(px(4.0)), {
                             |list, (index, row)| {
                                 let on = this.pane == pane
                                     && this.target.as_ref() == Some(&row.key);
@@ -295,18 +318,26 @@ fn child(
         theme::text_muted()
     };
     let key = row.key.clone();
+    let mut spoken = row.label.to_string();
+    for part in [
+        row.account.as_deref(),
+        row.chip.map(|chip| chip.to_lowercase()).as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        spoken.push_str(", ");
+        spoken.push_str(part);
+    }
     crate::widgets::focus_visible(Button::new(id), false)
         .selected(on)
-        .accessibility_label(match row.chip {
-            Some(chip) => SharedString::from(format!("{}, {}", row.label, chip.to_lowercase())),
-            None => row.label.clone(),
-        })
+        .accessibility_label(SharedString::from(spoken))
         .ml(px(26.0))
         .flex()
         .items_center()
         .justify_start()
         .gap(px(8.0))
-        .py(px(6.0))
+        .py(px(4.0))
         .pl(px(10.0))
         .pr(px(8.0))
         .border_l_1()
@@ -323,14 +354,31 @@ fn child(
             this.bring_into_view(pane, key.clone(), window, cx);
         }))
         .child(dot(row.dot))
-        .child(div().flex_1().min_w_0().child(crate::widgets::one_line(
-            row.label,
-            theme::SANS,
-            500.0,
-            12.0,
-            16.0,
-            foreground,
-        )))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(crate::widgets::one_line(
+                    row.label,
+                    theme::SANS,
+                    500.0,
+                    12.0,
+                    15.0,
+                    foreground,
+                ))
+                .when_some(row.account, |label, account| {
+                    label.child(crate::widgets::one_line(
+                        account,
+                        theme::SANS,
+                        400.0,
+                        10.5,
+                        13.0,
+                        theme::text_subtle(),
+                    ))
+                }),
+        )
         .when_some(row.chip, |row, chip| {
             row.child(
                 div()

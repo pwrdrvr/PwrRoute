@@ -15,7 +15,8 @@ something to put in it; About leads the nav, Browsers opens first.
   agents, App) and lists what Config Files and Cloud Sync own under a caret,
   after PwrAgent's AI Providers: each Finicky config found (at most
   `CONFIG_FILES_SHOWN`) and `rules.json`; each cloud folder, then the
-  places found but not added (OFF). A child opens its pane and sets
+  places found but not added (OFF), the account after a label's " · "
+  on its own small line. A child opens its pane and sets
   `target`; the row that `mark_target` marks takes the scroll anchor, and
   the pane scrolls to it on the next frame. Fold state, like a card's, is
   a reading position. A pane's internal name (`Pane::Configuration`,

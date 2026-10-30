@@ -69,13 +69,23 @@ pub fn sync() -> super::model::Sync {
                 conflict: None,
             },
         ],
-        offered: vec![SyncPlace {
-            label: "Google Drive \u{00b7} jo@example.com".into(),
-            shown: "~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute".into(),
-            root: PathBuf::from(
-                "/Users/jo/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive",
-            ),
-        }],
+        offered: vec![
+            SyncPlace {
+                label: "Google Drive \u{00b7} jo@example.com".into(),
+                shown: "~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute".into(),
+                root: PathBuf::from(
+                    "/Users/jo/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive",
+                ),
+            },
+            SyncPlace {
+                label: "Google Drive \u{00b7} jo@work.example.com".into(),
+                shown: "~/Library/CloudStorage/GoogleDrive-jo@work.example.com/My Drive/PwrRoute"
+                    .into(),
+                root: PathBuf::from(
+                    "/Users/jo/Library/CloudStorage/GoogleDrive-jo@work.example.com/My Drive",
+                ),
+            },
+        ],
         config: Some("~/.finicky.ts".into()),
         config_on: true,
         summary: "2 folders".into(),
