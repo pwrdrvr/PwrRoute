@@ -37,7 +37,7 @@ use crate::{
     audit::{AuditRecord, AuditSink, Outcome},
     backend::{
         ActivityEntry, ActivityOutcome, ActivitySource, AgentRef, Backends, ConsoleLine,
-        RulesError, host_of,
+        NotOpenedReason, RulesError, host_of,
     },
     roles::{Permission, Permissions, Role},
 };
@@ -55,7 +55,7 @@ Use pwrroute_resolve to see where a link would go and why; it never opens anythi
 Every trace names who decided: a rules.json rule or rewrite (`source: rules`, `index` counting rules.json's lists), a Finicky config's handler or rewrite (`source: config`, counting the config's), or whose default browser took a link nothing claimed, PwrRoute's (rules.json's defaultBrowser) or the config's. \
 With a Finicky config in charge its handlers run before rules.json's rules and its defaultBrowser takes the rest, unless rules.json says \"precedence\": \"pwrroute\": then rules.json's rules run first and its defaultBrowser takes everything else. \
 pwrroute_open dispatches a link through the router as a click would, and is recorded in Activity against this agent. \
-pwrroute_activity lists recent dispatches; its `retention` says where they are kept and for how long, each entry's `privacy` says how much of the link it keeps, `filter: \"unrouted\"` finds the links no rule chose, and `filter: \"notOpened\"` the links a rule or default kept from opening (`rules.json`'s browser `\"none\"`, Don't open). \
+pwrroute_activity lists recent dispatches; its `retention` says where they are kept and for how long, each entry's `privacy` says how much of the link it keeps, `filter: \"unrouted\"` finds the links no rule chose, `filter: \"notOpened\"` the links a rule or default kept from opening (`rules.json`'s browser `\"none\"`, Don't open) or the user held, and `filter: \"held\"` only those the user held; an entry still `waiting` can be opened from PwrRoute, and `hold` says whether the user is holding links now. \
 Read the rules with pwrroute_rules_list; pwrroute_suggest_rule proposes narrow patterns for a link and what else they would catch; \
 pwrroute_rules_test runs the saved examples and tests against a proposal without writing; \
 pwrroute_rules_apply writes a JSON Merge Patch, naming the revision you read, and refuses a change that fails a saved example or test unless force is true. \
@@ -138,9 +138,12 @@ enum ActivityFilter {
     Private,
     /// Recorded and not opened anywhere: a rule, a default or a config
     /// handler said Don't open (`rules.json`'s browser `"none"`, a
-    /// config's `browser: null`). These are the links waiting for a
-    /// decision.
+    /// config's `browser: null`), or the user held it. These are the links
+    /// waiting for a decision.
     NotOpened,
+    /// The not-opened links the user held (Hold, in PwrRoute's tray or
+    /// Overview): a part of `notOpened`.
+    Held,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -559,10 +562,19 @@ async fn activity(
         .clamp(1, MAX_ACTIVITY);
     let filter = input.filter;
     blocking(move || {
-        let entries = match source {
+        let mut entries = match source {
             ActivitySource::Memory => b.activity.recent(MAX_ACTIVITY)?,
             ActivitySource::Journal => b.activity.journal(MAX_ACTIVITY)?,
         };
+        // A journaled entry is from disk: nothing of it waits in memory.
+        if source == ActivitySource::Memory {
+            let waiting: std::collections::HashSet<u64> =
+                b.activity.waiting().into_iter().collect();
+            for entry in &mut entries {
+                entry.waiting =
+                    entry.outcome == ActivityOutcome::NotOpened && waiting.contains(&entry.id);
+            }
+        }
         let scanned = entries.len();
         let entries: Vec<ActivityEntry> = entries
             .into_iter()
@@ -574,6 +586,7 @@ async fn activity(
             "entries": entries,
             "fullUrls": full,
             "retention": b.activity.retention(),
+            "hold": b.activity.hold(),
             "source": source,
             "filter": filter,
             "scanned": scanned,
@@ -591,6 +604,7 @@ fn keeps(filter: ActivityFilter, entry: &ActivityEntry) -> bool {
         ActivityFilter::Rewritten => entry.rewritten,
         ActivityFilter::Private => entry.private,
         ActivityFilter::NotOpened => entry.outcome == ActivityOutcome::NotOpened,
+        ActivityFilter::Held => entry.reason == Some(NotOpenedReason::Hold),
     }
 }
 

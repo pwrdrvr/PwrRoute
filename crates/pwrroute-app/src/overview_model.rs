@@ -3102,7 +3102,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     // Held links take Failed's tile while they wait, unless a link
     // failed (design: Incoming Links 3b).
     let last = if status.held > 0 && today.failed == 0 {
-        tile("Held", status.held as u64, Filter::All)
+        tile("Held", status.held as u64, Filter::NotOpened)
     } else {
         Tile {
             danger: today.failed > 0,

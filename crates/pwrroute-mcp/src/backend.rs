@@ -290,6 +290,48 @@ pub trait ActivityLog: Send + Sync + 'static {
     /// Where dispatches are kept and for how long, in the router's own
     /// words, shown verbatim.
     fn retention(&self) -> String;
+
+    /// The ids of the not-opened dispatches that still wait in memory and
+    /// can be opened from PwrRoute's Activity or tray.
+    fn waiting(&self) -> Vec<u64> {
+        Vec::new()
+    }
+
+    /// The hold in force, when the user is holding links.
+    fn hold(&self) -> Option<Hold> {
+        None
+    }
+}
+
+/// Links the user is holding: recorded and not opened, for the next few or
+/// for a while. Serialized with `kind`: `{"kind":"next","left":1,"of":3}`,
+/// `{"kind":"until","untilMs":...}`, `{"kind":"untilOff"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Hold {
+    /// The next `of` links; `left` of them are still to come.
+    Next { left: u32, of: u32 },
+    /// Every link until a time, in milliseconds since the Unix epoch.
+    Until {
+        #[serde(rename = "untilMs")]
+        until_ms: u64,
+    },
+    /// Every link until the user goes back to the rules.
+    UntilOff,
+}
+
+impl Hold {
+    pub fn of(scope: pwrroute_router::SendScope) -> Self {
+        match scope {
+            pwrroute_router::SendScope::Next { left, of } => Self::Next { left, of },
+            pwrroute_router::SendScope::All { until: Some(until) } => Self::Until {
+                until_ms: until
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+            },
+            pwrroute_router::SendScope::All { until: None } => Self::UntilOff,
+        }
+    }
 }
 
 /// Where an [`ActivityEntry`] was read from.
@@ -343,6 +385,10 @@ pub struct ActivityEntry {
     /// Why a `notOpened` entry was not opened; absent for any other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<NotOpenedReason>,
+    /// A `notOpened` entry that still waits in memory: the user can open
+    /// it from PwrRoute. Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waiting: bool,
     /// Absent for a `none` entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<Trace>,

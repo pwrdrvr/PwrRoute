@@ -385,13 +385,14 @@ pub fn follow_default_browser(cx: &mut App) {
     .detach();
 }
 
-/// `PWRROUTE_TRAY_FIXTURE=routing` draws the design's 1a and `paused` its
-/// 1b, for screenshots and manual checks; the model then ignores the feed
-/// and the OS.
+/// `PWRROUTE_TRAY_FIXTURE=routing` draws the design's 1a, `paused` its
+/// 1b and `holding` Incoming Links 2c, for screenshots and manual checks;
+/// the model then ignores the feed and the OS.
 fn fixture(now: SystemTime) -> Option<TrayModel> {
     match std::env::var("PWRROUTE_TRAY_FIXTURE").as_deref() {
         Ok("routing") => Some(TrayModel::fixture(now)),
         Ok("paused") => Some(TrayModel::paused_fixture(now)),
+        Ok("holding") => Some(TrayModel::holding_fixture(now)),
         _ => None,
     }
 }

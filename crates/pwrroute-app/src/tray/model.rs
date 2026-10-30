@@ -376,6 +376,10 @@ impl Recent {
     /// kept from opening (Don't open, `browser: null`) is listed as "not
     /// opened" with who decided (design: Not Opened 2d).
     pub fn from_record(record: &DispatchRecord) -> Option<Self> {
+        // A held link is listed under Held, not here.
+        if record.not_opened_reason() == Some(NotOpenedReason::Hold) {
+            return None;
+        }
         let not_opened = record.outcome == Outcome::NotOpened;
         if !not_opened && !matches!(record.outcome, Outcome::Opened | Outcome::DryRun) {
             return None;
@@ -824,12 +828,8 @@ impl TrayModel {
         self.links_today = dispatched.links_today;
     }
 
-    /// The design's 2c: holding for an hour, two links held. Made up for
+    /// Incoming Links 2c: holding for an hour, two links held. Made up for
     /// the mock.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "the window harness and the screens example")
-    )]
     pub fn holding_fixture(now: SystemTime) -> Self {
         let mut model = Self::fixture(now);
         model.routing = Routing::Holding(SendScope::All {
