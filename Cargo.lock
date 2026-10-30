@@ -5981,8 +5981,11 @@ name = "pwrroute-app"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "ashpd",
  "async-channel",
  "chrono",
+ "embed-resource",
+ "futures",
  "gpui-kit",
  "interprocess",
  "log",
@@ -6082,8 +6085,11 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-core-services",
  "objc2-foundation 0.3.2",
+ "png 0.18.1",
  "pwrroute-router",
+ "windows 0.62.2",
  "windows-registry 0.6.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

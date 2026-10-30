@@ -825,7 +825,7 @@ impl PwrRoute {
     /// Add a rule for this link (design 2c): opens the sheet for the row's
     /// record, from the expanded row's "Add a rule…" or the "⋯" menu. A
     /// record kept as host only or nothing gets the sheet's disabled state.
-    pub fn add_rule(&mut self, key: RowKey, _window: &mut Window, cx: &mut Context<'_, Self>) {
+    pub fn add_rule(&mut self, key: RowKey, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(record) = record(key, cx) else {
             return;
         };
@@ -840,6 +840,7 @@ impl PwrRoute {
         self.find_collisions(&mut sheet, cx);
         sheet.rules_first = self.rules_first();
         sheet.config = self.config.as_ref().map(|config| config.path.clone());
+        window.focus(&sheet.pattern.focus, cx);
         self.actions.sheet = Some(sheet);
         self.actions.menu = None;
         self.actions.note = None;
@@ -1307,14 +1308,16 @@ pub fn row_menu(
                 false,
             ),
         };
-        item("activity-save", label, hint).on_click(cx.listener(move |this, _, _, cx| {
-            cx.stop_propagation();
-            if example {
-                this.save_record_as_example(key, cx);
-            } else {
-                this.save_record_as_test(key, cx);
-            }
-        }))
+        item("activity-save", label, hint)
+            .map(crate::accessibility::clickable)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                if example {
+                    this.save_record_as_example(key, cx);
+                } else {
+                    this.save_record_as_test(key, cx);
+                }
+            }))
     });
     let show = menu.added.map(|handler| {
         item(
@@ -1323,6 +1326,7 @@ pub fn row_menu(
             "Show in Rules".to_owned(),
             None,
         )
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
             this.show_added_rule(handler, window, cx);
@@ -1524,6 +1528,7 @@ fn candidate(
     .when(pattern.chars().count() > PATTERN_FITS, |row| {
         row.tooltip(crate::overview::tip(pattern.to_owned(), None))
     })
+    .map(crate::accessibility::clickable)
     .on_click(cx.listener(move |this, _, _, cx| this.pick_candidate(index, cx)))
 }
 
@@ -1557,6 +1562,7 @@ fn any_from_choice(sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> Option<St
                 )),
             "Every site. Turns on Sent from.",
         )
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(|this, _, _, cx| this.pick_any_from(cx))),
     )
 }
@@ -1612,7 +1618,8 @@ fn head_link(sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> Div {
                             .cursor_pointer()
                             .child(text(label, 10.5, 500.0, theme::accent_bright()))
                             // Only the view changes: a warning from Add stays.
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .map(crate::accessibility::clickable)
+.on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(sheet) = &mut this.actions.sheet {
                                     sheet.url_expanded = !sheet.url_expanded;
                                     cx.notify();
@@ -1750,6 +1757,7 @@ fn pattern_field(
         .id("add-rule-pattern")
         .debug_selector(|| "add-rule-pattern".into());
     crate::text_field::hit_area(area, &sheet.pattern)
+        .aria_label("URL pattern")
         .w_full()
         .child(boxed)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
@@ -1953,6 +1961,14 @@ fn sheet_body(
                                     .debug_selector(|| "add-rule-only-from".into())
                                     .cursor_pointer()
                                     .child(switch(sheet.only_from))
+                                    .map(crate::accessibility::clickable)
+                                    .role(gpui_kit::Role::Switch)
+                                    .aria_label(format!("Only when sent from {name}"))
+                                    .aria_toggled(if sheet.only_from {
+                                        gpui_kit::Toggled::True
+                                    } else {
+                                        gpui_kit::Toggled::False
+                                    })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.toggle_only_from(cx);
                                     })),
@@ -2199,6 +2215,11 @@ pub fn sheet(
                 .children(body),
         )
         .child(footer);
+    let panel = crate::accessibility::MenuCard::dialog(
+        "add-rule-focus",
+        panel,
+        sheet.pattern.focus.clone(),
+    );
     Some(deferred(
         div()
             .id("add-rule-scrim")

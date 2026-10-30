@@ -534,6 +534,7 @@ fn nav_item(
                 item.hover(|style| style.bg(theme::bg_hover()))
             }
         })
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, _, cx| this.show(pane, cx)))
         .child(text(pane.label(), 13.0, 500.0, foreground))
         .when_some(count, |item, count| {
@@ -558,6 +559,8 @@ impl Render for SettingsWindow {
         let body = self.pane_body(window, cx);
         div()
             .id(ROOT_ID)
+            .role(gpui_kit::Role::Pane)
+            .aria_label("Settings")
             .debug_selector(|| ROOT_ID.into())
             .track_focus(&self.focus)
             .size_full()

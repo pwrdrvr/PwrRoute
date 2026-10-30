@@ -1313,6 +1313,8 @@ impl Render for ApprovalWindow {
         };
         div()
             .id("mcp-approval")
+            .role(gpui_kit::Role::Dialog)
+            .aria_label("Local agent approval")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.key(event, window, cx);

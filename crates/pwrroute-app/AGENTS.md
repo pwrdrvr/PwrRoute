@@ -524,10 +524,14 @@ their own modules.
   lanes, `OpenAs::In`), Make a rule… (Activity's sheet) and Copy link, and
   Open all; they are not in Recent, and Quit says how many will be lost.
   Nothing about it is saved. The dropdown is keyboard-operable: Tab walks
-  the switch (one stop), To, For, the stepper and the live button,
+  the card in draw order (its rows, then the switch as one stop, To,
+  For, the stepper and the live button),
   Left/Right move the switch and For, Up/Down step, and the focused stop
   wears `.foc`'s ring only while the keyboard drives
-  (`last_input_was_keyboard`). The native menu has check rows (Route by
+  (`last_input_was_keyboard`). A key the focused stop does not take goes
+  to the menu's own Up/Down/Home/End (`accessibility::move_focus`), and
+  Esc folds what is open before it closes. The switch and For are radio
+  groups to a screen reader, one tab stop each. The native menu has check rows (Route by
   rules, Send next link → destination, Hold next link, Hold for 1 hour,
   Pause routing), Choose… (the Overview) and Held links (N)… (Activity).
   The Overview reads it as `Status::{paused, holding, sending}` (hero
@@ -573,8 +577,12 @@ their own modules.
   (`pwrroute_os::app_bundle`, `app_icon_png`), at the window's pixel size,
   and only once `app_icons::install` ran (`main`): tests draw letters, and
   the `screens` example too unless given `--app-icons`.
-  `browser_scan::rescan` drops them (`app_icons::forget`). Windows and
-  Linux have no icon yet.
+  `browser_scan::rescan` drops them (`app_icons::forget`). Windows finds
+  an app only by the `.exe` the scan placed it at (`location_of`), and
+  draws the icon Explorer shows; Linux has no icon yet. PwrRoute's own
+  window and taskbar icon on Windows is `packaging/windows/PwrRoute.ico`,
+  embedded by `build.rs` as icon resource 1, which GPUI loads for every
+  window.
 - **Menus and select lists use `widgets::menu_card` and `menu_row`**
   (design: Popovers and Overflow 1a-1d). A select's list is as wide as its
   field (`.absolute().left_0().right_0()`), never narrower, and scrolls

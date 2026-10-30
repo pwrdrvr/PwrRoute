@@ -841,12 +841,14 @@ fn select(
         width,
         trigger_content,
     )
+    .map(crate::accessibility::clickable)
     .on_click(cx.listener(move |this, _, _, cx| {
         this.open_default_menu(picking, !open, cx);
     }));
     let menu = open.then(|| {
         rows.into_iter().fold(
             menu_card(ElementId::Name(format!("{id}-menu").into()))
+                .existing_navigation()
                 .track_focus(&this.configuration.menu_focus)
                 .w(px(width))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -901,6 +903,7 @@ fn option_row(
                 cx.notify();
             }
         }))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             this.choose_default(picking, index, window, cx);
         }))

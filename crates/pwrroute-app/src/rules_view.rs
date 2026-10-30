@@ -324,6 +324,9 @@ fn rule_row_drawn(
     };
     div()
         .id(id)
+        .role(gpui_kit::Role::ListItem)
+        .aria_label(format!("Rule {index}, {}", rule.accessible_name()))
+        .aria_selected(state.selected)
         .relative()
         .flex()
         .items_center()
@@ -721,6 +724,8 @@ fn editable_row(
         Some(more),
     )
     .debug_selector(move || format!("{kind}-{index}"))
+    .map(crate::accessibility::clickable)
+    .role(gpui_kit::Role::ListItem)
     .on_click(cx.listener(move |this, _, window, cx| {
         window.focus(&this.focus, cx);
         this.select(selection, cx);
@@ -752,11 +757,13 @@ fn tombstone_at(
 /// The rewrites and handlers cards, which select a row for the editor.
 pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
     let rewrite_rules: Vec<&Rule> = app.rewrites.iter().map(|r| &r.rule).collect();
-    let rewrites = card().child(card_header_with(
-        "Step 1 \u{00b7} run in order \u{00b7} every match applies",
-        "Rewrites",
-        count_chip(&rewrite_rules, "rewrite"),
-    ));
+    let rewrites = crate::accessibility::exposed(card(), gpui_kit::Role::List, "Rewrites").child(
+        card_header_with(
+            "Step 1 \u{00b7} run in order \u{00b7} every match applies",
+            "Rewrites",
+            count_chip(&rewrite_rules, "rewrite"),
+        ),
+    );
     let rewrites = if app.rewrites.is_empty() {
         rewrites
             .children(tombstone_at(app, Selection::Rewrite(0), cx))
@@ -811,11 +818,13 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
     });
 
     let handler_rules: Vec<&Rule> = app.handlers.iter().map(|h| &h.rule).collect();
-    let handlers = card().child(card_header_with(
-        "Step 2 \u{00b7} first match wins",
-        "Rules",
-        count_chip(&handler_rules, "rule"),
-    ));
+    let handlers = crate::accessibility::exposed(card(), gpui_kit::Role::List, "Rules").child(
+        card_header_with(
+            "Step 2 \u{00b7} first match wins",
+            "Rules",
+            count_chip(&handler_rules, "rule"),
+        ),
+    );
     let handlers = if app.handlers.is_empty() {
         handlers
             .children(tombstone_at(app, Selection::Handler(0), cx))
@@ -1304,7 +1313,9 @@ fn saved_tests(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Option<Div> {
                             .flex()
                             .justify_center()
                             .cursor_pointer()
+                            .aria_label("Dismiss notice")
                             .child(mono("\u{00d7}", 11.0, 500.0, theme::text_subtle()))
+                            .map(crate::accessibility::clickable)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.remove_test(index, cx);
                             })),
@@ -1347,12 +1358,12 @@ struct BlankPicker {
 
 impl Global for BlankPicker {}
 
-fn picker_open(cx: &App) -> bool {
+pub(crate) fn picker_open(cx: &App) -> bool {
     cx.try_global::<BlankPicker>()
         .is_some_and(|picker| picker.open)
 }
 
-fn set_picker_open(open: bool, cx: &mut App) {
+pub(crate) fn set_picker_open(open: bool, cx: &mut App) {
     cx.default_global::<BlankPicker>().open = open;
 }
 
@@ -1418,7 +1429,7 @@ fn browser_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
         .flex_none()
         .child(
             button("Choose browser\u{2026}", ButtonKind::Primary, true)
-                .id(BLANK_BROWSER_ID)
+                .id(BLANK_BROWSER_ID).aria_expanded(open)
                 .debug_selector(|| BLANK_BROWSER_ID.into())
                 // Capture runs in paint order: before the deferred list's
                 // press-outside handler closes it.

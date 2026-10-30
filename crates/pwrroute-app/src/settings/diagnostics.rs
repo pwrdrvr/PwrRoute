@@ -2,6 +2,7 @@
 //! MCP door listen, and what routes links. Paths and states only; nothing
 //! here can show a link.
 
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{Context, Div, IntoElement, ParentElement as _, div};
 
 use super::controls::{
@@ -63,6 +64,7 @@ fn this_copy_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -
                             true,
                             diagnostics.data_dir_exists,
                         )
+                        .map(crate::accessibility::clickable)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.request(SettingsRequest::OpenDataFolder, window, cx);
                         })),
@@ -86,6 +88,7 @@ fn this_copy_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -
                             true,
                             diagnostics.log_exists,
                         )
+                        .map(crate::accessibility::clickable)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.request(SettingsRequest::OpenLogs, window, cx);
                         })),

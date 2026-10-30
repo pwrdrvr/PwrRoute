@@ -502,6 +502,9 @@ pub fn draw<V: 'static>(
                                         .text_color(theme::text_primary())
                                 })
                             })
+                            .map(crate::accessibility::clickable)
+                            .map(|element| crate::accessibility::radio(element, pill.on))
+                            .aria_label(format!("{}, {}", lane.name, pill.label))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 pick(this, choice.clone(), window, cx);
                             })),

@@ -165,6 +165,10 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
     };
     let key = |chord: &str| format!("{modifier}-{chord}");
     cx.bind_keys([
+        KeyBinding::new(&key("1"), ShowOverview, None),
+        KeyBinding::new(&key("2"), ShowRules, None),
+        KeyBinding::new(&key("3"), ShowTestLink, None),
+        KeyBinding::new(&key("4"), ShowActivity, None),
         KeyBinding::new(&key("q"), Quit, None),
         KeyBinding::new(&key("w"), CloseWindow, None),
         KeyBinding::new(&key("m"), Minimize, None),

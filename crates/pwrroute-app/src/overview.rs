@@ -107,7 +107,7 @@ pub struct OverviewState {
     /// Clicked: traced until it is clicked again, Esc, Clear, or a click on
     /// the map's empty ground. It wins over the pointer and the keyboard.
     pub pinned: Option<FocusKey>,
-    /// Where the arrow keys (and Tab) put the keyboard on the map.
+    /// Where the arrow keys put the keyboard on the map. Tab moves between controls.
     pub keyed: Option<FocusKey>,
     /// The node with no rules yet under the pointer: it offers "+ Add a
     /// rule…".
@@ -1451,7 +1451,7 @@ const SELECT_WIDTH: f32 = 220.0;
 /// shows its profile list in place of the browsers ("Default profile",
 /// then each). It is the field's width, under "Change…" too, where the
 /// popover aligns it to the right.
-fn browser_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
+fn browser_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> crate::accessibility::MenuCard {
     let browsers: Vec<&Installed> = app
         .installed
         .iter()
@@ -1545,6 +1545,7 @@ fn setup_card(app: &PwrRoute, setup: &Setup, cx: &mut Context<'_, PwrRoute>) -> 
     let choose: AnyElement = if setup.everything_else.done {
         button("Change\u{2026}", ButtonKind::Quiet, true)
             .id("overview-setup-change")
+            .aria_expanded(picking)
             .debug_selector(|| "overview-setup-change".into())
             .capture_any_mouse_down(remember)
             .on_click(toggle)
@@ -1552,12 +1553,14 @@ fn setup_card(app: &PwrRoute, setup: &Setup, cx: &mut Context<'_, PwrRoute>) -> 
     } else {
         input_box()
             .id("overview-setup-choose")
+            .aria_expanded(picking)
             .debug_selector(|| "overview-setup-choose".into())
             .w(px(SELECT_WIDTH))
             .cursor_pointer()
             .child(field_label("Choose a browser", theme::text_subtle()))
             .child(caret())
             .capture_any_mouse_down(remember)
+            .map(crate::accessibility::clickable)
             .on_click(toggle)
             .into_any_element()
     };
@@ -1689,6 +1692,7 @@ fn today(app: &PwrRoute, overview: &Overview, cx: &mut Context<'_, PwrRoute>) ->
                 tile.border_color(theme::accent_border())
                     .bg(theme::bg_row_active())
             })
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.open_activity(filter, window, cx);
             }))
@@ -2166,6 +2170,7 @@ fn map(
         .gap(px(GUTTER_MIN))
         .p(px(16.0))
         // A click on the empty ground lets go of the pin.
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(|this, _, _, cx| clear_pin(this, cx)))
         // The routes are lines: they fade while the map waits.
         .child(
@@ -2554,6 +2559,7 @@ fn rewrites_band(label: String, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div>
         .rounded(px(8.0))
         .cursor_pointer()
         .hover(|band| band.bg(theme::bg_hover()))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(|this, _, window, cx| {
             cx.stop_propagation();
             this.navigate(Screen::Rules, window, cx);
@@ -3008,9 +3014,12 @@ fn rule_row_drawn(
         _ => None,
     };
     let element = row_frame(("overview-row", index).into(), lit, pinned, ghost)
+        .aria_label(row.tooltip.clone())
+        .aria_selected(pinned)
         .debug_selector(move || format!("overview-row-{index}"))
         .tooltip(tip(row.tooltip.clone(), tip_source))
         .on_hover(hover_listener(key.clone(), cx))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             cx.stop_propagation();
             // A double-click opens the rule; a click pins it.
@@ -3049,6 +3058,7 @@ fn rule_row_drawn(
                         550.0,
                         theme::text_secondary(),
                     ))
+                    .map(crate::accessibility::clickable)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.open_rule(source, window, cx);
@@ -3110,6 +3120,7 @@ fn everything_else_row(
             ))
         })
         .on_hover(hover_listener(FocusKey::EverythingElse, cx))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, _, cx| {
             cx.stop_propagation();
             toggle_pin(this, FocusKey::EverythingElse, cx);
@@ -3493,6 +3504,7 @@ fn card_add(index: usize, name: &str, cx: &mut Context<'_, PwrRoute>) -> impl In
             None,
         ))
         .child(text("+ Rule", 10.5, 550.0, theme::text_muted()))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
             this.add_rule_for(&browser, "", false, window, cx);
@@ -3581,7 +3593,8 @@ fn browser_card(
             header
                 .cursor_pointer()
                 .on_hover(hover_listener(key.clone(), cx))
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .map(crate::accessibility::clickable)
+.on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     toggle_pin(this, key.clone(), cx);
                 }))
@@ -3642,6 +3655,7 @@ fn browser_card(
                     .hover(|more| more.bg(theme::bg_hover()))
                     .when(spot, |more| more.opacity(DIM))
                     .child(text(label, 10.5, 500.0, theme::text_subtle()))
+                    .map(crate::accessibility::clickable)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.overview.toggle_expanded(&key, index);
@@ -3886,6 +3900,7 @@ fn node_row(
                     cx.notify();
                 }
             }))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 this.add_rule_for(&browser, &profile, private, window, cx);
@@ -3893,6 +3908,7 @@ fn node_row(
     } else {
         element
             .on_hover(hover_listener(key.clone(), cx))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 toggle_pin(this, key.clone(), cx);
@@ -3969,7 +3985,9 @@ fn send_here_button(
                 .bg(theme::bg_row_active())
         })
         .tooltip(tip(format!("Send the next link to {named}"), None))
+        .aria_label(format!("Send the next link to {named}"))
         .child(icon("pwrroute/forward.svg", 12.0, theme::accent_bright()))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |_, _, _, cx| {
             cx.stop_propagation();
             crate::tray::send_next_to(crate::tray::destination(&browser, &profile, private), cx);
@@ -4027,7 +4045,8 @@ fn single_card(
         frame.tooltip(tip(tooltip, None))
     })
     .on_hover(hover_listener(key.clone(), cx))
-    .on_click(cx.listener(move |this, _, _, cx| {
+    .map(crate::accessibility::clickable)
+.on_click(cx.listener(move |this, _, _, cx| {
         cx.stop_propagation();
         toggle_pin(this, key.clone(), cx);
     }))

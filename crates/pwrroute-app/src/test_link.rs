@@ -519,7 +519,7 @@ fn step_row_drawn(
     count: usize,
     step: &TraceStep,
     cx: &mut Context<'_, PwrRoute>,
-) -> Div {
+) -> gpui_kit::Stateful<Div> {
     let (fill, border, number_color) = circle_colors(step.state);
     let number = step
         .number
@@ -580,6 +580,7 @@ fn step_row_drawn(
                         .text_color(theme::accent_bright())
                         .underline()
                         .child("Show each")
+                        .map(crate::accessibility::clickable)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.test.set_unfold(true);
                             cx.notify();
@@ -588,6 +589,9 @@ fn step_row_drawn(
         },
     );
     div()
+        .id(("trace-step", index))
+        .role(gpui_kit::Role::ListItem)
+        .aria_label(format!("{}, {}", step.title, step.detail))
         .relative()
         .flex()
         .gap(px(12.0))
@@ -704,9 +708,12 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
                 .cursor_pointer()
                 .child(label(None)),
         };
-        row.debug_selector(move || format!("test-opener-choice-{index}"))
+        row.role(gpui_kit::Role::MenuItem)
+            .aria_selected(selected)
+            .debug_selector(move || format!("test-opener-choice-{index}"))
             .when(selected, |row| row.bg(theme::bg_row_active()))
             .hover(|row| row.bg(theme::bg_hover()))
+            .map(|e| crate::widgets::keyboard_control(e, false))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.test.opener = index;
                 this.test.picking = false;
@@ -752,7 +759,7 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
         .flex_none()
         .child(
             input_box()
-                .id("test-opener")
+                .id("test-opener").aria_expanded(app.test.picking)
                 .debug_selector(|| "test-opener".into())
                 .cursor_pointer()
                 .child(text("from", 10.5, 400.0, theme::text_subtle()))
@@ -763,7 +770,8 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
                 .capture_any_mouse_down(cx.listener(|this, _, _, _| {
                     this.test.was_picking = this.test.picking;
                 }))
-                .on_click(cx.listener(|this, _, _, cx| {
+                .map(crate::accessibility::clickable)
+.on_click(cx.listener(|this, _, _, cx| {
                     this.test.picking = !this.test.was_picking;
                     cx.notify();
                 })),
@@ -984,6 +992,7 @@ pub fn pane(
         cx.stop_propagation();
         cx.notify();
     }))
+    .map(crate::accessibility::keyboard_only)
     .on_click(cx.listener(|this, _, window, cx| {
         window.focus(&this.test.url.focus, cx);
         cx.notify();
@@ -1021,6 +1030,8 @@ pub fn pane(
             let trace = view.steps.iter().enumerate().fold(
                 card()
                     .id("test-trace")
+                    .role(gpui_kit::Role::List)
+                    .aria_label("Routing steps")
                     .debug_selector(|| "test-trace".into()),
                 |trace, (index, step)| trace.child(step_row(index, count, step, cx)),
             );

@@ -3,6 +3,10 @@
 
 mod common;
 
+use std::fs::File;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
+
 use common::{Fixture, LOCAL_STATE, PROFILES_INI};
 use pwrroute_browsers::{Catalog, Platform, Profile, list_profiles, read_profiles};
 
@@ -120,4 +124,62 @@ fn browsers_without_a_profile_flag_list_nothing() {
     let fx = Fixture::new(Platform::MacOs);
     assert!(safari.profile_dir(&fx.env).is_none());
     assert!(list_profiles(safari, &fx.env).is_empty());
+}
+
+/// A profile the browser has made but not yet written to `Local State` is
+/// found by its folder, named by its own `Preferences`; other folders, a
+/// folder without a name, one being deleted and one older than `Local State`
+/// (a removed profile's leftovers) are not profiles.
+#[test]
+fn chromium_profile_folders_not_yet_in_local_state_are_listed() {
+    let edge = Catalog::builtin().find("edge").unwrap();
+    let fx = Fixture::new(Platform::Windows);
+    let rel = "home/AppData/Local/Microsoft/Edge/User Data";
+    let local_state = fx.write(
+        &format!("{rel}/Local State"),
+        r#"{
+          "profile": {
+            "info_cache": { "Default": { "name": "Profile 1" } },
+            "last_used": "Default"
+          },
+          "profiles": {
+            "profiles_deleted": ["C:\\Users\\example\\AppData\\Local\\Microsoft\\Edge\\User Data\\Profile 4"]
+          }
+        }"#,
+    );
+    for (folder, name) in [
+        ("Default", "Profile 1"),
+        ("Profile 10", "Later"),
+        ("Profile 2", "Example Work"),
+        ("Profile 4", "Being Deleted"),
+        ("Profile 5", "Removed Long Ago"),
+        ("Guest Profile", "Guest"),
+        ("System Profile", "System"),
+    ] {
+        let prefs = format!(r#"{{ "profile": {{ "name": "{name}" }} }}"#);
+        fx.write(&format!("{rel}/{folder}/Preferences"), &prefs);
+    }
+    // A folder with no Preferences has no name to show.
+    fx.write(&format!("{rel}/Profile 3/Cache"), "");
+    // Local State was written an hour ago, the removed profile's files a day
+    // ago; the others just now.
+    let ago = |hours: u64| SystemTime::now() - Duration::from_secs(hours * 3600);
+    let set_modified = |path: PathBuf, at: SystemTime| {
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    };
+    set_modified(local_state, ago(1));
+    set_modified(fx.path(&format!("{rel}/Profile 5/Preferences")), ago(24));
+    assert_eq!(
+        names(&list_profiles(edge, &fx.env)),
+        [
+            ("Profile 1", "Default", true),
+            ("Example Work", "Profile 2", false),
+            ("Later", "Profile 10", false),
+        ]
+    );
 }

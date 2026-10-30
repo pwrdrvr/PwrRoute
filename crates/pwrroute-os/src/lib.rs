@@ -21,18 +21,24 @@
 //!   browser can be timed from any thread. macOS only.
 //!
 //! - **App icons.** [`app_bundle`] finds the app a rule or the scan names and
-//!   [`app_icon_png`] renders the icon Finder shows for it. macOS only for
-//!   now: elsewhere both are `None` and the app draws its letter badge.
+//!   [`app_icon_png`] renders the icon Finder (macOS) or Explorer (Windows)
+//!   shows for it. On Linux both are `None` and the app draws its letter
+//!   badge.
 //!
-//! Everything that needs `unsafe` is in three modules: `macos::launch_services`
-//! (the LaunchServices calls), `macos::app_icon` (two AppKit calls) and
-//! `macos::window_order` (the window server's list).
+//! Everything that needs `unsafe` is in four modules: `macos::launch_services`
+//! (the LaunchServices calls), `macos::app_icon` (two AppKit calls),
+//! `macos::window_order` (the window server's list) and `win::app_icon`
+//! (the Shell's icon and GDI's pixels).
 
+pub mod accessibility;
 mod args;
+mod icon_pixels;
 #[cfg(target_os = "macos")]
 mod macos;
 mod paths;
 mod registration;
+#[cfg(windows)]
+mod win;
 
 pub use args::links_from_args;
 pub use paths::{data_dir, log_dir, router_dir};
@@ -114,16 +120,21 @@ pub fn top_window_owner() -> Option<WindowOwner> {
     }
 }
 
-/// The installed app `app` names: a bundle id, an app's name as Finder
-/// shows it, or a path to any file. Reads LaunchServices and the disk, so call it
-/// off the UI thread. Always `None` off macOS, which has no implementation
-/// yet.
+/// The installed app `app` names: on macOS a bundle id, an app's name as
+/// Finder shows it, or a path to any file; on Windows a path to a file (the
+/// scan names each browser's `.exe`). Reads LaunchServices and the disk, so
+/// call it off the UI thread. Always `None` on Linux, which has no
+/// implementation yet.
 pub fn app_bundle(app: &str) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         macos::installed_app_bundle(app)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        win::installed_app_bundle(app)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = app;
         None
@@ -146,14 +157,21 @@ pub fn app_bundle_id(path: &Path) -> Option<String> {
 }
 
 /// The icon Finder shows for the app at `bundle`, unmodified, as a
-/// `pixels`-square PNG (clamped to 16-1024). Reads the disk, so call it off
-/// the UI thread. Always `None` off macOS, which has no implementation yet.
+/// `pixels`-square PNG (clamped to 16-1024). On Windows, the icon Explorer
+/// shows for the `.exe` (or any file) at `bundle`, at least `pixels` square
+/// where the icon has that size (clamped to 16-256). Reads the disk, so call
+/// it off the UI thread. Always `None` on Linux, which has no
+/// implementation yet.
 pub fn app_icon_png(bundle: &Path, pixels: u32) -> Option<Vec<u8>> {
     #[cfg(target_os = "macos")]
     {
         macos::app_icon_png(bundle, pixels)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        win::app_icon_png(bundle, pixels)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = (bundle, pixels);
         None

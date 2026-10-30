@@ -859,6 +859,9 @@ impl Render for LogsWindow {
         self.h_max = (self.view.widest() as f32 * self.char_width - self.text_width).max(0.0);
         self.h_offset = self.h_offset.min(self.h_max);
         div()
+            .id("logs-window")
+            .role(gpui_kit::Role::Pane)
+            .aria_label("Logs")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.key(event, window, cx);
@@ -900,6 +903,7 @@ impl LogsWindow {
             Some(self.search_trailing(narrow, cx)),
             window,
         )
+        .map(crate::accessibility::keyboard_only)
         .on_click(cx.listener(|this, _, window, cx| {
             window.focus(&this.search.focus, cx);
             cx.notify();
@@ -926,6 +930,8 @@ impl LogsWindow {
                     .debug_selector(move || id.into())
                     .child(segment(label, self.view.mode == mode))
                     .tooltip(tip(hint))
+                    .map(crate::accessibility::clickable)
+                    .map(|element| crate::accessibility::radio(element, self.view.mode == mode))
                     .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx))),
             )
         });
@@ -944,6 +950,9 @@ impl LogsWindow {
                     .id(SharedString::from(format!("logs-level-{}", level.label())))
                     .debug_selector(move || format!("logs-level-{}", level.label()))
                     .child(segment(label, on))
+                    .map(crate::accessibility::clickable)
+                    .role(gpui_kit::Role::CheckBox)
+                    .aria_toggled(gpui_kit::Toggled::from(on))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_level(level, cx))),
             )
         });
@@ -974,18 +983,21 @@ impl LogsWindow {
             } else {
                 "Resume the live log"
             }))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(|this, _, _, cx| {
                 let live = !this.live;
                 this.set_live(live, cx);
             }));
         let wrap = tool_button(WRAP_ID, "pwrroute/wrap.svg", "Wrap", self.wrap, narrow)
             .tooltip(tip("Wrap long lines"))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(|this, _, _, cx| {
                 let wrap = !this.wrap;
                 this.set_wrap(wrap, cx);
             }));
         let mark = tool_button(MARK_ID, "pwrroute/bookmark.svg", "Mark", false, narrow)
             .tooltip(tip("Drop a mark after the newest line"))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(|this, _, _, cx| this.mark(cx)));
         let show_context = self.view.mode == SearchMode::Filter && self.view.searching();
         div()
@@ -1046,8 +1058,10 @@ impl LogsWindow {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|step| step.bg(theme::bg_hover_strong()))
+                .aria_label(hint)
                 .child(icon(path, 14.0, theme::text_secondary()))
                 .tooltip(tip(hint))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(move |this, _, _, cx| this.step(forward, cx)))
         };
         div()
@@ -1132,7 +1146,8 @@ impl LogsWindow {
                     .capture_any_mouse_down(cx.listener(|this, _, _, _| {
                         this.context_was_open = this.context_open;
                     }))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .map(crate::accessibility::clickable)
+.on_click(cx.listener(|this, _, _, cx| {
                         this.context_open = !this.context_was_open;
                         cx.notify();
                     })),
@@ -1376,6 +1391,7 @@ impl LogsWindow {
                     .bg(theme::bg_elevated())
                     .when(since, |action| action.cursor_pointer())
                     .child(text("Select since mark", 11.0, 600.0, action_color))
+                    .map(crate::accessibility::clickable)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.select_since_mark(window, cx);
                     })),
@@ -1383,6 +1399,7 @@ impl LogsWindow {
             .child(
                 div()
                     .id(CLEAR_MARK_ID)
+                    .aria_label("Remove the mark")
                     .debug_selector(|| CLEAR_MARK_ID.into())
                     .size(px(20.0))
                     .flex()
@@ -1393,6 +1410,7 @@ impl LogsWindow {
                     .hover(|clear| clear.bg(theme::bg_hover_strong()))
                     .child(icon("pwrroute/close.svg", 12.0, theme::text_muted()))
                     .tooltip(tip("Remove the mark"))
+                    .map(crate::accessibility::clickable)
                     .on_click(cx.listener(|this, _, _, cx| this.clear_mark(cx))),
             )
             .into_any_element()
@@ -1431,6 +1449,7 @@ impl LogsWindow {
                     .bg(theme::bg_elevated())
                     .cursor_pointer()
                     .child(text(label, 12.0, 600.0, theme::accent_bright()))
+                    .map(crate::accessibility::clickable)
                     .on_click(cx.listener(|this, _, _, cx| this.set_live(true, cx))),
             )
     }
@@ -1502,6 +1521,7 @@ impl LogsWindow {
                             .tooltip(tip(
                                 "Start the copy with the version, platform and log path",
                             ))
+                            .map(crate::accessibility::clickable)
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_diagnostics(cx))),
                     )
                     .child(
@@ -1516,6 +1536,7 @@ impl LogsWindow {
                             .px(px(6.0))
                             .cursor_pointer()
                             .child(text("\u{00d7}", 15.0, 500.0, theme::text_muted()))
+                            .map(crate::accessibility::clickable)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.selection = None;
                                 cx.notify();
@@ -1630,6 +1651,7 @@ fn tool_button(
             theme::bg_elevated()
         })
         .cursor_pointer()
+        .aria_label(label)
         .child(icon(path, 14.0, foreground))
         .when(!narrow, |button| {
             button.child(text(label, 11.5, 600.0, foreground))
@@ -1667,6 +1689,7 @@ fn gap_row(first: usize, count: usize, cx: &mut Context<'_, LogsWindow>) -> AnyE
         ))
         .child(dashed().flex_1())
         .tooltip(tip("Show these lines"))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, _, cx| this.open_gap(first, cx)))
         .into_any_element()
 }

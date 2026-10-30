@@ -219,13 +219,14 @@ pub struct Stops {
 
 impl Stops {
     fn new(cx: &mut App) -> Self {
-        let stop = |index: isize, cx: &mut App| cx.focus_handle().tab_stop(true).tab_index(index);
+        // In draw order with the menu's rows, as the window's Tab walks it.
+        let stop = |cx: &mut App| cx.focus_handle().tab_stop(true);
         Self {
-            switch: stop(1, cx),
-            to: stop(2, cx),
-            for_row: stop(3, cx),
-            stepper: stop(4, cx),
-            live: stop(5, cx),
+            switch: stop(cx),
+            to: stop(cx),
+            for_row: stop(cx),
+            stepper: stop(cx),
+            live: stop(cx),
         }
     }
 }
@@ -394,6 +395,14 @@ impl Dropdown {
     }
 
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // Esc folds what is open first (the To lanes, a held link's
+        // actions), then closes.
+        if self.unfolded != Unfolded::default() {
+            self.unfolded = Unfolded::default();
+            window.focus(&self.focus, cx);
+            self.fit(window, cx);
+            return;
+        }
         super::dropdown_closed(cx);
         window.remove_window();
     }
@@ -430,11 +439,17 @@ impl Dropdown {
         }
     }
 
-    /// The keys a focused control takes; a key one took goes no further.
-    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// The keys a focused control takes; a key one took goes no further,
+    /// and says so.
+    fn key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
         let keystroke = &event.keystroke;
         if keystroke.modifiers.modified() {
-            return;
+            return false;
         }
         let key = keystroke.key.as_str();
         let press = matches!(key, "enter" | "space");
@@ -457,9 +472,10 @@ impl Dropdown {
             // The live line is gone: keep the keyboard on the switch.
             window.focus(&self.stops.switch, cx);
         } else {
-            return;
+            return false;
         }
         cx.stop_propagation();
+        true
     }
 }
 
@@ -471,6 +487,9 @@ impl Render for Dropdown {
             .id("tray-dropdown")
             .key_context(CONTEXT)
             .track_focus(&self.focus)
+            .role(gpui_kit::Role::Menu)
+            .aria_label("PwrRoute routing")
+            .tab_group()
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
             .on_action(cx.listener(|this, _: &TestLink, window, cx| {
                 this.run(TrayCommand::TestLink, window, cx);
@@ -489,8 +508,19 @@ impl Render for Dropdown {
                 window.focus_prev(cx);
                 cx.notify();
             }))
+            // The focused control's keys first (the stepper takes Up and
+            // Down); what it leaves moves focus through the menu.
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.key(event, window, cx);
+                if this.key(event, window, cx) {
+                    return;
+                }
+                let key = event.keystroke.key.as_str();
+                if !event.keystroke.modifiers.modified()
+                    && matches!(key, "up" | "down" | "home" | "end")
+                {
+                    crate::accessibility::move_focus(&this.focus, key, window, cx);
+                    cx.stop_propagation();
+                }
             }))
             .size_full()
             .flex()
@@ -1132,6 +1162,8 @@ fn mode_switch(
         .id(SWITCH_ID)
         .debug_selector(|| SWITCH_ID.into())
         .track_focus(&stops.switch)
+        .role(gpui_kit::Role::RadioGroup)
+        .aria_label("Incoming links")
         .relative()
         .mt(px(2.0))
         .mb(px(6.0))
@@ -1180,6 +1212,14 @@ fn mode_switch(
                 .when(usable, |button| button.cursor_pointer())
                 .when(usable && !on, |button| {
                     button.hover(|button| button.bg(theme::bg_hover()))
+                })
+                .map(|button| {
+                    let label = if usable {
+                        mode.label().to_owned()
+                    } else {
+                        format!("{}, off while Activity keeps nothing", mode.label())
+                    };
+                    crate::accessibility::selected(button, label, on)
                 })
                 .when(usable, |button| {
                     button.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -1250,6 +1290,9 @@ fn destination_row(
         })
         .bg(theme::bg_row_active())
         .cursor_pointer()
+        .role(gpui_kit::Role::Button)
+        .aria_label("Send to")
+        .aria_expanded(choosing)
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.toggle_destinations(window, cx);
         }))
@@ -1360,6 +1403,8 @@ fn for_row(
         .id(FOR_ROW_ID)
         .debug_selector(|| FOR_ROW_ID.into())
         .track_focus(&stops.for_row)
+        .role(gpui_kit::Role::RadioGroup)
+        .aria_label("For")
         .relative()
         .flex()
         .flex_none()
@@ -1383,6 +1428,7 @@ fn for_row(
                 .when(!on, |option| {
                     option.hover(|option| option.bg(theme::bg_hover()))
                 })
+                .map(|option| crate::accessibility::selected(option, kind.label(), on))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.set_for(kind, window, cx);
                 }))
@@ -1442,6 +1488,8 @@ fn stepper(
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|button| button.bg(theme::bg_hover()))
+                .role(gpui_kit::Role::Button)
+                .aria_label(if delta > 0 { "Increase" } else { "Decrease" })
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.step(delta, window, cx);
                 }))
@@ -1589,6 +1637,13 @@ fn recent_row(
         .rounded(px(6.0))
         .cursor_pointer()
         .hover(|row| row.bg(theme::bg_hover()))
+        .map(crate::accessibility::clickable)
+        .aria_label(format!(
+            "{}, {}, {}",
+            recent.host,
+            recent.detail(),
+            recent.age(now)
+        ))
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.run(TrayCommand::Activity, window, cx);
         }))
@@ -1699,6 +1754,7 @@ fn row_frame(
 ) -> gpui_kit::Stateful<Div> {
     div()
         .id(id)
+        .role(gpui_kit::Role::MenuItem)
         .debug_selector(|| id.into())
         .flex()
         .items_center()
@@ -1718,6 +1774,7 @@ fn row_frame(
                 cx.notify();
             }
         }))
+        .map(|e| crate::widgets::keyboard_control(e, false))
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.run(command, window, cx);
         }))
