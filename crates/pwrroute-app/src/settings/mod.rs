@@ -569,7 +569,8 @@ fn nav_item(
                     .ml_auto()
                     .size(px(6.0))
                     .rounded_full()
-                    .bg(theme::status_error()),
+                    .bg(theme::status_error())
+                    .test_support(),
             )
         })
 }
