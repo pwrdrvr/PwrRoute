@@ -83,16 +83,13 @@ pub fn children(model: &SettingsModel, pane: Pane) -> Vec<Child> {
                     chip: (file.state == ConfigFileState::NotUsed).then_some("NOT USED"),
                 })
                 .collect();
-            let status = configuration.rules_status.as_ref();
             rows.push(Child {
                 key: RULES_KEY.into(),
                 label: "rules.json".into(),
-                dot: if status.starts_with("Not loaded") {
-                    Dot::Warn
-                } else if status.starts_with("No rules.json") {
-                    Dot::Off
-                } else {
-                    Dot::Ok
+                dot: match configuration.rules_loaded {
+                    Some(true) => Dot::Ok,
+                    Some(false) => Dot::Warn,
+                    None => Dot::Off,
                 },
                 chip: None,
             });

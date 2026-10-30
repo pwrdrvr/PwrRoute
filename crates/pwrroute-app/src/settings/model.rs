@@ -211,6 +211,8 @@ pub struct Configuration {
     /// How the file stands: "Loaded · edited 5 min ago", "No rules.json
     /// yet", or why it did not load.
     pub rules_status: SharedString,
+    /// Whether `rules.json` loaded: `None` before it is written.
+    pub rules_loaded: Option<bool>,
     /// Who takes the links nothing claims, while a Finicky config is in
     /// charge (Overview and Setup 5d). `None` while visual rules are:
     /// `rules.json` is then the whole config and its default takes them.

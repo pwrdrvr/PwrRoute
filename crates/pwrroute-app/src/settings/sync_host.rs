@@ -32,6 +32,10 @@ pub struct Facts<'a> {
     pub computer_name: &'a str,
     /// The Finicky config in charge, shown.
     pub config: Option<String>,
+    /// Whether a config is on disk where discovery looks, in charge or not
+    /// (Visual rules only, or one that did not load): then the folder's
+    /// is not offered, since Use it on this Mac never writes over one.
+    pub config_found: bool,
     pub config_on: bool,
     pub choices: &'a [BrowserChoice],
     pub installed: &'a [Installed],
@@ -128,12 +132,20 @@ fn config_gap(status: &TargetStatus, facts: &Facts<'_>) -> Option<FolderConfig> 
     } else {
         rules.saved_by.name.clone()
     };
-    let config = status
-        .folder_files
-        .iter()
-        .find(|(name, _)| name.starts_with("finicky."));
+    // The config the rules ran after, by its extension, else any there.
+    let named = crate::sync::config_name(Path::new(&runs_after));
+    let config = named
+        .as_deref()
+        .and_then(|name| status.folder_files.get_key_value(name))
+        .or_else(|| {
+            status
+                .folder_files
+                .iter()
+                .find(|(name, _)| name.starts_with("finicky."))
+        });
     match config {
-        Some((name, entry)) if facts.config.is_none() => Some(FolderConfig::Offer {
+        Some(_) if facts.config.is_some() || facts.config_found => None,
+        Some((name, entry)) => Some(FolderConfig::Offer {
             root: status.target.root.clone(),
             name: name.clone().into(),
             folder: status.target.label.clone().into(),
@@ -548,6 +560,11 @@ fn current(cx: &mut App) -> Sync {
         machine: &machine,
         computer_name: &crate::sync::computer_name(),
         config,
+        config_found: pwrroute_engine::discovery::config_candidates(
+            &pwrroute_engine::discovery::Environment::current(),
+        )
+        .iter()
+        .any(|path| path.is_file()),
         config_on: settings.syncs_config(),
         choices: &choices,
         installed: &installed,
@@ -589,30 +606,32 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
     }
     let home = std::env::home_dir().context("no home folder")?;
     let path = home.join(format!(".{name}"));
-    {
-        use std::io::Write as _;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .with_context(|| format!("cannot write ~/.{name}"))?;
-        file.write_all(&bytes)
-            .with_context(|| format!("cannot write ~/.{name}"))?;
-    }
+    write_new(&path, &bytes).with_context(|| format!("cannot write ~/.{name}"))?;
     crate::sync::edit_settings(|sync| sync.config = Some(true), cx)?;
-    // Discovery finds it first now; the Rules screen's "Found …" notice
-    // would only ask what the reader just answered.
+    // Discovery finds `~/.finicky.js` or `.ts` first now; another extension
+    // is kept in charge by path. The Rules screen's "Found …" notice would
+    // only ask what the reader just answered.
     let mut source = crate::settings_store::store(cx)
         .map(|store| store.read(cx).settings().source.clone())
         .unwrap_or_default();
     source.visual_only = false;
-    source.config = None;
+    source.config = (!discovery::config_candidates(&env).contains(&path)).then(|| path.clone());
     if !source.dismissed.contains(&path) {
         source.dismissed.push(path);
     }
     crate::importer_view::set_source_and_show(source, cx);
     super::configuration_host::refresh(cx);
     Ok(())
+}
+
+/// Writes `bytes` to `path` whole or not at all, and never over a file
+/// there: a staging file beside it, then a hard link, which fails if
+/// `path` exists, so discovery never reads half a config.
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let staging = path.with_extension(format!("pwrroute-{}.tmp", std::process::id()));
+    let written = std::fs::write(&staging, bytes).and_then(|()| std::fs::hard_link(&staging, path));
+    let _ = std::fs::remove_file(&staging);
+    written
 }
 
 /// Redraws the pane after a pass or a change, when Settings is open.
@@ -934,6 +953,7 @@ mod tests {
             machine,
             computer_name: "Studio Mac",
             config: config.map(str::to_owned),
+            config_found: config.is_some(),
             config_on: false,
             choices: &choices,
             installed: &installed,
@@ -1090,6 +1110,48 @@ mod tests {
             assert_eq!(sync.folder_config, None);
             assert_eq!(sync.folders[0].chip, "In sync");
         });
+    }
+
+    #[test]
+    fn the_offer_is_the_config_the_rules_ran_after_and_never_over_one_here() {
+        // Two machines' configs in the folder: the one the rules ran after.
+        let (icloud, status) = folder_with(Some("~/.finicky.ts"), &["finicky.js", "finicky.ts"]);
+        let machine = MachineFile::default();
+        with_config(
+            &status,
+            std::slice::from_ref(&icloud),
+            &machine,
+            None,
+            |sync| {
+                let Some(FolderConfig::Offer { name, .. }) = sync.folder_config else {
+                    panic!("an offer");
+                };
+                assert_eq!(name, "finicky.ts");
+            },
+        );
+        // A config on disk that is not in charge (Visual rules only, or one
+        // that did not load) is never written over, so nothing is offered.
+        let rules = rules();
+        let installed = installed();
+        let when = |ms: u64| format!("t{ms}");
+        let sync = build(&Facts {
+            status: &status,
+            targets: std::slice::from_ref(&icloud),
+            places: &[],
+            rules: &rules,
+            machine: &machine,
+            computer_name: "MacBook Air",
+            config: None,
+            config_found: true,
+            config_on: true,
+            choices: &[],
+            installed: &installed,
+            home: Some(Path::new("/Users/jo")),
+            here: "this Mac",
+            when: &when,
+        });
+        assert_eq!(sync.folder_config, None);
+        assert_eq!(sync.folders[0].chip, "In sync");
     }
 
     #[test]

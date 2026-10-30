@@ -530,19 +530,17 @@ pub fn add_target(target: Target, cx: &mut App) -> Result<()> {
     )
 }
 
-/// The files that sync: `rules.json`, which records the config it ran
-/// after here, and the Finicky config in charge unless "Also sync" is off.
+/// The files that sync: the Finicky config in charge unless "Also sync"
+/// is off, then `rules.json`, which records the config it ran after here.
+/// The config goes first, so a folder never lists rules that ran after a
+/// config it does not have yet (another machine would warn of it).
 fn items(rules: &Path, settings: &SyncSettings) -> Vec<Item> {
     let config = crate::router::config_in_charge();
     let home = std::env::home_dir();
-    let mut items = vec![Item {
-        name: "rules.json".into(),
-        local: rules.to_path_buf(),
-        check: Arc::new(check_rules),
-        runs_after: config
-            .as_deref()
-            .map(|config| crate::config_view::display_path(config, home.as_deref())),
-    }];
+    let runs_after = config
+        .as_deref()
+        .map(|config| crate::config_view::display_path(config, home.as_deref()));
+    let mut items = Vec::new();
     if settings.syncs_config()
         && let Some(config) = config
         && let Some(name) = config_name(&config)
@@ -554,6 +552,12 @@ fn items(rules: &Path, settings: &SyncSettings) -> Vec<Item> {
             runs_after: None,
         });
     }
+    items.push(Item {
+        name: "rules.json".into(),
+        local: rules.to_path_buf(),
+        check: Arc::new(check_rules),
+        runs_after,
+    });
     items
 }
 

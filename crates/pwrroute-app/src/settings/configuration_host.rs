@@ -248,6 +248,7 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             |path| display_path(path, home).into(),
         ),
         rules_status: rules_status.into(),
+        rules_loaded: facts.rules.as_ref().map(Result::is_ok),
         everything_else: facts
             .source
             .config

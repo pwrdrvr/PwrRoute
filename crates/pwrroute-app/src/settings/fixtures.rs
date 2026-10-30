@@ -561,6 +561,7 @@ pub fn configuration() -> Configuration {
         ],
         rules_path: "~/Library/Application Support/PwrRoute/rules.json".into(),
         rules_status: "Loaded \u{00b7} edited 12 min ago.".into(),
+        rules_loaded: Some(true),
         everything_else: None,
     }
 }
