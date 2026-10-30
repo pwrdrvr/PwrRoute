@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+  <meta name="design_doc_mode" content="canvas" />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./pwrroute.css" />
+  <style>
+    .snav { flex: 0 0 232px; gap: 2px; }
+    .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+    .spane > .card { flex: 0 0 auto; max-width: 760px; width: 100%; }
+    .spane > .pane-head { max-width: 760px; }
+    .stage { padding: 20px; background: var(--bg-app); display: flex; flex-direction: column; gap: 12px; width: 800px; }
+    .ngrp { margin: 12px 10px 4px; font: 700 9.5px/1 var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+    .nrow { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 10px 8px 0; border-radius: var(--radius-md); font: 500 13px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+    .nrow.on { background: var(--bg-row-active); color: var(--accent-bright); }
+    .nrow.on::before { content: ""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 3px; border-radius: 0 2px 2px 0; background: var(--accent); }
+    .nrow .nlab { flex: 1; min-width: 0; }
+    .nrow .cnt { margin-left: auto; font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+    .nrow .wdot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+    .ncar { flex: 0 0 18px; display: inline-flex; justify-content: center; }
+    .ncar i { width: 0; height: 0; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 5px solid var(--text-muted); }
+    .ncar i.open { transform: rotate(90deg); }
+    .nsubs { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; }
+    .nsub { display: flex; align-items: center; gap: 8px; margin-left: 26px; padding: 6px 8px 6px 10px; border-left: 1px solid var(--border-subtle); border-radius: 0 6px 6px 0; font: 500 12px/1.2 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+    .nsub .sl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .nsub .sd { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--status-suspended); }
+    .nsub .sd.ok { background: var(--status-ok); } .nsub .sd.off { background: var(--border-default); }
+    .nchip { flex: 0 0 auto; padding: 2px 5px; border: 1px solid var(--border-subtle); border-radius: 999px; font: 500 9px/1 var(--font-mono); color: var(--text-subtle); }
+    .prop { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-text); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase; vertical-align: 1px; }
+    .field-sub code, .field-help code, .own code, .dbar code, .ol code, .fx code, .help code { font: 500 10.5px/1 var(--font-mono); color: var(--accent-bright); }
+    .hosts { display: flex; flex-wrap: wrap; gap: 5px; }
+    .tag .x { color: var(--text-subtle); margin-left: 2px; }
+    .tag.bad { color: var(--danger-text); background: var(--danger-soft); border-color: var(--danger-base); }
+    .addp { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border: 1px dashed var(--border-default); border-radius: 6px; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); }
+    .own { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 9px 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); font: 400 11.5px/1.5 var(--font-sans); color: var(--text-secondary); }
+    .own b { color: var(--text-primary); font-weight: 600; }
+    .own .k { flex: none; font: 600 9.5px/1.9 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); width: 92px; }
+    .own .v { flex: 1; min-width: 0; }
+    .own.fin { background: var(--info-soft); border-color: transparent; }
+    .own.fin .k { color: var(--info-text); }
+    .seg.dis span { color: var(--text-subtle); }
+    .seg.dis span.on { background: var(--bg-panel-elevated); color: var(--text-muted); }
+    .legend { display: flex; gap: 14px; font: 400 10.5px/1.4 var(--font-sans); color: var(--text-subtle); }
+    .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+    .addrow { display: flex; gap: 8px; align-items: center; width: 100%; }
+    .addrow .inp { flex: 1; }
+    .inp.err { border-color: var(--danger-base); }
+    .emsg { font: 500 10.5px/1.45 var(--font-sans); color: var(--danger-text); }
+    .ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; counter-reset: s; width: 100%; }
+    .ol li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; font: 400 11.5px/1.55 var(--font-sans); color: var(--text-secondary); text-wrap: pretty; }
+    .ol li::before { counter-increment: s; content: counter(s); width: 18px; height: 18px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font: 700 9.5px/1 var(--font-mono); background: var(--bg-panel-elevated); color: var(--text-muted); border: 1px solid var(--border-subtle); }
+    .ol li b { color: var(--text-primary); font-weight: 600; }
+    .dbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border-faint); background: var(--bg-row-active); font: 400 11.5px/1.5 var(--font-sans); color: var(--text-secondary); }
+    .dbar > span:first-child { flex: 1; min-width: 0; }
+    .dbar b { color: var(--text-primary); font-weight: 600; }
+    .dbar.bad { background: var(--danger-soft); }
+    .dbar.bad b { color: var(--danger-text); }
+    .btn.off { color: var(--text-subtle); background: var(--bg-panel); border-color: var(--border-subtle); }
+    .clip { white-space: pre-wrap; font: 500 10.5px/1.6 var(--font-mono); color: var(--text-secondary); background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px; width: 100%; overflow-wrap: anywhere; }
+    .clip .a { color: var(--accent-bright); }
+    .clip .m { color: var(--text-subtle); }
+    .lbl { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+    .url { font: 500 11.5px/1.5 var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+    .url .chg { color: var(--accent-bright); background: var(--accent-soft); border-radius: 3px; padding: 0 2px; }
+    .testrow { display: flex; gap: 8px; align-items: center; max-width: 760px; width: 100%; }
+    .testrow .inp { flex: 1; }
+    .trace { display: flex; flex-direction: column; }
+    .ts { position: relative; display: grid; grid-template-columns: 22px 150px minmax(0, 1fr); gap: 0 12px; padding: 10px 14px; border-bottom: 1px solid var(--border-faint); }
+    .ts:last-child { border-bottom: none; }
+    .ts::before { content: ""; position: absolute; left: 24px; top: 0; bottom: 0; width: 1px; background: var(--border-subtle); }
+    .ts:first-child::before { top: 20px; }
+    .ts:last-child::before { bottom: calc(100% - 20px); }
+    .ts .n { position: relative; z-index: 1; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 9.5px/1 var(--font-mono); background: var(--bg-panel-elevated); border: 1px solid var(--border-default); color: var(--text-muted); }
+    .ts.hit .n { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-bright); }
+    .ts.end .n { background: var(--success-soft); border-color: transparent; color: var(--success-text); }
+    .ts .k { font: 600 11.5px/1.4 var(--font-sans); color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }
+    .ts .k small { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); }
+    .ts .v { min-width: 0; display: flex; flex-direction: column; gap: 5px; font: 400 11.5px/1.5 var(--font-sans); color: var(--text-muted); }
+    .ts .v .mm, .res .mm { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .ts.miss .k { color: var(--text-muted); }
+    .res { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
+    .res .big { width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-panel-elevated); display: flex; align-items: center; justify-content: center; font: 700 13px/1 var(--font-mono); color: var(--text-secondary); flex: 0 0 auto; }
+    .res .rt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+    .res .rt b { font: 600 15px/1.2 var(--font-sans); color: var(--text-primary); }
+    .ar { display: grid; grid-template-columns: 54px minmax(0, 1fr) 84px 118px 160px 52px; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+    .ar:last-child { border-bottom: none; }
+    .ar.head { padding: 7px 14px; background: var(--bg-panel-elevated); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+    .ar .t { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+    .ar .u { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .ar .ms { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+    .ar .d { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+    .ar .d .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+    .ar.x { background: var(--bg-row-active); border-bottom-color: transparent; }
+    .ax { padding: 4px 14px 12px 80px; border-bottom: 1px solid var(--border-faint); background: var(--bg-row-active); display: flex; flex-direction: column; gap: 6px; }
+    .ax .l { display: flex; align-items: center; gap: 8px; font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+    .ax .l .n { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 600 8.5px/1 var(--font-mono); background: var(--accent-soft); color: var(--accent-bright); flex: 0 0 auto; }
+    .ax .l .n.miss { background: var(--bg-panel-elevated); color: var(--text-subtle); }
+    .ax .l .n.ok { background: var(--success-soft); color: var(--success-text); }
+    .ax .l .url { font-size: 11px; }
+    .fx { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 980px; }
+    .fx > div { display: flex; flex-direction: column; gap: 8px; }
+    .fx p { margin: 0; font: 400 11px/1.55 var(--font-sans); color: var(--text-muted); text-wrap: pretty; }
+  </style>
+</helmet>
+
+<section class="dv-turn" id="t1">
+  <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Settings &rsaquo; Short Links</span><span class="prop">Proposal &middot; for follow-up implementation</span></div>
+  <p class="dv-sub">Someone on <code>rules.json</code> alone has no way to add a go-link host or turn expansion off; today only a Finicky config can. This proposes a three-way choice in the dedicated <b>Short Links</b> section (Settings Sections 1c): <b>Use built-in list</b>, <b>Custom list</b>, <b>Off</b>, saved as <code>options.urlShorteners</code> in rules.json. The first row always names the <b>owner</b> of the list in effect, and the pane explains what expansion does before listing any host. Switching to Off or Built-in keeps the custom draft for as long as the pane stays open.</p>
+  <div class="dv-opts">
+
+    <div class="dv-opt" id="1a" data-screen-label="1a Built-in hosts in use">
+      <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>rules.json alone, no <code>urlShorteners</code> key. The owner row says the list is inherited; the 18 built-in hosts are plain tags. How it follows a link comes first.</span></div>
+      <div class="dv-card win" style="width: 1060px;">
+        <div class="strip">
+          <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+          <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"></path><circle cx="724" cy="724" r="84"></circle></g><path d="M384 512C512 512 512 300 640 300"></path><circle cx="300" cy="512" r="84"></circle><circle cx="724" cy="300" r="84"></circle></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+          <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+        </div>
+        <div class="body">
+          <nav class="rail snav"><div class="nrow"><span class="ncar"></span><span class="nlab">About</span></div><div class="ngrp">Routing</div><div class="nrow"><span class="ncar"></span><span class="nlab">Browsers</span></div><div class="nrow"><span class="ncar"><i class="open"></i></span><span class="nlab">Config Files</span></div><div class="nsubs"><div class="nsub"><i class="sd ok"></i><span class="sl">rules.json</span></div></div><div class="nrow on"><span class="ncar"></span><span class="nlab">Short Links</span></div><div class="ngrp">Across machines</div><div class="nrow"><span class="ncar"></span><span class="nlab">Cloud Sync</span></div><div class="ngrp">Data and agents</div><div class="nrow"><span class="ncar"></span><span class="nlab">Privacy</span></div><div class="nrow"><span class="ncar"></span><span class="nlab">Local agents</span><span class="cnt">2</span></div><div class="ngrp">App</div><div class="nrow"><span class="ncar"></span><span class="nlab">Updates</span></div><div class="nrow"><span class="ncar"></span><span class="nlab">Diagnostics</span></div></nav>
+          <div class="spane">
+            <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Short Links</h1><p class="help">Links from a shortener are followed to where they land, so your rules match the real site and Activity shows both.</p></div></div>
+            <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">How it follows a link</p><h2 class="card-title">Before matching</h2></div></div>
+              <div class="field"><div class="field-l"><span>Each short link</span><span class="field-sub">Only links whose host, or a subdomain of it, is on the list.</span></div><div class="field-c">
+                <ol class="ol">
+                  <li><span>PwrRoute <b>contacts the shortener</b>. Every other link is matched without a request.</span></li>
+                  <li><span>It asks with <b>HEAD</b>, then <b>GET</b> if HEAD does not land.</span></li>
+                  <li><span>Each attempt follows <b>up to 3 redirects</b> and waits <b>750 ms</b> at most.</span></li>
+                  <li><span>If it fails, the <b>original link</b> is routed, or the <b>last redirect target</b> seen.</span></li>
+                  <li><span>Activity and Test a link show the clicked link and where it went. Expansion itself <b>logs and stores no URL</b>; the optional Activity journal in Privacy is separate.</span></li>
+                </ol>
+              </div></div>
+            </section>
+            <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Expanded before matching</p><h2 class="card-title">Shortener hosts</h2></div><span class="chip ok">Built-in &middot; 18 hosts</span></div>
+              <div class="field"><div class="field-l"><span>In effect</span><span class="field-sub">Who decides which hosts are expanded.</span></div><div class="field-c">
+                <div class="own"><span class="k">Owner</span><span class="v"><b>rules.json</b> &middot; no <code>urlShorteners</code> set, so it inherits the built-in list.</span></div>
+                <div class="seg"><span class="on">Use built-in list</span><span>Custom list</span><span>Off</span></div>
+              </div></div>
+              <div class="field"><div class="field-l"><span>Built-in hosts</span><span class="field-sub">Finicky&rsquo;s list. Updated with PwrRoute.</span></div><div class="field-c">
+                <div class="hosts"><span class="tag">aka.ms</span><span class="tag">bit.ly</span><span class="tag">buff.ly</span><span class="tag">d.to</span><span class="tag">dub.sh</span><span class="tag">goo.gl</span><span class="tag">is.gd</span><span class="tag">msteams.link</span><span class="tag">ow.ly</span><span class="tag">safelinks.protection.outlook.com</span><span class="tag">shorturl.at</span><span class="tag">spoti.fi</span><span class="tag">t.co</span><span class="tag">tiny.cc</span><span class="tag">tinyurl.com</span><span class="tag">urlshortener.teams.microsoft.com</span><span class="tag">wu8.in</span><span class="tag">linkprotect.cudasvc.com</span></div>
+                <span class="field-help">To add a host such as a go-link server, choose Custom list. It starts as a copy of these 18.</span>
+              </div></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1b" data-screen-label="1b Custom list with go.example.com">
+      <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Custom list, just after adding <code>go.example.com</code>. It starts as a copy of the 18 built-in hosts, all shown and removable, because a list <b>replaces</b> the built-ins rather than adding to them. The draft bar says exactly what Save writes.</span></div>
+      <div class="dv-card win" style="width: 1060px;">
+        <div class="strip">
+          <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+          <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"></path><circle cx="724" cy="724" r="84"></circle></g><path d="M384 512C512 512 512 300 640 300"></path><circle cx="300" cy="512" r="84"></circle><circle cx="724" cy="300" r="84"></circle></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+          <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+        </div>
+        <div class="body">
+          <nav class="rail snav"><div class="nrow"><span class="ncar"></span><span class="nlab">About</span></div><div class="ngrp">Routing</div><div class="nrow"><span class="ncar"></span><span class="nlab">Browsers</span></div><div class="nrow"><span class="ncar"><i class="open"></i></span><span class="nlab">Config Files</span></div><div class="nsubs"><div class="nsub"><i class="sd ok"></i><span class="sl">rules.json</span></div></div><div class="nrow on"><span class="ncar"></span><span class="nlab">Short Links</span><span class="wdot"></span></div><div class="ngrp">Across machines</div><div class="nrow"><span class="ncar"></span><span class="nlab">Cloud Sync</span></div><div class="ngrp">Data and agents</div><div class="nrow"><span class="ncar"></span><span class="nlab">Privacy</span></div><div class="nrow"><span class="ncar"></span><span class="nlab">Local agents</span><span class="cnt">2</span></div><div class="ngrp">App</div><div class="nrow"><span class="ncar"></span><span class="nlab">Updates</span></div><div class="nrow"><span class="ncar"></span><span class="nlab">Diagnostics</span></div></nav>
+          <div class="spane">
+            <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Short Links</h1><p class="help">Links from a shortener are followed to where they land, so your rules match the real site and Activity shows both.</p></div></div>
+            <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Expanded before matching</p><h2 class="card-title">Shortener hosts</h2></div><span class="chip acc">Custom &middot; 19 hosts &middot; unsaved</span></div>
+              <div class="field"><div class="field-l"><span>In effect</span><span class="field-sub">Who decides which hosts are expanded.</span></div><div class="field-c">
+                <div class="own"><span class="k">Owner</span><span class="v"><b>rules.json</b> &middot; built-in list until you save. Then this list replaces it.</span></div>
+                <div class="seg"><span>Use built-in list</span><span class="on">Custom list</span><span>Off</span></div>
+              </div></div>
+              <div class="field"><div class="field-l"><span>Hosts</span><span class="field-sub">The whole list. A host also covers its subdomains.</span></div><div class="field-c">
+                <div class="addrow"><div class="inp mono focus"><span class="ph">Add a host, like go.example.com</span></div><span class="btn sm">Add</span></div>
+                <div class="hosts"><span class="tag fn">go.example.com<span class="x">&times;</span></span><span class="tag">aka.ms<span class="x">&times;</span></span><span class="tag">bit.ly<span class="x">&times;</span></span><span class="tag">buff.ly<span class="x">&times;</span></span><span class="tag">d.to<span class="x">&times;</span></span><span class="tag">dub.sh<span class="x">&times;</span></span><span class="tag">goo.gl<span class="x">&times;</span></span><span class="tag">is.gd<span class="x">&times;</span></span><span class="tag">msteams.link<span class="x">&times;</span></span><span class="tag">ow.ly<span class="x">&times;</span></span><span class="tag">safelinks.protection.outlook.com<span class="x">&times;</span></span><span class="tag">shorturl.at<span class="x">&times;</span></span><span class="tag">spoti.fi<span class="x">&times;</span></span><span class="tag">t.co<span class="x">&times;</span></span><span class="tag">tiny.cc<span class="x">&times;</span></span><span class="tag">tinyurl.com<span class="x">&times;</span></span><span class="tag">urlshortener.teams.microsoft.com<span class="x">&times;</span></span><span class="tag">wu8.in<span class="x">&times;</span></span><span class="tag">linkprotect.cudasvc.com<span class="x">&times;</span></span></div>
+                <div class="legend"><span><i style="background: var(--accent-soft); border: 1px solid var(--accent-border);"></i>1 added</span><span><i style="background: var(--bg-panel-elevated); border: 1px solid var(--border-subtle);"></i>18 carried over from the built-in list</span></div>
+                <div class="row-actions"><span class="btn sm quiet">Reset to built-in hosts</span><span class="field-help">Built-in hosts PwrRoute adds later will not join a custom list on their own.</span></div>
+              </div></div>
+              <div class="field"><div class="field-l"><span>Saved as</span><span class="field-sub">The value Save writes to rules.json.</span></div><div class="field-c">
+                <div class="clip"><span class="m">"options": {</span>
+  <span class="a">"urlShorteners"</span>: [<span class="a">"go.example.com"</span>, "aka.ms", "bit.ly", "buff.ly", "d.to", "dub.sh", "goo.gl", "is.gd", "msteams.link", "ow.ly", "safelinks.protection.outlook.com", "shorturl.at", "spoti.fi", "t.co", "tiny.cc", "tinyurl.com", "urlshortener.teams.microsoft.com", "wu8.in", "linkprotect.cudasvc.com"]
+<span class="m">}</span></div>
+              </div></div>
+              <div class="dbar"><span><b>Unsaved.</b> Writes <code>options.urlShorteners</code>, 19 hosts, to rules.json.</span><span class="btn sm quiet">Discard</span><span class="btn sm primary">Save</span></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1c" data-screen-label="1c Expansion off">
+      <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Off, saved: rules.json holds <code>[]</code>. The custom list from 1b is held in memory while this pane is open, so Custom list brings it back as it was. Closing Settings drops it.</span></div>
+      <div class="stage">
+        <section class="card">
+          <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Expanded before matching</p><h2 class="card-title">Shortener hosts</h2></div><span class="chip">Off</span></div>
+          <div class="field"><div class="field-l"><span>In effect</span><span class="field-sub">Who decides which hosts are expanded.</span></div><div class="field-c">
+            <div class="own"><span class="k">Owner</span><span class="v"><b>rules.json</b> &middot; <code>urlShorteners: []</code>, so no link is expanded.</span></div>
+            <div class="seg"><span>Use built-in list</span><span>Custom list</span><span class="on">Off</span></div>
+          </div></div>
+          <div class="field"><div class="field-l"><span>Short links</span></div><div class="field-c">
+            <span class="field-help" style="color: var(--text-secondary);">Routed as they are. Rules see bit.ly or go.example.com, not where they lead, and PwrRoute contacts no shortener.</span>
+          </div></div>
+          <div class="field"><div class="field-l"><span>Custom list</span><span class="field-sub">Kept while this pane is open. Not saved.</span></div><div class="field-c">
+            <div class="hosts"><span class="tag fn">go.example.com</span><span class="tag">aka.ms</span><span class="tag">bit.ly</span><span class="tag">buff.ly</span><span class="tag">t.co</span><span class="addp">+14 more</span></div>
+            <div class="row-actions"><span class="btn sm">Use this list</span><span class="btn sm quiet danger">Discard draft</span><span class="field-help">Switches to Custom list with these 19 hosts; it still needs Save.</span></div>
+          </div></div>
+        </section>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1d" data-screen-label="1d Finicky config owns the list">
+      <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span><code>~/.finicky.js</code> sets <code>options.urlShorteners</code> explicitly, so it owns the list whatever the handler order. The choice is shown but locked, and the pane points to the file instead of pretending to change it. The rules.json setting is kept and marked not in effect. Below: the config sets <code>[]</code>.</span></div>
+      <div class="dv-card win" style="width: 1060px;">
+        <div class="strip">
+          <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+          <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"></path><circle cx="724" cy="724" r="84"></circle></g><path d="M384 512C512 512 512 300 640 300"></path><circle cx="300" cy="512" r="84"></circle><circle cx="724" cy="300" r="84"></circle></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+          <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+        </div>
+        <div class="body">
+          <nav class="rail snav"><div class="nrow"><span class="ncar"></span><span class="nlab">About</span></div><div class="ngrp">Routing</div><div class="nrow"><span class="ncar"></span><span class="nlab">Browsers</span></div><div class="nrow"><span class="ncar"><i class="open"></i></span><span class="nlab">Config Files</span></div><div class="nsubs"><div class="nsub"><i class="sd ok"></i><span class="sl">~/.finicky.js</span></div><div class="nsub"><i class="sd ok"></i><span class="sl">rules.json</span></div></div><div class="nrow on"><span class="ncar"></span><span class="nlab">Short Links</span></div><div class="ngrp">Across machines</div><div class="nrow"><span class="ncar"></span><span class="nlab">Cloud Sync</span></div><div class="ngrp">Data and agents</div><div class="nrow"><span class="ncar"></span><span class="nlab">Privacy</span></div><div class="nrow"><span class="ncar"></span><span class="nlab">Local agents</span><span class="cnt">2</span></div><div class="ngrp">App</div><div class="nrow"><span class="ncar"></span><span class="nlab">Updates</span></div><div class="nrow"><span class="ncar"></span><span class="nlab">Diagnostics</span></div></nav>
+          <div class="spane">
+            <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Short Links</h1><p class="help">Links from a shortener are followed to where they land, so your rules match the real site and Activity shows both.</p></div></div>
+            <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Expanded before matching</p><h2 class="card-title">Shortener hosts</h2></div><span class="chip acc">From ~/.finicky.js &middot; 4 hosts</span></div>
+              <div class="field"><div class="field-l"><span>In effect</span><span class="field-sub">Who decides which hosts are expanded.</span></div><div class="field-c">
+                <div class="own fin"><span class="k">Owner</span><span class="v"><b>~/.finicky.js</b> sets <code>options.urlShorteners</code>. A config that sets it always wins over rules.json, whichever file handles links first.</span></div>
+                <div class="seg dis"><span>Use built-in list</span><span class="on">Custom list</span><span>Off</span></div>
+                <div class="row-actions"><span class="btn sm">Open ~/.finicky.js</span><span class="btn sm quiet">Reveal in Finder</span><span class="field-help">PwrRoute reads the config; it never writes to it.</span></div>
+              </div></div>
+              <div class="field"><div class="field-l"><span>Hosts</span><span class="field-sub">Read from the config at 09:12.</span></div><div class="field-c">
+                <div class="hosts"><span class="tag">go.example.com</span><span class="tag">links.example.org</span><span class="tag">bit.ly</span><span class="tag">t.co</span></div>
+              </div></div>
+              <div class="field"><div class="field-l"><span>rules.json setting</span><span class="field-sub">Not in effect while the config sets the list.</span></div><div class="field-c">
+                <span class="field-help" style="color: var(--text-secondary);">Custom list, 19 hosts. Kept as is, and used again if ~/.finicky.js stops setting <code>urlShorteners</code> or stops being the source.</span>
+              </div></div>
+            </section>
+            <section class="card">
+              <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Expanded before matching</p><h2 class="card-title">Shortener hosts</h2></div><span class="chip">Off &middot; from ~/.finicky.js</span></div>
+              <div class="field"><div class="field-l"><span>In effect</span></div><div class="field-c">
+                <div class="own fin"><span class="k">Owner</span><span class="v"><b>~/.finicky.js</b> sets <code>urlShorteners: []</code>, so expansion is off. rules.json&rsquo;s setting does not apply.</span></div>
+                <div class="row-actions"><span class="btn sm">Open ~/.finicky.js</span></div>
+              </div></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1e" data-screen-label="1e Validation and save errors">
+      <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span><b>Top:</b> validation while editing. A pasted URL is refused with its host offered as the fix; a duplicate and a host with a space are marked in place, and Save stays off. <b>Bottom:</b> Save hit a conflict because rules.json changed on disk. The draft is kept and nothing was written; the existing conflict workflow takes over from Reload and keep draft.</span></div>
+      <div class="stage">
+        <section class="card">
+          <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Expanded before matching</p><h2 class="card-title">Shortener hosts</h2></div><span class="chip bad">2 problems</span></div>
+          <div class="field"><div class="field-l"><span>Hosts</span><span class="field-sub">The whole list. A host also covers its subdomains.</span></div><div class="field-c">
+            <div class="addrow"><div class="inp mono err focus">https://go.example.com/launch</div><span class="btn sm off">Add</span></div>
+            <span class="emsg">Enter a host, not a link. Add <span class="tag fn" style="height: 18px;">go.example.com</span> instead?</span>
+            <div class="hosts"><span class="tag bad">go example.com<span class="x">&times;</span></span><span class="tag bad">bit.ly<span class="x">&times;</span></span><span class="tag">aka.ms<span class="x">&times;</span></span><span class="tag">bit.ly<span class="x">&times;</span></span><span class="tag">buff.ly<span class="x">&times;</span></span><span class="tag">t.co<span class="x">&times;</span></span><span class="addp">+14 more</span></div>
+            <span class="emsg">&ldquo;go example.com&rdquo; has a space. &ldquo;bit.ly&rdquo; is already in the list.</span>
+          </div></div>
+          <div class="dbar"><span><b>Fix 2 hosts to save.</b> The saved list stays in effect.</span><span class="btn sm quiet">Discard</span><span class="btn sm off">Save</span></div>
+        </section>
+        <section class="card">
+          <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Expanded before matching</p><h2 class="card-title">Shortener hosts</h2></div><span class="chip acc">Custom &middot; 19 hosts &middot; unsaved</span></div>
+          <div class="field"><div class="field-l"><span>Hosts</span></div><div class="field-c">
+            <div class="hosts"><span class="tag fn">go.example.com</span><span class="tag">aka.ms</span><span class="tag">bit.ly</span><span class="tag">buff.ly</span><span class="tag">t.co</span><span class="addp">+14 more</span></div>
+          </div></div>
+          <div class="dbar bad"><span><b>Not saved.</b> rules.json changed on disk at 09:44, after this pane loaded. Your draft is kept; nothing was written.</span><span class="btn sm">Reload and keep draft</span></div>
+        </section>
+      </div>
+    </div>
+
+  </div>
+  <p class="dv-note"><b>Proposal.</b> Nothing in this turn exists yet; it is the design for a follow-up change. <b>Owner row.</b> Always the first row of Shortener hosts, one sentence: the file, then why it decides. rules.json in the field tone; a Finicky config in the info tone, because it is set elsewhere. <b>Choice.</b> The segmented control is the three schema states. Selecting one edits a draft; only Save writes, and the chip says <b>unsaved</b> until then. <b>Draft.</b> The last custom list is held in memory while the Short Links pane is open, so Built-in and Off do not cost the hand-built list; it is not persisted to disk. <b>Locked.</b> When a config owns the list, the control is drawn in the muted ramp with its value, not hidden, and the actions open the file. <b>Conflict.</b> Save uses the existing rules.json conflict workflow; this pane only adds Reload and keep draft.</p>
+</section>
+
+<section class="dv-turn" id="t2">
+  <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Test a link and Activity &rsaquo; as they are today</span></div>
+  <p class="dv-sub">No new layout here. Test a link keeps its numbered trace: <b>Received</b> with the clicked URL, an <b>Expanded short link</b> step with the destination, then the usual rewrite and rule steps. Activity keeps its row with the clicked link and the expanded row&rsquo;s step list, which already includes the expansion step.</p>
+  <div class="dv-opts">
+
+    <div class="dv-opt" id="2a" data-screen-label="2a Test a link trace">
+      <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Test a link for <code>https://go.example.com/launch</code>. Step 1 expands it to <code>https://example.com/landing</code>; the rewrites do not match; handler 3 takes the destination.</span></div>
+      <div class="dv-card win" style="width: 1060px;">
+        <div class="strip">
+          <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+          <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"></path><circle cx="724" cy="724" r="84"></circle></g><path d="M384 512C512 512 512 300 640 300"></path><circle cx="300" cy="512" r="84"></circle><circle cx="724" cy="300" r="84"></circle></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+          <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Test a link</span>
+        </div>
+        <div class="body">
+          <nav class="rail">
+            <div class="rail-item">Overview</div>
+            <div class="rail-item">Rules<span class="cnt">12</span></div>
+            <div class="rail-item on">Test a link</div>
+            <div class="rail-item">Activity<span class="cnt">49</span></div>
+            <div class="rail-label">Settings</div>
+            <div class="rail-item">Open Settings&hellip;<span class="cnt">&#8984;,</span></div>
+            <div class="rail-foot"><span class="st"><i></i>routing</span><span>reloaded 09:41</span></div>
+          </nav>
+          <div class="spane">
+            <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Dry run</div><h1 class="ttl">Test a link</h1></div></div>
+            <div class="testrow"><div class="inp mono focus">https://go.example.com/launch</div><div class="inp" style="flex: 0 0 170px;"><span class="note">from</span><span class="bi">Ma</span>Mail<span class="caret">&#9662;</span></div><span class="btn primary">Test</span></div>
+            <section class="card">
+              <div class="trace">
+                <div class="ts"><span class="n">0</span><div class="k">Received<small>from Mail &middot; com.apple.mail</small></div><div class="v"><span class="url">https://go.example.com/launch</span></div></div>
+                <div class="ts hit"><span class="n">1</span><div class="k">Expanded short link<small>go.example.com</small></div><div class="v"><span class="url"><span class="chg">https://example.com/landing</span></span></div></div>
+                <div class="ts miss"><span class="n">2</span><div class="k">Rewrites<small>2 in rules.json</small></div><div class="v">No match.</div></div>
+                <div class="ts hit"><span class="n">3</span><div class="k">Handler 3<small>example.com/* &middot; first match</small></div><div class="v"><div class="mm"><span class="tag">example.com/*</span><span class="note">matched the destination</span></div></div></div>
+                <div class="ts end"><span class="n">&#10003;</span><div class="k">Opens in</div><div class="v"><div class="mm"><span class="tag app"><span class="bi">Ff</span>Firefox</span><span class="tag">profile Work</span></div></div></div>
+              </div>
+            </section>
+            <section class="card">
+              <div class="res"><span class="big">Ff</span><div class="rt"><b>Firefox &middot; Work</b><div class="mm"><span class="url" style="color: var(--text-secondary);">https://example.com/landing</span></div></div><div class="row-actions"><span class="btn">Copy trace</span><span class="btn primary">Open now</span></div></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="2b" data-screen-label="2b Activity row">
+      <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>Activity, the same link. The row shows the clicked link; expanded, its steps start with the expansion step and its destination.</span></div>
+      <div class="stage" style="width: 1000px;">
+        <section class="card">
+          <div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span></div>
+          <div class="ar x"><span class="t">09:42:10</span><span class="u">https://go.example.com/launch</span><span>Mail</span><span><span class="tag">handler 3</span></span><div class="d"><span class="bi">Ff</span>Firefox<span class="pf">Work</span></div><span class="ms">66 ms</span></div>
+          <div class="ax">
+            <span class="l"><span class="n">1</span>expanded short link &rarr; <span class="url">https://example.com/landing</span></span>
+            <span class="l"><span class="n miss">2</span>rewrites &middot; no match</span>
+            <span class="l"><span class="n">3</span>handler 3 &middot; example.com/*</span>
+            <span class="l"><span class="n ok">&#10003;</span>opened in Firefox &middot; Work</span>
+          </div>
+          <div class="ar"><span class="t">09:33:40</span><span class="u">https://docs.example.org/guide</span><span>Calendar</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ff</span>Firefox<span class="pf">Work</span></div><span class="ms">4 ms</span></div>
+        </section>
+        <span class="note">Expanding a short link logs and stores no URL. These rows stay in memory and are forgotten when the router quits, unless the Activity journal is turned on in Settings &rsaquo; Privacy.</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section class="dv-turn" id="t3">
+  <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Schema &rsaquo; rules.json options.urlShorteners</span><span class="prop">Proposal &middot; for follow-up implementation</span></div>
+  <p class="dv-sub">One optional key, three meanings, no merge. A list <b>replaces</b> the built-ins and never appends, which is why Custom list copies them in visibly (1b) rather than adding to them in secret.</p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="3a" data-screen-label="3a Schema states">
+      <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>The three states, what Settings shows for each, and what rules.json holds.</span></div>
+      <div class="fx">
+        <div><span class="lbl">Absent &middot; Use built-in list</span><div class="clip"><span class="m">"options": {</span>
+  <span class="m">// no urlShorteners</span>
+<span class="m">}</span></div><p>Inherits PwrRoute&rsquo;s built-in hosts, including ones a later version adds.</p></div>
+        <div><span class="lbl">[] &middot; Off</span><div class="clip"><span class="m">"options": {</span>
+  <span class="a">"urlShorteners"</span>: []
+<span class="m">}</span></div><p>No link is expanded and no shortener is contacted.</p></div>
+        <div><span class="lbl">List &middot; Custom list</span><div class="clip"><span class="m">"options": {</span>
+  <span class="a">"urlShorteners"</span>: [<span class="a">"go.example.com"</span>, "aka.ms", "bit.ly", <span class="m">&hellip;</span>]
+<span class="m">}</span></div><p>Exactly these hosts. Built-in hosts are expanded only if they are in the list.</p></div>
+      </div>
+    </div>
+    <div class="dv-opt" id="3b" data-screen-label="3b Precedence">
+      <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a><span>Who owns the effective list. Handler order does not matter: the only question is whether the Finicky config sets the key explicitly.</span></div>
+      <div class="tbl" style="grid-template-columns: 220px 200px 220px minmax(0, 1fr); width: 980px;">
+        <div class="tr head"><span>Finicky config</span><span>rules.json</span><span>In effect</span><span>Owner row says</span></div>
+        <div class="tr"><span>None, or not the source</span><span>absent / [] / list</span><span>rules.json&rsquo;s value</span><span>rules.json, and which of the three</span></div>
+        <div class="tr"><span>Source, no <code>urlShorteners</code></span><span>absent / [] / list</span><span>rules.json&rsquo;s value</span><span>rules.json; the config does not set it</span></div>
+        <div class="tr"><span>Sets <code>urlShorteners: [&hellip;]</code></span><span>anything</span><span>The config&rsquo;s list</span><span>~/.finicky.js; rules.json not in effect (1d)</span></div>
+        <div class="tr"><span>Sets <code>urlShorteners: []</code></span><span>anything</span><span>Off</span><span>~/.finicky.js turns it off (1d, bottom)</span></div>
+        <div class="tr"><span>Sets it as a function</span><span>anything</span><span>The function&rsquo;s result, given the built-ins</span><span>~/.finicky.js computes the list; hosts shown as resolved</span></div>
+      </div>
+    </div>
+  </div>
+  <p class="dv-note"><b>Validation, in the app and in the router.</b> Each entry is a lowercase hostname: no scheme, path, port, space or wildcard; IDN hosts are stored in punycode and shown as typed. Duplicates are refused. A host matches itself and its subdomains, so <code>go.example.com</code> does not match <code>example.com</code>. A rules.json that fails validation keeps the last good snapshot, as for rules. <b>Request limits</b> are not settings: HEAD then GET, up to 3 redirects and 750 ms per attempt; on failure the original link or the last HTTP redirect target seen is routed. <b>Privacy.</b> Expansion writes no URL to any log or file. Activity and Test a link show the clicked link and destination as they already do; the optional Activity journal in Privacy is separate.</p>
+</section>
+</x-dc>
+</body>
+</html>
