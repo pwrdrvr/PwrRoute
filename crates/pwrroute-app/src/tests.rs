@@ -135,6 +135,38 @@ fn scroll_to(cx: &mut VisualTestContext, selector: &'static str) {
     panic!("{selector} never came into view");
 }
 
+/// Scrolls the scrolling `pane` until the element is wholly inside it, then
+/// clicks it. A control the pane clips still has bounds, but a click there
+/// lands on the pane's edge (the Add a rule sheet's body, under its foot).
+fn click_within(cx: &mut VisualTestContext, pane: &'static str, selector: &'static str) {
+    for _ in 0..20 {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("no element {selector} on screen"));
+        let area = cx
+            .debug_bounds(pane)
+            .unwrap_or_else(|| panic!("no pane {pane} on screen"));
+        let below = bounds.bottom() + px(8.0) - area.bottom();
+        let above = area.top() + px(8.0) - bounds.top();
+        let delta = if below > px(0.0) {
+            -below
+        } else if above > px(0.0) {
+            above
+        } else {
+            click(cx, selector);
+            return;
+        };
+        let event = ScrollWheelEvent {
+            position: area.center(),
+            delta: ScrollDelta::Pixels(point(px(0.0), delta)),
+            ..Default::default()
+        };
+        cx.update(|window, cx| window.dispatch_event(event.to_platform_input(), cx));
+        draw(cx);
+    }
+    panic!("{selector} never came inside {pane}");
+}
+
 /// Types the design's test link, from Slack, into the open Test a link
 /// screen, which starts empty, and runs it.
 fn type_sample(cx: &mut VisualTestContext) {
@@ -1889,9 +1921,11 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
 
     // Browser and profile in one pill: Work in Google Chrome, where the
     // link opened (Default, Personal, Work); then Keep.
-    click(cx, "add-rule-dest-0-2");
-    click(cx, "add-rule-keep-none");
-    click(cx, "add-rule-position-top");
+    // The sheet's body scrolls: Open in's lanes (Don't open last) push
+    // Keep and Position below its foot.
+    click_within(cx, "add-rule-body", "add-rule-dest-0-2");
+    click_within(cx, "add-rule-body", "add-rule-keep-none");
+    click_within(cx, "add-rule-body", "add-rule-position-top");
     let rule = view.read_with(cx, |app, _| {
         app.actions.sheet.as_ref().unwrap().rule().unwrap()
     });
@@ -1906,7 +1940,7 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     );
     // Only from the app that sent it: the link is saved as a test with
     // that app, since a rule's examples run from no app.
-    click(cx, "add-rule-only-from");
+    click_within(cx, "add-rule-body", "add-rule-only-from");
     // The rule now sees only PwrAgnt's links, and this was its only one.
     let (pattern, _, collisions, caption) = sheet(cx);
     assert_eq!(pattern, "*");
@@ -1931,8 +1965,6 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     assert_eq!(test.expect.browser, "Google Chrome");
     assert_eq!(test.expect.profile.as_deref(), Some("Work"));
 
-    // Open in's Don't open lane makes the sheet taller than the window.
-    scroll_to(cx, "add-rule-save");
     click(cx, "add-rule-save");
     assert!(cx.debug_bounds("add-rule-sheet").is_none());
     assert!(cx.debug_bounds("activity-action-note").is_some());
@@ -5868,7 +5900,7 @@ fn everything_else_can_be_dont_open(cx: &mut TestAppContext) {
     click(cx, "everything-else-more");
     click(cx, "everything-else-dont-open");
     assert!(cx.debug_bounds("rule-menu").is_none());
-    let file = RulesFile::load(&path).unwrap();
+    let file = saved(cx, &path);
     assert_eq!(file.default_browser, "none");
     assert_eq!(file.default_profile, "");
     scroll_to(cx, "everything-else-dont-open-note");
@@ -5886,31 +5918,12 @@ fn everything_else_can_be_dont_open(cx: &mut TestAppContext) {
 fn a_rule_can_be_set_to_dont_open(cx: &mut TestAppContext) {
     let dir = scratch("editor-dont-open");
     let path = dir.join("rules.json");
-    let (view, cx) = open_store(cx, None, fixture_store(&dir));
-    view.update(cx, |app, cx| {
-        app.browsers = vec![BrowserChoice {
-            name: "Firefox".into(),
-            profiles: vec!["Work".into()],
-        }];
-        app.select(Selection::Handler(0), cx);
-    });
-    let last = view.read_with(cx, |app, cx| {
-        let handler = &app.handlers[0];
-        crate::destinations::lanes(
-            &app.browsers,
-            &app.installed,
-            &crate::destinations::Choice::of(handler),
-            None,
-            crate::editor::scanned(app, cx),
-            true,
-        )
-        .len()
-            - 1
-    });
-    let selector: &'static str = format!("destination-{last}-0").leak();
-    scroll_to(cx, selector);
-    click(cx, selector);
-    let file = RulesFile::load(&path).unwrap();
+    // The scan's five browsers, then the Don't open lane (lane 5).
+    let (_view, cx) = open_with_scan(cx, &dir);
+    assert!(cx.debug_bounds("destination-lane-6").is_none());
+    scroll_to(cx, "destination-5-0");
+    click(cx, "destination-5-0");
+    let file = saved(cx, &path);
     assert_eq!(file.rules[0].browser, "none");
     assert_eq!(file.rules[0].profile, "");
     assert!(!file.rules[0].private);

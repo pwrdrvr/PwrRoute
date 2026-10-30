@@ -2192,6 +2192,7 @@ pub fn sheet(
         .child(
             div()
                 .id("add-rule-body")
+                .debug_selector(|| "add-rule-body".into())
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
