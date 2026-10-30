@@ -217,6 +217,24 @@ the project and re-export here.
   (precedence, never a fallback, what is kept, Hold). Written to the
   project, then compared by size with the file here. The other canvases,
   `pwrroute.css` and `support.js` are unchanged.
+- Updated **2026-10-29**: two canvases added for syncing rules across
+  machines, split in two so each could be written to the project in one
+  go. `PwrRoute Synced Rules.dc.html` holds turn 1, Settings › Sync (a new
+  nav item between Configuration and Privacy): the disclosure that sync
+  copies rules.json with its example and test URLs, the Sync to card with
+  the folders found (iCloud Drive, Google Drive by account, Dropbox) and
+  Choose a folder…, two folders set up with Sync now and the Finicky
+  config switch, a conflict with both sides and Keep this Mac's / Use
+  MacBook Air's, joining a folder that already has rules, the macOS
+  permission step and its denied state, and every folder row state.
+  `PwrRoute Synced Rules Machine.dc.html` holds turns 2 to 4: the This
+  machine card (named destinations and what each opens here, synced or
+  this Mac, a browser not installed, rule sets on or off here), the
+  Destinations lane and Rule set select in the rule editor with set
+  headings on Rules, sync status in the rail foot, the strip and the menu
+  bar dropdown, and the Sync pane on Linux and Windows. Written to the
+  project, then compared by size with the files here. The other
+  canvases, `pwrroute.css` and `support.js` are unchanged.
 
 - Updated **2026-10-29**: one canvas added for contrast and text size
   (`PwrRoute Contrast and Scale.dc.html`): dimmed content as a token step
@@ -261,6 +279,8 @@ the project and re-export here.
 | `PwrRoute Not Opened.dc.html` | Don't open as a rule's destination and Everything else (the last lane of Open in, Everything else's menu), Activity's Not opened filter and rows, Open in… on a not-opened row, a row opened later or not openable, Test a link, the tray's recents and the Overview's Not opened card, and how it behaves |
 | `PwrRoute Contrast and Scale.dc.html` | Contrast and text size: dimmed text as a token step (off rules, missed steps, the paused map) with its ratios; dark, light and each with Increase Contrast, every token's lowest ratio, and the light block's corrections; View › Zoom and the reflow at 200% (icon rail, Rules list and editor in turn, Activity's table scrolling, Today's tiles in pairs); the control edge, selected edge and focus ring |
 | `PwrRoute Incoming Links.dc.html` | What the next links do: the Rules / Send / Hold / Pause switch with its For row and live line, in the dropdown (held links first, their actions, Pause, keyboard, the native menu) and the Overview hero; held links in Activity; how Hold behaves (where it applies, how long a held link waits, restart, words, agents) |
+| `PwrRoute Synced Rules.dc.html` | Settings › Sync (turn 1): what syncs and who can read it, Sync to with the folders found and Choose a folder…, folders set up with their state chip and line, Sync now, the Finicky config switch, a conflict with both sides and backups, joining a folder that already has rules, the macOS permission step and its denied state, and every folder row state |
+| `PwrRoute Synced Rules Machine.dc.html` | Synced rules on each machine (turns 2 to 4): the This machine card with named destinations (synced or this Mac, a browser not installed) and rule sets on or off here; the Destinations lane and Rule set select in the rule editor and set headings on Rules; sync status in the rail foot, strip and menu bar dropdown; the Sync pane on Linux and Windows |
 | `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 

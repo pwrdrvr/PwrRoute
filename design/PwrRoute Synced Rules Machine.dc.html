@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* settings panes, as in Settings */
+          .snav { flex: 0 0 208px; }
+          .snav .rail-item { font-size: 13px; }
+          .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+          .spane > .card { flex: 0 0 auto; max-width: 760px; width: 100%; }
+          .spane > .pane-head { max-width: 760px; }
+          .cmd { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font: 500 11px/1.5 var(--font-mono); color: var(--text-secondary); }
+          .cmd span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+          .card-hd.solo { border-bottom: none; }
+          .card-foot { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border-faint); font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); }
+          .card-foot b { font-weight: 600; color: var(--text-secondary); }
+          .rail-item .xdot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--status-error); }
+          /* the disclosure sentence, as in Settings › Privacy */
+          .disc { width: 100%; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-faint); background: var(--bg-app); font: 400 11.5px/1.6 var(--font-sans); color: var(--text-secondary); text-wrap: pretty; }
+          .disc b { color: var(--text-primary); font-weight: 600; }
+          .disc.warn { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .disc .lead { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .note-acc { padding: 8px 10px; border-radius: 7px; background: var(--bg-row-active); border: 1px solid var(--accent-border); font: 400 11px/1.5 var(--font-sans); color: var(--text-secondary); }
+          .note-acc b { color: var(--text-primary); font-weight: 600; }
+          .note-warn { padding: 8px 10px; border-radius: 7px; background: var(--warn-soft); font: 400 11px/1.5 var(--font-sans); color: var(--warn-text); }
+          .note-bad { padding: 8px 10px; border-radius: 7px; background: var(--danger-soft); font: 400 11px/1.5 var(--font-sans); color: var(--danger-text); }
+
+          /* new in this canvas: a sync folder row */
+          .pv { width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); color: #fff; flex: 0 0 auto; }
+          .pv.ic { background: #3a8ee6; } .pv.gd { background: #1f9d58; } .pv.db { background: #0b5cd6; }
+          .pv.fo { background: var(--bg-hover-strong); border: 1px solid var(--border-default); color: var(--text-secondary); }
+          .fcap { padding: 7px 16px; background: var(--bg-panel-elevated); border-bottom: 1px solid var(--border-faint); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .dst { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px 12px; align-items: start; padding: 12px 16px; border-bottom: 1px solid var(--border-faint); }
+          .dst:last-child { border-bottom: none; }
+          .dst .dm { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+          .dst .dn { display: flex; align-items: center; gap: 8px; font: 600 12.5px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .dst .dn small { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .dst .dp { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+          .dst .dl { display: flex; align-items: center; gap: 6px; font: 400 11px/1.4 var(--font-sans); color: var(--text-secondary); }
+          .dst .dl i { width: 6px; height: 6px; border-radius: 50%; background: var(--status-ok); flex: 0 0 auto; }
+          .dst .dl.acc i { background: var(--accent); } .dst .dl.warn i { background: var(--status-warning); } .dst .dl.bad i { background: var(--status-error); } .dst .dl.wait i { background: var(--status-suspended); }
+          .dst .dl.bad { color: var(--danger-text); }
+          .dst .da { display: flex; align-items: center; gap: 6px; }
+          .dst .ex { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+          .dst.found .dn { font-weight: 500; }
+          .dst.found .dp { color: var(--text-subtle); }
+          .dst .dp.txt { font: 400 11px/1.45 var(--font-sans); color: var(--text-subtle); }
+          .dst.bad { background: linear-gradient(90deg, rgba(185,66,50,0.10), transparent 70%); box-shadow: inset 3px 0 0 var(--danger-base); }
+          .dst.warn { box-shadow: inset 3px 0 0 var(--status-warning); }
+          .dst.acc { background: linear-gradient(90deg, rgba(255,138,31,0.07), transparent 70%); box-shadow: inset 3px 0 0 var(--accent); }
+          .spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--border-default); border-top-color: var(--accent); flex: none; }
+          .stage { padding: 20px; background: var(--bg-app); display: flex; flex-direction: column; gap: 10px; }
+          .stage .cap { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-subtle); }
+          .stage > .card { width: 100%; }
+          /* this machine: destinations and rule sets */
+          .ab { width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); color: #fff; flex: 0 0 auto; }
+          .ab.ch { background: #3c9a4a; } .ab.sf { background: #2a7de1; } .ab.ff { background: #e5671e; } .ab.ar { background: #c04bb0; } .ab.ed { background: #1f8ad2; }
+          .ab.gone { background: transparent; border: 1px dashed var(--border-strong); color: var(--text-muted); }
+          .dtab { width: 100%; }
+          .dtr { display: grid; grid-template-columns: 96px minmax(0, 1fr) 76px 196px; gap: 12px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .dtr:last-child { border-bottom: none; }
+          .dtr.head { padding: 7px 16px; background: var(--bg-panel-elevated); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .dtr .nm { font: 600 12px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .dtr .here { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+          .dtr .bd { display: flex; align-items: center; gap: 7px; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .dtr .bd .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .dtr .bd.gone { color: var(--text-muted); }
+          .dtr .was { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); }
+          .dtr .act { display: flex; justify-content: flex-end; gap: 4px; }
+          .dtr .chip { justify-self: start; }
+          .dtr.warn { background: linear-gradient(90deg, var(--warn-soft), transparent 70%); }
+          .dtr.msg { display: block; padding: 0 16px 10px 124px; background: linear-gradient(90deg, var(--warn-soft), transparent 70%); }
+          .setr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--border-faint); }
+          .setr .sn { display: flex; flex-direction: column; gap: 3px; }
+          .setr .sn b { font: 600 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .setr .sn small { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); }
+          .setr .swl { display: flex; align-items: center; gap: 8px; font: 500 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .sechd { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px 10px; border-top: 1px solid var(--border-faint); }
+          .sechd b { font: 600 12px/1.3 var(--font-sans); color: var(--text-primary); }
+          .sechd span { font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); max-width: 64ch; }
+          .sechelp { padding: 10px 16px 12px; font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); border-top: 1px solid var(--border-faint); }
+
+          /* rule rows, as in Rule Editor Pickers, plus set headings */
+          .rel { position: relative; }
+          .rules { display: flex; flex-direction: column; position: relative; }
+          .rr { position: relative; display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) 14px minmax(0, 250px) 92px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.sel { background: var(--bg-row-active); }
+          .rr.sel::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+          .rr.sel .idx { color: var(--accent-bright); }
+          .grip { width: 7px; height: 12px; justify-self: center; background-image: radial-gradient(circle, var(--text-subtle) 1.1px, transparent 1.3px); background-size: 4.5px 5px; background-position: -0.5px 0; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .dest .dg { color: var(--accent); display: inline-flex; }
+          .rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .rr.off .m, .rr.off .dest, .rr.off .arrow, .rr.off .idx { opacity: 0.45; }
+          .rr .chip { font-size: 9px; padding: 3px 7px; justify-self: end; }
+          .rset { display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 54px; background: var(--bg-panel-elevated); border-bottom: 1px solid var(--border-faint); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .rset b { color: var(--text-secondary); font-weight: 600; }
+          .rset .chip { text-transform: none; letter-spacing: 0.03em; font-size: 9px; padding: 3px 7px; }
+          .rset .r { margin-left: auto; text-transform: none; letter-spacing: 0; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          /* the rule editor rail, as in Destination and App Pickers */
+          .rrail { flex: 0 0 372px; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); display: flex; flex-direction: column; overflow: visible; position: relative; }
+          .rs { padding: 14px 16px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 8px; position: relative; }
+          .rs h5 { margin: 0 0 2px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .lab { font: 600 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .lrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+          .lrow .lab { flex: 1; }
+          .addp { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px dashed var(--border-default); border-radius: var(--radius-md); font: 500 11px/1 var(--font-sans); color: var(--text-muted); align-self: flex-start; white-space: nowrap; }
+          .any { font: 500 11px/1 var(--font-sans); color: var(--text-subtle); }
+          .rhead { flex-direction: row; align-items: center; gap: 10px; }
+          .rhead > div { flex: 1; min-width: 0; }
+          .inp.pick { width: 100%; }
+          .inp.pick .pvv { flex: 1; min-width: 0; color: var(--text-primary); }
+          .inp.pick .ph2 { flex: none; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .lanes { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+          .lane { display: flex; flex-direction: column; gap: 8px; padding: 9px 10px 10px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-input); position: relative; }
+          .lane.on { border-color: var(--accent-border); background: linear-gradient(90deg, rgba(255,138,31,0.07), var(--bg-input) 70%); }
+          .lane-hd { display: flex; align-items: center; gap: 8px; font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .lane-hd .tg { margin-left: auto; font: 500 10px/1 var(--font-sans); color: var(--text-subtle); }
+          .lane-hd .dgl { width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-bright); }
+          .pills { display: flex; flex-wrap: wrap; gap: 5px; }
+          .pl { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-panel); font: 500 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .pl.def { color: var(--text-muted); }
+          .pl.priv { border-style: dashed; color: var(--text-muted); }
+          .pl.on { background: var(--accent); border: 1px solid transparent; color: var(--accent-on); font-weight: 600; }
+          .pl.hov { background: var(--bg-hover-strong); color: var(--text-primary); }
+          .pl.gone { border-style: dashed; color: var(--text-muted); }
+          .pl.gone small { font: 500 10px/1 var(--font-sans); color: var(--warn-text); }
+          .lane-hint { display: flex; align-items: center; gap: 6px; font: 500 10.5px/1.3 var(--font-sans); color: var(--text-muted); }
+          .lane-hint b { color: var(--text-primary); font-weight: 600; }
+          .lane-hint .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-secondary); }
+          .lanes-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); padding: 2px 2px 0; }
+          .lanes-more a { color: var(--accent-bright); text-decoration: none; }
+          .ptip { position: absolute; z-index: 4; display: flex; flex-direction: column; gap: 3px; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); font: 500 11px/1.35 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .ptip small { font: 500 10px/1.3 var(--font-mono); color: var(--text-muted); }
+
+          /* sync status in the chrome */
+          .strip-chip.bad .dot { background: var(--status-error); }
+          .strip-chip.bad { color: var(--danger-text); border-color: rgba(185,66,50,0.45); }
+          .sy { display: flex; align-items: center; gap: 6px; margin: 0 -6px; padding: 3px 6px; border-radius: 5px; font: 500 10.5px/1.4 var(--font-mono); color: var(--text-subtle); white-space: nowrap; }
+          .sy svg { width: 11px; height: 11px; flex: 0 0 auto; color: var(--status-ok); }
+          .sy.acc, .sy.acc svg { color: var(--accent-bright); }
+          .sy.warn, .sy.warn svg { color: var(--warn-text); }
+          .sy.bad { color: var(--danger-text); background: var(--danger-soft); }
+          .sy.bad svg { color: var(--danger-text); }
+          .sy.hov { background: var(--bg-panel-hover); color: var(--text-primary); }
+          .bld { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 2px; }
+          .bld-hd { display: flex; align-items: center; gap: 6px; height: 20px; }
+          .bld-k { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn-text); white-space: nowrap; }
+          .bld-v { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); white-space: nowrap; }
+          .ghost { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; opacity: 0.35; }
+          .ghost .blk { border: 1px solid var(--border-faint); border-radius: 8px; background: var(--bg-panel); }
+          .feet { display: flex; gap: 12px; padding: 16px; background: var(--bg-app); }
+          .feet .rail { flex: 0 0 196px; border: 1px solid var(--border-subtle); border-radius: 8px; height: 250px; }
+          .feet .cap { display: block; margin-bottom: 6px; font: 500 10.5px/1.4 var(--font-mono); color: var(--text-subtle); }
+          .ptr { position: absolute; z-index: 5; width: 13px; height: 18px; }
+          /* tray, as in Tray and First Run */
+          .desk { position: relative; width: 420px; height: 470px; background: #0b0a09; overflow: hidden; }
+          .mbar { position: absolute; left: 0; right: 0; top: 0; height: 24px; background: rgba(20,18,16,0.9); border-bottom: 1px solid var(--border-faint); display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 12px; font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .mbar .mi { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 18px; border-radius: 4px; }
+          .mbar .mi.on { background: rgba(247,243,235,0.14); }
+          .tray { position: absolute; top: 28px; right: 60px; width: 300px; background: rgba(16,16,16,0.98); border: 1px solid var(--border-default); border-radius: 10px; box-shadow: var(--shadow-popover); overflow: hidden; display: flex; flex-direction: column; }
+          .tray .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-faint); }
+          .tray .th .wordmark { font-size: 14px; }
+          .tray .th .chip { margin-left: auto; }
+          .tray .sec { padding: 6px 6px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; }
+          .tray .sec:last-child { border-bottom: none; }
+          .tray .cap { padding: 4px 6px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .mi-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 6px; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi-row.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+          .mi-row .kbd { margin-left: auto; }
+          .mi-row .sub { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); margin-left: auto; }
+          .mi-row.quit { color: var(--text-secondary); }
+          .mi-row svg { width: 12px; height: 12px; flex: 0 0 auto; }
+          .mi-row.sync { font-size: 11.5px; color: var(--text-secondary); }
+          .mi-row.sync svg { color: var(--status-ok); }
+          .mi-row.sync.bad { color: var(--danger-text); }
+          .mi-row.sync.bad svg { color: var(--danger-text); }
+          .mi-row.sync.acc, .mi-row.sync.acc svg { color: var(--accent-bright); }
+          .mi-row.sync.warn, .mi-row.sync.warn svg { color: var(--warn-text); }
+          .rec { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 10px; padding: 5px 6px; border-radius: 6px; }
+          .rec .h { grid-column: 1; grid-row: 1; font: 500 11.5px/1.2 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .rec .b { grid-column: 1; grid-row: 2; font: 500 10px/1.2 var(--font-sans); color: var(--text-muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+          .rec .ago { grid-column: 2; grid-row: 1 / 3; align-self: center; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .pause { display: flex; align-items: center; gap: 10px; padding: 7px 6px; }
+          .pause .pt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+          .pause .pt b { font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .pause .pt span { font: 400 10px/1.4 var(--font-sans); color: var(--text-muted); }
+          /* Windows and Linux chrome, as in Windows and Linux Chrome */
+          .win.w11 { border-radius: 8px; }
+          .win.gnome { border-radius: 0; border: 1px solid var(--border-strong); }
+          .strip.w11 { padding-right: 150px; }
+          .caps { position: absolute; right: 0; top: 0; height: 40px; display: flex; }
+          .caps span { width: 46px; height: 40px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); }
+          .gctl { display: flex; align-items: center; gap: 6px; }
+          .gctl span { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-panel-hover); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 2 — what the names mean on this machine ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">This machine &rsaquo; destinations and rule sets</span></div>
+        <p class="dv-sub">Browsers and profiles differ between machines, so rules can open links in a <b>named destination</b> (<code>destinations[]</code> in rules.json: Work 1, Work 2, Personal, PwrDrvr), and rules can belong to a <b>rule set</b> (<code>sets[]</code>, <code>rules[].set</code>) that a machine turns off. What a name opens on this machine, and which sets are off here, live in <code>machine.json</code> next to rules.json, which never syncs. The editor shows and writes the synced file; the This machine card writes machine.json. Turn 1, Settings &rsaquo; Sync and its folders, is in <b>PwrRoute Synced Rules</b>.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>This machine, with named destinations and rule sets in rules.json. Each destination row: the name, what it opens here (the browser badge and profile, as a lane draws them), and where that comes from: a neutral <b>synced</b> chip, or an accent <b>this Mac</b> chip with the synced value under it and <b>Use synced</b> to go back. A browser this Mac lacks turns its row to the warning tone with the way out on the row. Rule sets list each set with its count and a switch; a set this Mac overrides carries the <b>this Mac</b> chip.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Sync</div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Across machines</div><h1 class="ttl">Sync</h1><p class="help">Keep the same rules on every machine through a folder your cloud drive already syncs. PwrRoute reads and writes only its own PwrRoute folder there.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">Cloud folders</p><h2 class="card-title">Sync to</h2><p class="card-desc">Dropbox and iCloud Drive. Last synced 09:41.</p></div><span class="chip ok">In sync &middot; 2 folders</span><span class="btn sm quiet">Expand</span></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Never syncs &middot; machine.json</p><h2 class="card-title">This machine</h2></div></div>
+                    <div class="field"><div class="field-l"><span>Name</span><span class="field-sub">How your other machines see this one in sync status.</span></div><div class="field-c"><div class="inp" style="width: 260px;">Studio Mac</div></div></div>
+                    <div class="sechd"><b>Destinations</b><span>The names your rules open links in, and what each one opens on this Mac. A change here stays on this Mac.</span></div>
+                    <div class="dtab">
+                        <div class="dtr head"><span>Name</span><span>Opens here in</span><span>From</span><span></span></div>
+                        <div class="dtr"><span class="nm">Work 1</span><div class="here"><span class="bd"><span class="ab ch">Ch</span>Google Chrome<span class="pf">Profile 3</span></span><span class="was">synced: Google Chrome &middot; Work</span></div><span class="chip acc">this Mac</span><div class="act"><span class="btn sm">Change&hellip;</span><span class="btn sm quiet">Use synced</span></div></div>
+                        <div class="dtr"><span class="nm">Work 2</span><div class="here"><span class="bd"><span class="ab ch">Ch</span>Google Chrome<span class="pf">Work 2</span></span></div><span class="chip">synced</span><div class="act"><span class="btn sm">Change&hellip;</span></div></div>
+                        <div class="dtr"><span class="nm">Personal</span><div class="here"><span class="bd"><span class="ab sf">Sf</span>Safari<span class="pf">Personal</span></span></div><span class="chip">synced</span><div class="act"><span class="btn sm">Change&hellip;</span></div></div>
+                        <div class="dtr warn"><span class="nm">PwrDrvr</span><div class="here"><span class="bd gone"><span class="ab gone">Ar</span>Arc<span class="pf">not installed</span></span></div><span class="chip warn">synced</span><div class="act"><span class="btn sm">Choose a browser&hellip;</span></div></div>
+                        <div class="dtr msg"><span class="note-warn" style="display: block;">Arc isn&rsquo;t installed on this Mac. Links for PwrDrvr open in the fallback browser, Safari, until you choose a browser here.</span></div>
+                      </div>
+                    <div class="sechelp">Synced is what rules.json says. It is right when the browser and profile have the same names on every machine.</div>
+                    <div class="sechd"><b>Rule sets</b><span>Turn a set off on this Mac only. Its rules stay in place and keep their numbers.</span></div>
+                    <div class="sets">
+                        <div class="setr"><div class="sn"><b>Work 2 &middot; 4 rules</b><small>synced default: on</small></div><span></span><span class="swl">On on this Mac<span class="sw on"></span></span></div>
+                        <div class="setr"><div class="sn"><b>PwrDrvr &middot; 3 rules</b><small>synced default: on</small></div><span class="chip acc">this Mac</span><span class="swl">On on this Mac<span class="sw"></span></span></div>
+                      </div>
+                    <div class="sechelp">The synced default is in rules.json and applies on every machine that hasn&rsquo;t chosen. This Mac&rsquo;s choices are kept in machine.json, next to rules.json, and never sync.</div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>The Rules list and the rule editor rail. A set heading marks a run of rules in one set; it says which rule numbers it covers, and an off set says <b>off on this Mac</b> on the heading and on each of its rows, dimmed. Rows that open a named destination show its name with the target glyph, then what it opens here. In the rail, <b>Open in</b> gains a <b>Destinations</b> lane first: the names as pills, one lit, the lit one&rsquo;s meaning here under them and each pill&rsquo;s on hover. Below it, a <b>Rule set</b> select.</span></div>
+            <div class="dv-card win rel" style="width: 1340px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Rules</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 9 rules &middot; 2 sets</span>
+              </div>
+              <div class="body">
+                <nav class="rail"><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div><div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">724</span></div><div class="rail-foot"><span class="st"><i></i>routing</span><span class="sy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>synced &middot; 2 min ago</span></div></nav>
+                <div class="pane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Routing</div><h1 class="ttl">Rules</h1><p class="help">The first matching rule opens the link. A rule in a set that is off on this Mac is skipped here and keeps its number.</p></div><div class="actions"><span class="btn">Add rewrite</span><span class="btn primary">Add rule</span></div></div>
+                  <section class="card"><div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Visual rules &middot; rules.json</p><h2 class="card-title">Rules</h2></div><span class="chip">3 off on this Mac</span></div><div class="rules"><div class="rr"><span class="grip"></span><span class="idx">01</span><div class="m"><span class="tag">news.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>Personal<span class="pf">Safari &middot; Personal</span></div><span class="hits">41 today</span><span class="more">&#8943;</span></div><div class="rr"><span class="grip"></span><span class="idx">02</span><div class="m"><span class="tag">mail.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>Work 1<span class="pf">Chrome &middot; Profile 3</span></div><span class="hits">18 today</span><span class="more">&#8943;</span></div><div class="rset"><b>Work 2</b> set<span class="r">rules 03&ndash;06</span></div><div class="rr"><span class="grip"></span><span class="idx">03</span><div class="m"><span class="tag">*.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>Work 2<span class="pf">Chrome &middot; Work 2</span></div><span class="hits">9 today</span><span class="more">&#8943;</span></div><div class="rr sel"><span class="grip"></span><span class="idx">04</span><div class="m"><span class="tag">tickets.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>Work 2<span class="pf">Chrome &middot; Work 2</span></div><span class="hits">6 today</span><span class="more">&#8943;</span></div><div class="rr"><span class="grip"></span><span class="idx">05</span><div class="m"><span class="tag">docs.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>Work 2<span class="pf">Chrome &middot; Work 2</span></div><span class="hits">2 today</span><span class="more">&#8943;</span></div><div class="rr"><span class="grip"></span><span class="idx">06</span><div class="m"><span class="tag">meet.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>Work 2<span class="pf">Chrome &middot; Work 2</span></div><span class="hits">&mdash;</span><span class="more">&#8943;</span></div><div class="rset"><b>PwrDrvr</b> set<span class="chip">off on this Mac</span><span class="r">rules 07&ndash;09</span></div><div class="rr off"><span class="grip"></span><span class="idx">07</span><div class="m"><span class="tag">app.example.dev/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>PwrDrvr<span class="pf">Arc</span></div><span class="chip">off on this Mac</span><span class="more">&#8943;</span></div><div class="rr off"><span class="grip"></span><span class="idx">08</span><div class="m"><span class="tag">admin.example.dev/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>PwrDrvr<span class="pf">Arc</span></div><span class="chip">off on this Mac</span><span class="more">&#8943;</span></div><div class="rr off"><span class="grip"></span><span class="idx">09</span><div class="m"><span class="tag">status.example.dev/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="dg"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>PwrDrvr<span class="pf">Arc</span></div><span class="chip">off on this Mac</span><span class="more">&#8943;</span></div></div><div class="card-foot"><span>Everything else &rarr; <b>Personal</b> &middot; Safari &middot; Personal</span></div></section>
+                </div>
+                <aside class="rrail">
+                  <div class="rs rhead"><div><div class="eyebrow" style="color: var(--text-muted);">Rule &middot; 4 of 9</div><div style="font: 600 13px/1.4 var(--font-mono); color: var(--text-primary); margin-top: 6px;">tickets.example.net/*</div></div><span class="sw on"></span></div>
+                  <div class="rs"><h5>Match</h5><span class="lab">URL patterns</span><div class="inp mono" style="width: 100%;">tickets.example.net/*<span class="caret">&times;</span></div><span class="addp">+ pattern</span><div class="lrow" style="margin-top: 6px;"><span class="lab">Sent from</span><span class="any">Any app</span><span class="addp">+ app</span></div></div>
+                  <div class="rs"><h5>Open in</h5><div class="lanes">
+                    <div class="lane on"><div class="lane-hd"><span class="dgl"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg></span>Destinations<span class="tg">synced names</span></div><div class="pills"><span class="pl hov">Work 1</span><span class="pl on">Work 2</span><span class="pl">Personal</span><span class="pl gone">PwrDrvr <small>no Arc</small></span></div><div class="lane-hint"><b>Work 2</b> here:<span class="ab ch">Ch</span><span class="pf">Google Chrome &middot; Work 2</span></div>
+                      <div class="ptip" style="left: 4px; top: -40px;">Work 1 on this Mac<small>Google Chrome &middot; Profile 3 &middot; synced: Work</small></div></div>
+                    <div class="lane"><div class="lane-hd"><span class="ab ch">Ch</span>Google Chrome<span class="tg">3 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">Work</span><span class="pl">Work 2</span><span class="pl">Profile 3</span><span class="pl priv"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9c0-2 2-3 9-3s9 1 9 3c0 4-2 7-5 7-2 0-3-2-4-2s-2 2-4 2c-3 0-5-3-5-7z"/><path d="M7.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/><path d="M13.5 10.5c.8-.7 2.2-.7 3 0" fill="currentColor"/></svg>Incognito</span></div></div>
+                    <div class="lane"><div class="lane-hd"><span class="ab sf">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">Personal</span></div></div>
+                    <div class="lanes-more"><span>A browser pill sends this rule there on every machine.</span><a>Other app&hellip;</a></div>
+                  </div></div>
+                  <div class="rs"><h5>Rule set</h5><div class="inp pick"><span class="pvv">Work 2</span><span class="ph2">4 rules</span><span class="caret">&#9662;</span></div><span class="field-help">On on this Mac. Settings &rsaquo; Sync turns a set on or off for each machine; None keeps the rule always on.</span></div>
+                </aside>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note">Picking a destination pill writes <code>"destination": "Work 2"</code> and copies the synced browser and profile beside it, so a reader that ignores destinations (the Go host) still routes. Picking a browser pill clears the destination. A name rules.json does not define falls back to the rule&rsquo;s own browser and profile. <b>Change&hellip;</b> on a destination row opens the same lanes, without the Destinations lane, and writes machine.json only. A destination whose browser isn&rsquo;t installed here shows <b>no Arc</b> on its pill and the warning on its row; links go to the fallback browser, as for any missing browser.</p>
+        <p class="dv-next">Try next: &ldquo;Change&hellip; on Work 1 as a sheet&rdquo; &middot; &ldquo;managing destinations: add, rename, delete&rdquo; &middot; &ldquo;<a class="dv-oid" href="#2b">2b</a> with a set split across two runs&rdquo;</p>
+      </section>
+
+      <!-- ================= TURN 3 — sync status where you look ================= -->
+      <section class="dv-turn" id="t3">
+        <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Sync status in the window and the menu bar</span></div>
+        <p class="dv-sub">The person should be able to tell that sync works without opening Settings, and should not miss a conflict. The <b>rail foot</b> already says what the router is doing (<code>routing</code>, <code>next link &middot; Microsoft Edge</code>) and is on every main-window screen, so sync gets a line there. The <b>strip</b> holds the rules source chip and warnings like a failed test, so only the two states that need action add a chip there. The tray gets one line.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="3a">
+            <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span>Recommended: the rail foot, one line under <b>routing</b> and above the build block, whenever a folder is set up. It reads like its neighbours (mono, lower case) and is a click to Settings &rsaquo; Sync. Quiet when all is well; the warning and danger tones carry the two states that need the person. Nothing is drawn when sync is off.</span></div>
+            <div class="dv-card feet">
+              <div><span class="cap">in sync</span><nav class="rail"><div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">724</span></div><div class="rail-foot"><span class="st"><i></i>routing</span><span class="sy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>synced &middot; 2 min ago</span><div class="bld"><div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span></div></div></div></nav></div>
+              <div><span class="cap">syncing</span><nav class="rail"><div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">724</span></div><div class="rail-foot"><span class="st"><i></i>routing</span><span class="sy acc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>syncing&hellip;</span><div class="bld"><div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span></div></div></div></nav></div>
+              <div><span class="cap">every folder unavailable</span><nav class="rail"><div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">724</span></div><div class="rail-foot"><span class="st"><i></i>routing</span><span class="sy warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>sync paused &middot; folder unavailable</span><div class="bld"><div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span></div></div></div></nav></div>
+              <div><span class="cap">conflict</span><nav class="rail"><div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">9</span></div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">724</span></div><div class="rail-foot"><span class="st"><i></i>routing</span><span class="sy bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>sync conflict</span><div class="bld"><div class="bld-hd"><span class="bld-k">Dev build</span><span class="bld-v">0.5.0 &middot; debug</span></div></div></div></nav></div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="3b">
+            <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a><span>Only a conflict or a pause also gets a <b>strip chip</b>, after the rules chip, in the same voice as <code>tests &middot; 1 failed</code>: <b>sync &middot; conflict</b> (danger) or <b>sync &middot; paused</b> (warning). Both the chip and the rail line open Settings &rsaquo; Sync on the folder that needs it; the tooltip names it.</span></div>
+            <div class="dv-card win rel" style="width: 900px; height: 470px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Overview</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>rules.json &middot; 14 rules</span><span class="strip-chip bad"><span class="dot"></span>sync &middot; conflict</span>
+              </div>
+              <div class="body">
+                <nav class="rail"><div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"/><path d="M15 5.76v15"/><path d="M9 3.24v15"/></svg>Overview</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>Rules<span class="cnt">14</span></div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>Test a link</div><div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>Activity<span class="cnt">724</span></div><div class="rail-label">Settings</div><div class="rail-item">Open Settings&hellip;<span class="cnt">&#8984;,</span></div><div class="rail-foot"><span class="st"><i></i>routing</span><span class="sy bad hov"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>sync conflict</span></div></nav>
+                <div class="ghost"><div class="eyebrow">Where links go</div><div class="blk" style="height: 120px;"></div><div class="blk" style="height: 200px;"></div></div>
+              </div>
+              <span style="position: absolute; left: 160px; top: 436px;"><svg class="ptr" viewBox="0 0 13 18" aria-hidden="true"><path d="M1 1v14l3.6-3.4 2.3 5.2 2.2-1-2.3-5.1H12z" fill="#f7f3eb" stroke="#000" stroke-width="1"/></svg></span>
+              <span class="ptip" style="left: 176px; top: 400px;">Dropbox: both changed since the last sync<small>Click to open Settings &rsaquo; Sync</small></span>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="3c">
+            <div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a><span>The macOS dropdown gets one line of its own, between Pause routing and the window items: what synced and when, and where to. Clicked, it opens Settings &rsaquo; Sync. Windows and Linux add the same words as a disabled first row of the tray menu (a conflict row is enabled and opens Settings).</span></div>
+            <div class="dv-card" style="width: 422px;">
+              <div class="desk">
+                <div class="mbar"><span class="mi on"><svg viewBox="188 188 648 648" width="16" height="16" aria-hidden="true" style="color: var(--text-primary);"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg></span><span>Mon 09:41</span></div>
+                <div class="tray">
+                  <div class="th"><svg class="mark" viewBox="188 188 648 648" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip ok">default</span></div>
+                  <div class="sec">
+                    <span class="cap">Recent</span>
+                    <div class="rec"><span class="h">mail.example.com</span><span class="ago">1m</span><span class="b"><span class="bi">Ch</span>Work 1 &middot; Google Chrome &middot; rule 2</span></div>
+                    <div class="rec"><span class="h">news.example.com</span><span class="ago">3m</span><span class="b"><span class="bi">Sf</span>Personal &middot; Safari &middot; rule 1</span></div>
+                    <div class="mi-row" style="color: var(--text-muted); font-size: 11px;">Open Activity<span class="sub">724 today</span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="pause"><div class="pt"><b>Pause routing</b><span>Send every link to Safari &middot; Personal until switched back.</span></div><span class="sw"></span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="mi-row sync"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Rules synced 2 min ago<span class="sub">Dropbox, iCloud</span></div>
+                  </div>
+                  <div class="sec">
+                    <div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div>
+                    <div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div>
+                    <div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div>
+                  </div>
+                  <div class="sec"><div class="mi-row quit">Quit PwrRoute<span class="kbd">&#8984;Q</span></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="dv-card stage" style="width: 330px;">
+              <span class="cap">the same line, other states</span>
+              <div class="tray" style="position: static; width: 290px;">
+                <div class="sec"><div class="mi-row sync acc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Syncing rules&hellip;</div></div>
+                <div class="sec"><div class="mi-row sync warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Sync paused<span class="sub">folder unavailable</span></div></div>
+                <div class="sec"><div class="mi-row sync bad hov"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Sync conflict<span class="sub">Resolve&hellip;</span></div></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note">One state for the whole app, worst first: <b>conflict</b> (any folder) &rsaquo; <b>paused</b> (every folder unavailable) &rsaquo; <b>syncing</b> &rsaquo; <b>synced</b>. One unavailable folder among others that work reads <code>synced &middot; 2 min ago &middot; 1 unavailable</code> in the warning tone, without a strip chip, since the rules still reach the other machines. Waiting for a download counts as synced with the folders that are done. The age ticks with the minute and comes from the last check that found every reachable folder in agreement.</p>
+        <p class="dv-next">Try next: &ldquo;a strip chip for every state&rdquo; &middot; &ldquo;the conflict as a banner on Overview&rdquo; &middot; &ldquo;<a class="dv-oid" href="#3c">3c</a> on Windows&rdquo;</p>
+      </section>
+
+      <!-- ================= TURN 4 — Windows and Linux ================= -->
+      <section class="dv-turn" id="t4">
+        <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">Sync on Linux and Windows</span></div>
+        <p class="dv-sub">The same pane, the same rows and states, in each platform&rsquo;s chrome (Windows and Linux Chrome). Only the list of folders found differs, and the path style. Detection checks exact paths and never watches a directory.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="4a">
+            <div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a><span>Linux (GNOME). No iCloud Drive row. Google Drive is a folder the person picks, here an rclone mount at <code>~/GoogleDrive</code>; the row says <b>Folder &middot; chosen by you</b>, since PwrRoute does not guess which tool made it. Dropbox is found at <code>~/Dropbox</code> or from <code>~/.dropbox/info.json</code>. No permission step.</span></div>
+            <div class="dv-card win gnome" style="width: 1060px;">
+              <div class="strip">
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+                <div class="strip-fill"></div>
+                <div class="gctl"><span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 8h8"/></svg></span><span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4" y="4" width="8" height="8" rx="1.4"/></svg></span><span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="m4.6 4.6 6.8 6.8M11.4 4.6l-6.8 6.8"/></svg></span></div>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Sync</div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Across machines</div><h1 class="ttl">Sync</h1><p class="help">Keep the same rules on every machine through a folder your cloud drive already syncs. PwrRoute reads and writes only its own PwrRoute folder there.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Cloud folders</p><h2 class="card-title">Sync to</h2><p class="card-desc">Google Drive and iCloud have no Linux app, so pick the folder another tool keeps in sync. Dropbox is found from ~/.dropbox/info.json.</p></div><span class="chip ok">2 folders</span><div class="actions"><span class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Sync now</span></div></div>
+                    <div class="dst"><span class="pv fo"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><div class="dm"><span class="dn">Folder<small>&middot; chosen by you</small><span class="chip ok">In sync</span></span><span class="dp">~/GoogleDrive/PwrRoute</span><span class="dl"><i></i>09:41 &middot; saved by MacBook Air</span></div><div class="da"><span class="btn sm quiet">Reveal</span><span class="btn sm quiet danger">Remove</span></div></div>
+                    <div class="dst"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip ok">In sync</span></span><span class="dp">~/Dropbox/PwrRoute</span><span class="dl"><i></i>09:41 &middot; saved by thinkpad</span></div><div class="da"><span class="btn sm quiet">Reveal</span><span class="btn sm quiet danger">Remove</span></div></div>
+                    <div class="dst found"><span class="pv fo"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><div class="dm"><span class="dn">Choose a folder&hellip;</span><span class="dp txt">An rclone, Insync or GNOME Online Accounts mount, or a network share.</span></div><div class="da"><span class="btn sm">Choose&hellip;</span></div></div>
+                    <div class="card-foot"><span>Last synced <b>09:41</b> &middot; Checks every minute, when PwrRoute comes to the front and after every save.</span></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Never syncs</p><h2 class="card-title">This machine</h2></div></div>
+                    <div class="field"><div class="field-l"><span>Name</span><span class="field-sub">How your other machines see this one in sync status.</span></div><div class="field-c"><div class="inp" style="width: 260px;">thinkpad</div><span class="field-help">Starts as the hostname.</span></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="4b">
+            <div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a><span>Windows 11. Google Drive by its drive letter (<code>G:\My Drive</code>, checked by exact path), iCloud for Windows under <code>%USERPROFILE%\iCloudDrive</code>, Dropbox from <code>%LOCALAPPDATA%\Dropbox\info.json</code>. Reveal is <b>Show in Explorer</b>. Conflict and join read &ldquo;this PC&rdquo; where the Mac reads &ldquo;this Mac&rdquo;; Linux reads &ldquo;this computer&rdquo;.</span></div>
+            <div class="dv-card win w11" style="width: 1060px;">
+              <div class="strip w11">
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+                <div class="caps"><span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5.5h10"/></svg></span><span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5"/></svg></span><span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="m0.5 0.5 9 9M9.5 0.5l-9 9"/></svg></span></div>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Sync</div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Across machines</div><h1 class="ttl">Sync</h1><p class="help">Keep the same rules on every machine through a folder your cloud drive already syncs. PwrRoute reads and writes only its own PwrRoute folder there.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Cloud folders</p><h2 class="card-title">Sync to</h2></div><span class="chip ok">2 folders</span><div class="actions"><span class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Sync now</span></div></div>
+                    <div class="dst"><span class="pv gd">GD</span><div class="dm"><span class="dn">Google Drive<small>&middot; G:</small><span class="chip ok">In sync</span></span><span class="dp">G:\My Drive\PwrRoute</span><span class="dl"><i></i>09:41 &middot; saved by Studio Mac</span></div><div class="da"><span class="btn sm quiet">Show in Explorer</span><span class="btn sm quiet danger">Remove</span></div></div>
+                    <div class="dst"><span class="pv ic">iC</span><div class="dm"><span class="dn">iCloud Drive<span class="chip">Waiting</span></span><span class="dp">%USERPROFILE%\iCloudDrive\PwrRoute</span><span class="dl wait"><i></i>Waiting for iCloud to download rules.json</span></div><div class="da"><span class="btn sm quiet">Show in Explorer</span><span class="btn sm quiet danger">Remove</span></div></div>
+                    <div class="fcap">Also on this PC</div>
+                    <div class="dst found"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox</span><span class="dp">%USERPROFILE%\Dropbox\PwrRoute</span></div><div class="da"><span class="btn sm">Add</span></div></div>
+                    <div class="dst found"><span class="pv fo"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><div class="dm"><span class="dn">Choose a folder&hellip;</span><span class="dp txt">Another drive letter, a OneDrive folder, a network share.</span></div><div class="da"><span class="btn sm">Choose&hellip;</span></div></div>
+                    <div class="card-foot"><span>Last synced <b>09:41</b> &middot; Checks every minute, when PwrRoute comes to the front and after every save.</span></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Never syncs</p><h2 class="card-title">This machine</h2></div></div>
+                    <div class="field"><div class="field-l"><span>Name</span><span class="field-sub">How your other machines see this one in sync status.</span></div><div class="field-c"><div class="inp" style="width: 260px;">office-pc</div><span class="field-help">Starts as the computer name.</span></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-next">Try next: &ldquo;<a class="dv-oid" href="#4a">4a</a> with a GNOME Online Accounts folder under /run/user&rdquo; &middot; &ldquo;<a class="dv-oid" href="#4b">4b</a> with Google Drive on a different letter&rdquo;</p>
+      </section>
+
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>
