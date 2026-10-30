@@ -98,7 +98,16 @@ fn slot_tile(tile: &SlotTile, cx: &mut Context<'_, SettingsWindow>) -> AnyElemen
 /// Release channel: the 2×2 grid of slots, trains down, tracks across.
 fn channel_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
     let updates = &this.model.updates;
-    let label = |name: &str| div().w(px(52.0)).flex_none().child(column_head(name));
+    // The row stretches its tiles to the taller one's height, so the label
+    // centers itself in the stretched cell.
+    let label = |name: &str| {
+        div()
+            .w(px(52.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .child(column_head(name))
+    };
     let head = div()
         .flex()
         .gap(px(8.0))
@@ -112,7 +121,7 @@ fn channel_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
             .iter()
             .filter(|tile| tile.slot.train == train)
             .fold(
-                div().flex().items_center().gap(px(8.0)).child(label(name)),
+                div().flex().items_stretch().gap(px(8.0)).child(label(name)),
                 |row, tile| row.child(slot_tile(tile, cx)),
             );
         grid = grid.child(row);

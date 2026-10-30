@@ -5,7 +5,8 @@ and PwrGit. Drawn from `design/PwrRoute Settings.dc.html` (1a Local agents,
 1b Configuration, 1c Browsers), `design/PwrRoute Activity Privacy and
 Route Tests.dc.html` turn 1 (Privacy) and `design/PwrRoute Updates and
 Default Browser.dc.html` 1a/1b (Updates); Diagnostics and About follow
-the family's panes in the same controls. General is a placeholder.
+the family's panes in the same controls. There is no General pane until
+there is something to put in it; About leads the nav, Browsers opens first.
 
 - **The window draws a `SettingsModel` and nothing else.** `model.rs` is the
   contract for the MCP server, config discovery and the browser catalog:
