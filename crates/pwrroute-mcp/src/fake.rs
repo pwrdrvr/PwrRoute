@@ -136,6 +136,7 @@ impl FakeRouter {
         trace.browser.private = false;
         let mut entry = entry_of(self.next_id(), Some(via.to_owned()), trace);
         entry.outcome = ActivityOutcome::NotOpened;
+        entry.reason = Some(crate::backend::NotOpenedReason::Rule);
         entry.unrouted = false;
         lock(&self.opened).push((
             AgentRef {
@@ -183,6 +184,7 @@ fn entry_of(id: u64, via: Option<String>, trace: Trace) -> ActivityEntry {
         unrouted,
         rewritten,
         private,
+        reason: None,
         trace,
     }
 }

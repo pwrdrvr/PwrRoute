@@ -377,6 +377,7 @@ async fn activity_finds_the_links_that_were_not_opened() {
     let entries = held["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1, "{held}");
     assert_eq!(entries[0]["outcome"], "notOpened");
+    assert_eq!(entries[0]["reason"], "rule");
     assert_eq!(entries[0]["via"], "Mail");
     assert_eq!(entries[0]["trace"]["browser"]["appType"], "none");
     // The trace says it in words too.
