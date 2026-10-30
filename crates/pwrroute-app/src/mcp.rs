@@ -2169,11 +2169,7 @@ mod tests {
             request.client_title = title;
             let (view, cx) = cx
                 .add_window_view(move |window, cx| ApprovalWindow::new(request, reply, window, cx));
-            cx.simulate_resize(crate::zoom::window_size(
-                display,
-                (PROMPT_WIDTH, ASKING_HEIGHT),
-                cx,
-            ));
+            cx.simulate_resize(gpui_kit::size(px(PROMPT_WIDTH), px(ASKING_HEIGHT)));
             for _ in 0..3 {
                 draw(cx);
                 cx.run_until_parked();

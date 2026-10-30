@@ -1967,7 +1967,12 @@ fn back(cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
             .cursor_pointer()
             .hover(|back| back.bg(theme::bg_hover()))
             .child(theme::text("\u{2039}", 14.0, 500.0, theme::accent_bright()))
-            .child(theme::text("All rules", 12.0, 500.0, theme::accent_bright()))
+            .child(theme::text(
+                "All rules",
+                12.0,
+                500.0,
+                theme::accent_bright(),
+            ))
             .on_click(cx.listener(|this, _, _, cx| this.deselect(cx))),
     )
 }

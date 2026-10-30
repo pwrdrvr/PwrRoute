@@ -1325,7 +1325,9 @@ fn today(app: &PwrRoute, overview: &Overview, cx: &mut Context<'_, PwrRoute>) ->
                 .child(cap("Today", None, theme::text_muted()))
                 .child(note("Since PwrRoute started")),
         )
-        .child(tile_rows(tiles.map(IntoElement::into_any_element).collect()))
+        .child(tile_rows(
+            tiles.map(IntoElement::into_any_element).collect(),
+        ))
 }
 
 /// The tiles in a row, or two by two when a row would cut their labels:
