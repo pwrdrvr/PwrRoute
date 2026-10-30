@@ -241,13 +241,19 @@ impl Recent {
         })
     }
 
-    /// A recent entry from a dispatch record. `None` when the link did not
-    /// open (rejected, `browser: null`, a failed launch) or has no host.
+    /// A recent entry from a dispatch record. `None` when the link was
+    /// rejected, failed to launch or has no host. A link a rule or default
+    /// kept from opening (Don't open, `browser: null`) is listed as "not
+    /// opened" with who decided (design: Not Opened 2d).
     pub fn from_record(record: &DispatchRecord) -> Option<Self> {
-        if !matches!(record.outcome, Outcome::Opened | Outcome::DryRun) {
+        let not_opened = record.outcome == Outcome::NotOpened;
+        if !not_opened && !matches!(record.outcome, Outcome::Opened | Outcome::DryRun) {
             return None;
         }
-        let browser = record.browser.as_ref()?;
+        let browser = record.browser.as_ref();
+        if browser.is_none() && !not_opened {
+            return None;
+        }
         let mut received = None;
         let mut rewritten = false;
         let mut route = RecentRoute::Unnumbered;
@@ -284,15 +290,28 @@ impl Recent {
                 _ => {}
             }
         }
-        // A rule may name the browser by bundle id: show its name.
-        let label = BrowserLabel::new(
-            badge_for(&browser.name),
-            &crate::default_browser::browser_name(&browser.name),
-            (!browser.profile.is_empty()).then_some(browser.profile.as_str()),
-        )
-        .for_app(&browser.name);
+        let (label, opened) = match browser {
+            // A rule may name the browser by bundle id: show its name.
+            Some(browser) => (
+                BrowserLabel::new(
+                    badge_for(&browser.name),
+                    &crate::default_browser::browser_name(&browser.name),
+                    (!browser.profile.is_empty()).then_some(browser.profile.as_str()),
+                )
+                .for_app(&browser.name),
+                browser.url.as_str(),
+            ),
+            None => (
+                BrowserLabel::new(
+                    crate::widgets::AppBadge::from(crate::widgets::NOT_OPENED_BADGE),
+                    "not opened",
+                    None,
+                ),
+                record.final_url.as_deref()?,
+            ),
+        };
         Self::from_urls(
-            &browser.url,
+            opened,
             received.filter(|_| rewritten),
             label,
             route,
@@ -600,6 +619,8 @@ impl TrayModel {
             &current,
             None,
             self.choices.scanned,
+            // Sending links nowhere is Hold, not a destination.
+            false,
         )
     }
 
@@ -1048,7 +1069,10 @@ mod tests {
         assert_eq!(model.recents[1].rewritten_from.as_deref(), Some("x.com"));
         assert_eq!(model.links_today, records.len() as u64);
         assert!(records.iter().all(|r| Recent::from_record(r).is_none()
-            || matches!(r.outcome, Outcome::Opened | Outcome::DryRun)));
+            || matches!(
+                r.outcome,
+                Outcome::Opened | Outcome::DryRun | Outcome::NotOpened
+            )));
 
         let default = Recent::from_record(&records[6]).expect("the default opened");
         assert_eq!(default.route, RecentRoute::Default);
@@ -1057,6 +1081,38 @@ mod tests {
             default.detail(),
             "Google Chrome \u{00b7} Personal \u{00b7} default"
         );
+    }
+
+    /// A link a rule kept from opening is listed, as "not opened" with
+    /// who decided (design: Not Opened 2d).
+    #[test]
+    fn a_not_opened_link_is_a_recent_that_says_so() {
+        use pwrroute_router::{DispatchId, DispatchRecord, Privacy, Timings};
+        let url = "https://ads.example.net/click?id=7";
+        let record = |by| DispatchRecord {
+            id: DispatchId(1),
+            received_at: now(),
+            privacy: Privacy::Full,
+            link: pwrroute_router::Link::new(url, pwrroute_router::Source::CommandLine),
+            forwarded: false,
+            final_url: Some(url.into()),
+            browser: None,
+            steps: vec![
+                Step::Received { url: url.into() },
+                Step::Matched { by },
+                Step::NotOpened,
+            ],
+            outcome: Outcome::NotOpened,
+            timings: Timings::default(),
+        };
+        let rule = Recent::from_record(&record(Matched::Rule { index: 3 })).unwrap();
+        assert_eq!(rule.host, "ads.example.net");
+        assert_eq!(rule.detail(), "not opened \u{00b7} rule 4");
+        let default = Recent::from_record(&record(Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        }))
+        .unwrap();
+        assert_eq!(default.detail(), "not opened \u{00b7} default");
     }
 
     /// Attribution (WP-B): a recent names who routed it, `rules.json`'s

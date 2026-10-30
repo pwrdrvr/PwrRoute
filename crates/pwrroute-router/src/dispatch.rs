@@ -169,8 +169,9 @@ pub struct FallbackSource(Arc<dyn Fn() -> Option<(String, String)> + Send + Sync
 
 impl FallbackSource {
     /// Asks `choice` for the browser (an app name, bundle id or `.app`
-    /// path) and profile (empty for none). `None`, an empty name, or a name
-    /// that is PwrRoute itself means [`FALLBACK_BROWSER`].
+    /// path) and profile (empty for none). `None`, an empty name, a name
+    /// that is PwrRoute itself, or Don't open (`rules.json`'s browser
+    /// `"none"`, which opens nothing) means [`FALLBACK_BROWSER`].
     pub fn new(choice: impl Fn() -> Option<(String, String)> + Send + Sync + 'static) -> Self {
         Self(Arc::new(choice))
     }
@@ -181,11 +182,16 @@ impl FallbackSource {
         Self::new(move || Some(choice.clone()))
     }
 
-    /// The browser and profile now: never empty, never PwrRoute.
+    /// The browser and profile now: never empty, never PwrRoute, never
+    /// Don't open. A link that falls back must open somewhere.
     pub fn get(&self) -> (String, String) {
         (self.0)()
             .map(|(browser, profile)| (browser.trim().to_owned(), profile.trim().to_owned()))
-            .filter(|(browser, _)| !browser.is_empty() && !is_self_name(browser))
+            .filter(|(browser, _)| {
+                !browser.is_empty()
+                    && !is_self_name(browser)
+                    && !pwrroute_engine::is_dont_open(browser)
+            })
             .unwrap_or_else(|| (FALLBACK_BROWSER.to_owned(), String::new()))
     }
 }

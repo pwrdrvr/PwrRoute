@@ -76,6 +76,9 @@ pub struct Counts {
     pub rewritten: u64,
     /// Kept at host only or nothing: the rule that took it keeps less.
     pub private: u64,
+    /// Recorded and not opened: a rule, a default or a config handler
+    /// said Don't open.
+    pub not_opened: u64,
 }
 
 impl Counts {
@@ -106,6 +109,9 @@ impl Counts {
         if record.privacy != Privacy::Full {
             self.private += 1;
         }
+        if record.outcome == Outcome::NotOpened {
+            self.not_opened += 1;
+        }
     }
 
     /// The count a filter shows beside its label.
@@ -116,6 +122,7 @@ impl Counts {
             Filter::Failed => self.failed,
             Filter::Rewritten => self.rewritten,
             Filter::Private => self.private,
+            Filter::NotOpened => self.not_opened,
         }
     }
 
@@ -170,7 +177,9 @@ pub enum HitKey {
 /// names, never a host or URL. A paused or sent link counts for its
 /// browser only;
 /// a record kept at nothing has no browser, so it counts for its rule
-/// only.
+/// only. A link that was not opened counts under the browser word
+/// `"none"` (`rules.json`'s Don't open), which the Overview draws as its
+/// Not opened card.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tally {
     rules: HashMap<HitKey, u64>,
@@ -208,6 +217,11 @@ impl Tally {
             *self
                 .browsers
                 .entry((browser.name.clone(), browser.profile.clone(), private))
+                .or_default() += 1;
+        } else if record.outcome == Outcome::NotOpened {
+            *self
+                .browsers
+                .entry((pwrroute_engine::DONT_OPEN.to_owned(), String::new(), false))
                 .or_default() += 1;
         }
     }
@@ -606,12 +620,16 @@ pub enum Filter {
     Rewritten,
     /// Kept at host only or nothing: counts, and the host-only rows.
     Private,
+    /// Recorded and not opened (design: Not Opened 2a): the links waiting
+    /// for a decision, whoever said Don't open.
+    NotOpened,
 }
 
 impl Filter {
-    pub const ALL: [(Self, &'static str); 5] = [
+    pub const ALL: [(Self, &'static str); 6] = [
         (Self::All, "All"),
         (Self::Unrouted, "Everything else"),
+        (Self::NotOpened, "Not opened"),
         (Self::Failed, "Failed"),
         (Self::Rewritten, "Rewritten"),
         (Self::Private, "Private"),
@@ -725,6 +743,7 @@ impl ActivityRow {
             Filter::Rewritten => self.rewritten,
             Filter::Failed => self.failed(),
             Filter::Private => self.privacy != Privacy::Full,
+            Filter::NotOpened => matches!(self.opened, Opened::Nowhere),
         };
         if !kind {
             return false;
@@ -887,6 +906,35 @@ fn matched_line(by: Matched, config: Option<&str>) -> String {
         Matched::Default { owner: None } => "default \u{00b7} no handler matched".to_owned(),
         Matched::Unreported => "a rule or handler matched".to_owned(),
     }
+}
+
+/// The expanded row's line for a link that was not opened, naming who
+/// said so as the line before it does (design: Not Opened 2b): a
+/// `rules.json` rule or PwrRoute's default said Don't open (`"none"`), a
+/// config handler or default `browser: null`.
+fn not_opened_line(steps: &[Step], config: Option<&str>) -> String {
+    let by = steps.iter().find_map(|step| match step {
+        Step::Matched { by } => Some(*by),
+        _ => None,
+    });
+    let who = match by {
+        Some(Matched::Rule { index }) => format!("rule {} says Don't open", index + 1),
+        Some(Matched::Handler { index }) => {
+            format!("config handler {} says browser: null", index + 1)
+        }
+        Some(Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        }) => "PwrRoute's default is Don't open".to_owned(),
+        Some(Matched::Default {
+            owner: Some(Owner::Config),
+        }) => format!(
+            "{}'s default is browser: null",
+            config.unwrap_or("the config")
+        ),
+        Some(Matched::Default { owner: None }) => "the default opens nothing".to_owned(),
+        Some(Matched::Unreported) | None => "the rule says Don't open".to_owned(),
+    };
+    format!("not opened \u{00b7} {who}")
 }
 
 /// What a pause or a send passed over.
@@ -1072,7 +1120,7 @@ fn trace_lines(record: &DispatchRecord, config: Option<&str>) -> Vec<ActivitySte
             ),
             Step::NotOpened => (
                 StepMark::Miss(number),
-                "not opened \u{00b7} the rule says browser: null".to_owned(),
+                not_opened_line(&record.steps, config),
             ),
             Step::Launched { dry_run } => {
                 let mut line = format!(
@@ -2732,6 +2780,70 @@ mod tests {
     }
 
     #[test]
+    fn a_not_opened_link_says_who_decided_and_has_its_own_filter() {
+        let url = "https://ads.example.net/click?id=7";
+        let not_opened = |id, by| {
+            record(
+                id,
+                url,
+                Some("Mail"),
+                vec![
+                    Step::Received { url: url.into() },
+                    Step::Matched { by },
+                    Step::NotOpened,
+                ],
+            )
+        };
+        let line = |record: &DispatchRecord| {
+            let row = ActivityRow::from_record(record);
+            row.steps.last().unwrap().text.to_string()
+        };
+        let rule = not_opened(1, Matched::Rule { index: 3 });
+        assert_eq!(line(&rule), "not opened \u{00b7} rule 4 says Don't open");
+        let default = not_opened(
+            2,
+            Matched::Default {
+                owner: Some(Owner::PwrRoute),
+            },
+        );
+        assert_eq!(
+            line(&default),
+            "not opened \u{00b7} PwrRoute's default is Don't open"
+        );
+        let handler = not_opened(3, Matched::Handler { index: 1 });
+        assert_eq!(
+            line(&handler),
+            "not opened \u{00b7} config handler 2 says browser: null"
+        );
+        // The filter lists every not-opened row, whoever decided, and
+        // counts them.
+        let opened = record(
+            4,
+            "https://docs.example.com/",
+            None,
+            vec![
+                Step::Received {
+                    url: "https://docs.example.com/".into(),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let rows = [&rule, &default, &handler, &opened].map(|r| ActivityRow::from_record(r));
+        let kept: Vec<bool> = rows
+            .iter()
+            .map(|row| row.passes(Filter::NotOpened, ""))
+            .collect();
+        assert_eq!(kept, [true, true, true, false]);
+        let feed = Feed::from_records(vec![rule, default, handler, opened]);
+        assert_eq!(feed.today(SystemTime::now()).of(Filter::NotOpened), 3);
+        assert!(
+            Filter::ALL
+                .iter()
+                .any(|(f, label)| *f == Filter::NotOpened && *label == "Not opened")
+        );
+    }
+
+    #[test]
     fn a_browser_that_could_not_open_shows_the_fallback_that_did() {
         let url = "https://zoom.us/j/8142201137";
         let mut record = record(
@@ -2882,6 +2994,7 @@ mod tests {
                 unrouted: 3,
                 rewritten: 0,
                 private: 0,
+                not_opened: 0,
             }
         );
         assert_eq!(feed.today(now).label(), "3 today \u{00b7} 1 failed");

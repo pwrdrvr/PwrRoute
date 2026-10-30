@@ -1747,6 +1747,7 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
             .as_deref()
             .map(|opened| (opened, "where it opened")),
         crate::editor::scanned(app, cx),
+        true,
     );
     let private_word = sheet
         .private
