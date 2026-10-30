@@ -1370,7 +1370,7 @@ fn role_card(index: usize, role: Role, chosen: bool, cx: &mut Context<'_, Approv
         .border_color(if chosen {
             theme::accent()
         } else {
-            theme::border_strong()
+            theme::border_control()
         })
         .bg(theme::bg_input())
         .when(chosen, |radio| {

@@ -504,15 +504,18 @@ fn nav_item(
     } else {
         theme::text_secondary()
     };
-    Button::new(pane.nav_id())
+    // The 1px edge is the focus ring's, out of the design's 8/10 padding.
+    crate::widgets::focus_visible(Button::new(pane.nav_id()), false)
         .selected(selected)
         .accessibility_label(pane.label())
         .relative()
         .w_full()
         .justify_start()
         .gap(px(9.0))
-        .px(px(10.0))
-        .py(px(8.0))
+        .px(px(9.0))
+        .py(px(7.0))
+        .border_1()
+        .border_color(theme::transparent())
         .rounded(px(7.0))
         .cursor_pointer()
         .map(|item| {

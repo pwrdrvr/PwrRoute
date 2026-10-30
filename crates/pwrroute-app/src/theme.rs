@@ -3,6 +3,11 @@
 //! The colors are the dark-theme values from `design/pwrroute.css`, which
 //! mirror the PwrSuite family palette. Sizes stay in CSS pixels so a view
 //! reads like the design it was drawn from.
+//!
+//! Where the design falls short of WCAG 2.2 AA a token says so and departs
+//! from it (`border_control`, `accent_border`); the tests at the bottom
+//! hold every text token to 4.5:1 and every control edge, status dot and
+//! focus ring to 3:1 on every surface.
 
 use gpui_kit::{Div, FontWeight, Hsla, IntoElement, ParentElement as _, SharedString, Styled as _};
 use gpui_kit::{div, px, rgb, svg};
@@ -82,6 +87,13 @@ tokens! {
     border_subtle = hex_alpha(0xf7f3eb, 0.10);
     border_default = hex_alpha(0xf7f3eb, 0.14);
     border_strong = hex_alpha(0xf7f3eb, 0.20);
+    /// The edge of a control that is known by its edge alone: a text
+    /// field's box, a switch's track when off, a radio or a checkbox.
+    /// The design draws those in `--border-default` (1.4:1 on the
+    /// panels); WCAG 1.4.11 asks 3:1, which this is on every surface
+    /// (`tests::controls_meet_3_to_1`). Cards, dividers and frames stay
+    /// on the fainter borders: they are decoration.
+    border_control = hex_alpha(0xf7f3eb, 0.40);
     text_primary = hex(0xf7f3eb);
     text_secondary = hex(0xb8b0a5);
     text_muted = hex(0x8c857a);
@@ -92,7 +104,16 @@ tokens! {
     accent_soft = hex_alpha(0xff8a1f, 0.12);
     /// `.rr.new`, a line that is the rule in a source frame.
     accent_tint = hex_alpha(0xff8a1f, 0.08);
-    accent_border = hex_alpha(0xff8a1f, 0.42);
+    /// A selected tile's or lit row's edge. The design's 0.42 is 2.3:1 on
+    /// the panels, and for a tile the edge is what says it is chosen:
+    /// 0.56 is 3:1 (WCAG 1.4.11) and the same orange.
+    accent_border = hex_alpha(0xff8a1f, 0.56);
+    /// The keyboard focus ring (`widgets::focus_visible`): 8:1 on every
+    /// surface.
+    focus_ring = hex(0xff8a1f);
+    /// The ring on a control filled with the accent, where an accent ring
+    /// would not show: 18:1 on the panels around it.
+    focus_ring_on_accent = hex(0xf7f3eb);
     danger_soft = hex_alpha(0xb94232, 0.24);
     danger_text = hex(0xffb0a1);
     success_soft = hex_alpha(0x4a945c, 0.18);
@@ -170,4 +191,117 @@ pub fn icon(path: &'static str, size: f32, color: Hsla) -> impl IntoElement {
 /// The 6px status dot.
 pub fn dot(color: Hsla) -> Div {
     div().flex_none().size(px(6.0)).rounded_full().bg(color)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::Rgba;
+
+    use super::*;
+
+    /// Every fill a view draws text or a control on.
+    fn surfaces() -> Vec<(&'static str, Hsla)> {
+        vec![
+            ("bg_app", bg_app()),
+            ("bg_titlebar", bg_titlebar()),
+            ("bg_sidebar", bg_sidebar()),
+            ("bg_panel", bg_panel()),
+            ("bg_input", bg_input()),
+            ("bg_elevated", bg_elevated()),
+            ("bg_hover", bg_hover()),
+            ("bg_hover_strong", bg_hover_strong()),
+            ("bg_row_active", bg_row_active()),
+            ("bg_popover", bg_popover()),
+        ]
+    }
+
+    /// `color` over the opaque `under`, as the renderer blends it.
+    fn over(color: Hsla, under: Hsla) -> [f32; 3] {
+        let top = Rgba::from(color);
+        let bottom = Rgba::from(under);
+        let a = top.a;
+        [
+            top.r * a + bottom.r * (1.0 - a),
+            top.g * a + bottom.g * (1.0 - a),
+            top.b * a + bottom.b * (1.0 - a),
+        ]
+    }
+
+    /// WCAG 2.2 relative luminance of an sRGB color.
+    fn luminance([r, g, b]: [f32; 3]) -> f32 {
+        let linear = |c: f32| {
+            if c <= 0.040_45 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    fn contrast(color: Hsla, under: Hsla) -> f32 {
+        let a = luminance(over(color, under));
+        let b = luminance(over(under, under));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    fn assert_on_every_surface(tokens: &[(&str, Hsla)], minimum: f32) {
+        let mut failing = Vec::new();
+        for (name, color) in tokens {
+            for (surface, under) in surfaces() {
+                let ratio = contrast(*color, under);
+                if ratio < minimum {
+                    failing.push(format!("{name} on {surface}: {ratio:.2}"));
+                }
+            }
+        }
+        assert!(failing.is_empty(), "below {minimum}:1: {failing:#?}");
+    }
+
+    #[test]
+    fn contrast_matches_known_values() {
+        // WCAG's own extremes, and the design's muted text on black.
+        assert!((contrast(hex(0xffffff), hex(0x000000)) - 21.0).abs() < 0.01);
+        assert!((contrast(hex(0x8c857a), hex(0x000000)) - 5.75).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_meets_4_5_to_1() {
+        assert_on_every_surface(
+            &[
+                ("text_primary", text_primary()),
+                ("text_secondary", text_secondary()),
+                ("text_muted", text_muted()),
+                ("text_subtle", text_subtle()),
+                ("accent", accent()),
+                ("accent_bright", accent_bright()),
+                ("danger_text", danger_text()),
+                ("success_text", success_text()),
+                ("info_text", info_text()),
+                ("warn_text", warn_text()),
+                ("log_target", log_target()),
+            ],
+            4.5,
+        );
+        assert!(contrast(accent_on(), accent()) >= 4.5);
+    }
+
+    #[test]
+    fn controls_meet_3_to_1() {
+        assert_on_every_surface(
+            &[
+                ("border_control", border_control()),
+                ("accent_border", accent_border()),
+                ("focus_ring", focus_ring()),
+                ("focus_ring_on_accent", focus_ring_on_accent()),
+                ("status_ok", status_ok()),
+                ("status_error", status_error()),
+                ("status_warning", status_warning()),
+                ("status_suspended", status_suspended()),
+            ],
+            3.0,
+        );
+        // The ring on a primary button shows against its own fill too.
+        assert!(contrast(focus_ring_on_accent(), accent()) >= 2.0);
+    }
 }

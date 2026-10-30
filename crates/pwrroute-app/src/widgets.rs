@@ -3,8 +3,9 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Div, ElementId, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, StyledImage as _, div, img, px,
+    Div, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement as _,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledImage as _, div,
+    img, px,
 };
 
 use crate::theme::{self, icon, mono, text};
@@ -309,7 +310,7 @@ impl ButtonKind {
 }
 
 fn button_frame(kind: ButtonKind, small: bool) -> Div {
-    div()
+    keyboard_control(div(), kind == ButtonKind::Primary)
         .flex()
         .flex_none()
         .items_center()
@@ -353,9 +354,36 @@ pub fn input_box() -> Div {
         .px(px(10.0))
         .bg(theme::bg_input())
         .border_1()
-        .border_color(theme::border_default())
+        .border_color(theme::border_control())
         .rounded(px(7.0))
         .overflow_hidden()
+}
+
+/// Keyboard focus, drawn: while focus came by keyboard (GPUI's
+/// `focus_visible`, never after a click) the element's own 1px edge turns
+/// `theme::focus_ring`, or `focus_ring_on_accent` on an accent fill. The
+/// element must draw a border, transparent at rest, so the ring takes no
+/// layout space.
+pub fn focus_visible<E: InteractiveElement>(element: E, on_accent: bool) -> E {
+    let ring = if on_accent {
+        theme::focus_ring_on_accent()
+    } else {
+        theme::focus_ring()
+    };
+    element.focus_visible(move |style| style.border_color(ring))
+}
+
+/// A div control the keyboard can reach: once the caller gives it an id it
+/// is a Tab stop, Return and Space click it (GPUI's own keyboard click) and
+/// it shows [`focus_visible`]'s ring. A pointer press leaves focus where it
+/// was, as a native button does, so a click never takes the keys from the
+/// window's list or a field. Without an id GPUI keeps no focus handle and
+/// this does nothing, so a frame drawn inside another control (the
+/// approval window's `base::Button`s) stays out of the Tab order.
+pub fn keyboard_control<E: InteractiveElement>(element: E, on_accent: bool) -> E {
+    focus_visible(element, on_accent)
+        .tab_index(0)
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
 }
 
 /// `.inp.focus`. GPUI has no `outline`, so the 2px ring with its 1px offset
@@ -366,7 +394,7 @@ pub fn focus_ring(input: Div) -> Div {
         .m(px(-3.0))
         .p(px(1.0))
         .border_2()
-        .border_color(theme::accent())
+        .border_color(theme::focus_ring())
         .rounded(px(10.0))
         .child(input)
 }
@@ -385,7 +413,7 @@ pub fn switch(on: bool) -> Div {
     } else {
         (
             theme::bg_hover_strong(),
-            theme::border_default(),
+            theme::border_control(),
             theme::text_muted(),
         )
     };
@@ -429,9 +457,12 @@ pub fn segment(label: impl Into<SharedString>, selected: bool) -> Div {
     } else {
         theme::text_secondary()
     };
-    div()
-        .py(px(5.0))
-        .px(px(10.0))
+    // The 1px edge is the focus ring's, out of the design's 5/10 padding.
+    keyboard_control(div(), false)
+        .py(px(4.0))
+        .px(px(9.0))
+        .border_1()
+        .border_color(theme::transparent())
         .rounded(px(5.0))
         .cursor_pointer()
         .when(selected, |segment| segment.bg(theme::bg_row_active()))

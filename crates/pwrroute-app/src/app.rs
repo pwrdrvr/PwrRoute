@@ -178,7 +178,8 @@ impl PwrRoute {
         let tray = crate::tray::model(cx).map(|model| cx.observe(&model, |_, _, cx| cx.notify()));
         // Rules opens as a list: the editor appears on a click (or Down).
         let mut this = Self {
-            focus: cx.focus_handle(),
+            // A Tab stop, so Tab comes back round to the list and map keys.
+            focus: cx.focus_handle().tab_stop(true),
             menu_bar: MenuBar::entity("PwrRoute", cx),
             screen: Screen::Overview,
             rewrites: store.rewrites(),
@@ -998,7 +999,7 @@ impl PwrRoute {
         match self.screen {
             // The map's keyboard: Esc lets go of the pin.
             Screen::Overview => {
-                self.overview_key(key, event.keystroke.modifiers.shift, window, cx);
+                self.overview_key(key, window, cx);
             }
             Screen::Rules if self.config.is_none() || self.visual_rules_expanded => {
                 if self.rules_list_key(event, window, cx) {

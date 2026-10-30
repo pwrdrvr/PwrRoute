@@ -137,13 +137,12 @@ impl Render for DocWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let copy_label = if self.copied { "Copied" } else { "Copy" };
         let strip = aux_window::strip(self.doc.title(), &self.menu_bar, window, cx).child(
-            div()
+            button(copy_label, ButtonKind::Default, true)
                 .id(COPY_ID)
                 .debug_selector(|| COPY_ID.into())
                 // On Windows the strip is the drag area: a press here must
                 // be the button's.
                 .occlude()
-                .child(button(copy_label, ButtonKind::Default, true))
                 .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
         );
         let body = match &self.body {
