@@ -128,7 +128,6 @@ fn the_nav_switches_panes(cx: &mut TestAppContext) {
     for target in [
         Pane::Configuration,
         Pane::LocalAgents,
-        Pane::General,
         Pane::Updates,
         Pane::Diagnostics,
         Pane::About,

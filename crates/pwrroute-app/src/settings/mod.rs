@@ -94,31 +94,28 @@ pub const SHORTCUT: &str = if cfg!(target_os = "macos") {
 /// The nav's sections, in the design's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pane {
-    General,
+    About,
     Browsers,
     Configuration,
     Privacy,
     LocalAgents,
     Updates,
     Diagnostics,
-    About,
 }
 
 impl Pane {
-    pub const ALL: [Self; 8] = [
-        Self::General,
+    pub const ALL: [Self; 7] = [
+        Self::About,
         Self::Browsers,
         Self::Configuration,
         Self::Privacy,
         Self::LocalAgents,
         Self::Updates,
         Self::Diagnostics,
-        Self::About,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::General => "General",
             Self::Browsers => "Browsers",
             Self::Configuration => "Configuration",
             Self::Privacy => "Privacy",
@@ -132,7 +129,6 @@ impl Pane {
     /// The nav item's element id.
     pub fn nav_id(self) -> &'static str {
         match self {
-            Self::General => "settings-nav-general",
             Self::Browsers => "settings-nav-browsers",
             Self::Configuration => "settings-nav-configuration",
             Self::Privacy => "settings-nav-privacy",
@@ -146,7 +142,6 @@ impl Pane {
     /// The pane body's element id.
     pub fn pane_id(self) -> &'static str {
         match self {
-            Self::General => "settings-pane-general",
             Self::Browsers => "settings-pane-browsers",
             Self::Configuration => "settings-pane-configuration",
             Self::Privacy => "settings-pane-privacy",
@@ -317,7 +312,7 @@ impl SettingsWindow {
         Self {
             focus: cx.focus_handle(),
             menu_bar: MenuBar::entity("Settings", cx),
-            // General is not drawn yet; Browsers is the first pane that is.
+            // Browsers, not About: it is the pane people open Settings for.
             pane: Pane::Browsers,
             model,
             collapsed: HashSet::new(),
@@ -466,7 +461,6 @@ impl SettingsWindow {
 
     fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
         match self.pane {
-            Pane::General => placeholder(Pane::General),
             Pane::Browsers => browsers::pane(self, cx),
             Pane::Configuration => configuration::pane(self, cx),
             Pane::Privacy => privacy::pane(self, window, cx),
@@ -544,12 +538,6 @@ fn nav_item(
                     .child(mono(count, 10.5, 600.0, theme::text_subtle())),
             )
         })
-}
-
-/// A pane the design leaves to the family and that is not drawn yet.
-fn placeholder(pane: Pane) -> Div {
-    let help = "Launch at login, the menu bar icon and appearance. Not built yet.";
-    div().child(controls::pane_head("Settings", pane.label(), help, None))
 }
 
 /// `.strip`: the family title strip, with "Settings" as its crumb.
