@@ -3,6 +3,7 @@ name = "pwrroute-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Loads Finicky v4 JS/TS configs and resolves URLs to a browser, in QuickJS"
