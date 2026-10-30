@@ -114,7 +114,7 @@ pub enum Pane {
 }
 
 impl Pane {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::About,
         Self::Browsers,
         Self::Configuration,
