@@ -236,7 +236,8 @@ their own modules.
   template per `Platform` and its tests hold both to the order. macOS
   installs it with `cx.set_menus`; Windows and Linux draw the same
   template in the title strip (below). No Website row
-  (PwrRoute has none) and no Reload/zoom rows (a GPUI window has neither).
+  (PwrRoute has none) and no Reload row. View ends in Actual Size, Zoom
+  In and Zoom Out (`zoom.rs`, below).
   Edit's rows replay ⌘X/⌘C/⌘V/⌘A into the window in front: the text
   fields read raw keys, so those bindings live in `MENU_ONLY`, a context no
   element has, and never steal a key. A global action that touches a
@@ -563,6 +564,31 @@ their own modules.
   caller's own `.inp` box made a `text_field::hit_area` (the rule editor,
   Activity's sheet). Never draw a field's text as a plain div: it loses
   the caret. Write the text only through `set`, so the caret follows.
+- **Colors, dimming and zoom come from `theme` (design: Contrast and
+  Scale).** Four palettes: dark and light, each with Increase Contrast,
+  which strengthens ink and edges, never tints. Light draws only as a
+  preview (`PWRROUTE_APPEARANCE=light`); `PWRROUTE_INCREASE_CONTRAST=1`
+  previews the other. The theme is thread-local: set it on the GPUI
+  thread, then `cx.refresh_windows()`. Text never fades by `.opacity()`:
+  wrap what is off or missed in `theme::dimmed` / `dimmed_if`, which step
+  the neutral text ramp down one level (muted is the floor), and say
+  "off" another way (a chip, a strike, the dashed frame). Opacity is for
+  what is not text (`DIM_DECORATIVE`) and for passing states (`DISABLED`,
+  `LIFTED`, `SPOTLIGHT`). Every text token clears 4.5:1 and every control
+  edge 3:1 on every surface, also dimmed. `theme`'s tests check that and
+  compare `src/contrast.snap` (rewrite it with `UPDATE_CONTRAST_SNAP=1`
+  and review the diff). `design/pwrroute.css` holds the same values.
+  **Views size with `theme::px`, never `gpui_kit::px`:** it is the
+  design's pixels times View › Zoom (`zoom.rs`: 100 to 200%, saved as
+  `settings.json`'s `view.zoom`). A measured length goes back through
+  `theme::css` before it meets a constant. Screen geometry (`macos.rs`)
+  and tests keep `gpui_kit::px`. A window opens at `zoom::window_size`,
+  its design size zoomed and capped to the display. Layouts reflow rather
+  than clip (`app::Layout`): below 960 design px the rail is icons; Rules
+  shows the list or the editor (with "‹ All rules") when both do not fit;
+  Activity's table scrolls sideways past `column::TABLE_MIN`; Today's
+  tiles go in pairs. The `screens` example takes `--light`,
+  `--high-contrast`, `--zoom=1.5` and `--display=WxH`.
 - **Never clip text at its line box.** `theme::text` and most one-line
   helpers set the line height to the font size, and Geist's glyphs are
   taller than that (1.14em, Geist Mono 1.3em), so `overflow_hidden` on
