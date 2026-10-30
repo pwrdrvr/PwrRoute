@@ -453,12 +453,21 @@ fn when(ms: u64) -> String {
     }
 }
 
-/// The pane as the running app stands. Looks for cloud folders again.
+/// The pane as the running app stands, looking for cloud folders again:
+/// for the window opening.
 pub fn model(cx: &mut App) -> Sync {
+    if let Some(feed) = crate::sync::feed(cx) {
+        feed.update(cx, |feed, _| feed.look_for_places());
+    }
+    current(cx)
+}
+
+/// The pane with the cloud folders found when it opened: a pass or a
+/// change redraws it without listing `~/Library/CloudStorage` again.
+fn current(cx: &mut App) -> Sync {
     let Some(feed) = crate::sync::feed(cx) else {
         return Sync::default();
     };
-    feed.update(cx, |feed, _| feed.look_for_places());
     let (status, places) = {
         let feed = feed.read(cx);
         (feed.status.clone(), feed.places.clone())
@@ -497,7 +506,7 @@ pub fn refresh(cx: &mut App) {
     if !super::is_open(cx) {
         return;
     }
-    let sync = model(cx);
+    let sync = current(cx);
     super::update(cx, |model| model.sync = sync);
 }
 
@@ -505,7 +514,7 @@ fn report(problem: String, cx: &mut App) {
     if !super::is_open(cx) {
         return;
     }
-    let mut sync = model(cx);
+    let mut sync = current(cx);
     sync.problem = Some(problem.into());
     super::update(cx, |model| model.sync = sync);
 }

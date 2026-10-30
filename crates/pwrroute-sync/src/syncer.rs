@@ -275,16 +275,22 @@ impl Syncer {
     }
 
     /// Sets the folders. A folder no longer in the list is forgotten, so
-    /// adding it back starts as a join (and asks before overwriting).
-    pub fn set_targets(&mut self, targets: Vec<Target>) {
+    /// adding it back starts as a join (and asks before overwriting), and
+    /// leaves the status at once. Returns whether the status lost a folder.
+    pub fn set_targets(&mut self, targets: Vec<Target>) -> bool {
         for old in &self.targets {
             if !targets.iter().any(|t| t.id() == old.id()) {
                 self.state.forget(&old.id());
                 self.seen.retain(|(t, _), _| *t != old.id());
             }
         }
+        let before = self.status.targets.len();
+        self.status
+            .targets
+            .retain(|s| targets.iter().any(|t| t.id() == s.target.id()));
         self.targets = targets;
         self.save_state();
+        self.status.targets.len() != before
     }
 
     pub fn targets(&self) -> &[Target] {
@@ -616,7 +622,16 @@ fn read_local(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// Writes this machine's file. A symlink (a Finicky config linked into
+/// another synced folder by hand) is written through, never replaced.
 fn write_local(path: &Path, bytes: &[u8]) -> Result<()> {
+    let target;
+    let path = if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        target = fs::canonicalize(path).with_context(|| path.display().to_string())?;
+        target.as_path()
+    } else {
+        path
+    };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
     }

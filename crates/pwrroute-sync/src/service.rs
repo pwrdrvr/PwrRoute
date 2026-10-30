@@ -97,7 +97,11 @@ impl Service {
                         Ok(Command::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                         Ok(Command::Wake) => schedule.wake(),
                         Ok(Command::Targets(targets)) => {
-                            syncer.set_targets(targets);
+                            // A removed folder leaves the status now, even
+                            // when no folder is left to run a pass over.
+                            if syncer.set_targets(targets) {
+                                publish(&syncer);
+                            }
                             schedule.wake();
                         }
                         Ok(Command::Items(items)) => {

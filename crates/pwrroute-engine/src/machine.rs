@@ -36,7 +36,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::rules::{Binding, RuleSet, RulesFile};
+use crate::rules::{Binding, Destination, RuleSet, RulesFile};
 
 /// `machine.json`: this machine's bindings and rule-set switches.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +186,16 @@ impl RulesFile {
                 destination.binding = binding.clone();
             }
         }
+        // A name bound here that the synced file no longer defines still
+        // routes as bound, as `binding_for` (what the editor shows) says.
+        for (name, binding) in &machine.destinations {
+            if out.destination(name).is_none() {
+                out.destinations.push(Destination {
+                    name: name.clone(),
+                    binding: binding.clone(),
+                });
+            }
+        }
         for (name, on) in &machine.sets {
             match out.sets.iter_mut().find(|s| &s.name == name) {
                 Some(set) => set.enabled = *on,
@@ -274,7 +284,7 @@ impl RulesFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::{Destination, Rewrite, Rule};
+    use crate::rules::{Rewrite, Rule};
 
     fn binding(browser: &str, profile: &str) -> Binding {
         Binding {
@@ -457,6 +467,24 @@ mod tests {
         let here = file.resolved();
         assert_eq!(here.rules[0].browser, "Google Chrome");
         assert_eq!(here.rules[0].profile, "Work");
+    }
+
+    #[test]
+    fn a_name_bound_here_that_the_file_lost_still_routes_as_bound() {
+        let mut file = synced();
+        file.destinations.retain(|d| d.name != "Work 1");
+        let machine = MachineFile {
+            destinations: BTreeMap::from([(
+                "Work 1".to_owned(),
+                binding("Microsoft Edge", "Profile 3"),
+            )]),
+            ..MachineFile::default()
+        };
+        let (shown, _) = file.binding_for("Work 1", &machine).unwrap();
+        let here = file.for_machine(&machine);
+        assert_eq!(here.rules[0].browser, shown.browser);
+        assert_eq!(here.rules[0].profile, "Profile 3");
+        assert_eq!(here.for_machine(&machine), here, "idempotent");
     }
 
     #[test]

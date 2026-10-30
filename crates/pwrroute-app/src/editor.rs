@@ -51,6 +51,8 @@ pub enum Field {
     Becomes,
     /// The handler's rule set, by name.
     Set,
+    /// A name for what the handler opens, taken on Return.
+    Name,
 }
 
 /// The editor's fields for the selected rule. Built when the selection
@@ -66,6 +68,10 @@ pub struct Rail {
     pub becomes: TextField,
     /// The handler's rule set.
     pub set: TextField,
+    /// A name being typed for what the handler opens, and why the last
+    /// one was not taken.
+    pub name: TextField,
+    pub name_note: Option<String>,
     /// The sample was typed: it no longer follows the first pattern.
     pub sample_edited: bool,
     /// Which change's kind menu is open.
@@ -108,6 +114,8 @@ impl Rail {
             example: TextField::new("", cx),
             becomes: TextField::new("", cx),
             set: TextField::new(handler.set.clone().unwrap_or_default(), cx),
+            name: TextField::new("", cx),
+            name_note: None,
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
@@ -135,6 +143,8 @@ impl Rail {
             example: TextField::new("", cx),
             becomes: TextField::new("", cx),
             set: TextField::new(String::new(), cx),
+            name: TextField::new("", cx),
+            name_note: None,
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
@@ -168,6 +178,7 @@ impl Rail {
             Field::Example => Some(&mut self.example),
             Field::Becomes => Some(&mut self.becomes),
             Field::Set => Some(&mut self.set),
+            Field::Name => Some(&mut self.name),
         }
     }
 
@@ -181,6 +192,7 @@ impl Rail {
             Field::Example => Some(&self.example),
             Field::Becomes => Some(&self.becomes),
             Field::Set => Some(&self.set),
+            Field::Name => Some(&self.name),
         }
     }
 }
@@ -433,7 +445,7 @@ fn editable(
         .child(boxed)
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
             let taken = match field {
-                Field::Example | Field::Becomes => this.example_key(field, event, cx),
+                Field::Example | Field::Becomes | Field::Name => this.example_key(field, event, cx),
                 _ => this.rail_key(field, event, cx),
             };
             if taken {
@@ -921,6 +933,7 @@ fn open_in_section(
                 15.75,
             ))
         })
+        .children(name_destination_row(handler, rail, window, cx))
         .child(rule_set_row(app, handler, rail, window, cx))
         .child(labeled_row("Activity keeps", keep_control).mt(px(4.0)))
         .children(problems_under(&handler.problems, Under::Keep))
@@ -1003,6 +1016,51 @@ fn named_destinations(
                 10.5,
                 15.2,
             )),
+    )
+}
+
+/// "Name this destination": what the rule opens, saved under a name in
+/// `rules.json` so each machine can open that name its own way. Only for
+/// a rule that opens a browser by itself.
+fn name_destination_row(
+    handler: &Handler,
+    rail: &Rail,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Option<Div> {
+    // Don't open is not a place to name.
+    if handler.destination.is_some()
+        || handler.browser.trim().is_empty()
+        || pwrroute_engine::is_dont_open(&handler.browser)
+    {
+        return None;
+    }
+    let field = editable(
+        rail,
+        Field::Name,
+        "name-destination".into(),
+        Look {
+            mono: false,
+            placeholder: "Work 1",
+            error: rail.name_note.is_some(),
+        },
+        None,
+        window,
+        cx,
+    );
+    let help = rail.name_note.clone().unwrap_or_else(|| {
+        "Return names where this rule opens. Other rules can open the same name, and each \
+         machine can point it at its own browser and profile (Settings \u{203a} Sync)."
+            .to_owned()
+    });
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .mt(px(4.0))
+            .child(labeled_row("Name it", field))
+            .child(paragraph(help, 10.5, 15.2)),
     )
 }
 
@@ -1575,9 +1633,33 @@ impl PwrRoute {
         match text_field.key(&event.keystroke, cx) {
             Edit::Ignored => false,
             Edit::Handled | Edit::Changed => true,
+            Edit::Submit if field == Field::Name => {
+                self.name_destination_from_rail(cx);
+                true
+            }
             Edit::Submit => {
                 self.add_example_from_rail(cx);
                 true
+            }
+        }
+    }
+
+    /// Names what the selected rule opens with the name typed in the rail
+    /// (`RulesStore::name_destination`), or says why not.
+    pub fn name_destination_from_rail(&mut self, cx: &mut Context<'_, Self>) {
+        let (Some(Selection::Handler(h)), Some(rail)) = (self.selection, self.rail.as_mut()) else {
+            return;
+        };
+        let typed = rail.name.text.clone();
+        match self.store.name_destination(h, &typed) {
+            Ok(_) => {
+                rail.name.set("");
+                rail.name_note = None;
+                self.refresh(cx);
+            }
+            Err(why) => {
+                rail.name_note = Some(why);
+                cx.notify();
             }
         }
     }

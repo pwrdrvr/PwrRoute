@@ -528,6 +528,11 @@ impl PwrRoute {
     pub fn watch_activation(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
+                // machine.json edited by hand: the rows and Try it follow,
+                // as the router's reloader does.
+                if crate::sync::reload_machine(cx) {
+                    this.refresh(cx);
+                }
                 this.sync_with_disk(cx);
                 // Another machine may have saved while this one was away.
                 crate::sync::wake(cx);

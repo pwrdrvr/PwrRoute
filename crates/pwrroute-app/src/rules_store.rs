@@ -372,6 +372,39 @@ impl RulesStore {
         self.touch();
     }
 
+    /// Names what the handler opens: a new `destinations[]` entry bound to
+    /// its browser, profile and private window, which the handler then
+    /// opens by name. A name already taken opens that destination instead.
+    /// Returns the name used, or why there is none.
+    pub fn name_destination(&mut self, handler: usize, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Type a name first.".into());
+        }
+        if self.base.destination(name).is_some() {
+            self.set_destination(handler, Some(name));
+            return Ok(name.to_owned());
+        }
+        let Some(rule) = self.rule_mut(handler) else {
+            return Err("No rule is selected.".into());
+        };
+        if rule.browser.trim().is_empty() {
+            return Err("Choose where the rule opens first.".into());
+        }
+        let binding = engine::Binding {
+            browser: rule.browser.clone(),
+            profile: rule.profile.clone(),
+            private: rule.private,
+        };
+        rule.destination = Some(name.to_owned());
+        self.base.destinations.push(engine::Destination {
+            name: name.to_owned(),
+            binding,
+        });
+        self.touch();
+        Ok(name.to_owned())
+    }
+
     /// Puts the handler in a rule set by name; blank takes it out of any.
     pub fn set_rule_set(&mut self, handler: usize, name: &str) {
         let name = name.trim();
@@ -1109,6 +1142,41 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&text).unwrap(),
             serde_json::to_value(&file).unwrap()
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn naming_what_a_rule_opens_makes_a_destination_it_opens_by_name() {
+        let dir = scratch("name-destination");
+        let path = dir.join("rules.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"{ "defaultBrowser": "Safari",
+                 "rules": [{ "match": "work.example.com/*", "browser": "Google Chrome", "profile": "Work" },
+                           { "match": "docs.example.com/*", "browser": "Firefox" }] }"#,
+        )
+        .unwrap();
+        let mut store = RulesStore::load(Some(path.clone()));
+        assert!(store.name_destination(0, "  ").is_err());
+        assert_eq!(
+            store.name_destination(0, " Work 1 ").as_deref(),
+            Ok("Work 1")
+        );
+        assert_eq!(store.destinations().len(), 1);
+        assert_eq!(store.destinations()[0].binding.browser, "Google Chrome");
+        assert_eq!(store.destinations()[0].binding.profile, "Work");
+        // A name already taken opens that destination, and is not added twice.
+        assert_eq!(store.name_destination(1, "Work 1").as_deref(), Ok("Work 1"));
+        assert_eq!(store.destinations().len(), 1);
+        let handlers = store.handlers();
+        assert_eq!(handlers[1].destination.as_deref(), Some("Work 1"));
+        assert_eq!(handlers[1].browser, "Google Chrome");
+        assert!(handlers.iter().all(|h| h.problems.is_empty()));
+        store.save().unwrap();
+        let saved = RulesFile::load(&path).unwrap();
+        assert_eq!(saved.destinations.len(), 1);
+        assert_eq!(saved.rules[0].destination.as_deref(), Some("Work 1"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

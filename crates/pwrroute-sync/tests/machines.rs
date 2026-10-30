@@ -514,4 +514,34 @@ fn the_service_runs_a_pass_on_its_thread_and_publishes() {
     let status = rx.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(status.last_pass, Some(2_000));
     assert_eq!(status.targets[0].files[0].health, Health::InSync);
+
+    // Removing the last folder publishes a status with no folders, so the
+    // window stops showing the old one.
+    service.set_targets(Vec::new());
+    let status = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(status.targets.is_empty(), "{status:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pull_writes_through_a_symlinked_local_file() {
+    let cloud = cloud();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut studio = Mac::new("Studio Mac", &[cloud.path()]);
+    studio.save(&rules(&["a.example/*"]));
+    studio.pass(1_000);
+
+    // The Air's rules.json is a link into another folder it syncs by hand.
+    let mut air = Mac::new("MacBook Air", &[cloud.path()]);
+    let real = elsewhere.path().join("rules.json");
+    fs::write(&real, b"{}\n").unwrap();
+    std::os::unix::fs::symlink(&real, &air.rules).unwrap();
+    assert_eq!(air.health(2_000, 0), Health::Pulled);
+    assert!(
+        fs::symlink_metadata(&air.rules)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(&real).unwrap(), studio.local());
 }

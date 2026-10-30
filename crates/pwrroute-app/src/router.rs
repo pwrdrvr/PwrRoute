@@ -362,7 +362,7 @@ fn build_as_routed(
     let alone = Sources {
         config: None,
         rules: sources.rules.clone(),
-        ..Default::default()
+        machine: sources.machine.clone(),
     };
     Engine::from_sources(&alone, host, limits).or(loaded)
 }

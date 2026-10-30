@@ -49,13 +49,50 @@ pub fn rules_path() -> Option<PathBuf> {
     discovery::rules_path(&discovery::Environment::current())
 }
 
+fn machine_path() -> Option<PathBuf> {
+    rules_path().map(|p| MachineFile::path_beside(&p))
+}
+
+/// Reads `machine.json` again (an editor may have changed it). Returns
+/// whether the layer changed; one that does not parse keeps the last.
+pub fn reload_machine(cx: &App) -> bool {
+    if MACHINE
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_none()
+    {
+        // Not installed (tests): the layer stays empty.
+        return false;
+    }
+    let Some(path) = machine_path() else {
+        return false;
+    };
+    let read = match MachineFile::load(&path) {
+        Ok(read) => read,
+        Err(e) => {
+            log::warn!("machine.json did not load: {e:#}");
+            return false;
+        }
+    };
+    if read == machine() {
+        return false;
+    }
+    let name = machine_name(&read);
+    set_machine(read);
+    if let Some(feed) = feed(cx) {
+        feed.read(cx).with_service(|s| s.set_machine_name(&name));
+    }
+    true
+}
+
 /// Edits `machine.json` and saves it. The router's reloader follows the
-/// file; the window's engines read [`machine`] on their next build.
+/// file; the window's engines read [`machine`] on their next build. A file
+/// that does not parse is left alone: saving over it would lose the hand
+/// edits in it.
 pub fn edit_machine(edit: impl FnOnce(&mut MachineFile), cx: &mut App) -> Result<()> {
-    let path = rules_path()
-        .map(|p| MachineFile::path_beside(&p))
-        .context("no configuration directory")?;
-    let mut machine = MachineFile::load(&path).unwrap_or_else(|_| machine());
+    let path = machine_path().context("no configuration directory")?;
+    let mut machine =
+        MachineFile::load(&path).context("machine.json does not load; fix it by hand first")?;
     edit(&mut machine);
     machine.save(&path)?;
     let name = machine_name(&machine);
@@ -95,6 +132,9 @@ pub struct SyncFeed {
     /// opens ([`SyncFeed::look_for_places`]), never at launch.
     pub places: Vec<Place>,
     service: Option<Service>,
+    /// The files the thread was last given, by name and path: the config
+    /// in charge can change (or be published by the router) after launch.
+    sent_items: std::cell::RefCell<Vec<(String, PathBuf)>>,
 }
 
 impl SyncFeed {
@@ -102,6 +142,19 @@ impl SyncFeed {
         if let Some(service) = &self.service {
             f(service);
         }
+    }
+
+    /// Hands the thread `items` unless it already has those files.
+    fn send_items(&self, items: Vec<Item>) {
+        let names: Vec<(String, PathBuf)> = items
+            .iter()
+            .map(|i| (i.name.clone(), i.local.clone()))
+            .collect();
+        if *self.sent_items.borrow() == names {
+            return;
+        }
+        *self.sent_items.borrow_mut() = names;
+        self.with_service(|service| service.set_items(items));
     }
 
     /// Settles a conflict on the sync thread; `done` runs there.
@@ -172,19 +225,38 @@ pub fn line_of(status: &Status, now: u64) -> Option<Line> {
             )),
         });
     }
-    let down = |t: &&pwrroute_sync::TargetStatus| {
-        matches!(worst(t), Some(Health::Unavailable(_) | Health::Error(_)))
-    };
-    let unavailable = status.targets.iter().filter(down).count();
-    if unavailable == status.targets.len() {
-        return Some(Line {
-            text: "sync paused \u{00b7} folder unavailable".into(),
-            tone: Tone::Warn,
-            chip: Some("sync \u{00b7} paused"),
-            tip: status
-                .targets
-                .first()
-                .map(|t| format!("{}: not reachable", t.target.label)),
+    let unavailable = status
+        .targets
+        .iter()
+        .filter(|t| matches!(worst(t), Some(Health::Unavailable(_))))
+        .count();
+    // A write that failed or a file that does not load: the folder is
+    // there, so say so rather than "unavailable".
+    let failing: Vec<(&str, String)> = status
+        .targets
+        .iter()
+        .filter_map(|t| match worst(t) {
+            Some(Health::Error(why)) => Some((t.target.label.as_str(), why)),
+            _ => None,
+        })
+        .collect();
+    if unavailable + failing.len() == status.targets.len() {
+        return Some(match failing.first() {
+            Some((label, why)) => Line {
+                text: "sync paused \u{00b7} needs you".into(),
+                tone: Tone::Warn,
+                chip: Some("sync \u{00b7} paused"),
+                tip: Some(format!("{label}: {why}")),
+            },
+            None => Line {
+                text: "sync paused \u{00b7} folder unavailable".into(),
+                tone: Tone::Warn,
+                chip: Some("sync \u{00b7} paused"),
+                tip: status
+                    .targets
+                    .first()
+                    .map(|t| format!("{}: not reachable", t.target.label)),
+            },
         });
     }
     let settling = status
@@ -203,6 +275,10 @@ pub fn line_of(status: &Status, now: u64) -> Option<Line> {
     let mut tone = Tone::Quiet;
     if unavailable > 0 {
         text.push_str(&format!(" \u{00b7} {unavailable} unavailable"));
+        tone = Tone::Warn;
+    }
+    if !failing.is_empty() {
+        text.push_str(&format!(" \u{00b7} {} need you", failing.len()));
         tone = Tone::Warn;
     }
     Some(Line {
@@ -254,7 +330,12 @@ pub fn install(cx: &mut App) {
     set_machine(machine);
     let settings = settings(cx);
     let mut syncer = Syncer::new(&data_dir, &name, env!("CARGO_PKG_VERSION"));
-    syncer.set_items(items(&rules, &settings));
+    let first = items(&rules, &settings);
+    let sent = first
+        .iter()
+        .map(|i| (i.name.clone(), i.local.clone()))
+        .collect();
+    syncer.set_items(first);
     syncer.set_targets(settings.targets.clone());
     let (tx, rx) = async_channel::unbounded::<Status>();
     let service = match Service::spawn(syncer, SystemClock, move |status| {
@@ -270,6 +351,7 @@ pub fn install(cx: &mut App) {
         status: Status::default(),
         places: Vec::new(),
         service,
+        sent_items: std::cell::RefCell::new(sent),
     });
     cx.set_global(FeedGlobal(entity.clone()));
     cx.spawn(async move |cx| {
@@ -293,14 +375,25 @@ fn apply(status: Status, entity: &Entity<SyncFeed>, cx: &mut App) {
     if pulled {
         crate::app::sync_rules_windows(cx);
     }
+    follow_items(cx);
     crate::settings::sync_host::refresh(cx);
 }
 
 /// Runs a pass now: Sync now, the window coming to the front, an agent's
 /// write.
 pub fn wake(cx: &App) {
+    follow_items(cx);
     if let Some(feed) = feed(cx) {
         feed.read(cx).with_service(Service::wake);
+    }
+}
+
+/// Gives the thread the files that sync now: the router publishes the
+/// config in charge after launch, and the importer can change it.
+fn follow_items(cx: &App) {
+    if let (Some(feed), Some(rules)) = (feed(cx), rules_path()) {
+        let items = items(&rules, &settings(cx));
+        feed.read(cx).send_items(items);
     }
 }
 
@@ -315,13 +408,11 @@ pub fn edit_settings(edit: impl FnOnce(&mut SyncSettings), cx: &mut App) -> Resu
     let store = settings_store::store(cx).context("settings are not loaded")?;
     store.update(cx, |store, _| store.update(|s| edit(&mut s.sync)))?;
     let settings = settings(cx);
-    if let (Some(feed), Some(rules)) = (feed(cx), rules_path()) {
-        let items = items(&rules, &settings);
-        feed.read(cx).with_service(|service| {
-            service.set_items(items);
-            service.set_targets(settings.targets.clone());
-        });
+    if let Some(feed) = feed(cx) {
+        feed.read(cx)
+            .with_service(|service| service.set_targets(settings.targets.clone()));
     }
+    follow_items(cx);
     Ok(())
 }
 
@@ -474,6 +565,24 @@ mod tests {
         assert_eq!(one_down.tone, Tone::Warn);
         let paused = line_of(&status(&[Health::Unavailable("gone".into())], Some(0)), 0).unwrap();
         assert_eq!(paused.chip, Some("sync \u{00b7} paused"));
+        assert_eq!(paused.text, "sync paused \u{00b7} folder unavailable");
+        // A file that does not load is not an unreachable folder.
+        let broken = line_of(
+            &status(&[Health::Error("does not load".into())], Some(0)),
+            0,
+        )
+        .unwrap();
+        assert_eq!(broken.text, "sync paused \u{00b7} needs you");
+        assert_eq!(broken.tip.as_deref(), Some("Folder 0: does not load"));
+        let one_broken = line_of(
+            &status(&[Health::InSync, Health::Error("x".into())], Some(0)),
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            one_broken.text,
+            "synced \u{00b7} just now \u{00b7} 1 need you"
+        );
         let syncing = line_of(&status(&[Health::Waiting(Wait::Settling)], Some(0)), 0).unwrap();
         assert_eq!(syncing.text, "syncing\u{2026}");
         let conflict = pwrroute_sync::Conflict {
