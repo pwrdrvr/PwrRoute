@@ -143,7 +143,7 @@
         <div class="dv-opts">
 
           <div class="dv-opt" id="1a" data-screen-label="1a Rule editor: the Don't open lane">
-            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The rule editor&rsquo;s Open in. After the browsers comes one more lane, <b>Don&rsquo;t open</b>: the not-opened badge (an em dash on a dashed tile, as the Overview&rsquo;s Not opened card draws it), the name, the tag &ldquo;kept in Activity&rdquo; and one pill, <b>Don&rsquo;t open</b>. Its border is dashed until it is chosen, so it never reads as a browser. Choosing it clears the rule&rsquo;s profile and private window (they mean nothing here) and the Keep row stays. Right: the same rule on Rules, its target in secondary text with the badge.</span></div>
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The rule editor&rsquo;s Open in. After the browsers comes one more lane, <b>Don&rsquo;t open</b>: the not-opened badge (an em dash on a dashed tile, as the Overview&rsquo;s Not opened card draws it), the name, the tag &ldquo;kept in Activity&rdquo; and one pill, <b>Don&rsquo;t open</b>. Its border is dashed until it is chosen, so it never reads as a browser. Choosing it clears the rule&rsquo;s profile and private window (they mean nothing here) and the Keep row stays. Under the lanes one line says where its links go: &ldquo;Links this rule takes are not opened. Activity lists them under Not opened, where you can open one or add a rule.&rdquo; No missing-browser or profile warning applies. Try it reads &ldquo;This rule doesn&rsquo;t open that link.&rdquo; Right: the same rule on Rules, its target in secondary text with the badge.</span></div>
             <div class="dv-card crop" style="width: 1100px;">
               <div class="row2">
                 <div class="rrail">
@@ -156,7 +156,7 @@
                       <div class="lane no on"><div class="lane-hd"><span class="bi no">&mdash;</span>Don&rsquo;t open<span class="tg">kept in Activity</span></div><div class="pills"><span class="pl on">Don&rsquo;t open</span></div></div>
                     </div>
                   </div>
-                  <div class="rs"><h5>Try it</h5><div class="try"><span class="st"><i></i></span><span><b>Not opened</b> &middot; rule 4 matches https://ads.example.net/click?id=7</span></div></div>
+                  <div class="rs"><h5>Try it</h5><div class="try"><span class="st"><i></i></span><span>This rule doesn&rsquo;t open that link.</span></div></div>
                 </div>
                 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px;">
                   <span class="lbl">Rules</span>
@@ -197,7 +197,7 @@
                   <section class="card">
                     <div class="rr"><span class="idx">03</span><div class="m"><span class="tag">news.example.org/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
                     <div class="rr"><span class="idx">&infin;</span><div class="m"><span class="ev">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest no"><span class="bi no">&mdash;</span>Don&rsquo;t open</div><span class="hits">12 today</span><span class="more">&#8943;</span></div>
-                    <div class="card-foot">Only links your rules choose open. 12 others today were not opened &middot; <a style="color: var(--accent-bright);">Show in Activity</a></div>
+                    <div class="card-foot">Only links your rules choose open. 12 links today were not opened; they wait in Activity.</div>
                   </section>
                 </div>
               </div>
@@ -205,7 +205,7 @@
           </div>
 
           <div class="dv-opt" id="1c" data-screen-label="1c Activity's Add a rule: Don't open">
-            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Activity&rsquo;s Add a rule sheet draws the same lanes, so &ldquo;never open links like this&rdquo; is one pick: the Don&rsquo;t open lane comes last, as in the editor. Add stays disabled until a pill is on; the sheet&rsquo;s Added note reads &ldquo;Rule 5 added: links like this are not opened&rdquo;. The tray&rsquo;s Send links destination does not offer it: sending the next links nowhere is Hold, which has its own control.</span></div>
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Activity&rsquo;s Add a rule sheet draws the same lanes, so &ldquo;never open links like this&rdquo; is one pick: the Don&rsquo;t open lane comes last, as in the editor. Add stays disabled until a pill is on; the Added note is the one any rule gets. The tray&rsquo;s Send links destination does not offer it: sending the next links nowhere is Hold, which has its own control.</span></div>
             <div class="dv-card crop" style="width: 620px;">
               <span class="lbl">Open in</span>
               <div class="lanes">
@@ -239,14 +239,14 @@
           </div>
 
           <div class="dv-opt" id="2b" data-screen-label="2b Expanded: Open in… first">
-            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>The expanded row of a not-opened link. Its trace ends &ldquo;not opened &middot; PwrRoute&rsquo;s default is Don&rsquo;t open&rdquo; (or &ldquo;&middot; rule 4 says Don&rsquo;t open&rdquo;, &ldquo;&middot; config handler 2 says browser: null&rdquo;, &ldquo;&middot; held&rdquo;). The actions lead with <b>Open in&hellip;</b>, primary, then <b>Add a rule&hellip;</b> with its key, then Re-test. Open in&hellip; opens the compact lanes (the tray&rsquo;s, Send Links 1b) under the button; a pill opens the link there at once and closes the popover. The browser it opened in before, when there was one, is not a thing here: it never opened.</span></div>
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>The expanded row of a not-opened link. Its trace ends &ldquo;not opened &middot; PwrRoute&rsquo;s default is Don&rsquo;t open&rdquo; (or &ldquo;&middot; rule 4 says Don&rsquo;t open&rdquo;, &ldquo;&middot; config handler 2 says browser: null&rdquo;, &ldquo;&middot; held&rdquo;). The actions lead with <b>Open in&hellip;</b>, primary, then <b>Add a rule&hellip;</b> with its key, then Re-test. Open in&hellip; opens the compact lanes (the tray&rsquo;s, Send Links 1b) in a panel under the actions, in the row&rsquo;s flow, not floating; a pill opens the link there at once and closes the panel. Open in&hellip; again closes it. The browser it opened in before, when there was one, is not a thing here: it never opened.</span></div>
             <div class="dv-card crop" style="width: 1100px; height: 400px;">
               <section class="card">
                 <div class="ar unr sel"><span class="t">15:42:47</span><span class="u">https://unknown.example.org/welcome?ref=mail</span><span>Mail</span><span><span class="tag">default</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">3 ms</span><span class="more">&#8943;</span></div>
                 <div class="ax"><span class="l"><span class="n">D</span>PwrRoute&rsquo;s default &middot; no rule matched</span><span class="l"><span class="n">&mdash;</span>not opened &middot; PwrRoute&rsquo;s default is Don&rsquo;t open</span>
                   <span class="url">https://unknown.example.org/welcome?ref=mail</span>
                   <div class="acts"><span class="btn sm primary">Open in&hellip;</span><span class="btn sm quiet">Add a rule&hellip;<span class="kbd">&#8984;N</span></span><span class="btn sm quiet">Re-test</span></div>
-                  <div class="pop compact" style="left: 80px; top: 112px;">
+                  <div class="pop compact" style="position: static; margin-top: 8px; width: 420px;">
                     <div class="ph">Open this link in<span>once &middot; rules unchanged</span></div>
                     <div class="lanes">
                       <div class="lane"><div class="lane-hd"><span class="bi">Ch</span>Google Chrome</div><div class="pills"><span class="pl def">Default</span><span class="pl">Work</span><span class="pl">Personal</span><span class="pl priv">Incognito</span></div></div>
@@ -261,7 +261,7 @@
           </div>
 
           <div class="dv-opt" id="2c" data-screen-label="2c Opened later, and rows that can't be opened">
-            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>After Open in&hellip;: a new row at the top, Rule chip <b>opened</b> in the accent (the user chose), Opened in the browser it went to, and its trace starts &ldquo;opened from Activity &middot; was not opened at 15:42&rdquo;. The old row stays, its button gone and &ldquo;opened later in Firefox&rdquo; in its place. A row that can no longer be opened (kept as host only, or past the time links are kept) shows no Open in&hellip;: the action line says why, and Add a rule&hellip; is offered only where a full link was kept, as today.</span></div>
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>After Open in&hellip;: a new row at the top, Rule chip <b>opened</b> in the accent (the user chose), Opened in the browser it went to, and its trace starts &ldquo;opened from Activity &middot; was not opened at 15:42&rdquo;. The old row stays, its button gone and &ldquo;opened later in Firefox&rdquo; in its place. A row that can no longer be opened (no longer kept by the router, or read back from the journal of an earlier run) shows no Open in&hellip;: the action line says why. A row kept as host only can still be opened: the router keeps the link in memory while it waits, whatever the rule&rsquo;s privacy, and Add a rule&hellip; stays offered only where a full link was kept, as today.</span></div>
             <div class="dv-card crop" style="width: 1100px;">
               <section class="card">
                 <div class="ar"><span class="t">15:43:10</span><span class="u">https://unknown.example.org/welcome?ref=mail</span><span>Mail</span><span><span class="tag" style="color: var(--accent-bright);">opened</span></span><div class="d"><span class="bi">Ff</span>Firefox</div><span class="ms">41 ms</span><span class="more">&#8943;</span></div>
@@ -270,9 +270,10 @@
                   <span class="url">https://unknown.example.org/welcome?ref=mail</span>
                   <div class="acts"><span class="btn sm primary">Add a rule&hellip;<span class="kbd">&#8984;N</span></span><span class="btn sm quiet">Re-test</span><span class="why">Opened later in Firefox at 15:43.</span></div>
                 </div>
-                <div class="ar sel"><span class="t">15:20:05</span><span class="u"><span class="chip">host only</span>https://bank.example.com</span><span>Mail</span><span><span class="tag">rule 2</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">2 ms</span><span class="more">&#8943;</span></div>
-                <div class="ax"><span class="l"><span class="n hit">2</span>rule 2 &middot; bank.example.com/*</span><span class="l"><span class="n">&mdash;</span>not opened &middot; rule 2 says Don&rsquo;t open</span>
-                  <div class="acts"><span class="why">Rule 2 keeps links as host only, so the full link was not kept and this one can&rsquo;t be opened from here.</span></div>
+                <div class="ar sel"><span class="t">09:20:05</span><span class="u">https://ads.example.net/click?id=3</span><span>Mail</span><span><span class="tag">rule 4</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">2 ms</span><span class="more">&#8943;</span></div>
+                <div class="ax"><span class="l"><span class="n hit">4</span>rule 4 &middot; ads.example.net/*</span><span class="l"><span class="n">&mdash;</span>not opened &middot; rule 4 says Don&rsquo;t open</span>
+                  <span class="url">https://ads.example.net/click?id=3</span>
+                  <div class="acts"><span class="btn sm primary">Add a rule&hellip;<span class="kbd">&#8984;N</span></span><span class="btn sm quiet">Re-test</span><span class="why">No longer kept, so this link can&rsquo;t be opened from here.</span></div>
                 </div>
               </section>
             </div>
@@ -321,7 +322,7 @@
           <tr><td><code>rules.json</code></td><td>A rule&rsquo;s <code>"browser": "none"</code>, or <code>"defaultBrowser": "none"</code>, compared ignoring case. A profile or private flag beside it is ignored. The engine hands Finicky <code>browser: null</code>, so the result is the config API&rsquo;s own not-opened browser and a config&rsquo;s <code>browser: null</code> behaves the same. A word, not <code>null</code>: a JSON Merge Patch (an agent&rsquo;s <code>pwrroute_rules_apply</code>) cannot set a field to <code>null</code>, and the Go host reads <code>null</code> as empty.</td></tr>
           <tr><td>Precedence</td><td>Everything else on Don&rsquo;t open beside a Finicky config follows <code>precedence</code> as any default does: in the Go order the config&rsquo;s <code>defaultBrowser</code> keeps everything else; with &ldquo;Let PwrRoute&rsquo;s default take everything else&rdquo; on, unclaimed links are not opened. The config&rsquo;s handlers still open what they claim.</td></tr>
           <tr><td>Never a fallback</td><td>A not-opened link launches nothing, so the fallback browser never takes it. Don&rsquo;t open as Everything else is not a browser to fall back to: when a chosen browser fails to open, or no config loads, the fallback browser takes the link, as with no default at all. The tray&rsquo;s Pause routing target skips it the same way.</td></tr>
-          <tr><td>What is kept</td><td>The record, at its rule&rsquo;s privacy level, like any dispatch. To open it later the router keeps the full link in memory while the record is kept (the retention count and hours); Open in&hellip; is offered only while it does. Nothing more reaches disk than the journal already writes.</td></tr>
+          <tr><td>What is kept</td><td>The record, at its rule&rsquo;s privacy level, like any dispatch. To open it later the router keeps the full link in memory while the record is kept (the retention count and hours); Open in&hellip; is offered only while it does, for a host-only record too (the link stays in memory, never in the record). A record read from the journal of an earlier run can&rsquo;t be opened. Nothing more reaches disk than the journal already writes.</td></tr>
           <tr><td>Opening it</td><td>Open in&hellip; dispatches the link once to the picked browser and profile, after the rewrites, as a click would; the new record names the record it came from. The rules are not changed and the not-opened record is not edited.</td></tr>
           <tr><td>Hold</td><td>Hold records links without opening them, too: the same not-opened record, with &ldquo;held&rdquo; as who decided, the same filter, the same Open in&hellip;.</td></tr>
           <tr><td>Agents</td><td><code>pwrroute_resolve</code> says &ldquo;not opened&rdquo; and who decided. <code>pwrroute_activity</code> takes <code>filter: "notOpened"</code> and each not-opened entry carries a <code>reason</code> (<code>rule</code>, <code>default</code>, <code>hold</code>). <code>pwrroute_rules_apply</code> accepts <code>"none"</code> as a browser.</td></tr>
