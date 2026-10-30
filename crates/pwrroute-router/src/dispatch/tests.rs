@@ -3035,11 +3035,11 @@ fn a_dont_open_default_keeps_unclaimed_links_out_of_every_browser() {
         }
     }));
     assert!(launcher.launched().is_empty());
-    // A link a rule routes still opens.
+    // A link a rule routes still opens (the dry-run launcher's outcome).
     let record = handle
         .dispatch_and_wait(link("https://work.example.com/a"))
         .unwrap();
-    assert_eq!(record.outcome, Outcome::Opened);
+    assert_eq!(record.outcome, Outcome::DryRun);
     assert_eq!(launcher.launched().len(), 1);
     assert_eq!(launcher.launched()[0].name, "Firefox");
 }
@@ -3071,6 +3071,6 @@ fn dont_open_is_never_the_fallback_browser() {
         .handle()
         .dispatch_and_wait(link("https://example.com/"))
         .unwrap();
-    assert_eq!(record.outcome, Outcome::Opened);
+    assert_eq!(record.outcome, Outcome::DryRun);
     assert_eq!(launcher.launched()[0].name, FALLBACK_BROWSER);
 }
