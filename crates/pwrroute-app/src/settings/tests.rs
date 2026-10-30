@@ -1194,6 +1194,8 @@ fn config_files_lists_each_config_and_reveals_it(cx: &mut TestAppContext) {
     use super::nav::child_id;
     let (view, cx, requests) = settings(cx, |_| {});
     click(cx, child_id(Pane::Configuration, 1));
+    // One frame takes the anchor and scrolls; the next draws the row there.
+    draw(cx);
     draw(cx);
     assert_eq!(view.read_with(cx, |view, _| view.pane), Pane::Configuration);
     click(cx, gpui_kit::ElementId::Name("config-file-reveal-1".into()));
@@ -1209,7 +1211,7 @@ fn short_links_has_its_own_pane(cx: &mut TestAppContext) {
     click(cx, Pane::ShortLinks.nav_id());
     draw(cx);
     assert_eq!(view.read_with(cx, |view, _| view.pane), Pane::ShortLinks);
-    assert!(visible(cx, super::short_links::HOSTS_ID));
+    assert!(visible(cx, Pane::ShortLinks.pane_id()));
 }
 
 #[gpui_kit::test]

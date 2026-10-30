@@ -1014,7 +1014,7 @@ fn named_destinations(
             .children(meaning.map(|line| paragraph(line, 10.5, 15.2)))
             .child(paragraph(
                 "A named destination means what each machine says it means (Settings \u{203a} \
-                 Sync). A browser below sends this rule there on every machine.",
+                 Cloud Sync). A browser below sends this rule there on every machine.",
                 10.5,
                 15.2,
             )),

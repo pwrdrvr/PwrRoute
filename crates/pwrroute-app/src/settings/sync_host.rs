@@ -1059,26 +1059,32 @@ mod tests {
     fn a_machine_without_a_config_is_offered_the_folders() {
         let (icloud, status) = folder_with(Some("~/.finicky.js"), &["finicky.js"]);
         let machine = MachineFile::default();
-        with_config(&status, &[icloud.clone()], &machine, None, |sync| {
-            assert_eq!(
-                sync.folder_config,
-                Some(FolderConfig::Offer {
-                    root: PathBuf::from("/i"),
-                    name: "finicky.js".into(),
-                    folder: "iCloud Drive".into(),
-                    by: "Studio Mac".into(),
-                    at: "t7".into(),
-                    runs_after: "~/.finicky.js".into(),
-                    here: "~/.finicky.js".into(),
-                })
-            );
-            assert_eq!(sync.folders[0].chip, "Needs you");
-            assert_eq!(sync.folders[0].tone, SyncTone::Warn);
-            assert_eq!(
-                sync.folders[0].line,
-                "rules.json in sync \u{00b7} finicky.js not used here"
-            );
-        });
+        with_config(
+            &status,
+            std::slice::from_ref(&icloud),
+            &machine,
+            None,
+            |sync| {
+                assert_eq!(
+                    sync.folder_config,
+                    Some(FolderConfig::Offer {
+                        root: PathBuf::from("/i"),
+                        name: "finicky.js".into(),
+                        folder: "iCloud Drive".into(),
+                        by: "Studio Mac".into(),
+                        at: "t7".into(),
+                        runs_after: "~/.finicky.js".into(),
+                        here: "~/.finicky.js".into(),
+                    })
+                );
+                assert_eq!(sync.folders[0].chip, "Needs you");
+                assert_eq!(sync.folders[0].tone, SyncTone::Warn);
+                assert_eq!(
+                    sync.folders[0].line,
+                    "rules.json in sync \u{00b7} finicky.js not used here"
+                );
+            },
+        );
         // A machine with a config of its own keeps it: nothing is offered.
         with(&status, &[icloud], &machine, |sync| {
             assert_eq!(sync.folder_config, None);
@@ -1090,21 +1096,33 @@ mod tests {
     fn rules_that_ran_after_a_config_the_folder_lacks_say_so() {
         let (icloud, status) = folder_with(Some("~/.finicky.ts"), &[]);
         let machine = MachineFile::default();
-        with_config(&status, &[icloud.clone()], &machine, None, |sync| {
-            assert_eq!(
-                sync.folder_config,
-                Some(FolderConfig::Missing {
-                    by: "Studio Mac".into(),
-                    runs_after: "~/.finicky.ts".into(),
-                })
-            );
-            assert_eq!(sync.folders[0].tone, SyncTone::Warn);
-        });
+        with_config(
+            &status,
+            std::slice::from_ref(&icloud),
+            &machine,
+            None,
+            |sync| {
+                assert_eq!(
+                    sync.folder_config,
+                    Some(FolderConfig::Missing {
+                        by: "Studio Mac".into(),
+                        runs_after: "~/.finicky.ts".into(),
+                    })
+                );
+                assert_eq!(sync.folders[0].tone, SyncTone::Warn);
+            },
+        );
         // Rules that ran alone, or that this machine saved, say nothing.
         let (icloud, mut status) = folder_with(None, &[]);
-        with_config(&status, &[icloud.clone()], &machine, None, |sync| {
-            assert_eq!(sync.folder_config, None);
-        });
+        with_config(
+            &status,
+            std::slice::from_ref(&icloud),
+            &machine,
+            None,
+            |sync| {
+                assert_eq!(sync.folder_config, None);
+            },
+        );
         status.machine.id = "other".into();
         let entry = status.targets[0]
             .folder_files

@@ -2839,7 +2839,7 @@ mod tests {
         assert_eq!(
             model.config_detail(),
             "PwrRoute won't read ~/.finicky.ts. Turn it back on in Settings \u{203a} \
-             Configuration."
+             Config Files."
         );
 
         // Nothing importable, and a config that does not load.
