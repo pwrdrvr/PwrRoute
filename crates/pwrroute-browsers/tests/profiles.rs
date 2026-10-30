@@ -121,3 +121,46 @@ fn browsers_without_a_profile_flag_list_nothing() {
     assert!(safari.profile_dir(&fx.env).is_none());
     assert!(list_profiles(safari, &fx.env).is_empty());
 }
+
+/// A profile the browser has made but not yet written to `Local State` is
+/// found by its folder, named by its own `Preferences`; other folders, a
+/// folder without a name and one being deleted are not profiles.
+#[test]
+fn chromium_profile_folders_not_yet_in_local_state_are_listed() {
+    let edge = Catalog::builtin().find("edge").unwrap();
+    let fx = Fixture::new(Platform::Windows);
+    let rel = "home/AppData/Local/Microsoft/Edge/User Data";
+    fx.write(
+        &format!("{rel}/Local State"),
+        r#"{
+          "profile": {
+            "info_cache": { "Default": { "name": "Profile 1" } },
+            "last_used": "Default"
+          },
+          "profiles": {
+            "profiles_deleted": ["C:\\Users\\example\\AppData\\Local\\Microsoft\\Edge\\User Data\\Profile 4"]
+          }
+        }"#,
+    );
+    for (folder, name) in [
+        ("Default", "Profile 1"),
+        ("Profile 10", "Later"),
+        ("Profile 2", "Example Work"),
+        ("Profile 4", "Being Deleted"),
+        ("Guest Profile", "Guest"),
+        ("System Profile", "System"),
+    ] {
+        let prefs = format!(r#"{{ "profile": {{ "name": "{name}" }} }}"#);
+        fx.write(&format!("{rel}/{folder}/Preferences"), &prefs);
+    }
+    // A folder with no Preferences has no name to show.
+    fx.write(&format!("{rel}/Profile 3/Cache"), "");
+    assert_eq!(
+        names(&list_profiles(edge, &fx.env)),
+        [
+            ("Profile 1", "Default", true),
+            ("Example Work", "Profile 2", false),
+            ("Later", "Profile 10", false),
+        ]
+    );
+}

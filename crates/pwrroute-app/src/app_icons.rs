@@ -1,6 +1,7 @@
-//! Each app's own icon, as Finder shows it, for the `.bi` badges
-//! (`widgets::badge`). macOS draws it through `pwrroute_os`; Windows and
-//! Linux have no implementation yet, so their badges keep the letters.
+//! Each app's own icon, as Finder or Explorer shows it, for the `.bi` badges
+//! (`widgets::badge`). macOS and Windows draw it through `pwrroute_os`;
+//! Linux has no implementation yet, so its badges keep the letters. Windows
+//! finds an app only by the `.exe` the scan placed it at.
 //!
 //! An icon is read lazily, through GPUI's asset cache on its background
 //! executor: a badge asks for its app at the pixel size it draws while it
@@ -19,6 +20,9 @@ use gpui_kit::{
 };
 
 use crate::browser_scan;
+
+/// Whether `pwrroute_os` can find and draw an app's icon here.
+const HAS_ICONS: bool = cfg!(any(target_os = "macos", windows));
 
 /// What a badge asks for: the app as the rule or the scan names it, where
 /// the scan found it (when it did), and the square's size in pixels.
@@ -40,8 +44,8 @@ struct AppIcons {
 
 impl Global for AppIcons {}
 
-/// Turns icons on for this process. Without it every badge is letters. Off
-/// macOS there is no implementation yet, so badges stay letters from the
+/// Turns icons on for this process. Without it every badge is letters. On
+/// Linux there is no implementation yet, so badges stay letters from the
 /// first frame and nothing is loaded.
 pub fn install(cx: &mut App) {
     cx.set_global(AppIcons::default());
@@ -77,14 +81,15 @@ pub fn forget(cx: &mut App) {
 /// `widgets::badge_for` was given: a name, a bundle id or a path.
 pub fn source(app: SharedString, points: f32) -> ImageSource {
     ImageSource::Custom(Arc::new(move |window, cx| {
-        if !cfg!(target_os = "macos") || !cx.has_global::<AppIcons>() {
+        if !HAS_ICONS || !cx.has_global::<AppIcons>() {
             return Some(Err(ImageCacheError::Asset("app icons are off".into())));
         }
         let pixels = (points * window.scale_factor()).ceil() as u32;
         let bundle = match cx.global::<AppIcons>().bundles.get(&app) {
             Some(bundle) => bundle.clone(),
-            // Before the scan runs, LaunchServices finds the app; once it
-            // has, its answer is kept so a later frame keeps the same key.
+            // Before the scan runs, LaunchServices finds the app (Windows
+            // only a path); once it has, its answer is kept so a later
+            // frame keeps the same key.
             None if !browser_scan::has_run(cx) => None,
             None => {
                 let bundle = browser_scan::location_of(&app, cx);

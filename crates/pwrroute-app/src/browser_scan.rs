@@ -162,11 +162,30 @@ pub fn reread(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() {
         return scan(&environment());
     }
-    cx.update_global(|global: &mut ScanGlobal, _| {
+    let apps = cx.update_global(|global: &mut ScanGlobal, _| {
         let apps = scan(&global.env);
         global.apps = Some(apps.clone());
         apps
-    })
+    });
+    log_scan(&apps);
+    apps
+}
+
+/// What a rescan found, for the diagnostic log: each app's name and how
+/// many profiles it has, never their names.
+fn log_scan(apps: &[DetectedApp]) {
+    let found: Vec<String> = apps
+        .iter()
+        .map(|app| {
+            let blocked = if app.profiles_blocked {
+                ", blocked"
+            } else {
+                ""
+            };
+            format!("{} ({} profiles{blocked})", app.name, app.profiles.len())
+        })
+        .collect();
+    log::info!("browser scan: {}", found.join("; "));
 }
 
 /// The pickers' choices from `apps`, less the ones `hidden` names.

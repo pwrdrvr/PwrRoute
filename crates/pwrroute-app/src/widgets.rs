@@ -68,10 +68,10 @@ pub fn tag_frame() -> Div {
         .bg(theme::bg_elevated())
 }
 
-/// A browser or app's `.bi` badge: the app's own icon, as Finder shows it,
-/// once it has loaded, else its two letters (`app_icons.rs`). [`badge_for`]
-/// makes one for an app; a plain string is a fixed label that never becomes
-/// an icon ([`NOT_OPENED_BADGE`]).
+/// A browser or app's `.bi` badge: the app's own icon, as Finder or
+/// Explorer shows it, once it has loaded, else its two letters
+/// (`app_icons.rs`). [`badge_for`] makes one for an app; a plain string is a
+/// fixed label that never becomes an icon ([`NOT_OPENED_BADGE`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct AppBadge {
     letters: SharedString,
@@ -837,10 +837,30 @@ mod tests {
         }
     }
 
+    /// An app every machine of the platform has: Finder by its bundle id,
+    /// Explorer by its `.exe` (as Windows' scan names an app).
+    fn installed_app() -> String {
+        if cfg!(windows) {
+            let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+            format!(r"{windir}\explorer.exe")
+        } else {
+            "com.apple.finder".into()
+        }
+    }
+
+    /// The badge's `app-icon-…` or `app-letters-…` debug selector, which
+    /// the harness takes as `'static`.
+    fn selector(part: &str, app: &str) -> &'static str {
+        format!("app-{part}-{app}").leak()
+    }
+
+    /// Whether this platform draws app icons at all.
+    const DRAWS_ICONS: bool = cfg!(any(target_os = "macos", windows));
+
     fn open(cx: &mut TestAppContext) -> &mut VisualTestContext {
         let (_, cx) = cx.add_window_view(|_, _| {
             Badges(vec![
-                badge_for("com.apple.finder"),
+                badge_for(&installed_app()),
                 badge_for("com.example.no-such-app"),
             ])
         });
@@ -852,7 +872,8 @@ mod tests {
     #[gpui_kit::test]
     fn without_icons_every_badge_is_letters(cx: &mut TestAppContext) {
         let cx = open(cx);
-        assert!(cx.debug_bounds("app-letters-com.apple.finder").is_some());
+        let app = installed_app();
+        assert!(cx.debug_bounds(selector("letters", &app)).is_some());
         assert!(
             cx.debug_bounds("app-letters-com.example.no-such-app")
                 .is_some()
@@ -866,15 +887,16 @@ mod tests {
         // The icon loads off the UI thread, then the view draws again.
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));
-        let finder = cx
-            .debug_bounds("app-icon-com.apple.finder")
-            .expect("Finder's badge");
+        let app = installed_app();
+        let installed = cx
+            .debug_bounds(selector("icon", &app))
+            .expect("the installed app's badge");
         // The badge keeps its 12px box; the icon is 16px around it.
-        assert_eq!(finder.size.width, gpui_kit::px(16.0));
+        assert_eq!(installed.size.width, gpui_kit::px(16.0));
         assert_eq!(
-            cx.debug_bounds("app-letters-com.apple.finder").is_none(),
-            cfg!(target_os = "macos"),
-            "Finder's icon on macOS, its letters elsewhere"
+            cx.debug_bounds(selector("letters", &app)).is_none(),
+            DRAWS_ICONS,
+            "Finder's or Explorer's icon on macOS and Windows, its letters elsewhere"
         );
         assert!(
             cx.debug_bounds("app-letters-com.example.no-such-app")
@@ -886,8 +908,8 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));
         assert_eq!(
-            cx.debug_bounds("app-letters-com.apple.finder").is_none(),
-            cfg!(target_os = "macos")
+            cx.debug_bounds(selector("letters", &app)).is_none(),
+            DRAWS_ICONS
         );
     }
 

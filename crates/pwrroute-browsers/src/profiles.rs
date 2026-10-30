@@ -71,7 +71,13 @@ fn read_with(
     };
     match read(&path) {
         Ok(text) => {
-            let profiles = parse(&text);
+            let mut profiles = parse(&text);
+            if browser.profile_flag() == ProfileFlag::Chromium
+                && let Some(listed) = &mut profiles
+            {
+                let unlisted = unlisted_chromium_profiles(&dir, &text, listed);
+                listed.extend(unlisted);
+            }
             if let (Some(cache), Some(profiles)) = (env.profile_cache(), &profiles) {
                 // An unwritable cache must never prevent a live profile launch.
                 let _ = profile_cache::remember(cache, &browser.id, &path, profiles);
@@ -176,6 +182,77 @@ fn parse_chromium(local_state: &str) -> Option<Vec<Profile>> {
         p.default = true;
     }
     Some(profiles)
+}
+
+/// Profile folders a Chromium browser has made that its `Local State` does
+/// not list yet. The browser writes that file a while after a change, so a
+/// profile added a moment ago may only be on disk; a Rescan then still finds
+/// it. Only `Default` and `Profile N` folders count; each is named as its
+/// own `Preferences` (`profile.name`) names it, and one without a name there
+/// is left out, as is one the browser is deleting
+/// (`profiles.profiles_deleted`). In folder-number order, after the listed
+/// ones, never the default.
+fn unlisted_chromium_profiles(dir: &Path, local_state: &str, listed: &[Profile]) -> Vec<Profile> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut folders: Vec<(u32, String)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter_map(|name| Some((profile_folder_number(&name)?, name)))
+        .filter(|(_, name)| !listed.iter().any(|p| p.directory == *name))
+        .collect();
+    if folders.is_empty() {
+        return Vec::new();
+    }
+    let deleted = deleted_chromium_profiles(local_state);
+    folders.retain(|(_, name)| !deleted.contains(name));
+    folders.sort();
+    folders
+        .into_iter()
+        .filter_map(|(_, folder)| {
+            let prefs = fs::read(dir.join(&folder).join("Preferences")).ok()?;
+            let prefs: serde_json::Value = serde_json::from_slice(&prefs).ok()?;
+            let name = prefs["profile"]["name"].as_str()?.trim();
+            (!name.is_empty()).then(|| Profile {
+                name: name.to_owned(),
+                directory: folder,
+                default: false,
+            })
+        })
+        .collect()
+}
+
+/// Where `Default` sorts (0) and `Profile N` sorts (N + 1); `None` for any
+/// other folder (`Guest Profile`, `System Profile`, caches).
+fn profile_folder_number(folder: &str) -> Option<u32> {
+    if folder == "Default" {
+        return Some(0);
+    }
+    let number = folder.strip_prefix("Profile ")?;
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    number.parse::<u32>().ok()?.checked_add(1)
+}
+
+/// The folder names in `Local State`'s `profiles.profiles_deleted`: full
+/// paths of profiles the browser removes at its next start.
+fn deleted_chromium_profiles(local_state: &str) -> Vec<String> {
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(local_state) else {
+        return Vec::new();
+    };
+    state["profiles"]["profiles_deleted"]
+        .as_array()
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| path.as_str())
+                .filter_map(|path| path.rsplit(['/', '\\']).find(|part| !part.is_empty()))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The `[ProfileN]` sections of a Firefox `profiles.ini`, in file order. The
