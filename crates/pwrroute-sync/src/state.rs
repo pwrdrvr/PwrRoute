@@ -115,7 +115,11 @@ impl State {
         at: u64,
     ) -> Result<bool> {
         let sha = hash(bytes);
-        if self.backups.iter().any(|b| b.name == name && b.sha256 == sha) {
+        if self
+            .backups
+            .iter()
+            .any(|b| b.name == name && b.sha256 == sha)
+        {
             return Ok(false);
         }
         fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
@@ -152,7 +156,9 @@ fn new_id() -> String {
     let marker = 0_u8;
     let seed = format!(
         "{:?}-{}-{:p}-{:?}",
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default(),
         std::process::id(),
         &marker,
         std::env::home_dir(),
@@ -184,11 +190,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backups = dir.path().join("backups");
         let mut state = State::default();
-        assert!(state.back_up(&backups, "rules.json", b"a", "This machine", "why", 1).unwrap());
-        assert!(!state.back_up(&backups, "rules.json", b"a", "This machine", "why", 2).unwrap());
+        assert!(
+            state
+                .back_up(&backups, "rules.json", b"a", "This machine", "why", 1)
+                .unwrap()
+        );
+        assert!(
+            !state
+                .back_up(&backups, "rules.json", b"a", "This machine", "why", 2)
+                .unwrap()
+        );
         for i in 0..KEEP_BACKUPS + 3 {
             state
-                .back_up(&backups, "rules.json", i.to_string().as_bytes(), "Dropbox", "why", 10 + i as u64)
+                .back_up(
+                    &backups,
+                    "rules.json",
+                    i.to_string().as_bytes(),
+                    "Dropbox",
+                    "why",
+                    10 + i as u64,
+                )
                 .unwrap();
         }
         assert_eq!(state.backups.len(), KEEP_BACKUPS);
@@ -197,6 +218,9 @@ mod tests {
         assert_eq!(on_disk, KEEP_BACKUPS, "pruned files are gone too");
         let newest = state.backups.last().unwrap();
         assert!(newest.path.to_string_lossy().ends_with(".json"));
-        assert_eq!(fs::read(&newest.path).unwrap(), (KEEP_BACKUPS + 2).to_string().as_bytes());
+        assert_eq!(
+            fs::read(&newest.path).unwrap(),
+            (KEEP_BACKUPS + 2).to_string().as_bytes()
+        );
     }
 }

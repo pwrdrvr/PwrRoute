@@ -22,6 +22,7 @@ fn engine(config: Option<&str>, rules: RulesFile) -> Engine {
         &Sources {
             config: config.map(|c| configs().join(c)),
             rules,
+            ..Default::default()
         },
         Rc::new(DefaultHost),
         Limits::default(),

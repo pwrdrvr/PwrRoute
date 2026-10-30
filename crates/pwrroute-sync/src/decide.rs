@@ -91,7 +91,11 @@ mod tests {
     #[test]
     fn nothing_in_the_folder_is_a_push() {
         assert_eq!(decide(Present("a"), None, None), Push);
-        assert_eq!(decide(Present("a"), None, Some("a")), Push, "folder deleted");
+        assert_eq!(
+            decide(Present("a"), None, Some("a")),
+            Push,
+            "folder deleted"
+        );
         assert_eq!(decide(Blank("e"), None, None), Push);
         assert_eq!(decide(Missing, None, None), Nothing);
         assert_eq!(decide(Missing, None, Some("a")), Nothing);

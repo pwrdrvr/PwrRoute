@@ -112,7 +112,8 @@ impl Service {
                             choice,
                             done,
                         }) => {
-                            let result = syncer.resolve(&root, &name, &remote_sha, choice, clock.now());
+                            let result =
+                                syncer.resolve(&root, &name, &remote_sha, choice, clock.now());
                             done(result);
                             schedule.wake();
                         }

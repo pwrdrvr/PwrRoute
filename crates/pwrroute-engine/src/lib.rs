@@ -261,6 +261,11 @@ pub enum AppType {
 pub struct Sources {
     pub config: Option<PathBuf>,
     pub rules: RulesFile,
+    /// What the synced rules mean on this machine (`machine.json`): links
+    /// route with it applied ([`RulesFile::for_machine`]); the saved
+    /// examples and tests run without it, so they mean the same on every
+    /// machine ([`Engine::test_rules`]).
+    pub machine: MachineFile,
 }
 
 /// A loaded config, ready to resolve URLs.
@@ -275,9 +280,14 @@ pub struct Engine {
     /// The config's `console` output since the current run started; each
     /// trace takes its lines.
     console: ConsoleLog,
-    /// The `rules.json` the engine loaded, for the privacy of what it routes
-    /// and for its examples and tests.
+    /// The `rules.json` the engine loaded, as this machine routes it, for
+    /// the privacy of what it routes and for its examples and tests.
     rules: RulesFile,
+    /// The machine layer it was loaded with, and the file before it; when
+    /// the layer changes anything, [`Engine::test_rules`] runs the tests on
+    /// an engine over `synced`.
+    machine: MachineFile,
+    synced: RulesFile,
     imports: Rc<RefCell<Vec<PathBuf>>>,
     short_links: ShortLinks,
     /// For each `rules.json` rewrite and handler the engine loaded, its
@@ -304,6 +314,7 @@ impl Engine {
             &Sources {
                 config: Some(path.to_path_buf()),
                 rules: RulesFile::default(),
+                ..Default::default()
             },
             host,
             limits,
@@ -350,10 +361,8 @@ impl Engine {
         })));
         let context = Context::full(&runtime)?;
 
-        // Named destinations and rule sets, as the synced layer resolves
-        // them; a caller that routes for this machine passed
-        // `RulesFile::for_machine`'s file, which this leaves as it is.
-        let rules = sources.rules.resolved();
+        // Named destinations and rule sets, as this machine resolves them.
+        let rules = sources.rules.for_machine(&sources.machine);
         let mut engine = Self {
             context,
             _runtime: runtime,
@@ -363,6 +372,8 @@ impl Engine {
             host: Rc::clone(&host),
             console: ConsoleLog::new(),
             rules: rules.clone(),
+            machine: sources.machine.clone(),
+            synced: sources.rules.clone(),
             imports,
             short_links: ShortLinks::default(),
             planned_rewrites: rules.planned_rewrites(),
@@ -577,13 +588,20 @@ impl Engine {
     /// of `proposal` through an engine built from the same config and the
     /// proposal instead of the saved rules. The editor and an agent check a
     /// change this way before saving it. Nothing is opened or written.
+    ///
+    /// Examples and tests sync with the rules, so they run without this
+    /// machine's layer: a test of "Work 1" passes on every machine whatever
+    /// "Work 1" opens there, and a rule in a set that is off here still
+    /// answers for its examples.
     pub fn test_rules(&self, proposal: Option<&RulesFile>) -> Result<TestReport> {
         match proposal {
-            None => self.rules.run_tests(self),
+            None if self.machine.routes_as_synced() => self.rules.run_tests(self),
+            None => self.test_rules(Some(&self.synced)),
             Some(rules) => {
                 let sources = Sources {
                     config: self.config.clone(),
                     rules: rules.clone(),
+                    ..Default::default()
                 };
                 let engine = Self::from_sources(&sources, Rc::clone(&self.host), self.limits)?;
                 rules.run_tests(&engine)

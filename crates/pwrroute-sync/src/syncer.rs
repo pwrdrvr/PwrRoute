@@ -110,7 +110,10 @@ pub enum Health {
 impl Health {
     /// Whether the two sides hold the same file after this pass.
     pub fn in_step(&self) -> bool {
-        matches!(self, Self::Absent | Self::InSync | Self::Pushed | Self::Pulled)
+        matches!(
+            self,
+            Self::Absent | Self::InSync | Self::Pushed | Self::Pulled
+        )
     }
 }
 
@@ -376,12 +379,21 @@ impl Syncer {
                 Ok(seen) => Some(seen),
                 // A File Provider file that cannot be downloaded right now
                 // (offline) fails to read: wait for it.
-                Err(e) => return Health::Unavailable(format!("{e:#}")),
+                Err(e) => {
+                    return Health::Unavailable(match e.root_cause().downcast_ref::<io::Error>() {
+                        Some(io) => crate::folder::describe(io),
+                        None => format!("{e:#}"),
+                    });
+                }
             },
         };
         let manifest = folder.manifest();
         let base = self.state.base(&id, &item.name).map(str::to_owned);
-        let decision = decide(local_view, remote.as_ref().map(|r| r.sha.as_str()), base.as_deref());
+        let decision = decide(
+            local_view,
+            remote.as_ref().map(|r| r.sha.as_str()),
+            base.as_deref(),
+        );
         let settled = remote
             .as_ref()
             .is_none_or(|r| r.stable || listed(manifest.as_ref(), &item.name, &r.sha));
@@ -426,7 +438,10 @@ impl Syncer {
                     ));
                 }
                 if let Some(old) = &local {
-                    let why = format!("Before taking {}'s version", who(manifest.as_ref(), &item.name, &target.label));
+                    let why = format!(
+                        "Before taking {}'s version",
+                        who(manifest.as_ref(), &item.name, &target.label)
+                    );
                     if let Err(e) = self.back_up(&item.name, old, "This machine", &why, now) {
                         return Health::Error(format!("Backing up before syncing: {e:#}"));
                     }
@@ -466,7 +481,13 @@ impl Syncer {
 
     /// Reads the folder's file, or reuses the last read when its stamp has
     /// not changed (so an evicted file is not downloaded on every pass).
-    fn read_remote(&mut self, folder: &Folder, item: &Item, id: &str, stamp: Stamp) -> Result<Seen> {
+    fn read_remote(
+        &mut self,
+        folder: &Folder,
+        item: &Item,
+        id: &str,
+        stamp: Stamp,
+    ) -> Result<Seen> {
         let key = (id.to_owned(), item.name.clone());
         if let Some(seen) = self.seen.get_mut(&key)
             && seen.stamp == stamp
@@ -499,14 +520,23 @@ impl Syncer {
 
     fn back_up(&mut self, name: &str, bytes: &[u8], from: &str, why: &str, now: u64) -> Result<()> {
         let dir = self.backups_dir();
-        self.state.back_up(&dir, name, bytes, from, why, now).map(|_| ())
+        self.state
+            .back_up(&dir, name, bytes, from, why, now)
+            .map(|_| ())
     }
 
     /// Settles a conflict the UI showed. `remote_sha` is the folder's
     /// version as shown; if the folder changed since, nothing is written
     /// and the next pass shows the new state. The version not kept is
     /// backed up first.
-    pub fn resolve(&mut self, target_root: &Path, name: &str, remote_sha: &str, choice: Choice, now: u64) -> Result<()> {
+    pub fn resolve(
+        &mut self,
+        target_root: &Path,
+        name: &str,
+        remote_sha: &str,
+        choice: Choice,
+        now: u64,
+    ) -> Result<()> {
         let target = self
             .targets
             .iter()
@@ -521,9 +551,13 @@ impl Syncer {
             .context("that file no longer syncs")?;
         let folder = target.folder();
         let id = target.id();
-        let remote = fs::read(folder.file(name)).with_context(|| format!("reading {name} in {}", target.label))?;
+        let remote = fs::read(folder.file(name))
+            .with_context(|| format!("reading {name} in {}", target.label))?;
         if hash(&remote) != remote_sha {
-            bail!("{name} in {} changed again; look again before choosing", target.label);
+            bail!(
+                "{name} in {} changed again; look again before choosing",
+                target.label
+            );
         }
         let local = read_local(&item.local)?;
         match choice {

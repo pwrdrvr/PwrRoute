@@ -27,6 +27,7 @@ fn engine(config: Option<&str>, rules: RulesFile) -> Engine {
         &Sources {
             config: config.map(|c| configs().join(c)),
             rules,
+            ..Default::default()
         },
         Rc::new(DefaultHost),
         Limits::default(),
@@ -545,6 +546,7 @@ fn a_test_report_carries_the_console_lines_of_every_run() {
         &Sources {
             config: Some(path.clone()),
             rules,
+            ..Default::default()
         },
         Rc::new(DefaultHost),
         Limits::default(),
@@ -956,6 +958,7 @@ fn load_with(config: &Path, rules: RulesFile) -> Engine {
         &Sources {
             config: Some(config.to_path_buf()),
             rules,
+            ..Default::default()
         },
         Rc::new(DefaultHost),
         Limits::default(),
@@ -1590,4 +1593,105 @@ fn examples_and_tests_can_expect_a_link_not_to_open() {
     assert!(failed[0].1.starts_with("Firefox"), "{failed:?}");
     assert_eq!(failed[1].0, "Firefox");
     assert!(failed[1].1.starts_with("not opened"), "{failed:?}");
+}
+
+/// Synced rules: a link routes by what a named destination means on this
+/// machine, and a rule set off here is skipped; the saved examples and
+/// tests run on the synced rules alone, so they pass on every machine.
+#[test]
+fn a_machine_layer_routes_links_while_saved_tests_stay_synced() {
+    use pwrroute_engine::{Binding, Destination, MachineFile, RuleSet};
+    use std::collections::BTreeMap;
+    let rules = RulesFile {
+        default_browser: "Safari".into(),
+        destinations: vec![Destination {
+            name: "Work 1".into(),
+            binding: Binding {
+                browser: "Google Chrome".into(),
+                profile: "Work".into(),
+                private: false,
+            },
+        }],
+        sets: vec![RuleSet {
+            name: "Client".into(),
+            enabled: true,
+        }],
+        rules: vec![
+            Rule {
+                patterns: vec!["work.example.com/*".into()],
+                browser: "Google Chrome".into(),
+                profile: "Work".into(),
+                destination: Some("Work 1".into()),
+                examples: vec!["https://work.example.com/a".into()],
+                ..Rule::default()
+            },
+            Rule {
+                patterns: vec!["client.example.net/*".into()],
+                browser: "Firefox".into(),
+                set: Some("Client".into()),
+                examples: vec!["https://client.example.net/a".into()],
+                ..Rule::default()
+            },
+        ],
+        tests: vec![RouteTest {
+            url: "https://work.example.com/b".into(),
+            opener: None,
+            expect: Expectation {
+                browser: "Google Chrome".into(),
+                profile: Some("Work".into()),
+                url: None,
+            },
+        }],
+        ..RulesFile::default()
+    };
+    let machine = MachineFile {
+        destinations: BTreeMap::from([(
+            "Work 1".into(),
+            Binding {
+                browser: "Microsoft Edge".into(),
+                profile: "Profile 3".into(),
+                private: false,
+            },
+        )]),
+        sets: BTreeMap::from([("Client".into(), false)]),
+        ..MachineFile::default()
+    };
+    let engine = Engine::from_sources(
+        &Sources {
+            config: None,
+            rules: rules.clone(),
+            machine,
+        },
+        Rc::new(DefaultHost),
+        Limits::default(),
+    )
+    .unwrap();
+    let work = engine.resolve("https://work.example.com/x", None).unwrap();
+    assert_eq!(work.browser.name, "Microsoft Edge");
+    assert_eq!(work.browser.profile, "Profile 3");
+    let client = engine
+        .resolve("https://client.example.net/x", None)
+        .unwrap();
+    assert_eq!(client.browser.name, "Safari", "the set is off here");
+
+    let report = engine.test_rules(None).unwrap();
+    assert!(report.is_ok(), "{report:?}");
+    assert_eq!(report.total, 3);
+
+    // Without the layer the synced bindings route.
+    let synced = Engine::from_sources(
+        &Sources {
+            config: None,
+            rules,
+            ..Default::default()
+        },
+        Rc::new(DefaultHost),
+        Limits::default(),
+    )
+    .unwrap();
+    let work = synced.resolve("https://work.example.com/x", None).unwrap();
+    assert_eq!(
+        (work.browser.name.as_str(), work.browser.profile.as_str()),
+        ("Google Chrome", "Work")
+    );
 }

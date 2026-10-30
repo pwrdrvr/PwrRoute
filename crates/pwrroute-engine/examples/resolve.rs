@@ -70,7 +70,11 @@ fn main() -> Result<()> {
 
     let started = Instant::now();
     let engine = Engine::from_sources(
-        &Sources { config, rules },
+        &Sources {
+            config,
+            rules,
+            ..Default::default()
+        },
         Rc::new(StderrHost),
         Limits::default(),
     )

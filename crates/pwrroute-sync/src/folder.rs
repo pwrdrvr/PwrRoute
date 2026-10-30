@@ -172,10 +172,13 @@ fn icloud_stand_in(path: &Path) -> Option<PathBuf> {
     Some(path.with_file_name(format!(".{name}.icloud")))
 }
 
+/// How [`describe`] words a refused read, so the UI can offer the way out.
+pub const NO_ACCESS: &str = "PwrRoute may not use this folder";
+
 /// An I/O error in words, without the path (the caller names the folder).
 pub fn describe(e: &io::Error) -> String {
     match e.kind() {
-        io::ErrorKind::PermissionDenied => "PwrRoute may not use this folder".into(),
+        io::ErrorKind::PermissionDenied => NO_ACCESS.into(),
         io::ErrorKind::NotFound => "not there".into(),
         io::ErrorKind::TimedOut => "the cloud client did not answer in time".into(),
         _ => e.to_string(),
@@ -251,7 +254,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8], tag: &str) -> Result<()> {
         .file_name()
         .and_then(|n| n.to_str())
         .context("a file name")?;
-    let short: String = tag.chars().filter(char::is_ascii_alphanumeric).take(8).collect();
+    let short: String = tag
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(8)
+        .collect();
     let staging = path.with_file_name(format!(".{name}.{short}.tmp"));
     fs::write(&staging, bytes).with_context(|| path.display().to_string())?;
     fs::rename(&staging, path).with_context(|| path.display().to_string())
@@ -282,14 +289,18 @@ mod tests {
         let folder = Folder::new(dir.path());
         assert_eq!(folder.probe("rules.json"), Probe::Missing);
         assert!(folder.manifest().is_none());
-        folder.write("rules.json", b"{}\n", &me(), 42, "0.8.0").unwrap();
+        folder
+            .write("rules.json", b"{}\n", &me(), 42, "0.8.0")
+            .unwrap();
         assert_eq!(fs::read(folder.file("rules.json")).unwrap(), b"{}\n");
         let manifest = folder.manifest().unwrap();
         assert_eq!(manifest.files["rules.json"].sha256, hash(b"{}\n"));
         assert_eq!(manifest.files["rules.json"].bytes, 3);
         assert_eq!(manifest.saved_by.name, "Studio Mac");
         assert_eq!(manifest.saved_at, 42);
-        assert!(matches!(folder.probe("rules.json"), Probe::Present { stamp, .. } if stamp.len == 3));
+        assert!(
+            matches!(folder.probe("rules.json"), Probe::Present { stamp, .. } if stamp.len == 3)
+        );
         let leftovers: Vec<_> = fs::read_dir(folder.dir())
             .unwrap()
             .flatten()
@@ -297,7 +308,9 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "no staging file left behind");
         // A second file keeps the first's entry.
-        folder.write("finicky.ts", b"x", &me(), 43, "0.8.0").unwrap();
+        folder
+            .write("finicky.ts", b"x", &me(), 43, "0.8.0")
+            .unwrap();
         let manifest = folder.manifest().unwrap();
         assert_eq!(manifest.files.len(), 2);
         assert_eq!(manifest.files["rules.json"].saved_at, 42);

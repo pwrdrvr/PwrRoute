@@ -15,8 +15,8 @@ use std::{
 };
 
 use pwrroute_sync::{
-    Choice, ConflictKind, Content, Folder, Health, Item, Kind, MANIFEST, Schedule, Service,
-    Status, Syncer, Target, Wait, Why, hash,
+    Choice, ConflictKind, Content, Folder, Health, Item, Kind, MANIFEST, Schedule, Service, Status,
+    Syncer, Target, Wait, Why, hash,
 };
 use serde_json::{Value, json};
 
@@ -27,8 +27,13 @@ const RULES: &str = "rules.json";
 fn check(bytes: &[u8]) -> Content {
     match serde_json::from_slice::<Value>(bytes) {
         Err(e) => Content::Invalid(e.to_string()),
-        Ok(v) if v.get("rules").and_then(Value::as_array).is_none_or(Vec::is_empty)
-            && v.get("defaultBrowser").and_then(Value::as_str).is_none_or(str::is_empty) =>
+        Ok(v)
+            if v.get("rules")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+                && v.get("defaultBrowser")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty) =>
         {
             Content::Blank
         }
@@ -41,7 +46,9 @@ fn rules(patterns: &[&str]) -> Vec<u8> {
         .iter()
         .map(|p| json!({ "match": p, "browser": "Google Chrome", "profile": "Work" }))
         .collect();
-    let mut text = serde_json::to_string_pretty(&json!({ "defaultBrowser": "Safari", "rules": rules })).unwrap();
+    let mut text =
+        serde_json::to_string_pretty(&json!({ "defaultBrowser": "Safari", "rules": rules }))
+            .unwrap();
     text.push('\n');
     text.into_bytes()
 }
@@ -128,7 +135,10 @@ fn the_first_machine_fills_an_empty_folder_and_the_next_one_joins() {
     linux.save(b"{}\n");
     assert_eq!(linux.health(3_000, 0), Health::Pulled);
     assert_eq!(linux.syncer.status().backups.len(), 1);
-    assert_eq!(fs::read(&linux.syncer.status().backups[0].path).unwrap(), b"{}\n");
+    assert_eq!(
+        fs::read(&linux.syncer.status().backups[0].path).unwrap(),
+        b"{}\n"
+    );
 }
 
 #[test]
@@ -172,19 +182,34 @@ fn both_changed_is_a_conflict_that_writes_nothing_until_resolved() {
     assert_eq!(conflict.kind, ConflictKind::BothChanged);
     assert_eq!(conflict.local.as_deref(), Some(mine.as_slice()));
     assert_eq!(conflict.remote, theirs);
-    assert_eq!(conflict.remote_by.as_ref().map(|m| m.name.as_str()), Some("Studio Mac"));
+    assert_eq!(
+        conflict.remote_by.as_ref().map(|m| m.name.as_str()),
+        Some("Studio Mac")
+    );
     // Nothing moved, and the folder's version is already kept.
     assert_eq!(air.local(), mine);
     assert_eq!(remote(cloud.path()), theirs);
-    assert!(air.syncer.status().backups.iter().any(|b| b.sha256 == hash(&theirs)));
+    assert!(
+        air.syncer
+            .status()
+            .backups
+            .iter()
+            .any(|b| b.sha256 == hash(&theirs))
+    );
     // Still a conflict on the next pass: it never resolves itself.
     assert!(matches!(air.health(5_000, 0), Health::Conflict(_)));
 
     // The folder changed again since it was shown: refused.
     let shown = conflict.remote_sha.clone();
-    studio.save(&rules(&["a.example/*", "studio.example/*", "more.example/*"]));
+    studio.save(&rules(&[
+        "a.example/*",
+        "studio.example/*",
+        "more.example/*",
+    ]));
     studio.pass(6_000);
-    let refused = air.syncer.resolve(cloud.path(), RULES, &shown, Choice::UseFolder, 7_000);
+    let refused = air
+        .syncer
+        .resolve(cloud.path(), RULES, &shown, Choice::UseFolder, 7_000);
     assert!(refused.is_err());
     assert_eq!(air.local(), mine);
 
@@ -192,12 +217,21 @@ fn both_changed_is_a_conflict_that_writes_nothing_until_resolved() {
         panic!("expected a conflict");
     };
     air.syncer
-        .resolve(cloud.path(), RULES, &conflict.remote_sha, Choice::UseFolder, 9_000)
+        .resolve(
+            cloud.path(),
+            RULES,
+            &conflict.remote_sha,
+            Choice::UseFolder,
+            9_000,
+        )
         .unwrap();
     assert_eq!(air.local(), studio.local());
     let after = air.pass(9_500);
     assert_eq!(after.targets[0].files[0].health, Health::InSync);
-    assert!(after.backups.iter().any(|b| b.sha256 == hash(&mine)), "mine is kept");
+    assert!(
+        after.backups.iter().any(|b| b.sha256 == hash(&mine)),
+        "mine is kept"
+    );
 }
 
 #[test]
@@ -215,7 +249,13 @@ fn keep_local_overwrites_the_folder_and_keeps_its_version() {
         panic!("expected a conflict");
     };
     air.syncer
-        .resolve(cloud.path(), RULES, &conflict.remote_sha, Choice::KeepLocal, 5_000)
+        .resolve(
+            cloud.path(),
+            RULES,
+            &conflict.remote_sha,
+            Choice::KeepLocal,
+            5_000,
+        )
         .unwrap();
     assert_eq!(remote(cloud.path()), air.local());
     let kept = air.pass(6_000);
@@ -269,7 +309,16 @@ fn another_machines_write_is_applied_only_once_it_settles() {
     // A write the manifest lists applies on the first look.
     let next = rules(&["c.example/*"]);
     folder
-        .write(RULES, &next, &pwrroute_sync::Machine { id: "x".into(), name: "thinkpad".into() }, 6_000, "")
+        .write(
+            RULES,
+            &next,
+            &pwrroute_sync::Machine {
+                id: "x".into(),
+                name: "thinkpad".into(),
+            },
+            6_000,
+            "",
+        )
         .unwrap();
     assert_eq!(studio.health(7_000, 0), Health::Pulled);
     assert_eq!(studio.local(), next);
@@ -284,7 +333,12 @@ fn an_unavailable_folder_keeps_its_base_and_others_carry_on() {
     let mut studio = Mac::new("Studio Mac", &[dropbox.path(), &drive]);
     studio.save(&rules(&["a.example/*"]));
     let status = studio.pass(1_000);
-    assert!(status.targets.iter().all(|t| t.files[0].health == Health::Pushed));
+    assert!(
+        status
+            .targets
+            .iter()
+            .all(|t| t.files[0].health == Health::Pushed)
+    );
 
     // Google Drive quits: its folder is gone.
     let parked = drive_parent.path().join("parked");
@@ -292,7 +346,10 @@ fn an_unavailable_folder_keeps_its_base_and_others_carry_on() {
     studio.save(&rules(&["a.example/*", "b.example/*"]));
     let status = studio.pass(2_000);
     assert_eq!(status.targets[0].files[0].health, Health::Pushed);
-    assert!(matches!(status.targets[1].files[0].health, Health::Unavailable(_)));
+    assert!(matches!(
+        status.targets[1].files[0].health,
+        Health::Unavailable(_)
+    ));
     assert_eq!(status.targets[1].last_synced, Some(1_000));
     assert!(!drive.exists(), "a missing root is never created");
 
@@ -393,7 +450,11 @@ fn the_schedule_drives_passes_on_a_fake_clock() {
         .unwrap();
     assert_eq!(air_interval.1, 60_000);
     // The Air's pull did not count as its own edit.
-    assert!(!log.iter().any(|(n, _, why)| *n == "air" && *why == Why::LocalChange), "{log:?}");
+    assert!(
+        !log.iter()
+            .any(|(n, _, why)| *n == "air" && *why == Why::LocalChange),
+        "{log:?}"
+    );
 }
 
 #[test]
@@ -409,7 +470,7 @@ fn the_manifest_is_written_after_the_file_and_staging_files_do_not_linger() {
         .collect();
     let mut names = names;
     names.sort();
-    assert_eq!(names, vec![MANIFEST.to_owned(), RULES.to_owned()]);
+    assert_eq!(names, vec![RULES.to_owned(), MANIFEST.to_owned()]);
 }
 
 /// The clock a test moves by hand.

@@ -492,13 +492,18 @@ impl RulesFile {
             });
         };
         let defined = |name: &Option<String>| {
-            name.as_deref()
-                .is_some_and(|n| self.destination(n).is_some_and(|b| !b.browser.trim().is_empty()))
+            name.as_deref().is_some_and(|n| {
+                self.destination(n)
+                    .is_some_and(|b| !b.browser.trim().is_empty())
+            })
         };
         if let Some(name) = &self.default_destination
             && self.destination(name).is_none()
         {
-            flag(Place::DefaultBrowser, &format!("No destination is named “{name}”."));
+            flag(
+                Place::DefaultBrowser,
+                &format!("No destination is named “{name}”."),
+            );
         }
         if self.default_browser.trim().is_empty() && !defined(&self.default_destination) {
             flag(
@@ -1544,9 +1549,10 @@ mod tests {
 
     #[test]
     fn a_file_without_synced_fields_writes_none_of_them() {
-        let file: RulesFile =
-            serde_json::from_str(r#"{"defaultBrowser":"Safari","rules":[{"match":"a/*","browser":"Arc"}]}"#)
-                .unwrap();
+        let file: RulesFile = serde_json::from_str(
+            r#"{"defaultBrowser":"Safari","rules":[{"match":"a/*","browser":"Arc"}]}"#,
+        )
+        .unwrap();
         let text = serde_json::to_string(&file).unwrap();
         for field in ["destination", "sets", "\"set\"", "defaultDestination"] {
             assert!(!text.contains(field), "{field} in {text}");
@@ -1587,7 +1593,10 @@ mod tests {
             Place::DefaultBrowser,
             "No destination is named “Nowhere”.".into()
         )));
-        assert!(messages.contains(&(Place::Destination(3), "Two destinations are named “Work 1”.".into())));
+        assert!(messages.contains(&(
+            Place::Destination(3),
+            "Two destinations are named “Work 1”.".into()
+        )));
         assert!(messages.contains(&(Place::Destination(3), "Select a browser.".into())));
         // A rule whose destination names a browser needs none of its own.
         let mut file: RulesFile = serde_json::from_str(SYNCED).unwrap();

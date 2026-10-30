@@ -393,17 +393,18 @@ fn attempt(
     let imports = Rc::default();
     // Read once: the engine with the config and, if that fails, the one
     // without it are built from the same rules.json.
-    // `machine.json` beside it says what the synced rules mean here; a
-    // missing or broken one is no layer, so the synced rules still route.
     let rules = match rules_path {
-        Some(path) => RulesFile::load(path)
-            .map(|rules| rules.for_machine(&MachineFile::load_beside(path))),
+        Some(path) => RulesFile::load(path),
         None => Ok(RulesFile::default()),
     };
+    // `machine.json` beside it says what the synced rules mean here; a
+    // missing or broken one is no layer, so the synced rules still route.
+    let machine = rules_path.map(MachineFile::load_beside).unwrap_or_default();
     let load = |config: Option<PathBuf>, rules: &RulesFile, imports: &Rc<_>| {
         let sources = Sources {
             config,
             rules: rules.clone(),
+            machine: machine.clone(),
         };
         Engine::from_sources_reading(&sources, Rc::clone(host), limits, imports)
     };

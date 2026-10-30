@@ -116,7 +116,10 @@ mod tests {
                 passes.push((now, why));
             }
         }
-        assert_eq!(passes, vec![(60_000, Why::Interval), (120_000, Why::Interval)]);
+        assert_eq!(
+            passes,
+            vec![(60_000, Why::Interval), (120_000, Why::Interval)]
+        );
     }
 
     #[test]

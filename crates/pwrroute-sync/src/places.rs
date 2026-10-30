@@ -182,7 +182,11 @@ pub fn detect(env: &Env) -> Vec<Place> {
         add(Kind::Dropbox, label, path);
     }
     if fallback && let Some(dir) = profile {
-        add(Kind::Dropbox, Kind::Dropbox.name().into(), dir.join("Dropbox"));
+        add(
+            Kind::Dropbox,
+            Kind::Dropbox.name().into(),
+            dir.join("Dropbox"),
+        );
     }
     found
 }
@@ -331,7 +335,11 @@ mod tests {
             ..Env::default()
         };
         let kinds: Vec<Kind> = detect(&linux).into_iter().map(|p| p.kind).collect();
-        assert_eq!(kinds, vec![Kind::GoogleDrive, Kind::Dropbox], "no iCloud on Linux");
+        assert_eq!(
+            kinds,
+            vec![Kind::GoogleDrive, Kind::Dropbox],
+            "no iCloud on Linux"
+        );
         let windows = Env {
             os: Os::Windows,
             user_profile: Some(home.to_path_buf()),

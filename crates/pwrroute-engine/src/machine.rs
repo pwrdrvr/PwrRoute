@@ -98,7 +98,13 @@ impl MachineFile {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.name.is_empty() && self.destinations.is_empty() && self.sets.is_empty()
+        self.name.is_empty() && self.routes_as_synced()
+    }
+
+    /// Whether the layer changes nothing about routing (it may still name
+    /// the machine).
+    pub fn routes_as_synced(&self) -> bool {
+        self.destinations.is_empty() && self.sets.is_empty()
     }
 }
 
@@ -217,7 +223,11 @@ impl RulesFile {
                 rewrite.enabled = false;
             }
         }
-        if let Some(binding) = out.default_destination.as_deref().and_then(|n| bindings.get(n)) {
+        if let Some(binding) = out
+            .default_destination
+            .as_deref()
+            .and_then(|n| bindings.get(n))
+        {
             out.default_browser.clone_from(&binding.browser);
             out.default_profile.clone_from(&binding.profile);
         }
@@ -241,7 +251,11 @@ impl RulesFile {
                 rule.profile.clone_from(&binding.profile);
             }
         }
-        if let Some(binding) = self.default_destination.as_ref().and_then(|n| synced.get(n)) {
+        if let Some(binding) = self
+            .default_destination
+            .as_ref()
+            .and_then(|n| synced.get(n))
+        {
             self.default_browser.clone_from(&binding.browser);
             self.default_profile.clone_from(&binding.profile);
         }
@@ -339,7 +353,11 @@ mod tests {
     #[test]
     fn with_no_machine_layer_the_synced_bindings_route() {
         let file = synced();
-        assert_eq!(file.resolved(), file, "already mirrored, so nothing changes");
+        assert_eq!(
+            file.resolved(),
+            file,
+            "already mirrored, so nothing changes"
+        );
     }
 
     #[test]
@@ -353,19 +371,32 @@ mod tests {
         };
         let here = synced().for_machine(&machine);
         assert_eq!(
-            (here.rules[2].browser.as_str(), here.rules[2].profile.as_str()),
+            (
+                here.rules[2].browser.as_str(),
+                here.rules[2].profile.as_str()
+            ),
             ("Google Chrome", "Profile 3")
         );
         assert_eq!(
-            (here.rules[0].browser.as_str(), here.rules[0].profile.as_str()),
+            (
+                here.rules[0].browser.as_str(),
+                here.rules[0].profile.as_str()
+            ),
             ("Google Chrome", "Work")
         );
-        assert_eq!(here.rules[3].browser, "Safari", "no destination: as written");
+        assert_eq!(
+            here.rules[3].browser, "Safari",
+            "no destination: as written"
+        );
         assert_eq!(
             (here.default_browser.as_str(), here.default_profile.as_str()),
             ("Firefox", "default-release")
         );
-        assert_eq!(here.for_machine(&MachineFile::default()), here, "idempotent");
+        assert_eq!(
+            here.for_machine(&MachineFile::default()),
+            here,
+            "idempotent"
+        );
         assert_eq!(here.resolved(), here);
     }
 
@@ -377,7 +408,8 @@ mod tests {
             ..MachineFile::default()
         };
         assert_eq!(
-            file.binding_for("PwrDrvr", &machine).map(|(b, s)| (b.browser.as_str(), s)),
+            file.binding_for("PwrDrvr", &machine)
+                .map(|(b, s)| (b.browser.as_str(), s)),
             Some(("Firefox", BindingSource::Machine))
         );
         assert_eq!(
@@ -484,6 +516,9 @@ mod tests {
         assert!(text.contains("\"Work 1\": {"), "{text}");
         std::fs::write(&path, "{ nope").unwrap();
         assert!(MachineFile::load(&path).is_err());
-        assert!(MachineFile::load_beside(&rules).is_empty(), "broken: synced alone");
+        assert!(
+            MachineFile::load_beside(&rules).is_empty(),
+            "broken: synced alone"
+        );
     }
 }
