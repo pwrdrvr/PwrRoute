@@ -27,6 +27,7 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
         sync: sync_host::model(cx),
         privacy: privacy_host::model(cx),
         updates: updates_host::model(),
+        experimental: system_host::experimental(cx),
         diagnostics: system_host::diagnostics(cx, &local_agents),
         about: system_host::about(),
         local_agents,

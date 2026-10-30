@@ -16,6 +16,7 @@ mod configuration;
 pub mod configuration_host;
 mod controls;
 mod diagnostics;
+mod experimental;
 pub mod fixtures;
 mod local_agents;
 pub mod model;
@@ -104,11 +105,12 @@ pub enum Pane {
     Privacy,
     LocalAgents,
     Updates,
+    Experimental,
     Diagnostics,
 }
 
 impl Pane {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::About,
         Self::Browsers,
         Self::Configuration,
@@ -116,6 +118,7 @@ impl Pane {
         Self::Privacy,
         Self::LocalAgents,
         Self::Updates,
+        Self::Experimental,
         Self::Diagnostics,
     ];
 
@@ -127,6 +130,7 @@ impl Pane {
             Self::Privacy => "Privacy",
             Self::LocalAgents => "Local agents",
             Self::Updates => "Updates",
+            Self::Experimental => "Experimental",
             Self::Diagnostics => "Diagnostics",
             Self::About => "About",
         }
@@ -141,6 +145,7 @@ impl Pane {
             Self::Privacy => "settings-nav-privacy",
             Self::LocalAgents => "settings-nav-local-agents",
             Self::Updates => "settings-nav-updates",
+            Self::Experimental => "settings-nav-experimental",
             Self::Diagnostics => "settings-nav-diagnostics",
             Self::About => "settings-nav-about",
         }
@@ -155,6 +160,7 @@ impl Pane {
             Self::Privacy => "settings-pane-privacy",
             Self::LocalAgents => "settings-pane-local-agents",
             Self::Updates => "settings-pane-updates",
+            Self::Experimental => "settings-pane-experimental",
             Self::Diagnostics => "settings-pane-diagnostics",
             Self::About => "settings-pane-about",
         }
@@ -486,6 +492,7 @@ impl SettingsWindow {
             Pane::Privacy => privacy::pane(self, window, cx),
             Pane::LocalAgents => local_agents::pane(self, window, cx),
             Pane::Updates => updates::pane(self, cx),
+            Pane::Experimental => experimental::pane(self, cx),
             Pane::Diagnostics => diagnostics::pane(self, cx),
             Pane::About => about::pane(self, cx),
         }

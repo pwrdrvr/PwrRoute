@@ -21,6 +21,9 @@ pub fn model() -> SettingsModel {
         privacy: privacy(),
         browsers: browsers(),
         updates: updates(),
+        experimental: super::model::Experimental {
+            yield_browser_focus: Some(false),
+        },
         diagnostics: diagnostics(),
         about: about(),
     }
@@ -215,6 +218,7 @@ pub fn diagnostics() -> Diagnostics {
         log: "~/Library/Logs/PwrRoute/main.log".into(),
         log_exists: true,
         build: build(),
+        yield_browser_focus: Some(false),
     }
 }
 
