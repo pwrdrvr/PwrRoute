@@ -397,6 +397,56 @@ async fn activity_finds_the_links_that_were_not_opened() {
 }
 
 #[tokio::test]
+async fn activity_finds_the_links_the_user_held_and_the_hold_in_force() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Editor)).await;
+    h.router
+        .record_not_opened("https://ads.example.net/click?id=7", "Mail")
+        .unwrap();
+    h.router
+        .record_held("https://chat.example.com/r/team-7", "Chat")
+        .unwrap();
+    h.router
+        .record("https://docs.example.org/page", "Chat")
+        .unwrap();
+    h.router
+        .set_hold(Some(pwrroute_mcp::Hold::Next { left: 1, of: 3 }));
+    let client = h.client("test-agent").await;
+
+    let held = call(&client, "pwrroute_activity", json!({ "filter": "held" })).await;
+    assert_eq!(held.is_error, Some(false), "{}", text(&held));
+    let held = held.structured_content.unwrap();
+    assert_eq!(held["filter"], "held");
+    assert_eq!(held["hold"], json!({ "kind": "next", "left": 1, "of": 3 }));
+    let entries = held["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{held}");
+    assert_eq!(entries[0]["reason"], "hold");
+    assert_eq!(entries[0]["via"], "Chat");
+    assert_eq!(entries[0]["waiting"], true);
+
+    // Held is a part of not opened.
+    let not_opened = call(
+        &client,
+        "pwrroute_activity",
+        json!({ "filter": "notOpened" }),
+    )
+    .await;
+    let not_opened = not_opened.structured_content.unwrap();
+    assert_eq!(not_opened["entries"].as_array().unwrap().len(), 2);
+    // An opened entry never says it waits.
+    let all = call(&client, "pwrroute_activity", json!({})).await;
+    let all = all.structured_content.unwrap();
+    let opened = &all["entries"][0];
+    assert_eq!(opened["outcome"], "dryRun");
+    assert!(opened.get("waiting").is_none(), "{opened}");
+
+    h.router.set_hold(None);
+    let after = call(&client, "pwrroute_activity", json!({})).await;
+    assert_eq!(after.structured_content.unwrap()["hold"], Value::Null);
+    client.cancel().await.unwrap();
+    h.finish().await;
+}
+
+#[tokio::test]
 async fn apply_accepts_dont_open_for_a_rule_and_everything_else() {
     let h = Harness::start(FakeAnswer::Approve(Role::Editor)).await;
     let client = h.client("test-agent").await;

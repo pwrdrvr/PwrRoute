@@ -250,6 +250,8 @@ pub enum Tone {
     Accent,
     /// `.chip.ok`: a grant that went through.
     Ok,
+    /// `.chip.info`: links the user held (design: Incoming Links 4).
+    Info,
 }
 
 /// `.chip`: a count or state in a card header.
@@ -276,6 +278,7 @@ pub fn toned_chip(label: impl Into<SharedString>, tone: Tone) -> Div {
             theme::transparent(),
             theme::accent_bright(),
         ),
+        Tone::Info => (theme::info_soft(), theme::transparent(), theme::info_text()),
     };
     div()
         .flex()

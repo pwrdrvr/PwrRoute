@@ -1,21 +1,25 @@
 //! What the menu bar dropdown and the tray menu show, as plain data.
 //!
-//! The recents and the count come from the router's dispatch records
-//! ([`Recent::from_record`], [`TrayModel::sync`]), the pause state from the
-//! tray's own toggle (`tray::toggle_pause`, which pauses the router), and
-//! whether PwrRoute is the default browser from the OS
+//! The recents, the held links and the count come from the router's
+//! dispatch records ([`Recent::from_record`], [`HeldLink::from_record`],
+//! [`TrayModel::sync`]), what incoming links do (rules, send, hold, pause)
+//! from the router's override slot (`tray::sync_override`), and whether
+//! PwrRoute is the default browser from the OS
 //! (`tray::follow_default_browser`). [`TrayModel::starting`] is the model
 //! before any of them has reported; [`TrayModel::fixture`] is the whole
 //! design example, for screenshots and tests. Everything here is testable
 //! without a window.
 //!
 //! Recent links keep a host, never a full URL: the dropdown is visible to
-//! whoever is looking at the screen.
+//! whoever is looking at the screen. A held link is the exception (design:
+//! Incoming Links 2c): the user held it to see it, so a record kept in full
+//! shows its path too.
 
 use std::time::{Duration, SystemTime};
 
 use pwrroute_router::{
-    Destination, DispatchRecord, MAX_NEXT, Matched, Outcome, Owner, SendScope, SendTo, Sent, Step,
+    Destination, DispatchId, DispatchRecord, MAX_NEXT, Matched, NotOpenedReason, Outcome, Owner,
+    Privacy, SendScope, Sent, Step,
 };
 
 use crate::activity::{Feed, thousands};
@@ -27,7 +31,11 @@ use crate::widgets::{AppBadge, badge_for};
 /// How many recent links the dropdown lists.
 pub const RECENT_LIMIT: usize = 3;
 
-/// Whether links follow the rules.
+/// How many held links the dropdown lists; the rest wait in Activity.
+pub const HELD_LIMIT: usize = 4;
+
+/// What incoming links do: the router's override slot, as the tray last
+/// read it (`tray::sync_override`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Routing {
     #[default]
@@ -35,21 +43,143 @@ pub enum Routing {
     /// Every link goes to [`TrayModel::pause_target`]; rewrites still run.
     Paused,
     /// The user sent links to [`TrayModel::destination`]: the next few, or
-    /// all of them for a while (design: Send Links 1c-1e). The router
-    /// counts; the tray follows it (`tray::sync_send`).
+    /// all of them for a while. The router counts.
     Sending(SendScope),
+    /// Links are recorded and not opened, for the next few or for a while
+    /// (design: Incoming Links). They wait in [`TrayModel::held`].
+    Holding(SendScope),
 }
 
-/// The Send links switch: who picks the browser.
+/// The Incoming links switch (design: Incoming Links 1a): what the next
+/// links do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SendMode {
+pub enum Mode {
     Rules,
-    Next,
-    All,
+    Send,
+    Hold,
+    Pause,
 }
 
-/// How long All links lasts.
-pub const ALL_FOR: Duration = Duration::from_secs(60 * 60);
+impl Mode {
+    pub const ALL: [Self; 4] = [Self::Rules, Self::Send, Self::Hold, Self::Pause];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rules => "Rules",
+            Self::Send => "Send",
+            Self::Hold => "Hold",
+            Self::Pause => "Pause",
+        }
+    }
+
+    /// Send and Hold say for how long; Rules and Pause last until changed.
+    pub fn has_scope(self) -> bool {
+        matches!(self, Self::Send | Self::Hold)
+    }
+}
+
+/// The For row: how many links, or how long, Send and Hold last.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ForKind {
+    /// The next [`TrayModel::next_count`] links.
+    #[default]
+    Links,
+    /// [`TIME_STEPS`]`[`[`TrayModel::time_step`]`]` from when it starts.
+    Time,
+    /// Until the user goes back to the rules.
+    UntilOff,
+}
+
+impl ForKind {
+    pub const ALL: [Self; 3] = [Self::Links, Self::Time, Self::UntilOff];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Links => "Links",
+            Self::Time => "Time",
+            Self::UntilOff => "Until off",
+        }
+    }
+
+    /// Which choice a running scope is.
+    pub fn of(scope: SendScope) -> Self {
+        match scope {
+            SendScope::Next { .. } => Self::Links,
+            SendScope::All { until: Some(_) } => Self::Time,
+            SendScope::All { until: None } => Self::UntilOff,
+        }
+    }
+}
+
+/// The times For › Time steps through (design: Incoming Links 5).
+pub const TIME_STEPS: [Duration; 6] = [
+    Duration::from_secs(15 * 60),
+    Duration::from_secs(30 * 60),
+    Duration::from_secs(60 * 60),
+    Duration::from_secs(2 * 60 * 60),
+    Duration::from_secs(4 * 60 * 60),
+    Duration::from_secs(8 * 60 * 60),
+];
+
+/// One hour: where Time starts.
+pub const DEFAULT_TIME_STEP: usize = 2;
+
+/// "15m", "1h": the stepper's words for a time, short enough for its box.
+pub fn time_step_label(step: usize) -> String {
+    let minutes = TIME_STEPS[step.min(TIME_STEPS.len() - 1)].as_secs() / 60;
+    if minutes < 60 {
+        format!("{minutes}m")
+    } else {
+        format!("{}h", minutes / 60)
+    }
+}
+
+/// The tone a mode is drawn in: Send the accent, Hold info blue, Pause the
+/// warning (design: Incoming Links 1b, Tones).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Send,
+    Hold,
+    Pause,
+}
+
+/// A run of the live line or the hint; `strong` runs are emphasized.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Run {
+    pub text: String,
+    pub strong: bool,
+}
+
+impl Run {
+    fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            strong: false,
+        }
+    }
+
+    fn strong(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            strong: true,
+        }
+    }
+}
+
+/// The text of a list of runs.
+pub fn runs_text(runs: &[Run]) -> String {
+    runs.iter().map(|run| run.text.as_str()).collect()
+}
+
+/// The line that says what is on, and its one-click way back (design:
+/// Incoming Links 2b-2f).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Live {
+    pub tone: Tone,
+    pub runs: Vec<Run>,
+    /// "Back to rules", or "Resume" while paused.
+    pub button: &'static str,
+}
 
 /// Where Send links sends links: a browser, a profile or none (the
 /// browser's own), or the browser's private window by its word.
@@ -246,6 +376,10 @@ impl Recent {
     /// kept from opening (Don't open, `browser: null`) is listed as "not
     /// opened" with who decided (design: Not Opened 2d).
     pub fn from_record(record: &DispatchRecord) -> Option<Self> {
+        // A held link is listed under Held, not here.
+        if record.not_opened_reason() == Some(NotOpenedReason::Hold) {
+            return None;
+        }
         let not_opened = record.outcome == Outcome::NotOpened;
         if !not_opened && !matches!(record.outcome, Outcome::Opened | Outcome::DryRun) {
             return None;
@@ -382,12 +516,105 @@ pub fn host_of(url: &str) -> Option<String> {
     })
 }
 
-/// "52 min", "1 min", "under a minute".
-fn time_left(left: Duration) -> String {
-    let minutes = left.as_secs().div_ceil(60);
-    match minutes {
-        0 => "under a minute".to_owned(),
-        _ => format!("{minutes} min"),
+/// "41:52", "1:41:52": the time left, to the second, rounded up.
+pub fn countdown(left: Duration) -> String {
+    let secs = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+    let (hours, minutes, seconds) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// A link that was held and still waits to be opened (design: Incoming
+/// Links 2c). Only a hold's links: a rule that opens nothing is Activity's
+/// to show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldLink {
+    pub id: DispatchId,
+    /// Host, with the port when it is not the scheme's default.
+    pub host: String,
+    /// The path, query and fragment, when the record keeps the whole link;
+    /// empty for a record kept as host only, or a bare host.
+    pub rest: String,
+    /// The app that sent it, by name.
+    pub from: Option<String>,
+    /// Where the rules would have opened it.
+    pub rules: Option<BrowserLabel>,
+    pub at: SystemTime,
+}
+
+impl HeldLink {
+    /// The held link a record is. `None` unless a hold kept it, it keeps
+    /// at least the host, and it has one.
+    pub fn from_record(record: &DispatchRecord) -> Option<Self> {
+        if record.not_opened_reason() != Some(NotOpenedReason::Hold)
+            || record.privacy == Privacy::None
+        {
+            return None;
+        }
+        let url = url::Url::parse(&record.link.url).ok()?;
+        let host = host_of(url.as_str())?;
+        let rest = if record.privacy == Privacy::Full {
+            let mut rest = url.path().to_owned();
+            if let Some(query) = url.query() {
+                rest.push('?');
+                rest.push_str(query);
+            }
+            if let Some(fragment) = url.fragment() {
+                rest.push('#');
+                rest.push_str(fragment);
+            }
+            if rest == "/" { String::new() } else { rest }
+        } else {
+            String::new()
+        };
+        let rules = record.steps.iter().find_map(|step| match step {
+            Step::Held {
+                browser: Some(browser),
+                ..
+            } => Some(
+                BrowserLabel::new(
+                    badge_for(&browser.name),
+                    &crate::default_browser::browser_name(&browser.name),
+                    (!browser.profile.is_empty()).then_some(browser.profile.as_str()),
+                )
+                .for_app(&browser.name),
+            ),
+            _ => None,
+        });
+        Some(Self {
+            id: record.id,
+            host,
+            rest,
+            from: record
+                .link
+                .opener
+                .as_ref()
+                .map(|opener| opener.name.clone())
+                .filter(|name| !name.is_empty()),
+            rules,
+            at: record.received_at,
+        })
+    }
+
+    /// The second line: "from Chat · rules:" before the rules' browser,
+    /// or "from Chat · the rules open nothing".
+    pub fn detail(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(from) = &self.from {
+            parts.push(format!("from {from}"));
+        }
+        parts.push(
+            if self.rules.is_some() {
+                "rules:"
+            } else {
+                "the rules open nothing"
+            }
+            .to_owned(),
+        );
+        parts.join(" \u{00b7} ")
     }
 }
 
@@ -406,19 +633,45 @@ fn age(elapsed: Duration) -> String {
 pub struct Dispatched {
     /// The newest [`RECENT_LIMIT`] links that opened.
     pub recents: Vec<Recent>,
+    /// Every held link that still waits, newest first.
+    pub held: Vec<HeldLink>,
     pub links_today: u64,
 }
 
 impl Dispatched {
+    /// With a router, only what its buffer still holds is held: it drops a
+    /// record by age, and the link with it, while the feed keeps the record
+    /// until a later push.
     pub fn of(feed: &Feed, now: SystemTime) -> Self {
+        let mut dispatched = Self::of_records(feed.records(), feed.today(now).routed);
+        if feed.router().is_some() {
+            let pending = feed.pending();
+            dispatched.held.retain(|held| pending.contains(&held.id));
+        }
+        dispatched
+    }
+
+    /// From records, newest first. A held link that was opened since has a
+    /// newer record naming it ([`DispatchRecord::released_from`]), and no
+    /// longer waits; one whose record left the feed left the router's
+    /// buffer with it.
+    pub fn of_records(records: &[DispatchRecord], links_today: u64) -> Self {
+        let released: std::collections::HashSet<DispatchId> = records
+            .iter()
+            .filter_map(DispatchRecord::released_from)
+            .collect();
         Self {
-            recents: feed
-                .records()
+            recents: records
                 .iter()
                 .filter_map(Recent::from_record)
                 .take(RECENT_LIMIT)
                 .collect(),
-            links_today: feed.today(now).routed,
+            held: records
+                .iter()
+                .filter(|record| !released.contains(&record.id))
+                .filter_map(HeldLink::from_record)
+                .collect(),
+            links_today,
         }
     }
 }
@@ -432,17 +685,23 @@ pub enum HeaderChip {
     Paused,
     /// `.chip` "not default": links do not reach PwrRoute yet.
     NotDefault,
-    /// `.chip.acc` "next link" or "all links": the user sent links.
-    Sending(Sent),
+    /// `.chip.acc` "next link", "next 3" or "all links": the user sent
+    /// links.
+    Sending(SendScope),
+    /// `.chip.info` "holding".
+    Holding,
 }
 
 impl HeaderChip {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Default => "default",
-            Self::Paused => "paused",
-            Self::NotDefault => "not default",
-            Self::Sending(sent) => sent.short(),
+            Self::Default => "default".to_owned(),
+            Self::Paused => "paused".to_owned(),
+            Self::NotDefault => "not default".to_owned(),
+            Self::Sending(SendScope::Next { of: 1, .. }) => "next link".to_owned(),
+            Self::Sending(SendScope::Next { of, .. }) => format!("next {of}"),
+            Self::Sending(SendScope::All { .. }) => "all links".to_owned(),
+            Self::Holding => "holding".to_owned(),
         }
     }
 }
@@ -458,17 +717,26 @@ pub struct TrayModel {
     pub pause_target: BrowserLabel,
     /// Newest first. The dropdown shows the first [`RECENT_LIMIT`].
     pub recents: Vec<Recent>,
+    /// Held links that still wait, newest first. The dropdown shows the
+    /// first [`HELD_LIMIT`].
+    pub held: Vec<HeldLink>,
     pub links_today: u64,
-    /// Where Send links sends links: the one in force, else the last one
-    /// chosen this session, else the Everything else browser.
+    /// Where Send sends links: the one in force, else the last one chosen
+    /// this session, else the Everything else browser.
     pub destination: SendDestination,
     /// The user picked [`destination`](Self::destination); until then it
     /// follows the pause target.
     pub destination_chosen: bool,
-    /// How many links Next link takes when turned on (the stepper).
+    /// The For row's choice when Send or Hold turns on: the last chosen
+    /// this session, else the next link.
+    pub for_kind: ForKind,
+    /// How many links For › Links takes when turned on (the stepper).
     pub next_count: u32,
-    /// All links lasts [`ALL_FOR`] rather than until switched back.
-    pub all_for_hour: bool,
+    /// For › Time's length, an index into [`TIME_STEPS`].
+    pub time_step: usize,
+    /// Hold can turn on: Activity keeps links in memory, so a held link
+    /// has somewhere to wait (design: Incoming Links 5).
+    pub can_hold: bool,
     /// What the destination lanes offer, from the browser scan; read when
     /// the dropdown opens.
     pub choices: DestinationChoices,
@@ -484,7 +752,7 @@ impl TrayModel {
         let chrome = |profile: Option<&str>| BrowserLabel::new("Ch", "Google Chrome", profile);
         let recents = [
             Recent::from_urls(
-                "https://pwrdrvr.atlassian.net/browse/DEMO-1",
+                "https://tickets.example.com/browse/DEMO-1",
                 None,
                 chrome(Some("Work")),
                 RecentRoute::Handler(2),
@@ -511,11 +779,14 @@ impl TrayModel {
             is_default_browser: true,
             pause_target: chrome(Some("Personal")),
             recents: recents.into_iter().flatten().collect(),
+            held: Vec::new(),
             links_today: 1412,
             destination: SendDestination::profile(edge("Work")),
             destination_chosen: true,
+            for_kind: ForKind::Links,
             next_count: 1,
-            all_for_hour: false,
+            time_step: DEFAULT_TIME_STEP,
+            can_hold: true,
             choices: DestinationChoices {
                 browsers: vec![
                     BrowserChoice {
@@ -548,17 +819,59 @@ impl TrayModel {
             destination_chosen: false,
             pause_target,
             recents: Vec::new(),
+            held: Vec::new(),
             links_today: 0,
+            for_kind: ForKind::Links,
             next_count: 1,
-            all_for_hour: false,
+            time_step: DEFAULT_TIME_STEP,
+            can_hold: true,
             choices: DestinationChoices::default(),
         }
     }
 
-    /// The recents and the count from the dispatch feed.
+    /// The recents, the held links and the count from the dispatch feed.
     pub fn sync(&mut self, dispatched: Dispatched) {
         self.recents = dispatched.recents;
+        self.held = dispatched.held;
         self.links_today = dispatched.links_today;
+    }
+
+    /// Incoming Links 2c: holding for an hour, two links held. Made up for
+    /// the mock.
+    pub fn holding_fixture(now: SystemTime) -> Self {
+        let mut model = Self::fixture(now);
+        model.routing = Routing::Holding(SendScope::All {
+            until: Some(now + Duration::from_secs(41 * 60 + 52)),
+        });
+        model.for_kind = ForKind::Time;
+        model.recents.truncate(1);
+        let held = |id: u64, host: &str, rest: &str, from: &str, rules, minutes: u64| HeldLink {
+            id: DispatchId(id),
+            host: host.to_owned(),
+            rest: rest.to_owned(),
+            from: Some(from.to_owned()),
+            rules: Some(rules),
+            at: now - Duration::from_secs(minutes * 60),
+        };
+        model.held = vec![
+            held(
+                9002,
+                "chat.example.com",
+                "/r/team-7?ref=bot",
+                "Chat",
+                BrowserLabel::new("Ch", "Google Chrome", Some("Work")),
+                1,
+            ),
+            held(
+                9001,
+                "l.example.net",
+                "/t/9f2c1a?u=docs",
+                "Mail",
+                BrowserLabel::new("Sa", "Safari", None),
+                3,
+            ),
+        ];
+        model
     }
 
     /// The design's 1b: paused, with a link that skipped its handler.
@@ -586,6 +899,7 @@ impl TrayModel {
         self.routing == Routing::Paused
     }
 
+    #[cfg(test)]
     pub fn set_paused(&mut self, paused: bool) {
         self.routing = if paused {
             Routing::Paused
@@ -632,58 +946,154 @@ impl TrayModel {
         }
     }
 
-    /// Which segment of the Send links switch is lit: none while paused.
-    pub fn send_mode(&self) -> Option<SendMode> {
+    /// The hold in force.
+    pub fn holding(&self) -> Option<SendScope> {
         match self.routing {
-            Routing::Active => Some(SendMode::Rules),
-            Routing::Paused => None,
-            Routing::Sending(SendScope::Next { .. }) => Some(SendMode::Next),
-            Routing::Sending(SendScope::All { .. }) => Some(SendMode::All),
+            Routing::Holding(scope) => Some(scope),
+            _ => None,
         }
     }
 
-    /// The router's send for `mode` as the switch stands: the stepper's
-    /// count, the hour from `now`. `None` for Rules.
-    pub fn send_for(&self, mode: SendMode, now: SystemTime) -> Option<SendTo> {
-        let scope = match mode {
-            SendMode::Rules => return None,
-            SendMode::Next => {
+    /// The send's or the hold's scope, whichever is on.
+    pub fn scope(&self) -> Option<SendScope> {
+        self.sending().or(self.holding())
+    }
+
+    /// Which segment of the Incoming links switch is lit.
+    pub fn mode(&self) -> Mode {
+        match self.routing {
+            Routing::Active => Mode::Rules,
+            Routing::Paused => Mode::Pause,
+            Routing::Sending(_) => Mode::Send,
+            Routing::Holding(_) => Mode::Hold,
+        }
+    }
+
+    /// Which For choice is lit: the running scope's, else the one Send or
+    /// Hold will start with.
+    pub fn for_shown(&self) -> ForKind {
+        self.scope().map_or(self.for_kind, ForKind::of)
+    }
+
+    /// The scope Send or Hold starts with, as the For row stands: the
+    /// stepper's count, the time from `now`, or until switched back.
+    pub fn scope_for(&self, kind: ForKind, now: SystemTime) -> SendScope {
+        match kind {
+            ForKind::Links => {
                 let n = self.next_count.clamp(1, MAX_NEXT);
                 SendScope::Next { left: n, of: n }
             }
-            SendMode::All => SendScope::All {
-                until: self.all_for_hour.then(|| now + ALL_FOR),
+            ForKind::Time => SendScope::All {
+                until: Some(now + TIME_STEPS[self.time_step.min(TIME_STEPS.len() - 1)]),
             },
-        };
-        Some(SendTo {
-            destination: self.destination.target(),
-            scope,
-        })
-    }
-
-    /// The line under the switch while Next link or All links is on
-    /// (design 1c-1e): what happens after, or how long is left.
-    pub fn send_detail(&self, now: SystemTime) -> Option<String> {
-        match self.sending()? {
-            SendScope::Next { left, of } if left < of => {
-                Some(format!("{left} of {of} left, then the rules again"))
-            }
-            SendScope::Next { left: 1, .. } => Some("link, then the rules again".to_owned()),
-            SendScope::Next { .. } => Some("links, then the rules again".to_owned()),
-            SendScope::All { until: None } => None,
-            SendScope::All { until: Some(until) } => Some(format!(
-                "{} left",
-                time_left(until.duration_since(now).unwrap_or_default())
-            )),
+            ForKind::UntilOff => SendScope::All { until: None },
         }
     }
 
-    /// The stepper's number: what is left while Next link is on, else how
-    /// many it will take.
-    pub fn next_shown(&self) -> u32 {
-        match self.sending() {
-            Some(SendScope::Next { left, .. }) => left,
-            _ => self.next_count,
+    /// The router's send as the switch stands.
+    #[cfg(test)]
+    pub fn send_for(&self, now: SystemTime) -> pwrroute_router::SendTo {
+        pwrroute_router::SendTo {
+            destination: self.destination.target(),
+            scope: self.scope_for(self.for_kind, now),
+        }
+    }
+
+    /// The stepper's value: the count (of the links a running Links scope
+    /// takes in all) or the time; `None` for Until off.
+    pub fn stepper(&self) -> Option<String> {
+        match self.for_shown() {
+            ForKind::Links => Some(match self.scope() {
+                Some(SendScope::Next { of, .. }) => of.to_string(),
+                _ => self.next_count.to_string(),
+            }),
+            ForKind::Time => Some(time_step_label(self.time_step)),
+            ForKind::UntilOff => None,
+        }
+    }
+
+    /// The hint under the switch at rest (design: Incoming Links 2a): what
+    /// Send and Hold would do, so the click is never a surprise.
+    pub fn hint(&self) -> Option<Vec<Run>> {
+        (self.mode() == Mode::Rules).then(|| {
+            vec![
+                Run::plain("Send goes to "),
+                Run::strong(self.destination.display()),
+                Run::plain(". Hold keeps links here, unopened, until you open them."),
+            ]
+        })
+    }
+
+    /// The live line while Send, Hold or Pause is on (design: Incoming
+    /// Links 2b-2f): what happens, what is left, and the way back.
+    pub fn live(&self, now: SystemTime) -> Option<Live> {
+        let (tone, scope) = match self.routing {
+            Routing::Active => return None,
+            Routing::Paused => {
+                let target = &self.pause_target;
+                let mut runs = vec![
+                    Run::plain("Every link to "),
+                    Run::strong(target.name.clone()),
+                ];
+                if let Some(profile) = &target.profile {
+                    runs.push(Run::plain(format!(" \u{00b7} {profile}")));
+                }
+                runs.push(Run::plain(". Rewrites still run."));
+                return Some(Live {
+                    tone: Tone::Pause,
+                    runs,
+                    button: "Resume",
+                });
+            }
+            Routing::Sending(scope) => (Tone::Send, scope),
+            Routing::Holding(scope) => (Tone::Hold, scope),
+        };
+        let held = (tone == Tone::Hold && !self.held.is_empty())
+            .then(|| Run::plain(format!(" \u{00b7} {} held", self.held.len())));
+        let then = Run::plain(", then your rules decide again");
+        let mut runs = match scope {
+            SendScope::Next { of: 1, .. } => vec![Run::strong("Next link")],
+            SendScope::Next { left, of } => {
+                vec![Run::strong(format!("{left} of {of}")), Run::plain(" left")]
+            }
+            SendScope::All { until: Some(until) } => vec![
+                Run::strong(countdown(until.duration_since(now).unwrap_or_default())),
+                Run::plain(" left"),
+            ],
+            SendScope::All { until: None } => {
+                let mut runs = vec![
+                    Run::strong("Every link"),
+                    Run::plain(" until you go back to rules"),
+                ];
+                runs.extend(held);
+                return Some(Live {
+                    tone,
+                    runs,
+                    button: "Back to rules",
+                });
+            }
+        };
+        runs.extend(held);
+        runs.push(then);
+        Some(Live {
+            tone,
+            runs,
+            button: "Back to rules",
+        })
+    }
+
+    /// The held links the dropdown lists.
+    pub fn shown_held(&self) -> &[HeldLink] {
+        &self.held[..self.held.len().min(HELD_LIMIT)]
+    }
+
+    /// "2 held links will be lost", beside Quit while links wait: they
+    /// live in memory only.
+    pub fn quit_warning(&self) -> Option<String> {
+        match self.held.len() {
+            0 => None,
+            1 => Some("1 held link will be lost".to_owned()),
+            n => Some(format!("{n} held links will be lost")),
         }
     }
 
@@ -691,10 +1101,9 @@ impl TrayModel {
         if self.is_paused() {
             HeaderChip::Paused
         } else if let Some(scope) = self.sending() {
-            HeaderChip::Sending(match scope {
-                SendScope::Next { .. } => Sent::Next { nth: 1, of: 1 },
-                SendScope::All { .. } => Sent::All,
-            })
+            HeaderChip::Sending(scope)
+        } else if self.holding().is_some() {
+            HeaderChip::Holding
         } else if self.is_default_browser {
             HeaderChip::Default
         } else {
@@ -720,16 +1129,6 @@ impl TrayModel {
         !self.is_default_browser
     }
 
-    /// The line under "Pause routing".
-    pub fn pause_detail(&self) -> String {
-        let target = self.pause_target.display();
-        if self.is_paused() {
-            format!("Everything goes to {target}. Rewrites still run.")
-        } else {
-            format!("Send every link to {target} until switched back.")
-        }
-    }
-
     /// "1,412 today".
     pub fn today_label(&self) -> String {
         format!("{} today", thousands(self.links_today))
@@ -737,12 +1136,22 @@ impl TrayModel {
 
     /// The tray icon's tooltip.
     pub fn tooltip(&self) -> String {
-        if let HeaderChip::Sending(sent) = self.chip() {
-            return format!(
-                "PwrRoute \u{00b7} {} \u{00b7} {}",
-                sent.short(),
-                self.destination.display()
-            );
+        match self.chip() {
+            chip @ HeaderChip::Sending(_) => {
+                return format!(
+                    "PwrRoute \u{00b7} {} \u{00b7} {}",
+                    chip.label(),
+                    self.destination.display()
+                );
+            }
+            HeaderChip::Holding if !self.held.is_empty() => {
+                return format!(
+                    "PwrRoute \u{00b7} holding \u{00b7} {} held",
+                    self.held.len()
+                );
+            }
+            HeaderChip::Holding => return "PwrRoute \u{00b7} holding".to_owned(),
+            _ => {}
         }
         if self.is_paused() {
             format!(
@@ -858,18 +1267,20 @@ mod tests {
         let mut model = TrayModel::fixture(now());
         assert_eq!(model.chip(), HeaderChip::Default);
         assert!(model.shows_activity_row());
-        assert_eq!(
-            model.pause_detail(),
-            "Send every link to Google Chrome \u{00b7} Personal until switched back."
-        );
+        assert_eq!(model.live(now()), None);
 
         model.set_paused(true);
         assert_eq!(model.chip(), HeaderChip::Paused);
+        assert_eq!(model.mode(), Mode::Pause);
         assert!(!model.shows_activity_row());
+        let live = model.live(now()).expect("a pause says so");
+        assert_eq!(live.tone, Tone::Pause);
+        assert_eq!(live.button, "Resume");
         assert_eq!(
-            model.pause_detail(),
-            "Everything goes to Google Chrome \u{00b7} Personal. Rewrites still run."
+            runs_text(&live.runs),
+            "Every link to Google Chrome \u{00b7} Personal. Rewrites still run."
         );
+        assert_eq!(model.hint(), None);
 
         model.set_paused(false);
         model.is_default_browser = false;
@@ -925,11 +1336,18 @@ mod tests {
         let model = TrayModel::starting(chrome());
         assert_eq!(model.chip(), HeaderChip::NotDefault);
         assert!(!model.is_paused());
+        assert_eq!(model.mode(), Mode::Rules);
         assert!(model.recents.is_empty());
+        assert!(model.held.is_empty());
+        assert_eq!(model.quit_warning(), None);
+        // Send starts where a pause would go, for the next link.
         assert_eq!(
-            model.pause_detail(),
-            "Send every link to Google Chrome \u{00b7} Personal until switched back."
+            runs_text(&model.hint().expect("a hint at rest")),
+            "Send goes to Google Chrome \u{00b7} Personal. Hold keeps links here, unopened, \
+             until you open them."
         );
+        assert_eq!(model.for_shown(), ForKind::Links);
+        assert_eq!(model.stepper().as_deref(), Some("1"));
     }
 
     #[test]
@@ -1197,65 +1615,117 @@ mod tests {
         );
     }
 
-    fn sending(scope: SendScope) -> TrayModel {
+    fn with(routing: Routing) -> TrayModel {
         let mut model = TrayModel::fixture(now());
-        model.routing = Routing::Sending(scope);
+        model.routing = routing;
         model
     }
 
-    #[test]
-    fn send_links_says_who_picks_the_browser() {
-        let model = TrayModel::fixture(now());
-        assert_eq!(model.send_mode(), Some(SendMode::Rules));
-        assert_eq!(model.chip(), HeaderChip::Default);
-        assert_eq!(model.send_detail(now()), None);
+    fn live_text(model: &TrayModel) -> String {
+        runs_text(&model.live(now()).expect("something is on").runs)
+    }
 
-        let next = sending(SendScope::Next { left: 1, of: 1 });
-        assert_eq!(next.send_mode(), Some(SendMode::Next));
+    #[test]
+    fn the_switch_says_what_is_on_and_what_is_left() {
+        let model = TrayModel::fixture(now());
+        assert_eq!(model.mode(), Mode::Rules);
+        assert_eq!(model.chip(), HeaderChip::Default);
+
+        let next = with(Routing::Sending(SendScope::Next { left: 1, of: 1 }));
+        assert_eq!(next.mode(), Mode::Send);
         assert_eq!(next.chip().label(), "next link");
-        assert_eq!(
-            next.send_detail(now()).as_deref(),
-            Some("link, then the rules again")
-        );
+        assert_eq!(next.live(now()).unwrap().tone, Tone::Send);
+        assert_eq!(live_text(&next), "Next link, then your rules decide again");
+        assert_eq!(next.live(now()).unwrap().button, "Back to rules");
         assert_eq!(
             next.tooltip(),
             "PwrRoute \u{00b7} next link \u{00b7} Microsoft Edge \u{00b7} Work"
         );
-        let counting = sending(SendScope::Next { left: 2, of: 3 });
-        assert_eq!(
-            counting.send_detail(now()).as_deref(),
-            Some("2 of 3 left, then the rules again")
-        );
-        assert_eq!(counting.next_shown(), 2);
-        let three = sending(SendScope::Next { left: 3, of: 3 });
-        assert_eq!(
-            three.send_detail(now()).as_deref(),
-            Some("links, then the rules again")
-        );
+        assert_eq!(next.hint(), None);
 
-        let all = sending(SendScope::All {
-            until: Some(now() + Duration::from_secs(51 * 60 + 10)),
-        });
-        assert_eq!(all.chip().label(), "all links");
-        assert_eq!(all.send_detail(now()).as_deref(), Some("52 min left"));
+        // Design 2b: one of three used. The stepper shows the three.
+        let counting = with(Routing::Sending(SendScope::Next { left: 2, of: 3 }));
+        assert_eq!(counting.chip().label(), "next 3");
         assert_eq!(
-            sending(SendScope::All { until: None }).send_detail(now()),
-            None
+            live_text(&counting),
+            "2 of 3 left, then your rules decide again"
         );
+        assert_eq!(counting.stepper().as_deref(), Some("3"));
+        assert_eq!(counting.for_shown(), ForKind::Links);
 
-        // Paused: no segment is lit, and the pause wins the chip.
+        let timed = with(Routing::Sending(SendScope::All {
+            until: Some(now() + Duration::from_secs(41 * 60 + 52)),
+        }));
+        assert_eq!(timed.chip().label(), "all links");
+        assert_eq!(
+            live_text(&timed),
+            "41:52 left, then your rules decide again"
+        );
+        assert_eq!(timed.for_shown(), ForKind::Time);
+        assert_eq!(timed.stepper().as_deref(), Some("1h"));
+        let until_off = with(Routing::Sending(SendScope::All { until: None }));
+        assert_eq!(
+            live_text(&until_off),
+            "Every link until you go back to rules"
+        );
+        assert_eq!(until_off.for_shown(), ForKind::UntilOff);
+        assert_eq!(until_off.stepper(), None);
+
+        // Hold (design 2c, 2f): info blue, the held count in the line.
+        let hold = TrayModel::holding_fixture(now());
+        assert_eq!(hold.mode(), Mode::Hold);
+        assert_eq!(hold.chip(), HeaderChip::Holding);
+        assert_eq!(hold.chip().label(), "holding");
+        assert_eq!(hold.live(now()).unwrap().tone, Tone::Hold);
+        assert_eq!(
+            live_text(&hold),
+            "41:52 left \u{00b7} 2 held, then your rules decide again"
+        );
+        assert_eq!(hold.tooltip(), "PwrRoute \u{00b7} holding \u{00b7} 2 held");
+        assert_eq!(
+            hold.quit_warning().as_deref(),
+            Some("2 held links will be lost")
+        );
+        let mut next_hold = with(Routing::Holding(SendScope::Next { left: 1, of: 1 }));
+        assert_eq!(
+            live_text(&next_hold),
+            "Next link, then your rules decide again"
+        );
+        next_hold.held = hold.held.clone();
+        next_hold.routing = Routing::Holding(SendScope::All { until: None });
+        assert_eq!(
+            live_text(&next_hold),
+            "Every link until you go back to rules \u{00b7} 2 held"
+        );
+        // Held links outlive the hold.
+        next_hold.routing = Routing::Active;
+        assert_eq!(next_hold.live(now()), None);
+        assert_eq!(next_hold.shown_held().len(), 2);
+        assert!(next_hold.quit_warning().is_some());
+
+        // Paused wins the chip.
         let mut paused = TrayModel::fixture(now());
         paused.set_paused(true);
-        assert_eq!(paused.send_mode(), None);
         assert_eq!(paused.chip(), HeaderChip::Paused);
     }
 
     #[test]
-    fn the_switch_asks_the_router_for_the_stepper_count_or_the_hour() {
+    fn countdowns_round_up_to_the_second() {
+        assert_eq!(countdown(Duration::from_secs(41 * 60 + 52)), "41:52");
+        assert_eq!(countdown(Duration::from_millis(59_001)), "1:00");
+        assert_eq!(countdown(Duration::ZERO), "0:00");
+        assert_eq!(countdown(Duration::from_secs(3 * 3600 + 5)), "3:00:05");
+        assert_eq!(time_step_label(0), "15m");
+        assert_eq!(time_step_label(DEFAULT_TIME_STEP), "1h");
+        assert_eq!(time_step_label(TIME_STEPS.len() - 1), "8h");
+        assert_eq!(time_step_label(99), "8h");
+    }
+
+    #[test]
+    fn the_for_row_asks_the_router_for_the_count_the_time_or_until_off() {
         let mut model = TrayModel::fixture(now());
-        assert_eq!(model.send_for(SendMode::Rules, now()), None);
         model.next_count = 3;
-        let next = model.send_for(SendMode::Next, now()).unwrap();
+        let next = model.send_for(now());
         assert_eq!(next.scope, SendScope::Next { left: 3, of: 3 });
         assert_eq!(
             next.destination,
@@ -1265,15 +1735,25 @@ mod tests {
                 private: false,
             }
         );
+        model.for_kind = ForKind::Time;
+        model.time_step = 0;
         assert_eq!(
-            model.send_for(SendMode::All, now()).unwrap().scope,
+            model.send_for(now()).scope,
+            SendScope::All {
+                until: Some(now() + Duration::from_secs(15 * 60))
+            }
+        );
+        model.for_kind = ForKind::UntilOff;
+        assert_eq!(
+            model.scope_for(model.for_kind, now()),
             SendScope::All { until: None }
         );
-        model.all_for_hour = true;
+        model.next_count = 500;
         assert_eq!(
-            model.send_for(SendMode::All, now()).unwrap().scope,
-            SendScope::All {
-                until: Some(now() + ALL_FOR)
+            model.scope_for(ForKind::Links, now()),
+            SendScope::Next {
+                left: MAX_NEXT,
+                of: MAX_NEXT
             }
         );
         // A private window is the browser's, with no profile.
@@ -1290,6 +1770,96 @@ mod tests {
                 private: true,
             }
         );
+    }
+
+    #[test]
+    fn a_held_link_shows_its_path_only_when_its_record_keeps_it() {
+        use pwrroute_router::{AppType, Browser, DispatchId, Link, OpenerInfo, Source, Timings};
+        let url = "https://chat.example.com/r/team-7?ref=bot#top";
+        let chrome = Browser {
+            name: "com.google.Chrome".into(),
+            app_type: AppType::BundleId,
+            url: url.into(),
+            profile: "Work".into(),
+            args: Vec::new(),
+            open_in_background: None,
+            private: false,
+            privacy: Privacy::Full,
+        };
+        let held = |id: u64, privacy: Privacy| DispatchRecord {
+            id: DispatchId(id),
+            received_at: now(),
+            privacy,
+            link: Link::new(url, Source::AppleEvent).with_opener(Some(OpenerInfo {
+                name: "Chat".into(),
+                ..OpenerInfo::default()
+            })),
+            forwarded: false,
+            final_url: Some(url.into()),
+            browser: None,
+            steps: vec![
+                Step::Received { url: url.into() },
+                Step::Matched {
+                    by: Matched::Rule { index: 1 },
+                },
+                Step::Held {
+                    held: Sent::Next { nth: 1, of: 2 },
+                    skipped: None,
+                    browser: Some(chrome.clone()),
+                },
+                Step::NotOpened,
+            ],
+            outcome: Outcome::NotOpened,
+            timings: Timings::default(),
+        };
+        let full = HeldLink::from_record(&held(1, Privacy::Full)).expect("a held link");
+        assert_eq!(full.host, "chat.example.com");
+        assert_eq!(full.rest, "/r/team-7?ref=bot#top");
+        assert_eq!(full.from.as_deref(), Some("Chat"));
+        let rules = full.rules.clone().expect("where the rules would open it");
+        assert_eq!(rules.name, "Google Chrome");
+        assert_eq!(rules.app(), "com.google.Chrome");
+        assert_eq!(rules.profile.as_deref(), Some("Work"));
+        assert_eq!(full.detail(), "from Chat \u{00b7} rules:");
+
+        let mut host_only = held(2, Privacy::Host);
+        host_only.link.url = "https://chat.example.com".into();
+        let host = HeldLink::from_record(&host_only).expect("a host-only held link");
+        assert_eq!(host.rest, "");
+        assert_eq!(HeldLink::from_record(&held(3, Privacy::None)), None);
+
+        // A rule that opens nothing is not a hold's: Activity shows it.
+        let mut by_rule = held(4, Privacy::Full);
+        by_rule
+            .steps
+            .retain(|step| !matches!(step, Step::Held { .. }));
+        assert_eq!(HeldLink::from_record(&by_rule), None);
+
+        // Opened later: the newer record names it, and it waits no more.
+        let mut released = held(5, Privacy::Full);
+        released.steps = vec![
+            Step::Received { url: url.into() },
+            Step::Released {
+                from: DispatchId(1),
+                chosen: false,
+            },
+            Step::Launched { dry_run: false },
+        ];
+        released.outcome = Outcome::Opened;
+        released.browser = Some(chrome.clone());
+        let dispatched = Dispatched::of_records(
+            &[released, held(2, Privacy::Host), held(1, Privacy::Full)],
+            3,
+        );
+        assert_eq!(
+            dispatched
+                .held
+                .iter()
+                .map(|held| held.id)
+                .collect::<Vec<_>>(),
+            [DispatchId(2)]
+        );
+        assert_eq!(dispatched.recents.len(), 1);
     }
 
     #[test]

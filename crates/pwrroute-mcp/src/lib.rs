@@ -36,8 +36,8 @@ pub use approval::{ApprovalAnswer, ApprovalDecision, ApprovalReply, ApprovalRequ
 pub use audit::{AuditRecord, AuditSink, MemoryAudit, NoAudit, Outcome};
 pub use backend::{
     ActivityEntry, ActivityLog, ActivityOutcome, ActivitySource, AgentRef, Backends,
-    BrowserCatalog, BrowserList, DetectedBrowser, Resolver, Router, RulesError, RulesSnapshot,
-    RulesSource, RulesStore, RulesTester, StepKind, Trace, TraceStep,
+    BrowserCatalog, BrowserList, DetectedBrowser, Hold, Resolver, Router, RulesError,
+    RulesSnapshot, RulesSource, RulesStore, RulesTester, StepKind, Trace, TraceStep,
 };
 pub use engine::{EngineResolver, EngineTester, EngineThread, Loader};
 pub use link::Endpoint;

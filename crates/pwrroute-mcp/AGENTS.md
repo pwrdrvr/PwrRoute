@@ -129,8 +129,14 @@ open, and the audit holds no content.
   `not_opened_reason()`. For a rule or default (never a hold, whose step
   says the user held it) the deciding step's `summary` ends with
   `engine::NOT_OPENED` in both `trace_of`s (`engine::mark_not_opened`).
-  `filter: "notOpened"` lists them. `pwrroute_rules_apply` takes `"none"`
-  as any browser.
+  `filter: "notOpened"` lists them, and `filter: "held"` only the user's
+  holds. A memory entry that still waits to be opened
+  (`ActivityLog::waiting`, the router's `pending()`) says `waiting: true`;
+  the reply's `hold` is the hold in force (`ActivityLog::hold`: `next`
+  with `left` and `of`, `until` with `untilMs`, `untilOff`), `null` while
+  the rules decide. There is no tool to hold links or open a held one:
+  either would need its own permission. `pwrroute_rules_apply` takes
+  `"none"` as any browser.
 - **Activity is already reduced.** Entries come from the router at their
   rule's level (`privacy`); a `none` entry has no trace and no `via`. The
   tool adds only the role's cut (`hosts_only`) and the filters. The journal

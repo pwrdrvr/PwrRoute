@@ -194,7 +194,18 @@ the project and re-export here.
   role's description is corrected. Written to the project, then compared
   by size with the file here. The other canvases, `pwrroute.css` and
   `support.js` are unchanged.
-
+- Updated **2026-10-29**: one canvas added for what the next links do
+  (`PwrRoute Incoming Links.dc.html`): one four-way switch, Rules, Send,
+  Hold and Pause, with a For row (the next links, a time, or until off)
+  and a live line that counts down and goes back to rules in one click,
+  in the menu bar dropdown and at the top of the Overview; held links
+  first in the dropdown with Open, Open in…, Make a rule… and Copy link;
+  held links in Activity under the Not opened canvas's filter and row;
+  the keyboard order and focus ring; the native menu. It supersedes Send
+  Links turn 1 and the dropdown's Pause row. Written to the project, then
+  read back from its preview and compared byte for byte with the file
+  here. The other canvases, `pwrroute.css` and `support.js` are
+  unchanged.
 - Updated **2026-10-29**: one canvas added for links that are not opened
   (`PwrRoute Not Opened.dc.html`): Don't open as the last lane of Open in
   in the rule editor and Activity's Add a rule sheet, and as a choice in
@@ -249,6 +260,7 @@ the project and re-export here.
 | `PwrRoute Agent Approval.dc.html` | The local-agent approval window: before, a role chosen (Reader at open) with its permissions and Deny / Allow as <role>, keys, and the allowed and denied outcomes; no time limit |
 | `PwrRoute Not Opened.dc.html` | Don't open as a rule's destination and Everything else (the last lane of Open in, Everything else's menu), Activity's Not opened filter and rows, Open in… on a not-opened row, a row opened later or not openable, Test a link, the tray's recents and the Overview's Not opened card, and how it behaves |
 | `PwrRoute Contrast and Scale.dc.html` | Contrast and text size: dimmed text as a token step (off rules, missed steps, the paused map) with its ratios; dark, light and each with Increase Contrast, every token's lowest ratio, and the light block's corrections; View › Zoom and the reflow at 200% (icon rail, Rules list and editor in turn, Activity's table scrolling, Today's tiles in pairs); the control edge, selected edge and focus ring |
+| `PwrRoute Incoming Links.dc.html` | What the next links do: the Rules / Send / Hold / Pause switch with its For row and live line, in the dropdown (held links first, their actions, Pause, keyboard, the native menu) and the Overview hero; held links in Activity; how Hold behaves (where it applies, how long a held link waits, restart, words, agents) |
 | `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
