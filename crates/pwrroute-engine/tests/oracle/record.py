@@ -52,21 +52,17 @@ TERMINAL = {"name": "Terminal", "bundleId": "com.apple.Terminal", "path": "/Syst
 OUTLOOK = {"name": "Microsoft Outlook", "bundleId": "com.microsoft.Outlook", "path": "/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook"}
 MAIL = {"name": "Mail", "bundleId": "com.apple.mail", "path": "/System/Applications/Mail.app/Contents/MacOS/Mail"}
 BLANK = {"name": "", "bundleId": "", "path": ""}
-# Neutral openers for the Finicky-derived suites.
+MAIL_INBOX = dict(MAIL, windowTitle="Inbox")
 TESTAPP = {"name": "TestApp", "bundleId": "com.test.app", "path": "/Applications/TestApp.app"}
-SHELL = {"name": "Terminal", "bundleId": "com.example.terminal", "path": "/Applications/Utilities/Terminal.app"}
-FILES = {"name": "Files", "bundleId": "com.example.files", "path": "/System/Library/CoreServices/Files.app"}
-MAILER = {"name": "Mail", "bundleId": "com.example.mail", "path": "/Applications/Mail.app"}
-CALENDAR = {"name": "Calendar", "bundleId": "com.example.calendar", "path": "/Applications/Calendar.app"}
-CHAT = {"name": "Chat", "bundleId": "com.example.chat", "path": "/Applications/Chat.app"}
-MESSENGER = {"name": "Messenger", "bundleId": "com.example.messenger", "path": "/Applications/Messenger.app"}
-MAILER_INBOX = dict(MAILER, windowTitle="Inbox")
+GO_TERMINAL = {"name": "Terminal", "bundleId": "com.apple.Terminal", "path": "/Applications/Utilities/Terminal.app"}
+GO_FINDER = {"name": "Finder", "bundleId": "com.apple.finder", "path": "/System/Library/CoreServices/Finder.app"}
+TELEGRAM = {"name": "Telegram", "bundleId": "ru.keepcoder.Telegram", "path": "/Applications/Telegram.app"}
 
 # The links Finicky's testdata/config.js and testdata/rules.json route.
 TESTDATA_URLS = [
     "https://example.com/a",
-    "https://code.example/johnste/finicky",
-    "https://tracker.example/team/issue/1",
+    "https://github.com/johnste/finicky",
+    "https://linear.app/team/issue/1",
     "https://other.example/",
 ]
 
@@ -150,7 +146,7 @@ SUITES = [
             ("https://direct.example/", None),
             ("https://direct.example/", SLACK),
             ("https://direct.example/", BLANK),
-            ("https://example.com/", MAILER_INBOX),
+            ("https://example.com/", MAIL_INBOX),
         ],
     },
     {
@@ -170,17 +166,17 @@ SUITES = [
     },
     # Finicky's own tests, through its configs and rules files: config.test.ts
     # (packages/config-api), resolver_test.go and rules_test.go
-    # (apps/finicky/src), and its testdata/ pair, with neutral hosts and names.
+    # (apps/finicky/src), and its testdata/ pair.
     {
         "name": "Finicky config.test.ts handlers",
         "config": "finicky/config-test-handlers.js",
         "cases": [
             ("https://example.com", TESTAPP),
-            ("https://player.music.example/track/123", TESTAPP),
-            ("https://code.example/some-repo", TESTAPP),
-            ("https://shop.example/product", TESTAPP),
-            ("https://design.example/file/123", TESTAPP),
-            ("https://draw.example/dashboard", TESTAPP),
+            ("https://browser.spotify.com/track/123", TESTAPP),
+            ("https://github.com/some-repo", TESTAPP),
+            ("https://amazon.com/product", TESTAPP),
+            ("https://figma.com/file/123", TESTAPP),
+            ("https://sketch.com/dashboard", TESTAPP),
             ("https://example.com/docs", TESTAPP),
             ("https://example.com", None),
         ],
@@ -189,10 +185,10 @@ SUITES = [
         "name": "Finicky config.test.ts rewrites",
         "config": "finicky/config-test-rewrites.js",
         "cases": [
-            ("https://redirect.example/link?url=https://example.com", TESTAPP),
-            ("https://s.example/abc123", TESTAPP),
-            ("https://my.shortened.example/123", TESTAPP),
-            ("https://www.use-url-object.example", TESTAPP),
+            ("https://slack-redir.net/link?url=https://example.com", TESTAPP),
+            ("https://t.co/abc123", TESTAPP),
+            ("https://my.shortened.url/123", TESTAPP),
+            ("https://www.use-url-object.com", TESTAPP),
         ],
     },
     {
@@ -203,11 +199,11 @@ SUITES = [
             for u in [
                 "https://sub1.example.com",
                 "https://sub2.example.com/path",
-                "https://mail.search.example",
-                "https://docs.search.example.org",
-                "https://mail.provider.example",
+                "https://mail.google.com",
+                "https://docs.google.co.uk",
+                "https://mail.yahoo.com",
                 "https://example.com",
-                "https://search.example",
+                "https://google.com",
             ]
         ],
     },
@@ -223,49 +219,49 @@ SUITES = [
         "name": "Finicky resolver_test.go JS config",
         "config": "finicky/resolver-test-js.js",
         "urls": [
-            "https://code.example/johnste/finicky",
-            "https://gist.code.example/foo",
-            "https://tracker.example/team/issue/123",
+            "https://github.com/johnste/finicky",
+            "https://gist.github.com/foo",
+            "https://linear.app/team/issue/123",
             "https://example.com",
         ],
     },
     {
         "name": "Finicky resolver_test.go JSON rules only",
         "rules": "finicky/resolver-test-rules-only.json",
-        "urls": ["https://code.example/johnste/finicky", "https://tracker.example/team/issue/123", "https://example.com"],
+        "urls": ["https://github.com/johnste/finicky", "https://linear.app/team/issue/123", "https://example.com"],
     },
     {
         "name": "Finicky resolver_test.go JSON rules with a profile",
         "rules": "finicky/resolver-test-rules-profile.json",
-        "urls": ["https://code.example/foo"],
+        "urls": ["https://github.com/foo"],
     },
     {
         "name": "Finicky resolver_test.go JS config without rules",
         "config": "finicky/resolver-test-merged.js",
-        "urls": ["https://code.example/foo", "https://example.com"],
+        "urls": ["https://github.com/foo", "https://example.com"],
     },
     {
         "name": "Finicky resolver_test.go JS config with cached rules",
         "config": "finicky/resolver-test-merged.js",
         "rules": "finicky/resolver-test-cached-rules.json",
-        "urls": ["https://code.example/foo", "https://tracker.example/team/issue/1", "https://example.com"],
+        "urls": ["https://github.com/foo", "https://linear.app/team/issue/1", "https://example.com"],
     },
     {
         "name": "Finicky resolver_test.go function handler",
         "config": "finicky/resolver-test-function-handler.js",
-        "cases": [("https://example.com", SHELL), ("https://example.com", FILES)],
+        "cases": [("https://example.com", GO_TERMINAL), ("https://example.com", GO_FINDER)],
     },
     {
         "name": "Finicky resolver_test.go rewrite",
         "config": "finicky/resolver-test-rewrite.js",
-        "urls": ["https://www.video.example/watch?v=abc123"],
+        "urls": ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"],
     },
     {
         "name": "Finicky rules_test.go handlers",
         "rules": "finicky/rules-test-handlers.json",
         "urls": [
-            "https://code.example/johnste/finicky",
-            "https://tracker.example/team/issue/1",
+            "https://github.com/johnste/finicky",
+            "https://linear.app/team/issue/1",
             "https://example.com/",
         ],
     },
@@ -289,7 +285,7 @@ SUITES = [
             "https://old.example.com/path?q=1",
             "https://old.example.net/a",
             "https://redirect.example.com/p?q=1",
-            "https://vendor.example/mac",
+            "https://apple.com/mac",
             "http://match.example.com/x",
             "https://a.sub.example.com/x",
             "https://regex.example.com/x",
@@ -297,7 +293,7 @@ SUITES = [
             "https://fn.example.com/",
             "https://other.example/api/v1",
             "https://combined.example.com",
-            "http://example.com/x",
+            "http://combined.org/x",
             "https://simple.example.org/",
             "https://byname.example/",
             "https://bybundle.example/",
@@ -306,50 +302,50 @@ SUITES = [
             "https://profile-object.example/",
             "https://advanced.example/",
             "https://dynamic.example/",
-            "https://www.social.example/",
+            "https://www.facebook.com/",
             "https://work.example.com/",
             "https://personal.example.com/",
-            "https://home.example.com/",
-            "https://app.example.test/",
+            "https://safari.example.com/",
+            "https://site.dev/",
         ],
     },
     {
         "name": "Finicky wiki Configuration ideas",
         "config": "finicky/wiki-ideas.js",
         "cases": [
-            ("http://plain.example/x", SHELL),
-            ("https://example.com/?utm_source=x&fbclid=y&keep=1&source=share", SHELL),
-            ("https://search.example/search?q=1", SHELL),
-            ("https://acme.meet.example/j/123456789?pwd=abc", SHELL),
-            ("https://social.example/away.php?to=https%253A%252F%252Fexample.org%252F", SHELL),
-            ("https://app.tasks.example/t/86c1au25p", SHELL),
-            ("https://example.com/", MAILER),
-            ("https://example.com/", CALENDAR),
-            ("https://drive.example/x", CHAT),
-            ("https://drive.example/x", SHELL),
-            ("https://www.example.com/Finicky-docs", SHELL),
-            ("https://boards.example/b/1", SHELL),
-            ("https://open.music.example/track/1", SHELL),
-            ("https://teamchat.example/l/1", SHELL),
-            ("https://www.design.example/file/abc", SHELL),
-            ("https://community.example/channels/1", SHELL),
-            ("https://video.example/room", SHELL),
-            ("https://example.org/", MESSENGER),
-            ("https://calls.example/abc-defg-hij", SHELL),
-            ("https://www.office.example/", SHELL),
-            ("https://store.music.example/us/album/1", SHELL),
-            ("https://unrouted.example/", SHELL),
+            ("http://plain.example/x", TERMINAL),
+            ("https://example.com/?utm_source=x&fbclid=y&keep=1&source=share", TERMINAL),
+            ("https://google.com/search?q=1", TERMINAL),
+            ("https://acme.zoom.us/j/123456789?pwd=abc", TERMINAL),
+            ("https://vk.com/away.php?to=https%253A%252F%252Fexample.org%252F", TERMINAL),
+            ("https://app.clickup.com/t/86c1au25p", TERMINAL),
+            ("https://example.com/", MAIL),
+            ("https://example.com/", OUTLOOK),
+            ("https://drive.google.com/x", SLACK),
+            ("https://drive.google.com/x", TERMINAL),
+            ("https://www.example.com/Finicky-docs", TERMINAL),
+            ("https://trello.com/b/1", TERMINAL),
+            ("https://open.spotify.com/track/1", TERMINAL),
+            ("https://teams.microsoft.com/l/1", TERMINAL),
+            ("https://www.figma.com/file/abc", TERMINAL),
+            ("https://discord.com/channels/1", TERMINAL),
+            ("https://meet.jit.si/room", TERMINAL),
+            ("https://example.org/", TELEGRAM),
+            ("https://meet.google.com/abc-defg-hij", TERMINAL),
+            ("https://www.office.com/", TERMINAL),
+            ("https://music.apple.com/us/album/1", TERMINAL),
+            ("https://unrouted.example/", TERMINAL),
         ],
     },
     {
-        "name": "Finicky wiki chat deep-link recipe",
-        "config": "finicky/wiki-chat.js",
+        "name": "Finicky wiki Slack recipe",
+        "config": "finicky/wiki-slack.js",
         "urls": [
-            "https://acme.chat.example/archives/C0123/p1700000000123456",
-            "https://app.chat.example/client/T999/C888",
-            "https://acme.enterprise.chat.example/files/U1/F123",
-            "https://other.chat.example/archives/C1",
-            "https://acme.chat.example/",
+            "https://acme.slack.com/archives/C0123/p1700000000123456",
+            "https://app.slack.com/client/T999/C888",
+            "https://acme.enterprise.slack.com/files/U1/F123",
+            "https://other.slack.com/archives/C1",
+            "https://acme.slack.com/",
             "https://example.com/",
         ],
     },

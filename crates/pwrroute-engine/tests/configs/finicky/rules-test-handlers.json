@@ -1,9 +1,9 @@
 {
-  "defaultBrowser": "Personal Browser",
+  "defaultBrowser": "Firefox",
   "defaultProfile": "Work",
   "rules": [
-    { "match": "*code.example/*", "browser": "Work Browser", "profile": "Personal" },
-    { "match": ["https://tracker.example/*"], "browser": "Personal Browser" },
-    { "match": "example.com", "browser": "Home Browser" }
+    { "match": "*github.com/*", "browser": "Google Chrome", "profile": "Personal" },
+    { "match": ["https://linear.app/*"], "browser": "Firefox" },
+    { "match": "example.com", "browser": "Safari" }
   ]
 }

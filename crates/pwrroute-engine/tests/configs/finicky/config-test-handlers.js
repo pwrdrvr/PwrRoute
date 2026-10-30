@@ -1,17 +1,16 @@
-// handlerConfig from Finicky's packages/config-api/src/config.test.ts, with
-// neutral hosts and app names.
+// handlerConfig from Finicky's packages/config-api/src/config.test.ts.
 export default {
-  defaultBrowser: "Personal Browser",
+  defaultBrowser: "Firefox",
   handlers: [
-    { match: "player.music.example*", browser: "Music App" },
-    { match: ["code.example*", /shop/], browser: "Work Browser" },
+    { match: "browser.spotify.com*", browser: "Spotify" },
+    { match: ["github.com*", /amazon/], browser: "Google Chrome" },
     {
-      match: ["design.example*", "draw.example*"],
-      browser: { name: "Work Browser", profile: "Design" },
+      match: ["figma.com*", "sketch.com*"],
+      browser: { name: "Google Chrome", profile: "Design" },
     },
     {
       match: (url) => url.pathname.includes("docs"),
-      browser: "Work Browser",
+      browser: "Google Chrome",
     },
   ],
 };

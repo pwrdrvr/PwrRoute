@@ -1,13 +1,13 @@
 {
-  "defaultBrowser": "Work Browser",
+  "defaultBrowser": "Google Chrome",
   "rules": [
     {
-      "match": ["example.com/*", "code.example/*"],
-      "browser": "Home Browser"
+      "match": ["example.com/*", "github.com/*"],
+      "browser": "Safari"
     },
     {
-      "match": "tracker.example/*",
-      "browser": "Work Browser"
+      "match": "linear.app/*",
+      "browser": "Google Chrome"
     }
   ]
 }

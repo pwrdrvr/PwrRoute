@@ -1,10 +1,9 @@
-// edgeCaseConfig from Finicky's packages/config-api/src/config.test.ts, with
-// neutral app names.
+// edgeCaseConfig from Finicky's packages/config-api/src/config.test.ts.
 export default {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   handlers: [
-    { match: "", browser: "Browser A" },
-    { match: "https://*", browser: "Personal Browser" },
-    { match: "*?param=value*", browser: "Browser B" },
+    { match: "", browser: "Chrome" },
+    { match: "https://*", browser: "Firefox" },
+    { match: "*?param=value*", browser: "Edge" },
   ],
 };

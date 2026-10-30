@@ -1,6 +1,6 @@
 {
-  "defaultBrowser": "Home Browser",
+  "defaultBrowser": "Safari",
   "rules": [
-    { "match": "tracker.example/*", "browser": "Work Browser" }
+    { "match": "linear.app/*", "browser": "Google Chrome" }
   ]
 }

@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	vm, err := config.NewFromScript(api, "finickyConfig", `var finickyConfig = { default: { defaultBrowser: "Home Browser" } };`)
+	vm, err := config.NewFromScript(api, "finickyConfig", `var finickyConfig = { default: { defaultBrowser: "Safari" } };`)
 	if err != nil {
 		fail(err)
 	}

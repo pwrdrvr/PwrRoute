@@ -1,13 +1,13 @@
 // TestResolveURL_JSConfigFunctionHandler in Finicky's
-// apps/finicky/src/resolver/resolver_test.go, with neutral app names.
+// apps/finicky/src/resolver/resolver_test.go.
 module.exports = {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   handlers: [
     {
       match: function (request, { opener }) {
-        return opener && opener.bundleId === "com.example.terminal";
+        return opener && opener.bundleId === "com.apple.Terminal";
       },
-      browser: "Personal Browser",
+      browser: "Firefox",
     },
   ],
 };

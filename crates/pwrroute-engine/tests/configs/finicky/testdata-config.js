@@ -1,15 +1,15 @@
 /** @type {Parameters<typeof import("finicky").default>[0]} */
 module.exports = {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   handlers: [
     // This rule lives in the JS config and takes priority over rules.json
     {
-      match: "code.example/*",
-      browser: "Work Browser",
+      match: "github.com/*",
+      browser: "Google Chrome",
     },
     {
-      match: /tracker\.example/,
-      browser: "Personal Browser",
+      match: /linear\.app/,
+      browser: "Firefox",
     },
   ],
   options: {

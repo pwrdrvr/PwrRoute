@@ -24,8 +24,8 @@ use std::{
 };
 
 use pwrroute_engine::{
-    AppType, DefaultHost, Engine, FALLBACK_BROWSER, Host, Limits, LogLevel, ModifierKeys, Opener,
-    PowerInfo, Rule, RulesFile, Sources, SystemInfo,
+    AppType, DefaultHost, Engine, Host, Limits, LogLevel, ModifierKeys, Opener, PowerInfo, Rule,
+    RulesFile, Sources, SystemInfo,
 };
 use serde::Deserialize;
 
@@ -60,7 +60,7 @@ fn rules_only(rules: RulesFile) -> Engine {
 fn terminal() -> Opener {
     Opener {
         name: "Terminal".into(),
-        bundle_id: "com.example.terminal".into(),
+        bundle_id: "com.apple.Terminal".into(),
         path: "/System/Applications/Utilities/Terminal.app".into(),
         window_title: None,
     }
@@ -161,15 +161,15 @@ fn an_invalid_default_browser_is_rejected_as_finicky_rejects_it() {
 
 // ---- apps/finicky/src/resolver/resolver_test.go ----------------------------
 
-/// TestResolveURL_NoConfig: with no config at all, `ResolveURL` answers the
-/// Go host's fallback browser by bundle id. With no config and an empty
-/// `rules.json` the engine does the same (`FALLBACK_BROWSER`, as the Go
-/// host's `ToJSConfigScript` falls back).
+/// TestResolveURL_NoConfig: with no config at all, `ResolveURL` answers
+/// `com.apple.Safari` by bundle id. With no config and an empty `rules.json`
+/// the engine does the same (`FALLBACK_BROWSER`, as the Go host's
+/// `ToJSConfigScript` falls back).
 #[test]
-fn no_config_resolves_to_the_fallback_browser_by_bundle_id() {
+fn no_config_resolves_to_safari_by_bundle_id() {
     let engine = rules_only(RulesFile::default());
     let r = engine.resolve("https://example.com", None).unwrap();
-    assert_eq!(r.browser.name, FALLBACK_BROWSER);
+    assert_eq!(r.browser.name, "com.apple.Safari");
     assert_eq!(r.browser.app_type, AppType::BundleId);
     assert_eq!(r.browser.url, "https://example.com/");
     assert_eq!(r.error, None);
@@ -186,10 +186,10 @@ fn open_in_background_is_unset_unless_the_config_sets_it() {
     let path = write_config(
         "background.js",
         r#"export default {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   handlers: [
-    { match: "https://bg.example/*", browser: { name: "Personal Browser", openInBackground: true } },
-    { match: "https://fg.example/*", browser: { name: "Personal Browser", openInBackground: false } },
+    { match: "https://bg.example/*", browser: { name: "Firefox", openInBackground: true } },
+    { match: "https://fg.example/*", browser: { name: "Firefox", openInBackground: false } },
   ],
 };"#,
     );
@@ -218,11 +218,11 @@ fn rule(patterns: &[&str], browser: &str, profile: &str) -> Rule {
 }
 
 /// TestToJSHandlers_Empty and TestToJSConfigScript_DefaultBrowserFallback: no
-/// rules and no default browser route everything to `FALLBACK_BROWSER`.
+/// rules and no default browser route everything to `com.apple.Safari`.
 #[test]
-fn an_empty_rules_file_falls_back_to_the_fallback_browser() {
+fn an_empty_rules_file_falls_back_to_safari() {
     let engine = rules_only(RulesFile {
-        rules: vec![rule(&["example.com/*"], "Personal Browser", "")],
+        rules: vec![rule(&["example.com/*"], "Firefox", "")],
         ..RulesFile::default()
     });
     assert_eq!(
@@ -231,7 +231,7 @@ fn an_empty_rules_file_falls_back_to_the_fallback_browser() {
             .unwrap()
             .browser
             .name,
-        FALLBACK_BROWSER
+        "com.apple.Safari"
     );
     assert_eq!(
         engine
@@ -239,7 +239,7 @@ fn an_empty_rules_file_falls_back_to_the_fallback_browser() {
             .unwrap()
             .browser
             .name,
-        "Personal Browser"
+        "Firefox"
     );
 }
 
@@ -250,18 +250,18 @@ fn an_empty_rules_file_falls_back_to_the_fallback_browser() {
 #[test]
 fn incomplete_rules_are_skipped_and_the_rest_route() {
     let engine = rules_only(RulesFile {
-        default_browser: "Client Browser".into(),
+        default_browser: "Arc".into(),
         rules: vec![
-            rule(&[""], "Personal Browser", ""),
+            rule(&[""], "Firefox", ""),
             rule(&["skipped.example/*"], "", ""),
-            rule(&["", "kept.example/*"], "Home Browser", ""),
+            rule(&["", "kept.example/*"], "Safari", ""),
         ],
         ..RulesFile::default()
     });
     let browser = |url: &str| engine.resolve(url, None).unwrap().browser.name;
-    assert_eq!(browser("https://skipped.example/x"), "Client Browser");
-    assert_eq!(browser("https://kept.example/x"), "Home Browser");
-    assert_eq!(browser("https://any.example/"), "Client Browser");
+    assert_eq!(browser("https://skipped.example/x"), "Arc");
+    assert_eq!(browser("https://kept.example/x"), "Safari");
+    assert_eq!(browser("https://any.example/"), "Arc");
 }
 
 /// TestToJSHandlers_StringBrowser, _WithProfile and _MultipleRules (order
@@ -269,35 +269,35 @@ fn incomplete_rules_are_skipped_and_the_rest_route() {
 #[test]
 fn rules_keep_their_browser_profile_and_order() {
     let engine = rules_only(RulesFile {
-        default_browser: "Client Browser".into(),
+        default_browser: "Firefox".into(),
         rules: vec![
-            rule(&["*code.example/*"], "Personal Browser", ""),
-            rule(&["https://tracker.example/*"], "Work Browser", "Work"),
-            rule(&["*code.example/*", "example.com"], "Home Browser", ""),
+            rule(&["*github.com/*"], "Firefox", ""),
+            rule(&["https://linear.app/*"], "Google Chrome", "Work"),
+            rule(&["*github.com/*", "example.com"], "Safari", ""),
         ],
         ..RulesFile::default()
     });
-    let code = engine
-        .resolve("https://code.example/x", None)
+    let github = engine
+        .resolve("https://github.com/x", None)
         .unwrap()
         .browser;
     assert_eq!(
-        (code.name.as_str(), code.profile.as_str()),
-        ("Personal Browser", "")
+        (github.name.as_str(), github.profile.as_str()),
+        ("Firefox", "")
     );
-    let tracker = engine
-        .resolve("https://tracker.example/t/1", None)
+    let linear = engine
+        .resolve("https://linear.app/t/1", None)
         .unwrap()
         .browser;
     assert_eq!(
-        (tracker.name.as_str(), tracker.profile.as_str()),
-        ("Work Browser", "Work")
+        (linear.name.as_str(), linear.profile.as_str()),
+        ("Google Chrome", "Work")
     );
     let other = engine
         .resolve("https://other.example/", None)
         .unwrap()
         .browser;
-    assert_eq!(other.name, "Client Browser");
+    assert_eq!(other.name, "Firefox");
 }
 
 /// TestLoadSave_RoundTrip, on Go's own field names: what Go wrote loads, and
@@ -306,21 +306,21 @@ fn rules_keep_their_browser_profile_and_order() {
 #[test]
 fn a_go_rules_file_round_trips_byte_for_byte_in_shape() {
     let go_written = serde_json::json!({
-        "defaultBrowser": "Personal Browser",
+        "defaultBrowser": "Firefox",
         "defaultProfile": "Work",
         "rules": [
-            { "match": "*code.example/*", "browser": "Work Browser", "profile": "Personal" },
-            { "match": "https://tracker.example/*", "browser": "Home Browser" },
-            { "match": ["a.example/*", "b.example/*"], "browser": "Client Browser" }
+            { "match": "*github.com/*", "browser": "Google Chrome", "profile": "Personal" },
+            { "match": "https://linear.app/*", "browser": "Safari" },
+            { "match": ["a.example/*", "b.example/*"], "browser": "Arc" }
         ]
     });
     let dir = temp_dir("roundtrip");
     let path = dir.join("rules.json");
     fs::write(&path, serde_json::to_string_pretty(&go_written).unwrap()).unwrap();
     let loaded = RulesFile::load(&path).unwrap();
-    assert_eq!(loaded.default_browser, "Personal Browser");
+    assert_eq!(loaded.default_browser, "Firefox");
     assert_eq!(loaded.default_profile, "Work");
-    assert_eq!(loaded.rules[0].patterns, ["*code.example/*"]);
+    assert_eq!(loaded.rules[0].patterns, ["*github.com/*"]);
     assert_eq!(loaded.rules[0].profile, "Personal");
     assert_eq!(loaded.rules[2].patterns, ["a.example/*", "b.example/*"]);
     loaded.save(&path).unwrap();
@@ -339,22 +339,22 @@ fn a_missing_file_or_absent_rules_load_empty() {
         RulesFile::default()
     );
     let path = dir.join("rules.json");
-    fs::write(&path, r#"{"defaultBrowser":"Home Browser"}"#).unwrap();
+    fs::write(&path, r#"{"defaultBrowser":"Safari"}"#).unwrap();
     let file = RulesFile::load(&path).unwrap();
     assert!(file.rules.is_empty());
-    assert_eq!(file.default_browser, "Home Browser");
+    assert_eq!(file.default_browser, "Safari");
 }
 
-/// Finicky's `testdata/rules.json` (with neutral names), in the shape Finicky
-/// 4.4's visual editor saves, loads unchanged; `finicky_compat` checks how it
+/// Finicky's `testdata/rules.json`, read from disk exactly as Finicky 4.4's
+/// visual editor saved it, loads unchanged; `finicky_compat` checks how it
 /// routes against the Go host.
 #[test]
 fn finickys_testdata_rules_json_loads_unchanged() {
     let file = RulesFile::load(&configs().join("finicky/testdata-rules.json")).unwrap();
-    assert_eq!(file.default_browser, "Work Browser");
+    assert_eq!(file.default_browser, "Google Chrome");
     assert_eq!(file.rules.len(), 2);
-    assert_eq!(file.rules[0].patterns, ["example.com/*", "code.example/*"]);
-    assert_eq!(file.rules[1].patterns, ["tracker.example/*"]);
+    assert_eq!(file.rules[0].patterns, ["example.com/*", "github.com/*"]);
+    assert_eq!(file.rules[1].patterns, ["linear.app/*"]);
     assert!(file.problems().is_empty(), "{:?}", file.problems());
 }
 
@@ -392,7 +392,7 @@ impl Host for FakeHost {
     }
 
     fn is_app_running(&self, identifier: &str) -> bool {
-        identifier == "com.example.chat" || identifier == "Chat"
+        identifier == "com.tinyspeck.slackmacgap" || identifier == "Slack"
     }
 
     fn log(&self, level: LogLevel, message: &str) {
@@ -409,7 +409,7 @@ fn the_finicky_global_answers_every_documented_utility() {
     let path = write_config(
         "utilities.js",
         r#"export default {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   handlers: [
     { match: () => finicky.getModifierKeys().command && finicky.getModifierKeys().fn && !finicky.getModifierKeys().shift, browser: "Modifier Keys" },
   ],
@@ -418,8 +418,8 @@ export const probe = () => ({
   keys: finicky.getModifierKeys(),
   system: finicky.getSystemInfo(),
   power: finicky.getPowerInfo(),
-  chat: finicky.isAppRunning("com.example.chat"),
-  other: finicky.isAppRunning("Other App"),
+  slack: finicky.isAppRunning("com.tinyspeck.slackmacgap"),
+  arc: finicky.isAppRunning("Arc"),
   hostnames: finicky.matchHostnames(["example.com", /\.example\.org$/])(new URL("https://a.example.org/")),
   domains: finicky.matchDomains("example.com")(new URL("https://example.com/x")),
   notify: finicky.notify("hello") === undefined,
@@ -452,8 +452,8 @@ export const probe = () => ({
         got["power"],
         serde_json::json!({ "isCharging": true, "isConnected": true, "percentage": 80 })
     );
-    assert_eq!(got["chat"], true);
-    assert_eq!(got["other"], false);
+    assert_eq!(got["slack"], true);
+    assert_eq!(got["arc"], false);
     assert_eq!(got["hostnames"], true);
     assert_eq!(got["domains"], true);
     assert_eq!(got["notify"], true);
@@ -486,7 +486,7 @@ fn console_levels_and_the_commonjs_warning_reach_the_host() {
     let path = write_config(
         "console.js",
         r#"console.log("log line"); console.warn("warn line"); console.error("error line");
-module.exports = { defaultBrowser: "Home Browser" };"#,
+module.exports = { defaultBrowser: "Safari" };"#,
     );
     let host = Rc::new(FakeHost::default());
     engine_for(Some(path), RulesFile::default(), host.clone());
@@ -518,7 +518,7 @@ fn legacy_url_arguments_work_and_warn() {
     let path = write_config(
         "legacy-args.js",
         r#"export default {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   handlers: [
     { match: ({ url }) => url.host === "legacy.example" && url.protocol === "https", browser: "Legacy URL" },
     { match: ({ opener }) => opener !== null && opener.name === "Terminal", browser: "Legacy Opener" },
@@ -561,12 +561,12 @@ fn wiki_ideas() -> Engine {
 fn the_bookmark_recipe_rewrites_a_finicky_link_to_its_target() {
     let r = wiki_ideas()
         .resolve(
-            "finicky://open?url=https%3A%2F%2Fcode.example%2Fx",
+            "finicky://open?url=https%3A%2F%2Fgithub.com%2Fx",
             Some(&terminal()),
         )
         .unwrap();
-    assert_eq!(r.browser.url, "https://code.example/x");
-    assert_eq!(r.browser.name, "Home Browser");
+    assert_eq!(r.browser.url, "https://github.com/x");
+    assert_eq!(r.browser.name, "Safari");
     assert_eq!(r.error, None);
 }
 
@@ -577,9 +577,9 @@ fn the_bookmark_recipe_rewrites_a_finicky_link_to_its_target() {
 #[test]
 fn a_recipe_that_assumes_an_opener_falls_back_without_one() {
     let r = wiki_ideas()
-        .resolve("https://drive.example/x", None)
+        .resolve("https://drive.google.com/x", None)
         .unwrap();
-    assert_eq!(r.browser.name, "Home Browser");
+    assert_eq!(r.browser.name, "Safari");
     assert!(r.error.is_some());
 }
 
@@ -591,12 +591,12 @@ fn a_recipe_that_assumes_an_opener_falls_back_without_one() {
 fn v3_partial_url_objects_fail_validation_as_in_finicky_4() {
     for (name, source) in [
         (
-            "partial-host.js",
-            r#"export default { defaultBrowser: "Home Browser", rewrite: [{ match: "shop.example/*", url: { host: "smile.shop.example" } }] };"#,
+            "smile.js",
+            r#"export default { defaultBrowser: "Safari", rewrite: [{ match: "amazon.com/*", url: { host: "smile.amazon.com" } }] };"#,
         ),
         (
-            "partial-hash.js",
-            r#"export default { defaultBrowser: "Home Browser", rewrite: [{ match: finicky.matchHostnames("www.reports.example"), url: { hash: "report" } }] };"#,
+            "spamcop.js",
+            r#"export default { defaultBrowser: "Safari", rewrite: [{ match: finicky.matchHostnames("www.spamcop.net"), url: { hash: "report" } }] };"#,
         ),
     ] {
         let path = write_config(name, source);
@@ -616,13 +616,13 @@ fn finicky_log_from_v3_is_reported_as_an_error() {
     let path = write_config(
         "finicky-log.js",
         r#"module.exports = {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   rewrite: [{ match(all) { finicky.log(JSON.stringify(all, null, 2)); return false; }, url: ({ url }) => url }],
 };"#,
     );
     let engine = engine_for(Some(path), RulesFile::default(), Rc::new(DefaultHost));
     let r = engine.resolve("https://example.com/", None).unwrap();
-    assert_eq!(r.browser.name, "Home Browser");
+    assert_eq!(r.browser.name, "Safari");
     assert!(r.error.is_some());
 }
 
@@ -633,7 +633,7 @@ fn every_documented_option_loads() {
     let path = write_config(
         "options.js",
         r#"export default {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   options: { urlShorteners: ["s.example"], logRequests: true, checkForUpdates: false, keepRunning: true, hideIcon: true },
 };"#,
     );
@@ -645,6 +645,6 @@ fn every_documented_option_loads() {
             .unwrap()
             .browser
             .name,
-        "Home Browser"
+        "Safari"
     );
 }

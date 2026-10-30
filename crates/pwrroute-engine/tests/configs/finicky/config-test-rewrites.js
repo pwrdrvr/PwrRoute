@@ -1,15 +1,14 @@
-// rewriteConfig from Finicky's packages/config-api/src/config.test.ts, with
-// neutral hosts.
+// rewriteConfig from Finicky's packages/config-api/src/config.test.ts.
 export default {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   rewrite: [
     {
-      match: "https://redirect.example/link?url=*",
+      match: "https://slack-redir.net/link?url=*",
       url: (url) => url.href,
     },
     {
-      match: /^https:\/\/s\.example\/.+/,
-      url: (url) => url.href.replace("s.example", "social.example"),
+      match: /^https:\/\/t\.co\/.+/,
+      url: (url) => url.href.replace("t.co", "twitter.com"),
     },
     {
       match: (url) => url.href.includes("shortened"),

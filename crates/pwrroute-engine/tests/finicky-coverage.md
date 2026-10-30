@@ -6,11 +6,6 @@ Expectations come from Finicky: its own assertions, or the PwrFinicky Go
 host (goja) recorded by `oracle/record.py`. Update this map when a Finicky
 test or a PwrRoute test it names changes.
 
-The ports keep Finicky's code, pattern shapes and assertions but use neutral hosts
-(`*.example`), app names (`Work Browser`, `Music App`) and bundle ids
-(`com.example.*`) in place of the real services Finicky's tests and wiki name;
-a Finicky `it` titled after its URL is titled after the neutral one.
-
 Where the tests run:
 
 - **unit**: `finicky_suite.rs::finickys_config_api_unit_tests_pass_in_the_engine`
@@ -32,9 +27,9 @@ Where the tests run:
 | `config.test.ts` › openUrl › wildcards (7) | unit; suite "Finicky config.test.ts wildcards" |
 | `config.test.ts` › openUrl › edge cases (3) | unit; suite "Finicky config.test.ts edge cases" |
 | `wildcard.test.ts` › matchWildcard (13) | unit, through `isMatch(pattern, { href })`, which is how the API calls it; real links: suite "wildcards" (`configs/wildcards.ts`) |
-| `FinickyURL.test.ts` › constructor, urlString, url, opener, keys, URL inheritance (10) | unit; legacy `({ url })` / `({ opener })` in configs: `finicky_suite.rs::legacy_url_arguments_work_and_warn`, suites "Finicky wiki Configuration ideas" and "Finicky wiki chat deep-link recipe" |
+| `FinickyURL.test.ts` › constructor, urlString, url, opener, keys, URL inheritance (10) | unit; legacy `({ url })` / `({ opener })` in configs: `finicky_suite.rs::legacy_url_arguments_work_and_warn`, suites "Finicky wiki Configuration ideas" and "Finicky wiki Slack recipe" |
 | `utils.test.ts` › isMatch (8) | unit |
-| `utils.test.ts` › rewriteUrl (11) | unit. The two vitest mocks are replaced by the real functions: a legacy object without `username` rewrites to `https://undefinedlegacy.example/…` in Finicky, and in PwrRoute |
+| `utils.test.ts` › rewriteUrl (11) | unit. The two vitest mocks are replaced by the real functions: a legacy object without `username` rewrites to `https://undefinedlegacy.com/…` in Finicky, and in PwrRoute |
 | `utils.test.ts` › autodetectAppStringType (5) | unit; `rules.rs::app_type_matches_finickys_autodetect` (the Rust copy `rules.json` uses) |
 | `utils.test.ts` › resolveBrowser (9) | unit |
 | PwrFinicky's `config.test.ts` › candidate validation (2; in the bundle's source) | unit |
@@ -43,7 +38,7 @@ Where the tests run:
 
 | Finicky test | PwrRoute |
 | --- | --- |
-| `TestResolveURL_NoConfig` | `finicky_suite.rs::no_config_resolves_to_the_fallback_browser_by_bundle_id` |
+| `TestResolveURL_NoConfig` | `finicky_suite.rs::no_config_resolves_to_safari_by_bundle_id` |
 | `TestResolveURL_JSConfig` | suite "Finicky resolver_test.go JS config" |
 | `TestResolveURL_JSONRulesOnly` | suite "Finicky resolver_test.go JSON rules only" |
 | `TestResolveURL_JSONRulesWithProfile` | suite "Finicky resolver_test.go JSON rules with a profile" |
@@ -57,10 +52,10 @@ Where the tests run:
 
 | Finicky test | PwrRoute |
 | --- | --- |
-| `TestToJSHandlers_Empty` | `finicky_suite.rs::an_empty_rules_file_falls_back_to_the_fallback_browser`; `rules.rs::plan_follows_go_to_js_handlers` |
+| `TestToJSHandlers_Empty` | `finicky_suite.rs::an_empty_rules_file_falls_back_to_safari`; `rules.rs::plan_follows_go_to_js_handlers` |
 | `TestToJSHandlers_SkipsIncompleteRules` | `finicky_suite.rs::incomplete_rules_are_skipped_and_the_rest_route`; `rules.rs::plan_follows_go_to_js_handlers`. Not a suite: the PwrFinicky router refuses such a file, upstream skips the rule |
 | `TestToJSHandlers_StringBrowser`, `_WithProfile`, `_MultipleRules` | `finicky_suite.rs::rules_keep_their_browser_profile_and_order`; suite "Finicky rules_test.go handlers" |
-| `TestToJSConfigScript_DefaultBrowserFallback` | `finicky_suite.rs::an_empty_rules_file_falls_back_to_the_fallback_browser`; `rules.rs::base_config_follows_go_to_js_config_script` |
+| `TestToJSConfigScript_DefaultBrowserFallback` | `finicky_suite.rs::an_empty_rules_file_falls_back_to_safari`; `rules.rs::base_config_follows_go_to_js_config_script` |
 | `TestToJSConfigScript_ExplicitDefaultBrowser` | `finicky_suite.rs::rules_keep_their_browser_profile_and_order`; suite "Finicky resolver_test.go JSON rules only" |
 | `TestToJSConfigScript_NamespaceIsUsed` | not applicable: the namespace is internal (`finickyConfig`), not part of the file |
 | `TestLoadSave_RoundTrip` | `finicky_suite.rs::a_go_rules_file_round_trips_byte_for_byte_in_shape`; `rules.rs::writes_what_the_go_host_writes_when_no_extension_is_used` |
@@ -70,8 +65,8 @@ Where the tests run:
 
 | Finicky file | PwrRoute |
 | --- | --- |
-| `testdata/config.js` | `configs/finicky/testdata-config.js` (neutral names); suites "Finicky testdata config.js" and "… with rules.json" |
-| `testdata/rules.json` | `configs/finicky/testdata-rules.json` (neutral names); suites "Finicky testdata rules.json" and "… with rules.json"; `finicky_suite.rs::finickys_testdata_rules_json_loads_unchanged` |
+| `testdata/config.js` | `configs/finicky/testdata-config.js` (verbatim); suites "Finicky testdata config.js" and "… with rules.json". Same file as `configs/legacy-commonjs.js` |
+| `testdata/rules.json` | `configs/finicky/testdata-rules.json` (verbatim); suites "Finicky testdata rules.json" and "… with rules.json"; `finicky_suite.rs::finickys_testdata_rules_json_loads_unchanged` |
 | `example-config/example.js`, `example.ts` | `configs/finicky-example.js`, `.ts` (verbatim); configs, suites "opener in the Finicky example", "opener with rules" |
 
 ## Documented API (wiki "Configuration (v4)", "Configuration ideas", `finicky.d.ts`)
@@ -79,7 +74,7 @@ Where the tests run:
 | Feature | PwrRoute |
 | --- | --- |
 | Every example on "Configuration (v4)" | suite "Finicky wiki Configuration (v4)" (`configs/finicky/wiki-v4.js`) |
-| "Configuration ideas" recipes that validate under Finicky 4 | suites "Finicky wiki Configuration ideas", "Finicky wiki chat deep-link recipe"; the `finicky://open?url=` bookmark and a recipe run without an opener: `finicky_suite.rs::the_bookmark_recipe_…`, `::a_recipe_that_assumes_an_opener_…` |
+| "Configuration ideas" recipes that validate under Finicky 4 | suites "Finicky wiki Configuration ideas", "Finicky wiki Slack recipe"; the `finicky://open?url=` bookmark and a recipe run without an opener: `finicky_suite.rs::the_bookmark_recipe_…`, `::a_recipe_that_assumes_an_opener_…` |
 | Finicky 3 recipes Finicky 4 rejects (partial `url` objects), `finicky.log` | `finicky_suite.rs::v3_partial_url_objects_fail_validation_as_in_finicky_4`, `::finicky_log_from_v3_is_reported_as_an_error` |
 | Matchers: wildcard, regex, function, array | unit; suites "wildcards", "functions", wiki suites |
 | Rewrites: string, URL, function, legacy object, chained | unit; suites "functions", "rules after a TS config with rewrites", wiki suites |
@@ -93,7 +88,7 @@ Where the tests run:
 | `finicky.getModifierKeys`, `getSystemInfo`, `getPowerInfo`, `isAppRunning` | `finicky_suite.rs::the_finicky_global_answers_every_documented_utility`; `finicky_compat.rs::host_functions_and_console_reach_the_host`; per-OS answers: `src/native/mod.rs` |
 | `finicky.notify`, `finicky.getBattery` (API stubs) | `finicky_suite.rs::the_finicky_global_answers_every_documented_utility` |
 | `console.log`, `warn`, `error` | `finicky_suite.rs::console_levels_and_the_commonjs_warning_reach_the_host`; `features.rs::console_output_reaches_the_native_hosts_log` |
-| `module.exports` (CommonJS) with its deprecation warning | suites "rules after a CommonJS config", "Finicky testdata config.js", "Finicky wiki chat deep-link recipe"; `finicky_suite.rs::console_levels_and_the_commonjs_warning_reach_the_host` |
+| `module.exports` (CommonJS) with its deprecation warning | suites "rules after a CommonJS config", "Finicky testdata config.js", "Finicky wiki Slack recipe"; `finicky_suite.rs::console_levels_and_the_commonjs_warning_reach_the_host` |
 | `.ts` configs, relative imports | configs (`finicky-example.ts`, `stress.ts` + `helpers.ts`) |
 | Config locations (`~/.finicky.js` …) | `discovery.rs::finicky_order_comes_first` |
 | JSON rules (Finicky 4.4-alpha `rules.json`) merged after a config's handlers | suites "rules …", "Finicky resolver_test.go JS config with cached rules", "Finicky testdata config.js with rules.json" |
@@ -121,6 +116,6 @@ the same; these are host features around them.
 ## Where the Go host is wrong
 
 Cases with a `goHost` note in `expected.json` hold the engine's answer:
-goja leaves RegExp named groups undefined, so `stress.ts`'s meeting-link
-rewrite and the wiki's chat deep-link recipe throw under the Go host (and under Finicky 4, which
+goja leaves RegExp named groups undefined, so `stress.ts`'s Zoom rewrite and
+the wiki's Slack recipe throw under the Go host (and under Finicky 4, which
 also runs configs in goja). QuickJS supports them.

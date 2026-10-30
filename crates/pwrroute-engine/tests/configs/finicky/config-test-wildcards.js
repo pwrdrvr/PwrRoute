@@ -1,9 +1,8 @@
-// wildcardConfig from Finicky's packages/config-api/src/config.test.ts, with
-// neutral hosts and app names.
+// wildcardConfig from Finicky's packages/config-api/src/config.test.ts.
 export default {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   handlers: [
-    { match: "*.example.com*", browser: "Browser A" },
-    { match: ["*.search.*", "mail.*.example*"], browser: "Browser A" },
+    { match: "*.example.com*", browser: "Chrome" },
+    { match: ["*.google.*", "mail.*.com*"], browser: "Chrome" },
   ],
 };

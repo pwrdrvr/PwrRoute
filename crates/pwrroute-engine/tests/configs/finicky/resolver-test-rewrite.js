@@ -1,12 +1,12 @@
 // TestResolveURL_RewriteRule in Finicky's
-// apps/finicky/src/resolver/resolver_test.go, with neutral hosts.
+// apps/finicky/src/resolver/resolver_test.go.
 module.exports = {
-  defaultBrowser: "Home Browser",
+  defaultBrowser: "Safari",
   rewrite: [
     {
-      match: "https://www.video.example/watch*",
+      match: "https://www.youtube.com/watch*",
       url: function (url) {
-        return url.href.replace("https://www.video.example/watch", "https://vid.example/");
+        return url.href.replace("https://www.youtube.com/watch", "https://youtu.be/");
       },
     },
   ],
