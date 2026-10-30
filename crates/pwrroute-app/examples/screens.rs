@@ -4,12 +4,17 @@
 //!
 //! ```text
 //! cargo run -p pwrroute-app --example screens -- OUT_DIR [--app-icons]
+//!     [--light] [--high-contrast] [--zoom=1.5]
 //! ```
 //!
 //! The badges are letters, so every machine draws the same PNGs.
 //! `--app-icons` draws the apps' own icons instead, from what this Mac has
 //! installed (`app_icons.rs`): an app the fixtures name that is not
 //! installed keeps its letters.
+//!
+//! `--light` and `--high-contrast` draw the light palette and the Increase
+//! Contrast one (`theme.rs`); `--zoom=` draws at a View › Zoom step, in a
+//! window that much larger, as the app opens one on a display with room.
 //!
 //! macOS only: the headless renderer is Metal, and GPUI's Mac platform must
 //! be created on the main thread, which a libtest test never runs on. The
@@ -306,6 +311,9 @@ const TRAFFIC_LIGHTS: (f32, f32) = (16.0, 13.0);
 #[cfg(target_os = "macos")]
 #[path = "../src/widgets.rs"]
 mod widgets;
+#[cfg(target_os = "macos")]
+#[path = "../src/zoom.rs"]
+mod zoom;
 
 /// `--app-icons`: draw the apps' own icons, not their letters.
 #[cfg(target_os = "macos")]
@@ -342,6 +350,21 @@ fn draws() -> usize {
     }
 }
 
+/// `--display=WxH`: the visible area of the display the windows open on,
+/// in points. A zoomed window is no larger, as `zoom::window_size` has it.
+#[cfg(target_os = "macos")]
+static DISPLAY: std::sync::OnceLock<(f32, f32)> = std::sync::OnceLock::new();
+
+/// A window's design size, zoomed and held to `--display=`.
+#[cfg(target_os = "macos")]
+fn win(width: f32, height: f32) -> gpui_kit::Size<gpui_kit::Pixels> {
+    let (max_width, max_height) = DISPLAY.get().copied().unwrap_or((f32::MAX, f32::MAX));
+    gpui_kit::size(
+        theme::px(width).min(gpui_kit::px(max_width)),
+        theme::px(height).min(gpui_kit::px(max_height)),
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn main() {
     use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -364,6 +387,26 @@ fn main() {
         eprintln!("usage: screens OUT_DIR [--app-icons]");
         std::process::exit(2);
     };
+    if let Some((width, height)) = flags.iter().find_map(|flag| {
+        let flag = flag.to_string_lossy();
+        let (width, height) = flag.strip_prefix("--display=")?.split_once('x')?;
+        Some((width.parse().ok()?, height.parse().ok()?))
+    }) {
+        let _ = DISPLAY.set((width, height));
+    }
+    let zoom = flags
+        .iter()
+        .find_map(|flag| flag.to_string_lossy().strip_prefix("--zoom=")?.parse().ok())
+        .unwrap_or(1.0);
+    theme::set(theme::Theme {
+        appearance: if flags.iter().any(|flag| flag == "--light") {
+            theme::Appearance::Light
+        } else {
+            theme::Appearance::Dark
+        },
+        increase_contrast: flags.iter().any(|flag| flag == "--high-contrast"),
+        zoom: theme::snap_zoom(zoom),
+    });
     std::fs::create_dir_all(&dir).expect("create the output directory");
     let home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/home");
     let config = home.join(".finicky.ts");
@@ -385,7 +428,7 @@ fn main() {
             Some(std::time::SystemTime::now()),
         );
         let handle = cx
-            .open_window(size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), |_, cx| {
+            .open_window(win(WINDOW_SIZE.0, WINDOW_SIZE.1), |_, cx| {
                 cx.new(|cx| PwrRoute::with_store(config, Some(home), store, cx))
             })
             .expect("open a headless window");
@@ -990,20 +1033,23 @@ fn main() {
                 )
             });
             let handle = cx
-                .open_window(size(px(tray::dropdown::WIDTH), height), |window, cx| {
-                    let model = cx.new(|_| model);
-                    cx.new(|cx| {
-                        let mut dropdown = tray::dropdown::Dropdown::new(
-                            model,
-                            px(f32::MAX),
-                            std::rc::Rc::new(|_| {}),
-                            window,
-                            cx,
-                        );
-                        dropdown.choosing = choosing;
-                        dropdown
-                    })
-                })
+                .open_window(
+                    size(theme::px(tray::dropdown::WIDTH), height),
+                    |window, cx| {
+                        let model = cx.new(|_| model);
+                        cx.new(|cx| {
+                            let mut dropdown = tray::dropdown::Dropdown::new(
+                                model,
+                                px(f32::MAX),
+                                std::rc::Rc::new(|_| {}),
+                                window,
+                                cx,
+                            );
+                            dropdown.choosing = choosing;
+                            dropdown
+                        })
+                    },
+                )
                 .expect("open a headless window");
             cx.allow_parking();
             for _ in 0..draws() {
@@ -1158,7 +1204,7 @@ fn main() {
                 cx.set_reduce_motion(true);
             });
             let handle = cx
-                .open_window(size(px(680.0), px(600.0)), |_, cx| {
+                .open_window(win(680.0, 600.0), |_, cx| {
                     cx.new(|cx| {
                         let mut view = FirstRun::new(model, hooks(), cx);
                         view.picking = picking;
@@ -1231,7 +1277,7 @@ fn main() {
         model.selected = selected;
         model.step = step;
         let handle = cx
-            .open_window(size(px(1180.0), px(640.0)), |_, cx| {
+            .open_window(win(1180.0, 640.0), |_, cx| {
                 cx.new(|cx| importer_view::Importer::new(model, cx))
             })
             .expect("open a headless window");
@@ -1275,7 +1321,7 @@ fn main() {
             settings::install(cx);
         });
         let handle = cx
-            .open_window(size(px(1058.0), px(height)), |_, cx| {
+            .open_window(win(1058.0, height), |_, cx| {
                 cx.new(|cx| {
                     let mut view = settings::SettingsWindow::new(
                         settings::fixtures::model(),
@@ -1397,7 +1443,7 @@ fn main() {
             gpui_kit::platform::current_headless_renderer,
         );
         cx.update(setup);
-        let window_size = size(px(width), px(height));
+        let window_size = win(width, height);
         let handle: gpui_kit::AnyWindowHandle = match which {
             Help::Doc(doc) => cx
                 .open_window(window_size, move |_, cx| {
@@ -1724,7 +1770,7 @@ fn main() {
                 cx.set_reduce_motion(true);
             });
             let handle = cx
-                .open_window(size(px(680.0), px(height)), |_, cx| {
+                .open_window(win(680.0, height), |_, cx| {
                     cx.new(|cx| {
                         let mut view = FirstRun::new(model, hooks(), cx);
                         view.picking = picking;
@@ -2095,7 +2141,7 @@ fn main() {
             let height = if config.is_some() { 1300.0 } else { 1100.0 };
             let home = home.clone();
             let handle = cx
-                .open_window(size(px(shot.width), px(height)), |_, cx| {
+                .open_window(win(shot.width, height), |_, cx| {
                     cx.new(|cx| PwrRoute::with_store(config, Some(home), store, cx))
                 })
                 .expect("open a headless window");
@@ -2256,7 +2302,7 @@ fn main() {
             settings::install(cx);
         });
         let handle = cx
-            .open_window(size(px(998.0), px(620.0)), |_, cx| {
+            .open_window(win(998.0, 620.0), |_, cx| {
                 cx.new(|cx| {
                     let mut model = settings::fixtures::model();
                     model.configuration = configuration;

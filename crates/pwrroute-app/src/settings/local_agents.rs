@@ -2,13 +2,14 @@
 //! once more before it acts; a revoked row offers Allow again (with its
 //! last role) and Forget (its next connection is asked about again).
 
+use crate::theme::px;
 use gpui_kit::base::actions::{SelectDown, SelectUp};
 use gpui_kit::base::{Button, Select, box_shadow};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Div, FocusHandle, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    anchored, deferred, div, point, px, rgb,
+    anchored, deferred, div, point, rgb,
 };
 
 use std::collections::HashMap;
@@ -607,7 +608,7 @@ fn role_select(
         )
         .map(|trigger| {
             if disabled {
-                trigger.opacity(0.5)
+                trigger.opacity(theme::DISABLED)
             } else {
                 let open = menu.is_some();
                 let id = session.id.clone();

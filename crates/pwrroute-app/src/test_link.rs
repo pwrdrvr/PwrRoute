@@ -24,11 +24,12 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, ClipboardItem, Context, Div, HighlightStyle, Hsla, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
-    StrikethroughStyle, Styled as _, StyledText, Window, deferred, div, px,
+    StrikethroughStyle, Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{
     AppType, Engine, Expectation, Limits, Link, NativeHost, RouteTest, RulesFile, Sources, Trace,
@@ -499,24 +500,30 @@ fn chip(chip: &Chip) -> Div {
     }
 }
 
-/// `.ts`: number, title and detail, and what the step did.
+/// `.ts`: number, title and detail, and what the step did. A step the
+/// link missed is drawn [`theme::dimmed`]: it still explains the decision,
+/// so its text stays readable.
 fn step_row(
     index: usize,
     count: usize,
     step: &TraceStep,
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl IntoElement + use<> {
+    theme::dimmed_if(step.state == StepState::Miss, || {
+        step_row_drawn(index, count, step, cx)
+    })
+}
+
+fn step_row_drawn(
+    index: usize,
+    count: usize,
+    step: &TraceStep,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
     let (fill, border, number_color) = circle_colors(step.state);
     let number = step
         .number
         .map_or_else(|| "\u{2713}".to_owned(), |n| n.to_string());
-    let dim = |cell: Div| {
-        if step.state == StepState::Miss {
-            cell.opacity(0.55)
-        } else {
-            cell
-        }
-    };
     let first = index == 0;
     let last = index + 1 == count;
     let body = step.body.iter().fold(
@@ -623,7 +630,7 @@ fn step_row(
                     .child(mono(number, 9.5, 600.0, number_color)),
             ),
         )
-        .child(dim(div()
+        .child(div()
             .w(px(150.0))
             .flex_none()
             .flex()
@@ -654,8 +661,8 @@ fn step_row(
                     .line_height(px(13.0))
                     .text_color(theme::text_subtle())
                     .child(step.detail.clone()),
-            )))
-        .child(dim(body))
+            ))
+        .child(body)
 }
 
 /// The opener menu's width: wider than its field, never narrower.

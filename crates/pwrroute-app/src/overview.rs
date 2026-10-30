@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Bounds,
@@ -25,7 +26,7 @@ use gpui_kit::{
     InteractiveElement as _, IntoElement, ParentElement as _, PathBuilder, Pixels, Point, Render,
     SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledText, TextRun,
     Window, WindowTextSystem, anchored, canvas, deferred, div, ease_out_quint, font,
-    linear_color_stop, linear_gradient, point, px,
+    linear_color_stop, linear_gradient, point,
 };
 
 use crate::app::{PwrRoute, Screen, Selection};
@@ -47,7 +48,6 @@ use crate::widgets::{
 const SHARE_MIN: f32 = 300.0;
 /// The rail, and the pane's and the map's padding and borders, for the
 /// map's widths at a window width.
-const RAIL: f32 = 197.0;
 const PANE_X: f32 = 48.0;
 const MAP_X: f32 = 34.0;
 
@@ -63,8 +63,8 @@ const FADE: Duration = Duration::from_millis(120);
 const TICK: Duration = Duration::from_millis(400);
 /// The override's hand-off route.
 const HANDOFF: Duration = Duration::from_millis(900);
-/// What is not lit, while something is.
-const DIM: f32 = 0.45;
+/// What is not lit, while something is: for as long as the hover or pin.
+const DIM: f32 = theme::SPOTLIGHT;
 
 /// The element ids tests reach.
 pub const PANE_ID: &str = "overview-pane";
@@ -760,8 +760,9 @@ pub fn pane(
     cx: &mut Context<'_, PwrRoute>,
 ) -> Stateful<Div> {
     let overview = build(app, status, cx);
-    let width = f32::from(window.viewport_size().width);
-    let widths = MapWidths::of_content(width - RAIL - PANE_X - MAP_X);
+    let width = theme::css(window.viewport_size().width);
+    let rail = crate::app::Layout::of(app, window).rail_width();
+    let widths = MapWidths::of_content(width - rail - 1.0 - PANE_X - MAP_X);
     pane_frame(PANE_ID)
         .debug_selector(|| PANE_ID.into())
         // A scroll moves the map under a pointer that did not move: GPUI
@@ -1276,7 +1277,8 @@ fn today(app: &PwrRoute, overview: &Overview, cx: &mut Context<'_, PwrRoute>) ->
             .id(("overview-tile", i))
             .debug_selector(move || format!("overview-tile-{i}"))
             .flex_1()
-            .min_w_0()
+            // Its label whole: zoomed, the tiles wrap two by two.
+            .min_w(px(TILE_MIN))
             .flex()
             .flex_col()
             .gap(px(9.0))
@@ -1319,8 +1321,34 @@ fn today(app: &PwrRoute, overview: &Overview, cx: &mut Context<'_, PwrRoute>) ->
                 .child(cap("Today", None, theme::text_muted()))
                 .child(note("Since PwrRoute started")),
         )
-        .child(div().flex().gap(px(10.0)).children(tiles))
+        .child(tile_rows(
+            tiles.map(IntoElement::into_any_element).collect(),
+        ))
 }
+
+/// The tiles in a row, or two by two when a row would cut their labels:
+/// they pair up, and the pairs wrap, so never three and one.
+fn tile_rows(tiles: Vec<AnyElement>) -> Div {
+    let mut tiles = tiles.into_iter();
+    let mut rows = div().flex().flex_wrap().gap(px(10.0));
+    loop {
+        let pair: Vec<AnyElement> = tiles.by_ref().take(2).collect();
+        if pair.is_empty() {
+            return rows;
+        }
+        rows = rows.child(
+            div()
+                .flex_1()
+                .min_w(px(2.0 * TILE_MIN + 10.0))
+                .flex()
+                .gap(px(10.0))
+                .children(pair),
+        );
+    }
+}
+
+/// A Today tile's least width: "Took everything else" and its chevron.
+const TILE_MIN: f32 = 190.0;
 
 fn tile_number(n: u64, color: Hsla) -> Div {
     text(crate::activity::thousands(n), 22.0, 700.0, color)
@@ -1400,7 +1428,7 @@ impl Measure {
             strikethrough: None,
         };
         // GPUI rounds a text box up to a whole pixel.
-        f32::from(self.0.layout_line(text, px(size), &[run], None).width).ceil()
+        theme::css(self.0.layout_line(text, px(size), &[run], None).width).ceil()
     }
 
     fn mono(&self, text: &str, size: f32) -> f32 {
@@ -1551,6 +1579,12 @@ fn map(
         );
     let legend = legend(map, &lit, pinned, cx);
 
+    // Paused, the whole map waits; with all links sent, only the rules
+    // and their routes do: the destination's node stays lit. Waiting is
+    // drawn dimmed (text a step down, badges and routes faded), never by
+    // fading the text.
+    let rules_only = map.dimmed && map.caption == Caption::WhenRulesDecide;
+    let waiting = theme::dim_scope(map.dimmed);
     // The rule column, and which child is which row for the routes.
     let mut ends: Vec<Option<End>> = Vec::new();
     let mut left: Vec<AnyElement> = Vec::new();
@@ -1580,14 +1614,11 @@ fn map(
             Item::Row(index) => {
                 let row = &map.rows[*index];
                 ends.push(Some(End::Row(*index)));
-                let drawn = rule_row(*index, row, &trace, widths, &measure, cx);
-                // Nothing runs it (the config never loaded): faded, as a
-                // row that is not lit.
-                left.push(if row.idle {
-                    div().opacity(DIM).child(drawn).into_any_element()
-                } else {
-                    drawn
-                });
+                // Nothing runs it (the config never loaded): dimmed, and
+                // its section says "not running".
+                left.push(theme::dimmed_if(row.idle, || {
+                    rule_row(*index, row, &trace, widths, &measure, cx)
+                }));
                 after_row = true;
             }
         }
@@ -1623,6 +1654,8 @@ fn map(
         .flex_col()
         .gap(px(4.0))
         .children(left);
+    drop(waiting);
+    let waiting = theme::dim_scope(map.dimmed && !rules_only);
 
     // The destinations: routed browsers, the special cards, then "Also
     // installed" and the browsers with no rules yet.
@@ -1636,17 +1669,14 @@ fn map(
             }
         }
         let expanded = state.expanded.contains(card.key());
-        let drawn = if card.single() {
-            single_card(index, card, &trace, &bounds, cx)
-        } else {
-            browser_card(index, card, &trace, expanded, wide, app, &bounds, cx)
-        };
-        // Fed only by rows nothing runs.
-        right.push(if card.idle {
-            div().opacity(DIM).child(drawn).into_any_element()
-        } else {
-            drawn
-        });
+        // Fed only by rows nothing runs: dimmed.
+        right.push(theme::dimmed_if(card.idle, || {
+            if card.single() {
+                single_card(index, card, &trace, &bounds, cx)
+            } else {
+                browser_card(index, card, &trace, expanded, wide, app, &bounds, cx)
+            }
+        }));
     }
     let card_column = div()
         .relative()
@@ -1656,6 +1686,7 @@ fn map(
         .flex_col()
         .gap(px(10.0))
         .children(right);
+    drop(waiting);
 
     // Every route, at rest or dimmed, then the traced ones over them; they
     // ease to their new state when the trace changes.
@@ -1727,7 +1758,6 @@ fn map(
         )
     });
 
-    let rules_only = map.dimmed && map.caption == Caption::WhenRulesDecide;
     let body = div()
         .id("overview-map-body")
         .debug_selector(|| "overview-map-body".into())
@@ -1739,25 +1769,20 @@ fn map(
         .justify_between()
         .gap(px(GUTTER_MIN))
         .p(px(16.0))
-        // Paused, the whole map waits; with all links sent, only the rules
-        // and their routes do: the destination's node stays lit.
-        .when(map.dimmed && !rules_only, |body| body.opacity(0.4))
         // A click on the empty ground lets go of the pin.
         .on_click(cx.listener(|this, _, _, cx| clear_pin(this, cx)))
-        .child(if rules_only {
+        // The routes are lines: they fade while the map waits.
+        .child(
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .size_full()
-                .opacity(0.4)
-                .child(layer)
-                .into_any_element()
-        } else {
-            layer.into_any_element()
-        })
+                .when(map.dimmed, |routes| routes.opacity(theme::DIM_DECORATIVE))
+                .child(layer),
+        )
         .children(handoff)
-        .child(rule_column.when(rules_only, |column| column.opacity(0.4)))
+        .child(rule_column)
         .child(card_column);
 
     div()
@@ -1944,19 +1969,22 @@ fn strokes(now: &[Route], before: &[Route], t: f32) -> Vec<Stroke> {
     out
 }
 
-/// The dot grid: 1px dots every 16px at 5%, offset 8.
+/// The dot grid: 1px dots every 16px at 5%, offset 8. `bounds` is
+/// measured, in screen points; the grid's spacing and dots zoom.
 fn paint_dots(bounds: Bounds<Pixels>, window: &mut Window) {
     let color = alpha(theme::text_primary(), 0.05);
-    let step = 16.0;
-    let mut y = f32::from(bounds.origin.y) + 8.0;
+    let step = f32::from(px(16.0));
+    let offset = f32::from(px(8.0));
+    let half = f32::from(px(0.5));
+    let mut y = f32::from(bounds.origin.y) + offset;
     let bottom = f32::from(bounds.bottom());
     let right = f32::from(bounds.right());
     while y < bottom {
-        let mut x = f32::from(bounds.origin.x) + 8.0;
+        let mut x = f32::from(bounds.origin.x) + offset;
         while x < right {
             window.paint_quad(gpui_kit::fill(
                 Bounds::new(
-                    point(px(x - 0.5), px(y - 0.5)),
+                    point(gpui_kit::px(x - half), gpui_kit::px(y - half)),
                     gpui_kit::size(px(1.0), px(1.0)),
                 ),
                 color,
@@ -2528,7 +2556,22 @@ fn edit_label(source: RowSource) -> &'static str {
     }
 }
 
+/// A rule's row. A switched-off rule is drawn dimmed (its "off" chip says
+/// why), and fades further only with the rest while something is lit.
 fn rule_row(
+    index: usize,
+    row: &Row,
+    trace: &Look<'_>,
+    widths: MapWidths,
+    measure: &Measure,
+    cx: &mut Context<'_, PwrRoute>,
+) -> AnyElement {
+    theme::dimmed_if(!row.enabled, || {
+        rule_row_drawn(index, row, trace, widths, measure, cx)
+    })
+}
+
+fn rule_row_drawn(
     index: usize,
     row: &Row,
     trace: &Look<'_>,
@@ -2542,7 +2585,9 @@ fn rule_row(
     let lit = light.lit();
     let pinned = trace.pinned == Some(focus);
     let edit = trace.touched(focus);
-    let ghost = row.target.ghost();
+    // A rule that is off runs no more than one whose browser is missing:
+    // the same dashed frame says so.
+    let ghost = row.target.ghost() || !row.enabled;
     let source = row.source;
     let edit_width = if edit {
         8.0 + measure.sans(edit_label(source), 550.0, 10.5) + 16.0
@@ -2638,14 +2683,12 @@ fn rule_row(
         .when(row.node.is_some() && row.enabled, |row| {
             row.child(port(true, 1, port_style))
         });
-    // A switched-off rule stays at 40%, and dims with the rest.
     let (from, to) = light.opacities();
-    let scale = if row.enabled { 1.0 } else { 0.4 };
     faded(
         element,
         ("overview-row-dim", index * 1_000_000 + trace.generation).into(),
-        from * scale,
-        to * scale,
+        from,
+        to,
     )
 }
 

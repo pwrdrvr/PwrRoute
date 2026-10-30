@@ -21,6 +21,7 @@
 use std::rc::Rc;
 use std::time::SystemTime;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, DisplayId, Div, Entity,
@@ -28,7 +29,7 @@ use gpui_kit::{
     LineFragment, MouseButton, ParentElement as _, Pixels, Point, Render,
     StatefulInteractiveElement as _, Styled as _, StyledText, Subscription, TextSystem, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, font,
-    px, size,
+    size,
 };
 
 use super::TrayCommand;
@@ -1118,7 +1119,7 @@ pub fn lanes_height(lanes: &[Lane], text_system: &std::sync::Arc<TextSystem>) ->
             .map(|ch| {
                 text_system
                     .advance(font, px(destinations::PILL_TEXT), ch)
-                    .map_or(0.0, |size| size.width.as_f32())
+                    .map_or(0.0, |size| theme::css(size.width))
             })
             .sum();
         // GPUI rounds a text box up to a whole pixel.
@@ -1210,5 +1211,6 @@ pub fn fitted_height(
     text_system: &std::sync::Arc<TextSystem>,
     max_height: Pixels,
 ) -> Pixels {
-    px(card_height(model, choosing, text_system).as_f32().ceil()).min(max_height)
+    // Measured, so already zoomed: rounded in screen points.
+    gpui_kit::px(card_height(model, choosing, text_system).as_f32().ceil()).min(max_height)
 }

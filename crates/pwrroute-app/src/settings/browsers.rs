@@ -1,7 +1,8 @@
 //! 1c Browsers: OS default registration, detected browsers and other apps.
 
+use crate::theme::px;
 use gpui_kit::{
-    Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div, px,
+    Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div,
 };
 
 use super::controls::{
@@ -185,7 +186,16 @@ fn app_row(
     app: &BrowserApp,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Div {
-    let dim = |cell: Div| if app.visible { cell } else { cell.opacity(0.5) };
+    // A hidden app is still listed to be shown again: dimmed, its switch off.
+    theme::dimmed_if(!app.visible, || app_row_drawn(list, index, app, cx))
+}
+
+fn app_row_drawn(
+    list: List,
+    index: usize,
+    app: &BrowserApp,
+    cx: &mut Context<'_, SettingsWindow>,
+) -> Div {
     let profiles = if app.profiles.is_empty() {
         div().children(app.note.clone().map(note))
     } else {
@@ -210,45 +220,48 @@ fn app_row(
         .gap(px(12.0))
         .py(px(10.0))
         .px(px(16.0))
-        .child(dim(div().w(px(22.0)).flex_none().child(badge(
-            if app.usage == Usage::NotInstalled {
-                // Never an icon beside "not installed".
-                app.badge.without_icon()
-            } else {
-                app.badge.clone()
-            },
-        ))))
-        .child(dim(div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(3.0))
-            .child(para(
-                app.name.clone(),
-                12.5,
-                600.0,
-                1.2,
-                theme::text_primary(),
-            ))
-            .child(
-                mono(app.location.clone(), 10.0, 500.0, theme::text_subtle())
-                    .line_height(px(13.0))
-                    .flex_shrink_1()
-                    .min_w_0()
-                    .text_ellipsis(),
-            )))
-        .child(dim(div()
-            .w(px(220.0))
-            .flex_shrink_1()
-            .min_w_0()
-            .child(profiles)))
-        .child(dim(div().w(px(90.0)).flex_none().child(status(word, dot))))
-        .child(dim(div().w(px(36.0)).flex_none().child(
-            switch((id, index), visible)
-                .accessibility_label(SharedString::from(format!("Show {}", app.name)))
-                .on_change(move |on, _, window, cx| set(&on, window, cx)),
-        )))
+        .child(
+            div()
+                .w(px(22.0))
+                .flex_none()
+                .child(badge(if app.usage == Usage::NotInstalled {
+                    // Never an icon beside "not installed".
+                    app.badge.without_icon()
+                } else {
+                    app.badge.clone()
+                })),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .child(para(
+                    app.name.clone(),
+                    12.5,
+                    600.0,
+                    1.2,
+                    theme::text_primary(),
+                ))
+                .child(
+                    mono(app.location.clone(), 10.0, 500.0, theme::text_subtle())
+                        .line_height(px(13.0))
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .text_ellipsis(),
+                ),
+        )
+        .child(div().w(px(220.0)).flex_shrink_1().min_w_0().child(profiles))
+        .child(div().w(px(90.0)).flex_none().child(status(word, dot)))
+        .child(
+            div().w(px(36.0)).flex_none().child(
+                switch((id, index), visible)
+                    .accessibility_label(SharedString::from(format!("Show {}", app.name)))
+                    .on_change(move |on, _, window, cx| set(&on, window, cx)),
+            ),
+        )
 }
 
 fn detected_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {

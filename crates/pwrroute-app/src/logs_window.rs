@@ -21,13 +21,14 @@
 use std::ops::Range;
 use std::time::Duration;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Font, HighlightStyle,
     Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, LineFragment, ListAlignment,
     ListOffset, ListState, MouseButton, MouseDownEvent, ParentElement as _, Render,
     ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
-    Window, WindowHandle, deferred, div, list, px,
+    Window, WindowHandle, deferred, div, list,
 };
 
 use crate::aux_window::{self, Frame};
@@ -764,7 +765,7 @@ impl LogsWindow {
     /// unwrapped text sideways.
     fn scrolled(&mut self, event: &ScrollWheelEvent, cx: &mut Context<'_, Self>) {
         let delta = event.delta.pixel_delta(px(ROW_HEIGHT));
-        let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        let (dx, dy) = (theme::css(delta.x), theme::css(delta.y));
         if !self.wrap && dx != 0.0 {
             let offset = (self.h_offset - dx).clamp(0.0, self.h_max);
             if offset != self.h_offset {
@@ -849,11 +850,11 @@ impl Render for LogsWindow {
         if self.view.mode != SearchMode::Filter || !self.view.searching() {
             self.context_open = false;
         }
-        let list_width = f32::from(window.viewport_size().width) - 2.0 * (BODY_PAD + FRAME_BORDER);
+        let list_width = theme::css(window.viewport_size().width) - 2.0 * (BODY_PAD + FRAME_BORDER);
         self.text_width = (list_width - GUTTER - TEXT_LEFT - TEXT_RIGHT).max(0.0);
         let font_id = window.text_system().resolve_font(&Self::mono_font());
         if let Ok(advance) = window.text_system().advance(font_id, px(TEXT_SIZE), 'm') {
-            self.char_width = f32::from(advance.width);
+            self.char_width = theme::css(advance.width);
         }
         self.h_max = (self.view.widest() as f32 * self.char_width - self.text_width).max(0.0);
         self.h_offset = self.h_offset.min(self.h_max);
@@ -887,7 +888,7 @@ impl Render for LogsWindow {
 
 impl LogsWindow {
     fn toolbar(&self, window: &Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let narrow = f32::from(window.viewport_size().width) < NARROW_BELOW;
+        let narrow = theme::css(window.viewport_size().width) < NARROW_BELOW;
         let search = text_field::field_with(
             SEARCH_ID,
             &self.search,

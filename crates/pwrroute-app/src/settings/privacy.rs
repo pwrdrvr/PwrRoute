@@ -9,12 +9,13 @@
 //! on the journal: both are a step the reader confirms, and Escape or
 //! Cancel leaves things where they were.
 
+use crate::theme::px;
 use gpui_kit::base::{Button, TestSupportExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    anchored, deferred, div, point, px,
+    anchored, deferred, div, point,
 };
 
 use super::SettingsWindow;
@@ -432,7 +433,7 @@ fn journal_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
         .border_color(theme::border_subtle())
         .rounded(px(7.0))
         .when(!on && privacy.journal_files.is_none(), |cmd| {
-            cmd.opacity(0.45)
+            cmd.opacity(theme::DISABLED)
         })
         .child(
             div().flex_1().min_w_0().child(

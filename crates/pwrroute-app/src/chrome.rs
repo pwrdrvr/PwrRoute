@@ -1,11 +1,12 @@
 //! The family window chrome: the title strip across the top and the
 //! navigation rail down the left.
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Div, Entity, Global, HighlightStyle, InteractiveElement as _,
     IntoElement as _, ParentElement as _, Role, Stateful, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Window, WindowControlArea, div, px, svg,
+    Styled as _, StyledText, Window, WindowControlArea, div, svg,
 };
 
 use crate::app::{PwrRoute, Screen};
@@ -435,13 +436,18 @@ fn captions(window: &Window) -> Div {
         ))
 }
 
-/// `.rail-item`; `.on` when `selected`.
+/// The nav rail's width, and its width as icons (`app::Layout`).
+pub const RAIL_WIDTH: f32 = 196.0;
+pub const RAIL_COMPACT: f32 = 56.0;
+
+/// `.rail-item`; `.on` when `selected`; the icon alone when `compact`.
 fn rail_item(
     id: &'static str,
     icon_path: &'static str,
     label: &'static str,
     selected: bool,
     trailing: Option<AnyElement>,
+    compact: bool,
 ) -> Stateful<Div> {
     let (foreground, icon_color) = if selected {
         (theme::accent_bright(), theme::accent())
@@ -483,9 +489,17 @@ fn rail_item(
             )
         })
         .child(icon(icon_path, 15.0, icon_color))
-        .child(text(label, 13.0, 500.0, foreground))
-        .when_some(trailing, |item, trailing| {
-            item.child(div().ml_auto().child(trailing))
+        .map(|item| {
+            if compact {
+                // The icon alone, named by its tooltip and its label.
+                item.justify_center()
+                    .tooltip(crate::overview::tip(label, None))
+            } else {
+                item.child(text(label, 13.0, 500.0, foreground))
+                    .when_some(trailing, |item, trailing| {
+                        item.child(div().ml_auto().child(trailing))
+                    })
+            }
         })
 }
 
@@ -495,6 +509,7 @@ fn section(
     cx: &mut Context<'_, PwrRoute>,
     screen: Screen,
     trailing: Option<AnyElement>,
+    compact: bool,
 ) -> Stateful<Div> {
     let (id, icon_path) = match screen {
         Screen::Overview => ("nav-overview", "pwrroute/map.svg"),
@@ -508,6 +523,7 @@ fn section(
         screen.label(),
         app.screen == screen,
         trailing,
+        compact,
     )
     .on_click(cx.listener(move |this, _, window, cx| this.navigate(screen, window, cx)))
 }
@@ -784,7 +800,15 @@ fn build_row(
 }
 
 /// `.rail`: the sections, Settings, and the routing state at the foot.
-pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>) -> Div {
+/// `compact` draws it as icons, with the foot's routing line as its dot;
+/// `app::Layout` keeps it full while the foot asks to Reload or Overwrite
+/// `rules.json`.
+pub fn nav_rail(
+    app: &PwrRoute,
+    status: &Status,
+    compact: bool,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
     let count = |label: String| mono(label, 10.5, 600.0, theme::text_subtle()).into_any_element();
     // Rewrites plus rules plus the config's, across both sources; a config
     // that did not load is a warning dot instead.
@@ -806,6 +830,10 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
         (rules_count > 0).then(|| count(rules_count.to_string()))
     };
     let (dot, line) = routing_line(status);
+    if compact {
+        let warning = app.config.is_some() && status.config_error.is_some();
+        return compact_rail(app, warning, dot, line, cx);
+    }
     let foot = div()
         .flex()
         .flex_col()
@@ -845,7 +873,7 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
             "rail.openSettings",
             "rail.foot",
         ]))
-        .w(px(196.0))
+        .w(px(RAIL_WIDTH))
         .flex_none()
         .flex()
         .flex_col()
@@ -856,14 +884,15 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
         .bg(theme::bg_sidebar())
         .border_r_1()
         .border_color(theme::border_subtle())
-        .child(section(app, cx, Screen::Overview, None))
-        .child(section(app, cx, Screen::Rules, rules_trailing))
-        .child(section(app, cx, Screen::TestLink, None))
+        .child(section(app, cx, Screen::Overview, None, false))
+        .child(section(app, cx, Screen::Rules, rules_trailing, false))
+        .child(section(app, cx, Screen::TestLink, None, false))
         .child(section(
             app,
             cx,
             Screen::Activity,
             app.activity.today.compact().map(count),
+            false,
         ))
         .child(div().mt(px(10.0)).mx(px(8.0)).mb(px(4.0)).child(tracked(
             "Settings",
@@ -879,10 +908,88 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
                 "Open Settings\u{2026}",
                 false,
                 Some(key_cap(current(cx).settings_key()).into_any_element()),
+                false,
             )
             .on_click(|_, _, cx| crate::settings::open(cx, None)),
         )
         .child(div().mt_auto().pt(px(10.0)).px(px(8.0)).child(foot))
+}
+
+/// The rail as icons. The counts go (Rules keeps its warning as a dot on
+/// the icon's corner) and the foot is the routing dot, its line in the
+/// tooltip; the build is in Settings › About.
+fn compact_rail(
+    app: &PwrRoute,
+    rules_warning: bool,
+    dot: gpui_kit::Hsla,
+    line: String,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    div()
+        .on_children_prepainted(e2e::regions(&[
+            "rail.overview",
+            "rail.rules",
+            "rail.test",
+            "rail.activity",
+            "rail.settingsHeading",
+            "rail.openSettings",
+            "rail.foot",
+        ]))
+        .w(px(RAIL_COMPACT))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .pt(px(10.0))
+        .px(px(10.0))
+        .pb(px(12.0))
+        .bg(theme::bg_sidebar())
+        .border_r_1()
+        .border_color(theme::border_subtle())
+        .child(section(app, cx, Screen::Overview, None, true))
+        .child(
+            section(app, cx, Screen::Rules, None, true).when(rules_warning, |item| {
+                item.child(
+                    div()
+                        .absolute()
+                        .top(px(5.0))
+                        .right(px(6.0))
+                        .child(theme::dot(theme::status_warning())),
+                )
+            }),
+        )
+        .child(section(app, cx, Screen::TestLink, None, true))
+        .child(section(app, cx, Screen::Activity, None, true))
+        // "Settings" as a rule: a heading does not fit.
+        .child(
+            div()
+                .mt(px(10.0))
+                .mb(px(6.0))
+                .mx(px(6.0))
+                .h(px(1.0))
+                .bg(theme::border_subtle()),
+        )
+        .child(
+            rail_item(
+                OPEN_SETTINGS_ID,
+                "pwrroute/settings.svg",
+                "Open Settings\u{2026}",
+                false,
+                None,
+                true,
+            )
+            .on_click(|_, _, cx| crate::settings::open(cx, None)),
+        )
+        .child(
+            div()
+                .id("rail-foot-dot")
+                .mt_auto()
+                .flex()
+                .justify_center()
+                .py(px(6.0))
+                .tooltip(crate::overview::tip(line, None))
+                .child(theme::dot(dot)),
+        )
 }
 
 #[cfg(test)]

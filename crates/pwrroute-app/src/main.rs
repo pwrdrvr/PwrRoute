@@ -67,6 +67,7 @@ mod try_it;
 mod update_channel;
 mod updater;
 mod widgets;
+mod zoom;
 
 use std::{
     io::Write,
@@ -79,7 +80,7 @@ use std::{
 
 use gpui_kit::{
     App, AppContext as _, Bounds, DisplayId, Global, QuitMode, TitlebarOptions, WindowBounds,
-    WindowOptions, point, px, size,
+    WindowOptions, point, px,
 };
 
 use crate::{app::PwrRoute, router::Resident};
@@ -199,6 +200,15 @@ fn main() -> ExitCode {
     app.run(move |cx| {
         e2e::startup("launched");
         assets::load_fonts(cx);
+        // A preview of the light palette (design: Contrast and Scale); the
+        // app does not follow the OS's appearance yet.
+        if std::env::var("PWRROUTE_APPEARANCE").is_ok_and(|value| value == "light") {
+            theme::set_appearance(theme::Appearance::Light);
+        }
+        // The Increase Contrast palette before the OS's setting reaches it.
+        if std::env::var("PWRROUTE_INCREASE_CONTRAST").is_ok_and(|value| value == "1") {
+            theme::set_increase_contrast(true);
+        }
         app_menu::install(cx);
         dock::install(cx);
         // Before the tray, which follows the feed from the start.
@@ -468,7 +478,7 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
         return;
     }
     let display = display.or_else(|| placement::display_for_new_window(cx));
-    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let bounds = Bounds::centered(display, zoom::window_size(display, WINDOW_SIZE, cx), cx);
     let window = cx
         .open_window(
             WindowOptions {
@@ -480,7 +490,7 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
                     traffic_light_position: Some(point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
                 }),
                 app_id: Some("pwrroute".to_owned()),
-                window_min_size: Some(size(px(1000.0), px(600.0))),
+                window_min_size: Some(zoom::min_size(display, (1000.0, 600.0), cx)),
                 ..Default::default()
             },
             |window, cx| {

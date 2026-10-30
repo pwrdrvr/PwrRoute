@@ -11,6 +11,8 @@
 *.deb
 *.rpm
 *.snap
+# theme.rs's contrast table, which its tests pin (not a Snap package).
+!/crates/pwrroute-app/src/contrast.snap
 
 # Logs
 *.log

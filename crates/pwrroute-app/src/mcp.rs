@@ -27,6 +27,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::theme::px;
 use chrono::{DateTime, Local};
 use gpui_kit::base::Button;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -34,7 +35,7 @@ use gpui_kit::{
     App, AppContext as _, BorrowAppContext as _, Bounds, Context, Div, FocusHandle, Global,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point,
 };
 use pwrroute_engine::{
     ConfigChoice, Limits,
@@ -752,7 +753,11 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
     let client = request.client_name.clone();
     let title = prompt_title(&request);
     let display = crate::placement::display_for_new_window(cx);
-    let bounds = Bounds::centered(display, size(px(PROMPT_WIDTH), px(ASKING_HEIGHT)), cx);
+    let bounds = Bounds::centered(
+        display,
+        crate::zoom::window_size(display, (PROMPT_WIDTH, ASKING_HEIGHT), cx),
+        cx,
+    );
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -766,7 +771,11 @@ fn open_prompt(request: ApprovalRequest, reply: ApprovalReply, cx: &mut App) {
                 )),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(size(px(PROMPT_WIDTH), px(SHORT_HEIGHT))),
+            window_min_size: Some(crate::zoom::min_size(
+                display,
+                (PROMPT_WIDTH, SHORT_HEIGHT),
+                cx,
+            )),
             kind: PROMPT_KIND,
             // On macOS the panel shows over everything without taking the
             // keyboard: an agent asks while the person types in its
@@ -983,7 +992,8 @@ impl ApprovalWindow {
             let _ = window;
             let title = prompt_title(&self.request);
             cx.spawn(async move |_, _| {
-                if !crate::macos::set_prompt_height(&title, height) {
+                // AppKit takes screen points: the design height, zoomed.
+                if !crate::macos::set_prompt_height(&title, px(height).as_f32()) {
                     log::debug!("the approval window was not resized: no open panel");
                 }
             })
@@ -992,7 +1002,7 @@ impl ApprovalWindow {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = cx;
-            window.resize(size(px(PROMPT_WIDTH), px(height)));
+            window.resize(gpui_kit::size(px(PROMPT_WIDTH), px(height)));
         }
     }
 
@@ -1001,13 +1011,19 @@ impl ApprovalWindow {
     /// the design's content needs; this keeps the buttons clear of
     /// anything more.
     fn fit(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let overflow = self.scroll.max_offset().y.as_f32();
+        let overflow = theme::css(self.scroll.max_offset().y);
         if overflow < 1.0 {
             return;
         }
-        let want = (window.viewport_size().height.as_f32() + overflow)
+        // Zoomed, MAX_HEIGHT can be taller than the display: the body
+        // scrolls past what the display holds.
+        let display = window.display(cx).map_or(f32::MAX, |display| {
+            theme::css(display.visible_bounds().size.height)
+        });
+        let want = (theme::css(window.viewport_size().height) + overflow)
             .ceil()
-            .min(MAX_HEIGHT);
+            .min(MAX_HEIGHT)
+            .min(display.floor());
         if want <= self.asked_height + 0.5 {
             return;
         }
@@ -2159,7 +2175,7 @@ mod tests {
             request.client_title = title;
             let (view, cx) = cx
                 .add_window_view(move |window, cx| ApprovalWindow::new(request, reply, window, cx));
-            cx.simulate_resize(size(px(PROMPT_WIDTH), px(ASKING_HEIGHT)));
+            cx.simulate_resize(gpui_kit::size(px(PROMPT_WIDTH), px(ASKING_HEIGHT)));
             for _ in 0..3 {
                 draw(cx);
                 cx.run_until_parked();

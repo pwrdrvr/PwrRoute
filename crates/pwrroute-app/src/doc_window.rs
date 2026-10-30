@@ -10,11 +10,12 @@
 
 use std::rc::Rc;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, FocusHandle, HighlightStyle, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledText, UniformListScrollHandle, Window, WindowHandle, div, px, uniform_list,
+    Styled as _, StyledText, UniformListScrollHandle, Window, WindowHandle, div, uniform_list,
 };
 
 use crate::aux_window::{self, Frame};

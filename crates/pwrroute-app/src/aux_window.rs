@@ -2,9 +2,10 @@
 //! kind (a second open brings it forward), and the title strip with its
 //! "Help › …" crumb (the family's auxiliary title bar).
 
+use crate::theme::px;
 use gpui_kit::{
     App, AppContext as _, Bounds, Context, Div, Entity, ParentElement as _, Render, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, point, px, size,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, point,
 };
 
 use crate::menu_bar::MenuBar;
@@ -44,7 +45,11 @@ pub fn open<V: Render + 'static>(
     build: impl FnOnce(&mut Window, &mut Context<'_, V>) -> V,
 ) -> Option<WindowHandle<V>> {
     let display = crate::placement::display_for_new_window(cx);
-    let bounds = Bounds::centered(display, size(px(frame.size.0), px(frame.size.1)), cx);
+    let bounds = Bounds::centered(
+        display,
+        crate::zoom::window_size(display, frame.size, cx),
+        cx,
+    );
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -55,7 +60,7 @@ pub fn open<V: Render + 'static>(
                 traffic_light_position: Some(point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(size(px(frame.min.0), px(frame.min.1))),
+            window_min_size: Some(crate::zoom::min_size(display, frame.min, cx)),
             ..Default::default()
         },
         |window, cx| cx.new(|cx| build(window, cx)),

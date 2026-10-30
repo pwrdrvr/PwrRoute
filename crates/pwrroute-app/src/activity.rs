@@ -30,12 +30,13 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::SystemTime;
 
+use crate::theme::px;
 use chrono::{DateTime, Local, NaiveDate};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _,
     IntoElement, KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, px,
+    Styled as _, Subscription, Window, div,
 };
 use pwrroute_router::{
     DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, NotOpenedReason, Options,
@@ -1556,6 +1557,12 @@ mod column {
     pub const TOOK: f32 = 48.0;
     pub const MORE: f32 = 18.0;
     pub const GAP: f32 = 12.0;
+    /// The link column's least width. Narrower than the columns need (View
+    /// › Zoom), the table scrolls sideways rather than squeeze the link
+    /// to nothing: a table keeps its columns (WCAG 1.4.10 exempts it).
+    pub const LINK_MIN: f32 = 160.0;
+    pub const TABLE_MIN: f32 =
+        28.0 + TIME + LINK_MIN + FROM + RULE + OPENED + TOOK + MORE + 6.0 * GAP + 2.0;
     /// Where the expanded trace starts: the link column.
     pub const TRACE_INDENT: f32 = 14.0 + TIME + GAP;
 }
@@ -2139,9 +2146,11 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
                     })),
             )
         });
+    // Zoomed, the filters and the note wrap under the search.
     div()
         .flex()
         .flex_none()
+        .flex_wrap()
         .items_center()
         .gap(px(8.0))
         .child(div().w(px(260.0)).flex_none().flex().child(search))
@@ -2453,7 +2462,13 @@ pub fn pane(
                 ),
         )
         .child(toolbar(app, window, cx))
-        .child(list)
+        .child(
+            div()
+                .id("activity-table")
+                .w_full()
+                .overflow_x_scroll()
+                .child(list.min_w(px(column::TABLE_MIN))),
+        )
         // The router's sentence, verbatim: the same one Settings › Privacy
         // shows under the journal switch.
         .child(

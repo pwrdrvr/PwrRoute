@@ -439,7 +439,7 @@ fn click(position: (f64, f64), size: (f64, f64), pointer: Option<(f64, f64)>, cx
     let anchor = crate::macos::status_item_anchor(position, size, pointer);
     let (origin, display, max_height) = match &anchor {
         Some(anchor) => {
-            let origin = crate::macos::dropdown_origin(anchor, gpui_kit::px(dropdown::WIDTH));
+            let origin = crate::macos::dropdown_origin(anchor, crate::theme::px(dropdown::WIDTH));
             (
                 origin,
                 Some(anchor.display),

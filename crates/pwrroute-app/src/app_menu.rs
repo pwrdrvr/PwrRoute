@@ -58,6 +58,10 @@ mod menu_actions {
             ShowRules,
             ShowTestLink,
             ShowActivity,
+            /// View › Zoom (`zoom.rs`): every window, 100% to 200%.
+            ActualSize,
+            ZoomIn,
+            ZoomOut,
             /// Tab and Shift-Tab: the next or previous control. GPUI has
             /// no Tab order of its own until a window binds it.
             FocusNext,
@@ -144,6 +148,9 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
     cx.on_action(move |_: &ShowRules, cx| show(Screen::Rules, cx));
     cx.on_action(move |_: &ShowTestLink, cx| show(Screen::TestLink, cx));
     cx.on_action(move |_: &ShowActivity, cx| show(Screen::Activity, cx));
+    cx.on_action(|_: &ActualSize, cx| crate::zoom::step(None, cx));
+    cx.on_action(|_: &ZoomIn, cx| crate::zoom::step(Some(1), cx));
+    cx.on_action(|_: &ZoomOut, cx| crate::zoom::step(Some(-1), cx));
     // Focus moves inside the window the key was pressed in, once its
     // dispatch is done (as `in_front_window` says).
     cx.on_action(|_: &FocusNext, cx| in_front_window(cx, |window, cx| window.focus_next(cx)));
@@ -168,6 +175,11 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
         // Every window's Tab order: the controls built on
         // `widgets::keyboard_control`, gpui-kit's controls and the text
         // fields, in the order they are drawn.
+        KeyBinding::new(&key("0"), ActualSize, None),
+        // ⌘+ is ⌘= on most layouts; both zoom in, as in a browser.
+        KeyBinding::new(&key("="), ZoomIn, None),
+        KeyBinding::new(&key("+"), ZoomIn, None),
+        KeyBinding::new(&key("-"), ZoomOut, None),
         KeyBinding::new("tab", FocusNext, None),
         KeyBinding::new("shift-tab", FocusPrevious, None),
     ]);
@@ -267,14 +279,19 @@ pub fn menus(platform: Platform) -> Vec<Menu> {
         MenuItem::action("Select All", SelectAll),
     ]));
 
-    // Rule 7: the app's own screens open View. The standard's Reload Window
-    // and zoom rows are the Electron renderer's; a GPUI window has neither,
-    // and macOS adds Enter Full Screen itself.
+    // Rule 7: the app's own screens open View, then the zoom rows in their
+    // own section (`zoom.rs`). The standard's Reload Window is the Electron
+    // renderer's, which a GPUI window has no use for, and macOS adds Enter
+    // Full Screen itself.
     menus.push(Menu::new("View").items([
         MenuItem::action(Screen::Overview.label(), ShowOverview),
         MenuItem::action(Screen::Rules.label(), ShowRules),
         MenuItem::action(Screen::TestLink.label(), ShowTestLink),
         MenuItem::action(Screen::Activity.label(), ShowActivity),
+        MenuItem::separator(),
+        MenuItem::action("Actual Size", ActualSize),
+        MenuItem::action("Zoom In", ZoomIn),
+        MenuItem::action("Zoom Out", ZoomOut),
     ]));
 
     // macOS lists the open windows under these itself (`setWindowsMenu`).
@@ -439,12 +456,21 @@ mod tests {
     }
 
     #[test]
-    fn view_lists_the_screens_and_edit_has_no_undo() {
+    fn view_lists_the_screens_and_zoom_and_edit_has_no_undo() {
         for platform in [Platform::Mac, Platform::Other] {
             let menus = menus(platform);
             assert_eq!(
                 labels(menu(&menus, "View")),
-                ["Overview", "Rules", "Test a link", "Activity"]
+                [
+                    "Overview",
+                    "Rules",
+                    "Test a link",
+                    "Activity",
+                    "---",
+                    "Actual Size",
+                    "Zoom In",
+                    "Zoom Out"
+                ]
             );
             assert_eq!(
                 labels(menu(&menus, "Edit")),
