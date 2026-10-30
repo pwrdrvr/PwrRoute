@@ -3,6 +3,7 @@ name = "pwrroute-sync"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Syncs PwrRoute's rules.json (and optionally a Finicky config) through cloud-drive folders"
