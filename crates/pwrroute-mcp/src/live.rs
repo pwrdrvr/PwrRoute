@@ -339,10 +339,13 @@ pub fn trace_of(record: &DispatchRecord, config: Option<&str>) -> Trace {
             Step::Browser { .. } | Step::NotOpened | Step::Launched { .. } => {}
         }
     }
-    if record.outcome == Outcome::NotOpened
-        && let Some(step) = steps.iter_mut().rev().find(|s| s.kind != StepKind::Rewrite)
-    {
-        step.summary.push_str(crate::engine::NOT_OPENED);
+    // A rule or default that opens nothing says so; a held link's own
+    // step already says the user held it.
+    if matches!(
+        record.not_opened_reason(),
+        Some(pwrroute_router::NotOpenedReason::Rule | pwrroute_router::NotOpenedReason::Default)
+    ) {
+        crate::engine::mark_not_opened(&mut steps);
     }
     let browser = record.browser.clone().unwrap_or_else(|| Browser {
         name: String::new(),
@@ -1000,6 +1003,26 @@ mod tests {
         assert_eq!(
             default.reason,
             Some(crate::backend::NotOpenedReason::Default)
+        );
+        // A held link was not kept from opening by Don't open: its step
+        // says the user held it, and nothing more.
+        let mut held = record(Matched::Rule { index: 0 });
+        held.steps.insert(
+            2,
+            Step::Held {
+                held: pwrroute_router::Sent::All,
+                skipped: None,
+                browser: None,
+            },
+        );
+        let held = entry_of(&held, ActivitySource::Memory, None);
+        assert_eq!(held.reason, Some(crate::backend::NotOpenedReason::Hold));
+        let steps = held.trace.expect("a full record has a trace").steps;
+        assert!(
+            steps
+                .iter()
+                .all(|s| !s.summary.ends_with(crate::engine::NOT_OPENED)),
+            "{steps:?}"
         );
     }
 

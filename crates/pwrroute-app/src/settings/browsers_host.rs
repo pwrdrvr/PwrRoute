@@ -110,7 +110,9 @@ fn other_apps(apps: &[DetectedApp], facts: &Facts) -> Vec<BrowserApp> {
     let mut rows = Vec::new();
     for rule in &facts.rules.rules {
         let value = rule.browser.trim();
+        // Don't open (`"none"`) names no app to find.
         if value.is_empty()
+            || pwrroute_engine::is_dont_open(value)
             || apps.iter().any(|app| app.is_named(value))
             || seen.iter().any(|s| s.eq_ignore_ascii_case(value))
         {
@@ -267,7 +269,8 @@ mod tests {
                    { "match": "docs.google.com/*", "browser": "/Applications/Google Chrome.app", "enabled": false },
                    { "match": "zoom.us/*", "browser": "us.zoom.xos", "enabled": false },
                    { "match": "figma.com/*", "browser": "" },
-                   { "match": "*.pdf", "browser": "/Applications/Preview.app" }
+                   { "match": "*.pdf", "browser": "/Applications/Preview.app" },
+                   { "match": "ads.example.net/*", "browser": "none" }
                  ] }"#,
         );
         let apps = [
@@ -298,7 +301,8 @@ mod tests {
         assert_eq!(model.detected[1].usage, Usage::Unused);
 
         // Apps the rules name that were not detected, once each, in
-        // order; an empty browser is no app at all.
+        // order; an empty browser, or Don't open ("none"), is no app at
+        // all.
         let others: Vec<_> = model
             .other_apps
             .iter()

@@ -3371,8 +3371,6 @@ mod tests {
         );
     }
 
-    /// Today's private links count on the private-window node, the rest
-    /// on their profile.
     /// Don't open (`"none"`), a rule's and Everything else's, feeds the
     /// Not opened card that a config's `browser: null` feeds, and today's
     /// not-opened links count there (design: Not Opened 2d).
@@ -3442,6 +3440,8 @@ mod tests {
         assert!(matches!(map.rows[1].target, Target::NotOpened { .. }));
     }
 
+    /// Today's private links count on the private-window node, the rest
+    /// on their profile.
     #[test]
     fn private_links_count_on_the_private_window() {
         let map = World::rules().build().map;

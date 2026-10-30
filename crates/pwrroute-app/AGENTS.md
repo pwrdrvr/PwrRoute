@@ -59,8 +59,9 @@ their own modules.
   retention or clears the journal). A record is a row at `Full` or `Host`
   (the host-only chip) and a count at `None`; the filters are All,
   Everything else (`Filter::Unrouted`: a default, PwrRoute's or the
-  config's, or the fallback took it), Failed, Rewritten and Private, each
-  with its count. The Rule
+  config's, or the fallback took it), Not opened (`Filter::NotOpened`:
+  Don't open, a config's `browser: null`, or held), Failed, Rewritten and
+  Private, each with its count. The Rule
   column says who routed a link: "rule 3" (`rules.json`'s, `Matched::Rule`),
   "cfg h 2" (the config's handler), "default" (PwrRoute's) or "config
   default" (`Matched::Default`'s owner; a record from before owners is
@@ -606,8 +607,9 @@ their own modules.
   true)`: the editor and Activity's sheet; never the tray's Send links,
   which is Hold's business) and the last row of Everything else's menu,
   not the setup card or first run. The Overview draws it on its Not
-  opened card (`overview_model::resolve`), and `Tally` counts not-opened
-  links there under the word `"none"`. Never a target to launch: the
+  opened card (`overview_model::resolve`), and `Tally` counts the links a
+  rule or default kept from opening there under the word `"none"` (a held
+  link counts for no card). Never a target to launch: the
   tray's pause target passes over it, and the router's `FallbackSource`
   refuses it. In Activity a not-opened row has its filter
   (`Filter::NotOpened`), a trace line naming who decided

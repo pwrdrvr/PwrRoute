@@ -877,9 +877,7 @@ impl PwrRoute {
             let _ = this.update(cx, |this, cx| {
                 if let Err(error) = result {
                     let note = match error {
-                        OpenLaterError::NotPending => {
-                            "No longer kept, so this link can't be opened from here.".to_owned()
-                        }
+                        OpenLaterError::NotPending => activity::NO_LONGER_KEPT.to_owned(),
                         OpenLaterError::Gone(_) => "PwrRoute isn't routing links now.".to_owned(),
                     };
                     this.activity.open_note = Some((key, note));

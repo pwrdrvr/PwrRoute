@@ -77,7 +77,7 @@ pub struct Counts {
     /// Kept at host only or nothing: the rule that took it keeps less.
     pub private: u64,
     /// Recorded and not opened: a rule, a default or a config handler
-    /// said Don't open.
+    /// said Don't open, or the user held it.
     pub not_opened: u64,
 }
 
@@ -177,9 +177,9 @@ pub enum HitKey {
 /// names, never a host or URL. A paused or sent link counts for its
 /// browser only;
 /// a record kept at nothing has no browser, so it counts for its rule
-/// only. A link that was not opened counts under the browser word
-/// `"none"` (`rules.json`'s Don't open), which the Overview draws as its
-/// Not opened card.
+/// only. A link a rule or default kept from opening counts under the
+/// browser word `"none"` (`rules.json`'s Don't open), which the Overview
+/// draws as its Not opened card; a held link counts for its rule only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tally {
     rules: HashMap<HitKey, u64>,
@@ -218,7 +218,12 @@ impl Tally {
                 .browsers
                 .entry((browser.name.clone(), browser.profile.clone(), private))
                 .or_default() += 1;
-        } else if record.outcome == Outcome::NotOpened {
+        } else if matches!(
+            record.not_opened_reason(),
+            Some(NotOpenedReason::Rule | NotOpenedReason::Default)
+        ) {
+            // Don't open (or a config's `browser: null`). A held link is
+            // the user's, not a destination's: no card counts it.
             *self
                 .browsers
                 .entry((pwrroute_engine::DONT_OPEN.to_owned(), String::new(), false))
@@ -415,9 +420,6 @@ impl Feed {
         }
     }
 
-    /// The record behind a row: from memory, or from the journal for a
-    /// journaled row (read again only when its files changed, like
-    /// [`journal`](Self::journal)).
     /// The not-opened dispatches the router can still open; none without
     /// a router.
     pub fn pending(&self) -> HashSet<DispatchId> {
@@ -432,6 +434,9 @@ impl Feed {
         self.handle.clone()
     }
 
+    /// The record behind a row: from memory, or from the journal for a
+    /// journaled row (read again only when its files changed, like
+    /// [`journal`](Self::journal)).
     pub fn record(&self, key: RowKey) -> Option<DispatchRecord> {
         if key.journaled {
             self.with_journal(JOURNAL_ROWS, |records| {
@@ -972,9 +977,10 @@ fn opened_later(records: &[DispatchRecord]) -> HashMap<DispatchId, String> {
         .iter()
         .filter_map(|record| {
             let from = record.released_from()?;
+            // A later record kept at nothing has no browser to name.
             let to = match &record.browser {
                 Some(browser) => crate::default_browser::browser_name(&browser.name),
-                None => NOT_OPENED.to_lowercase(),
+                None => "a browser".to_owned(),
             };
             Some((from, to))
         })
@@ -2060,9 +2066,12 @@ fn not_opened_why(app: &PwrRoute, row: &ActivityRow) -> Option<String> {
     Some(if row.journaled {
         "From the journal: links from an earlier run can't be opened from here.".to_owned()
     } else {
-        "No longer kept, so this link can't be opened from here.".to_owned()
+        NO_LONGER_KEPT.to_owned()
     })
 }
+
+/// Why a not-opened row the router no longer holds can't be opened.
+pub const NO_LONGER_KEPT: &str = "No longer kept, so this link can't be opened from here.";
 
 /// `.kbd` on a primary button: the accent's ink, on a faint edge.
 fn on_primary_key(label: &'static str) -> Div {
@@ -3101,6 +3110,27 @@ mod tests {
             .map(|row| row.passes(Filter::NotOpened, ""))
             .collect();
         assert_eq!(kept, [true, true, true, false]);
+        // The Overview's Not opened card counts what Don't open kept, under
+        // the word "none"; a held link is the user's and counts for no card.
+        let mut held = not_opened(5, Matched::Rule { index: 0 });
+        held.steps.insert(
+            2,
+            Step::Held {
+                held: pwrroute_router::Sent::All,
+                skipped: None,
+                browser: None,
+            },
+        );
+        let mut tally = Tally::default();
+        for record in [&rule, &default, &held] {
+            tally.count(record);
+        }
+        assert_eq!(
+            tally
+                .browsers
+                .get(&("none".to_owned(), String::new(), false)),
+            Some(&2)
+        );
         let feed = Feed::from_records(vec![rule, default, handler, opened]);
         assert_eq!(feed.today(SystemTime::now()).of(Filter::NotOpened), 3);
         assert!(
