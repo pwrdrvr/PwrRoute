@@ -30,6 +30,8 @@ use crate::theme::px;
 use crate::theme::{self, mono, text};
 
 pub const SYNC_NOW_ID: &str = "sync-now";
+/// The Sync to card, where each folder's row is.
+pub const FOLDERS_ID: &str = "sync-folders";
 pub const CHOOSE_ID: &str = "sync-choose";
 pub const NAME_ID: &str = "sync-machine-name";
 pub const CONFIG_ID: &str = "sync-config";
@@ -263,7 +265,7 @@ fn folders_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
             )
         });
     this.disclosure(
-        "sync-folders",
+        FOLDERS_ID,
         heading("Cloud folders", "Sync to").description(card_description(
             "Add one or more. PwrRoute makes a PwrRoute folder inside and keeps rules.json there.",
         )),
@@ -291,11 +293,8 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
             this.model.sync.config_on = *on;
             this.request(SettingsRequest::SetSyncConfig(*on), window, cx);
         });
-        let saved_as = if config.ends_with(".ts") {
-            "finicky.ts"
-        } else {
-            "finicky.js"
-        };
+        let saved_as = crate::sync::config_name(std::path::Path::new(config.as_ref()))
+            .unwrap_or_else(|| "finicky.js".to_owned());
         rows.push(field(
             format!("Also sync {config}"),
             Some(para(

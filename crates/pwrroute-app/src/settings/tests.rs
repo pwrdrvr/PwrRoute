@@ -1207,6 +1207,16 @@ fn a_nav_child_opens_its_pane_at_its_row(cx: &mut TestAppContext) {
     });
     assert_eq!(pane, Pane::Sync);
     assert_eq!(target, Some(folder_key(&icloud)));
+    // The pane's own item forgets the row; a folded card opens for one.
+    click(cx, Pane::Sync.nav_id());
+    assert_eq!(view.read_with(cx, |view, _| view.target.clone()), None);
+    view.update(cx, |view, _| {
+        view.collapsed.insert(super::sync::FOLDERS_ID);
+    });
+    click(cx, child_id(Pane::Sync, 1));
+    assert!(view.read_with(cx, |view, _| {
+        !view.collapsed.contains(super::sync::FOLDERS_ID)
+    }));
     // Another pane forgets the row.
     click(cx, Pane::Browsers.nav_id());
     assert_eq!(view.read_with(cx, |view, _| view.target.clone()), None);

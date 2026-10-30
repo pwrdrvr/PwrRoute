@@ -31,6 +31,8 @@ use crate::theme::{self, mono, text};
 use crate::widgets::{field_label, menu_card, menu_row, profiles_hint, segmented};
 
 pub const VISUAL_SLOT_ID: &str = "config-source-visual";
+/// The Files card, where each config file's row is.
+pub const FILES_ID: &str = "config-files";
 pub const FINICKY_SLOT_ID: &str = "config-source-finicky";
 /// The importer card's "Review import…".
 pub const REVIEW_IMPORT_ID: &str = "config-review-import";
@@ -560,7 +562,7 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
         ],
     );
     rows.push(div().child(this.mark_target(&nav::RULES_KEY.into(), rules)));
-    this.disclosure("config-files", heading("On disk", "Files"), None, rows, cx)
+    this.disclosure(FILES_ID, heading("On disk", "Files"), None, rows, cx)
 }
 
 /// One Finicky config PwrRoute found (Settings Sections 1b): whether it is

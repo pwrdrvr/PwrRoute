@@ -67,6 +67,18 @@ pub fn folder_key(root: &std::path::Path) -> SharedString {
     format!("folder:{}", root.display()).into()
 }
 
+/// The card that holds the row `key` names: Config Files' Files card, or
+/// Cloud Sync's Sync to card.
+fn card_of(key: &str) -> Option<&'static str> {
+    if key.starts_with("config:") {
+        Some(super::configuration::FILES_ID)
+    } else if key.starts_with("folder:") {
+        Some(super::sync::FOLDERS_ID)
+    } else {
+        None
+    }
+}
+
 /// The `index`th row under `pane`'s nav item.
 pub fn child_id(pane: Pane, index: usize) -> ElementId {
     ElementId::Name(format!("{}-child-{index}", pane.nav_id()).into())
@@ -247,7 +259,12 @@ fn item(
             }
         })
         .map(crate::accessibility::clickable)
-        .on_click(cx.listener(move |this, _, _, cx| this.show(pane, cx)))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            // The pane itself, not one of its rows.
+            this.target = None;
+            this.show(pane, cx);
+            cx.notify();
+        }))
         .child(gutter(pane, caret, cx))
         .child(text(pane.label(), 13.0, 500.0, foreground))
         .when_some(count, |item, count| {
@@ -412,6 +429,11 @@ impl SettingsWindow {
         cx: &mut Context<'_, Self>,
     ) {
         self.show(pane, cx);
+        // A folded card never draws the row, and the anchor would scroll
+        // to wherever it last was.
+        if let Some(card) = card_of(&key) {
+            self.collapsed.remove(card);
+        }
         self.target = Some(key);
         cx.notify();
         // The row takes the anchor when this frame draws; the anchor scrolls
