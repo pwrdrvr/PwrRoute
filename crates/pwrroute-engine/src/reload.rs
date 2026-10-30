@@ -4,9 +4,9 @@
 //! reports why in [`Status::error`].
 //!
 //! Change detection polls exact paths, as the Go router did: the config
-//! candidates (or the chosen config), every file the config imported, and
-//! `rules.json`. Each is fingerprinted by its metadata and contents, so an
-//! atomic save (a new inode), an ordinary write and a delete are all seen.
+//! candidates (or the chosen config), every file the config imported,
+//! `rules.json` and the `machine.json` beside it. Each is fingerprinted by
+//! its metadata and contents, so an atomic save (a new inode), an ordinary write and a delete are all seen.
 //! No directory is listed or watched.
 //!
 //! The [`Reloader`] lives on the engine's thread (an engine is not `Send`).
@@ -30,7 +30,7 @@ use std::{
 
 use anyhow::{Result, anyhow};
 
-use crate::{Engine, Host, Limits, RulesFile, Sources, discovery};
+use crate::{Engine, Host, Limits, MachineFile, RulesFile, Sources, discovery};
 
 /// Largest file whose contents go into a fingerprint; larger ones are
 /// compared by metadata alone.
@@ -328,6 +328,7 @@ impl Reloader {
         }
         if let Some(rules) = &self.rules_path {
             watched.push(rules.clone());
+            watched.push(MachineFile::path_beside(rules));
         }
         self.seen = self.watch.replace(watched, stale);
         outcome
@@ -386,13 +387,17 @@ fn attempt(
     let mut known: Vec<PathBuf> = previously_read.to_vec();
     known.extend(config.iter().cloned());
     known.extend(rules_path.map(Path::to_path_buf));
+    known.extend(rules_path.map(MachineFile::path_beside));
     let before = fingerprint_of(&known);
 
     let imports = Rc::default();
     // Read once: the engine with the config and, if that fails, the one
     // without it are built from the same rules.json.
+    // `machine.json` beside it says what the synced rules mean here; a
+    // missing or broken one is no layer, so the synced rules still route.
     let rules = match rules_path {
-        Some(path) => RulesFile::load(path),
+        Some(path) => RulesFile::load(path)
+            .map(|rules| rules.for_machine(&MachineFile::load_beside(path))),
         None => Ok(RulesFile::default()),
     };
     let load = |config: Option<PathBuf>, rules: &RulesFile, imports: &Rc<_>| {

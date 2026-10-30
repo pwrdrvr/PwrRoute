@@ -22,6 +22,10 @@
 //! | `rules[].examples` | no | URLs that must resolve to this rule. Run by [`RulesFile::run_tests`]; a new rule cannot take them over unnoticed. |
 //! | `rewrites[].examples` | no | `{ "url", "becomes" }` pairs: this rewrite must match `url` and turn it into `becomes`. |
 //! | `tests` | no | `{ "url", "opener"?, "expect": { "browser", "profile"?, "url"? } }`: the whole config, JS included, must send `url` there. `opener` is an app name or bundle id (`Name:bundle.id` sets both). |
+//! | `destinations` | no | Named targets for synced rules: `{ "name", "browser", "profile"?, "private"? }`, the binding every machine starts with. A machine's `machine.json` can bind a name to something else ([`MachineFile`](crate::MachineFile)). |
+//! | `rules[].destination`, `defaultDestination` | no | Open in this named target. `browser`/`profile` (or `defaultBrowser`/`defaultProfile`) are still written, copied from the synced binding, so a reader that ignores the name routes the same way. A name `destinations` does not define falls back to them. |
+//! | `rules[].set`, `rewrites[].set` | no | The rule set the entry belongs to. Absent: no set, always on. |
+//! | `sets` | no | `{ "name", "enabled"? }`: a set's default on every machine (on when absent). A machine's `machine.json` can turn a set off or on there. |
 //!
 //! With a JS config, the config's rewrites and handlers run first and it owns
 //! the default browser and options; these rules are appended after its own,
@@ -73,6 +77,11 @@ pub struct RulesFile {
     pub default_browser: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_profile: String,
+    /// PwrRoute extension: everything else opens in this named destination
+    /// (see [`RulesFile::destinations`]); `defaultBrowser`/`defaultProfile`
+    /// mirror its synced binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_destination: Option<String>,
     /// PwrRoute extension: whether these rules and this default browser go
     /// before a JS config's handlers and default. Absent is
     /// [`Precedence::Config`], the Go host's order, and is never written, so
@@ -81,6 +90,15 @@ pub struct RulesFile {
     pub precedence: Precedence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<RulesOptions>,
+    /// PwrRoute extension: named targets a rule can open in by name, with
+    /// the binding every machine starts with. Synced rules name these so
+    /// each machine can say what "Work" means there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub destinations: Vec<Destination>,
+    /// PwrRoute extension: rule sets and whether each is on by default.
+    /// A set no entry here names is on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<RuleSet>,
     /// PwrRoute extension: rewrites, applied in order before any handler.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rewrites: Vec<Rewrite>,
@@ -201,6 +219,13 @@ pub struct Rule {
     /// PwrRoute extension: URLs that must resolve to this rule.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<String>,
+    /// PwrRoute extension: open in this named destination. `browser` and
+    /// `profile` mirror its synced binding for readers that ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// PwrRoute extension: the rule set this rule belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<String>,
 }
 
 impl Default for Rule {
@@ -214,6 +239,8 @@ impl Default for Rule {
             private: false,
             privacy: None,
             examples: Vec::new(),
+            destination: None,
+            set: None,
         }
     }
 }
@@ -286,6 +313,9 @@ pub struct Rewrite {
     /// URLs this rewrite must match, and what it must turn each into.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<RewriteExample>,
+    /// PwrRoute extension: the rule set this rewrite belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<String>,
 }
 
 impl Default for Rewrite {
@@ -296,8 +326,42 @@ impl Default for Rewrite {
             enabled: true,
             privacy: None,
             examples: Vec::new(),
+            set: None,
         }
     }
+}
+
+/// A named target in `rules.json`'s `destinations`: what a rule's
+/// `destination` means unless this machine binds the name to something else.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Destination {
+    pub name: String,
+    #[serde(flatten)]
+    pub binding: Binding,
+}
+
+/// What a named destination opens: a browser, its profile, and whether the
+/// window is private. The synced default in `rules.json`, or a machine's own
+/// in `machine.json`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Binding {
+    #[serde(default)]
+    pub browser: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub profile: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub private: bool,
+}
+
+/// A rule set in `rules.json`'s `sets`, with whether it is on by default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSet {
+    pub name: String,
+    #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
 }
 
 impl Rewrite {
@@ -373,6 +437,7 @@ pub enum Place {
     Rule(usize),
     Rewrite(usize),
     Test(usize),
+    Destination(usize),
 }
 
 /// Something the editor should not save, with the reason in words for the
@@ -426,7 +491,16 @@ impl RulesFile {
                 message: message.to_owned(),
             });
         };
-        if self.default_browser.trim().is_empty() {
+        let defined = |name: &Option<String>| {
+            name.as_deref()
+                .is_some_and(|n| self.destination(n).is_some_and(|b| !b.browser.trim().is_empty()))
+        };
+        if let Some(name) = &self.default_destination
+            && self.destination(name).is_none()
+        {
+            flag(Place::DefaultBrowser, &format!("No destination is named “{name}”."));
+        }
+        if self.default_browser.trim().is_empty() && !defined(&self.default_destination) {
             flag(
                 Place::DefaultBrowser,
                 match self.precedence {
@@ -443,7 +517,12 @@ impl RulesFile {
         }
         for (i, rule) in self.rules.iter().enumerate() {
             let place = Place::Rule(i);
-            if rule.browser.trim().is_empty() {
+            if let Some(name) = &rule.destination
+                && self.destination(name).is_none()
+            {
+                flag(place, &format!("No destination is named “{name}”."));
+            }
+            if rule.browser.trim().is_empty() && !defined(&rule.destination) {
                 flag(place, "Select a browser.");
             } else if is_self(&rule.browser) {
                 flag(place, "Select a browser other than PwrRoute.");
@@ -479,6 +558,20 @@ impl RulesFile {
                 .all(|e| is_absolute_url(&e.url) && is_absolute_url(&e.becomes))
             {
                 flag(place, EXAMPLE_URL);
+            }
+        }
+        for (i, destination) in self.destinations.iter().enumerate() {
+            let place = Place::Destination(i);
+            let name = destination.name.trim();
+            if name.is_empty() {
+                flag(place, "Name the destination.");
+            } else if self.destinations[..i].iter().any(|d| d.name.trim() == name) {
+                flag(place, &format!("Two destinations are named “{name}”."));
+            }
+            if destination.binding.browser.trim().is_empty() {
+                flag(place, "Select a browser.");
+            } else if is_self(&destination.binding.browser) {
+                flag(place, "Select a browser other than PwrRoute.");
             }
         }
         for (i, test) in self.tests.iter().enumerate() {
@@ -1365,5 +1458,141 @@ mod tests {
             message(Precedence::PwrRoute).as_deref(),
             Some("Pick a default browser for PwrRoute to take everything else.")
         );
+    }
+
+    /// The synced-rules fields: every one optional, written only when
+    /// used, and a file that names destinations still carries a browser on
+    /// every rule for a reader that ignores them.
+    const SYNCED: &str = r#"{
+  "defaultBrowser": "Google Chrome",
+  "defaultProfile": "Personal",
+  "defaultDestination": "Personal",
+  "destinations": [
+    {
+      "name": "Work 1",
+      "browser": "Google Chrome",
+      "profile": "Work"
+    },
+    {
+      "name": "Personal",
+      "browser": "Google Chrome",
+      "profile": "Personal"
+    },
+    {
+      "name": "Private",
+      "browser": "Firefox",
+      "private": true
+    }
+  ],
+  "sets": [
+    {
+      "name": "Client",
+      "enabled": false
+    },
+    {
+      "name": "Home"
+    }
+  ],
+  "rewrites": [
+    {
+      "match": "client.example.net/*",
+      "actions": [
+        {
+          "setScheme": "https"
+        }
+      ],
+      "set": "Client"
+    }
+  ],
+  "rules": [
+    {
+      "match": "work.example.com/*",
+      "browser": "Google Chrome",
+      "profile": "Work",
+      "destination": "Work 1",
+      "set": "Client"
+    }
+  ]
+}
+"#;
+
+    #[test]
+    fn synced_fields_round_trip_byte_for_byte() {
+        let file: RulesFile = serde_json::from_str(SYNCED).unwrap();
+        assert_eq!(file.default_destination.as_deref(), Some("Personal"));
+        assert_eq!(file.destinations.len(), 3);
+        assert!(file.destinations[2].binding.private);
+        assert!(!file.sets[0].enabled && file.sets[1].enabled);
+        assert_eq!(file.rules[0].destination.as_deref(), Some("Work 1"));
+        assert_eq!(file.rules[0].set.as_deref(), Some("Client"));
+        assert_eq!(file.rewrites[0].set.as_deref(), Some("Client"));
+        let mut text = serde_json::to_string_pretty(&file).unwrap();
+        text.push('\n');
+        // `"enabled": true` is the default and is not written back.
+        assert_eq!(text, SYNCED.replace(",\n      \"enabled\": true", ""));
+        assert!(file.problems().is_empty(), "{:?}", file.problems());
+    }
+
+    #[test]
+    fn a_name_blind_reader_still_finds_a_browser_on_every_rule() {
+        // What the Go host reads: plain fields, unknown ones ignored.
+        let raw: Value = serde_json::from_str(SYNCED).unwrap();
+        assert_eq!(raw["defaultBrowser"], json!("Google Chrome"));
+        assert_eq!(raw["rules"][0]["browser"], json!("Google Chrome"));
+        assert_eq!(raw["rules"][0]["profile"], json!("Work"));
+    }
+
+    #[test]
+    fn a_file_without_synced_fields_writes_none_of_them() {
+        let file: RulesFile =
+            serde_json::from_str(r#"{"defaultBrowser":"Safari","rules":[{"match":"a/*","browser":"Arc"}]}"#)
+                .unwrap();
+        let text = serde_json::to_string(&file).unwrap();
+        for field in ["destination", "sets", "\"set\"", "defaultDestination"] {
+            assert!(!text.contains(field), "{field} in {text}");
+        }
+    }
+
+    #[test]
+    fn the_plan_follows_the_set_and_the_destination() {
+        let file: RulesFile = serde_json::from_str(SYNCED).unwrap();
+        // "Client" is off by default, so its rule and rewrite are not planned.
+        let plan = file.resolved().plan();
+        assert_eq!(plan["handlers"], json!([]));
+        assert_eq!(plan["rewrites"], json!([]));
+        let mut on = file.clone();
+        on.sets[0].enabled = true;
+        on.destinations[0].binding.browser = "Firefox".into();
+        on.destinations[0].binding.profile = String::new();
+        let plan = on.resolved().plan();
+        assert_eq!(plan["handlers"][0]["browser"], json!("Firefox"));
+    }
+
+    #[test]
+    fn destinations_are_checked() {
+        let mut file: RulesFile = serde_json::from_str(SYNCED).unwrap();
+        file.rules[0].destination = Some("Gone".into());
+        file.default_destination = Some("Nowhere".into());
+        file.destinations.push(Destination {
+            name: "Work 1".into(),
+            binding: Binding::default(),
+        });
+        let messages: Vec<(Place, String)> = file
+            .problems()
+            .into_iter()
+            .map(|p| (p.place, p.message))
+            .collect();
+        assert!(messages.contains(&(Place::Rule(0), "No destination is named “Gone”.".into())));
+        assert!(messages.contains(&(
+            Place::DefaultBrowser,
+            "No destination is named “Nowhere”.".into()
+        )));
+        assert!(messages.contains(&(Place::Destination(3), "Two destinations are named “Work 1”.".into())));
+        assert!(messages.contains(&(Place::Destination(3), "Select a browser.".into())));
+        // A rule whose destination names a browser needs none of its own.
+        let mut file: RulesFile = serde_json::from_str(SYNCED).unwrap();
+        file.rules[0].browser.clear();
+        file.default_browser.clear();
+        assert!(file.problems().is_empty(), "{:?}", file.problems());
     }
 }

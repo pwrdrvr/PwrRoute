@@ -16,6 +16,9 @@
 //! - [`Engine::review_import`] is the Finicky importer's [`Review`] of a
 //!   config: which of its rules a visual rule holds exactly, which stay
 //!   JS, and a probed [`Suggested`] rule for a function that looks like one.
+//! - [`MachineFile`] is `machine.json`, the layer that never syncs: what a
+//!   named destination means on this machine and which rule sets are off
+//!   here ([`RulesFile::for_machine`]).
 //! - [`ShortLinks`] expands short links over a [`Network`] before resolving.
 //! - [`discovery`] finds the config and `rules.json` the way Finicky does.
 //! - [`Reloader`] watches them and swaps in a new [`Engine`] only once it has
@@ -35,6 +38,7 @@ mod host;
 mod http;
 mod import;
 mod loader;
+mod machine;
 mod native;
 mod reload;
 mod rules;
@@ -69,12 +73,13 @@ pub use host::{
 #[cfg(feature = "http")]
 pub use http::HttpNetwork;
 pub use import::{Review, Reviewed, SourceLines, Suggested, Verdict, Visual};
+pub use machine::{BindingSource, MachineFile};
 pub use native::NativeHost;
 pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
 pub use rules::{
-    DONT_OPEN, Expectation, FALLBACK_BROWSER, Place, Precedence, PrivacySetting, Problem, Rewrite,
-    RewriteAction, RewriteExample, RouteTest, Rule, RulesFile, RulesOptions, app_type_of,
-    is_dont_open,
+    Binding, DONT_OPEN, Destination, Expectation, FALLBACK_BROWSER, Place, Precedence,
+    PrivacySetting, Problem, Rewrite, RewriteAction, RewriteExample, RouteTest, Rule, RuleSet,
+    RulesFile, RulesOptions, app_type_of, is_dont_open,
 };
 pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
 pub use suggest::{Suggestion, suggest_rule};
@@ -345,6 +350,10 @@ impl Engine {
         })));
         let context = Context::full(&runtime)?;
 
+        // Named destinations and rule sets, as the synced layer resolves
+        // them; a caller that routes for this machine passed
+        // `RulesFile::for_machine`'s file, which this leaves as it is.
+        let rules = sources.rules.resolved();
         let mut engine = Self {
             context,
             _runtime: runtime,
@@ -353,23 +362,23 @@ impl Engine {
             config: config.as_ref().map(|(path, _)| path.clone()),
             host: Rc::clone(&host),
             console: ConsoleLog::new(),
-            rules: sources.rules.clone(),
+            rules: rules.clone(),
             imports,
             short_links: ShortLinks::default(),
-            planned_rewrites: sources.rules.planned_rewrites(),
-            planned_rules: sources.rules.planned_rules(),
+            planned_rewrites: rules.planned_rewrites(),
+            planned_rules: rules.planned_rules(),
         };
         let console = engine.console.clone();
         let shorteners = engine.with_deadline(limits.load, |ctx| {
             install_globals(&ctx, &host, &console)?;
             let base = match &config {
                 Some(_) => serde_json::Value::Null,
-                None => sources.rules.base_config(),
+                None => rules.base_config(),
             };
             let setup: Function<'_> = ctx.eval("__pwrroute.setup")?;
             setup
                 .call::<_, ()>((
-                    ctx.json_parse(sources.rules.plan().to_string())?,
+                    ctx.json_parse(rules.plan().to_string())?,
                     ctx.json_parse(base.to_string())?,
                 ))
                 .catch(&ctx)
