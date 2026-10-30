@@ -46,3 +46,6 @@ design/uploads/
 # Local task artifacts and PR descriptions
 .local/
 
+
+# Python bytecode from running the packaging tests
+__pycache__/

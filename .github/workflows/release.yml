@@ -138,8 +138,11 @@ jobs:
   macos-prepare:
     name: Build macOS universal and prepare signing input
     needs: [typecheck, test]
-    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
-    timeout-minutes: 60
+    # The standard hosted runner: free for a public repository (never a
+    # billed -large or -xlarge size). It holds no credentials; the sign job
+    # below does. A tag's build starts cold on three cores, hence the limit.
+    runs-on: macos-26
+    timeout-minutes: 120
     outputs:
       signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
     steps:
@@ -154,6 +157,10 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      # The image's other toolchains would change rust-cache's key.
+      - name: Keep only the pinned Rust toolchain
+        run: ./scripts/ci/prune-rust-toolchains.sh
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -219,8 +226,8 @@ jobs:
     # The only macOS job with Apple credentials. It does not check out source
     # or run cargo; it packs the verified app from macos-prepare.
     needs: macos-prepare
-    # Certificate import/signing runs on a disposable hosted runner. Builds
-    # and all other macOS work stay on the persistent lab pool.
+    # Certificate import/signing runs on a disposable hosted runner, apart
+    # from the build: only this job sees the Apple credentials.
     runs-on: macos-26
     timeout-minutes: 90
     environment: apple-signing

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Before Desktop E2E on a pwrdrvr-macos Tart guest: require that this user's
+# Before Desktop E2E on a macOS runner: require that this user's
 # session owns the console and its screen is not locked. GPUI draws nothing
 # for a window the platform does not present, and behind the lock screen no
 # window is presented: each test's window paints its first frames and stops,
@@ -7,7 +7,7 @@
 # of after every wait in the suite has timed out.
 #
 # Read-only: this reports the session and display state and changes nothing.
-# Unlocking a guest, or turning its screen lock off, is for the lab operator.
+# Unlocking a machine, or turning its screen lock off, is for its owner.
 set -euo pipefail
 
 user="$(/usr/bin/id -un)"
