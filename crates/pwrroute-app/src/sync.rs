@@ -201,10 +201,32 @@ pub struct Line {
     pub tip: Option<String>,
 }
 
-/// The whole app's sync state, worst first: a conflict in any folder,
-/// paused (every folder unavailable), syncing, synced. `None` while
-/// nothing syncs. `now` and `last_pass` are milliseconds.
-pub fn line_of(status: &Status, now: u64) -> Option<Line> {
+/// The whole app's sync state, worst first (design: Synced Rules 3c): a
+/// conflict in any folder, paused (no folder reachable or every one
+/// failing), syncing, synced. The rail line and the tray read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Overall {
+    /// The first folder in conflict, by label.
+    Conflict(String),
+    /// No folder in step: the first failing one and why, else the first
+    /// unreachable one.
+    Paused {
+        failing: Option<(String, String)>,
+        first: String,
+    },
+    Syncing,
+    Synced {
+        /// When the last pass ran, in milliseconds.
+        last: u64,
+        unavailable: usize,
+        failing: usize,
+        /// The folders in step, by their short names.
+        folders: Vec<String>,
+    },
+}
+
+/// [`Overall`] for `status`; `None` while nothing syncs.
+pub fn overall(status: &Status) -> Option<Overall> {
     use pwrroute_sync::{Health, Wait};
     if status.targets.is_empty() {
         return None;
@@ -215,15 +237,7 @@ pub fn line_of(status: &Status, now: u64) -> Option<Line> {
         .iter()
         .find(|t| matches!(worst(t), Some(Health::Conflict(_))))
     {
-        return Some(Line {
-            text: "sync conflict".into(),
-            tone: Tone::Bad,
-            chip: Some("sync \u{00b7} conflict"),
-            tip: Some(format!(
-                "{}: both changed since the last sync",
-                target.target.label
-            )),
-        });
+        return Some(Overall::Conflict(target.target.label.clone()));
     }
     let unavailable = status
         .targets
@@ -232,31 +246,18 @@ pub fn line_of(status: &Status, now: u64) -> Option<Line> {
         .count();
     // A write that failed or a file that does not load: the folder is
     // there, so say so rather than "unavailable".
-    let failing: Vec<(&str, String)> = status
+    let failing: Vec<(String, String)> = status
         .targets
         .iter()
         .filter_map(|t| match worst(t) {
-            Some(Health::Error(why)) => Some((t.target.label.as_str(), why)),
+            Some(Health::Error(why)) => Some((t.target.label.clone(), why)),
             _ => None,
         })
         .collect();
     if unavailable + failing.len() == status.targets.len() {
-        return Some(match failing.first() {
-            Some((label, why)) => Line {
-                text: "sync paused \u{00b7} needs you".into(),
-                tone: Tone::Warn,
-                chip: Some("sync \u{00b7} paused"),
-                tip: Some(format!("{label}: {why}")),
-            },
-            None => Line {
-                text: "sync paused \u{00b7} folder unavailable".into(),
-                tone: Tone::Warn,
-                chip: Some("sync \u{00b7} paused"),
-                tip: status
-                    .targets
-                    .first()
-                    .map(|t| format!("{}: not reachable", t.target.label)),
-            },
+        return Some(Overall::Paused {
+            failing: failing.into_iter().next(),
+            first: status.targets[0].target.label.clone(),
         });
     }
     let settling = status
@@ -264,28 +265,129 @@ pub fn line_of(status: &Status, now: u64) -> Option<Line> {
         .iter()
         .any(|t| matches!(worst(t), Some(Health::Waiting(Wait::Settling))));
     let Some(last) = status.last_pass.filter(|_| !settling) else {
-        return Some(Line {
+        return Some(Overall::Syncing);
+    };
+    let folders = status
+        .targets
+        .iter()
+        .filter(|t| !matches!(worst(t), Some(Health::Unavailable(_) | Health::Error(_))))
+        .map(|t| short_name(&t.target))
+        .collect();
+    Some(Overall::Synced {
+        last,
+        unavailable,
+        failing: failing.len(),
+        folders,
+    })
+}
+
+/// A folder as the tray lists it: "iCloud", "Dropbox", a folder's name.
+fn short_name(target: &Target) -> String {
+    match target.kind {
+        pwrroute_sync::Kind::ICloud => "iCloud".into(),
+        pwrroute_sync::Kind::GoogleDrive => "Google Drive".into(),
+        pwrroute_sync::Kind::Dropbox => "Dropbox".into(),
+        pwrroute_sync::Kind::Folder => target.label.clone(),
+    }
+}
+
+/// The rail foot's line and the strip's chip for `status`. `now` and
+/// `last_pass` are milliseconds.
+pub fn line_of(status: &Status, now: u64) -> Option<Line> {
+    Some(match overall(status)? {
+        Overall::Conflict(label) => Line {
+            text: "sync conflict".into(),
+            tone: Tone::Bad,
+            chip: Some("sync \u{00b7} conflict"),
+            tip: Some(format!("{label}: both changed since the last sync")),
+        },
+        Overall::Paused {
+            failing: Some((label, why)),
+            ..
+        } => Line {
+            text: "sync paused \u{00b7} needs you".into(),
+            tone: Tone::Warn,
+            chip: Some("sync \u{00b7} paused"),
+            tip: Some(format!("{label}: {why}")),
+        },
+        Overall::Paused {
+            failing: None,
+            first,
+        } => Line {
+            text: "sync paused \u{00b7} folder unavailable".into(),
+            tone: Tone::Warn,
+            chip: Some("sync \u{00b7} paused"),
+            tip: Some(format!("{first}: not reachable")),
+        },
+        Overall::Syncing => Line {
             text: "syncing\u{2026}".into(),
             tone: Tone::Quiet,
             chip: None,
             tip: None,
-        });
-    };
-    let mut text = format!("synced \u{00b7} {}", age(now.saturating_sub(last)));
-    let mut tone = Tone::Quiet;
-    if unavailable > 0 {
-        text.push_str(&format!(" \u{00b7} {unavailable} unavailable"));
-        tone = Tone::Warn;
-    }
-    if !failing.is_empty() {
-        text.push_str(&format!(" \u{00b7} {} need you", failing.len()));
-        tone = Tone::Warn;
-    }
-    Some(Line {
-        text,
-        tone,
-        chip: None,
-        tip: None,
+        },
+        Overall::Synced {
+            last,
+            unavailable,
+            failing,
+            ..
+        } => {
+            let mut text = format!("synced \u{00b7} {}", age(now.saturating_sub(last)));
+            let mut tone = Tone::Quiet;
+            if unavailable > 0 {
+                text.push_str(&format!(" \u{00b7} {unavailable} unavailable"));
+                tone = Tone::Warn;
+            }
+            if failing > 0 {
+                text.push_str(&format!(" \u{00b7} {failing} need you"));
+                tone = Tone::Warn;
+            }
+            Line {
+                text,
+                tone,
+                chip: None,
+                tip: None,
+            }
+        }
+    })
+}
+
+/// The tray's sync row (design: Synced Rules 3c) for `status`.
+pub fn tray_row_of(status: &Status, now: u64) -> Option<crate::tray::model::SyncRow> {
+    use crate::tray::model::{SyncRow, SyncTone};
+    Some(match overall(status)? {
+        Overall::Conflict(_) => SyncRow {
+            title: "Sync conflict".into(),
+            sub: Some("Resolve\u{2026}".into()),
+            tone: SyncTone::Bad,
+        },
+        Overall::Paused { failing, .. } => SyncRow {
+            title: "Sync paused".into(),
+            sub: Some(if failing.is_some() {
+                "needs you".into()
+            } else {
+                "folder unavailable".into()
+            }),
+            tone: SyncTone::Warn,
+        },
+        Overall::Syncing => SyncRow {
+            title: "Syncing rules\u{2026}".into(),
+            sub: None,
+            tone: SyncTone::Busy,
+        },
+        Overall::Synced {
+            last,
+            unavailable,
+            failing,
+            folders,
+        } => SyncRow {
+            title: format!("Rules synced {}", age(now.saturating_sub(last))),
+            sub: Some(folders.join(", ")).filter(|s| !s.is_empty()),
+            tone: if unavailable + failing > 0 {
+                SyncTone::Warn
+            } else {
+                SyncTone::Ok
+            },
+        },
     })
 }
 

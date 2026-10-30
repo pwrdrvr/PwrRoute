@@ -470,7 +470,10 @@ impl SettingsWindow {
                 .border_color(theme::border_subtle()),
             |nav, pane| {
                 let count = (pane == Pane::LocalAgents && agents > 0).then(|| agents.to_string());
-                nav.child(nav_item(pane, self.pane == pane, count, cx))
+                // Synced Rules 1c: a conflict marks Sync wherever the
+                // reader is in Settings.
+                let dot = pane == Pane::Sync && self.model.sync.has_conflict();
+                nav.child(nav_item(pane, self.pane == pane, count, dot, cx))
             },
         )
     }
@@ -508,6 +511,7 @@ fn nav_item(
     pane: Pane,
     selected: bool,
     count: Option<String>,
+    dot: bool,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Button {
     let foreground = if selected {
@@ -556,7 +560,22 @@ fn nav_item(
                     .child(mono(count, 10.5, 600.0, theme::text_subtle())),
             )
         })
+        .when(dot, |item| {
+            // `.rail-item .xdot`
+            item.child(
+                div()
+                    .id(SYNC_DOT_ID)
+                    .debug_selector(|| SYNC_DOT_ID.into())
+                    .ml_auto()
+                    .size(px(6.0))
+                    .rounded_full()
+                    .bg(theme::status_error()),
+            )
+        })
 }
+
+/// The red dot on Sync's nav item while a folder is in conflict.
+pub const SYNC_DOT_ID: &str = "settings-nav-sync-dot";
 
 /// `.strip`: the family title strip, with "Settings" as its crumb.
 fn title_strip(menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {

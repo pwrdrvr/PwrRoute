@@ -573,6 +573,13 @@ pub struct Sync {
     pub problem: Option<SharedString>,
 }
 
+impl Sync {
+    /// Whether a folder is in conflict (or joining), which needs the reader.
+    pub fn has_conflict(&self) -> bool {
+        self.folders.iter().any(|f| f.conflict.is_some())
+    }
+}
+
 /// A chip's tone, as the producer judges it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SyncTone {

@@ -229,6 +229,7 @@ enum TrayCommand {
     TogglePause,
     MakeDefault,
     HeldLinks,
+    Sync,
     Quit,
 }
 
@@ -1038,8 +1039,15 @@ fn main() {
         let first_held = holding.held[0].id;
         let mut hold_next = base.clone();
         hold_next.routing = Routing::Holding(SendScope::Next { left: 1, of: 1 });
+        let mut synced = model.clone();
+        synced.sync = Some(tray::model::SyncRow {
+            title: "Rules synced 2 min ago".into(),
+            sub: Some("Dropbox, iCloud".into()),
+            tone: tray::model::SyncTone::Ok,
+        });
         let shots = [
             ("tray-1a", model, Unfolded::default()),
+            ("tray-synced", synced, Unfolded::default()),
             (
                 "tray-send-choose",
                 choose,
@@ -2343,6 +2351,71 @@ fn main() {
                 app.navigate(Screen::Rules, window, cx);
             },
         );
+    }
+
+    // Synced Rules 2b and 3a: the Rules list with set headings, rows that
+    // open a named destination, the editor's Destinations lane, Rule set
+    // and Name it, and the rail foot's sync line. Contrived names and
+    // example hosts, in a scratch directory.
+    {
+        let scratch = std::env::temp_dir().join("pwrroute-screens-synced");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let rules = scratch.join("rules.json");
+        std::fs::write(
+            &rules,
+            r#"{
+  "defaultBrowser": "Safari",
+  "defaultProfile": "Personal",
+  "defaultDestination": "Personal",
+  "destinations": [
+    { "name": "Work 1", "browser": "Google Chrome", "profile": "Profile 3" },
+    { "name": "Work 2", "browser": "Google Chrome", "profile": "Work 2" },
+    { "name": "Personal", "browser": "Safari", "profile": "Personal" },
+    { "name": "PwrDrvr", "browser": "Arc" }
+  ],
+  "sets": [{ "name": "PwrDrvr", "enabled": false }],
+  "rules": [
+    { "match": "news.example.com/*", "browser": "Safari", "profile": "Personal", "destination": "Personal" },
+    { "match": "mail.example.com/*", "browser": "Google Chrome", "profile": "Profile 3", "destination": "Work 1" },
+    { "match": "*.example.net/*", "browser": "Google Chrome", "profile": "Work 2", "destination": "Work 2", "set": "Work 2" },
+    { "match": "tickets.example.net/*", "browser": "Google Chrome", "profile": "Work 2", "destination": "Work 2", "set": "Work 2" },
+    { "match": "docs.example.net/*", "browser": "Google Chrome", "profile": "Work 2", "destination": "Work 2", "set": "Work 2" },
+    { "match": "app.example.dev/*", "browser": "Arc", "destination": "PwrDrvr", "set": "PwrDrvr" },
+    { "match": "admin.example.dev/*", "browser": "Arc", "destination": "PwrDrvr", "set": "PwrDrvr" },
+    { "match": "status.example.org/*", "browser": "Firefox" }
+  ]
+}
+"#,
+        )
+        .expect("write the rules");
+        let canvas = move |app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>| {
+            let file = pwrroute_engine::RulesFile::load(&rules).expect("read the rules");
+            app.store = rules_store::RulesStore::from_file(
+                Some(rules.clone()),
+                file,
+                true,
+                Some(std::time::SystemTime::now()),
+            );
+            app.sync_line = Some(sync::Line {
+                text: "synced \u{00b7} 2 min ago".into(),
+                tone: sync::Tone::Quiet,
+                chip: None,
+                tip: None,
+            });
+            app.refresh(cx);
+        };
+        let canvas = std::rc::Rc::new(canvas);
+        let named = canvas.clone();
+        shoot("app-synced-rules", None, &move |app, window, cx| {
+            named(app, cx);
+            app.navigate(Screen::Rules, window, cx);
+            app.select(Selection::Handler(3), cx);
+        });
+        shoot("app-synced-rules-name-it", None, &move |app, window, cx| {
+            canvas(app, cx);
+            app.navigate(Screen::Rules, window, cx);
+            app.select(Selection::Handler(7), cx);
+        });
     }
 
     // Settings Everything else (WP-F): Configuration while ~/.finicky.ts is

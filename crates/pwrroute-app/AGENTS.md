@@ -209,11 +209,22 @@ their own modules.
   pull is followed by `app::sync_rules_windows`, so every writer goes
   through the same path. `sync::machine()` is this machine's
   `machine.json`; every engine that resolves a link takes it as
-  `Sources::machine`, and `edit_machine` is the one writer. `sync::line`
-  is the rail foot's line and the strip's chip (`chrome.rs`), and opens
-  Settings › Sync. The editor offers named destinations above the lanes
-  and a Rule set field; a rule whose set is off here reads "off on this
-  Mac" (`Matcher::OffHere`). Folders are added only from a click.
+  `Sources::machine`, and `edit_machine` is the one writer (it refuses a
+  `machine.json` that does not parse rather than save over it);
+  `reload_machine` follows hand edits on window activation. The files
+  that sync are re-read on every wake and pass (`follow_items`), since
+  the router publishes the config in charge after launch.
+  `sync::overall` is the one reading of how sync stands: `line_of` makes
+  the rail foot's line and the strip's chip (`chrome.rs`) from it, and
+  `tray_row_of` the tray's row (`TrayModel::sync`: the dropdown's row
+  under Pause routing, and the native menu's first row, enabled only for
+  a conflict); each opens Settings › Sync. The editor offers named
+  destinations above the lanes, Name it (Return makes a `destinations[]`
+  entry from the rule's browser, `RulesStore::name_destination`) and a
+  Rule set field. The Rules list heads each run of rules in one set
+  (`set_heading`) and draws a named destination by its name and what it
+  opens here; a rule whose set is off here is dimmed and reads "off on
+  this Mac" (`Matcher::OffHere`). Folders are added only from a click.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
   (`activity.keep`, `activity.journal`, `activity.journalDays`), the

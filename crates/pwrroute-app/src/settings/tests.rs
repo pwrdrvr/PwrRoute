@@ -1139,6 +1139,8 @@ mod everything_else {
 #[gpui_kit::test]
 fn the_sync_pane_resolves_a_conflict_only_from_its_buttons(cx: &mut TestAppContext) {
     let (view, cx, requests) = settings(cx, |model| model.sync = fixtures::sync_conflict());
+    // The conflict marks Sync's nav item from any pane.
+    assert!(visible(cx, super::SYNC_DOT_ID));
     click(cx, Pane::Sync.nav_id());
     draw(cx);
     let root = view.read_with(cx, |view, _| view.model.sync.folders[0].root.clone());

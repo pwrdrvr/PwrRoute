@@ -74,6 +74,9 @@ pub enum RowBadge {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
     pub matchers: Vec<Matcher>,
+    /// The named destination the rule opens (`rules[].destination`), drawn
+    /// before what it opens on this machine (design: Synced Rules 2b).
+    pub named: Option<SharedString>,
     pub destination: Destination,
     pub hits: SharedString,
     pub enabled: bool,
@@ -120,6 +123,7 @@ impl Rule {
     pub fn plain(matchers: Vec<Matcher>, destination: Destination) -> Self {
         Self {
             matchers,
+            named: None,
             destination,
             hits: "".into(),
             enabled: true,
@@ -219,6 +223,7 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
     Handler {
         rule: Rule {
             matchers,
+            named: rule.destination.clone().map(Into::into),
             destination,
             hits: hits(badge),
             enabled: rule.enabled,
@@ -279,6 +284,7 @@ pub fn rewrite(rewrite: &engine::Rewrite, badge: RowBadge, problems: Vec<String>
     Rewrite {
         rule: Rule {
             matchers,
+            named: None,
             destination,
             hits: hits(badge),
             enabled: rewrite.enabled,

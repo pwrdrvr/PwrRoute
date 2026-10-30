@@ -328,13 +328,24 @@ impl RulesStore {
     pub fn handlers(&self) -> Vec<Handler> {
         let problems = self.problems();
         let machine = crate::sync::machine();
+        // What each rule opens on this machine: a named destination's
+        // binding here (design: Synced Rules 2b).
+        let here = self.edited().for_machine(&machine);
         self.rules
             .iter()
             .enumerate()
             .map(|(i, entry)| {
                 let problems = problems.at(Place::Rule(i));
                 let badge = self.badge(&problems, self.saved_rules.contains_key(&entry.id));
-                let mut handler = rules_model::handler(&entry.value, badge, problems);
+                let shown = match (&entry.value.destination, here.rules.get(i)) {
+                    (Some(_), Some(routed)) => engine::Rule {
+                        browser: routed.browser.clone(),
+                        profile: routed.profile.clone(),
+                        ..entry.value.clone()
+                    },
+                    _ => entry.value.clone(),
+                };
+                let mut handler = rules_model::handler(&shown, badge, problems);
                 if entry.value.enabled
                     && let Some(set) = &entry.value.set
                     && !self.base.set_enabled_on(set, &machine)
