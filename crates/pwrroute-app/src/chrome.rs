@@ -509,6 +509,7 @@ fn section(
         app.screen == screen,
         trailing,
     )
+    .map(crate::accessibility::clickable)
     .on_click(cx.listener(move |this, _, window, cx| this.navigate(screen, window, cx)))
 }
 
@@ -566,6 +567,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
     if build.is_release() {
         return div()
             .id(BUILD_ALL_ID)
+            .aria_label("Copy build information")
             .debug_selector(|| BUILD_ALL_ID.into())
             .cursor_pointer()
             .child(
@@ -589,6 +591,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
                 "Click to copy the version and commit",
                 build.commit.clone(),
             ))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(|this, _, _, cx| this.copy_build(Part::All, cx)))
             .into_any_element();
     }
@@ -608,6 +611,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
         .child(
             div()
                 .id(BUILD_ALL_ID)
+                .aria_label("Copy build information")
                 .debug_selector(|| BUILD_ALL_ID.into())
                 .ml_auto()
                 .size(px(20.0))
@@ -633,6 +637,7 @@ fn build_block(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
                     "Copy the version, checkout, branch and commit",
                     None,
                 ))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(|this, _, _, cx| this.copy_build(Part::All, cx))),
         );
     let checkout = build
@@ -779,6 +784,7 @@ fn build_row(
                 .group_hover(id, |style| style.text_color(theme::text_muted()))
                 .into_any_element()
         })
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, _, cx| this.copy_build(part, cx)))
         .into_any_element()
 }
@@ -880,6 +886,7 @@ pub fn nav_rail(app: &PwrRoute, status: &Status, cx: &mut Context<'_, PwrRoute>)
                 false,
                 Some(key_cap(current(cx).settings_key()).into_any_element()),
             )
+            .map(crate::accessibility::clickable)
             .on_click(|_, _, cx| crate::settings::open(cx, None)),
         )
         .child(div().mt_auto().pt(px(10.0)).px(px(8.0)).child(foot))

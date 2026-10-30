@@ -243,11 +243,11 @@ fn install_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
             cx,
         )),
         _ => row_actions().child(
-            button_when(CHECK_ID, "Check now", Kind::Default, true, !checking).on_click(
-                cx.listener(|this, _, window, cx| {
+            button_when(CHECK_ID, "Check now", Kind::Default, true, !checking)
+                .map(crate::accessibility::clickable)
+                .on_click(cx.listener(|this, _, window, cx| {
                     this.request(SettingsRequest::CheckForUpdates, window, cx);
-                }),
-            ),
+                })),
         ),
     };
     let state = field(

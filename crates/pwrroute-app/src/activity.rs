@@ -1581,6 +1581,7 @@ fn row(
     // button is, so the click looks at what was open before that.
     let more = button("\u{22ef}", ButtonKind::Quiet, true)
         .id(("activity-more", index))
+        .aria_label("More actions for this link")
         .debug_selector(move || format!("activity-more-{index}"))
         .capture_any_mouse_down(cx.listener(|this, _, _, _| {
             this.actions.menu_was = this.actions.menu.as_ref().map(|menu| menu.key);
@@ -1615,6 +1616,11 @@ fn row(
         row.hover(|style| style.bg(theme::bg_hover()))
     })
     .id(("activity-row", index))
+    .aria_label(format!(
+        "{}, {}, from {}, {}",
+        row.time, row.url, row.from, row.rule
+    ))
+    .aria_expanded(expanded)
     .debug_selector(move || format!("activity-row-{index}"))
     .cursor_pointer()
     .on_hover(cx.listener(move |this, over: &bool, _, cx| {
@@ -1630,6 +1636,8 @@ fn row(
             cx.notify();
         }
     }))
+    .map(crate::accessibility::clickable)
+    .role(gpui_kit::Role::ListItem)
     .on_click(cx.listener(move |this, _, window, cx| {
         this.activity.toggle(key);
         // The list takes the keyboard back from the search field, so
@@ -1710,6 +1718,7 @@ fn quick_add_button(
             "Add a rule for this link",
             shortcut,
         ))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
             this.add_rule(key, window, cx);
@@ -1800,7 +1809,8 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
                             .child(on_primary_key(shortcut))
                             .id(("activity-add-rule", index))
                             .debug_selector(move || format!("activity-add-rule-{index}"))
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                            .map(crate::accessibility::clickable)
+.on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.add_rule(key, window, cx);
                             })),
@@ -1855,6 +1865,7 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
         cx.stop_propagation();
         cx.notify();
     }))
+    .map(crate::accessibility::clickable)
     .on_click(cx.listener(|this, _, window, cx| {
         window.focus(&this.activity.search.focus, cx);
         cx.notify();
@@ -1882,7 +1893,8 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
                     ))
                     .id(label)
                     .debug_selector(move || format!("activity-filter-{filter:?}"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .map(|e| crate::widgets::keyboard_control(e, false))
+.on_click(cx.listener(move |this, _, _, cx| {
                         this.activity.filter = filter;
                         cx.notify();
                     })),
@@ -2202,7 +2214,7 @@ pub fn pane(
                 ),
         )
         .child(toolbar(app, window, cx))
-        .child(list)
+        .child(crate::accessibility::exposed(list, gpui_kit::Role::List, "Recent links"))
         // The router's sentence, verbatim: the same one Settings › Privacy
         // shows under the journal switch.
         .child(

@@ -173,6 +173,7 @@ pub fn frame(window: &Window) {
 enum Request {
     Ping,
     State,
+    Accessibility,
     /// Keystrokes, space separated, in GPUI's syntax: `down`, `cmd-q`.
     Key {
         keys: String,
@@ -364,7 +365,11 @@ fn on_ui_thread(request: Request, cx: &mut App) -> (Value, Option<Then>) {
                 Box::new(move |cx| {
                     with_main_window(cx, |window, cx| {
                         for keystroke in keystrokes {
-                            window.dispatch_keystroke(keystroke, cx);
+                            window.dispatch_keystroke(keystroke.clone(), cx);
+                            window.dispatch_event(
+                                PlatformInput::KeyUp(gpui_kit::KeyUpEvent { keystroke }),
+                                cx,
+                            );
                         }
                         Ok(json!({}))
                     });
@@ -383,6 +388,12 @@ fn on_ui_thread(request: Request, cx: &mut App) -> (Value, Option<Then>) {
 fn now(request: Request, cx: &mut App) -> Value {
     match request {
         Request::State => ok(state(cx)),
+        Request::Accessibility => with_main_window(cx, |window, _| {
+            let tree = window
+                .debug_a11y_tree_json()
+                .and_then(|json| serde_json::from_str::<Value>(&json).ok());
+            Ok(json!({ "active": window.is_a11y_active(), "tree": tree }))
+        }),
         Request::Click { region } => with_main_window(cx, |window, cx| {
             let (_, regions) = painted_by(window.window_handle().window_id());
             let bounds = regions
@@ -603,6 +614,10 @@ mod tests {
     fn requests_parse_from_the_contract() {
         let parse = |s: &str| serde_json::from_str::<Request>(s).unwrap();
         assert!(matches!(parse(r#"{"cmd":"state"}"#), Request::State));
+        assert!(matches!(
+            parse(r#"{"cmd":"accessibility"}"#),
+            Request::Accessibility
+        ));
         assert!(matches!(
             parse(r#"{"cmd":"key","keys":"down cmd-q"}"#),
             Request::Key { keys } if keys == "down cmd-q"

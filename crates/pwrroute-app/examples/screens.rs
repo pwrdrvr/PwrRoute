@@ -21,6 +21,9 @@
 )]
 
 #[cfg(target_os = "macos")]
+#[path = "../src/accessibility.rs"]
+mod accessibility;
+#[cfg(target_os = "macos")]
 #[path = "../src/activity.rs"]
 mod activity;
 #[cfg(target_os = "macos")]

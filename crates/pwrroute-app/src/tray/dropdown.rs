@@ -262,6 +262,12 @@ impl Dropdown {
     }
 
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.choosing {
+            self.choosing = false;
+            window.focus(&self.focus, cx);
+            self.fit(window, cx);
+            return;
+        }
         super::dropdown_closed(cx);
         window.remove_window();
     }
@@ -274,6 +280,16 @@ impl Render for Dropdown {
             .id("tray-dropdown")
             .key_context(CONTEXT)
             .track_focus(&self.focus)
+            .role(gpui_kit::Role::Menu)
+            .aria_label("PwrRoute routing")
+            .tab_group()
+            .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                let key = event.keystroke.key.as_str();
+                if matches!(key, "up" | "down" | "home" | "end") {
+                    crate::accessibility::move_focus(&this.focus, key, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
             .on_action(cx.listener(|this, _: &TestLink, window, cx| {
                 this.run(TrayCommand::TestLink, window, cx);
@@ -359,6 +375,10 @@ fn card(
             .py(px(7.0))
             .rounded(px(6.0))
             .cursor_pointer()
+            .map(crate::accessibility::clickable)
+            .role(gpui_kit::Role::Switch)
+            .aria_label("Pause routing")
+            .aria_toggled(gpui_kit::Toggled::from(paused))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.run(TrayCommand::TogglePause, window, cx);
             }))
@@ -567,6 +587,9 @@ fn send_section(
                     button.hover(|button| button.bg(theme::bg_hover()))
                 }
             })
+            .map(crate::accessibility::clickable)
+            .role(gpui_kit::Role::RadioButton)
+            .aria_selected(on)
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.send(target, window, cx);
             }))
@@ -629,6 +652,8 @@ fn send_section(
         })
         .cursor_pointer()
         .hover(|row| row.border_color(theme::accent_border()))
+        .map(crate::accessibility::clickable)
+        .aria_expanded(choosing)
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.toggle_choosing(window, cx);
         }))
@@ -763,6 +788,12 @@ fn next_line(model: &TrayModel, now: SystemTime, cx: &mut Context<'_, Dropdown>)
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|button| button.bg(theme::bg_hover()))
+                .map(crate::accessibility::clickable)
+                .aria_label(if delta > 0 {
+                    "Increase link count"
+                } else {
+                    "Decrease link count"
+                })
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                     super::step_next(delta, cx);
                 }))
@@ -806,6 +837,9 @@ fn all_line(model: &TrayModel, now: SystemTime, cx: &mut Context<'_, Dropdown>) 
                 .when(!on, |option| {
                     option.hover(|option| option.bg(theme::bg_hover()))
                 })
+                .map(crate::accessibility::clickable)
+                .role(gpui_kit::Role::RadioButton)
+                .aria_selected(on)
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                     super::set_all_for_hour(hour, cx);
                 }))
@@ -919,6 +953,13 @@ fn recent_row(
         .rounded(px(6.0))
         .cursor_pointer()
         .hover(|row| row.bg(theme::bg_hover()))
+        .map(crate::accessibility::clickable)
+        .aria_label(format!(
+            "{}, {}, {}",
+            recent.host,
+            recent.detail(),
+            recent.age(now)
+        ))
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.run(TrayCommand::Activity, window, cx);
         }))
@@ -1021,6 +1062,7 @@ fn row_frame(
 ) -> gpui_kit::Stateful<Div> {
     div()
         .id(id)
+        .role(gpui_kit::Role::MenuItem)
         .debug_selector(|| id.into())
         .flex()
         .items_center()
@@ -1040,6 +1082,7 @@ fn row_frame(
                 cx.notify();
             }
         }))
+        .map(|e| crate::widgets::keyboard_control(e, false))
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.run(command, window, cx);
         }))

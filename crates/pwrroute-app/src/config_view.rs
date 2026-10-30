@@ -727,6 +727,14 @@ fn banner(
         .cursor_pointer()
         .child(precedence_switch(rules_first, config.flips))
         .child(text(SWITCH_LABEL, 11.5, 600.0, theme::text_primary()).line_height(px(14.95)))
+        .map(crate::accessibility::clickable)
+        .role(gpui_kit::Role::Switch)
+        .aria_label(SWITCH_LABEL)
+        .aria_toggled(if rules_first {
+            gpui_kit::Toggled::True
+        } else {
+            gpui_kit::Toggled::False
+        })
         .on_click(cx.listener(|this, _, _, cx| this.toggle_precedence(cx)));
     // Why the last flip did not happen, while the store still would not
     // write the file.

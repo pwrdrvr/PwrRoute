@@ -88,3 +88,8 @@ gpui-kit = { version = "=0.6.6", default-features = false, features = [
     "test-support",
 ] }
 tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already shipped by gpui-base; the portal supplies live contrast preferences.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "settings"] }
+futures = "0.3"

@@ -324,6 +324,14 @@ fn header(eyebrow: &str, title: SharedString, rule: &Rule, cx: &mut Context<'_, 
             .id("handler-enabled")
             .debug_selector(|| "handler-enabled".into())
             .cursor_pointer()
+            .map(crate::accessibility::clickable)
+            .role(gpui_kit::Role::Switch)
+            .aria_label("Rule enabled")
+            .aria_toggled(if rule.enabled {
+                gpui_kit::Toggled::True
+            } else {
+                gpui_kit::Toggled::False
+            })
             .on_click(cx.listener(|this, _, _, cx| this.toggle_selected(cx)))
             .child(switch(rule.enabled))
             .into_any_element()
@@ -401,6 +409,16 @@ fn editable(
         .id(ElementId::Name(id.clone()))
         .debug_selector(move || id.to_string());
     crate::text_field::hit_area(area, text_field)
+        .aria_label(match field {
+            Field::Pattern(index) => format!("URL pattern {}", index + 1),
+            Field::Browser => "Browser name".into(),
+            Field::Profile => "Browser profile".into(),
+            Field::Value(index) => format!("Rewrite value {}", index + 1),
+            Field::Sample => "Try this link".into(),
+            Field::Example => "Example link".into(),
+            Field::Becomes => "Expected rewritten link".into(),
+        })
+        .aria_placeholder(look.placeholder)
         .w_full()
         .min_w_0()
         .child(boxed)
@@ -414,6 +432,7 @@ fn editable(
                 cx.notify();
             }
         }))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             if let Some(focus) = this
                 .rail
@@ -440,7 +459,9 @@ fn remove_button(
             .debug_selector(move || id.to_string())
             .cursor_pointer()
             .px(px(2.0))
+            .aria_label("Remove field")
             .child(mono("\u{00d7}", 11.0, 500.0, theme::text_subtle()))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx))),
     )
 }
@@ -477,6 +498,7 @@ fn add_button(
                     .ml(px(4.0)),
             )
         })
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
 }
 
@@ -641,7 +663,7 @@ fn opener_add(
     handler: &Handler,
     rail: &Rail,
     cx: &mut Context<'_, PwrRoute>,
-) -> (Div, Option<Stateful<Div>>) {
+) -> (Div, Option<crate::accessibility::MenuCard>) {
     let Some(Selection::Handler(h)) = app.selection else {
         return (div(), None);
     };
@@ -739,7 +761,10 @@ fn opener_add(
 
 /// A rail menu placed under its control at the left; the caller sets its
 /// width.
-fn floating_menu(id: &'static str, cx: &mut Context<'_, PwrRoute>) -> Stateful<Div> {
+fn floating_menu(
+    id: &'static str,
+    cx: &mut Context<'_, PwrRoute>,
+) -> crate::accessibility::MenuCard {
     crate::widgets::menu_card(id)
         .debug_selector(move || id.into())
         .absolute()
@@ -769,6 +794,7 @@ fn choice_row(
     let on_click: OnClick = Box::new(on_click);
     crate::widgets::menu_row(ElementId::Name(id.clone()), badge_label, label, hint)
         .debug_selector(move || id.to_string())
+        .aria_selected(selected)
         .when(selected, |row| row.bg(theme::bg_row_active()))
         .when(dim, |row| row.opacity(0.6))
         .hover(|row| row.bg(theme::bg_hover()))
@@ -790,6 +816,7 @@ fn other_row(
         .cursor_pointer()
         .hover(|row| row.bg(theme::bg_hover()))
         .child(text(label, 11.5, 500.0, theme::text_muted()))
+        .map(crate::accessibility::clickable)
         .on_click(on_click)
 }
 
@@ -806,6 +833,7 @@ fn list_link(
             .cursor_pointer()
             .px(px(2.0))
             .child(text("\u{2190} list", 10.5, 500.0, theme::accent()))
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx))),
     )
 }
@@ -923,6 +951,7 @@ fn lanes_destination(app: &PwrRoute, handler: &Handler, cx: &mut Context<'_, Pwr
                     500.0,
                     theme::accent_bright(),
                 ))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(|this, _, window, cx| this.type_browser(window, cx))),
         );
     div()
@@ -986,9 +1015,17 @@ fn typed_destination(
         .when(private_enabled, |switch| {
             switch
                 .cursor_pointer()
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_private(cx)))
         })
         .when(!private_enabled, |switch| switch.opacity(0.45))
+        .role(gpui_kit::Role::Switch)
+        .aria_label(private_label.clone())
+        .aria_toggled(if handler.private {
+            gpui_kit::Toggled::True
+        } else {
+            gpui_kit::Toggled::False
+        })
         .child(switch(handler.private));
     div()
         .flex()
@@ -1658,8 +1695,10 @@ fn kind_picker(
                     Some(item.example.into()),
                 )
                 .debug_selector(move || format!("change-{index}-kind-{kind}"))
+                .aria_selected(selected)
                 .when(selected, |row| row.bg(theme::bg_row_active()))
                 .hover(|row| row.bg(theme::bg_hover()))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.set_action_kind(index, kind, cx);
                 })),
@@ -1685,7 +1724,7 @@ fn kind_picker(
         .flex_none()
         .child(
             input_box()
-                .id(("change-kind", index))
+                .id(("change-kind", index)).aria_expanded(rail.picking_kind == Some(index))
                 .debug_selector(move || format!("change-{index}-kind"))
                 .min_h(px(28.0))
                 .px(px(8.0))
@@ -1706,7 +1745,8 @@ fn kind_picker(
                         rail.was_picking = rail.picking_kind;
                     }
                 }))
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .map(crate::accessibility::clickable)
+.on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(rail) = &mut this.rail {
                         rail.picking_kind = if rail.was_picking == Some(index) {
                             None

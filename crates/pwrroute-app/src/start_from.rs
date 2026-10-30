@@ -14,7 +14,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, Context, Div, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
+    App, Context, Div, InteractiveElement as _, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window, deferred, div, px,
 };
 use pwrroute_engine::{Privacy, suggest_rule};
@@ -285,6 +285,7 @@ pub fn section(app: &PwrRoute, index: usize, cx: &mut Context<'_, PwrRoute>) -> 
         .child(content)
         .child(caret())
         .capture_any_mouse_down(cx.listener(|this, _, _, _| this.note_rail_menu()))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(|this, _, _, cx| this.toggle_rail_menu(RailMenu::StartFrom, cx)));
     let note = match chosen.as_ref().and_then(|url| {
         links
@@ -328,7 +329,7 @@ fn menu(
     links: &[RecentLink],
     chosen: Option<&str>,
     cx: &mut Context<'_, PwrRoute>,
-) -> Stateful<Div> {
+) -> crate::accessibility::MenuCard {
     let mut menu = crate::widgets::menu_card("start-menu")
         .debug_selector(|| "start-menu".into())
         .absolute()
@@ -379,7 +380,8 @@ fn menu(
                     13.2,
                     theme::text_muted(),
                 )))
-                .on_click(cx.listener(move |this, _, window, cx| {
+                .map(crate::accessibility::clickable)
+.on_click(cx.listener(move |this, _, window, cx| {
                     this.start_from(start.clone(), window, cx);
                 })),
         );
@@ -445,6 +447,7 @@ pub fn suggestions(
                         theme::text_secondary()
                     },
                 ))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.use_pattern(chosen.clone(), window, cx);
                 })),

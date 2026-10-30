@@ -7,7 +7,8 @@ use std::time::{Duration, SystemTime};
 
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, Render, Styled as _, Subscription, Window, div,
+    KeyDownEvent, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, div,
 };
 
 use pwrroute_engine::{Description, Engine, Limits, NativeHost, discovery};
@@ -232,6 +233,21 @@ impl PwrRoute {
     /// Shows a screen. Test a link runs its sample the first time and takes
     /// the keyboard; the others give it to the window.
     pub fn navigate(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.screen != screen {
+            // A View shortcut dismisses the old screen's transient surfaces
+            // before focusing the new screen, just as leaving via the rail does.
+            if self.actions.sheet.is_some() {
+                self.cancel_add_rule(window, cx);
+            }
+            self.actions.menu = None;
+            self.row_actions.menu = None;
+            self.test.picking = false;
+            crate::rules_view::set_picker_open(false, cx);
+            if let Some(rail) = &mut self.rail {
+                rail.menu = None;
+                rail.picking_kind = None;
+            }
+        }
         if self.screen == Screen::Overview && screen != Screen::Overview {
             self.overview.leave();
         }
@@ -991,6 +1007,46 @@ impl PwrRoute {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        // An unhandled Esc bubbles out of a field after its selection is
+        // collapsed. Dismiss only the innermost transient surface.
+        if event.keystroke.key == "escape" {
+            let mut dismissed = true;
+            if self
+                .rail
+                .as_ref()
+                .is_some_and(|r| r.menu.is_some() || r.picking_kind.is_some())
+            {
+                if let Some(rail) = &mut self.rail {
+                    rail.menu = None;
+                    rail.picking_kind = None;
+                }
+            } else if self.actions.menu.take().is_some() || self.row_actions.menu.take().is_some() {
+            } else if self.test.picking {
+                self.test.picking = false;
+            } else if self.overview.picking {
+                self.overview.picking = false;
+                self.overview.choosing = None;
+            } else if crate::rules_view::picker_open(cx) {
+                crate::rules_view::set_picker_open(false, cx);
+            } else if self.actions.sheet.is_some() {
+                self.cancel_add_rule(window, cx);
+            } else {
+                dismissed = false;
+            }
+            if dismissed {
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+        }
+        // A menu owns focus, but its documented list shortcuts still name
+        // the row that opened it (rather than the currently selected row).
+        if (self.actions.menu.is_some() && self.activity_key(event, window, cx))
+            || (self.row_actions.menu.is_some() && self.rules_list_key(event, window, cx))
+        {
+            cx.stop_propagation();
+            return;
+        }
         // A field in the rail has the keyboard: its keys are its own.
         if !self.focus.is_focused(window) {
             return;
@@ -1066,6 +1122,8 @@ impl Render for PwrRoute {
                 e2e::regions(&["titleStrip", "body"])(bounds, window, cx);
             })
             .id(ROOT_ID)
+            .role(gpui_kit::Role::Pane)
+            .aria_label(self.screen.label())
             .debug_selector(|| ROOT_ID.into())
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

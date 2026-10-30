@@ -144,6 +144,7 @@ tokens! {
 }
 
 /// A single-line run of sans text: CSS `font: <weight> <size>/1`.
+#[track_caller]
 pub fn text(content: impl Into<SharedString>, size: f32, css_weight: f32, color: Hsla) -> Div {
     div()
         .flex_none()
@@ -153,10 +154,11 @@ pub fn text(content: impl Into<SharedString>, size: f32, css_weight: f32, color:
         .line_height(px(size))
         .text_color(color)
         .whitespace_nowrap()
-        .child(content.into())
+        .child(crate::accessibility::label(content))
 }
 
 /// The same in Geist Mono.
+#[track_caller]
 pub fn mono(content: impl Into<SharedString>, size: f32, css_weight: f32, color: Hsla) -> Div {
     text(content, size, css_weight, color).font_family(mono_family(css_weight))
 }
@@ -167,6 +169,7 @@ pub fn mono(content: impl Into<SharedString>, size: f32, css_weight: f32, color:
 /// tracking is the gap. GPUI rounds every measured text box up to a whole
 /// pixel, about 0.5 to 0.75px per glyph, so that much comes back out of the
 /// gap. Good for short eyebrows; not for running text.
+#[track_caller]
 pub fn tracked(content: &str, size: f32, css_weight: f32, em: f32, color: Hsla) -> Div {
     let mut row = div()
         .flex()
@@ -174,9 +177,17 @@ pub fn tracked(content: &str, size: f32, css_weight: f32, em: f32, color: Hsla) 
         .gap(px((size * em - 0.75).max(0.0)));
     for ch in content.to_uppercase().chars() {
         let glyph = if ch == ' ' { '\u{00a0}' } else { ch };
-        row = row.child(text(glyph.to_string(), size, css_weight, color));
+        row = row.child(
+            div()
+                .font_family(SANS)
+                .font_weight(weight(css_weight))
+                .text_size(px(size))
+                .line_height(px(size))
+                .text_color(color)
+                .child(glyph.to_string()),
+        );
     }
-    row
+    crate::accessibility::heading(row, content)
 }
 
 /// A monochrome SVG from the embedded assets, tinted with `color`.
@@ -191,6 +202,15 @@ pub fn icon(path: &'static str, size: f32, color: Hsla) -> impl IntoElement {
 /// The 6px status dot.
 pub fn dot(color: Hsla) -> Div {
     div().flex_none().size(px(6.0)).rounded_full().bg(color)
+}
+
+// PWR-15 palette: filled in by the contrast thread
+static INCREASE_CONTRAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn set_increase_contrast(on: bool) {
+    INCREASE_CONTRAST.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn increase_contrast() -> bool {
+    INCREASE_CONTRAST.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[cfg(test)]

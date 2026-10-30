@@ -16,10 +16,12 @@ browser registration on macOS, Windows and Linux, and apps' icons (macOS).
   `set_default_browser` asks to become the default and runs only from an
   explicit user action; the OS always gets the last word.
 - **`unsafe` lives in `src/macos/launch_services.rs`,
-  `src/macos/app_icon.rs` and `src/macos/window_order.rs` only**: the
+  `src/macos/app_icon.rs`, `src/macos/window_order.rs` and
+  `src/accessibility.rs` only**: the
   LaunchServices C calls, the two AppKit calls that render an icon
-  (`CGImageForProposedRect`, the PNG export), and the window server's list
-  (a typed cast and three CoreGraphics key constants), each with a `SAFETY`
+  (`CGImageForProposedRect`, the PNG export), the window server's list
+  (a typed cast and three CoreGraphics key constants), and the typed Windows
+  high-contrast query, each with a `SAFETY`
   comment. objc2's other Foundation and AppKit bindings are safe; prefer
   them.
 - **`top_window_owner` reads the window server, not AppKit**, so it is

@@ -4,6 +4,7 @@
 //! Help's rows open. The Source row and Copy build info follow the design's
 //! Build Identity 2a and 2b.
 
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{AnyElement, Context, Div, IntoElement, ParentElement as _, Styled as _, div, px};
 
 use super::SettingsWindow;
@@ -153,11 +154,11 @@ fn about_button(
     request: SettingsRequest,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> impl IntoElement {
-    button_when(id, label, Kind::Default, true, true).on_click(cx.listener(
-        move |this, _, window, cx| {
+    button_when(id, label, Kind::Default, true, true)
+        .map(crate::accessibility::clickable)
+        .on_click(cx.listener(move |this, _, window, cx| {
             this.request(request.clone(), window, cx);
-        },
-    ))
+        }))
 }
 
 fn project_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {

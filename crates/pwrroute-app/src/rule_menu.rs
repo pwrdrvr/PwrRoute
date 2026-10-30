@@ -691,6 +691,8 @@ pub fn more_cell(
     };
     let button = div()
         .id(id)
+        .aria_label("More rule actions")
+        .aria_expanded(open)
         .debug_selector(move || selector.clone())
         .w(px(20.0))
         .py(px(3.0))
@@ -718,6 +720,7 @@ pub fn more_cell(
         .capture_any_mouse_down(cx.listener(|this, _, _, _| {
             this.row_actions.menu_was = this.row_actions.menu;
         }))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
             // The menu's keys (Esc, ⌘D, ⌫) reach the list.
@@ -871,6 +874,7 @@ fn rule_menu(
         let row = item(id, label, to.and_then(count), key, tone);
         items.push(match to {
             Some(to) => row
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
                     this.move_rule(selection, to, window, cx);
@@ -912,6 +916,7 @@ fn rule_menu(
             Some(keys.duplicate),
             Tone::Plain,
         )
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
             this.duplicate_rule(selection, window, cx);
@@ -927,6 +932,7 @@ fn rule_menu(
             None,
             Tone::Plain,
         )
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, _, cx| {
             cx.stop_propagation();
             this.set_rule_enabled(selection, !enabled, cx);
@@ -939,6 +945,7 @@ fn rule_menu(
     };
     items.push(
         item("rule-menu-test", test, None, None, Tone::Plain)
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 this.test_rule(selection, window, cx);
@@ -954,6 +961,7 @@ fn rule_menu(
             Some(keys.delete),
             Tone::Danger,
         )
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
             this.delete_rule(selection, window, cx);
@@ -1043,6 +1051,7 @@ fn config_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<AnyElement
             None,
             Tone::Plain,
         )
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, _, cx| {
             cx.stop_propagation();
             this.close_row_actions(cx);
@@ -1056,6 +1065,7 @@ fn config_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<AnyElement
             None,
             Tone::Plain,
         )
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _, _, cx| {
             cx.stop_propagation();
             this.close_row_actions(cx);

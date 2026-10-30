@@ -613,6 +613,7 @@ fn role_select(
                 let id = session.id.clone();
                 trigger
                     .cursor_pointer()
+                    .map(crate::accessibility::clickable)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.open_role_menu(&id, !open, cx);
                     }))

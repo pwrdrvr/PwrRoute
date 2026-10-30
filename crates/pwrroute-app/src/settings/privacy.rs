@@ -236,6 +236,7 @@ fn number_field(
         cx.stop_propagation();
         cx.notify();
     }))
+    .map(crate::accessibility::clickable)
     .on_click(cx.listener(move |this, _, window, cx| {
         let focus = if id == KEEP_COUNT_ID {
             this.privacy.count.focus.clone()
@@ -450,11 +451,11 @@ fn journal_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
     let has_files = privacy.journal_files.is_some();
     let actions = row_actions()
         .child(
-            button_when(REVEAL_ID, "Reveal", Kind::Default, true, on || has_files).on_click(
-                cx.listener(|this, _, window, cx| {
+            button_when(REVEAL_ID, "Reveal", Kind::Default, true, on || has_files)
+                .map(crate::accessibility::clickable)
+                .on_click(cx.listener(|this, _, window, cx| {
                     this.request(SettingsRequest::RevealJournal, window, cx);
-                }),
-            ),
+                })),
         )
         .child(
             button_when(
@@ -464,6 +465,7 @@ fn journal_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
                 true,
                 has_files,
             )
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_sheet(Sheet::ClearJournal, window, cx);
             })),
@@ -747,6 +749,26 @@ fn sheet_overlay(
     };
     let panel = div()
         .id(SHEET_ID)
+        .role(gpui_kit::Role::Dialog)
+        .aria_label(title)
+        .tab_group()
+        .on_action(
+            cx.listener(|this, _: &crate::app_menu::FocusNext, window, cx| {
+                crate::accessibility::move_focus(&this.privacy.sheet_focus, "down", window, cx);
+                cx.stop_propagation();
+            }),
+        )
+        .on_action(
+            cx.listener(|this, _: &crate::app_menu::FocusPrevious, window, cx| {
+                crate::accessibility::move_focus(
+                    &this.privacy.sheet_focus,
+                    "shift-tab",
+                    window,
+                    cx,
+                );
+                cx.stop_propagation();
+            }),
+        )
         .debug_selector(|| SHEET_ID.into())
         .test_support()
         .track_focus(&this.privacy.sheet_focus)
@@ -826,8 +848,13 @@ fn sheet_overlay(
                 .justify_center()
                 .items_start()
                 .pt(px(120.0))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(|this, _, window, cx| this.cancel_sheet(window, cx)))
-                .child(panel.on_click(|_, _, cx| cx.stop_propagation())),
+                .child(
+                    panel
+                        .map(crate::accessibility::clickable)
+                        .on_click(|_, _, cx| cx.stop_propagation()),
+                ),
         ),
     )
     .into_any_element()

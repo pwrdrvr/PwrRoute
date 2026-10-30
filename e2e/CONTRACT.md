@@ -39,7 +39,8 @@ One request per connection, one line of JSON each way. Every answer carries
 |---|---|
 | `{"cmd":"ping"}` | `{"startup":[{"stage":"main","ms":0},…]}`: the startup stages reached so far (below). |
 | `{"cmd":"state"}` | See below. |
-| `{"cmd":"key","keys":"down cmd-q"}` | Keystrokes in GPUI's syntax, dispatched to the main window with `Window::dispatch_keystroke`, so key bindings and the focused view's handlers run as for a real key press. |
+| `{"cmd":"accessibility"}` | `active` and GPUI's last AccessKit `tree` snapshot; `tree` is null until assistive technology activates the platform adapter. |
+| `{"cmd":"key","keys":"down cmd-q"}` | Keystrokes in GPUI's syntax, dispatched to the main window with `Window::dispatch_keystroke`, followed by a `KeyUp` event, so bindings, field handlers and Return/Space activation run as for a physical key. |
 | `{"cmd":"click","region":"rail.activity"}` | A left mouse down and up at the center of a painted region, through `Window::dispatch_event`: hit testing and click handlers run as for a real click. |
 | `{"cmd":"action","name":"quit"}` | `quit` dispatches the app's `Quit` action (the menu bar's Quit, ⌘Q, Ctrl+Q). `closeWindow` closes the main window as its close button does. `showWindow` opens or raises it. |
 | `{"cmd":"dispatches"}` | `{"dispatches":[…]}`: the router's recent `DispatchRecord`s, newest first, serialized as in `pwrroute-router` (camelCase). |

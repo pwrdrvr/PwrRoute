@@ -28,6 +28,7 @@
 //! (the LaunchServices calls), `macos::app_icon` (two AppKit calls) and
 //! `macos::window_order` (the window server's list).
 
+pub mod accessibility;
 mod args;
 #[cfg(target_os = "macos")]
 mod macos;

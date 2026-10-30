@@ -95,6 +95,7 @@ pub struct DocWindow {
     focus: FocusHandle,
     menu_bar: Entity<MenuBar>,
     copied: bool,
+    scroll: gpui_kit::ScrollHandle,
 }
 
 enum Body {
@@ -123,6 +124,7 @@ impl DocWindow {
             focus: cx.focus_handle(),
             menu_bar: MenuBar::entity(doc.title(), cx),
             copied: false,
+            scroll: gpui_kit::ScrollHandle::new(),
         }
     }
 
@@ -148,6 +150,7 @@ impl Render for DocWindow {
         let body = match &self.body {
             Body::Changelog(blocks) => div()
                 .id("doc-scroll")
+                .track_scroll(&self.scroll)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
@@ -196,7 +199,37 @@ impl Render for DocWindow {
             }
         };
         div()
+            .id("document-window")
+            .role(gpui_kit::Role::Document)
+            .aria_label(self.doc.title())
             .track_focus(&self.focus)
+            .on_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    if key == "escape" {
+                        window.remove_window();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if matches!(key, "pageup" | "pagedown" | "home" | "end") {
+                        let scroll = match &this.body {
+                            Body::Changelog(_) => this.scroll.clone(),
+                            Body::Lines(_, handle) => handle.0.borrow().base_handle.clone(),
+                        };
+                        let old = scroll.offset();
+                        let page = window.viewport_size().height * 0.8;
+                        let y = match key {
+                            "pageup" => (old.y + page).min(gpui_kit::px(0.0)),
+                            "pagedown" => old.y - page,
+                            "home" => gpui_kit::px(0.0),
+                            _ => gpui_kit::Pixels::MIN,
+                        };
+                        scroll.set_offset(gpui_kit::point(old.x, y));
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }),
+            )
             .size_full()
             .flex()
             .flex_col()

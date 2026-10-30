@@ -9,6 +9,8 @@
 // A window, not a console program, when built for Windows.
 #![windows_subsystem = "windows"]
 
+mod accessibility;
+mod accessibility_prefs;
 mod activity;
 mod activity_actions;
 mod app;
@@ -200,6 +202,7 @@ fn main() -> ExitCode {
         e2e::startup("launched");
         assets::load_fonts(cx);
         app_menu::install(cx);
+        accessibility_prefs::install(cx);
         dock::install(cx);
         // Before the tray, which follows the feed from the start.
         activity::install(resident.handle(), resident.dispatched.clone(), cx);

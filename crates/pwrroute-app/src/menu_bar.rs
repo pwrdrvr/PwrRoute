@@ -797,6 +797,7 @@ impl MenuBar {
                 .into_any_element()
         });
         menu_card(("menu-card", index))
+            .existing_navigation()
             .debug_selector(move || card_id)
             .absolute()
             .top(px(CARD_TOP))

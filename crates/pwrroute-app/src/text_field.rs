@@ -19,8 +19,9 @@ use gpui_kit::{
     AnyElement, App, Bounds, ClipboardItem, ContentMask, DispatchPhase, Div, Element, ElementId,
     FocusHandle, Font, GlobalElementId, InspectorElementId, InteractiveElement as _, IntoElement,
     Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, Pixels, ShapedLine, SharedString, Stateful, Style, Styled as _, TextAlign,
-    TextRun, TruncateFrom, Window, div, fill, font, point, px, relative,
+    ParentElement as _, Pixels, ShapedLine, SharedString, Stateful,
+    StatefulInteractiveElement as _, Style, Styled as _, TextAlign, TextRun, TruncateFrom, Window,
+    div, fill, font, point, px, relative,
 };
 
 use crate::theme;
@@ -280,10 +281,11 @@ impl TextField {
                 None => Edit::Handled,
             },
             _ if command => Edit::Ignored,
-            "escape" => {
+            "escape" if !selection.is_empty() => {
                 self.move_to(head, false);
                 Edit::Handled
             }
+            "escape" => Edit::Ignored,
             key => {
                 let typed = keystroke.key_char.clone().or_else(|| match key {
                     "space" => Some(" ".to_owned()),
@@ -448,6 +450,8 @@ pub fn field_with(
         });
     let boxed = if focused { focus_ring(inner) } else { inner };
     hit_area(div().id(id).debug_selector(|| id.into()), field)
+        .aria_label(look.placeholder)
+        .aria_placeholder(look.placeholder)
         .flex_1()
         .min_w_0()
         .child(boxed)
@@ -456,8 +460,18 @@ pub fn field_with(
 /// Makes `element`, the box around a field, its hit area: a press there
 /// focuses the field and places the caret (see [`TextField::on_press`]),
 /// under the text cursor.
-pub fn hit_area(element: Stateful<Div>, field: &TextField) -> Stateful<Div> {
+pub fn hit_area(mut element: Stateful<Div>, field: &TextField) -> Stateful<Div> {
+    let name = element
+        .interactivity()
+        .element_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "Text".into())
+        .replace('-', " ");
     element
+        .role(gpui_kit::Role::TextInput)
+        .aria_label(name)
+        .aria_value(field.shared())
         .track_focus(&field.focus)
         .cursor_text()
         .on_mouse_down(MouseButton::Left, field.on_press())
@@ -826,6 +840,7 @@ mod tests {
             // Esc drops the selection, leaving the caret where it was.
             press(&mut field, "shift-left escape", cx);
             assert_eq!(field.selection(), 47..47);
+            assert_eq!(press(&mut field, "escape", cx), Edit::Ignored);
         });
     }
 

@@ -643,25 +643,25 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
             .gap(px(8.0))
             .when(done.undoable, |row| {
                 row.child(
-                    small_button(UNDO_ID, "Undo import", false).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
+                    small_button(UNDO_ID, "Undo import", false)
+                        .map(crate::accessibility::clickable)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             if let Some(source) = this.undo_import(cx)
                                 && let Some(config) = restore_source(source, cx)
                             {
                                 this.set_config(config, cx);
                             }
-                        },
-                    )),
+                        })),
                 )
             })
             .when(done.stays > 0, |row| {
                 row.child(
-                    small_button("importer-show-js", "Show what stayed JS", true).on_click(
-                        move |_: &ClickEvent, _, cx| {
+                    small_button("importer-show-js", "Show what stayed JS", true)
+                        .map(crate::accessibility::clickable)
+                        .on_click(move |_: &ClickEvent, _, cx| {
                             let file = file.clone();
                             cx.defer(move |cx| open(file, false, cx));
-                        },
-                    ),
+                        }),
                 )
             });
         banners.push(
@@ -704,18 +704,21 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
                         .gap(px(8.0))
                         .child(
                             small_button(NOTICE_REVIEW_ID, "Review import\u{2026}", false)
+                                .map(crate::accessibility::clickable)
                                 .on_click(move |_: &ClickEvent, _, cx| {
                                     let file = review.clone();
                                     cx.defer(move |cx| open(file, false, cx));
                                 }),
                         )
-                        .child(small_button(NOTICE_DISMISS_ID, "Not now", true).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                dismiss(&dismissed, cx);
-                                this.found_config = None;
-                                cx.notify();
-                            }),
-                        )),
+                        .child(
+                            small_button(NOTICE_DISMISS_ID, "Not now", true)
+                                .map(crate::accessibility::clickable)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    dismiss(&dismissed, cx);
+                                    this.found_config = None;
+                                    cx.notify();
+                                })),
+                        ),
                 ),
         );
     }
@@ -972,6 +975,10 @@ fn list(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
                 .debug_selector(|| ALL_ID.into())
                 .cursor_pointer()
                 .child(checkbox(model.all_checked(), true))
+                .map(crate::accessibility::clickable)
+                .role(gpui_kit::Role::CheckBox)
+                .aria_label("Select all importable rules")
+                .aria_toggled(gpui_kit::Toggled::from(model.all_checked()))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_all(cx))),
         )
         .child(text(
@@ -1026,6 +1033,10 @@ fn list(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
             .w(px(14.0))
             .when(item.checkable(), |cell| cell.cursor_pointer())
             .child(checkbox(item.checked, item.checkable()))
+            .map(crate::accessibility::clickable)
+            .role(gpui_kit::Role::CheckBox)
+            .aria_label(format!("Import rule {}", index + 1))
+            .aria_toggled(gpui_kit::Toggled::from(item.checked))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 this.toggle(index, cx);
@@ -1063,6 +1074,7 @@ fn list(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
                 )))
                 .child(row_text(item))
                 .child(verdict_chip(item.label()))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select(index, cx))),
         );
     }
@@ -1308,6 +1320,7 @@ fn suggestion(model: &ImportModel, index: usize, cx: &mut Context<'_, Importer>)
                     .child(arrow())
                     .child(badge(crate::widgets::badge_for(&rule.browser)))
                     .child(text(to, 12.0, 600.0, theme::text_primary()))
+                    .map(crate::accessibility::clickable)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.toggle(index, cx);
                     })),
@@ -1446,6 +1459,7 @@ fn problem(model: &ImportModel, problem: &str, cx: &mut Context<'_, Importer>) -
                     Look::Quiet,
                     true,
                 )
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.choose_another(window, cx);
                 })),
@@ -1592,6 +1606,7 @@ fn place(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
                 model.placement == placement,
                 lines,
             )
+            .map(crate::accessibility::clickable)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.model.placement = placement;
                 cx.notify();
@@ -1784,6 +1799,9 @@ fn choose_source(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Statefu
                 model.source == choice,
                 lines,
             )
+            .map(crate::accessibility::clickable)
+            .role(gpui_kit::Role::RadioButton)
+            .aria_selected(model.source == choice)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.model.source = choice;
                 cx.notify();
@@ -1866,13 +1884,16 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
         .map(|row| {
             if first {
                 row.child(
-                    action_button(CANCEL_ID, "Cancel".into(), Look::Quiet, false).on_click(
-                        cx.listener(|_, _: &ClickEvent, window, _| window.remove_window()),
-                    ),
+                    action_button(CANCEL_ID, "Cancel".into(), Look::Quiet, false)
+                        .map(crate::accessibility::clickable)
+                        .on_click(
+                            cx.listener(|_, _: &ClickEvent, window, _| window.remove_window()),
+                        ),
                 )
             } else {
                 row.child(
                     action_button(BACK_ID, "Back".into(), Look::Quiet, false)
+                        .map(crate::accessibility::clickable)
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.back(cx))),
                 )
             }
@@ -1880,6 +1901,7 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
         .child(
             action_button(NEXT_ID, next_label, Look::Primary, false)
                 .when(!can_go, |button| button.opacity(0.5))
+                .map(crate::accessibility::clickable)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     if can_go {
                         this.next(window, cx);
@@ -1906,6 +1928,16 @@ impl Render for Importer {
         };
         div()
             .id(ROOT_ID)
+            .role(gpui_kit::Role::Dialog)
+            .aria_label("Import configuration")
+            .on_key_down(
+                cx.listener(|_, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        window.remove_window();
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .debug_selector(|| ROOT_ID.into())
             .track_focus(&self.focus)
             .size_full()
