@@ -130,6 +130,7 @@ impl TraceView {
         }];
         // A rule that throws stops the handlers; the default follows.
         let threw = trace.steps.iter().any(|s| s.error.is_some());
+        let not_opened = trace.resolution.browser.app_type == AppType::None;
         let mut misses: Vec<&Step> = Vec::new();
         for step in &trace.steps {
             if step.stage == Stage::Handler && !step.matched && step.error.is_none() && !unfold {
@@ -142,7 +143,15 @@ impl TraceView {
                 continue;
             }
             flush_misses(&mut steps, &mut misses);
-            steps.push(engine_step(step, rules, config, opener, threw, steps.len()));
+            steps.push(engine_step(
+                step,
+                rules,
+                config,
+                opener,
+                threw,
+                not_opened,
+                steps.len(),
+            ));
         }
         flush_misses(&mut steps, &mut misses);
         if !trace.console.is_empty() {
@@ -196,9 +205,22 @@ impl TraceView {
         steps.push(TraceStep {
             number: None,
             state: StepState::End,
-            title: "Opens in".into(),
+            title: if browser.app_type == AppType::None {
+                NOT_OPENED.into()
+            } else {
+                "Opens in".into()
+            },
             detail: format!("resolved in {}", millis(took)),
-            body: vec![StepBody::Chips(chips, None)],
+            body: vec![if browser.app_type == AppType::None {
+                // Design: Not Opened 2d.
+                StepBody::Text(
+                    "Don't open \u{00b7} nothing opens; Activity keeps the link so you can \
+                     open it"
+                        .into(),
+                )
+            } else {
+                StepBody::Chips(chips, None)
+            }],
         });
         Self {
             steps,
@@ -294,6 +316,7 @@ fn engine_step(
     config: Option<&str>,
     opener: Option<&OpenerChoice>,
     threw: bool,
+    not_opened: bool,
     number: usize,
 ) -> TraceStep {
     let patterns = || {
@@ -424,7 +447,7 @@ fn engine_step(
                 } else {
                     "no handler matched".into()
                 },
-                body: vec![StepBody::Text(owner.opens_it(threw))],
+                body: vec![StepBody::Text(owner.opens_it(threw, not_opened))],
             }
         }
     }
@@ -467,12 +490,29 @@ impl<'a> DefaultOwner<'a> {
     }
 
     /// The step's sentence: who opens the link, and after an error, why.
-    fn opens_it(self, threw: bool) -> String {
+    /// `not_opened`: the default is Don't open (`"none"`, or a config's
+    /// `null`), so it keeps the link instead.
+    fn opens_it(self, threw: bool, not_opened: bool) -> String {
         let who = match self {
             Self::Alone => "the default browser".to_owned(),
             Self::PwrRoute { .. } => "PwrRoute's default".to_owned(),
             Self::Config(config) => format!("{config}'s defaultBrowser"),
         };
+        if not_opened {
+            let who = match self {
+                Self::Alone => "Everything else".to_owned(),
+                _ => who,
+            };
+            return match self {
+                _ if threw => {
+                    format!("Finicky stops at the error, and {who} is Don't open: not opened.")
+                }
+                Self::PwrRoute { beside } => format!(
+                    "{who} is Don't open: not opened. {beside}'s defaultBrowser is not used."
+                ),
+                _ => format!("{who} is Don't open: not opened."),
+            };
+        }
         match self {
             _ if threw => format!("Finicky stops at the error and {who} opens it."),
             Self::Alone => "The default browser opens it.".into(),

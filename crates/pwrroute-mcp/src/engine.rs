@@ -314,7 +314,7 @@ pub(crate) fn trace_of(trace: engine::Trace, config: Option<&str>) -> Trace {
         .resolution
         .error
         .or_else(|| trace.steps.iter().find_map(|s| s.error.clone()));
-    let steps = trace
+    let mut steps: Vec<TraceStep> = trace
         .steps
         .iter()
         .filter(|s| (s.stage == Stage::Rewrite && s.matched) || s.won)
@@ -330,6 +330,9 @@ pub(crate) fn trace_of(trace: engine::Trace, config: Option<&str>) -> Trace {
             source: Some(StepSource::from(s.source)),
         })
         .collect();
+    if trace.resolution.browser.app_type == engine::AppType::None {
+        mark_not_opened(&mut steps);
+    }
     let original_url = (trace.original_url != trace.url).then_some(trace.original_url);
     Trace {
         url: trace.url,
@@ -338,6 +341,20 @@ pub(crate) fn trace_of(trace: engine::Trace, config: Option<&str>) -> Trace {
         browser: trace.resolution.browser,
         error,
         console: trace.console.iter().map(Into::into).collect(),
+    }
+}
+
+/// What a deciding step adds when its browser opens nothing: `rules.json`'s
+/// Don't open (`"browser": "none"`) or a config's `browser: null`.
+pub(crate) const NOT_OPENED: &str = ": not opened (Don't open)";
+
+/// Ends the step that chose the browser with [`NOT_OPENED`], so the trace
+/// says in words what the browser's `appType` of `none` says. Callers
+/// call it only when a rule or default opened nothing, never for a link
+/// the user held.
+pub(crate) fn mark_not_opened(steps: &mut [TraceStep]) {
+    if let Some(step) = steps.iter_mut().rev().find(|s| s.kind != StepKind::Rewrite) {
+        step.summary.push_str(NOT_OPENED);
     }
 }
 

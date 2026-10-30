@@ -118,6 +118,36 @@ impl FakeRouter {
         Ok(())
     }
 
+    /// Records a dispatch a rule kept from opening (Don't open), as the
+    /// router would have kept it: the rule's trace, a browser that opens
+    /// nothing, and the not-opened outcome.
+    pub fn record_not_opened(&self, url: &str, via: &str) -> anyhow::Result<()> {
+        let mut trace = FakeResolver.resolve(url, None)?;
+        trace.steps.retain(|s| s.kind == StepKind::Rewrite);
+        trace.steps.push(TraceStep {
+            kind: StepKind::Handler,
+            index: Some(1),
+            summary: format!("rules.json rule 2 matched{}", crate::engine::NOT_OPENED),
+            url: None,
+            source: Some(StepSource::Rules),
+        });
+        trace.browser.name = String::new();
+        trace.browser.app_type = AppType::None;
+        trace.browser.private = false;
+        let mut entry = entry_of(self.next_id(), Some(via.to_owned()), trace);
+        entry.outcome = ActivityOutcome::NotOpened;
+        entry.reason = Some(crate::backend::NotOpenedReason::Rule);
+        entry.unrouted = false;
+        lock(&self.opened).push((
+            AgentRef {
+                name: String::new(),
+                connection: 0,
+            },
+            entry,
+        ));
+        Ok(())
+    }
+
     fn next_id(&self) -> u64 {
         lock(&self.opened).len() as u64 + 1
     }
@@ -154,6 +184,7 @@ fn entry_of(id: u64, via: Option<String>, trace: Trace) -> ActivityEntry {
         unrouted,
         rewritten,
         private,
+        reason: None,
         trace,
     }
 }

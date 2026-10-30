@@ -25,8 +25,11 @@ runs on every platform.
   `FallbackSource` the router calls each time a link falls back (the app
   reads `rules.json`'s `defaultBrowser` and `defaultProfile`), so a choice
   saved while the router runs applies to the next link. `FallbackSource::get`
-  turns an empty answer, or one naming PwrRoute, into `FALLBACK_BROWSER`;
-  callers do not repeat that check.
+  turns an empty answer, one naming PwrRoute, or Don't open (`rules.json`'s
+  browser `"none"`) into `FALLBACK_BROWSER`; callers do not repeat that
+  check. A link that resolves to Don't open (`AppType::None`, a config's
+  `browser: null` too) is `Step::NotOpened` / `Outcome::NotOpened`: it is
+  never launched and never falls back.
 - **URLs never touch disk unless the journal is on, and then only at the
   record's privacy level.** Each `DispatchRecord` is reduced to the
   `Privacy` of the rule that routed it (`Full`, `Host`: scheme and host

@@ -340,9 +340,35 @@ pub struct ActivityEntry {
     pub rewritten: bool,
     /// Opened in a private window.
     pub private: bool,
+    /// Why a `notOpened` entry was not opened; absent for any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<NotOpenedReason>,
     /// Absent for a `none` entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<Trace>,
+}
+
+/// Why a dispatch was recorded and not opened, from its trace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum NotOpenedReason {
+    /// A `rules.json` rule said Don't open (`"browser": "none"`), or a
+    /// config handler `browser: null`.
+    Rule,
+    /// No rule matched and the default is Don't open (or `null`).
+    Default,
+    /// The user held it.
+    Hold,
+}
+
+impl From<pwrroute_router::NotOpenedReason> for NotOpenedReason {
+    fn from(reason: pwrroute_router::NotOpenedReason) -> Self {
+        match reason {
+            pwrroute_router::NotOpenedReason::Rule => Self::Rule,
+            pwrroute_router::NotOpenedReason::Default => Self::Default,
+            pwrroute_router::NotOpenedReason::Hold => Self::Hold,
+        }
+    }
 }
 
 impl ActivityEntry {

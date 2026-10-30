@@ -826,13 +826,16 @@ fn open_in_section(
 ) -> Div {
     let value = handler.browser.trim();
     let shown = crate::default_browser::browser_name(value);
-    let missing =
-        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
-    let stray_profile = crate::destinations::unknown_profile(
-        &app.browsers,
-        &app.installed,
-        &crate::destinations::Choice::of(handler),
-    );
+    // Don't open names no app: never missing, and no profile to check.
+    let dont_open = pwrroute_engine::is_dont_open(value);
+    let missing = !dont_open
+        && crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
+    let stray_profile = !dont_open
+        && crate::destinations::unknown_profile(
+            &app.browsers,
+            &app.installed,
+            &crate::destinations::Choice::of(handler),
+        );
     let keep = handler.keep();
     let keep_control = KEEP_LEVELS.iter().fold(segmented(), |seg, (level, label)| {
         let level = *level;
@@ -871,6 +874,14 @@ fn open_in_section(
                 ),
             ))
         })
+        .when(dont_open, |section| {
+            section.child(paragraph(
+                "Links this rule takes are not opened. Activity lists them under Not opened, \
+                 where you can open one or add a rule.",
+                10.5,
+                15.75,
+            ))
+        })
         .child(labeled_row("Activity keeps", keep_control).mt(px(4.0)))
         .children(problems_under(&handler.problems, Under::Keep))
         .child(paragraph(
@@ -893,6 +904,7 @@ fn lanes_destination(app: &PwrRoute, handler: &Handler, cx: &mut Context<'_, Pwr
         &current,
         None,
         scanned(app, cx),
+        true,
     );
     let hidden = app.installed.iter().filter(|a| a.hidden).count();
     let foot = div()

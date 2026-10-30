@@ -565,6 +565,9 @@ pub fn note(content: impl Into<SharedString>) -> Div {
 /// How a `browser: null` destination reads: the link is not opened.
 pub const NOT_OPENED: &str = "Not opened";
 pub const NOT_OPENED_BADGE: &str = "\u{2014}";
+/// `rules.json`'s browser `"none"` as a choice (design: Not Opened 1a, 1b):
+/// a rule or Everything else that keeps links from opening.
+pub const DONT_OPEN: &str = "Don't open";
 
 /// One line of text that ends in an ellipsis when its box is too narrow.
 pub fn one_line(
@@ -732,6 +735,11 @@ pub fn profiles_hint(profiles: &[String]) -> Option<String> {
 /// The badge for a browser or app: its icon, with the letters the design
 /// draws for it when there is none.
 pub fn badge_for(name: &str) -> AppBadge {
+    // Don't open is no app: the not-opened badge, never an icon. Callers
+    // pass the word or the name `browser_name` gives it.
+    if pwrroute_engine::is_dont_open(name) || name == DONT_OPEN {
+        return AppBadge::from(NOT_OPENED_BADGE);
+    }
     let app = name.trim();
     AppBadge {
         letters: badge_letters(name),

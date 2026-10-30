@@ -178,6 +178,7 @@ pub fn entry_of(
         unrouted,
         rewritten,
         private,
+        reason: record.not_opened_reason().map(Into::into),
         trace,
     }
 }
@@ -337,6 +338,14 @@ pub fn trace_of(record: &DispatchRecord, config: Option<&str>) -> Trace {
             }
             Step::Browser { .. } | Step::NotOpened | Step::Launched { .. } => {}
         }
+    }
+    // A rule or default that opens nothing says so; a held link's own
+    // step already says the user held it.
+    if matches!(
+        record.not_opened_reason(),
+        Some(pwrroute_router::NotOpenedReason::Rule | pwrroute_router::NotOpenedReason::Default)
+    ) {
+        crate::engine::mark_not_opened(&mut steps);
     }
     let browser = record.browser.clone().unwrap_or_else(|| Browser {
         name: String::new(),
@@ -947,6 +956,74 @@ mod tests {
         assert!(!list.pwrroute_is_default);
         assert_eq!(list.os_default.as_deref(), Some("com.apple.Safari"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A not-opened record says so in its deciding step, and its entry
+    /// carries why: a rule, a default, or a hold.
+    #[test]
+    fn a_not_opened_record_says_who_kept_it_from_opening() {
+        use pwrroute_router::{DispatchId, Timings};
+        let url = "https://ads.example.net/a";
+        let record = |by| DispatchRecord {
+            id: DispatchId(3),
+            received_at: SystemTime::now(),
+            privacy: Privacy::Full,
+            link: Link::new(url, Source::CommandLine),
+            forwarded: false,
+            final_url: Some(url.into()),
+            browser: None,
+            steps: vec![
+                Step::Received { url: url.into() },
+                Step::Matched { by },
+                Step::NotOpened,
+            ],
+            outcome: Outcome::NotOpened,
+            timings: Timings::default(),
+        };
+        let rule = entry_of(
+            &record(Matched::Rule { index: 3 }),
+            ActivitySource::Memory,
+            None,
+        );
+        assert_eq!(rule.outcome, ActivityOutcome::NotOpened);
+        assert_eq!(rule.reason, Some(crate::backend::NotOpenedReason::Rule));
+        let trace = rule.trace.expect("a full record has a trace");
+        assert_eq!(
+            trace.steps.last().unwrap().summary,
+            "rules.json rule 4 matched: not opened (Don't open)"
+        );
+        assert_eq!(trace.browser.app_type, AppType::None);
+        let default = entry_of(
+            &record(Matched::Default {
+                owner: Some(Owner::PwrRoute),
+            }),
+            ActivitySource::Memory,
+            None,
+        );
+        assert_eq!(
+            default.reason,
+            Some(crate::backend::NotOpenedReason::Default)
+        );
+        // A held link was not kept from opening by Don't open: its step
+        // says the user held it, and nothing more.
+        let mut held = record(Matched::Rule { index: 0 });
+        held.steps.insert(
+            2,
+            Step::Held {
+                held: pwrroute_router::Sent::All,
+                skipped: None,
+                browser: None,
+            },
+        );
+        let held = entry_of(&held, ActivitySource::Memory, None);
+        assert_eq!(held.reason, Some(crate::backend::NotOpenedReason::Hold));
+        let steps = held.trace.expect("a full record has a trace").steps;
+        assert!(
+            steps
+                .iter()
+                .all(|s| !s.summary.ends_with(crate::engine::NOT_OPENED)),
+            "{steps:?}"
+        );
     }
 
     /// Attribution (WP-B): a record's trace names who decided, by list and

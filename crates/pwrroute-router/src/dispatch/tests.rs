@@ -2962,3 +2962,115 @@ fn held_and_released_steps_read_back_from_json() {
         Step::NotOpened
     );
 }
+
+// Don't open: `rules.json`'s browser "none", a rule's or the default. The
+// engine hands Finicky `browser: null`, so the router records the link as
+// not opened, launches nothing and never falls back.
+
+/// A rule for ads.example.net that says Don't open, a rule for
+/// work.example.com that opens, and Everything else on Don't open.
+fn dont_open_rules() -> RulesFile {
+    RulesFile {
+        default_browser: "none".into(),
+        rules: vec![
+            Rule {
+                patterns: vec!["https://work.example.com/*".into()],
+                browser: "Firefox".into(),
+                ..Rule::default()
+            },
+            Rule {
+                patterns: vec!["https://ads.example.net/*".into()],
+                browser: "none".into(),
+                ..Rule::default()
+            },
+        ],
+        ..RulesFile::default()
+    }
+}
+
+#[test]
+fn a_dont_open_rule_records_the_link_without_launching_or_falling_back() {
+    let (router, launcher) = rules_router(dont_open_rules());
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://ads.example.net/click?id=7"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::NotOpened);
+    assert!(record.browser.is_none());
+    assert_eq!(record.steps.last(), Some(&Step::NotOpened));
+    // The rule that chose it is in the trace, by its place in the file.
+    assert!(record.steps.contains(&Step::Matched {
+        by: Matched::Rule { index: 1 }
+    }));
+    assert!(
+        !record
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Fallback { .. } | Step::Launched { .. })),
+        "{:?}",
+        record.steps
+    );
+    assert!(launcher.launched().is_empty());
+    // Recorded, for Activity.
+    let recent = handle.recent();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].outcome, Outcome::NotOpened);
+    assert_eq!(
+        recent[0].final_url.as_deref(),
+        Some("https://ads.example.net/click?id=7")
+    );
+}
+
+#[test]
+fn a_dont_open_default_keeps_unclaimed_links_out_of_every_browser() {
+    let (router, launcher) = rules_router(dont_open_rules());
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://unknown.example.org/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::NotOpened);
+    assert!(record.steps.contains(&Step::Matched {
+        by: Matched::Default {
+            owner: Some(Owner::PwrRoute)
+        }
+    }));
+    assert!(launcher.launched().is_empty());
+    // A link a rule routes still opens (the dry-run launcher's outcome).
+    let record = handle
+        .dispatch_and_wait(link("https://work.example.com/a"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched().len(), 1);
+    assert_eq!(launcher.launched()[0].name, "Firefox");
+}
+
+#[test]
+fn dont_open_is_never_the_fallback_browser() {
+    // rules.json's defaultBrowser is what the app hands the router as the
+    // fallback; Don't open there must not become a browser to launch.
+    for word in ["none", "None", " none "] {
+        let (browser, profile) = FallbackSource::fixed(word, "Work").get();
+        assert_eq!(
+            (browser.as_str(), profile.as_str()),
+            (FALLBACK_BROWSER, ""),
+            "{word:?}"
+        );
+    }
+    // With no config in charge, the fallback opens the link.
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("none", ""),
+            ..Options::default()
+        },
+        None,
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched()[0].name, FALLBACK_BROWSER);
+}

@@ -114,6 +114,10 @@ impl DefaultState {
 /// [`handler_name`] with the installed app's name, looked up once per id.
 /// The tray, its recents and Activity's Opened in all name apps this way.
 pub fn browser_name(id: &str) -> String {
+    // `rules.json`'s Don't open is no app to look up.
+    if pwrroute_engine::is_dont_open(id) {
+        return crate::widgets::DONT_OPEN.to_owned();
+    }
     handler_name(id, &installed_name)
 }
 

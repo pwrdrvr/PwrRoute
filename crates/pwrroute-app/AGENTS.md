@@ -59,8 +59,9 @@ their own modules.
   retention or clears the journal). A record is a row at `Full` or `Host`
   (the host-only chip) and a count at `None`; the filters are All,
   Everything else (`Filter::Unrouted`: a default, PwrRoute's or the
-  config's, or the fallback took it), Failed, Rewritten and Private, each
-  with its count. The Rule
+  config's, or the fallback took it), Not opened (`Filter::NotOpened`:
+  Don't open, a config's `browser: null`, or held), Failed, Rewritten and
+  Private, each with its count. The Rule
   column says who routed a link: "rule 3" (`rules.json`'s, `Matched::Rule`),
   "cfg h 2" (the config's handler), "default" (PwrRoute's) or "config
   default" (`Matched::Default`'s owner; a record from before owners is
@@ -597,6 +598,28 @@ their own modules.
   back to a blank rule. The Overview's first-rule prompt names the last
   link, with "Blank rule" for `add_blank_handler`. The link stays in
   memory: Try it is never written.
+- **Don't open (design: Not Opened).** `rules.json`'s browser `"none"`
+  (`pwrroute_engine::is_dont_open`) is no app: `default_browser::
+  browser_name` names it `widgets::DONT_OPEN` and `badge_for` gives it
+  `NOT_OPENED_BADGE`, so a row, a tooltip or a label never shows an app
+  called "none", and no picker ever calls it missing. It is the last lane
+  of Open in where a rule is picked (`destinations::lanes(.., dont_open:
+  true)`: the editor and Activity's sheet; never the tray's Send links,
+  which is Hold's business) and the last row of Everything else's menu,
+  not the setup card or first run. The Overview draws it on its Not
+  opened card (`overview_model::resolve`), and `Tally` counts the links a
+  rule or default kept from opening there under the word `"none"` (a held
+  link counts for no card). Never a target to launch: the
+  tray's pause target passes over it, and the router's `FallbackSource`
+  refuses it. In Activity a not-opened row has its filter
+  (`Filter::NotOpened`), a trace line naming who decided
+  (`not_opened_line`), and, while `RouterHandle::pending` holds it
+  (`ActivityRow::waiting`), Open in… first: compact lanes under the row
+  (`activity_actions::open_in_lanes`) whose pill calls
+  `PwrRoute::open_not_opened(key, OpenAs::In(..))` off the GPUI thread.
+  The later record's `released_from` marks the old row "opened later in
+  X" (`ActivityRow::opened_later`); a journaled or swept one says why it
+  can't be opened (`not_opened_why`). Hold's rows use the same action.
 - **Open in is lanes, Sent from is chips (`destinations.rs`; design:
   Destination and App Pickers).** The editor, Activity's sheet and the
   tray's Send links destination draw the same `destinations::lanes`
