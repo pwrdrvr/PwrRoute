@@ -103,9 +103,7 @@ const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Fram
 /// back when it is launched again.
 pub fn set_default() -> Result<DefaultRequest> {
     let bundle = app_bundle()?;
-    let other_copy_held = ["http", "https"]
-        .into_iter()
-        .any(|scheme| is_ours(launch_services::default_handler(scheme).as_deref()));
+    let other_copy_held = status()?.other_copy.is_some();
     forget_other_copies(&bundle);
     launch_services::register(&bundle)?;
     let http = is_current_handler("http", &bundle);
@@ -146,14 +144,26 @@ fn other_copies(current: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Takes the other copies out of LaunchServices. The files stay. A copy
-/// that will not go is left: the status read afterwards names it.
+/// Takes the other copies out of LaunchServices, all at once: this runs on
+/// the click, on the main thread. The files stay. A copy that will not go
+/// is left, and the status read afterwards names it.
 fn forget_other_copies(current: &Path) {
-    for copy in other_copies(current) {
-        let _ = std::process::Command::new(LSREGISTER)
-            .arg("-u")
-            .arg(&copy)
-            .status();
+    use std::process::{Command, Stdio};
+    let running: Vec<_> = other_copies(current)
+        .into_iter()
+        .filter_map(|copy| {
+            Command::new(LSREGISTER)
+                .arg("-u")
+                .arg(&copy)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()
+        })
+        .collect();
+    for mut child in running {
+        let _ = child.wait();
     }
 }
 

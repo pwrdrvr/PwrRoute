@@ -343,7 +343,7 @@ fn waiting_note(request: DefaultRequest) -> &'static str {
             "Finish in Windows Settings: select Set default on PwrRoute\u{2019}s page, or choose \
              PwrRoute for HTTP and for HTTPS."
         }
-        DefaultRequest::Set => "Set with xdg-settings; reading it back.",
+        DefaultRequest::Set => "PwrRoute is set as the default; reading it back.",
         DefaultRequest::TookOverFromCopy => {
             "Took the default from another copy of PwrRoute; reading it back."
         }
@@ -587,7 +587,9 @@ mod tests {
     #[test]
     fn another_copy_of_pwrroute_is_named_by_its_path() {
         let none: &AppName = &|_| None;
-        let home = std::env::var("HOME").unwrap_or_default();
+        let Ok(home) = std::env::var("HOME") else {
+            return;
+        };
         let held = DefaultStatus {
             is_default: false,
             http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
