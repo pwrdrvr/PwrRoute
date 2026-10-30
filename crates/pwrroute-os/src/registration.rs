@@ -54,7 +54,9 @@ pub enum DefaultRequest {
     Prompted,
     /// Windows: Settings › Default apps is open on PwrRoute.
     OpenedSettings,
-    /// Linux: `xdg-settings` made PwrRoute the default.
+    /// PwrRoute is the default with no prompt to answer: on Linux
+    /// `xdg-settings` set it; on macOS this copy already handled both
+    /// schemes.
     Set,
     /// macOS: another copy of PwrRoute held the default. The other copies
     /// were taken out of LaunchServices, so links reach this one with no

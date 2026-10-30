@@ -96,7 +96,10 @@ impl DefaultState {
         {
             Some(id) => Self::Other(handler_name(id, app_name).into()),
             None => match &status.other_copy {
-                Some(path) => Self::OtherCopy(tilde(path).into()),
+                Some(path) => {
+                    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                    Self::OtherCopy(tilde(path, home.as_deref()).into())
+                }
                 None => Self::Unknown,
             },
         }
@@ -118,13 +121,12 @@ impl DefaultState {
 }
 
 /// `path` with the home folder written `~`.
-fn tilde(path: &str) -> String {
-    std::env::var_os("HOME")
-        .and_then(|home| {
-            let rest = std::path::Path::new(path).strip_prefix(home).ok()?;
-            Some(format!("~/{}", rest.display()))
-        })
-        .unwrap_or_else(|| path.to_owned())
+fn tilde(path: &str, home: Option<&std::path::Path>) -> String {
+    home.and_then(|home| {
+        let rest = std::path::Path::new(path).strip_prefix(home).ok()?;
+        Some(format!("~/{}", rest.display()))
+    })
+    .unwrap_or_else(|| path.to_owned())
 }
 
 /// A browser or app as `rules.json`, a config or the router names it
@@ -587,19 +589,26 @@ mod tests {
     #[test]
     fn another_copy_of_pwrroute_is_named_by_its_path() {
         let none: &AppName = &|_| None;
-        let Ok(home) = std::env::var("HOME") else {
-            return;
-        };
+        let home = std::path::Path::new("/Users/someone");
+        assert_eq!(
+            tilde("/Users/someone/src/PwrRoute.app", Some(home)),
+            "~/src/PwrRoute.app"
+        );
+        assert_eq!(
+            tilde("/Applications/PwrRoute.app", Some(home)),
+            "/Applications/PwrRoute.app"
+        );
+        assert_eq!(tilde("/Users/someone/x.app", None), "/Users/someone/x.app");
         let held = DefaultStatus {
             is_default: false,
             http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
             https: Some(pwrroute_os::BUNDLE_ID.to_owned()),
-            other_copy: Some(format!("{home}/src/PwrRoute/target/dev/PwrRoute.app")),
+            other_copy: Some("/Volumes/PwrRoute/PwrRoute.app".to_owned()),
         };
         let state = DefaultState::from_status(Some(&held), none);
         assert_eq!(
             state,
-            DefaultState::OtherCopy("~/src/PwrRoute/target/dev/PwrRoute.app".into())
+            DefaultState::OtherCopy("/Volumes/PwrRoute/PwrRoute.app".into())
         );
         assert!(!state.is_default());
         assert_eq!(state.current_name(), "another copy of PwrRoute");

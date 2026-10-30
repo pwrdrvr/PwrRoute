@@ -115,6 +115,16 @@ pub fn set_default() -> Result<DefaultRequest> {
             DefaultRequest::Set
         });
     }
+    // Both schemes still name PwrRoute's id: LaunchServices has not caught
+    // up yet, or a copy would not go. macOS puts up no dialog for an id
+    // that already holds the default, so do not say it will; the read-back
+    // settles it.
+    let ids_ours = ["http", "https"]
+        .into_iter()
+        .all(|scheme| is_ours(launch_services::default_handler(scheme).as_deref()));
+    if other_copy_held && ids_ours {
+        return Ok(DefaultRequest::TookOverFromCopy);
+    }
     let scheme = scheme_to_request(http, https);
     let workspace = NSWorkspace::sharedWorkspace();
     if workspace.respondsToSelector(sel!(
@@ -144,27 +154,23 @@ fn other_copies(current: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Takes the other copies out of LaunchServices, all at once: this runs on
-/// the click, on the main thread. The files stay. A copy that will not go
-/// is left, and the status read afterwards names it.
+/// Takes the other copies out of LaunchServices, in one `lsregister` run
+/// (it takes several paths), so the database sees one writer. The files
+/// stay. A copy that will not go is left, and the status read afterwards
+/// names it.
 fn forget_other_copies(current: &Path) {
     use std::process::{Command, Stdio};
-    let running: Vec<_> = other_copies(current)
-        .into_iter()
-        .filter_map(|copy| {
-            Command::new(LSREGISTER)
-                .arg("-u")
-                .arg(&copy)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .ok()
-        })
-        .collect();
-    for mut child in running {
-        let _ = child.wait();
+    let copies = other_copies(current);
+    if copies.is_empty() {
+        return;
     }
+    let _ = Command::new(LSREGISTER)
+        .arg("-u")
+        .args(&copies)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// Ask for `https` once `http` selects this bundle and `https` does not,
