@@ -269,18 +269,17 @@ jobs:
   macos:
     name: macOS (test + bundle)
     # Apple silicon. gpui-kit compiles Metal shaders at runtime, so no Metal
-    # toolchain is needed here. The self-hosted Tart pool e2e-macos uses:
-    # GitHub-hosted macOS minutes cost ten times Linux's on a private repo.
-    # Never run fork code on this pool, so fork PRs skip this job; it is not
-    # a required check.
-    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    # toolchain is needed here. The standard hosted runner is free for a
+    # public repository; the -large and -xlarge sizes are billed, so never
+    # pick one. It is a throwaway VM, so fork PRs run this job too. A cold
+    # build of the GPUI stack on its three cores is slow; the limit leaves
+    # room for that one run, after which the cache makes it minutes.
+    runs-on: macos-26
     needs: changes
     if: >-
       !cancelled() &&
-      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false') &&
-      (github.event_name == 'push' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
-    timeout-minutes: 45
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -291,10 +290,10 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
-      # No prune-rust-toolchains.sh here: the guests persist and are shared
-      # with other repositories, so uninstalling their toolchains is not
-      # ours to do. Their toolchains change only when someone updates them,
-      # so the cache key stays steady without it.
+      # The image's other toolchains would change rust-cache's key.
+      - name: Keep only the pinned Rust toolchain
+        run: ./scripts/ci/prune-rust-toolchains.sh
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Our toolchain version is in the prefix, so bumping RUST_TOOLCHAIN
@@ -310,8 +309,8 @@ jobs:
         run: cargo xtask test
 
       # CI checks the app only; preview/release jobs exercise the full DMG.
-      # All packaging uses the lab's stable Xcode 26+ without changing its
-      # global selection. A missing icon compiler is a runner prerequisite.
+      # All packaging uses the image's Xcode 26+ without changing its global
+      # selection. A missing icon compiler is a runner prerequisite.
       - name: Select an Xcode with actool 26
         id: xcode
         uses: ./.github/actions/select-xcode-for-actool
@@ -430,18 +429,20 @@ jobs:
 
   e2e-macos:
     name: macOS Desktop E2E
-    # The restricted Tart runner pool PwrGit and PwrAgnt use. PwrRoute must be
-    # in that organization runner group's selected repositories, or this job
-    # stays queued. Never run fork code on this pool. The guests persist
-    # between jobs, so they are not disposable: no PWRROUTE_E2E_DISPOSABLE.
-    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    # The standard hosted runner (free for a public repository; never a
+    # billed -large or -xlarge size). Its image has a logged-in desktop, and
+    # it is a throwaway VM: fork PRs run here, and it is disposable. The
+    # macOS registration scenarios still skip until the harness can answer
+    # LaunchServices' consent prompt (e2e/CONTRACT.md, "Registration").
+    runs-on: macos-26
     needs: changes
     if: >-
       !cancelled() &&
-      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false') &&
-      (github.event_name == 'push' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
-    timeout-minutes: 45
+      (needs.changes.result != 'success' || needs.changes.outputs.code_impacting != 'false')
+    timeout-minutes: 90
+    env:
+      # A hosted runner is thrown away after the job (e2e/CONTRACT.md).
+      PWRROUTE_E2E_DISPOSABLE: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -452,6 +453,10 @@ jobs:
         with:
           toolchain: "1.97"
 
+      # The image's other toolchains would change rust-cache's key.
+      - name: Keep only the pinned Rust toolchain
+        run: ./scripts/ci/prune-rust-toolchains.sh
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Only main writes the cache. The store is capped at 10 GB and each
@@ -461,10 +466,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Saved even when a test fails: the build is what is slow to redo.
           cache-on-failure: true
-
-      - name: Clear PwrRoute state left by earlier jobs
-        timeout-minutes: 5
-        run: ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
       # GPUI draws nothing for a window the platform does not present. Wake
       # the display, and hold it awake for the run (power assertions, no
@@ -478,7 +479,7 @@ jobs:
         run: ./scripts/ci/macos-e2e-require-desktop.sh
 
       - name: Desktop E2E
-        timeout-minutes: 30
+        timeout-minutes: 75
         run: caffeinate -dims cargo xtask e2e
 
       - name: Upload Desktop E2E artifacts
@@ -555,13 +556,6 @@ jobs:
           LINUX_E2E_RESULT: ${{ needs.e2e-linux.result }}
           MACOS_E2E_RESULT: ${{ needs.e2e-macos.result }}
           WINDOWS_E2E_RESULT: ${{ needs.e2e-windows.result }}
-          # macOS is not scheduled for fork PRs (the self-hosted guests must
-          # not run untrusted code), so it reports `skipped` there. Excuse
-          # exactly that case; any other missing macOS result fails, so an
-          # event neither job anticipated fails closed.
-          MACOS_IS_FORK_PR: >-
-            ${{ github.event_name == 'pull_request'
-            && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
 
@@ -586,12 +580,7 @@ jobs:
           say "### Desktop E2E platform results"
           require "Classify Changes" "$CHANGES_RESULT"
           require "Linux" "$LINUX_E2E_RESULT"
-          if [[ "$MACOS_IS_FORK_PR" == "true" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
-            say "- SKIP \`macOS\` (skipped): fork PR; the self-hosted lane is not scheduled"
-            echo "::warning::macOS Desktop E2E did not run for this fork PR; macOS coverage is unverified."
-          else
-            require "macOS" "$MACOS_E2E_RESULT"
-          fi
+          require "macOS" "$MACOS_E2E_RESULT"
           require "Windows" "$WINDOWS_E2E_RESULT"
 
           exit "$status"

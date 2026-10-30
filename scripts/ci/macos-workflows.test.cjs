@@ -13,20 +13,22 @@ const jobs = file => [...read(`.github/workflows/${file}`).split('\njobs:\n')[1]
 const release = jobs('release.yml');
 const signing = release.find(job => job.id === 'macos-sign').body;
 
-test('only release macOS signing is hosted; all other macOS jobs select the lab pool', () => {
+test('every macOS job runs on the standard hosted macos-26 runner', () => {
+  // The standard hosted runner is free for a public repository; the -large
+  // and -xlarge sizes are billed, and no job may need a self-hosted machine.
   const audited = [];
   for (const file of workflows) {
-    const source = read(`.github/workflows/${file}`);
-    // Permit hosted macOS only inside this one credentialed release job.
-    const otherJobs = file === 'release.yml' ? source.replace(signing, '') : source;
-    assert.doesNotMatch(otherJobs, /\bmacos-(?:latest|\d[\w.-]*)\b/i, file);
+    const source = read(`.github/workflows/${file}`).replace(/^ *#.*$/gm, '');
+    assert.doesNotMatch(source, /self-hosted/, file);
+    assert.doesNotMatch(source, /\bmacos-[\w.-]*-(?:large|xlarge)\b/i, file);
+    assert.doesNotMatch(source, /\bmacos-latest\b/i, file);
     for (const { id, body } of jobs(file)) {
-      if (!/runs-on:.*macOS/i.test(body)) continue;
-      if (file === 'release.yml' && id === 'macos-sign') {
-        assert.match(body, /^    runs-on: macos-26$/m, id);
-      } else {
-        assert.match(body, /runs-on: \[self-hosted, macOS, ARM64, pwrdrvr-macos\]/, id);
-        assert.doesNotMatch(body.replace(/^ *#.*$/gm, ''), /prune-rust-toolchains|PWRROUTE_E2E_DISPOSABLE/, id);
+      if (!/runs-on:.*macos/i.test(body)) continue;
+      assert.match(body, /^    runs-on: macos-26$/m, id);
+      // Jobs that compile keep rust-cache's key to the pinned toolchain.
+      if (/rust-cache/.test(body)) {
+        assert.ok(body.indexOf('prune-rust-toolchains.sh') < body.indexOf('Swatinem/rust-cache'), `${file}/${id}`);
+        assert.ok(body.includes('prune-rust-toolchains.sh'), `${file}/${id}`);
       }
       audited.push(`${file}/${id}`);
     }
@@ -35,26 +37,23 @@ test('only release macOS signing is hosted; all other macOS jobs select the lab 
     'release.yml/macos-prepare', 'release.yml/macos-sign']);
 });
 
-test('macOS preview rejects labeled and synchronized fork PRs while retaining dispatch', () => {
+test('macOS preview builds on the build-preview label or dispatch, forks included', () => {
   const body = jobs('preview-build.yml').find(job => job.id === 'preview-macos').body;
-  const expression = body.match(/    if: >-\n((?:      .*\n)+)/)[1]
+  const expression = body.match(/    if: \|\n((?:      .*\n)+)/)[1]
     .replace(/github\.event\.pull_request\.labels\.\*\.name/g, 'github.event.pull_request.labels.map(label => label.name)');
   const evaluate = new Function('github', 'contains', `return (${expression});`);
-  const github = { event_name: 'pull_request', repository: 'pwrdrvr/PwrRoute', event: {
-    action: 'labeled', label: { name: 'build-preview' },
-    pull_request: { head: { repo: { full_name: 'someone/fork' } }, labels: [{ name: 'build-preview' }] },
-  } };
   const contains = (array, item) => array.includes(item);
-  for (const action of ['labeled', 'synchronize']) {
-    github.event.action = action;
-    assert.equal(evaluate(github, contains), false);
-    github.event.pull_request.head.repo.full_name = github.repository;
-    assert.equal(evaluate(github, contains), true);
-    github.event.pull_request.head.repo.full_name = 'someone/fork';
+  for (const head of ['someone/fork', 'pwrdrvr/PwrRoute']) {
+    const pr = { head: { repo: { full_name: head } }, labels: [{ name: 'build-preview' }] };
+    const github = { event_name: 'pull_request', repository: 'pwrdrvr/PwrRoute', event: {
+      action: 'labeled', label: { name: 'build-preview' }, pull_request: pr } };
+    assert.equal(evaluate(github, contains), true, `labeled ${head}`);
+    github.event.action = 'synchronize';
+    assert.equal(evaluate(github, contains), true, `synchronize ${head}`);
+    github.event = { action: 'labeled', label: { name: 'other' }, pull_request: { ...pr, labels: [{ name: 'other' }] } };
+    assert.equal(evaluate(github, contains), false, `other label ${head}`);
   }
-  github.event_name = 'workflow_dispatch';
-  github.event = {};
-  assert.equal(evaluate(github, contains), true);
+  assert.equal(evaluate({ event_name: 'workflow_dispatch', event: {} }, contains), true);
 });
 
 test('credentialed signing retains environment and digest boundaries without checkout or compilation', () => {

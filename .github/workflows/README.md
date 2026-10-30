@@ -11,18 +11,20 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
 Every Rust job pins Rust 1.97, the version in `rust-toolchain.toml`.
-Hosted Linux/Windows jobs prune the image's other Rust toolchains before
-`Swatinem/rust-cache`, whose key hashes all installed toolchains. Persistent
-macOS guests never prune shared toolchains. Only main saves CI caches.
+Every job that compiles prunes the image's other Rust toolchains before
+`Swatinem/rust-cache`, whose key hashes all installed toolchains. Only main
+saves CI caches.
 Linux jobs install GPUI's system libraries with `scripts/ci/install-linux-deps.sh`.
 
-CI `macos` and `e2e-macos`, preview `preview-macos`, and release
-`macos-prepare` use `[self-hosted, macOS, ARM64, pwrdrvr-macos]`. Only the
-credentialed release `macos-sign` job uses GitHub-hosted `macos-26`: certificate
-import failed on the self-hosted guests in [run 40904812733](https://github.com/pwrdrvr/PwrRoute/actions/runs/40904812733/job/123563958316).
-That job packs, signs, notarizes and verifies the prepared app and DMG.
-The restricted organization runner group must allow `pwrdrvr/PwrRoute`.
-Fork PRs skip CI macOS and macOS previews, including labeled forks.
+Every macOS job (CI `macos` and `e2e-macos`, preview `preview-macos`,
+release `macos-prepare` and `macos-sign`) runs on GitHub's standard hosted
+`macos-26` runner, which is free for a public repository. The `-large` and
+`-xlarge` sizes are billed: never pick one (`scripts/ci/macos-workflows.test.cjs`
+fails on them, and on any self-hosted label). The runner has three cores, so
+a cold build of the GPUI stack is slow; the cache from main makes later runs
+minutes. Hosted runners are throwaway VMs, so fork PRs run the macOS jobs
+too. Only `macos-sign` sees Apple credentials: it packs, signs, notarizes and
+verifies the app `macos-prepare` built.
 
 The pool's capability and lifecycle source is PwrSuiteLab:
 `docs/macos-runner-xcode.md`, `macos-vm-rebuild/README.md` and
@@ -44,12 +46,12 @@ Jobs and the names the "Protect main" ruleset requires:
 | `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, CI classifier tests, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
 | `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
-| `macos` | macOS (test + bundle) | self-hosted `pwrdrvr-macos` | Tests, then `cargo xtask bundle --app-only --require-icon-catalog` (ad hoc signed); same-repository PRs and pushes only. |
+| `macos` | macOS (test + bundle) | macos-26 | Tests, then `cargo xtask bundle --app-only --require-icon-catalog` (ad hoc signed). |
 | `windows` | Windows (test) | windows-2025 | The tests, which compile every module of the app. |
 | `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | `cargo xtask e2e` under Xvfb, with Mesa's software Vulkan. |
-| `e2e-macos` | macOS Desktop E2E | self-hosted `pwrdrvr-macos` | `cargo xtask e2e` on a Tart guest; same-repository PRs and pushes only. |
+| `e2e-macos` | macOS Desktop E2E | macos-26 | `cargo xtask e2e`. |
 | `e2e-windows` | Windows Desktop E2E | windows-2025 | `cargo xtask e2e`. |
-| `desktop-e2e-result` | **Desktop E2E** (to require) | ubuntu-latest | Fails unless every platform's E2E job succeeded (macOS excused on fork PRs). |
+| `desktop-e2e-result` | **Desktop E2E** (to require) | ubuntu-latest | Fails unless every platform's E2E job succeeded. |
 
 The required check names are pinned. Renaming the `Typecheck`, `Build` or
 `Test` job leaves that check permanently pending and blocks every PR.
@@ -57,8 +59,8 @@ The required check names are pinned. Renaming the `Typecheck`, `Build` or
 chain.
 
 The CI macOS job validates the app bundle, icon catalog and ad hoc signature
-without creating a DMG. Previews create the complete DMG on the lab pool;
-release signing creates it on the hosted runner. `dmg-layout.py` follows
+without creating a DMG. Previews create the complete DMG;
+release signing creates it after packing. `dmg-layout.py` follows
 PwrSuiteLab's direct `.DS_Store` writer:
 the background, 660×400 window, 112-point icons, app/Applications positions and
 custom volume icon remain present without Finder AppleEvents or an Automation
@@ -76,23 +78,15 @@ window-only screenshots of fixture data) for 30 days.
   since wgpu finds no GPU on the runner, plus `x11-utils` and ImageMagick
   for the OS-side window checks and screenshots, and `xdg-utils` for the
   default-browser scenarios.
-- **macOS** runs on the self-hosted Tart pool shared with PwrGit and
-  PwrAgnt, selected by `[self-hosted, macOS, ARM64, pwrdrvr-macos]`. Add
-  `pwrdrvr/PwrRoute` to that organization runner group's selected
-  repositories, or the job stays queued. Guests need a logged-in desktop.
-  Fork PRs skip it so untrusted code never reaches the persistent guests.
-  `scripts/ci/macos-e2e-pre-run-cleanup.sh` first stops PwrRoute copies an
-  earlier job in this workspace left running and clears the app's saved
-  window state. The job then wakes the display, holds it awake with
-  `caffeinate` for the run, and `scripts/ci/macos-e2e-require-desktop.sh`
-  fails it at once if the runner's session is locked or off the console:
-  GPUI draws no window the platform does not present, so behind the lock
-  screen every test that needs a redraw would time out. A locked guest needs
-  its screen lock and screensaver off, which is the lab's to set.
+- **macOS** runs on the hosted `macos-26` image, which has a logged-in
+  desktop. The job wakes the display, holds it awake with `caffeinate` for
+  the run, and `scripts/ci/macos-e2e-require-desktop.sh` fails it at once if
+  the runner's session is locked or off the console: GPUI draws no window
+  the platform does not present, so behind the lock screen every test that
+  needs a redraw would time out.
 - **Windows** needs nothing extra: the hosted image has a desktop session.
 
-Hosted runners set `PWRROUTE_E2E_DISPOSABLE=1`; the Tart guests persist, so
-they do not. Only a disposable machine runs the scenarios in which the app
+Every E2E job runs on a hosted runner and sets `PWRROUTE_E2E_DISPOSABLE=1`. Only a disposable machine runs the scenarios in which the app
 registers itself with the OS and a link arrives through the OS's handler for
 web links (`e2e/CONTRACT.md`, "Registration"): on Linux through `xdg-open`,
 on Windows through the registered ProgID command. Elsewhere they skip.
@@ -135,7 +129,7 @@ Push events always run full CI. API errors, empty or incomplete pagination
 and duplicate results also run full CI. A script failure or missing output
 cannot opt out: the job output defaults to full CI unless the classifier
 successfully emits `false`. Downstream jobs also run if the classification
-job itself fails, while retaining the macOS self-hosted fork guard.
+job itself fails.
 
 Do not add `paths` or `paths-ignore` to the `pull_request` trigger. Required
 status checks must still exist on every PR: skipped jobs satisfy them, missing
@@ -195,7 +189,7 @@ version is promoted, Beta falls back to it.
 
 | Platform | Built on | Assets |
 |---|---|---|
-| macOS | Built on self-hosted `pwrdrvr-macos`, both architectures joined with `lipo`; packed and signed on GitHub-hosted `macos-26` | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
+| macOS | Built on `macos-26`, both architectures joined with `lipo`; packed and signed on `macos-26` in a separate job | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
 | Windows | windows-2025, static C runtime; packed by `vpk` | `PwrRoute-win-Setup.exe`, `PwrRoute-win.msi`, `PwrRoute-win-Portable.zip`, `PwrRoute-<v>-full.nupkg` (and `-delta`), `releases.win.json`, `assets.win.json`, `RELEASES`, `PwrRoute-<v>-windows-SHA256SUMS` |
 | Linux | ubuntu-22.04 and ubuntu-22.04-arm, for the oldest glibc floor | `PwrRoute-<v>-linux-<arch>.tar.gz`, `.deb`, `-SHA256SUMS` |
 
