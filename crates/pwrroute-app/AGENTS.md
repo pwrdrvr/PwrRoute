@@ -549,8 +549,12 @@ their own modules.
   (`pwrroute_os::app_bundle`, `app_icon_png`), at the window's pixel size,
   and only once `app_icons::install` ran (`main`): tests draw letters, and
   the `screens` example too unless given `--app-icons`.
-  `browser_scan::rescan` drops them (`app_icons::forget`). Windows and
-  Linux have no icon yet.
+  `browser_scan::rescan` drops them (`app_icons::forget`). Windows finds
+  an app only by the `.exe` the scan placed it at (`location_of`), and
+  draws the icon Explorer shows; Linux has no icon yet. PwrRoute's own
+  window and taskbar icon on Windows is `packaging/windows/PwrRoute.ico`,
+  embedded by `build.rs` as icon resource 1, which GPUI loads for every
+  window.
 - **Menus and select lists use `widgets::menu_card` and `menu_row`**
   (design: Popovers and Overflow 1a-1d). A select's list is as wide as its
   field (`.absolute().left_0().right_0()`), never narrower, and scrolls

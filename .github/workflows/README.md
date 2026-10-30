@@ -354,9 +354,10 @@ the release. The sign jobs read the previous release with `github.token`.
   instead.
 - **Windows arm64.** disktree builds it on `windows-11-arm`; add it when there
   is a user for it. vpk would pack it as its own channel.
-- **Icons for pwrroute.exe and the Linux .deb.** `vpk pack --icon` covers
-  Setup.exe, the MSI and the shortcut; the executable has no icon resource,
-  and the desktop entry no `Icon=`.
+- **An icon for the Linux .deb.** The desktop entry has no `Icon=`. On
+  Windows `vpk pack --icon` covers Setup.exe, the MSI and the shortcut, and
+  `pwrroute.exe` carries `PwrRoute.ico` itself (icon resource 1, embedded by
+  `crates/pwrroute-app/build.rs`), which GPUI loads for its windows.
 - **Update UI.** A log line and the macOS "Check for Updates…" menu item
   until the update design lands.
 
