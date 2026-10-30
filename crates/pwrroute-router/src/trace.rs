@@ -16,7 +16,10 @@ use crate::link::{Link, Source};
 /// that won); a link no rule matched is kept in full. The router reduces
 /// the record to this level before anything stores it, sees it or writes
 /// it, so a `Host` record never held the full URL anywhere outside the
-/// dispatch thread. What each level keeps of a record:
+/// dispatch thread, with one exception: a link that was not opened
+/// ([`Outcome::NotOpened`]) keeps its whole link in memory beside its
+/// record, never on disk, until it is opened or its record leaves, so it
+/// can still be opened. What each level keeps of a record:
 ///
 /// - `Full`: the URL, the opener and every step, as received.
 /// - `Host`: scheme and host only, in the link, the final URL and every
