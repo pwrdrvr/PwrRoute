@@ -572,8 +572,9 @@ fn sync_from(opened: &mut Opened<'_>, handle: &RouterHandle) {
     let model = opened.model.clone();
     let records = handle.recent();
     opened.cx.update(|_, cx| {
-        model.update(cx, |model, _| {
+        model.update(cx, |model, cx| {
             model.sync(Dispatched::of_records(&records, records.len() as u64));
+            cx.notify();
         });
         super::sync_override(&model, cx);
     });
@@ -716,6 +717,13 @@ fn the_switch_works_from_the_keyboard(cx: &mut TestAppContext) {
         opened.cx.simulate_keystrokes(keys);
         opened.settle();
     };
+    // As `dropdown::open` does: the keys bound, the card focused.
+    opened.cx.update(|window, cx| {
+        super::dropdown::bind_keys(cx);
+        let focus = view.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    opened.settle();
 
     key(&mut opened, "tab");
     assert_eq!(focused(&mut opened), Some("switch"));

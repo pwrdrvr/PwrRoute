@@ -744,7 +744,7 @@ impl TrayModel {
         let chrome = |profile: Option<&str>| BrowserLabel::new("Ch", "Google Chrome", profile);
         let recents = [
             Recent::from_urls(
-                "https://pwrdrvr.atlassian.net/browse/DEMO-1",
+                "https://tickets.example.com/browse/DEMO-1",
                 None,
                 chrome(Some("Work")),
                 RecentRoute::Handler(2),
