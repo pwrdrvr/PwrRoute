@@ -201,6 +201,19 @@ their own modules.
   (`RulesFile::owns_default`), never the precedence alone. Rules
   and Test a link reuse Overview's source chip. Leaving Overview
   (`OverviewState::leave`) drops its fades and the callout's hand-off.
+- **Synced rules (`sync.rs`; design: Synced Rules, Synced Rules
+  Machine).** `sync::install` runs `pwrroute_sync::Service` over
+  `rules.json` (and the config in charge when `settings.json`'s
+  `sync.config` is on) and the folders in `sync.targets`; it wakes on
+  window activation and after an agent's `pwrroute_rules_apply`, and a
+  pull is followed by `app::sync_rules_windows`, so every writer goes
+  through the same path. `sync::machine()` is this machine's
+  `machine.json`; every engine that resolves a link takes it as
+  `Sources::machine`, and `edit_machine` is the one writer. `sync::line`
+  is the rail foot's line and the strip's chip (`chrome.rs`), and opens
+  Settings › Sync. The editor offers named destinations above the lanes
+  and a Rule set field; a rule whose set is off here reads "off on this
+  Mac" (`Matcher::OffHere`). Folders are added only from a click.
 - **Settings persist in `settings.json` (`settings_store.rs`).** The data
   directory's `settings.json` holds Activity's retention and the journal
   (`activity.keep`, `activity.journal`, `activity.journalDays`), the

@@ -152,6 +152,10 @@ mod settings_store;
 #[cfg(target_os = "macos")]
 #[path = "../src/start_from.rs"]
 mod start_from;
+
+#[cfg(target_os = "macos")]
+#[path = "../src/sync.rs"]
+mod sync;
 #[cfg(target_os = "macos")]
 #[path = "../src/test_link.rs"]
 mod test_link;
@@ -1351,6 +1355,9 @@ fn main() {
         ("settings-1b", settings::Pane::Configuration, 1315.0),
         ("settings-1c", settings::Pane::Browsers, 880.0),
         ("settings-privacy", settings::Pane::Privacy, 1560.0),
+        // Synced Rules 1b and 1c, with 2a's machine card.
+        ("settings-sync", settings::Pane::Sync, 1500.0),
+        ("settings-sync-conflict", settings::Pane::Sync, 1300.0),
         // The family's panes, at a height that holds their cards.
         ("settings-updates", settings::Pane::Updates, 760.0),
         ("settings-diagnostics", settings::Pane::Diagnostics, 900.0),
@@ -1368,11 +1375,12 @@ fn main() {
         let handle = cx
             .open_window(win(1058.0, height), |_, cx| {
                 cx.new(|cx| {
-                    let mut view = settings::SettingsWindow::new(
-                        settings::fixtures::model(),
-                        std::rc::Rc::new(|_, _, _| {}),
-                        cx,
-                    );
+                    let mut model = settings::fixtures::model();
+                    if name == "settings-sync-conflict" {
+                        model.sync = settings::fixtures::sync_conflict();
+                    }
+                    let mut view =
+                        settings::SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx);
                     view.pane = pane;
                     view
                 })

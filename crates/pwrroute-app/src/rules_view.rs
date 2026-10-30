@@ -51,6 +51,7 @@ fn matcher(matcher: &Matcher) -> Div {
         Matcher::App { badge, name } => app_tag(badge.clone(), name.clone()),
         Matcher::Function(source) => function(source),
         Matcher::Off => chip("off"),
+        Matcher::OffHere => chip(format!("off on {}", crate::settings::sync_host::here())),
         Matcher::Privacy(label) => chip(label.clone()),
     }
 }

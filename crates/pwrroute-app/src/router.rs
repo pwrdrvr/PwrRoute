@@ -362,6 +362,7 @@ fn build_as_routed(
     let alone = Sources {
         config: None,
         rules: sources.rules.clone(),
+        ..Default::default()
     };
     Engine::from_sources(&alone, host, limits).or(loaded)
 }
@@ -1286,6 +1287,7 @@ mod tests {
         let sources = Sources {
             config: Some(config.clone()),
             rules: serde_json::from_str(RULES).unwrap(),
+            ..Default::default()
         };
         let build = |left_out: bool| {
             build_as_routed(&sources, Rc::new(DefaultHost), Limits::default(), |path| {

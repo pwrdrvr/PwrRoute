@@ -469,6 +469,7 @@ impl AddRule {
             private: self.private,
             privacy: (self.keep != implied).then(|| self.keep.into()),
             examples,
+            ..engine::Rule::default()
         })
     }
 

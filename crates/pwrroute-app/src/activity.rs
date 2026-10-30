@@ -2702,6 +2702,7 @@ mod tests {
                 let sources = Sources {
                     config: None,
                     rules,
+                    ..Default::default()
                 };
                 let engine =
                     Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())?;

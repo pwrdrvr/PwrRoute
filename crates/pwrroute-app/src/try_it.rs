@@ -199,6 +199,9 @@ fn load(config: Option<&std::path::Path>, rules: &RulesFile) -> Result<Engine, S
     let sources = pwrroute_engine::Sources {
         config: config.map(std::path::Path::to_path_buf),
         rules: rules.clone(),
+        // Try it shows how this machine routes; the saved examples and
+        // tests run without the layer (`Engine::test_rules`).
+        machine: crate::sync::machine(),
     };
     // The OS answers the config's finicky.* calls, as it does for the
     // router, so an example that depends on them is tested as it routes.

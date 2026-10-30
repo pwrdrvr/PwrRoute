@@ -327,15 +327,61 @@ impl RulesStore {
     /// The rows of the handlers card.
     pub fn handlers(&self) -> Vec<Handler> {
         let problems = self.problems();
+        let machine = crate::sync::machine();
         self.rules
             .iter()
             .enumerate()
             .map(|(i, entry)| {
                 let problems = problems.at(Place::Rule(i));
                 let badge = self.badge(&problems, self.saved_rules.contains_key(&entry.id));
-                rules_model::handler(&entry.value, badge, problems)
+                let mut handler = rules_model::handler(&entry.value, badge, problems);
+                if entry.value.enabled
+                    && let Some(set) = &entry.value.set
+                    && !self.base.set_enabled_on(set, &machine)
+                {
+                    handler.rule.matchers.push(rules_model::Matcher::OffHere);
+                }
+                handler
             })
             .collect()
+    }
+
+    /// The named destinations `rules.json` defines, in its order.
+    pub fn destinations(&self) -> &[engine::Destination] {
+        &self.base.destinations
+    }
+
+    /// Opens the handler in a named destination: `destination` is written
+    /// and the synced binding copied into `browser`/`profile`, so a reader
+    /// that ignores names routes the same way. `None` clears the name and
+    /// keeps the browser it had.
+    pub fn set_destination(&mut self, handler: usize, name: Option<&str>) {
+        let binding = name.and_then(|n| self.base.destination(n).cloned());
+        let Some(rule) = self.rule_mut(handler) else {
+            return;
+        };
+        let name = name.map(str::to_owned);
+        if rule.destination == name && binding.as_ref().is_none_or(|b| b.browser == rule.browser) {
+            return;
+        }
+        rule.destination = name;
+        if let Some(binding) = binding {
+            rule.browser = binding.browser;
+            rule.profile = binding.profile;
+        }
+        self.touch();
+    }
+
+    /// Puts the handler in a rule set by name; blank takes it out of any.
+    pub fn set_rule_set(&mut self, handler: usize, name: &str) {
+        let name = name.trim();
+        let set = (!name.is_empty()).then(|| name.to_owned());
+        if let Some(rule) = self.rule_mut(handler)
+            && rule.set != set
+        {
+            rule.set = set;
+            self.touch();
+        }
     }
 
     fn badge(&self, problems: &[String], saved: bool) -> RowBadge {
@@ -614,11 +660,14 @@ impl RulesStore {
         }
     }
 
+    /// Sets the handler's browser. A browser picked or typed by hand
+    /// replaces a named destination, which would otherwise decide.
     pub fn set_browser(&mut self, handler: usize, text: &str) {
         if let Some(rule) = self.rule_mut(handler)
             && rule.browser != text
         {
             rule.browser = text.to_owned();
+            rule.destination = None;
             self.touch();
         }
     }
@@ -628,6 +677,7 @@ impl RulesStore {
             && rule.profile != text
         {
             rule.profile = text.to_owned();
+            rule.destination = None;
             self.touch();
         }
     }

@@ -25,6 +25,7 @@ pwrroute-engine = { workspace = true }
 pwrroute-mcp = { path = "../pwrroute-mcp" }
 pwrroute-os = { workspace = true }
 pwrroute-router = { workspace = true }
+pwrroute-sync = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Wakes the GPUI thread when a second launch asks for the window, and

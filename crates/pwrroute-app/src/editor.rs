@@ -49,6 +49,8 @@ pub enum Field {
     Example,
     /// For a rewrite's example: what the URL must become.
     Becomes,
+    /// The handler's rule set, by name.
+    Set,
 }
 
 /// The editor's fields for the selected rule. Built when the selection
@@ -62,6 +64,8 @@ pub struct Rail {
     /// The example to add, and (for a rewrite) what it must become.
     pub example: TextField,
     pub becomes: TextField,
+    /// The handler's rule set.
+    pub set: TextField,
     /// The sample was typed: it no longer follows the first pattern.
     pub sample_edited: bool,
     /// Which change's kind menu is open.
@@ -103,6 +107,7 @@ impl Rail {
             sample: TextField::new(sample_url(&handler.patterns), cx),
             example: TextField::new("", cx),
             becomes: TextField::new("", cx),
+            set: TextField::new(handler.set.clone().unwrap_or_default(), cx),
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
@@ -129,6 +134,7 @@ impl Rail {
             sample: TextField::new(sample_url(&rewrite.patterns), cx),
             example: TextField::new("", cx),
             becomes: TextField::new("", cx),
+            set: TextField::new(String::new(), cx),
             sample_edited: false,
             picking_kind: None,
             was_picking: None,
@@ -161,6 +167,7 @@ impl Rail {
             Field::Sample => Some(&mut self.sample),
             Field::Example => Some(&mut self.example),
             Field::Becomes => Some(&mut self.becomes),
+            Field::Set => Some(&mut self.set),
         }
     }
 
@@ -173,6 +180,7 @@ impl Rail {
             Field::Sample => Some(&self.sample),
             Field::Example => Some(&self.example),
             Field::Becomes => Some(&self.becomes),
+            Field::Set => Some(&self.set),
         }
     }
 }
@@ -883,6 +891,7 @@ fn open_in_section(
     };
     section()
         .child(section_title("Open in"))
+        .children(named_destinations(app, handler, cx))
         .child(destination)
         .children(problems_under(&handler.problems, Under::Browser))
         .when(missing, |section| {
@@ -912,6 +921,7 @@ fn open_in_section(
                 15.75,
             ))
         })
+        .child(rule_set_row(app, handler, rail, window, cx))
         .child(labeled_row("Activity keeps", keep_control).mt(px(4.0)))
         .children(problems_under(&handler.problems, Under::Keep))
         .child(paragraph(
@@ -920,6 +930,131 @@ fn open_in_section(
             10.5,
             15.75,
         ))
+}
+
+/// The Destinations lane (design: Synced Rules 2b): `rules.json`'s named
+/// destinations as pills, the rule's lit, and what the lit one opens on
+/// this machine. Nothing when the file names none.
+fn named_destinations(
+    app: &PwrRoute,
+    handler: &Handler,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Option<Div> {
+    use crate::destinations::{Choice, Lane, Pill, PillKind};
+    let named = app.store.destinations();
+    if named.is_empty() {
+        return None;
+    }
+    let pills = named
+        .iter()
+        .map(|d| Pill {
+            label: d.name.clone(),
+            kind: PillKind::Profile,
+            // The name rides in the choice's browser; `choose_named` reads it.
+            choice: Choice {
+                browser: d.name.clone(),
+                ..Choice::default()
+            },
+            on: handler.destination.as_deref() == Some(d.name.as_str()),
+        })
+        .collect();
+    let lane = Lane {
+        name: "Destinations".into(),
+        value: String::new(),
+        badge: crate::widgets::badge_for("Destinations"),
+        pills,
+        tag: Some("synced names".into()),
+        missing: false,
+        on: handler.destination.is_some(),
+        dont_open: false,
+    };
+    let machine = crate::sync::machine();
+    let meaning = handler.destination.as_deref().and_then(|name| {
+        let file = app.store.edited();
+        let (binding, source) = file.binding_for(name, &machine)?;
+        let shown = crate::default_browser::browser_name(&binding.browser);
+        let shown = if binding.profile.is_empty() {
+            shown
+        } else {
+            format!("{shown} \u{00b7} {}", binding.profile)
+        };
+        let whose = match source {
+            pwrroute_engine::BindingSource::Machine => " (set on this machine)",
+            pwrroute_engine::BindingSource::Synced => "",
+        };
+        Some(format!("{name} here: {shown}{whose}"))
+    });
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(crate::destinations::draw(
+                "named",
+                &[lane],
+                crate::destinations::Density::Regular,
+                |this: &mut PwrRoute, choice, _, cx| this.choose_named(&choice.browser, cx),
+                cx,
+            ))
+            .children(meaning.map(|line| paragraph(line, 10.5, 15.2)))
+            .child(paragraph(
+                "A named destination means what each machine says it means (Settings \u{203a} \
+                 Sync). A browser below sends this rule there on every machine.",
+                10.5,
+                15.2,
+            )),
+    )
+}
+
+/// The rule set this rule belongs to, by name; blank is none. Settings ›
+/// Sync turns a set on or off for each machine.
+fn rule_set_row(
+    app: &PwrRoute,
+    handler: &Handler,
+    rail: &Rail,
+    window: &Window,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let field = editable(
+        rail,
+        Field::Set,
+        "rule-set".into(),
+        Look {
+            mono: false,
+            placeholder: "None",
+            error: false,
+        },
+        None,
+        window,
+        cx,
+    );
+    let file = app.store.edited();
+    let help = match handler.set.as_deref() {
+        Some(set) if !file.set_enabled_on(set, &crate::sync::machine()) => {
+            format!("Off on this machine. Settings \u{203a} Sync turns {set} on or off here.")
+        }
+        Some(_) => "On on this machine. Settings \u{203a} Sync turns a set on or off for each \
+                    machine."
+            .to_owned(),
+        None => {
+            let names = file.set_names();
+            if names.is_empty() {
+                "A set can be turned off on one machine. None keeps the rule always on.".to_owned()
+            } else {
+                format!(
+                    "Sets in these rules: {}. None keeps the rule always on.",
+                    names.join(", ")
+                )
+            }
+        }
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .mt(px(4.0))
+        .child(labeled_row("Rule set", field))
+        .child(paragraph(help, 10.5, 15.2))
 }
 
 /// Open in as lanes (design: Destination and App Pickers 1c, 1d): the
@@ -1318,6 +1453,27 @@ impl PwrRoute {
             rail.menu = None;
             rail.browser_typed = false;
             rail.profile_typed = false;
+        }
+        self.refresh(cx);
+    }
+
+    /// A pill in the Destinations lane: the rule opens in that named
+    /// destination, whatever it means on each machine; picking the lit one
+    /// again takes the name off and keeps the browser.
+    pub fn choose_named(&mut self, name: &str, cx: &mut Context<'_, Self>) {
+        let Some(Selection::Handler(h)) = self.selection else {
+            return;
+        };
+        let lit = self
+            .handlers
+            .get(h)
+            .is_some_and(|handler| handler.destination.as_deref() == Some(name));
+        self.store.set_destination(h, (!lit).then_some(name));
+        let handler = self.store.handlers().into_iter().nth(h);
+        if let (Some(rail), Some(handler)) = (&mut self.rail, handler) {
+            rail.browser.set(handler.browser);
+            rail.profile.set(handler.profile);
+            rail.menu = None;
         }
         self.refresh(cx);
     }

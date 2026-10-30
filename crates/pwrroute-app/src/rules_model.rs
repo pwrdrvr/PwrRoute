@@ -26,6 +26,9 @@ pub enum Matcher {
     Function(SharedString),
     /// The rule is switched off.
     Off,
+    /// The rule's set is off on this machine (`machine.json`): it keeps
+    /// its place and number, and routes elsewhere.
+    OffHere,
     /// What the rule keeps of the links it takes, when less than
     /// everything: "private · host only", "nothing".
     Privacy(SharedString),
@@ -141,6 +144,10 @@ pub struct Handler {
     pub privacy: Option<PrivacySetting>,
     /// `rules[].examples`: URLs that must resolve to this handler.
     pub examples: Vec<String>,
+    /// `rules[].destination`: the named destination it opens in.
+    pub destination: Option<String>,
+    /// `rules[].set`: the rule set it belongs to.
+    pub set: Option<String>,
     /// Why the editor cannot save it, in `RulesFile::problems`'s words.
     pub problems: Vec<String>,
 }
@@ -225,6 +232,8 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
         private: rule.private,
         privacy: rule.privacy.clone(),
         examples: rule.examples.clone(),
+        destination: rule.destination.clone(),
+        set: rule.set.clone(),
         problems,
     }
 }
