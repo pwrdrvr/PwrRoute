@@ -398,8 +398,11 @@ impl RulesStore for FakeRules {
 /// A rules document as a [`RulesFile`] with no problems, re-serialized so
 /// the store holds exactly what the file would.
 pub(crate) fn validate(rules: Value) -> Result<Value, RulesError> {
-    let file: RulesFile =
+    let mut file: RulesFile =
         serde_json::from_value(rules).map_err(|e| RulesError::Invalid(e.to_string()))?;
+    // A rule that names a destination carries its synced browser too, for
+    // readers that ignore names (the Go host), as the editor writes it.
+    file.mirror_destinations();
     let problems = file.problems();
     if let Some(problem) = problems.first() {
         return Err(RulesError::Invalid(format!(

@@ -801,6 +801,7 @@ mod tests {
                     &pwrroute_engine::Sources {
                         config: None,
                         rules,
+                        ..Default::default()
                     },
                     std::rc::Rc::new(pwrroute_engine::DefaultHost),
                     pwrroute_engine::Limits::default(),

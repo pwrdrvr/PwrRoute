@@ -7,6 +7,7 @@ members = [
     "crates/pwrroute-mcp",
     "crates/pwrroute-os",
     "crates/pwrroute-router",
+    "crates/pwrroute-sync",
     "e2e",
     "xtask",
 ]
@@ -26,6 +27,7 @@ pwrroute-browsers = { path = "crates/pwrroute-browsers" }
 pwrroute-engine = { path = "crates/pwrroute-engine" }
 pwrroute-os = { path = "crates/pwrroute-os" }
 pwrroute-router = { path = "crates/pwrroute-router" }
+pwrroute-sync = { path = "crates/pwrroute-sync" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

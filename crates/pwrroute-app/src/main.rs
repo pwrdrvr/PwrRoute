@@ -58,6 +58,7 @@ mod settings;
 mod settings_live;
 mod settings_store;
 mod start_from;
+mod sync;
 mod test_link;
 #[cfg(test)]
 mod tests;
@@ -217,6 +218,8 @@ fn main() -> ExitCode {
         // Before the tray, which follows the feed from the start.
         activity::install(resident.handle(), resident.dispatched.clone(), cx);
         settings_store::install(resident.settings.clone(), Some(resident.handle()), cx);
+        // Synced rules: after settings.json, which lists the folders.
+        sync::install(cx);
         tray::install(Some(resident.handle()), cx);
         default_browser::install(default_browser::Os::real(), cx);
         if args.request_default_on_startup(e2e::requested())
@@ -378,6 +381,7 @@ fn run_rules_tests(rules: Option<&Path>, config: Option<&Path>, out: &mut dyn Wr
     let sources = Sources {
         config: config.map(Path::to_path_buf),
         rules: rules_file,
+        ..Default::default()
     };
     // The OS answers the config's finicky.* calls, as it does for the
     // router. Its console output is collected (the last ConsoleLog::CAPACITY

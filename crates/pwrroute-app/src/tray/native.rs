@@ -59,6 +59,9 @@ pub enum MenuEntry {
     Check(TrayCommand, String, bool),
     /// "Held links (N)…", enabled while links wait.
     Held(String, bool),
+    /// Sync's row (design: Synced Rules 3c): its words, and whether it
+    /// acts (only a conflict's opens Settings › Sync).
+    Sync(String, bool),
     Separator,
 }
 
@@ -76,7 +79,13 @@ pub fn menu_entries(model: &TrayModel) -> Vec<MenuEntry> {
     let mode = model.mode();
     let to = model.destination.display();
     let held = model.held.len();
-    vec![
+    let sync = model.sync.iter().flat_map(|row| {
+        [
+            MenuEntry::Sync(row.menu_label(), row.actionable()),
+            Separator,
+        ]
+    });
+    sync.chain([
         Item(TrayCommand::OpenMain, "Open PwrRoute".into()),
         Item(TrayCommand::TestLink, "Test a link\u{2026}".into()),
         Separator,
@@ -120,7 +129,8 @@ pub fn menu_entries(model: &TrayModel) -> Vec<MenuEntry> {
         Item(TrayCommand::About, "About PwrRoute".into()),
         Separator,
         Item(TrayCommand::Quit, quit.into()),
-    ]
+    ])
+    .collect()
 }
 
 /// The live tray icon. Dropping it removes the icon.
@@ -132,6 +142,12 @@ pub struct NativeTray {
     /// "Held links (N)…": its count and whether it is enabled follow the
     /// model.
     held: Option<MenuItem>,
+    /// Sync's first row and the separator under it, put in and taken out
+    /// as rules start and stop syncing.
+    menu: Menu,
+    sync_row: MenuItem,
+    sync_separator: PredefinedMenuItem,
+    sync_shown: std::cell::Cell<bool>,
 }
 
 impl NativeTray {
@@ -144,8 +160,23 @@ impl NativeTray {
         let menu = Menu::new();
         let mut checks = HashMap::new();
         let mut held = None;
+        let sync_row = MenuItem::with_id(TrayCommand::Sync.menu_id(), "", false, None);
+        let sync_separator = PredefinedMenuItem::separator();
+        let mut sync_shown = false;
+        let mut after_sync = false;
         for entry in menu_entries(model) {
             let item: Box<dyn IsMenuItem> = match entry {
+                MenuEntry::Sync(label, enabled) => {
+                    sync_row.set_text(label);
+                    sync_row.set_enabled(enabled);
+                    sync_shown = true;
+                    after_sync = true;
+                    Box::new(sync_row.clone())
+                }
+                MenuEntry::Separator if after_sync => {
+                    after_sync = false;
+                    Box::new(sync_separator.clone())
+                }
                 MenuEntry::Item(command, label) => {
                     Box::new(MenuItem::with_id(command.menu_id(), label, true, None))
                 }
@@ -210,12 +241,20 @@ impl NativeTray {
         let builder = builder.with_icon(image);
         let icon = builder
             .with_tooltip(model.tooltip())
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             // The left click is ours: the dropdown on macOS, the window
             // elsewhere. The menu is the right click.
             .with_menu_on_left_click(false)
             .build()?;
-        Ok(Self { icon, checks, held })
+        Ok(Self {
+            icon,
+            checks,
+            held,
+            menu,
+            sync_row,
+            sync_separator,
+            sync_shown: std::cell::Cell::new(sync_shown),
+        })
     }
 
     /// A left click on the icon where it is now, as tray-icon would report
@@ -246,8 +285,25 @@ impl NativeTray {
                         item.set_enabled(enabled);
                     }
                 }
-                MenuEntry::Item(..) | MenuEntry::Separator => {}
+                MenuEntry::Item(..) | MenuEntry::Sync(..) | MenuEntry::Separator => {}
             }
+        }
+        match &model.sync {
+            Some(row) => {
+                self.sync_row.set_text(row.menu_label());
+                self.sync_row.set_enabled(row.actionable());
+                if !self.sync_shown.get() {
+                    let _ = self.menu.insert(&self.sync_row, 0);
+                    let _ = self.menu.insert(&self.sync_separator, 1);
+                    self.sync_shown.set(true);
+                }
+            }
+            None if self.sync_shown.get() => {
+                let _ = self.menu.remove(&self.sync_row);
+                let _ = self.menu.remove(&self.sync_separator);
+                self.sync_shown.set(false);
+            }
+            None => {}
         }
         let _ = self.icon.set_tooltip(Some(model.tooltip()));
     }
@@ -268,7 +324,8 @@ mod tests {
             .map(|entry| match entry {
                 MenuEntry::Item(_, label)
                 | MenuEntry::Check(_, label, _)
-                | MenuEntry::Held(label, _) => label.as_str(),
+                | MenuEntry::Held(label, _)
+                | MenuEntry::Sync(label, _) => label.as_str(),
                 MenuEntry::Separator => "-",
             })
             .collect();
@@ -333,6 +390,38 @@ mod tests {
             held(&holding),
             Some(("Held links (2)\u{2026}".to_owned(), true))
         );
+    }
+
+    #[test]
+    fn syncing_puts_its_row_first_and_only_a_conflict_acts() {
+        use super::super::model::{SyncRow, SyncTone};
+        let mut model = TrayModel::fixture(SystemTime::now());
+        model.sync = Some(SyncRow {
+            title: "Rules synced 2 min ago".into(),
+            sub: Some("Dropbox, iCloud".into()),
+            tone: SyncTone::Ok,
+        });
+        let entries = menu_entries(&model);
+        assert_eq!(
+            entries[..2],
+            [
+                MenuEntry::Sync(
+                    "Rules synced 2 min ago \u{00b7} Dropbox, iCloud".into(),
+                    false
+                ),
+                MenuEntry::Separator,
+            ]
+        );
+        assert_eq!(
+            entries[2],
+            MenuEntry::Item(TrayCommand::OpenMain, "Open PwrRoute".into())
+        );
+        model.sync = Some(SyncRow {
+            title: "Sync conflict".into(),
+            sub: Some("Resolve\u{2026}".into()),
+            tone: SyncTone::Bad,
+        });
+        assert!(matches!(menu_entries(&model)[0], MenuEntry::Sync(_, true)));
     }
 
     #[test]

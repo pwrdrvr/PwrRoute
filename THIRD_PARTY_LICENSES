@@ -9345,7 +9345,7 @@ Apache License 2.0 (486)
 - chrono@0.4.45 | https://github.com/chronotope/chrono
 - nonmax@0.5.5 | https://github.com/LPGhatguy/nonmax
 
-MIT License (194)
+MIT License (195)
 - rustybuzz@0.20.1 | https://github.com/harfbuzz/rustybuzz
 - uds_windows@1.2.1 | https://github.com/haraldh/rust_uds_windows
 - freetype-sys@0.20.1 | https://github.com/PistonDevelopers/freetype-sys.git
@@ -9433,6 +9433,7 @@ MIT License (194)
 - pwrroute-mcp@0.9.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-os@0.9.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-router@0.9.0 | https://github.com/pwrdrvr/PwrRoute
+- pwrroute-sync@0.9.0 | https://github.com/pwrdrvr/PwrRoute
 - pwrroute-e2e@0.9.0 | https://github.com/pwrdrvr/PwrRoute
 - xtask@0.9.0
 - base64-simd@0.8.0 | https://github.com/Nugine/simd
@@ -23772,6 +23773,7 @@ Applies to:
 - pwrroute-mcp@0.9.0
 - pwrroute-os@0.9.0
 - pwrroute-router@0.9.0
+- pwrroute-sync@0.9.0
 - pwrroute-e2e@0.9.0
 - xtask@0.9.0
 - base64-simd@0.8.0

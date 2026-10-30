@@ -285,6 +285,8 @@ impl TestLink {
             let sources = Sources {
                 config: self.config.clone(),
                 rules: self.rules.clone(),
+                // As this machine routes: its destinations and sets.
+                machine: crate::sync::machine(),
             };
             // The OS answers the config's finicky.* calls, as it does for
             // the router; the run's console output comes back in the trace.

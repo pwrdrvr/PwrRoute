@@ -22,6 +22,8 @@ pub mod model;
 pub mod privacy;
 pub mod privacy_host;
 mod style;
+mod sync;
+pub mod sync_host;
 pub mod system_host;
 #[cfg(test)]
 mod tests;
@@ -98,6 +100,7 @@ pub enum Pane {
     About,
     Browsers,
     Configuration,
+    Sync,
     Privacy,
     LocalAgents,
     Updates,
@@ -105,10 +108,11 @@ pub enum Pane {
 }
 
 impl Pane {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::About,
         Self::Browsers,
         Self::Configuration,
+        Self::Sync,
         Self::Privacy,
         Self::LocalAgents,
         Self::Updates,
@@ -119,6 +123,7 @@ impl Pane {
         match self {
             Self::Browsers => "Browsers",
             Self::Configuration => "Configuration",
+            Self::Sync => "Sync",
             Self::Privacy => "Privacy",
             Self::LocalAgents => "Local agents",
             Self::Updates => "Updates",
@@ -132,6 +137,7 @@ impl Pane {
         match self {
             Self::Browsers => "settings-nav-browsers",
             Self::Configuration => "settings-nav-configuration",
+            Self::Sync => "settings-nav-sync",
             Self::Privacy => "settings-nav-privacy",
             Self::LocalAgents => "settings-nav-local-agents",
             Self::Updates => "settings-nav-updates",
@@ -145,6 +151,7 @@ impl Pane {
         match self {
             Self::Browsers => "settings-pane-browsers",
             Self::Configuration => "settings-pane-configuration",
+            Self::Sync => "settings-pane-sync",
             Self::Privacy => "settings-pane-privacy",
             Self::LocalAgents => "settings-pane-local-agents",
             Self::Updates => "settings-pane-updates",
@@ -301,6 +308,7 @@ pub struct SettingsWindow {
     pub(crate) agents: local_agents::State,
     pub(crate) privacy: privacy::State,
     pub(crate) configuration: configuration::State,
+    pub(crate) sync: sync::State,
     scroll: ScrollHandle,
     on_request: RequestHandler,
 }
@@ -314,6 +322,7 @@ impl SettingsWindow {
         let agents = local_agents::State::new(cx);
         let privacy = privacy::State::new(&model.privacy, cx);
         let configuration = configuration::State::new(cx);
+        let sync = sync::State::new(&model.sync, cx);
         Self {
             focus: cx.focus_handle(),
             menu_bar: MenuBar::entity("Settings", cx),
@@ -325,6 +334,7 @@ impl SettingsWindow {
             agents,
             privacy,
             configuration,
+            sync,
             scroll: ScrollHandle::new(),
             on_request,
         }
@@ -338,6 +348,7 @@ impl SettingsWindow {
             self.agents.close_menu();
             self.privacy.close_sheet();
             self.configuration.close_menu();
+            self.sync.close();
             self.scroll.set_offset(point(px(0.0), px(0.0)));
             cx.notify();
         }
@@ -459,7 +470,10 @@ impl SettingsWindow {
                 .border_color(theme::border_subtle()),
             |nav, pane| {
                 let count = (pane == Pane::LocalAgents && agents > 0).then(|| agents.to_string());
-                nav.child(nav_item(pane, self.pane == pane, count, cx))
+                // Synced Rules 1c: a conflict marks Sync wherever the
+                // reader is in Settings.
+                let dot = pane == Pane::Sync && self.model.sync.has_conflict();
+                nav.child(nav_item(pane, self.pane == pane, count, dot, cx))
             },
         )
     }
@@ -468,6 +482,7 @@ impl SettingsWindow {
         match self.pane {
             Pane::Browsers => browsers::pane(self, cx),
             Pane::Configuration => configuration::pane(self, cx),
+            Pane::Sync => sync::pane(self, window, cx),
             Pane::Privacy => privacy::pane(self, window, cx),
             Pane::LocalAgents => local_agents::pane(self, window, cx),
             Pane::Updates => updates::pane(self, cx),
@@ -496,6 +511,7 @@ fn nav_item(
     pane: Pane,
     selected: bool,
     count: Option<String>,
+    dot: bool,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Button {
     let foreground = if selected {
@@ -544,7 +560,23 @@ fn nav_item(
                     .child(mono(count, 10.5, 600.0, theme::text_subtle())),
             )
         })
+        .when(dot, |item| {
+            // `.rail-item .xdot`
+            item.child(
+                div()
+                    .id(SYNC_DOT_ID)
+                    .debug_selector(|| SYNC_DOT_ID.into())
+                    .ml_auto()
+                    .size(px(6.0))
+                    .rounded_full()
+                    .bg(theme::status_error())
+                    .test_support(),
+            )
+        })
 }
+
+/// The red dot on Sync's nav item while a folder is in conflict.
+pub const SYNC_DOT_ID: &str = "settings-nav-sync-dot";
 
 /// `.strip`: the family title strip, with "Settings" as its crumb.
 fn title_strip(menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {

@@ -16,6 +16,9 @@
 //! - [`Engine::review_import`] is the Finicky importer's [`Review`] of a
 //!   config: which of its rules a visual rule holds exactly, which stay
 //!   JS, and a probed [`Suggested`] rule for a function that looks like one.
+//! - [`MachineFile`] is `machine.json`, the layer that never syncs: what a
+//!   named destination means on this machine and which rule sets are off
+//!   here ([`RulesFile::for_machine`]).
 //! - [`ShortLinks`] expands short links over a [`Network`] before resolving.
 //! - [`discovery`] finds the config and `rules.json` the way Finicky does.
 //! - [`Reloader`] watches them and swaps in a new [`Engine`] only once it has
@@ -35,6 +38,7 @@ mod host;
 mod http;
 mod import;
 mod loader;
+mod machine;
 mod native;
 mod reload;
 mod rules;
@@ -69,12 +73,13 @@ pub use host::{
 #[cfg(feature = "http")]
 pub use http::HttpNetwork;
 pub use import::{Review, Reviewed, SourceLines, Suggested, Verdict, Visual};
+pub use machine::{BindingSource, MachineFile};
 pub use native::NativeHost;
 pub use reload::{ConfigChoice, Reloader, Status, WatchSet, Watcher};
 pub use rules::{
-    DONT_OPEN, Expectation, FALLBACK_BROWSER, Place, Precedence, PrivacySetting, Problem, Rewrite,
-    RewriteAction, RewriteExample, RouteTest, Rule, RulesFile, RulesOptions, app_type_of,
-    is_dont_open,
+    Binding, DONT_OPEN, Destination, Expectation, FALLBACK_BROWSER, Place, Precedence,
+    PrivacySetting, Problem, Rewrite, RewriteAction, RewriteExample, RouteTest, Rule, RuleSet,
+    RulesFile, RulesOptions, app_type_of, is_dont_open,
 };
 pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
 pub use suggest::{Suggestion, suggest_rule};
@@ -256,6 +261,11 @@ pub enum AppType {
 pub struct Sources {
     pub config: Option<PathBuf>,
     pub rules: RulesFile,
+    /// What the synced rules mean on this machine (`machine.json`): links
+    /// route with it applied ([`RulesFile::for_machine`]); the saved
+    /// examples and tests run without it, so they mean the same on every
+    /// machine ([`Engine::test_rules`]).
+    pub machine: MachineFile,
 }
 
 /// A loaded config, ready to resolve URLs.
@@ -270,9 +280,14 @@ pub struct Engine {
     /// The config's `console` output since the current run started; each
     /// trace takes its lines.
     console: ConsoleLog,
-    /// The `rules.json` the engine loaded, for the privacy of what it routes
-    /// and for its examples and tests.
+    /// The `rules.json` the engine loaded, as this machine routes it, for
+    /// the privacy of what it routes and for its examples and tests.
     rules: RulesFile,
+    /// The machine layer it was loaded with, and the file before it; when
+    /// the layer changes anything, [`Engine::test_rules`] runs the tests on
+    /// an engine over `synced`.
+    machine: MachineFile,
+    synced: RulesFile,
     imports: Rc<RefCell<Vec<PathBuf>>>,
     short_links: ShortLinks,
     /// For each `rules.json` rewrite and handler the engine loaded, its
@@ -299,6 +314,7 @@ impl Engine {
             &Sources {
                 config: Some(path.to_path_buf()),
                 rules: RulesFile::default(),
+                ..Default::default()
             },
             host,
             limits,
@@ -345,6 +361,8 @@ impl Engine {
         })));
         let context = Context::full(&runtime)?;
 
+        // Named destinations and rule sets, as this machine resolves them.
+        let rules = sources.rules.for_machine(&sources.machine);
         let mut engine = Self {
             context,
             _runtime: runtime,
@@ -353,23 +371,25 @@ impl Engine {
             config: config.as_ref().map(|(path, _)| path.clone()),
             host: Rc::clone(&host),
             console: ConsoleLog::new(),
-            rules: sources.rules.clone(),
+            rules: rules.clone(),
+            machine: sources.machine.clone(),
+            synced: sources.rules.clone(),
             imports,
             short_links: ShortLinks::default(),
-            planned_rewrites: sources.rules.planned_rewrites(),
-            planned_rules: sources.rules.planned_rules(),
+            planned_rewrites: rules.planned_rewrites(),
+            planned_rules: rules.planned_rules(),
         };
         let console = engine.console.clone();
         let shorteners = engine.with_deadline(limits.load, |ctx| {
             install_globals(&ctx, &host, &console)?;
             let base = match &config {
                 Some(_) => serde_json::Value::Null,
-                None => sources.rules.base_config(),
+                None => rules.base_config(),
             };
             let setup: Function<'_> = ctx.eval("__pwrroute.setup")?;
             setup
                 .call::<_, ()>((
-                    ctx.json_parse(sources.rules.plan().to_string())?,
+                    ctx.json_parse(rules.plan().to_string())?,
                     ctx.json_parse(base.to_string())?,
                 ))
                 .catch(&ctx)
@@ -568,13 +588,20 @@ impl Engine {
     /// of `proposal` through an engine built from the same config and the
     /// proposal instead of the saved rules. The editor and an agent check a
     /// change this way before saving it. Nothing is opened or written.
+    ///
+    /// Examples and tests sync with the rules, so they run without this
+    /// machine's layer: a test of "Work 1" passes on every machine whatever
+    /// "Work 1" opens there, and a rule in a set that is off here still
+    /// answers for its examples.
     pub fn test_rules(&self, proposal: Option<&RulesFile>) -> Result<TestReport> {
         match proposal {
-            None => self.rules.run_tests(self),
+            None if self.machine.routes_as_synced() => self.rules.run_tests(self),
+            None => self.test_rules(Some(&self.synced)),
             Some(rules) => {
                 let sources = Sources {
                     config: self.config.clone(),
                     rules: rules.clone(),
+                    ..Default::default()
                 };
                 let engine = Self::from_sources(&sources, Rc::clone(&self.host), self.limits)?;
                 rules.run_tests(&engine)

@@ -8,7 +8,9 @@
 use gpui_kit::{App, Window};
 
 use crate::settings::model::{SettingsModel, SettingsRequest};
-use crate::settings::{browsers_host, configuration_host, privacy_host, system_host, updates_host};
+use crate::settings::{
+    browsers_host, configuration_host, privacy_host, sync_host, system_host, updates_host,
+};
 use crate::{default_browser, mcp};
 
 /// Every pane, read fresh. The default-browser chip follows the window from
@@ -22,6 +24,7 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
     SettingsModel {
         browsers: browsers_host::model(cx),
         configuration: configuration_host::model(cx),
+        sync: sync_host::model(cx),
         privacy: privacy_host::model(cx),
         updates: updates_host::model(),
         diagnostics: system_host::diagnostics(cx, &local_agents),
@@ -38,6 +41,7 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
         || mcp::handle_settings_request(request, cx)
         || browsers_host::handle_request(request, cx)
         || configuration_host::handle_request(request, cx)
+        || sync_host::handle_request(request, cx)
         || updates_host::handle_request(request, cx)
         || system_host::handle_request(request, cx);
     if !handled {

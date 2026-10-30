@@ -5073,6 +5073,7 @@ fn a_deleted_rules_try_it_link_stays_with_it(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("https://meet.google.com/typed-here");
     draw(cx);
+    scroll_to(cx, "rail-delete");
     click(cx, "rail-delete");
     let (selection, sample, edited) = view.read_with(cx, |app, _| {
         let rail = app.rail.as_ref().expect("the editor");

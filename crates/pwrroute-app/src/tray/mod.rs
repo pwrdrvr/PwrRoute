@@ -74,11 +74,13 @@ pub enum TrayCommand {
     /// Ask the OS to make PwrRoute the default browser: the dropdown's row
     /// while another app has it.
     MakeDefault,
+    /// Sync's row: Settings › Sync.
+    Sync,
     Quit,
 }
 
 impl TrayCommand {
-    const ALL: [Self; 15] = [
+    const ALL: [Self; 16] = [
         Self::OpenMain,
         Self::TestLink,
         Self::Rules,
@@ -93,6 +95,7 @@ impl TrayCommand {
         Self::ChooseWhere,
         Self::HeldLinks,
         Self::MakeDefault,
+        Self::Sync,
         Self::Quit,
     ];
 
@@ -114,6 +117,7 @@ impl TrayCommand {
             Self::ChooseWhere => "pwrroute.send-choose",
             Self::HeldLinks => "pwrroute.held",
             Self::MakeDefault => "pwrroute.make-default",
+            Self::Sync => "pwrroute.sync",
             Self::Quit => "pwrroute.quit",
         }
     }
@@ -180,6 +184,7 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
     });
     if live {
         follow_feed(&model, cx);
+        follow_sync(&model, cx);
     }
     let (events, received) = async_channel::unbounded();
     let native = match NativeTray::create(model.read(cx), events) {
@@ -397,6 +402,34 @@ fn fixture(now: SystemTime) -> Option<TrayModel> {
     }
 }
 
+/// Keep the sync row at what the last pass found, and its age current
+/// each time the dropdown opens.
+fn follow_sync(model: &Entity<TrayModel>, cx: &mut App) {
+    let Some(feed) = crate::sync::feed(cx) else {
+        return;
+    };
+    refresh_sync(model, cx);
+    let model = model.clone();
+    cx.observe(&feed, move |_, cx| refresh_sync(&model, cx))
+        .detach();
+}
+
+fn refresh_sync(model: &Entity<TrayModel>, cx: &mut App) {
+    let Some(feed) = crate::sync::feed(cx) else {
+        return;
+    };
+    let row = crate::sync::tray_row_of(
+        &feed.read(cx).status,
+        pwrroute_sync::Clock::now(&pwrroute_sync::SystemClock),
+    );
+    model.update(cx, |model, cx| {
+        if model.sync != row {
+            model.sync = row;
+            cx.notify();
+        }
+    });
+}
+
 /// Keep the recents and the count at what the router has dispatched.
 fn follow_feed(model: &Entity<TrayModel>, cx: &mut App) {
     let Some(feed) = activity::feed(cx) else {
@@ -449,6 +482,7 @@ fn click(position: (f64, f64), size: (f64, f64), pointer: Option<(f64, f64)>, cx
         return;
     }
     let model = tray.model.clone();
+    let live = tray.live;
     // The chip and the Make default row draw what the OS says now, not what
     // it said at the last tick.
     default_browser::refresh(false, cx);
@@ -459,6 +493,10 @@ fn click(position: (f64, f64), size: (f64, f64), pointer: Option<(f64, f64)>, cx
     // list.
     if let Some(feed) = activity::feed(cx) {
         sync_feed(&model, &feed, cx);
+    }
+    // "Rules synced 2 min ago" counts from now.
+    if live {
+        refresh_sync(&model, cx);
     }
     let anchor = crate::macos::status_item_anchor(position, size, pointer);
     let (origin, display, max_height) = match &anchor {
@@ -507,6 +545,7 @@ pub fn run(command: TrayCommand, cx: &mut App) {
         TrayCommand::OpenMain => crate::show_main_window(cx),
         TrayCommand::About => crate::settings::open(cx, Some(crate::settings::Pane::About)),
         TrayCommand::Settings => crate::settings::open(cx, None),
+        TrayCommand::Sync => crate::settings::open(cx, Some(crate::settings::Pane::Sync)),
         TrayCommand::Rules => show_screen(Screen::Rules, cx),
         TrayCommand::TestLink => show_screen(Screen::TestLink, cx),
         TrayCommand::Activity => show_screen(Screen::Activity, cx),

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* settings panes, as in Settings */
+          .snav { flex: 0 0 208px; }
+          .snav .rail-item { font-size: 13px; }
+          .spane { flex: 1; min-width: 0; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+          .spane > .card { flex: 0 0 auto; max-width: 760px; width: 100%; }
+          .spane > .pane-head { max-width: 760px; }
+          .cmd { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); font: 500 11px/1.5 var(--font-mono); color: var(--text-secondary); }
+          .cmd span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+          .card-hd.solo { border-bottom: none; }
+          .card-foot { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border-faint); font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); }
+          .card-foot b { font-weight: 600; color: var(--text-secondary); }
+          .rail-item .xdot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--status-error); }
+          /* the disclosure sentence, as in Settings › Privacy */
+          .disc { width: 100%; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-faint); background: var(--bg-app); font: 400 11.5px/1.6 var(--font-sans); color: var(--text-secondary); text-wrap: pretty; }
+          .disc b { color: var(--text-primary); font-weight: 600; }
+          .disc.warn { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .disc .lead { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .note-acc { padding: 8px 10px; border-radius: 7px; background: var(--bg-row-active); border: 1px solid var(--accent-border); font: 400 11px/1.5 var(--font-sans); color: var(--text-secondary); }
+          .note-acc b { color: var(--text-primary); font-weight: 600; }
+          .note-warn { padding: 8px 10px; border-radius: 7px; background: var(--warn-soft); font: 400 11px/1.5 var(--font-sans); color: var(--warn-text); }
+          .note-bad { padding: 8px 10px; border-radius: 7px; background: var(--danger-soft); font: 400 11px/1.5 var(--font-sans); color: var(--danger-text); }
+
+          /* new in this canvas: a sync folder row */
+          .pv { width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); color: #fff; flex: 0 0 auto; }
+          .pv.ic { background: #3a8ee6; } .pv.gd { background: #1f9d58; } .pv.db { background: #0b5cd6; }
+          .pv.fo { background: var(--bg-hover-strong); border: 1px solid var(--border-default); color: var(--text-secondary); }
+          .fcap { padding: 7px 16px; background: var(--bg-panel-elevated); border-bottom: 1px solid var(--border-faint); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .dst { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px 12px; align-items: start; padding: 12px 16px; border-bottom: 1px solid var(--border-faint); }
+          .dst:last-child { border-bottom: none; }
+          .dst .dm { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+          .dst .dn { display: flex; align-items: center; gap: 8px; font: 600 12.5px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .dst .dn small { font: 500 11px/1 var(--font-sans); color: var(--text-muted); }
+          .dst .dp { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+          .dst .dl { display: flex; align-items: center; gap: 6px; font: 400 11px/1.4 var(--font-sans); color: var(--text-secondary); }
+          .dst .dl i { width: 6px; height: 6px; border-radius: 50%; background: var(--status-ok); flex: 0 0 auto; }
+          .dst .dl.acc i { background: var(--accent); } .dst .dl.warn i { background: var(--status-warning); } .dst .dl.bad i { background: var(--status-error); } .dst .dl.wait i { background: var(--status-suspended); }
+          .dst .dl.bad { color: var(--danger-text); }
+          .dst .da { display: flex; align-items: center; gap: 6px; }
+          .dst .ex { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+          .dst.found .dn { font-weight: 500; }
+          .dst.found .dp { color: var(--text-subtle); }
+          .dst .dp.txt { font: 400 11px/1.45 var(--font-sans); color: var(--text-subtle); }
+          .dst.bad { background: linear-gradient(90deg, rgba(185,66,50,0.10), transparent 70%); box-shadow: inset 3px 0 0 var(--danger-base); }
+          .dst.warn { box-shadow: inset 3px 0 0 var(--status-warning); }
+          .dst.acc { background: linear-gradient(90deg, rgba(255,138,31,0.07), transparent 70%); box-shadow: inset 3px 0 0 var(--accent); }
+          .spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--border-default); border-top-color: var(--accent); flex: none; }
+          .stage { padding: 20px; background: var(--bg-app); display: flex; flex-direction: column; gap: 10px; }
+          .stage .cap { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-subtle); }
+          .stage > .card { width: 100%; }
+          /* conflict and join: the two sides */
+          .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+          .side { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-input); }
+          .side .sh { display: flex; align-items: center; gap: 8px; font: 600 12px/1.2 var(--font-sans); color: var(--text-primary); }
+          .side .sh .chip { margin-left: auto; }
+          .side .sm { font: 500 10.5px/1.4 var(--font-mono); color: var(--text-muted); }
+          .diff { width: 100%; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; background: var(--bg-app); }
+          .diff .cap { padding: 6px 10px; background: var(--bg-panel-elevated); font: 600 10.5px/1.3 var(--font-sans); color: var(--text-secondary); border-bottom: 1px solid var(--border-faint); }
+          .diff .cap i { font-style: normal; font-weight: 500; color: var(--text-subtle); }
+          .diff .dr { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); font: 500 11px/1.4 var(--font-mono); color: var(--text-primary); white-space: nowrap; }
+          .diff .dr:last-child { border-bottom: none; }
+          .diff .dr .k { width: 12px; text-align: center; font-weight: 700; }
+          .diff .dr .k.add { color: var(--success-text); } .diff .dr .k.chg { color: var(--warn-text); }
+          .diff .dr .r { color: var(--text-muted); }
+          .diff .dr .tag { height: 18px; }
+          .resolve { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+          .resolve .note { flex: 1; min-width: 200px; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Settings › Sync ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Settings &rsaquo; Sync</span></div>
+        <p class="dv-sub">Rules sync through a folder the person already syncs (iCloud Drive, Google Drive, Dropbox, or any folder), never through a PwrRoute server. For each one PwrRoute keeps <code>&lt;folder&gt;/PwrRoute/</code> with <code>rules.json</code>, a <code>sync.json</code> manifest written last, and <code>finicky.ts</code> when that is on. A new <b>Sync</b> item joins the Settings nav between Configuration and Privacy. The pane has four cards: <b>What syncs</b> (the disclosure), <b>Sync to</b> (the folders, one row each), <b>What goes in the folder</b> (rules.json and the optional Finicky config) and <b>This machine</b> (its name, and in turn 2 what the shared names mean here). In the UI a synced place is a <b>folder</b>; <b>destination</b> is kept for the named targets rules open links in. Turns 2 to 4 (what the names mean on each machine, sync status in the window and menu bar, Linux and Windows) are in <b>PwrRoute Synced Rules Machine</b>.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Nothing set up. The disclosure comes first and is the only thing in the pane before a folder is added: what is copied, including the example and test URLs, and who can read it. <b>Sync to</b> lists the folders PwrRoute found by exact path (Google Drive by listing <code>~/Library/CloudStorage</code> once, when the pane opens), each with <b>Add</b>, and <b>Choose a folder&hellip;</b> for anything else. The path shown is the one PwrRoute will use.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Sync</div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Across machines</div><h1 class="ttl">Sync</h1><p class="help">Keep the same rules on every machine through a folder your cloud drive already syncs. PwrRoute reads and writes only its own PwrRoute folder there.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Before you add a folder</p><h2 class="card-title">What syncs</h2></div><span class="chip">Off</span></div>
+                    <div class="field"><div class="field-l"><span>What leaves this Mac</span><span class="field-sub">Said once here, before the first folder is added.</span></div><div class="field-c">
+                      <div class="disc warn"><div class="lead"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>What is copied</div>Sync copies <b>rules.json</b> into the folder you choose, <b>including the example and test URLs saved with your rules</b>. Anyone who can open that folder, and the company that stores it, can read them. Activity, the journal and this machine&rsquo;s own settings never sync.</div>
+                    </div></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Cloud folders</p><h2 class="card-title">Sync to</h2><p class="card-desc">Add one or more. PwrRoute makes a PwrRoute folder inside and keeps rules.json there.</p></div><span class="chip">Not set up</span></div>
+                    <div class="fcap">Found on this Mac</div>
+                    <div class="dst found"><span class="pv ic">iC</span><div class="dm"><span class="dn">iCloud Drive</span><span class="dp">~/Library/Mobile Documents/com~apple~CloudDocs/PwrRoute</span></div><div class="da"><span class="btn sm">Add</span></div></div>
+                    <div class="dst found"><span class="pv gd">GD</span><div class="dm"><span class="dn">Google Drive<small>&middot; jo@example.com</small></span><span class="dp">~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute</span></div><div class="da"><span class="btn sm">Add</span></div></div>
+                    <div class="dst found"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox</span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span></div><div class="da"><span class="btn sm">Add</span></div></div>
+                    <div class="dst found"><span class="pv fo"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><div class="dm"><span class="dn">Choose a folder&hellip;</span><span class="dp txt">A folder another app keeps in sync: an rclone or Insync folder, a network share.</span></div><div class="da"><span class="btn sm">Choose&hellip;</span></div></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Never syncs</p><h2 class="card-title">This machine</h2></div></div>
+                    <div class="field"><div class="field-l"><span>Name</span><span class="field-sub">How your other machines see this one in sync status.</span></div><div class="field-c"><div class="inp" style="width: 260px;">Studio Mac</div><span class="field-help">Starts as the computer name.</span></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Set up with two folders. Each row: provider, path in mono, a <b>chip</b> for the state and a <b>line</b> that says what it means, then Reveal and Remove. Remove stops syncing there and leaves the folder&rsquo;s files alone. <b>Sync now</b> sits in the card head; the foot says when it last synced and when it checks. The disclosure folds to one line once a folder is added.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Sync</div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Across machines</div><h1 class="ttl">Sync</h1><p class="help">Keep the same rules on every machine through a folder your cloud drive already syncs. PwrRoute reads and writes only its own PwrRoute folder there.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd solo"><div class="card-hd-main"><p class="card-eyebrow">What syncs</p><h2 class="card-title">rules.json, with its example and test URLs</h2><p class="card-desc">Activity, the journal and this machine&rsquo;s settings stay on this Mac.</p></div><span class="btn sm quiet">Expand</span></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Cloud folders</p><h2 class="card-title">Sync to</h2></div><span class="chip ok">2 folders</span><div class="actions"><span class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Sync now</span></div></div>
+                    <div class="dst"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip ok">In sync</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl"><i></i>09:41 &middot; saved by MacBook Air</span></div><div class="da"><span class="btn sm quiet">Reveal</span><span class="btn sm quiet danger">Remove</span></div></div>
+                    <div class="dst"><span class="pv ic">iC</span><div class="dm"><span class="dn">iCloud Drive<span class="chip">Waiting</span></span><span class="dp">~/Library/Mobile Documents/com~apple~CloudDocs/PwrRoute</span><span class="dl wait"><i></i>Waiting for iCloud to download rules.json</span></div><div class="da"><span class="btn sm quiet">Reveal</span><span class="btn sm quiet danger">Remove</span></div></div>
+                    <div class="fcap">Also on this Mac</div>
+                    <div class="dst found"><span class="pv gd">GD</span><div class="dm"><span class="dn">Google Drive<small>&middot; jo@example.com</small></span><span class="dp">~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute</span></div><div class="da"><span class="btn sm">Add</span></div></div>
+                    <div class="dst found"><span class="pv fo"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><div class="dm"><span class="dn">Choose a folder&hellip;</span><span class="dp txt">A folder another app keeps in sync: an rclone or Insync folder, a network share.</span></div><div class="da"><span class="btn sm">Choose&hellip;</span></div></div>
+                    <div class="card-foot"><span>Last synced <b>09:41</b> &middot; Checks every minute, when PwrRoute comes to the front and after every save.</span></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Files</p><h2 class="card-title">What goes in the folder</h2></div></div>
+                    <div class="field"><div class="field-l"><span>rules.json</span><span class="field-sub">Your visual rules, with their examples and tests.</span></div><div class="field-c"><span class="chip ok">Always</span></div></div>
+                    <div class="field"><div class="field-l"><span>Also sync ~/.finicky.ts</span><span class="field-sub">On this machine only. Saved in the folder as finicky.ts.</span></div><div class="field-c"><span class="sw on"></span><span class="field-help">Only this file syncs; files it imports do not. The router keeps reading ~/.finicky.ts, never the cloud folder.</span></div></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Never syncs</p><h2 class="card-title">This machine</h2></div></div>
+                    <div class="field"><div class="field-l"><span>Name</span><span class="field-sub">How your other machines see this one in sync status.</span></div><div class="field-c"><div class="inp" style="width: 260px;">Studio Mac</div><span class="field-help">Starts as the computer name.</span></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>A conflict. This Mac edited rules.json at 09:12 while MacBook Air saved a different one to Dropbox at 09:20. Nothing is written: the row goes to the danger tone and opens on the two sides, what differs by rule number, and two equal buttons. The other folder carries on, so iCloud already has this Mac&rsquo;s rules. The nav item carries a red dot until it is resolved.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Sync<span class="xdot"></span></div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Across machines</div><h1 class="ttl">Sync</h1><p class="help">Keep the same rules on every machine through a folder your cloud drive already syncs. PwrRoute reads and writes only its own PwrRoute folder there.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Cloud folders</p><h2 class="card-title">Sync to</h2></div><span class="chip bad">1 conflict</span><div class="actions"><span class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>Sync now</span></div></div>
+                    <div class="dst bad"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip bad">Conflict</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl bad"><i></i>Both changed since the last sync</span></div><div class="da"><span class="btn sm quiet">Reveal</span></div><div class="ex"><div class="cmp"><div class="side"><div class="sh">This Mac<span class="chip acc">routing now</span></div><span class="sm">14 rules &middot; edited 09:12</span></div><div class="side"><div class="sh">MacBook Air<span class="chip">in Dropbox</span></div><span class="sm">15 rules &middot; saved 09:20</span></div></div>
+                      <div class="diff"><div class="cap">What MacBook Air&rsquo;s has <i>against this Mac&rsquo;s</i></div><div class="dr"><span class="k add">+</span><span class="r">rule 15</span><span class="tag">*.example.org/*</span><span class="arrow">&rarr;</span>Work 2</div><div class="dr"><span class="k chg">~</span><span class="r">rule 3</span>profile <span class="tag">Work</span><span class="arrow">&rarr;</span><span class="tag">Work 1</span></div></div>
+                      <div class="resolve"><span class="btn">Keep this Mac&rsquo;s</span><span class="btn">Use MacBook Air&rsquo;s</span><span class="note">The one you don&rsquo;t keep is saved to backups.</span><span class="btn sm quiet">Show backups</span></div>
+                      <span class="field-help">Links keep routing with this Mac&rsquo;s rules until you choose. Nothing is written to Dropbox meanwhile.</span></div></div>
+                    <div class="dst"><span class="pv ic">iC</span><div class="dm"><span class="dn">iCloud Drive<span class="chip ok">In sync</span></span><span class="dp">~/Library/Mobile Documents/com~apple~CloudDocs/PwrRoute</span><span class="dl"><i></i>09:12 &middot; saved by Studio Mac</span></div><div class="da"><span class="btn sm quiet">Reveal</span><span class="btn sm quiet danger">Remove</span></div></div>
+                    <div class="card-foot"><span>Last synced <b>09:12</b> &middot; Checks every minute, when PwrRoute comes to the front and after every save.</span></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1d">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>Joining. MacBook Air adds a Dropbox folder that already has Studio Mac&rsquo;s rules while it has 6 of its own. With no base yet and rules on both sides, it asks once. Taking the folder&rsquo;s is the usual case, so it is the primary. An empty Mac takes the folder&rsquo;s without asking; an empty folder gets this Mac&rsquo;s.</span></div>
+            <div class="dv-card win" style="width: 1060px;">
+              <div class="strip">
+                <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div>
+                <div class="brand"><svg class="mark" viewBox="188 188 648 648" width="20" height="20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"/><circle cx="724" cy="724" r="84"/></g><path d="M384 512C512 512 512 300 640 300"/><circle cx="300" cy="512" r="84"/><circle cx="724" cy="300" r="84"/></g></svg><p class="wordmark">Pwr<b>Route</b></p></div>
+                <span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Settings</span>
+              </div>
+              <div class="body">
+                <nav class="rail snav">
+                  <div class="rail-item">General</div>
+                  <div class="rail-item">Browsers</div>
+                  <div class="rail-item">Configuration</div>
+                  <div class="rail-item on">Sync</div>
+                  <div class="rail-item">Privacy</div>
+                  <div class="rail-item">Local agents<span class="cnt">2</span></div>
+                  <div class="rail-item">Updates</div>
+                  <div class="rail-item">Diagnostics</div>
+                  <div class="rail-item">About</div>
+                </nav>
+                <div class="spane">
+                  <div class="pane-head"><div class="pane-head-main"><div class="eyebrow">Across machines</div><h1 class="ttl">Sync</h1><p class="help">Keep the same rules on every machine through a folder your cloud drive already syncs. PwrRoute reads and writes only its own PwrRoute folder there.</p></div></div>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Cloud folders</p><h2 class="card-title">Sync to</h2></div><span class="chip">Not set up</span></div>
+                    <div class="dst acc"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip acc">Joining</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl acc"><i></i>Has rules already &middot; choose which to keep</span></div><div class="da"><span class="btn sm quiet">Cancel</span></div><div class="ex"><div class="note-acc">This folder already has rules from <b>Studio Mac</b> (15 rules, saved yesterday).</div>
+                      <div class="cmp"><div class="side"><div class="sh">In Dropbox<span class="chip">from Studio Mac</span></div><span class="sm">15 rules &middot; saved yesterday 17:48</span></div><div class="side"><div class="sh">This Mac<span class="chip acc">routing now</span></div><span class="sm">6 rules &middot; edited today 08:30</span></div></div>
+                      <div class="resolve"><span class="btn primary">Use the folder&rsquo;s rules</span><span class="btn">Replace with this Mac&rsquo;s</span><span class="note">This Mac&rsquo;s 6 rules are saved to backups first.</span></div>
+                      <span class="field-help">Replace writes this Mac&rsquo;s 6 rules over the folder&rsquo;s and saves the folder&rsquo;s 15 to backups. Studio Mac takes them on its next check. Nothing syncs to Dropbox until you choose.</span></div></div>
+                    <div class="fcap">Also on this Mac</div>
+                    <div class="dst found"><span class="pv ic">iC</span><div class="dm"><span class="dn">iCloud Drive</span><span class="dp">~/Library/Mobile Documents/com~apple~CloudDocs/PwrRoute</span></div><div class="da"><span class="btn sm">Add</span></div></div>
+                    <div class="dst found"><span class="pv fo"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><div class="dm"><span class="dn">Choose a folder&hellip;</span><span class="dp txt">A folder another app keeps in sync: an rclone or Insync folder, a network share.</span></div><div class="da"><span class="btn sm">Choose&hellip;</span></div></div>
+                  </section>
+                  <section class="card">
+                    <div class="card-hd"><div class="card-hd-main"><p class="card-eyebrow">Never syncs</p><h2 class="card-title">This machine</h2></div></div>
+                    <div class="field"><div class="field-l"><span>Name</span><span class="field-sub">How your other machines see this one in sync status.</span></div><div class="field-c"><div class="inp" style="width: 260px;">MacBook Air</div><span class="field-help">Starts as the computer name.</span></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1e">
+            <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span>macOS permission. Add on a cloud folder macOS guards first explains, in the row, what it is about to ask and why; Continue makes the request, so the OS prompt only ever follows a click. Denied, the row stays, in the warning tone, with the switch to turn on and the two ways out. Dropbox in <code>~/Dropbox</code> and a folder from the panel need no prompt.</span></div>
+            <div class="dv-card stage" style="width: 760px;">
+              <span class="cap">after Add, before the macOS prompt</span>
+              <section class="card">
+                    <div class="dst acc"><span class="pv gd">GD</span><div class="dm"><span class="dn">Google Drive<small>&middot; jo@example.com</small><span class="chip acc">Adding</span></span><span class="dp">~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute</span><span class="dl acc"><i></i>Needs your OK in macOS first</span></div><div class="da"></div><div class="ex"><div class="note-acc">macOS will ask to let PwrRoute use files in Google Drive. PwrRoute only reads and writes its own PwrRoute folder there.</div>
+                      <div class="resolve"><span class="btn primary">Continue</span><span class="btn quiet">Cancel</span></div></div></div>
+              </section>
+              <span class="cap">macOS said no</span>
+              <section class="card">
+                    <div class="dst warn"><span class="pv gd">GD</span><div class="dm"><span class="dn">Google Drive<small>&middot; jo@example.com</small><span class="chip warn">No access</span></span><span class="dp">~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute</span><span class="dl warn"><i></i>macOS didn&rsquo;t let PwrRoute use files in Google Drive</span></div><div class="da"><span class="btn sm quiet danger">Remove</span></div><div class="ex"><div class="note-warn">Turn on Google Drive for PwrRoute in System Settings &rsaquo; Privacy &amp; Security &rsaquo; Files &amp; Folders, then try again.</div>
+                      <div class="resolve"><span class="btn">Open Privacy &amp; Security</span><span class="btn">Try again</span></div></div></div>
+              </section>
+              <span class="cap">iCloud Drive reads the same, with its name</span>
+              <section class="card">
+                    <div class="dst acc"><span class="pv ic">iC</span><div class="dm"><span class="dn">iCloud Drive<span class="chip acc">Adding</span></span><span class="dp">~/Library/Mobile Documents/com~apple~CloudDocs/PwrRoute</span><span class="dl acc"><i></i>Needs your OK in macOS first</span></div><div class="da"></div><div class="ex"><div class="note-acc">macOS will ask to let PwrRoute use files in iCloud Drive. PwrRoute only reads and writes its own PwrRoute folder there.</div><div class="resolve"><span class="btn primary">Continue</span><span class="btn quiet">Cancel</span></div></div></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1f">
+            <div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a><span>Every row state, one component. Chip tone: <b>ok</b> In sync; <b>acc</b> Syncing&hellip; with a spinner; <b>neutral</b> Waiting (a placeholder not yet downloaded, or a remote change still settling: its hash does not match the manifest yet, or it changed within the last two checks); <b>warn</b> Unavailable (the root is gone: client not running, drive not mounted) and Can&rsquo;t read; <b>bad</b> Conflict. A pull says so in its line, with the backup.</span></div>
+            <div class="dv-card stage" style="width: 760px;">
+              <section class="card">
+                    <div class="dst"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip ok">In sync</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl"><i></i>09:41 &middot; saved by MacBook Air</span></div><div class="da"></div></div>
+                    <div class="dst"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip ok">In sync</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl"><i></i>Updated from MacBook Air &middot; 09:41 &middot; this Mac&rsquo;s saved to backups</span></div><div class="da"><span class="btn sm quiet">Show backups</span></div></div>
+                    <div class="dst"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip acc">Syncing&hellip;</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl acc"><span class="spin"></span>Writing rules.json</span></div><div class="da"></div></div>
+                    <div class="dst"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip">Waiting</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl wait"><i></i>Changed on MacBook Air &middot; waiting for it to finish syncing</span></div><div class="da"></div></div>
+                    <div class="dst"><span class="pv ic">iC</span><div class="dm"><span class="dn">iCloud Drive<span class="chip">Waiting</span></span><span class="dp">~/Library/Mobile Documents/com~apple~CloudDocs/PwrRoute</span><span class="dl wait"><i></i>Waiting for iCloud to download rules.json</span></div><div class="da"></div></div>
+                    <div class="dst warn"><span class="pv gd">GD</span><div class="dm"><span class="dn">Google Drive<small>&middot; jo@example.com</small><span class="chip warn">Unavailable</span></span><span class="dp">~/Library/CloudStorage/GoogleDrive-jo@example.com/My Drive/PwrRoute</span><span class="dl warn"><i></i>Folder not found (is Google Drive running?) &middot; tries again every minute</span></div><div class="da"></div></div>
+                    <div class="dst bad"><span class="pv db">Db</span><div class="dm"><span class="dn">Dropbox<span class="chip bad">Conflict</span></span><span class="dp">~/Library/CloudStorage/Dropbox/PwrRoute</span><span class="dl bad"><i></i>Both changed since the last sync</span></div><div class="da"><span class="btn sm">Resolve&hellip;</span></div></div>
+                    <div class="dst warn"><span class="pv fo"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><div class="dm"><span class="dn">Folder<small>&middot; chosen by you</small><span class="chip warn">Can&rsquo;t read</span></span><span class="dp">/Volumes/share/PwrRoute</span><span class="dl warn"><i></i>rules.json there doesn&rsquo;t read as rules &middot; nothing was applied</span></div><div class="da"><span class="btn sm quiet">Reveal</span></div></div>
+              </section>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note">How a check runs, per folder and per file: PwrRoute compares this Mac&rsquo;s file and the folder&rsquo;s against the hash they last agreed on. Only the folder changed: it pulls, backing this Mac&rsquo;s up first. Only this Mac changed: it pushes. Both changed: <b>Conflict</b>, nothing written. A pull counts as a local change, so the next check pushes it to the other folders. Checks run every minute, on window focus, after waking, after every save (the Rules screen, first run, Settings and agents) and on <b>Sync now</b>. Backups live in <code>&lt;data folder&gt;/sync/backups</code>; the newest 20 are kept. macOS prompts only follow a click on Add or Sync now.</p>
+        <p class="dv-next">Try next: &ldquo;<a class="dv-oid" href="#1c">1c</a> with three folders, two in conflict&rdquo; &middot; &ldquo;the backups list from Show backups&rdquo; &middot; &ldquo;<a class="dv-oid" href="#1b">1b</a> on a light theme&rdquo;</p>
+      </section>
+
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

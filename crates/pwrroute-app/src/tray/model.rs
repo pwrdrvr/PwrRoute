@@ -706,6 +706,44 @@ impl HeaderChip {
     }
 }
 
+/// The sync row's color (design: Synced Rules 3c's `.mi-row.sync`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncTone {
+    /// Synced: the icon in the ok color.
+    Ok,
+    /// Syncing: the accent.
+    Busy,
+    /// Paused, or some folder unreachable.
+    Warn,
+    /// A conflict.
+    Bad,
+}
+
+/// Sync's one row in the dropdown, and the native menu's first row:
+/// "Rules synced 2 min ago" with "Dropbox, iCloud" beside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncRow {
+    pub title: String,
+    pub sub: Option<String>,
+    pub tone: SyncTone,
+}
+
+impl SyncRow {
+    /// The native menu's words: the title and the sub on one line.
+    pub fn menu_label(&self) -> String {
+        match &self.sub {
+            Some(sub) => format!("{} \u{00b7} {sub}", self.title),
+            None => self.title.clone(),
+        }
+    }
+
+    /// Only a conflict's row acts (it opens Settings › Sync) in the native
+    /// menu; the others only say how sync stands.
+    pub fn actionable(&self) -> bool {
+        self.tone == SyncTone::Bad
+    }
+}
+
 /// Everything the tray surfaces draw.
 #[derive(Clone, Debug)]
 pub struct TrayModel {
@@ -740,6 +778,8 @@ pub struct TrayModel {
     /// What the destination lanes offer, from the browser scan; read when
     /// the dropdown opens.
     pub choices: DestinationChoices,
+    /// Sync's row, while rules sync with a folder (`sync::tray_row_of`).
+    pub sync: Option<SyncRow>,
 }
 
 impl TrayModel {
@@ -805,6 +845,7 @@ impl TrayModel {
                 installed: Vec::new(),
                 scanned: true,
             },
+            sync: None,
         }
     }
 
@@ -826,6 +867,7 @@ impl TrayModel {
             time_step: DEFAULT_TIME_STEP,
             can_hold: true,
             choices: DestinationChoices::default(),
+            sync: None,
         }
     }
 

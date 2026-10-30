@@ -136,10 +136,15 @@ pub struct PwrRoute {
     /// The build block's row that was just copied, and the copy's number:
     /// its check shows until [`COPIED_FOR`] passes with no later copy.
     pub build_copied: Option<(Part, u64)>,
+    /// Sync's line for the rail foot and strip (`sync::line`); a test or
+    /// screenshot sets its own.
+    pub sync_line: Option<crate::sync::Line>,
     /// A debounced save is on its way.
     save_scheduled: bool,
     /// Pausing from the tray redraws the Overview.
     _tray: Option<Subscription>,
+    /// Each sync pass redraws the rail foot's line.
+    _sync: Option<Subscription>,
 }
 
 impl PwrRoute {
@@ -177,6 +182,12 @@ impl PwrRoute {
         let described = described(engine.as_ref());
         // Pausing and resuming from the tray changes the Overview's hero.
         let tray = crate::tray::model(cx).map(|model| cx.observe(&model, |_, _, cx| cx.notify()));
+        let sync = crate::sync::feed(cx).map(|feed| {
+            cx.observe(&feed, |this: &mut Self, _, cx| {
+                this.sync_line = crate::sync::line(cx);
+                cx.notify();
+            })
+        });
         // Rules opens as a list: the editor appears on a click (or Down).
         let mut this = Self {
             // A Tab stop, so Tab comes back round to the list and map keys.
@@ -214,8 +225,10 @@ impl PwrRoute {
             config_loaded: SystemTime::now(),
             build: BuildInfo::current(),
             build_copied: None,
+            sync_line: crate::sync::line(cx),
             save_scheduled: false,
             _tray: tray,
+            _sync: sync,
         };
         if this.config.is_none() {
             this.found_config = crate::importer_view::found_config(this.home.as_deref(), cx);
@@ -515,7 +528,14 @@ impl PwrRoute {
     pub fn watch_activation(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
+                // machine.json edited by hand: the rows and Try it follow,
+                // as the router's reloader does.
+                if crate::sync::reload_machine(cx) {
+                    this.refresh(cx);
+                }
                 this.sync_with_disk(cx);
+                // Another machine may have saved while this one was away.
+                crate::sync::wake(cx);
             }
         })
         .detach();
@@ -987,6 +1007,7 @@ impl PwrRoute {
             (Field::Pattern(i), _) => self.store.set_pattern(selection, i, text),
             (Field::Browser, Selection::Handler(h)) => self.store.set_browser(h, text),
             (Field::Profile, Selection::Handler(h)) => self.store.set_profile(h, text),
+            (Field::Set, Selection::Handler(h)) => self.store.set_rule_set(h, text),
             (Field::Value(i), Selection::Rewrite(r)) => {
                 let kind = self
                     .rewrites

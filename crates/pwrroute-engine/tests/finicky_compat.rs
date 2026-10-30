@@ -164,6 +164,7 @@ fn suites_match_the_go_host_and_their_traces() {
                 .as_ref()
                 .map(|r| RulesFile::load(&configs().join(r)).unwrap())
                 .unwrap_or_default(),
+            ..Default::default()
         };
         let engine = Engine::from_sources(
             &sources,

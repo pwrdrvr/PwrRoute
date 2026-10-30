@@ -211,6 +211,35 @@ fn losing_the_default_shows_the_make_default_row(cx: &mut TestAppContext) {
     assert_eq!(opened.window_height(), before, "and shrank back");
 }
 
+/// Rules start syncing while the dropdown is open: sync's row comes in
+/// between Incoming links and the commands, and the window follows.
+#[gpui_kit::test]
+fn the_sync_row_comes_and_goes_with_the_card(cx: &mut TestAppContext) {
+    use super::dropdown::{SWITCH_ID, SYNC_ID};
+    use super::model::{SyncRow, SyncTone};
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    assert!(opened.cx.debug_bounds(SYNC_ID).is_none());
+    let before = opened.window_height();
+
+    opened.update_model(|model| {
+        model.sync = Some(SyncRow {
+            title: "Rules synced 2 min ago".into(),
+            sub: Some("Dropbox, iCloud".into()),
+            tone: SyncTone::Ok,
+        });
+    });
+    let row = opened.cx.debug_bounds(SYNC_ID).expect("the sync row");
+    let switch = opened.cx.debug_bounds(SWITCH_ID).expect("Incoming links");
+    assert!(row.top() > switch.bottom(), "under Incoming links");
+    assert_card_fits(&mut opened);
+    assert!(opened.window_height() > before);
+
+    opened.update_model(|model| model.sync = None);
+    assert!(opened.cx.debug_bounds(SYNC_ID).is_none());
+    assert_card_fits(&mut opened);
+    assert_eq!(opened.window_height(), before);
+}
+
 /// Recent links arriving while the dropdown is open grow the window with
 /// the card, up to the recents' limit.
 #[gpui_kit::test]

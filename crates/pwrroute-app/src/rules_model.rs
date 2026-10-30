@@ -26,6 +26,9 @@ pub enum Matcher {
     Function(SharedString),
     /// The rule is switched off.
     Off,
+    /// The rule's set is off on this machine (`machine.json`): it keeps
+    /// its place and number, and routes elsewhere.
+    OffHere,
     /// What the rule keeps of the links it takes, when less than
     /// everything: "private · host only", "nothing".
     Privacy(SharedString),
@@ -71,6 +74,9 @@ pub enum RowBadge {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
     pub matchers: Vec<Matcher>,
+    /// The named destination the rule opens (`rules[].destination`), drawn
+    /// before what it opens on this machine (design: Synced Rules 2b).
+    pub named: Option<SharedString>,
     pub destination: Destination,
     pub hits: SharedString,
     pub enabled: bool,
@@ -91,6 +97,7 @@ impl Rule {
                 Matcher::App { name, .. } => name.to_string(),
                 Matcher::Function(_) => "JavaScript matcher".to_owned(),
                 Matcher::Off => "Off".to_owned(),
+                Matcher::OffHere => "Off on this machine".to_owned(),
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -107,6 +114,12 @@ impl Rule {
             Destination::Function(_) => "JavaScript destination".to_owned(),
             Destination::Unset(value) => (*value).to_owned(),
         };
+        // A named destination reads as the row draws it: the name, then
+        // what it opens here.
+        let destination = match &self.named {
+            Some(name) => format!("{name}, {destination}"),
+            None => destination,
+        };
         format!(
             "{patterns}, {destination}, {}",
             if self.enabled { "enabled" } else { "disabled" }
@@ -117,6 +130,7 @@ impl Rule {
     pub fn plain(matchers: Vec<Matcher>, destination: Destination) -> Self {
         Self {
             matchers,
+            named: None,
             destination,
             hits: "".into(),
             enabled: true,
@@ -141,6 +155,10 @@ pub struct Handler {
     pub privacy: Option<PrivacySetting>,
     /// `rules[].examples`: URLs that must resolve to this handler.
     pub examples: Vec<String>,
+    /// `rules[].destination`: the named destination it opens in.
+    pub destination: Option<String>,
+    /// `rules[].set`: the rule set it belongs to.
+    pub set: Option<String>,
     /// Why the editor cannot save it, in `RulesFile::problems`'s words.
     pub problems: Vec<String>,
 }
@@ -212,6 +230,7 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
     Handler {
         rule: Rule {
             matchers,
+            named: rule.destination.clone().map(Into::into),
             destination,
             hits: hits(badge),
             enabled: rule.enabled,
@@ -225,6 +244,8 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
         private: rule.private,
         privacy: rule.privacy.clone(),
         examples: rule.examples.clone(),
+        destination: rule.destination.clone(),
+        set: rule.set.clone(),
         problems,
     }
 }
@@ -270,6 +291,7 @@ pub fn rewrite(rewrite: &engine::Rewrite, badge: RowBadge, problems: Vec<String>
     Rewrite {
         rule: Rule {
             matchers,
+            named: None,
             destination,
             hits: hits(badge),
             enabled: rewrite.enabled,

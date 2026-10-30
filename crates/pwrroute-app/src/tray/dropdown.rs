@@ -42,7 +42,8 @@ use pwrroute_router::{DispatchId, OpenAs};
 
 use super::TrayCommand;
 use super::model::{
-    ForKind, HeaderChip, HeldLink, Live, Mode, Recent, Run, SendDestination, Tone, TrayModel,
+    ForKind, HeaderChip, HeldLink, Live, Mode, Recent, Run, SendDestination, SyncRow, SyncTone,
+    Tone, TrayModel,
 };
 use crate::destinations::{self, Density, Lane};
 use crate::theme::{self, icon, mono, text, tracked};
@@ -77,6 +78,8 @@ pub const OPEN_ALL_ID: &str = "tray-held-open-all";
 pub const HELD_LANES_ID: &str = "tray-held-lanes";
 pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
 pub const QUIT_ID: &str = "tray-quit";
+/// Sync's row (design: Synced Rules 3c).
+pub const SYNC_ID: &str = "tray-sync";
 /// The sections between the header and Quit, which scroll on a display too
 /// short for the card.
 pub const BODY_ID: &str = "tray-body";
@@ -622,6 +625,11 @@ fn card(
         ));
     }
 
+    let sync = model
+        .sync
+        .as_ref()
+        .map(|row| section().child(sync_row(row, hovered, cx)));
+
     let commands = section()
         .child(menu_row(
             "tray-test",
@@ -693,6 +701,7 @@ fn card(
                 })
                 .child(recents.flex_none())
                 .child(incoming_section(model, now, unfolded, stops, ring, cx).flex_none())
+                .children(sync.map(|sync| sync.flex_none()))
                 .child(commands.flex_none()),
         )
         .child(
@@ -1745,6 +1754,37 @@ fn menu_row(
         .when_some(shortcut, |row, shortcut| row.child(key_cap(shortcut)))
 }
 
+/// `.mi-row.sync`: how sync stands, a click to Settings › Sync.
+fn sync_row(
+    row: &SyncRow,
+    hovered: Option<&'static str>,
+    cx: &mut Context<'_, Dropdown>,
+) -> impl IntoElement {
+    let (icon_color, color) = match row.tone {
+        SyncTone::Ok => (theme::status_ok(), theme::text_secondary()),
+        SyncTone::Busy => (theme::accent_bright(), theme::accent_bright()),
+        SyncTone::Warn => (theme::warn_text(), theme::warn_text()),
+        SyncTone::Bad => (theme::danger_text(), theme::danger_text()),
+    };
+    let color = if hovered == Some(SYNC_ID) && row.tone == SyncTone::Ok {
+        theme::accent_bright()
+    } else {
+        color
+    };
+    row_frame(SYNC_ID, TrayCommand::Sync, hovered, cx)
+        .h(px(MENU_ROW))
+        .child(icon("pwrroute/sync.svg", 12.0, icon_color))
+        .child(text(row.title.clone(), 11.5, 500.0, color))
+        .when_some(row.sub.clone(), |frame, sub| {
+            frame.child(div().ml_auto().min_w_0().child(mono(
+                sub,
+                10.0,
+                500.0,
+                theme::text_subtle(),
+            )))
+        })
+}
+
 /// `.mi-row`'s box; `.hov` while the pointer is on it.
 fn row_frame(
     id: &'static str,
@@ -1978,12 +2018,19 @@ fn card_height_at(
     let commands = SECTION_PADDING
         + MENU_ROW * (3.0 + f32::from(u8::from(model.shows_make_default_row())))
         + 1.0;
+    // Sync's row, while rules sync with a folder.
+    let sync = if model.sync.is_some() {
+        SECTION_PADDING + MENU_ROW + 1.0
+    } else {
+        0.0
+    };
     let quit = SECTION_PADDING + MENU_ROW;
     px(2.0
         + HEADER
         + held_height(model, unfolded, text_system)
         + recents
         + incoming_height(model, unfolded, now, text_system)
+        + sync
         + commands
         + quit)
 }

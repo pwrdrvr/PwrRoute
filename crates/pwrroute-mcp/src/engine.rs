@@ -237,6 +237,7 @@ fn build(rules: &RulesFile, limits: Limits) -> Result<Engine> {
         &Sources {
             config: None,
             rules: rules.clone(),
+            ..Default::default()
         },
         Rc::new(NativeHost::new()),
         limits,

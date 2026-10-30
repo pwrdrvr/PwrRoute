@@ -51,6 +51,7 @@ fn matcher(matcher: &Matcher) -> Div {
         Matcher::App { badge, name } => app_tag(badge.clone(), name.clone()),
         Matcher::Function(source) => function(source),
         Matcher::Off => chip("off"),
+        Matcher::OffHere => chip(format!("off on {}", crate::settings::sync_host::here())),
         Matcher::Privacy(label) => chip(label.clone()),
     }
 }
@@ -259,6 +260,33 @@ pub(crate) fn destination(destination: &Destination) -> Div {
     }
 }
 
+/// `.dest` for a rule that opens a named destination (design: Synced
+/// Rules 2b): the target glyph and the name, then what it opens on this
+/// machine.
+fn named_destination(name: &SharedString, here: &Destination) -> Div {
+    let opens = match here {
+        Destination::Browser { name, profile, .. } => Some(match profile {
+            Some(profile) => format!("{name} \u{00b7} {profile}"),
+            None => name.to_string(),
+        }),
+        _ => None,
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(7.0))
+        .min_w_0()
+        .child(
+            svg()
+                .path("pwrroute/target.svg")
+                .flex_none()
+                .size(px(11.0))
+                .text_color(theme::accent()),
+        )
+        .child(text(name.clone(), 12.0, 500.0, theme::text_primary()))
+        .children(opens.map(|opens| mono(opens, 10.5, 500.0, theme::text_muted())))
+}
+
 /// How a row reads besides its content.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct RowState {
@@ -289,8 +317,10 @@ pub(crate) fn rule_row(
 ) -> Stateful<Div> {
     // `.rr.off > * { opacity: .5 }` would take its patterns to 2.2:1: a
     // rule that is off is read before it is turned back on, so it is drawn
-    // dimmed (one step down the text ramp) and its "off" chip says why.
-    theme::dimmed_if(!rule.enabled, || {
+    // dimmed (one step down the text ramp) and its "off" chip says why. So
+    // is a rule whose set is off on this machine (Synced Rules 2b).
+    let off = !rule.enabled || rule.matchers.contains(&Matcher::OffHere);
+    theme::dimmed_if(off, || {
         rule_row_drawn(id, index, rule, state, matchers, more)
     })
 }
@@ -410,8 +440,9 @@ fn rule_row_drawn(
                 // `.rr .strike`: the design fades it to 54%, 2.3:1. The
                 // strike says it is overridden; the text drops one step.
                 .when(state.struck, |cell| cell.line_through())
-                .child(theme::dimmed_if(state.struck, || {
-                    destination(&rule.destination)
+                .child(theme::dimmed_if(state.struck, || match &rule.named {
+                    Some(name) => named_destination(name, &rule.destination),
+                    None => destination(&rule.destination),
                 })),
         )
         .when(!state.read_only, |row| {
@@ -852,6 +883,8 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
             ))
     } else {
         let hits = todays_hits(app, cx);
+        let file = app.store.edited();
+        let machine = crate::sync::machine();
         app.handlers
             .iter()
             .enumerate()
@@ -861,6 +894,9 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
                     rule.hits = hits.clone();
                 }
                 let card = card.children(tombstone_at(app, Selection::Handler(index), cx));
+                let card = card.children(set_run(&app.handlers, index).map(|(set, last)| {
+                    set_heading(set, index, last, !file.set_enabled_on(set, &machine))
+                }));
                 let last = index + 1 == app.handlers.len();
                 let examples = examples_row(app, Selection::Handler(index), last);
                 let state = RowState {
@@ -930,6 +966,57 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
         .gap(px(18.0))
         .child(rewrites)
         .child(handlers)
+}
+
+/// The rule set a run of rules starting at `index` belongs to, and the
+/// run's last index: `None` unless `index` starts a run (the first rule,
+/// or one whose set differs from the rule above).
+fn set_run(handlers: &[crate::rules_model::Handler], index: usize) -> Option<(&str, usize)> {
+    let set = handlers.get(index)?.set.as_deref()?;
+    if index > 0 && handlers[index - 1].set.as_deref() == Some(set) {
+        return None;
+    }
+    let run = handlers[index..]
+        .iter()
+        .take_while(|h| h.set.as_deref() == Some(set))
+        .count();
+    Some((set, index + run - 1))
+}
+
+/// `.rset`: the heading over a run of rules in one set (design: Synced
+/// Rules 2b), with the rule numbers it covers and, when the set is off on
+/// this machine, a chip saying so.
+fn set_heading(set: &str, first: usize, last: usize, off: bool) -> Stateful<Div> {
+    let numbers = if first == last {
+        format!("rule {:02}", first + 1)
+    } else {
+        format!("rules {:02}\u{2013}{:02}", first + 1, last + 1)
+    };
+    div()
+        .id(SharedString::from(format!("rule-set-{first}")))
+        .debug_selector(move || format!("rule-set-{first}"))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .py(px(7.0))
+        .pr(px(12.0))
+        .pl(px(54.0))
+        .bg(theme::bg_elevated())
+        .border_b_1()
+        .border_color(theme::border_faint())
+        .child(text(set.to_owned(), 9.5, 600.0, theme::text_secondary()))
+        .child(tracked("set", 9.5, 600.0, 0.14, theme::text_muted()))
+        .when(off, |row| {
+            row.child(chip(format!(
+                "off on {}",
+                crate::settings::sync_host::here()
+            )))
+        })
+        .child(
+            div()
+                .ml_auto()
+                .child(mono(numbers, 10.0, 500.0, theme::text_subtle())),
+        )
 }
 
 /// What a failure's input is an example or test of: "example of rule 3",
