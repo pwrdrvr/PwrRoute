@@ -464,6 +464,30 @@ impl Engine {
         })
     }
 
+    /// Evaluates `script` in the engine's JS context (after the config API,
+    /// the `finicky` global and the config), then returns `expression`'s
+    /// value as JSON (`null` for `undefined`). It exists so a test can call
+    /// the API's exports directly, as Finicky's own unit tests do
+    /// (`tests/finicky_suite.rs`); routing never uses it. Runs under the
+    /// resolve deadline.
+    #[doc(hidden)]
+    pub fn evaluate(&self, script: &str, expression: &str) -> Result<serde_json::Value> {
+        self.console.clear();
+        self.with_deadline(self.limits.resolve, |ctx| {
+            ctx.eval::<(), _>(script)
+                .catch(&ctx)
+                .map_err(|e| js_error("evaluating the script", &e))?;
+            let json: Option<String> = ctx
+                .eval(format!("JSON.stringify(({expression}))"))
+                .catch(&ctx)
+                .map_err(|e| js_error("evaluating the expression", &e))?;
+            Ok(match json {
+                Some(json) => serde_json::from_str(&json)?,
+                None => serde_json::Value::Null,
+            })
+        })
+    }
+
     /// Resolves a link and returns every step on the way: the rewrites and
     /// handlers evaluated, which matched, and which won. Nothing is opened;
     /// the resolution is the one [`Engine::resolve_link`] returns.

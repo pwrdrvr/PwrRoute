@@ -1,0 +1,9 @@
+{
+  "defaultBrowser": "Firefox",
+  "defaultProfile": "Work",
+  "rules": [
+    { "match": "*github.com/*", "browser": "Google Chrome", "profile": "Personal" },
+    { "match": ["https://linear.app/*"], "browser": "Firefox" },
+    { "match": "example.com", "browser": "Safari" }
+  ]
+}

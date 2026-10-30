@@ -1,0 +1,6 @@
+{
+  "defaultBrowser": "Safari",
+  "rules": [
+    { "match": "linear.app/*", "browser": "Google Chrome" }
+  ]
+}

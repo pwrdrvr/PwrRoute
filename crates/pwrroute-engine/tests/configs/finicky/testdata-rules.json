@@ -1,0 +1,13 @@
+{
+  "defaultBrowser": "Google Chrome",
+  "rules": [
+    {
+      "match": ["example.com/*", "github.com/*"],
+      "browser": "Safari"
+    },
+    {
+      "match": "linear.app/*",
+      "browser": "Google Chrome"
+    }
+  ]
+}
