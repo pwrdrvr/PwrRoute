@@ -994,6 +994,7 @@ mod everything_else {
                 })),
                 catch_all: None,
             }),
+            config_files: Vec::new(),
             home: Some(home.to_path_buf()),
             browsers: vec![
                 scanned("Google Chrome", "com.google.Chrome", &["Personal", "Work"]),
@@ -1157,4 +1158,84 @@ fn the_sync_pane_resolves_a_conflict_only_from_its_buttons(cx: &mut TestAppConte
         *requests.borrow(),
         [resolve(true), resolve(false), SettingsRequest::SyncNow]
     );
+}
+
+#[gpui_kit::test]
+fn a_nav_child_opens_its_pane_at_its_row(cx: &mut TestAppContext) {
+    use super::nav::{caret_id, child_id, folder_key};
+    let (view, cx, _) = settings(cx, |_| {});
+    // Cloud Sync's rows: Dropbox, iCloud Drive, then Google Drive (off).
+    click(cx, child_id(Pane::Sync, 1));
+    draw(cx);
+    let (pane, target, icloud) = view.read_with(cx, |view, _| {
+        (
+            view.pane,
+            view.target.clone(),
+            view.model.sync.folders[1].root.clone(),
+        )
+    });
+    assert_eq!(pane, Pane::Sync);
+    assert_eq!(target, Some(folder_key(&icloud)));
+    // Another pane forgets the row.
+    click(cx, Pane::Browsers.nav_id());
+    assert_eq!(view.read_with(cx, |view, _| view.target.clone()), None);
+    // The caret folds the rows away without leaving the pane in view.
+    click(cx, caret_id(Pane::Sync));
+    draw(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.pane), Pane::Browsers);
+    assert!(
+        cx.update(|window, _| window.try_find(child_id(Pane::Sync, 0)))
+            .is_none()
+    );
+}
+
+#[gpui_kit::test]
+fn config_files_lists_each_config_and_reveals_it(cx: &mut TestAppContext) {
+    use super::nav::child_id;
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, child_id(Pane::Configuration, 1));
+    draw(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.pane), Pane::Configuration);
+    click(cx, gpui_kit::ElementId::Name("config-file-reveal-1".into()));
+    let path = view.read_with(cx, |view, _| {
+        view.model.configuration.config_files[1].path.clone()
+    });
+    assert_eq!(*requests.borrow(), [SettingsRequest::RevealConfig(path)]);
+}
+
+#[gpui_kit::test]
+fn short_links_has_its_own_pane(cx: &mut TestAppContext) {
+    let (view, cx, _) = settings(cx, |_| {});
+    click(cx, Pane::ShortLinks.nav_id());
+    draw(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.pane), Pane::ShortLinks);
+    assert!(visible(cx, super::short_links::HOSTS_ID));
+}
+
+#[gpui_kit::test]
+fn use_it_on_this_mac_asks_for_the_folders_config(cx: &mut TestAppContext) {
+    let (_view, cx, requests) = settings(cx, |model| {
+        model.sync = fixtures::sync_folder_config();
+    });
+    click(cx, Pane::Sync.nav_id());
+    draw(cx);
+    click(cx, super::sync::USE_CONFIG_ID);
+    assert_eq!(
+        *requests.borrow(),
+        [SettingsRequest::UseFolderConfig {
+            root: "/Users/jo/Library/Mobile Documents/com~apple~CloudDocs".into(),
+            name: "finicky.js".into(),
+        }]
+    );
+}
+
+#[gpui_kit::test]
+fn a_config_the_folder_lacks_is_named_with_where_to_fix_it(cx: &mut TestAppContext) {
+    let (_view, cx, _) = settings(cx, |model| {
+        model.sync = fixtures::sync_folder_config_missing();
+    });
+    click(cx, Pane::Sync.nav_id());
+    draw(cx);
+    assert!(visible(cx, super::sync::MISSING_CONFIG_ID));
+    assert!(!visible(cx, super::sync::USE_CONFIG_ID));
 }

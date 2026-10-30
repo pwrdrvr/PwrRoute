@@ -74,7 +74,7 @@ pub enum TrayCommand {
     /// Ask the OS to make PwrRoute the default browser: the dropdown's row
     /// while another app has it.
     MakeDefault,
-    /// Sync's row: Settings › Sync.
+    /// Sync's row: Settings › Cloud Sync.
     Sync,
     Quit,
 }

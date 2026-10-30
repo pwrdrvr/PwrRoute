@@ -1366,6 +1366,15 @@ fn main() {
         // Synced Rules 1b and 1c, with 2a's machine card.
         ("settings-sync", settings::Pane::Sync, 1500.0),
         ("settings-sync-conflict", settings::Pane::Sync, 1300.0),
+        // Settings Sections 1c, 2a and 2b: Short Links on its own, and a
+        // folder whose rules ran after a config this Mac does not run.
+        ("settings-short-links", settings::Pane::ShortLinks, 760.0),
+        ("settings-sync-folder-config", settings::Pane::Sync, 1500.0),
+        (
+            "settings-sync-folder-config-missing",
+            settings::Pane::Sync,
+            1500.0,
+        ),
         // The family's panes, at a height that holds their cards.
         ("settings-updates", settings::Pane::Updates, 760.0),
         ("settings-diagnostics", settings::Pane::Diagnostics, 900.0),
@@ -1384,12 +1393,26 @@ fn main() {
             .open_window(win(1058.0, height), |_, cx| {
                 cx.new(|cx| {
                     let mut model = settings::fixtures::model();
-                    if name == "settings-sync-conflict" {
-                        model.sync = settings::fixtures::sync_conflict();
+                    match name {
+                        "settings-sync-conflict" => {
+                            model.sync = settings::fixtures::sync_conflict();
+                        }
+                        "settings-sync-folder-config" => {
+                            model.sync = settings::fixtures::sync_folder_config();
+                        }
+                        "settings-sync-folder-config-missing" => {
+                            model.sync = settings::fixtures::sync_folder_config_missing();
+                        }
+                        _ => {}
                     }
+                    // 2a: the folder that needs the reader, from its nav row.
+                    let target = name
+                        .starts_with("settings-sync-folder-config")
+                        .then(|| settings::nav::folder_key(&model.sync.folders[0].root));
                     let mut view =
                         settings::SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx);
                     view.pane = pane;
+                    view.target = target;
                     view
                 })
             })

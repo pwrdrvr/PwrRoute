@@ -5,10 +5,21 @@ and PwrGit. Drawn from `design/PwrRoute Settings.dc.html` (1a Local agents,
 1b Configuration, 1c Browsers), `design/PwrRoute Activity Privacy and
 Route Tests.dc.html` turn 1 (Privacy) and `design/PwrRoute Updates and
 Default Browser.dc.html` 1a/1b (Updates), `design/PwrRoute Synced
-Rules.dc.html` and its Machine file (Sync); Diagnostics and About follow
-the family's panes in the same controls. There is no General pane until
-there is something to put in it; About leads the nav, Browsers opens first.
+Rules.dc.html` and its Machine file (Cloud Sync), and `design/PwrRoute
+Settings Sections.dc.html` (the grouped nav, Config Files, Short Links,
+Cloud Sync's Finicky config); Diagnostics and About follow the family's
+panes in the same controls. There is no General pane until there is
+something to put in it; About leads the nav, Browsers opens first.
 
+- **The nav (`nav.rs`) groups panes** (Routing, Across machines, Data and
+  agents, App) and lists what Config Files and Cloud Sync own under a caret,
+  after PwrAgent's AI Providers: each Finicky config found (at most
+  `CONFIG_FILES_SHOWN`) and `rules.json`; each cloud folder, then the
+  places found but not added (OFF). A child opens its pane and sets
+  `target`; the row that `mark_target` marks takes the scroll anchor, and
+  the pane scrolls to it on the next frame. Fold state, like a card's, is
+  a reading position. A pane's internal name (`Pane::Configuration`,
+  `Pane::Sync`) need not match its label; ids stay put so tests and E2E do.
 - **The window draws a `SettingsModel` and nothing else.** `model.rs` is the
   contract for the MCP server, config discovery and the browser catalog:
   they fill it in their own words, with display-ready strings, and the
@@ -27,10 +38,12 @@ there is something to put in it; About leads the nav, Browsers opens first.
   which file is in charge; the tiles only show it (`can_switch` is off;
   the importer's Choose source picks the source), the importer card is a
   read-only summary of `Engine::review_import` whose Review import… opens
-  the importer (`importer_view::open`),
-  Short links lists the engine's built-in hosts, and Reveal, Open data
-  folder and Reload now act. While a config is in charge (never with
-  visual rules alone) the Source card adds Everything else (design:
+  the importer (`importer_view::open`), Files lists every config discovery
+  would find (in charge, did not load, or not used and why) above
+  `rules.json`, and Reveal, Open data folder and Reload now act. The same
+  producer fills Short Links (`short_links.rs`): the engine's list in
+  charge and whose it is (built in, the config's `urlShorteners`, or
+  off). While a config is in charge (never with visual rules alone) the Source card adds Everything else (design:
   Overview and Setup 5d): a segmented control, "{config}'s default ·
   {browser}" | "PwrRoute's default", that is `rules.json`'s `precedence`,
   the browser and profile selects that are its `defaultBrowser` /
@@ -54,6 +67,12 @@ there is something to put in it; About leads the nav, Browsers opens first.
   conflict resolves only from its buttons (naming the hash it showed), and
   binding a destination or switching a set writes `machine.json` through
   `sync::edit_machine`. Its copy says plainly what goes to the cloud.
+  From the manifest's `runsAfter` it says when the folder's `rules.json`
+  ran after a Finicky config this machine does not run (`config_gap`):
+  with the config in the folder and none here, Use it on this Mac copies
+  it to `~/.finicky.<ext>` (never over a config discovery would find),
+  turns Also sync on and puts it in charge; without it, which machine to
+  fix. A machine with a config of its own is offered nothing.
   `updates_host`:
   `updater::installation` and
   `updater::state`; a dev build reads "not updatable", no check reads

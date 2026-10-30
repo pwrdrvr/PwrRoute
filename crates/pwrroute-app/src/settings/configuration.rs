@@ -1,5 +1,6 @@
-//! 1b Configuration: where rules come from, the Finicky importer, short
-//! links and the files on disk. While a Finicky config is in charge, the
+//! 1b Config Files: where rules come from, the Finicky importer and the
+//! files on disk, every Finicky config found among them (Settings
+//! Sections 1b). While a Finicky config is in charge, the
 //! Source card also says whose default takes everything else (Overview and
 //! Setup 5d): the config's or PwrRoute's, and which browser PwrRoute's is.
 
@@ -17,14 +18,15 @@ use gpui_kit::{
 };
 
 use super::controls::{
-    Kind, Tone, action_tag, badge, card_description, chip, command_box, field, field_help,
-    field_sub, field_sub_code, fn_tag, heading, note, pane_head, radio_dot, row_actions, slot, tag,
+    Kind, Tone, action_tag, badge, button, card_description, chip, command_box, field, field_help,
+    field_sub, fn_tag, heading, pane_head, radio_dot, row_actions, slot, tag,
 };
 use super::model::{
-    DefaultOwner, EverythingElse, ImportCandidate, Piece, RulesSource, SettingsRequest,
+    ConfigFile, ConfigFileState, DefaultOwner, EverythingElse, ImportCandidate, Piece, RulesSource,
+    SettingsRequest,
 };
 use super::style::{self, para};
-use super::{SettingsWindow, request_button};
+use super::{SettingsWindow, nav, request_button};
 use crate::theme::{self, mono, text};
 use crate::widgets::{field_label, menu_card, menu_row, profiles_hint, segmented};
 
@@ -248,15 +250,14 @@ impl SettingsWindow {
 pub fn pane(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> Div {
     div()
         .child(pane_head(
-            "Rules source",
-            "Configuration",
+            "Routing",
+            "Config Files",
             "Where the router reads its rules from. Visual rules are the default. A Finicky \
              config, when selected, runs its rewrites first.",
             None,
         ))
         .child(source_card(this, cx))
         .when_some(import_card(this, cx), Div::child)
-        .child(short_links_card(this, cx))
         .child(files_card(this, cx))
 }
 
@@ -514,64 +515,22 @@ fn import_card(
     ))
 }
 
-fn short_links_card(
-    this: &SettingsWindow,
-    cx: &mut Context<'_, SettingsWindow>,
-) -> impl IntoElement {
-    let configuration = &this.model.configuration;
-    let hosts = configuration
-        .shorteners
-        .iter()
-        .fold(div().flex().flex_wrap().gap(px(5.0)), |hosts, host| {
-            hosts.child(tag(host.clone()))
-        });
-    let off = configuration.shorteners.is_empty();
-    let rows = vec![field(
-        if off {
-            "Expansion is off"
-        } else {
-            "Expanded before matching"
-        },
-        Some(field_sub_code(
-            "A link from one of these hosts is followed to where it lands (HEAD, then GET, up \
-             to 3 redirects, 750 ms each) before any rule runs, so rules match the \
-             destination and Activity shows both. A Finicky config sets its own list with ",
-            "urlShorteners",
-            "; an empty list turns expansion off.",
-        )),
-        [
-            hosts.into_any_element(),
-            note(if off {
-                "The config in charge sets urlShorteners to an empty list, so no link is \
-                 followed and nothing leaves this Mac before a rule sees it."
-            } else {
-                "The list is the engine\u{2019}s; rules.json cannot change it yet."
-            })
-            .into_any_element(),
-        ],
-    )];
-    this.disclosure(
-        "config-short-links",
-        heading("Options", "Short links"),
-        None,
-        rows,
-        cx,
-    )
-}
-
 fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
-    let rows = vec![field(
+    let configuration = &this.model.configuration;
+    let mut rows: Vec<Div> = configuration
+        .config_files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| config_file_row(this, index, file, cx))
+        .collect();
+    let rules = field(
         "rules.json",
         Some(field_sub(
             "Validated before publication; a bad edit keeps the last good snapshot.",
         )),
         [
-            command_box(
-                std::slice::from_ref(&this.model.configuration.rules_path),
-                None,
-            )
-            .into_any_element(),
-            field_help(this.model.configuration.rules_status.clone()).into_any_element(),
+            command_box(std::slice::from_ref(&configuration.rules_path), None).into_any_element(),
+            field_help(configuration.rules_status.clone()).into_any_element(),
             row_actions()
                 .child(request_button(
                     "config-reveal",
@@ -599,8 +558,43 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
                 ))
                 .into_any_element(),
         ],
-    )];
+    );
+    rows.push(div().child(this.mark_target(&nav::RULES_KEY.into(), rules)));
     this.disclosure("config-files", heading("On disk", "Files"), None, rows, cx)
+}
+
+/// One Finicky config PwrRoute found (Settings Sections 1b): whether it is
+/// in charge, failed or never runs, and Reveal.
+fn config_file_row(
+    this: &SettingsWindow,
+    index: usize,
+    file: &ConfigFile,
+    cx: &mut Context<'_, SettingsWindow>,
+) -> Div {
+    let state = match file.state {
+        ConfigFileState::InCharge => chip("In charge", Tone::Ok),
+        ConfigFileState::Failed => chip("Did not load", Tone::Warn),
+        ConfigFileState::NotUsed => chip("Not used", Tone::Neutral),
+    };
+    let path = file.path.clone();
+    let reveal = button(
+        ElementId::Name(format!("config-file-reveal-{index}").into()),
+        "Reveal",
+        Kind::Default,
+        true,
+    )
+    .on_click(cx.listener(move |this, _, window, cx| {
+        this.request(SettingsRequest::RevealConfig(path.clone()), window, cx);
+    }));
+    let row = field(
+        file.shown.clone(),
+        Some(div().flex().child(state)),
+        [
+            field_help(file.line.clone()).into_any_element(),
+            row_actions().child(reveal).into_any_element(),
+        ],
+    );
+    div().child(this.mark_target(&nav::config_key(&file.path), row))
 }
 
 // ---- Everything else (Overview and Setup 5d) -------------------------------

@@ -7,10 +7,11 @@
 use crate::build_info::BuildInfo;
 
 use super::model::{
-    About, AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, Configuration,
-    DefaultBrowser, DefaultState, Diagnostics, FinickyConfig, Grant, ImportCandidate, ImportPlan,
-    JournalFiles, JournalLevel, Listener, LocalAgents, Permission, Piece, Privacy, RoleId,
-    RulesSource, SessionId, SettingsModel, Slot, SlotTile, Status, UpdateState, Updates, Usage,
+    About, AgentAction, AgentRole, AgentSession, BrowserApp, Browsers, ConfigFile, ConfigFileState,
+    Configuration, DefaultBrowser, DefaultState, Diagnostics, FinickyConfig, Grant,
+    ImportCandidate, ImportPlan, JournalFiles, JournalLevel, Listener, LocalAgents, Permission,
+    Piece, Privacy, RoleId, RulesSource, SessionId, SettingsModel, ShortLinks, ShortLinksSource,
+    Slot, SlotTile, Status, UpdateState, Updates, Usage,
 };
 
 pub fn model() -> SettingsModel {
@@ -109,7 +110,56 @@ pub fn sync() -> super::model::Sync {
             },
         ],
         problem: None,
+        folder_config: None,
     }
+}
+
+/// Settings Sections 2a: this Mac has no Finicky config, and iCloud Drive's
+/// rules ran after Studio Mac's `~/.finicky.js`, which is in the folder.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "for the window's tests and the screens example")
+)]
+pub fn sync_folder_config() -> super::model::Sync {
+    use super::model::{FolderConfig, SyncTone};
+    let mut sync = sync();
+    sync.machine_name = "MacBook Air".into();
+    sync.computer_name = "MacBook Air".into();
+    sync.folders.remove(0);
+    sync.config = None;
+    sync.summary = "1 folder".into();
+    sync.summary_tone = SyncTone::Ok;
+    let icloud = &mut sync.folders[0];
+    icloud.chip = "Needs you".into();
+    icloud.tone = SyncTone::Warn;
+    icloud.line = "rules.json in sync \u{00b7} finicky.js not used here".into();
+    sync.folder_config = Some(FolderConfig::Offer {
+        root: icloud.root.clone(),
+        name: "finicky.js".into(),
+        folder: "iCloud Drive".into(),
+        by: "Studio Mac".into(),
+        at: "09:41".into(),
+        runs_after: "~/.finicky.js".into(),
+        here: "~/.finicky.js".into(),
+    });
+    sync
+}
+
+/// Settings Sections 2b: the folder's rules ran after Studio Mac's
+/// `~/.finicky.ts`, which is not syncing.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "for the window's tests and the screens example")
+)]
+pub fn sync_folder_config_missing() -> super::model::Sync {
+    use super::model::FolderConfig;
+    let mut sync = sync_folder_config();
+    sync.folders[0].line = "rules.json in sync \u{00b7} ~/.finicky.ts is not here".into();
+    sync.folder_config = Some(FolderConfig::Missing {
+        by: "Studio Mac".into(),
+        runs_after: "~/.finicky.ts".into(),
+    });
+    sync
 }
 
 /// Synced Rules 1c: Dropbox in conflict with MacBook Air, iCloud in sync.
@@ -487,10 +537,29 @@ pub fn configuration() -> Configuration {
                 candidate(true, vec![text("defaultBrowser \u{2192} Google Chrome")]),
             ],
         }),
-        shorteners: ["t.co", "bit.ly", "tinyurl.com", "lnkd.in", "buff.ly"]
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        short_links: ShortLinks {
+            hosts: ["t.co", "bit.ly", "tinyurl.com", "lnkd.in", "buff.ly"]
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            source: ShortLinksSource::BuiltIn {
+                config: Some("~/.finicky.ts".into()),
+            },
+        },
+        config_files: vec![
+            ConfigFile {
+                shown: "~/.finicky.ts".into(),
+                path: "/Users/jo/.finicky.ts".into(),
+                state: ConfigFileState::InCharge,
+                line: "Loaded \u{00b7} edited yesterday.".into(),
+            },
+            ConfigFile {
+                shown: "~/.config/finicky/finicky.js".into(),
+                path: "/Users/jo/.config/finicky/finicky.js".into(),
+                state: ConfigFileState::NotUsed,
+                line: "~/.finicky.ts comes first, so this one never runs.".into(),
+            },
+        ],
         rules_path: "~/Library/Application Support/PwrRoute/rules.json".into(),
         rules_status: "Loaded \u{00b7} edited 12 min ago.".into(),
         everything_else: None,

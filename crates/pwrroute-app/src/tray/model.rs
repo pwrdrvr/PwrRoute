@@ -737,7 +737,7 @@ impl SyncRow {
         }
     }
 
-    /// Only a conflict's row acts (it opens Settings › Sync) in the native
+    /// Only a conflict's row acts (it opens Settings › Cloud Sync) in the native
     /// menu; the others only say how sync stands.
     pub fn actionable(&self) -> bool {
         self.tone == SyncTone::Bad

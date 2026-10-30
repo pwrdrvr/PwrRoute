@@ -203,8 +203,12 @@ their own modules.
   (`OverviewState::leave`) drops its fades and the callout's hand-off.
 - **Synced rules (`sync.rs`; design: Synced Rules, Synced Rules
   Machine).** `sync::install` runs `pwrroute_sync::Service` over
-  `rules.json` (and the config in charge when `settings.json`'s
-  `sync.config` is on) and the folders in `sync.targets`; it wakes on
+  `rules.json` (and the Finicky config in charge unless `settings.json`'s
+  `sync.config` is `false`: absent means on, because a config's handlers
+  run before the rules and a folder without it is half the routing) and
+  the folders in `sync.targets`; `rules.json`'s item names the config it
+  runs after here (`runsAfter`), so another machine can tell what it is
+  missing (Settings › Cloud Sync, `settings/AGENTS.md`); it wakes on
   window activation and after an agent's `pwrroute_rules_apply`, and a
   pull is followed by `app::sync_rules_windows`, so every writer goes
   through the same path. `sync::machine()` is this machine's
@@ -218,7 +222,7 @@ their own modules.
   the rail foot's line and the strip's chip (`chrome.rs`) from it, and
   `tray_row_of` the tray's row (`TrayModel::sync`: the dropdown's row
   under Incoming links, and the native menu's first row, enabled only for
-  a conflict); each opens Settings › Sync. The editor offers named
+  a conflict); each opens Settings › Cloud Sync. The editor offers named
   destinations above the lanes, Name it (Return makes a `destinations[]`
   entry from the rule's browser, `RulesStore::name_destination`) and a
   Rule set field. The Rules list heads each run of rules in one set
@@ -468,7 +472,7 @@ their own modules.
   (and the file dismissed); Open in editor is `open_with_system`, which the
   test platform does not implement, so tests never click it. The blank
   state's Choose browser… writes `defaultBrowser` from `PwrRoute::browsers`
-  and its config row opens Settings › Configuration.
+  and its config row opens Settings › Config Files.
 - **Local agents (`mcp.rs`).** `mcp::install` serves MCP from
   `pwrroute_mcp::McpHost` on `<data dir>/mcp.sock`, over the router's
   handle and an engine that follows the same files; `pwrroute mcp` in

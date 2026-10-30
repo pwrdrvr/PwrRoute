@@ -71,6 +71,14 @@ pub struct FileEntry {
     pub saved_by: Machine,
     #[serde(default)]
     pub saved_at: u64,
+    /// The config this version ran after on the machine that wrote it (its
+    /// shown path, `~/.finicky.js`): a Finicky config's handlers run before
+    /// `rules.json`'s rules, so there `rules.json` is only half the routing.
+    /// Recorded only when the file's content is written, never on its own,
+    /// so two machines with different configs do not rewrite the manifest
+    /// back and forth; a pull leaves it as the writer left it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs_after: Option<String>,
 }
 
 /// A machine as sync names it: a random id that never changes and the
@@ -218,9 +226,48 @@ impl Folder {
             .filter(|m| m.format == FORMAT)
     }
 
-    /// Writes `bytes` as `name`, then records it in the manifest. Creates
-    /// `PwrRoute/` inside the root, never the root itself.
-    pub fn write(&self, name: &str, bytes: &[u8], by: &Machine, at: u64, app: &str) -> Result<()> {
+    /// The bytes of `name` once they have settled: the manifest lists the
+    /// name and the file's hash is the one it lists. Otherwise an error in
+    /// words for the user: the file is still arriving, or is not in this
+    /// folder. Reads the exact path only.
+    pub fn settled(&self, name: &str) -> Result<Vec<u8>> {
+        let arriving = || anyhow::anyhow!("{name} is still arriving in this folder");
+        let absent = || anyhow::anyhow!("{name} is not in this folder");
+        if !self.root.is_dir() {
+            anyhow::bail!("{} is not there", self.root.display());
+        }
+        let Some(entry) = self.manifest().and_then(|mut m| m.files.remove(name)) else {
+            return Err(absent());
+        };
+        match self.probe(name) {
+            Probe::Present { .. } => {}
+            // Listed but not here yet: the client has not brought it down.
+            Probe::Missing | Probe::NotDownloaded => return Err(arriving()),
+            Probe::Unavailable(why) => anyhow::bail!("{name}: {why}"),
+        }
+        let bytes = match fs::read(self.file(name)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(arriving()),
+            Err(e) => anyhow::bail!("{name}: {}", describe(&e)),
+        };
+        if hash(&bytes) != entry.sha256 {
+            return Err(arriving());
+        }
+        Ok(bytes)
+    }
+
+    /// Writes `bytes` as `name`, then records it in the manifest with
+    /// `runs_after` ([`FileEntry::runs_after`]). Creates `PwrRoute/` inside
+    /// the root, never the root itself.
+    pub fn write(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        by: &Machine,
+        at: u64,
+        app: &str,
+        runs_after: Option<&str>,
+    ) -> Result<()> {
         if !self.root.is_dir() {
             anyhow::bail!("{} is not there", self.root.display());
         }
@@ -236,6 +283,7 @@ impl Folder {
                 bytes: bytes.len() as u64,
                 saved_by: by.clone(),
                 saved_at: at,
+                runs_after: runs_after.map(str::to_owned),
             },
         );
         manifest.saved_by = by.clone();
@@ -290,7 +338,7 @@ mod tests {
         assert_eq!(folder.probe("rules.json"), Probe::Missing);
         assert!(folder.manifest().is_none());
         folder
-            .write("rules.json", b"{}\n", &me(), 42, "0.8.0")
+            .write("rules.json", b"{}\n", &me(), 42, "0.8.0", None)
             .unwrap();
         assert_eq!(fs::read(folder.file("rules.json")).unwrap(), b"{}\n");
         let manifest = folder.manifest().unwrap();
@@ -309,7 +357,7 @@ mod tests {
         assert!(leftovers.is_empty(), "no staging file left behind");
         // A second file keeps the first's entry.
         folder
-            .write("finicky.ts", b"x", &me(), 43, "0.8.0")
+            .write("finicky.ts", b"x", &me(), 43, "0.8.0", None)
             .unwrap();
         let manifest = folder.manifest().unwrap();
         assert_eq!(manifest.files.len(), 2);
@@ -322,7 +370,11 @@ mod tests {
         let gone = dir.path().join("CloudStorage/Dropbox");
         let folder = Folder::new(&gone);
         assert!(matches!(folder.probe("rules.json"), Probe::Unavailable(_)));
-        assert!(folder.write("rules.json", b"{}", &me(), 1, "").is_err());
+        assert!(
+            folder
+                .write("rules.json", b"{}", &me(), 1, "", None)
+                .is_err()
+        );
         assert!(!gone.exists());
     }
 

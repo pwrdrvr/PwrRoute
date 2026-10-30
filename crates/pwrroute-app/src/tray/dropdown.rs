@@ -1754,7 +1754,7 @@ fn menu_row(
         .when_some(shortcut, |row, shortcut| row.child(key_cap(shortcut)))
 }
 
-/// `.mi-row.sync`: how sync stands, a click to Settings › Sync.
+/// `.mi-row.sync`: how sync stands, a click to Settings › Cloud Sync.
 fn sync_row(
     row: &SyncRow,
     hovered: Option<&'static str>,

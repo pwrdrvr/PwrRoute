@@ -198,11 +198,14 @@ pub struct Configuration {
     pub finicky: Option<FinickyConfig>,
     /// What the importer offers from that config.
     pub import: Option<ImportPlan>,
-    /// The hosts whose links are followed to where they land before the
-    /// rules run: the engine's built-in list, or the config's own
-    /// `urlShorteners` when it sets one. Empty when the config turned
-    /// expansion off.
-    pub shorteners: Vec<SharedString>,
+    /// What Settings › Short Links shows: the hosts expanded before the
+    /// rules run, and whose list it is. Built from the same load of the
+    /// config as the rest of this pane.
+    pub short_links: ShortLinks,
+    /// Every Finicky config file discovery can see, in the order it checks
+    /// them (at most [`CONFIG_FILES_SHOWN`]): the nav's children under
+    /// Config Files and the Files card's rows.
+    pub config_files: Vec<ConfigFile>,
     /// Where `rules.json` lives, as the reader would type it.
     pub rules_path: SharedString,
     /// How the file stands: "Loaded · edited 5 min ago", "No rules.json
@@ -212,6 +215,53 @@ pub struct Configuration {
     /// charge (Overview and Setup 5d). `None` while visual rules are:
     /// `rules.json` is then the whole config and its default takes them.
     pub everything_else: Option<EverythingElse>,
+}
+
+/// How many config files the nav and the Files card list: Finicky's
+/// paths and `rules.json` together stay at ten.
+pub const CONFIG_FILES_SHOWN: usize = 9;
+
+/// A Finicky config file that is on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigFile {
+    /// "~/.finicky.js".
+    pub shown: SharedString,
+    pub path: std::path::PathBuf,
+    pub state: ConfigFileState,
+    /// "Loaded 09:12 · edited yesterday", "~/.finicky.js comes first, so
+    /// this one never runs.", or why it did not load.
+    pub line: SharedString,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigFileState {
+    /// The router runs it.
+    InCharge,
+    /// In charge, but it did not load.
+    Failed,
+    /// On disk, but an earlier file (or Visual rules only) is in charge.
+    NotUsed,
+}
+
+/// Settings › Short Links: the hosts whose links are followed to where
+/// they land before the rules run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShortLinks {
+    /// Empty when expansion is off.
+    pub hosts: Vec<SharedString>,
+    pub source: ShortLinksSource,
+}
+
+/// Whose list [`ShortLinks::hosts`] is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShortLinksSource {
+    /// The engine's built-in list, Finicky's: `rules.json` alone, or a
+    /// config (named) that does not set `urlShorteners`.
+    BuiltIn { config: Option<SharedString> },
+    /// The config's own `urlShorteners`.
+    Config(SharedString),
+    /// The config sets `urlShorteners: []`.
+    Off(SharedString),
 }
 
 /// Whose default browser takes the links no handler or rule claims:
@@ -226,7 +276,7 @@ pub enum DefaultOwner {
     PwrRoute,
 }
 
-/// Settings › Configuration's Everything else field: the segmented control,
+/// Settings › Config Files's Everything else field: the segmented control,
 /// what each answer means, and `rules.json`'s default browser.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EverythingElse {
@@ -543,7 +593,7 @@ impl Diagnostics {
 
 // ---- Sync -----------------------------------------------------------------
 
-/// Settings › Sync (design: Synced Rules): the folders `rules.json` syncs
+/// Settings › Cloud Sync (design: Synced Rules): the folders `rules.json` syncs
 /// with, how each stands, this machine's name, and what the synced
 /// destinations and rule sets mean here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -559,6 +609,9 @@ pub struct Sync {
     /// is; and whether it syncs too.
     pub config: Option<SharedString>,
     pub config_on: bool,
+    /// What the folder says about a Finicky config this machine lacks or
+    /// another machine does not sync (Settings Sections 2a, 2b).
+    pub folder_config: Option<FolderConfig>,
     /// "Synced 09:41", "Not synced yet", or the worst folder's state, for
     /// the pane head's chip.
     pub summary: SharedString,
@@ -578,6 +631,34 @@ impl Sync {
     pub fn has_conflict(&self) -> bool {
         self.folders.iter().any(|f| f.conflict.is_some())
     }
+}
+
+/// A Finicky config the folder's rules.json ran after on another machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FolderConfig {
+    /// The folder has it and this machine has no config of its own: Use
+    /// it on this Mac writes it here and puts it in charge.
+    Offer {
+        root: std::path::PathBuf,
+        /// Its name in the folder: "finicky.js".
+        name: SharedString,
+        /// "iCloud Drive".
+        folder: SharedString,
+        /// Who saved it: "Studio Mac".
+        by: SharedString,
+        /// "09:41".
+        at: SharedString,
+        /// The config the rules ran after there: "~/.finicky.js".
+        runs_after: SharedString,
+        /// Where Use it on this Mac writes it: "~/.finicky.js".
+        here: SharedString,
+    },
+    /// The folder's rules.json ran after a config that is not in the
+    /// folder; only the machine that has it can fix that.
+    Missing {
+        by: SharedString,
+        runs_after: SharedString,
+    },
 }
 
 /// A chip's tone, as the producer judges it.
@@ -779,6 +860,13 @@ pub enum SettingsRequest {
     SetMachineName(SharedString),
     /// Sync: "Also sync" the Finicky config in charge.
     SetSyncConfig(bool),
+    /// Sync: write the folder's config here and put it in charge.
+    UseFolderConfig {
+        root: std::path::PathBuf,
+        name: SharedString,
+    },
+    /// Config Files: show a Finicky config file in the file manager.
+    RevealConfig(std::path::PathBuf),
     RevealSyncBackups,
     /// Sync: bind a named destination on this machine.
     BindDestination {

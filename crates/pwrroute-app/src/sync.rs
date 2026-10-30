@@ -2,9 +2,9 @@
 //! this machine's layer (`machine.json`).
 //!
 //! `install` starts a [`pwrroute_sync::Service`] over `rules.json` (and the
-//! Finicky config in charge, when Settings › Sync says so) and the folders
+//! Finicky config in charge, when Settings › Cloud Sync says so) and the folders
 //! `settings.json`'s `sync.targets` lists. Its reports land in the
-//! [`SyncFeed`] entity, which Settings › Sync, the rail foot and the tray
+//! [`SyncFeed`] entity, which Settings › Cloud Sync, the rail foot and the tray
 //! read. A pass that applied another machine's file asks every main window
 //! to read `rules.json` again (`app::sync_rules_windows`), as an MCP write
 //! does; the router's reloader already follows the file.
@@ -128,7 +128,7 @@ pub fn machine_name(machine: &MachineFile) -> String {
 /// What the sync thread last reported, and its handle.
 pub struct SyncFeed {
     pub status: Status,
-    /// The cloud folders found on this machine, read when Settings › Sync
+    /// The cloud folders found on this machine, read when Settings › Cloud Sync
     /// opens ([`SyncFeed::look_for_places`]), never at launch.
     pub places: Vec<Place>,
     service: Option<Service>,
@@ -530,22 +530,28 @@ pub fn add_target(target: Target, cx: &mut App) -> Result<()> {
     )
 }
 
-/// The files that sync: `rules.json`, and the Finicky config in charge
-/// when `config` is on.
+/// The files that sync: `rules.json`, which records the config it ran
+/// after here, and the Finicky config in charge unless "Also sync" is off.
 fn items(rules: &Path, settings: &SyncSettings) -> Vec<Item> {
+    let config = crate::router::config_in_charge();
+    let home = std::env::home_dir();
     let mut items = vec![Item {
         name: "rules.json".into(),
         local: rules.to_path_buf(),
         check: Arc::new(check_rules),
+        runs_after: config
+            .as_deref()
+            .map(|config| crate::config_view::display_path(config, home.as_deref())),
     }];
-    if settings.config
-        && let Some(config) = crate::router::config_in_charge()
+    if settings.syncs_config()
+        && let Some(config) = config
         && let Some(name) = config_name(&config)
     {
         items.push(Item {
             name,
             local: config,
             check: Arc::new(check_config),
+            runs_after: None,
         });
     }
     items
@@ -569,7 +575,7 @@ pub fn check_rules(bytes: &[u8]) -> Content {
 
 /// A config must be text. Whether it loads is the reloader's to say: a
 /// broken one is left out and `rules.json` keeps routing.
-fn check_config(bytes: &[u8]) -> Content {
+pub fn check_config(bytes: &[u8]) -> Content {
     match std::str::from_utf8(bytes) {
         Ok(text) if text.trim().is_empty() => Content::Invalid("empty".into()),
         Ok(_) => Content::Valid,
@@ -632,6 +638,7 @@ mod tests {
                     last_synced: last_pass,
                     saved_by: None,
                     saved_at: None,
+                    folder_files: Default::default(),
                 })
                 .collect(),
             last_pass,

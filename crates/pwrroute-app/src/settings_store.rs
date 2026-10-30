@@ -60,7 +60,7 @@ pub struct Settings {
     /// View › Zoom. Left out at Actual Size.
     #[serde(skip_serializing_if = "ViewSettings::is_default")]
     pub view: ViewSettings,
-    /// Settings › Sync: the folders `rules.json` syncs with. Left out
+    /// Settings › Cloud Sync: the folders `rules.json` syncs with. Left out
     /// while nothing syncs.
     #[serde(skip_serializing_if = "SyncSettings::is_default")]
     pub sync: SyncSettings,
@@ -97,12 +97,19 @@ impl ViewSettings {
 pub struct SyncSettings {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<pwrroute_sync::Target>,
-    /// "Also sync" the Finicky config in charge.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub config: bool,
+    /// "Also sync" the Finicky config in charge: on unless switched off
+    /// ([`SyncSettings::syncs_config`]). A config's handlers run before
+    /// `rules.json`'s rules, so a folder without it is half the routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<bool>,
 }
 
 impl SyncSettings {
+    /// Whether the Finicky config in charge syncs with `rules.json`.
+    pub fn syncs_config(&self) -> bool {
+        self.config.unwrap_or(true)
+    }
+
     fn is_default(&self) -> bool {
         *self == Self::default()
     }

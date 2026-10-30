@@ -1,4 +1,4 @@
-//! Settings › Sync's producer: the pane from the sync thread's last report
+//! Settings › Cloud Sync's producer: the pane from the sync thread's last report
 //! (`crate::sync`), the cloud folders found here, `rules.json` and
 //! `machine.json`, and the answers to its requests.
 //!
@@ -14,8 +14,8 @@ use pwrroute_engine::{BindingSource, MachineFile, RulesFile};
 use pwrroute_sync::{ConflictKind, Health, Place, Status, Target, TargetStatus, Wait};
 
 use super::model::{
-    DestinationRow, RuleSetRow, SettingsRequest, Sync, SyncConflict, SyncFolder, SyncPlace,
-    SyncTone,
+    DestinationRow, FolderConfig, RuleSetRow, SettingsRequest, Sync, SyncConflict, SyncFolder,
+    SyncPlace, SyncTone,
 };
 use crate::activity_actions::BrowserChoice;
 use crate::destinations::{self, Choice};
@@ -47,6 +47,7 @@ pub fn build(facts: &Facts<'_>) -> Sync {
     let shown = |root: &Path| {
         crate::config_view::display_path(&root.join(pwrroute_sync::FOLDER), facts.home)
     };
+    let mut folder_config = None;
     let folders: Vec<SyncFolder> = facts
         .targets
         .iter()
@@ -56,7 +57,26 @@ pub fn build(facts: &Facts<'_>) -> Sync {
                 .targets
                 .iter()
                 .find(|s| s.target.root == target.root);
-            folder(target, status, shown(&target.root), facts)
+            let mut row = folder(target, status, shown(&target.root), facts);
+            if let Some(found) = status.and_then(|status| config_gap(status, facts)) {
+                // Only an otherwise quiet folder says so: a conflict or a
+                // wait needs the reader first.
+                if row.tone == SyncTone::Ok {
+                    row.chip = "Needs you".into();
+                    row.tone = SyncTone::Warn;
+                    row.line = match &found {
+                        FolderConfig::Offer { name, .. } => {
+                            format!("rules.json in sync \u{00b7} {name} not used here")
+                        }
+                        FolderConfig::Missing { runs_after, .. } => {
+                            format!("rules.json in sync \u{00b7} {runs_after} is not here")
+                        }
+                    }
+                    .into();
+                }
+                folder_config.get_or_insert(found);
+            }
+            row
         })
         .collect();
     let offered = facts
@@ -91,6 +111,42 @@ pub fn build(facts: &Facts<'_>) -> Sync {
         destinations: destination_rows(facts),
         sets: set_rows(facts),
         problem: None,
+        folder_config,
+    }
+}
+
+/// What the folder's `rules.json` ran after on the machine that saved it,
+/// when this machine cannot run the same (Settings Sections 2a, 2b): the
+/// folder has the config and this machine has none of its own (Offer), or
+/// the folder lacks it and another machine saved the rules (Missing). A
+/// machine with its own config is offered nothing: each keeps its own.
+fn config_gap(status: &TargetStatus, facts: &Facts<'_>) -> Option<FolderConfig> {
+    let rules = status.folder_files.get("rules.json")?;
+    let runs_after = rules.runs_after.clone()?;
+    let by = if rules.saved_by.name.is_empty() {
+        "another machine".to_owned()
+    } else {
+        rules.saved_by.name.clone()
+    };
+    let config = status
+        .folder_files
+        .iter()
+        .find(|(name, _)| name.starts_with("finicky."));
+    match config {
+        Some((name, entry)) if facts.config.is_none() => Some(FolderConfig::Offer {
+            root: status.target.root.clone(),
+            name: name.clone().into(),
+            folder: status.target.label.clone().into(),
+            by: by.into(),
+            at: (facts.when)(entry.saved_at).into(),
+            runs_after: runs_after.into(),
+            here: format!("~/.{name}").into(),
+        }),
+        None if rules.saved_by.id != facts.status.machine.id => Some(FolderConfig::Missing {
+            by: by.into(),
+            runs_after: runs_after.into(),
+        }),
+        _ => None,
     }
 }
 
@@ -492,13 +548,71 @@ fn current(cx: &mut App) -> Sync {
         machine: &machine,
         computer_name: &crate::sync::computer_name(),
         config,
-        config_on: settings.config,
+        config_on: settings.syncs_config(),
         choices: &choices,
         installed: &installed,
         home: home.as_deref(),
         here: here(),
         when: &when,
     })
+}
+
+/// A config bigger than this is not one to copy (sync's own limit).
+const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
+
+/// Use it on this Mac (Settings Sections 2a): the folder's settled config
+/// written to `~/.{name}`, never over a config already here, then put in
+/// charge with Also sync on so it keeps up.
+fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use pwrroute_engine::discovery;
+    if crate::sync::config_name(Path::new(name)).as_deref() != Some(name) {
+        anyhow::bail!("{name} is not a Finicky config");
+    }
+    let env = discovery::Environment::current();
+    if let Some(found) = discovery::config_candidates(&env)
+        .into_iter()
+        .find(|p| p.is_file())
+    {
+        let home = std::env::home_dir();
+        anyhow::bail!(
+            "{} is already here",
+            crate::config_view::display_path(&found, home.as_deref())
+        );
+    }
+    let bytes = pwrroute_sync::Folder::new(root).settled(name)?;
+    if bytes.len() > MAX_CONFIG_BYTES {
+        anyhow::bail!("{name} is too big to be a config");
+    }
+    if let pwrroute_sync::Content::Invalid(why) = crate::sync::check_config(&bytes) {
+        anyhow::bail!("{name}: {why}");
+    }
+    let home = std::env::home_dir().context("no home folder")?;
+    let path = home.join(format!(".{name}"));
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| format!("cannot write ~/.{name}"))?;
+        file.write_all(&bytes)
+            .with_context(|| format!("cannot write ~/.{name}"))?;
+    }
+    crate::sync::edit_settings(|sync| sync.config = Some(true), cx)?;
+    // Discovery finds it first now; the Rules screen's "Found …" notice
+    // would only ask what the reader just answered.
+    let mut source = crate::settings_store::store(cx)
+        .map(|store| store.read(cx).settings().source.clone())
+        .unwrap_or_default();
+    source.visual_only = false;
+    source.config = None;
+    if !source.dismissed.contains(&path) {
+        source.dismissed.push(path);
+    }
+    crate::importer_view::set_source_and_show(source, cx);
+    super::configuration_host::refresh(cx);
+    Ok(())
 }
 
 /// Redraws the pane after a pass or a change, when Settings is open.
@@ -560,8 +674,9 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
         }
         SettingsRequest::SetSyncConfig(on) => {
             let on = *on;
-            crate::sync::edit_settings(|sync| sync.config = on, cx)
+            crate::sync::edit_settings(|sync| sync.config = Some(on), cx)
         }
+        SettingsRequest::UseFolderConfig { root, name } => use_folder_config(root, name, cx),
         SettingsRequest::RevealSyncBackups => {
             if let Some(newest) = crate::sync::feed(cx)
                 .and_then(|feed| feed.read(cx).status.backups.first().map(|b| b.path.clone()))
@@ -792,6 +907,17 @@ mod tests {
         machine: &MachineFile,
         f: impl FnOnce(Sync) -> R,
     ) -> R {
+        with_config(status, targets, machine, Some("~/.finicky.ts"), f)
+    }
+
+    /// [`with`], with `config` in charge here (or none).
+    fn with_config<R>(
+        status: &Status,
+        targets: &[Target],
+        machine: &MachineFile,
+        config: Option<&str>,
+        f: impl FnOnce(Sync) -> R,
+    ) -> R {
         let rules = rules();
         let installed = installed();
         let choices: Vec<BrowserChoice> = Vec::new();
@@ -807,7 +933,7 @@ mod tests {
             rules: &rules,
             machine,
             computer_name: "Studio Mac",
-            config: Some("~/.finicky.ts".into()),
+            config: config.map(str::to_owned),
             config_on: false,
             choices: &choices,
             installed: &installed,
@@ -854,6 +980,7 @@ mod tests {
                         name: "MacBook Air".into(),
                     }),
                     saved_at: Some(4),
+                    folder_files: Default::default(),
                 },
                 TargetStatus {
                     target: drive.clone(),
@@ -864,6 +991,7 @@ mod tests {
                     last_synced: None,
                     saved_by: None,
                     saved_at: None,
+                    folder_files: Default::default(),
                 },
             ],
         };
@@ -885,6 +1013,107 @@ mod tests {
                 assert_eq!(sync.offered.len(), 1);
             },
         );
+    }
+
+    /// A folder in step whose rules.json `other` saved after `runs_after`,
+    /// holding `files` besides it.
+    fn folder_with(runs_after: Option<&str>, files: &[&str]) -> (Target, Status) {
+        let icloud = target("/i", "iCloud Drive");
+        let other = Machine {
+            id: "other".into(),
+            name: "Studio Mac".into(),
+        };
+        let entry = |runs_after: Option<&str>| pwrroute_sync::FileEntry {
+            sha256: "x".into(),
+            bytes: 1,
+            saved_by: other.clone(),
+            saved_at: 7,
+            runs_after: runs_after.map(str::to_owned),
+        };
+        let mut folder_files = BTreeMap::from([("rules.json".to_owned(), entry(runs_after))]);
+        for name in files {
+            folder_files.insert((*name).to_owned(), entry(None));
+        }
+        let status = Status {
+            machine: Machine {
+                id: "me".into(),
+                name: "MacBook Air".into(),
+            },
+            targets: vec![TargetStatus {
+                target: icloud.clone(),
+                files: vec![FileStatus {
+                    name: "rules.json".into(),
+                    health: Health::InSync,
+                }],
+                last_synced: Some(8),
+                saved_by: Some(other.clone()),
+                saved_at: Some(7),
+                folder_files,
+            }],
+            ..Status::default()
+        };
+        (icloud, status)
+    }
+
+    #[test]
+    fn a_machine_without_a_config_is_offered_the_folders() {
+        let (icloud, status) = folder_with(Some("~/.finicky.js"), &["finicky.js"]);
+        let machine = MachineFile::default();
+        with_config(&status, &[icloud.clone()], &machine, None, |sync| {
+            assert_eq!(
+                sync.folder_config,
+                Some(FolderConfig::Offer {
+                    root: PathBuf::from("/i"),
+                    name: "finicky.js".into(),
+                    folder: "iCloud Drive".into(),
+                    by: "Studio Mac".into(),
+                    at: "t7".into(),
+                    runs_after: "~/.finicky.js".into(),
+                    here: "~/.finicky.js".into(),
+                })
+            );
+            assert_eq!(sync.folders[0].chip, "Needs you");
+            assert_eq!(sync.folders[0].tone, SyncTone::Warn);
+            assert_eq!(
+                sync.folders[0].line,
+                "rules.json in sync \u{00b7} finicky.js not used here"
+            );
+        });
+        // A machine with a config of its own keeps it: nothing is offered.
+        with(&status, &[icloud], &machine, |sync| {
+            assert_eq!(sync.folder_config, None);
+            assert_eq!(sync.folders[0].chip, "In sync");
+        });
+    }
+
+    #[test]
+    fn rules_that_ran_after_a_config_the_folder_lacks_say_so() {
+        let (icloud, status) = folder_with(Some("~/.finicky.ts"), &[]);
+        let machine = MachineFile::default();
+        with_config(&status, &[icloud.clone()], &machine, None, |sync| {
+            assert_eq!(
+                sync.folder_config,
+                Some(FolderConfig::Missing {
+                    by: "Studio Mac".into(),
+                    runs_after: "~/.finicky.ts".into(),
+                })
+            );
+            assert_eq!(sync.folders[0].tone, SyncTone::Warn);
+        });
+        // Rules that ran alone, or that this machine saved, say nothing.
+        let (icloud, mut status) = folder_with(None, &[]);
+        with_config(&status, &[icloud.clone()], &machine, None, |sync| {
+            assert_eq!(sync.folder_config, None);
+        });
+        status.machine.id = "other".into();
+        let entry = status.targets[0]
+            .folder_files
+            .get_mut("rules.json")
+            .unwrap();
+        entry.runs_after = Some("~/.finicky.ts".into());
+        with(&status, &[icloud], &machine, |sync| {
+            assert_eq!(sync.folder_config, None);
+        });
     }
 
     #[test]
@@ -918,6 +1147,7 @@ mod tests {
                 last_synced: None,
                 saved_by: None,
                 saved_at: None,
+                folder_files: Default::default(),
             }],
             ..Status::default()
         };
