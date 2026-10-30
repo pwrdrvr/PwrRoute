@@ -18,9 +18,9 @@ use pwrroute_router::{
 };
 
 use super::dropdown::{
-    BODY_ID, CARD_ID, DESTINATION_ID, DESTINATIONS_ID, Dropdown, FOR_IDS, HEADER_ID, HELD_LANES_ID,
-    LANES_WIDTH, LIST_MAX, LIVE_BUTTON_ID, MAKE_DEFAULT_ID, MODE_IDS, OPEN_ALL_ID, QUIT_ID,
-    STEP_UP_ID, Unfolded, WIDTH, card_height, held_id, lanes_height,
+    BODY_ID, CARD_ID, DESTINATION_ID, DESTINATIONS_ID, Dropdown, FOR_IDS, HEADER, HEADER_ID,
+    HELD_LANES_ID, LANES_WIDTH, LIST_MAX, LIVE_BUTTON_ID, MAKE_DEFAULT_ID, MODE_IDS, OPEN_ALL_ID,
+    QUIT_ID, STEP_UP_ID, Unfolded, WIDTH, card_height, held_id, lanes_height,
 };
 use super::model::{
     BrowserLabel, Dispatched, ForKind, Mode, Recent, RecentRoute, Routing, TrayModel,
@@ -148,7 +148,7 @@ fn the_header_is_a_click_target_at_the_top(cx: &mut TestAppContext) {
     let header = opened.cx.debug_bounds(HEADER_ID).expect("the header");
     assert!((header.top() - card.top()).abs() <= px(1.0));
     assert!((header.size.width - card.size.width).abs() <= px(2.0));
-    assert!((header.size.height - px(41.0)).abs() <= px(1.0));
+    assert!((header.size.height - px(HEADER)).abs() <= px(1.0));
 }
 
 #[gpui_kit::test]

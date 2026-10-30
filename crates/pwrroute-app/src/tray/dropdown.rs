@@ -777,13 +777,16 @@ fn header(chip: HeaderChip, cx: &mut Context<'_, Dropdown>) -> gpui_kit::Statefu
         .border_color(theme::border_faint())
         .cursor_pointer()
         .hover(|row| row.bg(theme::bg_hover()))
-        // A tab stop like the rows, but focus shows as the row's fill: a
-        // focus border would grow the header past `HEADER`.
-        .role(gpui_kit::Role::Button)
+        .role(gpui_kit::Role::MenuItem)
         .aria_label("Open PwrRoute")
-        .tab_index(0)
-        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-        .focus_visible(|row| row.bg(theme::bg_row_active()))
+        .map(|row| crate::widgets::keyboard_control(row, false))
+        // Replaces `keyboard_control`'s ring: the header draws only a
+        // bottom edge, so focus also fills the row. A full border would
+        // grow it past `HEADER`.
+        .focus_visible(|row| {
+            row.bg(theme::bg_row_active())
+                .border_color(theme::focus_ring())
+        })
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.run(TrayCommand::OpenMain, window, cx);
         }))
@@ -1847,7 +1850,7 @@ fn label_text(label: &'static str, size: f32, color: gpui_kit::Hsla) -> AnyEleme
 // adds them up; a test holds it to the laid-out card.
 
 /// `.th`: 10px padding around the 20px chip, and its hairline.
-const HEADER: f32 = 10.0 + 20.0 + 10.0 + 1.0;
+pub const HEADER: f32 = 10.0 + 20.0 + 10.0 + 1.0;
 /// `.sec` padding, top and bottom.
 const SECTION_PADDING: f32 = 12.0;
 /// `.cap`: 9.5px text in 4px padding.
