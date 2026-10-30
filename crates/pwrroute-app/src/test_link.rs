@@ -985,7 +985,7 @@ pub fn pane(
         cx.stop_propagation();
         cx.notify();
     }))
-    .map(crate::accessibility::clickable)
+    .map(crate::accessibility::keyboard_only)
     .on_click(cx.listener(|this, _, window, cx| {
         window.focus(&this.test.url.focus, cx);
         cx.notify();

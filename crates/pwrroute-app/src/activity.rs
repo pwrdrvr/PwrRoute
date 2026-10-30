@@ -1865,7 +1865,7 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
         cx.stop_propagation();
         cx.notify();
     }))
-    .map(crate::accessibility::clickable)
+    .map(crate::accessibility::keyboard_only)
     .on_click(cx.listener(|this, _, window, cx| {
         window.focus(&this.activity.search.focus, cx);
         cx.notify();

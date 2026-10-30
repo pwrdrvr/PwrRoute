@@ -1800,8 +1800,7 @@ fn choose_source(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Statefu
                 lines,
             )
             .map(crate::accessibility::clickable)
-            .role(gpui_kit::Role::RadioButton)
-            .aria_selected(model.source == choice)
+            .map(|element| crate::accessibility::radio(element, model.source == choice))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.model.source = choice;
                 cx.notify();

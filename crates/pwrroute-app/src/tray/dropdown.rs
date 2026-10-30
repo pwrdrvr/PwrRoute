@@ -588,8 +588,7 @@ fn send_section(
                 }
             })
             .map(crate::accessibility::clickable)
-            .role(gpui_kit::Role::RadioButton)
-            .aria_selected(on)
+            .map(|element| crate::accessibility::radio(element, on))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.send(target, window, cx);
             }))
@@ -838,8 +837,7 @@ fn all_line(model: &TrayModel, now: SystemTime, cx: &mut Context<'_, Dropdown>) 
                     option.hover(|option| option.bg(theme::bg_hover()))
                 })
                 .map(crate::accessibility::clickable)
-                .role(gpui_kit::Role::RadioButton)
-                .aria_selected(on)
+                .map(|element| crate::accessibility::radio(element, on))
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                     super::set_all_for_hour(hour, cx);
                 }))

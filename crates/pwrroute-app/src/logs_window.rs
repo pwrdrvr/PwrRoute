@@ -902,7 +902,7 @@ impl LogsWindow {
             Some(self.search_trailing(narrow, cx)),
             window,
         )
-        .map(crate::accessibility::clickable)
+        .map(crate::accessibility::keyboard_only)
         .on_click(cx.listener(|this, _, window, cx| {
             window.focus(&this.search.focus, cx);
             cx.notify();
@@ -930,8 +930,7 @@ impl LogsWindow {
                     .child(segment(label, self.view.mode == mode))
                     .tooltip(tip(hint))
                     .map(crate::accessibility::clickable)
-                    .role(gpui_kit::Role::RadioButton)
-                    .aria_selected(self.view.mode == mode)
+                    .map(|element| crate::accessibility::radio(element, self.view.mode == mode))
                     .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx))),
             )
         });

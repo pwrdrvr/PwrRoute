@@ -6041,6 +6041,76 @@ fn accessibility_picker_arrows_wrap_return_selects_and_escape_restores_focus(
 }
 
 #[gpui_kit::test]
+fn accessibility_profile_picker_recovers_focus_after_replacing_browser_rows(
+    cx: &mut TestAppContext,
+) {
+    cx.update(crate::app_menu::install);
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    let profile = view.read_with(cx, |app, _| app.installed[0].profiles[0].clone());
+    let trigger = cx.update(|window, cx| window.focused(cx));
+    click(cx, "overview-setup-choose");
+    draw(cx);
+    // Return replaces the browser rows while the menu stays open.
+    activate_focused(cx);
+    assert!(cx.debug_bounds("overview-setup-choice-0").is_none());
+    assert!(cx.debug_bounds("overview-setup-profile-0").is_some());
+    keys(cx, "escape");
+    assert!(!view.read_with(cx, |app, _| app.overview.picking));
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), trigger);
+
+    click(cx, "overview-setup-choose");
+    draw(cx);
+    activate_focused(cx);
+    keys(cx, "down");
+    activate_focused(cx);
+    assert!(!view.read_with(cx, |app, _| app.overview.picking));
+    assert_eq!(saved(cx, &path).default_profile, profile);
+}
+
+fn activate_focused(cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+    });
+    cx.run_until_parked();
+    draw(cx);
+    draw(cx);
+}
+
+#[gpui_kit::test]
+fn accessibility_cancel_from_a_keyboard_menu_returns_to_the_activity_list(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let dir = scratch("a11y-menu-sheet-cancel");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    for escape in [false, true] {
+        click(cx, "activity-more-4");
+        draw(cx);
+        activate_focused(cx);
+        assert!(view.read_with(cx, |app, _| app.actions.sheet.is_some()));
+        assert!(cx.debug_bounds("activity-menu-4").is_none());
+        if escape {
+            // First Esc collapses the pattern's selection; the next closes.
+            keys(cx, "escape escape");
+        } else {
+            click(cx, "add-rule-cancel");
+        }
+        assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()));
+        let list = view.read_with(cx, |app, _| app.focus.clone());
+        assert!(cx.update(|window, _| list.is_focused(window)));
+        keys(cx, "secondary-n");
+        assert!(view.read_with(cx, |app, _| app.actions.sheet.is_some()));
+        click(cx, "add-rule-cancel");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
 fn accessibility_sheet_tab_wraps_inside_the_dialog(cx: &mut TestAppContext) {
     cx.update(crate::app_menu::install);
     let dir = scratch("a11y-sheet-focus");

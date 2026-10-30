@@ -161,7 +161,12 @@ impl Render for DocWindow {
                         .py(px(24.0))
                         .flex()
                         .flex_col()
-                        .children(blocks.iter().map(draw_block)),
+                        .children(
+                            blocks
+                                .iter()
+                                .enumerate()
+                                .map(|(index, block)| draw_block(index, block)),
+                        ),
                 )
                 .into_any_element(),
             Body::Lines(lines, scroll) => {
@@ -181,14 +186,7 @@ impl Render for DocWindow {
                             .child(
                                 uniform_list("doc-lines", rows.len(), move |range, _, _| {
                                     range
-                                        .map(|index| {
-                                            div().h(px(LINE_HEIGHT)).px(px(16.0)).child(mono(
-                                                rows[index].clone(),
-                                                12.0,
-                                                400.0,
-                                                theme::text_secondary(),
-                                            ))
-                                        })
+                                        .map(|index| draw_line(index, rows[index].clone()))
                                         .collect()
                                 })
                                 .track_scroll(scroll)
@@ -354,6 +352,14 @@ pub fn changelog(markdown: &str, version: &str) -> Vec<Block> {
     kept
 }
 
+fn draw_line(index: usize, content: SharedString) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(("doc-line", index))
+        .h(px(LINE_HEIGHT))
+        .px(px(16.0))
+        .child(mono(content, 12.0, 400.0, theme::text_secondary()))
+}
+
 /// "Area - what changed": the area in bold, as the changelog's convention.
 fn bullet_spans(item: &str) -> Vec<Span> {
     match item.split_once(" - ") {
@@ -422,8 +428,8 @@ pub fn spans(text: &str) -> Vec<Span> {
     out
 }
 
-fn draw_block(block: &Block) -> gpui_kit::AnyElement {
-    match block {
+fn draw_block(index: usize, block: &Block) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let block = match block {
         Block::Version {
             name,
             date,
@@ -441,8 +447,7 @@ fn draw_block(block: &Block) -> gpui_kit::AnyElement {
             .when_some(date.clone(), |row, date| {
                 row.child(mono(date, 11.0, 500.0, theme::text_muted()))
             })
-            .when(*current, |row| row.child(chip("This copy")))
-            .into_any_element(),
+            .when(*current, |row| row.child(chip("This copy"))),
         Block::Bullet(spans) => div()
             .flex()
             .gap(px(10.0))
@@ -453,10 +458,10 @@ fn draw_block(block: &Block) -> gpui_kit::AnyElement {
                     .pt(px(7.0))
                     .child(div().size(px(4.0)).rounded_full().bg(theme::accent())),
             )
-            .child(styled(spans).flex_1().min_w_0())
-            .into_any_element(),
-        Block::Paragraph(spans) => styled(spans).py(px(6.0)).into_any_element(),
-    }
+            .child(styled(spans).flex_1().min_w_0()),
+        Block::Paragraph(spans) => styled(spans).py(px(6.0)),
+    };
+    block.id(("doc-block", index))
 }
 
 /// Spans as one wrapping run: sans 12.5/1.6, bold in the primary color,
@@ -537,6 +542,32 @@ pub fn wrap(text: &str, columns: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::Element;
+
+    #[test]
+    fn repeated_document_text_has_distinct_stable_instance_ids() {
+        let lines: Vec<_> = ["", "", "Repeated", "Repeated"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, content)| Element::id(&draw_line(index, content.into())).unwrap())
+            .collect();
+        for (index, id) in lines.iter().enumerate() {
+            assert!(!lines[..index].contains(id));
+        }
+        assert_eq!(
+            Some(lines[0].clone()),
+            Element::id(&draw_line(0, "".into()))
+        );
+        let block = Block::Version {
+            name: "v0.1.0".into(),
+            date: Some("2026-10-29".into()),
+            current: true,
+        };
+        assert_ne!(
+            Element::id(&draw_block(0, &block)),
+            Element::id(&draw_block(1, &block))
+        );
+    }
 
     #[test]
     fn the_changelog_reads_as_versions_and_bullets() {

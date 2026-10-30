@@ -3,7 +3,7 @@
 use gpui_kit::{
     AnyElement, App, Div, ElementId, FocusHandle, InteractiveElement, Interactivity, IntoElement,
     ParentElement, RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement,
-    StyleRefinement, Styled, Window,
+    StyleRefinement, Styled, Toggled, Window,
 };
 use std::hash::{Hash, Hasher};
 
@@ -27,10 +27,14 @@ pub fn selected<E: InteractiveElement>(
     label: impl Into<SharedString>,
     selected: bool,
 ) -> E {
+    Semantic(radio(element, selected)).aria_label(label).0
+}
+
+pub fn radio<E: InteractiveElement>(element: E, selected: bool) -> E {
     Semantic(element)
         .role(Role::RadioButton)
-        .aria_label(label)
         .aria_selected(selected)
+        .aria_toggled(Toggled::from(selected))
         .0
 }
 
@@ -54,7 +58,12 @@ pub fn heading(element: Div, label: &str) -> Div {
 /// pointer and keyboard always run exactly the same callback. Text descendants
 /// supply the default accessible name; icon-only controls supply an aria_label.
 pub fn clickable<E: StatefulInteractiveElement>(element: E) -> E {
-    crate::widgets::keyboard_control(element.role(Role::Button), false)
+    keyboard_only(element.role(Role::Button))
+}
+
+/// Add keyboard behavior without changing a field's role or accessible value.
+pub fn keyboard_only<E: StatefulInteractiveElement>(element: E) -> E {
+    crate::widgets::keyboard_control(element, false)
         .focus_visible(|style| style.border_1().border_color(crate::theme::focus_ring()))
 }
 
@@ -212,6 +221,23 @@ impl RenderOnce for MenuCard {
         });
         let scope = state.read(cx).scope.clone();
         let trigger = state.read(cx).trigger.clone();
+        // A picker can replace its rows without replacing its card. Check
+        // after layout, when the old focused row is no longer in the tree.
+        // Only recover focus that belonged to this menu; another control's
+        // deliberate focus change must win.
+        if scope.contains_focused(window, cx)
+            && let Some(previous) = window.focused(cx)
+        {
+            let scope = scope.clone();
+            window.defer(cx, move |window, cx| {
+                let focused = window.focused(cx);
+                if (focused.is_none() || focused.as_ref() == Some(&previous))
+                    && !scope.contains_focused(window, cx)
+                {
+                    move_focus(&scope, "home", window, cx);
+                }
+            });
+        }
         self.card
             .role(if dialog { Role::Dialog } else { Role::Menu })
             .aria_label(if dialog { "Add a rule" } else { "Choices" })
@@ -244,5 +270,54 @@ impl RenderOnce for MenuCard {
                     // The owner dismisses its model in the bubbling handler.
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::{Element, TestAppContext, accesskit::Node, div};
+
+    #[gpui_kit::test]
+    fn keyboard_behavior_preserves_editable_field_semantics(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let field = crate::text_field::TextField::new("example.com/*", cx);
+            let input = keyboard_only(crate::text_field::hit_area(
+                div().id("rule-pattern"),
+                &field,
+            ));
+            assert_eq!(input.a11y_role(), Some(Role::TextInput));
+            let mut node = Node::new(input.a11y_role().unwrap());
+            input.write_a11y_info(&mut node);
+            assert_eq!(node.label(), Some("rule pattern"));
+            assert_eq!(node.value(), Some("example.com/*"));
+            assert_eq!(
+                clickable(div().id("action")).a11y_role(),
+                Some(Role::Button)
+            );
+        });
+    }
+
+    #[test]
+    fn radios_expose_both_checked_states_and_keep_their_names() {
+        for checked in [false, true] {
+            // Exercise both shared segments and the helper used by the
+            // destination pills, tray choices, importer and log modes.
+            let controls = [
+                crate::widgets::segment("Rules", checked).id("segment"),
+                radio(
+                    clickable(div().id("choice").aria_label("Next link")),
+                    checked,
+                ),
+            ];
+            for control in controls {
+                assert_eq!(control.a11y_role(), Some(Role::RadioButton));
+                let mut node = Node::new(Role::RadioButton);
+                control.write_a11y_info(&mut node);
+                assert_eq!(node.toggled(), Some(Toggled::from(checked)));
+                assert_eq!(node.is_selected(), Some(checked));
+                assert!(node.label().is_some());
+            }
+        }
     }
 }

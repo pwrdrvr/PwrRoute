@@ -460,9 +460,8 @@ pub fn draw<V: 'static>(
                                 })
                             })
                             .map(crate::accessibility::clickable)
-                            .role(gpui_kit::Role::RadioButton)
+                            .map(|element| crate::accessibility::radio(element, pill.on))
                             .aria_label(format!("{}, {}", lane.name, pill.label))
-                            .aria_selected(pill.on)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 pick(this, choice.clone(), window, cx);
                             })),

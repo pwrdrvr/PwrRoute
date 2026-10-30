@@ -66,7 +66,6 @@ pub struct Actions {
     /// on that mouse down, so the click that follows reads this.
     pub menu_was: Option<RowKey>,
     pub sheet: Option<AddRule>,
-    return_focus: Option<gpui_kit::FocusHandle>,
     pub note: Option<(RowKey, String)>,
 }
 
@@ -838,7 +837,6 @@ impl PwrRoute {
         self.find_collisions(&mut sheet, cx);
         sheet.rules_first = self.rules_first();
         sheet.config = self.config.as_ref().map(|config| config.path.clone());
-        self.actions.return_focus = window.focused(cx);
         window.focus(&sheet.pattern.focus, cx);
         self.actions.sheet = Some(sheet);
         self.actions.menu = None;
@@ -883,12 +881,7 @@ impl PwrRoute {
     /// keyboard back (the sheet's field may have had it).
     pub fn cancel_add_rule(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         self.actions.sheet = None;
-        let focus = self
-            .actions
-            .return_focus
-            .take()
-            .unwrap_or_else(|| self.focus.clone());
-        window.focus(&focus, cx);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
