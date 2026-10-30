@@ -264,9 +264,15 @@ fn a_click_on_a_button_leaves_the_keys_with_the_list(cx: &mut TestAppContext) {
         let focus = view.read_with(cx, |app, _| app.focus.clone());
         cx.update(|window, _| focus.is_focused(window))
     };
-    // A rail item is a Tab stop now; a pointer press still leaves the
-    // keyboard where it was, as a native button does.
-    click(cx, "nav-rules");
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::Activity, window, cx)
+    });
+    draw(cx);
+    assert!(list_has_keys(cx));
+    // A filter segment is a Tab stop now, and its click does not move
+    // focus itself: a pointer press leaves the keyboard where it was, as a
+    // native button does.
+    click(cx, "activity-filter-Failed");
     assert!(list_has_keys(cx));
 }
 

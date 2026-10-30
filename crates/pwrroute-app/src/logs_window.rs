@@ -1504,10 +1504,9 @@ impl LogsWindow {
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_diagnostics(cx))),
                     )
                     .child(
-                        div()
+                        button("Copy", ButtonKind::Primary, true)
                             .id(COPY_ID)
                             .debug_selector(|| COPY_ID.into())
-                            .child(button("Copy", ButtonKind::Primary, true))
                             .on_click(cx.listener(|this, _, _, cx| this.copy_selection(cx))),
                     )
                     .child(
@@ -1571,17 +1570,15 @@ impl LogsWindow {
             })
             .when(has_file, |bar| {
                 bar.child(
-                    div()
+                    button("Copy path", ButtonKind::Quiet, true)
                         .id(COPY_PATH_ID)
                         .debug_selector(|| COPY_PATH_ID.into())
-                        .child(button("Copy path", ButtonKind::Quiet, true))
                         .on_click(cx.listener(|this, _, _, cx| this.copy_path(cx))),
                 )
                 .child(
-                    div()
+                    button("Reveal", ButtonKind::Quiet, true)
                         .id(REVEAL_ID)
                         .debug_selector(|| REVEAL_ID.into())
-                        .child(button("Reveal", ButtonKind::Quiet, true))
                         .on_click(cx.listener(|this, _, _, cx| this.reveal(cx))),
                 )
             })
