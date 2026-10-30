@@ -402,19 +402,24 @@ fn follow_feed(model: &Entity<TrayModel>, cx: &mut App) {
     let Some(feed) = activity::feed(cx) else {
         return;
     };
-    fn sync(model: &Entity<TrayModel>, feed: &Entity<Feed>, cx: &mut App) {
-        let dispatched = Dispatched::of(feed.read(cx), SystemTime::now());
-        model.update(cx, |model, cx| {
-            model.sync(dispatched);
-            cx.notify();
-        });
-        // A dispatch may have used up the last of a count.
-        sync_override(model, cx);
-    }
-    sync(model, &feed, cx);
+    sync_feed(model, &feed, cx);
     let model = model.clone();
-    cx.observe(&feed, move |feed, cx| sync(&model, &feed, cx))
+    cx.observe(&feed, move |feed, cx| sync_feed(&model, &feed, cx))
         .detach();
+}
+
+/// The recents, the held links and the count from the feed. It changes on
+/// every dispatch and after Settings changes the retention, so whether
+/// Hold can keep anything is read again here too.
+fn sync_feed(model: &Entity<TrayModel>, feed: &Entity<Feed>, cx: &mut App) {
+    let dispatched = Dispatched::of(feed.read(cx), SystemTime::now());
+    model.update(cx, |model, cx| {
+        model.sync(dispatched);
+        cx.notify();
+    });
+    refresh_can_hold(model, cx);
+    // A dispatch may have used up the last of a count.
+    sync_override(model, cx);
 }
 
 fn handle(event: TrayEvent, cx: &mut App) {
@@ -450,8 +455,11 @@ fn click(position: (f64, f64), size: (f64, f64), pointer: Option<(f64, f64)>, cx
     // The pause row names where links would go now, not at launch.
     refresh_pause_target(&model, cx);
     refresh_destinations(&model, cx);
-    refresh_can_hold(&model, cx);
-    sync_override(&model, cx);
+    // A held link the router has since dropped by age is gone from the
+    // list.
+    if let Some(feed) = activity::feed(cx) {
+        sync_feed(&model, &feed, cx);
+    }
     let anchor = crate::macos::status_item_anchor(position, size, pointer);
     let (origin, display, max_height) = match &anchor {
         Some(anchor) => {
@@ -598,8 +606,11 @@ fn start(mode: Mode, kind: Option<ForKind>, next: Option<u32>, cx: &mut App) {
     let Some(model) = model(cx) else {
         return;
     };
-    if mode == Mode::Hold && !model.read(cx).can_hold {
-        return;
+    if mode == Mode::Hold {
+        refresh_can_hold(&model, cx);
+        if !model.read(cx).can_hold {
+            return;
+        }
     }
     if mode == Mode::Pause {
         refresh_pause_target(&model, cx);
@@ -784,19 +795,23 @@ pub fn sync_override(model: &Entity<TrayModel>, cx: &mut App) {
 }
 
 /// Hold needs somewhere to keep what it holds: with Activity keeping
-/// nothing in memory, a held link could never be opened.
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "only macOS has the dropdown")
-)]
+/// nothing in memory, a held link could never be opened. A hold in force
+/// then ends now, as the router would end it at the next link.
 fn refresh_can_hold(model: &Entity<TrayModel>, cx: &mut App) {
     let Some(router) = router(cx) else {
         return;
     };
     let can_hold = router.retention().memory.count > 0;
+    if !can_hold {
+        router.set_hold(None);
+    }
     model.update(cx, |model, cx| {
         if model.can_hold != can_hold {
             model.can_hold = can_hold;
+            cx.notify();
+        }
+        if !can_hold && model.holding().is_some() {
+            model.routing = Routing::Active;
             cx.notify();
         }
     });

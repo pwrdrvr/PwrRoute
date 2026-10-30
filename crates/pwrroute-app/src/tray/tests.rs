@@ -13,8 +13,8 @@ use gpui_kit::{
     AppContext as _, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px, size,
 };
 use pwrroute_router::{
-    Destination, DryRunLauncher, Link, Options, Override, PauseTarget, Router, RouterHandle,
-    SendScope, Source,
+    Destination, DryRunLauncher, Link, Options, Override, PauseTarget, Retention, Router,
+    RouterHandle, SendScope, Source,
 };
 
 use super::dropdown::{
@@ -26,6 +26,7 @@ use super::model::{
     BrowserLabel, Dispatched, ForKind, Mode, Recent, RecentRoute, Routing, TrayModel,
 };
 use super::{ConfigDefault, Tray};
+use crate::activity::Feed;
 
 const RULES: &str = MODE_IDS[0];
 const SEND: &str = MODE_IDS[1];
@@ -675,17 +676,69 @@ fn held_links_wait_in_the_card_until_opened(cx: &mut TestAppContext) {
 }
 
 /// With Activity keeping nothing, a held link would have nowhere to wait:
-/// Hold does not turn on.
+/// Hold does not turn on, whatever the tray last read, and a hold already
+/// on ends as soon as the tray reads the retention again.
 #[gpui_kit::test]
 fn hold_does_not_turn_on_while_nothing_is_kept(cx: &mut TestAppContext) {
-    let mut fixture = TrayModel::fixture(SystemTime::now());
-    fixture.can_hold = false;
-    let mut opened = open(fixture, cx);
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
     let (_router, handle) = with_router(&mut opened);
+    let model = opened.model.clone();
+    let nothing = Retention { count: 0, hours: 0 };
+    handle.set_retention(nothing).unwrap();
+    assert!(
+        model.read_with(opened.cx, |model, _| model.can_hold),
+        "not read yet"
+    );
     click(&mut opened, HOLD);
     assert_eq!(handle.override_in_force(), None);
+    assert!(!model.read_with(opened.cx, |model, _| model.can_hold));
     opened.cx.update(|_, cx| super::set_mode(Mode::Hold, cx));
     assert_eq!(handle.override_in_force(), None);
+
+    handle.set_retention(Retention::default()).unwrap();
+    click(&mut opened, HOLD);
+    assert!(matches!(
+        handle.override_in_force(),
+        Some(Override::Holding(_))
+    ));
+    handle.set_retention(nothing).unwrap();
+    opened
+        .cx
+        .update(|_, cx| super::refresh_can_hold(&model, cx));
+    opened.settle();
+    assert_eq!(handle.override_in_force(), None);
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.mode()),
+        Mode::Rules
+    );
+}
+
+/// A held link the router no longer keeps (gone by age, or swept) is not
+/// listed, though the feed still has its record.
+#[gpui_kit::test]
+fn the_tray_lists_only_what_the_router_still_holds(cx: &mut TestAppContext) {
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    let (_router, handle) = with_router(&mut opened);
+    handle.set_hold(Some(SendScope::Next { left: 1, of: 1 }));
+    handle
+        .dispatch_and_wait(Link::new(
+            "https://chat.example.com/r/team-7",
+            Source::CommandLine,
+        ))
+        .unwrap();
+    let mut feed = Feed::new(Some(handle.clone()));
+    for record in handle.recent().into_iter().rev() {
+        feed.push(record);
+    }
+    assert_eq!(Dispatched::of(&feed, SystemTime::now()).held.len(), 1);
+
+    // The router drops it; the feed is not reloaded.
+    handle
+        .set_retention(Retention { count: 0, hours: 0 })
+        .unwrap();
+    handle.set_retention(Retention::default()).unwrap();
+    assert_eq!(feed.records().len(), 1);
+    assert!(Dispatched::of(&feed, SystemTime::now()).held.is_empty());
 }
 
 /// The keyboard (design: Incoming Links 2f): Tab reaches the switch,

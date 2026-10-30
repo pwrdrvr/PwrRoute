@@ -639,8 +639,16 @@ pub struct Dispatched {
 }
 
 impl Dispatched {
+    /// With a router, only what its buffer still holds is held: it drops a
+    /// record by age, and the link with it, while the feed keeps the record
+    /// until a later push.
     pub fn of(feed: &Feed, now: SystemTime) -> Self {
-        Self::of_records(feed.records(), feed.today(now).routed)
+        let mut dispatched = Self::of_records(feed.records(), feed.today(now).routed);
+        if feed.router().is_some() {
+            let pending = feed.pending();
+            dispatched.held.retain(|held| pending.contains(&held.id));
+        }
+        dispatched
     }
 
     /// From records, newest first. A held link that was opened since has a

@@ -490,7 +490,11 @@ impl PwrRoute {
             ("left" | "right", HeroStop::Switch) => {
                 let usable: Vec<Mode> = Mode::ALL
                     .into_iter()
-                    .filter(|mode| *mode != Mode::Hold || incoming.can_hold)
+                    // The lit segment always counts, so the arrows move
+                    // from where the switch is.
+                    .filter(|mode| {
+                        *mode != Mode::Hold || incoming.can_hold || *mode == incoming.mode
+                    })
                     .collect();
                 let here = usable
                     .iter()

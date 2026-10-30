@@ -404,7 +404,9 @@ impl Dropdown {
         let model = self.model.read(cx);
         let usable: Vec<Mode> = Mode::ALL
             .into_iter()
-            .filter(|mode| *mode != Mode::Hold || model.can_hold)
+            // The lit segment always counts, so the arrows move from where
+            // the switch is.
+            .filter(|mode| *mode != Mode::Hold || model.can_hold || *mode == model.mode())
             .collect();
         let at = usable
             .iter()

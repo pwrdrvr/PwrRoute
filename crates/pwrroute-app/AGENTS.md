@@ -514,9 +514,11 @@ their own modules.
   is left and has the one-click way back (Back to rules, or Resume). The
   router counts, and the tray reads its slot back after every dispatch and
   every second while a time runs (`sync_override`, `follow_clock`). Hold
-  is refused while Activity keeps nothing in memory (`can_hold`). Held
-  links come from the feed (`HeldLink::from_record`: a hold's record not
-  yet released, at least host level) and lead the dropdown with their host
+  is refused while Activity keeps nothing in memory (`can_hold`, read
+  again on every feed change and before Hold starts; a hold on then
+  ends). Held links come from the feed (`HeldLink::from_record`: a hold's
+  record not yet released, at least host level, that the router's
+  `pending()` still holds) and lead the dropdown with their host
   and path, where they came from and where the rules would open them:
   Open (`tray::open_held`, `OpenAs::Rules`), "···" for Open in… (the
   lanes, `OpenAs::In`), Make a rule… (Activity's sheet) and Copy link, and
