@@ -101,6 +101,8 @@ jobs:
               if (path === "CHANGELOG.md") return false;
               return path === ".github/dependabot.yml" ||
                 path.startsWith("docs/") ||
+                // The Claude Design mirror: nothing builds, embeds or tests it.
+                path.startsWith("design/") ||
                 path.startsWith(".agents/skills/") ||
                 path.startsWith(".github/ISSUE_TEMPLATE/") ||
                 path.startsWith(".github/PULL_REQUEST_TEMPLATE/") ||
@@ -121,7 +123,7 @@ jobs:
               ])
               .addRaw(
                 nonCodeOnly
-                  ? "Only documentation, agent skills, PR/issue templates or Dependabot configuration changed; expensive CI jobs are skipped."
+                  ? "Only documentation, the design mirror, agent skills, PR/issue templates or Dependabot configuration changed; expensive CI jobs are skipped."
                   : `Full CI runs because \`${codeImpactingFile.filename}\` requires it.`,
               )
               .write();
