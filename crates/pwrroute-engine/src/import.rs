@@ -105,7 +105,6 @@ const WHY_URL_FUNCTION: &str =
 const WHY_URL_TEXT: &str = "Its url is not a full URL a visual rewrite can store.";
 const WHY_BROWSER_FUNCTION: &str =
     "A browser function picks the browser per link; a visual rule names one.";
-const WHY_NOT_OPENED: &str = "browser: null (do not open the link) has no visual form.";
 const WHY_ARGS: &str =
     "It passes launch arguments or a background flag, which visual rules do not store.";
 const WHY_APP_TYPE: &str =
@@ -387,8 +386,9 @@ fn visual_browser(spec: &BrowserSpec) -> Result<(String, String), &'static str> 
         BrowserSpec::Function(_) => return Err(WHY_BROWSER_FUNCTION),
         BrowserSpec::Browser(fixed) => fixed,
     };
+    // `browser: null` is Don't open, which `rules.json` writes as a word.
     if fixed.app_type == AppType::None {
-        return Err(WHY_NOT_OPENED);
+        return Ok((rules::DONT_OPEN.to_owned(), String::new()));
     }
     if !fixed.args.is_empty() || fixed.open_in_background.is_some() {
         return Err(WHY_ARGS);

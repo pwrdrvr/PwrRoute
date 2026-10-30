@@ -11,6 +11,8 @@
 *.deb
 *.rpm
 *.snap
+# theme.rs's contrast table, which its tests pin (not a Snap package).
+!/crates/pwrroute-app/src/contrast.snap
 
 # Logs
 *.log
@@ -46,3 +48,6 @@ design/uploads/
 # Local task artifacts and PR descriptions
 .local/
 
+
+# Python bytecode from running the packaging tests
+__pycache__/

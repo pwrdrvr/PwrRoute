@@ -14,7 +14,7 @@ use super::*;
 use crate::{
     launcher::DryRunLauncher,
     link::{OpenerInfo, Source},
-    trace::{Sent, WITHHELD},
+    trace::{NotOpenedReason, Sent, WITHHELD},
 };
 
 const CONFIG: &str = r#"
@@ -2572,4 +2572,505 @@ fn launch_progress_observers_follow_diagnostic_and_retention_settings() {
         assert_eq!(record.privacy, Privacy::None);
         assert_eq!(count.load(Ordering::Relaxed), expected);
     }
+}
+
+fn held_step(record: &DispatchRecord) -> Option<(Sent, Option<usize>, Option<String>)> {
+    record.steps.iter().find_map(|step| match step {
+        Step::Held {
+            held,
+            skipped,
+            browser,
+        } => Some((*held, *skipped, browser.as_ref().map(|b| b.name.clone()))),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_hold_records_the_next_links_without_opening_them_then_the_rules_decide_again() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::next(2)));
+    assert_eq!(
+        handle.override_in_force(),
+        Some(Override::Holding(SendScope::Next { left: 2, of: 2 }))
+    );
+
+    let first = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/1"))
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::NotOpened);
+    assert!(first.browser.is_none());
+    assert_eq!(first.steps.last(), Some(&Step::NotOpened));
+    // Where the rules would have opened it, and which handler that was.
+    assert_eq!(
+        held_step(&first),
+        Some((
+            Sent::Next { nth: 1, of: 2 },
+            Some(0),
+            Some("Firefox".into())
+        ))
+    );
+    assert_eq!(first.not_opened_reason(), Some(NotOpenedReason::Hold));
+    assert_eq!(handle.hold(), Some(SendScope::Next { left: 1, of: 2 }));
+
+    let second = handle
+        .dispatch_and_wait(link("https://example.org/2"))
+        .unwrap();
+    assert_eq!(
+        held_step(&second),
+        Some((Sent::Next { nth: 2, of: 2 }, None, Some("Safari".into())))
+    );
+    assert_eq!(handle.hold(), None, "used up: the rules decide again");
+    assert_eq!(handle.override_in_force(), None);
+
+    let third = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/3"))
+        .unwrap();
+    assert_eq!(third.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched().len(), 1, "only the third opened");
+    assert_eq!(handle.pending(), vec![second.id, first.id]);
+}
+
+#[test]
+fn a_hold_of_all_links_lasts_until_its_time_runs_out_or_it_is_ended() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    let later = SystemTime::now() + Duration::from_secs(3600);
+    handle.set_hold(Some(SendScope::All { until: Some(later) }));
+    for i in 0..3 {
+        let record = handle
+            .dispatch_and_wait(link(&format!("https://example.org/{i}")))
+            .unwrap();
+        assert_eq!(held_step(&record).map(|h| h.0), Some(Sent::All));
+    }
+    assert_eq!(
+        handle.hold(),
+        Some(SendScope::All { until: Some(later) }),
+        "all links never counts down"
+    );
+    // The time runs out: the next link opens, and the hold reads as off.
+    let past = SystemTime::now() - Duration::from_secs(1);
+    assert!(
+        handle
+            .rescope(SendScope::All { until: Some(past) })
+            .is_some()
+    );
+    let record = handle
+        .dispatch_and_wait(link("https://example.org/x"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(handle.hold(), None);
+    // Until turned off, then turned off.
+    handle.set_hold(Some(SendScope::All { until: None }));
+    handle.set_hold(None);
+    let record = handle
+        .dispatch_and_wait(link("https://example.org/y"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched().len(), 2);
+    assert_eq!(handle.pending().len(), 3, "ending a hold opens nothing");
+
+    // A hold whose time ran out unseen is ended, not given a new scope.
+    handle.set_hold(Some(SendScope::All { until: Some(later) }));
+    assert!(
+        handle
+            .rescope(SendScope::All { until: Some(past) })
+            .is_some()
+    );
+    assert_eq!(handle.rescope(SendScope::next(2)), None);
+    assert_eq!(handle.step_next(1), None);
+    assert_eq!(handle.override_in_force(), None);
+}
+
+#[test]
+fn hold_send_and_pause_share_one_slot() {
+    let (_dir, router, _launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::next(3)));
+    // Ending what is not on leaves the hold alone.
+    handle.set_send_to(None);
+    handle.set_paused(None);
+    assert!(handle.hold().is_some());
+    handle.set_send_to(Some(next(1)));
+    assert_eq!(handle.hold(), None, "sending ends a hold");
+    handle.set_hold(Some(SendScope::next(1)));
+    assert_eq!(handle.send_to(), None, "holding ends a send");
+    handle.set_paused(Some(pause_target()));
+    assert_eq!(handle.hold(), None, "pausing ends a hold");
+    handle.set_hold(Some(SendScope::next(1)));
+    assert_eq!(handle.paused(), None, "holding ends a pause");
+    handle.set_override(None);
+    assert_eq!(handle.override_in_force(), None, "Rules ends all of them");
+}
+
+#[test]
+fn a_holds_count_can_change_while_it_runs_and_a_pause_has_none() {
+    let (_dir, router, _launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    assert_eq!(handle.step_next(1), None, "nothing to change");
+    handle.set_hold(Some(SendScope::next(1)));
+    assert_eq!(
+        handle.step_next(2),
+        Some(Override::Holding(SendScope::Next { left: 3, of: 3 }))
+    );
+    handle
+        .dispatch_and_wait(link("https://example.org/"))
+        .unwrap();
+    assert_eq!(handle.hold(), Some(SendScope::Next { left: 2, of: 3 }));
+    assert_eq!(
+        handle.step_next(-5),
+        Some(Override::Holding(SendScope::Next { left: 1, of: 2 })),
+        "never below one"
+    );
+    assert_eq!(
+        handle.rescope(SendScope::Next { left: 500, of: 500 }),
+        Some(Override::Holding(SendScope::Next {
+            left: MAX_NEXT,
+            of: MAX_NEXT
+        }))
+    );
+    handle.set_paused(Some(pause_target()));
+    assert_eq!(handle.step_next(1), None);
+    assert_eq!(handle.rescope(SendScope::next(2)), None);
+    assert_eq!(handle.paused(), Some(pause_target()));
+}
+
+#[test]
+fn test_a_link_ignores_a_hold_and_does_not_count() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::next(1)));
+    let record = handle
+        .test(link("https://team.chat.example.com/x"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::Tested);
+    assert_eq!(held_step(&record), None);
+    assert_eq!(handle.hold(), Some(SendScope::next(1)));
+    assert!(launcher.launched().is_empty());
+    assert!(handle.pending().is_empty());
+}
+
+#[test]
+fn a_held_link_opens_later_as_the_rules_say_with_its_source_and_opener() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::next(1)));
+    let mail = OpenerInfo {
+        name: "Mail".into(),
+        bundle_id: "com.apple.mail".into(),
+        path: "/System/Applications/Mail.app".into(),
+        window_title: None,
+    };
+    let held = handle
+        .dispatch_and_wait(
+            Link::new("https://example.org/x", Source::AppleEvent).with_opener(Some(mail.clone())),
+        )
+        .unwrap();
+    assert_eq!(handle.pending(), vec![held.id]);
+
+    let opened = handle.open_not_opened(held.id, OpenAs::Rules).unwrap();
+    assert_ne!(opened.id, held.id);
+    assert_eq!(opened.outcome, Outcome::DryRun);
+    assert_eq!(opened.released_from(), Some(held.id));
+    assert_eq!(
+        opened.steps[1],
+        Step::Released {
+            from: held.id,
+            chosen: false
+        }
+    );
+    // The mail handler still sees the opener; the source is the click's.
+    assert_eq!(opened.link.source, Source::AppleEvent);
+    assert_eq!(opened.link.opener, Some(mail));
+    assert_eq!(launcher.launched()[0].name, "Google Chrome");
+    assert_eq!(launcher.launched()[0].profile, "Work");
+    // Recorded like any dispatch, and the held one waits no more.
+    assert_eq!(handle.recent()[0].id, opened.id);
+    assert!(handle.get(held.id).is_some(), "the held record stays");
+    assert!(handle.pending().is_empty());
+    assert_eq!(
+        handle.open_not_opened(held.id, OpenAs::Rules).unwrap_err(),
+        OpenLaterError::NotPending
+    );
+    assert_eq!(
+        handle
+            .open_not_opened(DispatchId(999), OpenAs::Rules)
+            .unwrap_err(),
+        OpenLaterError::NotPending
+    );
+}
+
+#[test]
+fn a_held_link_opens_later_where_the_user_picks_past_any_override() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::All { until: None }));
+    let held = handle
+        .dispatch_and_wait(link("https://example.com/old/page"))
+        .unwrap();
+    // Still holding: opening a held link is not held again, nor counted.
+    let opened = handle
+        .open_not_opened(held.id, OpenAs::In(edge("Work", true)))
+        .unwrap();
+    assert!(opened.steps.contains(&Step::Released {
+        from: held.id,
+        chosen: true
+    }));
+    assert_eq!(held_step(&opened), None);
+    let browser = &launcher.launched()[0];
+    assert_eq!(browser.name, "Microsoft Edge");
+    assert!(browser.private);
+    // The rewrites ran; a private window keeps at most the host.
+    assert_eq!(browser.url, "https://example.com/new");
+    assert_eq!(opened.privacy, Privacy::Host);
+    assert_eq!(handle.hold(), Some(SendScope::All { until: None }));
+}
+
+#[test]
+fn a_rule_that_opens_nothing_waits_too_and_opens_later_in_the_fallback() {
+    let (_dir, router, launcher) = engine_router(Options {
+        fallback: FallbackSource::fixed("Fallback Browser", ""),
+        ..Options::default()
+    });
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://blocked.example.com/ad"))
+        .unwrap();
+    assert_eq!(record.not_opened_reason(), Some(NotOpenedReason::Rule));
+    assert_eq!(handle.pending(), vec![record.id]);
+    let opened = handle.open_not_opened(record.id, OpenAs::Rules).unwrap();
+    assert!(opened.steps.contains(&Step::Fallback {
+        reason: "the rules open nothing for this link".into()
+    }));
+    assert_eq!(launcher.launched()[0].name, "Fallback Browser");
+    assert_eq!(opened.outcome, Outcome::DryRun);
+}
+
+#[test]
+fn a_host_only_held_link_keeps_its_whole_url_in_memory_so_it_can_open() {
+    let (router, launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::next(2)));
+    let secret = "https://host.example.com/inbox?token=hunter2";
+    let held = handle.dispatch_and_wait(link(secret)).unwrap();
+    // The record is host only, the Held step's browser included.
+    assert_eq!(held.privacy, Privacy::Host);
+    let json = serde_json::to_string(&handle.get(held.id).unwrap()).unwrap();
+    for private in ["hunter2", "/inbox"] {
+        assert!(!json.contains(private), "{private} leaked into {json}");
+    }
+    // A counted-only record keeps nothing, so nothing waits.
+    let counted = handle
+        .dispatch_and_wait(link("https://none.example.com/secret"))
+        .unwrap();
+    assert_eq!(counted.privacy, Privacy::None);
+    assert_eq!(counted.not_opened_reason(), None, "no steps to read");
+    assert_eq!(handle.pending(), vec![held.id]);
+    // Opened, the browser gets the whole URL; the new record is host only.
+    let opened = handle.open_not_opened(held.id, OpenAs::Rules).unwrap();
+    assert_eq!(launcher.launched()[0].url, secret);
+    assert_eq!(opened.link.url, "https://host.example.com");
+}
+
+#[test]
+fn with_nothing_kept_nothing_waits_and_clear_forgets_what_did() {
+    let (_dir, router, launcher) = engine_router(Options {
+        retention: Retention { count: 0, hours: 0 },
+        ..Options::default()
+    });
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::All { until: None }));
+    // A held link would have nowhere to wait: it opens, and the hold ends.
+    let opened = handle
+        .dispatch_and_wait(link("https://example.org/"))
+        .unwrap();
+    assert_eq!(opened.outcome, Outcome::DryRun);
+    assert_eq!(held_step(&opened), None);
+    assert_eq!(launcher.launched().len(), 1);
+    assert_eq!(handle.hold(), None);
+    assert!(handle.pending().is_empty());
+    assert_eq!(
+        handle
+            .open_not_opened(opened.id, OpenAs::Rules)
+            .unwrap_err(),
+        OpenLaterError::NotPending
+    );
+
+    let (_dir, router, _launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::next(1)));
+    handle
+        .dispatch_and_wait(link("https://example.org/"))
+        .unwrap();
+    assert_eq!(handle.pending().len(), 1);
+    handle.clear_recent();
+    assert!(handle.pending().is_empty());
+}
+
+#[test]
+fn a_new_router_starts_on_the_rules_with_nothing_held() {
+    // Memory only: a restart (a new router) forgets the hold and the links
+    // it held, as it forgets a send or a pause.
+    let (dir, router, _launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::All { until: None }));
+    handle
+        .dispatch_and_wait(link("https://example.org/"))
+        .unwrap();
+    assert_eq!(handle.pending().len(), 1);
+    drop(router);
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options::default(),
+        Some(engine_factory(&dir)),
+        launcher.clone(),
+    )
+    .unwrap();
+    let handle = router.handle();
+    assert_eq!(handle.override_in_force(), None);
+    assert!(handle.pending().is_empty());
+    let record = handle
+        .dispatch_and_wait(link("https://example.org/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched().len(), 1);
+}
+
+#[test]
+fn held_and_released_steps_read_back_from_json() {
+    let held = Step::Held {
+        held: Sent::Next { nth: 1, of: 3 },
+        skipped: Some(2),
+        browser: None,
+    };
+    let json = serde_json::to_string(&held).unwrap();
+    assert_eq!(
+        json,
+        r#"{"kind":"held","held":{"kind":"next","nth":1,"of":3},"skipped":2}"#
+    );
+    assert_eq!(serde_json::from_str::<Step>(&json).unwrap(), held);
+    let released = Step::Released {
+        from: DispatchId(7),
+        chosen: true,
+    };
+    let json = serde_json::to_string(&released).unwrap();
+    assert_eq!(json, r#"{"kind":"released","from":7,"chosen":true}"#);
+    assert_eq!(serde_json::from_str::<Step>(&json).unwrap(), released);
+    // A not-opened record journaled before reasons existed still reads.
+    assert_eq!(
+        serde_json::from_str::<Step>(r#"{"kind":"notOpened"}"#).unwrap(),
+        Step::NotOpened
+    );
+}
+
+// Don't open: `rules.json`'s browser "none", a rule's or the default. The
+// engine hands Finicky `browser: null`, so the router records the link as
+// not opened, launches nothing and never falls back.
+
+/// A rule for ads.example.net that says Don't open, a rule for
+/// work.example.com that opens, and Everything else on Don't open.
+fn dont_open_rules() -> RulesFile {
+    RulesFile {
+        default_browser: "none".into(),
+        rules: vec![
+            Rule {
+                patterns: vec!["https://work.example.com/*".into()],
+                browser: "Firefox".into(),
+                ..Rule::default()
+            },
+            Rule {
+                patterns: vec!["https://ads.example.net/*".into()],
+                browser: "none".into(),
+                ..Rule::default()
+            },
+        ],
+        ..RulesFile::default()
+    }
+}
+
+#[test]
+fn a_dont_open_rule_records_the_link_without_launching_or_falling_back() {
+    let (router, launcher) = rules_router(dont_open_rules());
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://ads.example.net/click?id=7"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::NotOpened);
+    assert!(record.browser.is_none());
+    assert_eq!(record.steps.last(), Some(&Step::NotOpened));
+    // The rule that chose it is in the trace, by its place in the file.
+    assert!(record.steps.contains(&Step::Matched {
+        by: Matched::Rule { index: 1 }
+    }));
+    assert!(
+        !record
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Fallback { .. } | Step::Launched { .. })),
+        "{:?}",
+        record.steps
+    );
+    assert!(launcher.launched().is_empty());
+    // Recorded, for Activity.
+    let recent = handle.recent();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].outcome, Outcome::NotOpened);
+    assert_eq!(
+        recent[0].final_url.as_deref(),
+        Some("https://ads.example.net/click?id=7")
+    );
+}
+
+#[test]
+fn a_dont_open_default_keeps_unclaimed_links_out_of_every_browser() {
+    let (router, launcher) = rules_router(dont_open_rules());
+    let handle = router.handle();
+    let record = handle
+        .dispatch_and_wait(link("https://unknown.example.org/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::NotOpened);
+    assert!(record.steps.contains(&Step::Matched {
+        by: Matched::Default {
+            owner: Some(Owner::PwrRoute)
+        }
+    }));
+    assert!(launcher.launched().is_empty());
+    // A link a rule routes still opens (the dry-run launcher's outcome).
+    let record = handle
+        .dispatch_and_wait(link("https://work.example.com/a"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched().len(), 1);
+    assert_eq!(launcher.launched()[0].name, "Firefox");
+}
+
+#[test]
+fn dont_open_is_never_the_fallback_browser() {
+    // rules.json's defaultBrowser is what the app hands the router as the
+    // fallback; Don't open there must not become a browser to launch.
+    for word in ["none", "None", " none "] {
+        let (browser, profile) = FallbackSource::fixed(word, "Work").get();
+        assert_eq!(
+            (browser.as_str(), profile.as_str()),
+            (FALLBACK_BROWSER, ""),
+            "{word:?}"
+        );
+    }
+    // With no config in charge, the fallback opens the link.
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("none", ""),
+            ..Options::default()
+        },
+        None,
+        launcher.clone(),
+    )
+    .unwrap();
+    let record = router
+        .handle()
+        .dispatch_and_wait(link("https://example.com/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched()[0].name, FALLBACK_BROWSER);
 }

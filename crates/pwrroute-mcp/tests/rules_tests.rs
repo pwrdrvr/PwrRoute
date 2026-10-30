@@ -351,3 +351,91 @@ async fn activity_keeps_each_record_at_its_level_and_says_where_it_is_kept() {
     client.cancel().await.unwrap();
     h.finish().await;
 }
+
+#[tokio::test]
+async fn activity_finds_the_links_that_were_not_opened() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Editor)).await;
+    h.router.record(UNROUTED, "Chat").unwrap();
+    h.router
+        .record_not_opened("https://ads.example.net/click?id=7", "Mail")
+        .unwrap();
+    h.router
+        .record("https://docs.example.org/page", "Chat")
+        .unwrap();
+    let client = h.client("test-agent").await;
+
+    let held = call(
+        &client,
+        "pwrroute_activity",
+        json!({ "filter": "notOpened" }),
+    )
+    .await;
+    assert_eq!(held.is_error, Some(false), "{}", text(&held));
+    let held = held.structured_content.unwrap();
+    assert_eq!(held["filter"], "notOpened");
+    assert_eq!(held["scanned"], 3);
+    let entries = held["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{held}");
+    assert_eq!(entries[0]["outcome"], "notOpened");
+    assert_eq!(entries[0]["reason"], "rule");
+    assert_eq!(entries[0]["via"], "Mail");
+    assert_eq!(entries[0]["trace"]["browser"]["appType"], "none");
+    // The trace says it in words too.
+    let summary = entries[0]["trace"]["steps"][0]["summary"].as_str().unwrap();
+    assert!(summary.ends_with("not opened (Don't open)"), "{summary}");
+    // Not opened is not unrouted: a rule decided.
+    let unrouted = call(
+        &client,
+        "pwrroute_activity",
+        json!({ "filter": "unrouted" }),
+    )
+    .await;
+    let unrouted = unrouted.structured_content.unwrap();
+    assert_eq!(unrouted["entries"].as_array().unwrap().len(), 1);
+    client.cancel().await.unwrap();
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn apply_accepts_dont_open_for_a_rule_and_everything_else() {
+    let h = Harness::start(FakeAnswer::Approve(Role::Editor)).await;
+    let client = h.client("test-agent").await;
+    let listed = call(&client, "pwrroute_rules_list", json!({})).await;
+    let listed = listed.structured_content.unwrap();
+    let mut rules = listed["rules"]["rules"].as_array().cloned().unwrap();
+    rules.push(json!({
+        "match": "ads.example.net/*",
+        "browser": "none",
+        "examples": ["https://ads.example.net/click"]
+    }));
+    // Everything else is Don't open: only rules open links. The saved test
+    // expected Safari for example.net, so it now fails unless it changes
+    // too; expect it not to open.
+    let patch = json!({
+        "defaultBrowser": "none",
+        "rules": rules,
+        "tests": [{ "url": "https://example.net/", "expect": { "browser": "none" } }]
+    });
+    let written = call(
+        &client,
+        "pwrroute_rules_apply",
+        json!({ "baseRevision": "1", "patch": patch }),
+    )
+    .await;
+    assert_eq!(written.is_error, Some(false), "{}", text(&written));
+    let written = written.structured_content.unwrap();
+    assert_eq!(written["written"], true, "{written}");
+    let listed = call(&client, "pwrroute_rules_list", json!({})).await;
+    let listed = listed.structured_content.unwrap();
+    assert_eq!(listed["rules"]["defaultBrowser"], "none");
+    assert_eq!(listed["rules"]["rules"][1]["browser"], "none");
+    // Every example and test passes through the real engine.
+    let tested = call(&client, "pwrroute_rules_test", json!({})).await;
+    let tested = tested.structured_content.unwrap();
+    assert_eq!(
+        tested["report"]["total"], tested["report"]["passed"],
+        "{tested}"
+    );
+    client.cancel().await.unwrap();
+    h.finish().await;
+}

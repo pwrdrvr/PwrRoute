@@ -220,7 +220,7 @@ fn suites_match_the_go_host_and_their_traces() {
             }
         }
     }
-    assert_eq!(checked, 75, "expected.json lost suite cases");
+    assert_eq!(checked, 186, "expected.json lost suite cases");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

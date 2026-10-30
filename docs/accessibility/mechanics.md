@@ -33,9 +33,8 @@ including with no window open. Linux contrast uses the desktop settings
 portal's initial value and change stream; Base owns its live motion stream.
 Unavailable settings leave the last known value alone. Base preserves an
 application motion override, including deterministic tests. Contrast calls
-`theme::set_increase_contrast` and refreshes windows; the flag stub is the
-integration point for the separate palette work. No color values are defined
-by this change.
+`theme::set_increase_contrast` on the GPUI thread and refreshes windows,
+using the merged contrast palette. No color values are defined by this change.
 
 ## Validation boundaries
 
@@ -58,5 +57,5 @@ integration gap, rather than a limitation of the role/label API. Metadata alone 
 Manual VoiceOver, Narrator/NVDA and Orca operation and live OS-setting changes
 still require platform testing. Linux sandbox checks do not establish macOS
 or Windows behavior. A successful fixture screen render checks layout, not
-the accessibility tree. The keyboard-only tray changes use the current tray;
-the Hold redesign was still unmerged when they were implemented.
+the accessibility tree. The keyboard-only tray changes are integrated with
+the merged Hold redesign.

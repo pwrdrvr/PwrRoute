@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::theme::px;
 use gpui_kit::base::actions::{SelectDown, SelectUp};
 use gpui_kit::base::{Radio, Select, TestSupportExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -12,7 +13,7 @@ use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, Context, Div, ElementId, FocusHandle,
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div, ease_out_quint,
-    point, px,
+    point,
 };
 
 use super::controls::{
@@ -286,7 +287,7 @@ fn source_slot(
         .disabled(!available || !enabled)
         .accessibility_label(title)
         .on_change(move |on, _, window, cx| set(&on, window, cx))
-        .when(!available, |slot| slot.opacity(0.5))
+        .when(!available, |slot| slot.opacity(theme::DISABLED))
         .child(
             div()
                 .flex()

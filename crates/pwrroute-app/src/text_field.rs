@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Bounds, ClipboardItem, ContentMask, DispatchPhase, Div, Element, ElementId,
@@ -21,7 +22,7 @@ use gpui_kit::{
     Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement as _, Pixels, ShapedLine, SharedString, Stateful,
     StatefulInteractiveElement as _, Style, Styled as _, TextAlign, TextRun, TruncateFrom, Window,
-    div, fill, font, point, px, relative,
+    div, fill, font, point, relative,
 };
 
 use crate::theme;

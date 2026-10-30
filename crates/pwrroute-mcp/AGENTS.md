@@ -122,6 +122,15 @@ open, and the audit holds no content.
   send's step (`held_step`) names what it passed over the same way; a
   send says "the user sent this link (next link 1 of 3)". There is no
   tool to send links yet: it would need its own permission.
+- **Not opened is said, not inferred.** A link a rule or default kept
+  from opening (`rules.json`'s browser `"none"`, Don't open; a config's
+  `browser: null`) or the user held is `outcome: "notOpened"`; its entry's
+  `reason` (`rule`, `default`, `hold`) is the router's
+  `not_opened_reason()`. For a rule or default (never a hold, whose step
+  says the user held it) the deciding step's `summary` ends with
+  `engine::NOT_OPENED` in both `trace_of`s (`engine::mark_not_opened`).
+  `filter: "notOpened"` lists them. `pwrroute_rules_apply` takes `"none"`
+  as any browser.
 - **Activity is already reduced.** Entries come from the router at their
   rule's level (`privacy`); a `none` entry has no trace and no `via`. The
   tool adds only the role's cut (`hosts_only`) and the filters. The journal

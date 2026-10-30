@@ -37,15 +37,16 @@ jobs:
     name: Build preview DMG (macOS universal)
     # Run when the just-applied label is build-preview (labeled event), OR when
     # build-preview is already on the PR (synchronize event), OR on dispatch.
-    # Fork code must never run on the persistent lab guests, even if labeled.
-    if: >-
-      (github.event_name == 'workflow_dispatch' ||
-       github.event.pull_request.head.repo.full_name == github.repository) &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.action == 'labeled' && github.event.label.name == 'build-preview') ||
-       (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'build-preview')))
-    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
-    timeout-minutes: 60
+    # The standard hosted runner: free for a public repository (never a
+    # billed -large or -xlarge size), and a throwaway VM with no secrets
+    # here, so a labeled fork PR may build too. A cold universal build on its
+    # three cores is slow, hence the limit.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'build-preview') ||
+      (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'build-preview'))
+    runs-on: macos-26
+    timeout-minutes: 120
     steps:
       - name: Checkout branch
         uses: actions/checkout@v7
@@ -55,6 +56,10 @@ jobs:
         with:
           toolchain: "1.97"
           targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      # The image's other toolchains would change rust-cache's key.
+      - name: Keep only the pinned Rust toolchain
+        run: ./scripts/ci/prune-rust-toolchains.sh
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 

@@ -22,13 +22,14 @@ use std::f32::consts::{PI, TAU};
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationExt as _, App, AppContext as _, Bounds, BoxShadow, ClickEvent, Context,
     DisplayId, Div, Entity, FocusHandle, HighlightStyle, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, PathBuilder, Render, Rgba, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, StyledText, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowOptions, anchored, canvas, deferred, div, point, px, size,
+    WindowBounds, WindowHandle, WindowOptions, anchored, canvas, deferred, div, point,
 };
 use pwrroute_engine::Precedence;
 use serde::{Deserialize, Serialize};
@@ -936,7 +937,16 @@ pub fn label_for(browsers: &[BrowserChoice], value: &str, profile: &str) -> Brow
                 || choice.label.name.eq_ignore_ascii_case(value)
         })
         .map_or_else(
-            || BrowserLabel::new(badge_for(value), value, None),
+            || {
+                // Don't open (`"none"`, from an imported `browser: null`)
+                // by its words, never as an app called "none".
+                let name = if pwrroute_engine::is_dont_open(value) {
+                    crate::widgets::DONT_OPEN
+                } else {
+                    value
+                };
+                BrowserLabel::new(badge_for(value), name, None)
+            },
             |choice| choice.label.clone(),
         );
     label.profile = Some(profile.to_owned()).filter(|profile| !profile.is_empty());
@@ -1084,7 +1094,11 @@ pub fn open(
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<FirstRun>> {
     let display = crate::placement::display_for_new_window(cx);
-    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let bounds = Bounds::centered(
+        display,
+        crate::zoom::window_size(display, WINDOW_SIZE, cx),
+        cx,
+    );
     let window = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1098,7 +1112,7 @@ pub fn open(
                 )),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(size(px(WINDOW_SIZE.0), px(560.0))),
+            window_min_size: Some(crate::zoom::min_size(display, (WINDOW_SIZE.0, 560.0), cx)),
             ..Default::default()
         },
         |_, cx| cx.new(|cx| FirstRun::new(model, hooks, cx)),
@@ -1422,7 +1436,8 @@ impl Render for FirstRun {
         } else {
             let numbered = steps.iter().enumerate().map(|(index, (step, state))| {
                 let number = index + 1;
-                match step {
+                // A step still to come is read ahead: dimmed, not faded.
+                theme::dimmed_if(*state == StepState::Todo, || match step {
                     Step::Access => step_card(
                         number,
                         Look::from(*state),
@@ -1447,7 +1462,7 @@ impl Render for FirstRun {
                         "Make PwrRoute the default browser",
                         default_body(model, *state, cx),
                     ),
-                }
+                })
             });
             div().flex().flex_col().gap(px(10.0)).children(numbered)
         };
@@ -1997,8 +2012,7 @@ fn step_card(number: usize, look: Look, title: &'static str, body: Div) -> Div {
                 .bg(theme::bg_panel()),
             Look::Todo => step
                 .border_color(theme::border_subtle())
-                .bg(theme::bg_panel())
-                .opacity(0.6),
+                .bg(theme::bg_panel()),
         })
         .child(div().w(px(28.0)).flex_none().child(marker))
         .child(
@@ -3917,7 +3931,7 @@ mod tests {
         model.import = Some(ImportChoice::KeepFile);
         model.default_error = Some("a long error".to_owned());
         let (_view, _calls, cx) = open_with(cx, model);
-        cx.simulate_resize(size(px(680.0), px(560.0)));
+        cx.simulate_resize(gpui_kit::size(px(680.0), px(560.0)));
         draw(cx);
         let body = cx.debug_bounds("first-run-body").unwrap();
         let later = cx.debug_bounds("first-run-later").unwrap();

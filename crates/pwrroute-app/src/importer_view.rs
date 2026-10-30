@@ -22,12 +22,13 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, Bounds, ClickEvent, Context, Div, ElementId, Entity, FocusHandle, Global,
     Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
-    WindowHandle, WindowOptions, div, point, px, size,
+    WindowHandle, WindowOptions, div, point,
 };
 use pwrroute_engine::Privacy;
 use pwrroute_engine::{ConfigChoice, RulesFile, SourceLines, Verdict, Visual, discovery};
@@ -238,7 +239,11 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
     }
     let failed = from_first_run.as_ref().map(|from| from.on_done.clone());
     let display = crate::placement::display_for_new_window(cx);
-    let bounds = Bounds::centered(display, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let bounds = Bounds::centered(
+        display,
+        crate::zoom::window_size(display, WINDOW_SIZE, cx),
+        cx,
+    );
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -249,7 +254,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
                 traffic_light_position: Some(point(px(16.0), px(13.0))),
             }),
             app_id: Some("pwrroute".to_owned()),
-            window_min_size: Some(size(px(980.0), px(560.0))),
+            window_min_size: Some(crate::zoom::min_size(display, (980.0, 560.0), cx)),
             ..Default::default()
         },
         |_, cx| {
@@ -800,7 +805,7 @@ fn checkbox(checked: bool, available: bool) -> Div {
                 box_.border_color(theme::border_control())
             }
         })
-        .when(!available, |box_| box_.opacity(0.35))
+        .when(!available, |box_| box_.opacity(theme::DISABLED))
 }
 
 /// `.chip` in the verdict's tone: `.ok`, `.warn` or `.acc`.
@@ -1276,10 +1281,12 @@ fn suggestion(model: &ImportModel, index: usize, cx: &mut Context<'_, Importer>)
         return None;
     };
     let rule = &suggested.rule;
-    let to = if rule.profile.is_empty() {
-        rule.browser.clone()
+    // Named as the reader knows it; Don't open (`"none"`) has no profile.
+    let name = crate::default_browser::browser_name(&rule.browser);
+    let to = if rule.profile.is_empty() || pwrroute_engine::is_dont_open(&rule.browser) {
+        name
     } else {
-        format!("{} \u{00b7} {}", rule.browser, rule.profile)
+        format!("{name} \u{00b7} {}", rule.profile)
     };
     let patterns = rule
         .patterns
@@ -1899,7 +1906,7 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
         })
         .child(
             action_button(NEXT_ID, next_label, Look::Primary, false)
-                .when(!can_go, |button| button.opacity(0.5))
+                .when(!can_go, |button| button.opacity(theme::DISABLED))
                 .map(crate::accessibility::clickable)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     if can_go {

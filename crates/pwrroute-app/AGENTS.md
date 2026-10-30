@@ -59,8 +59,9 @@ their own modules.
   retention or clears the journal). A record is a row at `Full` or `Host`
   (the host-only chip) and a count at `None`; the filters are All,
   Everything else (`Filter::Unrouted`: a default, PwrRoute's or the
-  config's, or the fallback took it), Failed, Rewritten and Private, each
-  with its count. The Rule
+  config's, or the fallback took it), Not opened (`Filter::NotOpened`:
+  Don't open, a config's `browser: null`, or held), Failed, Rewritten and
+  Private, each with its count. The Rule
   column says who routed a link: "rule 3" (`rules.json`'s, `Matched::Rule`),
   "cfg h 2" (the config's handler), "default" (PwrRoute's) or "config
   default" (`Matched::Default`'s owner; a record from before owners is
@@ -235,7 +236,8 @@ their own modules.
   template per `Platform` and its tests hold both to the order. macOS
   installs it with `cx.set_menus`; Windows and Linux draw the same
   template in the title strip (below). No Website row
-  (PwrRoute has none) and no Reload/zoom rows (a GPUI window has neither).
+  (PwrRoute has none) and no Reload row. View ends in Actual Size, Zoom
+  In and Zoom Out (`zoom.rs`, below).
   Edit's rows replay ⌘X/⌘C/⌘V/⌘A into the window in front: the text
   fields read raw keys, so those bindings live in `MENU_ONLY`, a context no
   element has, and never steal a key. A global action that touches a
@@ -562,6 +564,33 @@ their own modules.
   caller's own `.inp` box made a `text_field::hit_area` (the rule editor,
   Activity's sheet). Never draw a field's text as a plain div: it loses
   the caret. Write the text only through `set`, so the caret follows.
+- **Colors, dimming and zoom come from `theme` (design: Contrast and
+  Scale).** Four palettes: dark and light, each with Increase Contrast,
+  which strengthens ink and edges, never tints. Light draws only as a
+  preview (`PWRROUTE_APPEARANCE=light`); `PWRROUTE_INCREASE_CONTRAST=1`
+  previews the other. The theme is thread-local: set it on the GPUI
+  thread, then `cx.refresh_windows()`. Text never fades by `.opacity()`:
+  wrap what is off or missed in `theme::dimmed` / `dimmed_if`, which step
+  the neutral text ramp down one level (muted is the floor), and say
+  "off" another way (a chip, a strike, the dashed frame). Opacity is for
+  what is not text (`DIM_DECORATIVE`) and for passing states (`DISABLED`,
+  `LIFTED`, `SPOTLIGHT`). Every text token clears 4.5:1 and every control
+  edge 3:1 on every surface, also dimmed. `theme`'s tests check that and
+  compare `src/contrast.snap` (rewrite it with `UPDATE_CONTRAST_SNAP=1`
+  and review the diff). `design/pwrroute.css` holds the same values.
+  **Views size with `theme::px`, never `gpui_kit::px`:** it is the
+  design's pixels times View › Zoom (`zoom.rs`: 100 to 200%, saved as
+  `settings.json`'s `view.zoom`). A measured length goes back through
+  `theme::css` before it meets a constant. Screen geometry (`macos.rs`)
+  and tests keep `gpui_kit::px`. A window opens at `zoom::window_size`,
+  its design size zoomed and capped to the display; its minimum is
+  `zoom::min_size`, never zoomed (GPUI fixes it at open). Layouts reflow rather
+  than clip (`app::Layout`): below 960 design px the rail is icons
+  (full while its foot offers Reload and Overwrite); Rules
+  shows the list or the editor (with "‹ All rules") when both do not fit;
+  Activity's table scrolls sideways past `column::TABLE_MIN`; Today's
+  tiles go in pairs. The `screens` example takes `--light`,
+  `--high-contrast`, `--zoom=1.5` and `--display=WxH`.
 - **Never clip text at its line box.** `theme::text` and most one-line
   helpers set the line height to the font size, and Geist's glyphs are
   taller than that (1.14em, Geist Mono 1.3em), so `overflow_hidden` on
@@ -597,6 +626,28 @@ their own modules.
   back to a blank rule. The Overview's first-rule prompt names the last
   link, with "Blank rule" for `add_blank_handler`. The link stays in
   memory: Try it is never written.
+- **Don't open (design: Not Opened).** `rules.json`'s browser `"none"`
+  (`pwrroute_engine::is_dont_open`) is no app: `default_browser::
+  browser_name` names it `widgets::DONT_OPEN` and `badge_for` gives it
+  `NOT_OPENED_BADGE`, so a row, a tooltip or a label never shows an app
+  called "none", and no picker ever calls it missing. It is the last lane
+  of Open in where a rule is picked (`destinations::lanes(.., dont_open:
+  true)`: the editor and Activity's sheet; never the tray's Send links,
+  which is Hold's business) and the last row of Everything else's menu,
+  not the setup card or first run. The Overview draws it on its Not
+  opened card (`overview_model::resolve`), and `Tally` counts the links a
+  rule or default kept from opening there under the word `"none"` (a held
+  link counts for no card). Never a target to launch: the
+  tray's pause target passes over it, and the router's `FallbackSource`
+  refuses it. In Activity a not-opened row has its filter
+  (`Filter::NotOpened`), a trace line naming who decided
+  (`not_opened_line`), and, while `RouterHandle::pending` holds it
+  (`ActivityRow::waiting`), Open in… first: compact lanes under the row
+  (`activity_actions::open_in_lanes`) whose pill calls
+  `PwrRoute::open_not_opened(key, OpenAs::In(..))` off the GPUI thread.
+  The later record's `released_from` marks the old row "opened later in
+  X" (`ActivityRow::opened_later`); a journaled or swept one says why it
+  can't be opened (`not_opened_why`). Hold's rows use the same action.
 - **Open in is lanes, Sent from is chips (`destinations.rs`; design:
   Destination and App Pickers).** The editor, Activity's sheet and the
   tray's Send links destination draw the same `destinations::lanes`

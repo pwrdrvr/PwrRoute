@@ -1,9 +1,9 @@
 //! The wrapping-text helpers Settings' cards are made of, and the tokens
 //! its panes name through `style::`, which are `theme`'s: never a copy.
 
+use crate::theme::px;
 use gpui_kit::{
     Div, Font, Hsla, ParentElement as _, SharedString, Styled as _, StyledText, TextRun, div, font,
-    px,
 };
 
 use crate::theme;

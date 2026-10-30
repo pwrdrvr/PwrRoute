@@ -239,13 +239,17 @@ fn live_pause_target(config_default: &mut ConfigDefault) -> BrowserLabel {
 /// its `defaultProfile`), else the Finicky config's own `defaultBrowser`
 /// when it names a browser rather than a function, else the router's
 /// fallback browser. The same chain as the first-run window's "Fallback
-/// browser" step describes.
+/// browser" step describes. Don't open (`"none"`) is no place to pause
+/// to: a pause opens every link, so it is passed over like an empty one.
 fn pause_target(
     rules: Option<&RulesFile>,
     config: Option<&Path>,
     config_default: &mut ConfigDefault,
 ) -> BrowserLabel {
-    if let Some(rules) = rules.filter(|rules| !rules.default_browser.is_empty()) {
+    if let Some(rules) = rules.filter(|rules| {
+        !rules.default_browser.trim().is_empty()
+            && !pwrroute_engine::is_dont_open(&rules.default_browser)
+    }) {
         return label(&rules.default_browser, &rules.default_profile);
     }
     config_default
@@ -435,7 +439,7 @@ fn click(position: (f64, f64), size: (f64, f64), pointer: Option<(f64, f64)>, cx
     let anchor = crate::macos::status_item_anchor(position, size, pointer);
     let (origin, display, max_height) = match &anchor {
         Some(anchor) => {
-            let origin = crate::macos::dropdown_origin(anchor, gpui_kit::px(dropdown::WIDTH));
+            let origin = crate::macos::dropdown_origin(anchor, crate::theme::px(dropdown::WIDTH));
             (
                 origin,
                 Some(anchor.display),
@@ -825,6 +829,16 @@ mod target_tests {
         assert_eq!(target_of(&bundle).browser, "com.google.Chrome");
         // Named in rules.json, the config is not consulted at all.
         assert!(cache.config.is_none());
+    }
+
+    #[test]
+    fn a_dont_open_default_is_not_a_pause_target() {
+        // A pause opens every link; Everything else on Don't open has no
+        // browser to give it, so the chain goes on to the fallback.
+        let mut cache = ConfigDefault::default();
+        let target = pause_target(Some(&rules("none", "Work")), None, &mut cache);
+        assert_eq!(target_of(&target).browser, FALLBACK_BROWSER);
+        assert_eq!(target_of(&target).profile, "");
     }
 
     /// First run saves the default as a bundle id. The pause line and the

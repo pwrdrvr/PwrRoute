@@ -13,6 +13,7 @@
 //! | `precedence` | no | Who goes first while a JS config is in charge ([`Precedence`]). Absent (or `config`, or any word but `pwrroute`): the Go host's order, the config's handlers, then these rules, then the config's `defaultBrowser`. `pwrroute`: these rules, then the config's handlers, then `defaultBrowser`/`defaultProfile` above instead of the config's. Rewrites run config first either way. Without a config it changes nothing. |
 //! | `options` | yes | Finicky's `options`, used only when no JS config is in charge. |
 //! | `rules[].match`, `.browser`, `.profile` | yes | Handlers: the first match wins. `match` is a string or a list. `browser` is an app name (`Google Chrome`), a bundle id (`com.google.Chrome`) or a `.app` path (`/Applications/Google Chrome.app`, `~/Applications/…`), told apart as Finicky tells them apart (`app_type`); `defaultBrowser` takes the same. |
+//! | `browser`/`defaultBrowser` `"none"` | no | Don't open: the link is recorded and not opened anywhere ([`DONT_OPEN`]). The host hands Finicky `browser: null`, a config's own way of saying it. The Go host would look for an app called `none`. |
 //! | `rules[].opener` | no | Also require the link to come from one of these apps (name or bundle id). |
 //! | `rules[].enabled` | no | `false` switches a rule off but keeps its place. |
 //! | `rewrites` | no | Rewrites: every match applies, in order, before the handlers. |
@@ -46,6 +47,22 @@ use crate::Privacy;
 
 /// The default browser the Go host used for a `rules.json` that names none.
 pub const FALLBACK_BROWSER: &str = "com.apple.Safari";
+
+/// PwrRoute extension: the browser word for "Don't open", in a rule's
+/// `browser` or the file's `defaultBrowser` (compared ignoring case and
+/// surrounding space; see [`is_dont_open`]). A link it takes is not opened
+/// anywhere: the router records it as not opened and the user can open it
+/// from Activity. The engine hands Finicky `browser: null`, the config
+/// API's own spelling, so it routes as a config's `browser: null` does.
+///
+/// A word rather than `null` because a JSON Merge Patch cannot set a field
+/// to `null` (it removes it), and the Go host reads `null` as `""`.
+pub const DONT_OPEN: &str = "none";
+
+/// Whether a `rules.json` browser is [`DONT_OPEN`].
+pub fn is_dont_open(browser: &str) -> bool {
+    browser.trim().eq_ignore_ascii_case(DONT_OPEN)
+}
 
 /// The contents of `rules.json`. Field order is the file's.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -622,6 +639,10 @@ impl RewriteAction {
 /// id into `open -a com.google.Chrome`; and the `"name:profile"` string form
 /// splits on the first `:`, so it is never used.
 fn browser_spec(browser: &str, profile: &str) -> Value {
+    // Don't open: Finicky's `browser: null`. A profile means nothing here.
+    if is_dont_open(browser) {
+        return Value::Null;
+    }
     if profile.is_empty() {
         json!(browser)
     } else {
@@ -1223,6 +1244,59 @@ mod tests {
         file.save(&path).unwrap();
         assert_eq!(RulesFile::load(&path).unwrap(), file);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dont_open_round_trips_and_plans_as_a_null_browser() {
+        let text = r#"{
+  "defaultBrowser": "none",
+  "rules": [
+    {
+      "match": "ads.example.com/*",
+      "browser": "none"
+    },
+    {
+      "match": "work.example.com/*",
+      "browser": "None",
+      "profile": "Work"
+    }
+  ]
+}"#;
+        let file: RulesFile = serde_json::from_str(text).unwrap();
+        // Written back as read: the word, not null, and nothing added.
+        let back: Value = serde_json::to_value(&file).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(text).unwrap());
+        assert!(file.problems().is_empty(), "{:?}", file.problems());
+        // Both rules load; each hands Finicky `browser: null`, whatever the
+        // case or a profile left behind.
+        assert_eq!(file.planned_rules(), [0, 1]);
+        let browsers: Vec<Value> = file.plan()["handlers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["browser"].clone())
+            .collect();
+        assert_eq!(browsers, [Value::Null, Value::Null]);
+        assert_eq!(file.base_config()["defaultBrowser"], Value::Null);
+        // Under "pwrroute" the word is a usable default: it takes
+        // everything else from the config's.
+        let owned = RulesFile {
+            precedence: Precedence::PwrRoute,
+            ..file
+        };
+        assert!(owned.owns_default());
+        let plan = owned.plan();
+        assert_eq!(plan.get("defaultBrowser"), Some(&Value::Null), "{plan}");
+    }
+
+    #[test]
+    fn only_the_word_none_is_dont_open() {
+        for word in ["none", "None", " NONE "] {
+            assert!(is_dont_open(word), "{word:?}");
+        }
+        for other in ["", "Safari", "none.app", "nonesuch", "PwrRoute:none"] {
+            assert!(!is_dont_open(other), "{other:?}");
+        }
     }
 
     #[test]

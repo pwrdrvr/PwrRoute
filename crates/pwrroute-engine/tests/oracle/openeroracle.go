@@ -18,7 +18,7 @@ import (
 func main() {
 	dataDir := flag.String("data-dir", "", "")
 	configPath := flag.String("config", "", "")
-	opener := flag.String("opener", "", "NAME|BUNDLE_ID|PATH")
+	opener := flag.String("opener", "", "NAME|BUNDLE_ID|PATH[|WINDOW_TITLE]")
 	testURL := flag.String("test", "", "")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(io.Discard, nil)))
@@ -30,11 +30,11 @@ func main() {
 	defer engine.Close()
 	var info *resolver.OpenerInfo
 	if *opener != "" {
-		parts := strings.SplitN(*opener, "|", 3)
-		for len(parts) < 3 {
+		parts := strings.SplitN(*opener, "|", 4)
+		for len(parts) < 4 {
 			parts = append(parts, "")
 		}
-		info = &resolver.OpenerInfo{Name: parts[0], BundleID: parts[1], Path: parts[2]}
+		info = &resolver.OpenerInfo{Name: parts[0], BundleID: parts[1], Path: parts[2], WindowTitle: parts[3]}
 	}
 	result, err := engine.Resolve(*testURL, info, false)
 	if err != nil {

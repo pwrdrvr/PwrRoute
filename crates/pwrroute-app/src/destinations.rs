@@ -11,16 +11,17 @@
 //! the rule's browser gets a lane of its own, first, drawn as missing once
 //! the scan ran.
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Div, ElementId, InteractiveElement as _, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, px, svg,
+    StatefulInteractiveElement as _, Styled as _, Window, div, svg,
 };
 
 use crate::activity_actions::BrowserChoice;
 use crate::overview_model::{Installed, private_term};
 use crate::theme::{self, text};
-use crate::widgets::{AppBadge, badge, badge_for};
+use crate::widgets::{AppBadge, DONT_OPEN, NOT_OPENED_BADGE, badge, badge_for};
 
 /// What a pill writes to the rule.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -78,20 +79,34 @@ pub struct Lane {
     pub missing: bool,
     /// One of its pills is on.
     pub on: bool,
+    /// The Don't open lane: no browser, drawn dashed until chosen.
+    pub dont_open: bool,
 }
 
 /// The lanes for `current`: `first` (the browser a link opened in, or
 /// the rule's own) leads, with `first_tag` beside it; then the scan's
 /// browsers in its order. `browsers` is the scan less the hidden apps,
-/// `installed` the whole scan, `scanned` whether it ran.
+/// `installed` the whole scan, `scanned` whether it ran. With `dont_open`
+/// the Don't open lane comes last.
 pub fn lanes(
     browsers: &[BrowserChoice],
     installed: &[Installed],
     current: &Choice,
     first: Option<(&str, &str)>,
     scanned: bool,
+    dont_open: bool,
 ) -> Vec<Lane> {
-    let value = current.browser.trim();
+    let not_opened = pwrroute_engine::is_dont_open(&current.browser);
+    // Don't open names no browser: no browser lane lights or goes missing.
+    let value = if not_opened {
+        ""
+    } else {
+        current.browser.trim()
+    };
+    let current = &Choice {
+        browser: value.to_owned(),
+        ..current.clone()
+    };
     // The scan's name for the rule's browser, which may be written as a
     // bundle id or in another case.
     let current_name = (!value.is_empty()).then(|| {
@@ -200,7 +215,34 @@ pub fn lanes(
         }
         out.push(lane);
     }
+    if dont_open {
+        out.push(dont_open_lane(not_opened));
+    }
     out
+}
+
+/// The Don't open lane: one pill that writes `"none"` and clears the
+/// profile and private window, which mean nothing there.
+fn dont_open_lane(on: bool) -> Lane {
+    Lane {
+        name: DONT_OPEN.to_owned(),
+        value: pwrroute_engine::DONT_OPEN.to_owned(),
+        badge: AppBadge::from(NOT_OPENED_BADGE),
+        pills: vec![Pill {
+            label: DONT_OPEN.to_owned(),
+            kind: PillKind::Profile,
+            choice: Choice {
+                browser: pwrroute_engine::DONT_OPEN.to_owned(),
+                profile: String::new(),
+                private: false,
+            },
+            on,
+        }],
+        tag: Some("kept in Activity".to_owned()),
+        missing: false,
+        on,
+        dont_open: true,
+    }
 }
 
 /// The rule's profile is one the scan read for its browser by neither
@@ -323,6 +365,7 @@ fn lane_for(
         tag,
         missing,
         on,
+        dont_open: false,
     }
 }
 
@@ -512,7 +555,7 @@ pub fn draw<V: 'static>(
                     .map(|el| {
                         if lane.on {
                             el.border_color(theme::accent_border())
-                        } else if lane.missing {
+                        } else if lane.missing || lane.dont_open {
                             el.border_dashed().border_color(theme::border_default())
                         } else {
                             el.border_color(theme::border_subtle())
@@ -603,7 +646,7 @@ mod tests {
 
     #[test]
     fn one_pill_is_the_whole_choice() {
-        let none = lanes(&scan(), &[], &Choice::default(), None, true);
+        let none = lanes(&scan(), &[], &Choice::default(), None, true, false);
         assert!(on(&none).is_empty(), "nothing is chosen for the person");
         let edge = &none[0];
         assert_eq!(
@@ -634,7 +677,7 @@ mod tests {
             private: false,
         };
         assert_eq!(
-            on(&lanes(&scan(), &[], &work, None, true)),
+            on(&lanes(&scan(), &[], &work, None, true, false)),
             [("Microsoft Edge".into(), "Work".into())]
         );
         let private = Choice {
@@ -643,7 +686,7 @@ mod tests {
             ..work.clone()
         };
         assert_eq!(
-            on(&lanes(&scan(), &[], &private, None, true)),
+            on(&lanes(&scan(), &[], &private, None, true, false)),
             [("Microsoft Edge".into(), "InPrivate".into())]
         );
         // A profile with private keeps both, on the private pill.
@@ -651,7 +694,7 @@ mod tests {
             private: true,
             ..work
         };
-        let drawn = lanes(&scan(), &[], &both, None, true);
+        let drawn = lanes(&scan(), &[], &both, None, true, false);
         assert_eq!(
             on(&drawn),
             [("Microsoft Edge".into(), "InPrivate \u{00b7} work".into())]
@@ -673,13 +716,45 @@ mod tests {
             profile: "Profile 1".into(),
             private: false,
         };
-        let drawn = lanes(&scan(), &installed, &rule, None, true);
+        let drawn = lanes(&scan(), &installed, &rule, None, true, false);
         assert_eq!(
             drawn.len(),
             2,
             "the bundle id is the scan's Edge, not a lane of its own"
         );
         assert_eq!(on(&drawn), [("Microsoft Edge".into(), "Personal".into())]);
+    }
+
+    #[test]
+    fn dont_open_is_the_last_lane_where_a_rule_is_picked() {
+        let off = lanes(&scan(), &[], &Choice::default(), None, true, true);
+        let last = off.last().unwrap();
+        assert!(last.dont_open && !last.on && !last.missing);
+        assert_eq!(last.name, "Don't open");
+        assert_eq!(last.pills.len(), 1);
+        assert_eq!(last.pills[0].choice.browser, "none");
+        // Chosen, it is the one pill on; no browser lane lights, and the
+        // word never becomes a missing browser's lane.
+        let chosen = Choice {
+            browser: "None".into(),
+            profile: "Work".into(),
+            private: true,
+        };
+        let drawn = lanes(&scan(), &[], &chosen, None, true, true);
+        assert!(drawn.iter().all(|lane| !lane.missing), "{drawn:?}");
+        let lit: Vec<&str> = drawn
+            .iter()
+            .flat_map(|lane| lane.pills.iter())
+            .filter(|pill| pill.on)
+            .map(|pill| pill.label.as_str())
+            .collect();
+        assert_eq!(lit, ["Don't open"]);
+        // Not offered where it means nothing (the tray's Send links).
+        assert!(
+            !lanes(&scan(), &[], &Choice::default(), None, true, false)
+                .iter()
+                .any(|lane| lane.dont_open)
+        );
     }
 
     #[test]
@@ -690,6 +765,7 @@ mod tests {
             &Choice::default(),
             Some(("Safari", "where it opened")),
             true,
+            false,
         );
         assert_eq!(first[0].name, "Safari");
         assert_eq!(first[0].tag.as_deref(), Some("where it opened"));
@@ -699,13 +775,13 @@ mod tests {
             profile: "Work".into(),
             private: false,
         };
-        let drawn = lanes(&scan(), &[], &gone, None, true);
+        let drawn = lanes(&scan(), &[], &gone, None, true, false);
         assert_eq!(drawn[0].name, "Vivaldi");
         assert!(drawn[0].missing);
         assert_eq!(drawn[0].tag.as_deref(), Some("not installed"));
         assert_eq!(on(&drawn), [("Vivaldi".into(), "Work".into())]);
         // Before the scan ran nothing is drawn as missing.
-        assert!(!lanes(&scan(), &[], &gone, None, false)[0].missing);
+        assert!(!lanes(&scan(), &[], &gone, None, false, false)[0].missing);
     }
 
     #[test]
@@ -715,7 +791,7 @@ mod tests {
             profile: "Lab".into(),
             private: false,
         };
-        let drawn = lanes(&scan(), &[], &other, None, true);
+        let drawn = lanes(&scan(), &[], &other, None, true, false);
         assert_eq!(on(&drawn), [("Microsoft Edge".into(), "Lab".into())]);
         assert_eq!(
             drawn[0].pills.len(),
@@ -731,7 +807,7 @@ mod tests {
         };
         assert!(!unknown_profile(&scan(), &[], &safari));
         assert_eq!(
-            on(&lanes(&scan(), &[], &safari, None, true)),
+            on(&lanes(&scan(), &[], &safari, None, true, false)),
             [("Safari".into(), "Lab".into())]
         );
         let work = Choice {
@@ -755,7 +831,7 @@ mod tests {
             profile: String::new(),
             private: false,
         };
-        let drawn = lanes(&scan(), &installed, &arc, None, true);
+        let drawn = lanes(&scan(), &installed, &arc, None, true, false);
         assert_eq!(drawn.len(), 3);
         assert_eq!(drawn[0].tag.as_deref(), Some("hidden in Settings"));
         assert_eq!(on(&drawn), [("Arc".into(), "Default".into())]);
@@ -770,7 +846,7 @@ mod tests {
             profile: String::new(),
             private: true,
         };
-        let drawn = lanes(&scan(), &[], &safari, None, true);
+        let drawn = lanes(&scan(), &[], &safari, None, true, false);
         assert_eq!(on(&drawn), [("Safari".into(), "Private window".into())]);
     }
 }

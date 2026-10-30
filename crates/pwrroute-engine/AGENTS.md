@@ -40,7 +40,13 @@ crate docs map the modules.
 - **`rules.json` is Go's schema plus optional fields.** Every extension
   (`rewrites`, `opener`, `enabled`) defaults to what the Go host did, so a Go
   file loads unchanged. A file using an extension behaves differently under
-  Go, which ignores unknown fields; `src/rules.rs` has the table.
+  Go, which ignores unknown fields; `src/rules.rs` has the table. Don't
+  open is the browser word `"none"` (`DONT_OPEN`, `is_dont_open`: a rule's
+  `browser` or `defaultBrowser`), never `null`, which a JSON Merge Patch
+  cannot write and Go reads as `""`. `browser_spec` plans it to Finicky's
+  own `browser: null`, so the result is the API's `appType: "none"`; a test
+  expecting `"none"` passes only for that, and the importer writes a
+  config's `browser: null` as it.
 - **`tests/finicky_compat.rs` is the gate.** `tests/configs/expected.json`
   was recorded from the PwrFinicky Go host (goja), one URL per process.
   `configs` holds the original cases; `suites` (config, `rules.json`,
@@ -51,6 +57,14 @@ crate docs map the modules.
   engine output without re-running the Go host or explaining the difference
   there. Behavior Go never had (extensions, trace, short links with a fake
   network, reload) is tested in `tests/features.rs` and `tests/reload.rs`.
+- **Finicky's own tests are ported, and `tests/finicky-coverage.md` maps
+  each to its PwrRoute test.** Its config API unit tests live in
+  `tests/configs/finicky-unit.js`, which `tests/finicky_suite.rs` runs
+  through `Engine::evaluate` (a test-only hook, like `resolve_plain`) and
+  `record.py --eval-oracle` runs in goja; keep Finicky's describe/it names.
+  Its Go tests, `testdata/` and wiki examples are suites under
+  `tests/configs/finicky/`. When Finicky adds a test or a documented
+  feature, port it and add its row to the map.
 - **Limits stay on.** Every load and resolve runs under a deadline and a heap
   limit (`Limits`), so a looping or runaway config cannot hang the router.
   Short-link expansion has its own per-attempt deadline and redirect limit.

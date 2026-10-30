@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          .crop { background: var(--bg-app); padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; position: relative; }
+          .row2 { display: flex; gap: 20px; align-items: flex-start; }
+          .lbl { font: 600 10px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .bi.no { background: var(--bg-panel-elevated); color: var(--text-muted); border: 1px dashed var(--border-default); }
+          /* rule rows, as in App Baseline 1a */
+          .rr { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr) 14px minmax(0, 230px) 64px 20px; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-bottom: 1px solid var(--border-faint); }
+          .rr:last-child { border-bottom: none; }
+          .rr.sel { background: var(--bg-row-active); }
+          .rr.sel::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+          .rr .idx { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .m { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; align-items: center; }
+          .rr .m .ev { font: 600 11px/1 var(--font-sans); color: var(--text-primary); }
+          .rr .dest { display: flex; align-items: center; gap: 7px; min-width: 0; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .rr .dest .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .rr .dest.no { color: var(--text-secondary); }
+          .rr .hits { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .rr .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .card-foot { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--border-faint); font: 500 10.5px/1.4 var(--font-sans); color: var(--text-subtle); }
+          /* the rule editor rail */
+          .rrail { width: 372px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-panel); display: flex; flex-direction: column; overflow: hidden; }
+          .rs { padding: 14px 16px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; gap: 8px; }
+          .rs:last-child { border-bottom: none; }
+          .rs h5 { margin: 0 0 2px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .rs .try { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-app); border: 1px solid var(--border-faint); font: 500 11px/1.45 var(--font-sans); color: var(--text-secondary); }
+          .rs .try b { color: var(--text-primary); font-weight: 600; }
+          /* Open in lanes, as in Destination and App Pickers 1c */
+          .lanes { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+          .lane { display: flex; flex-direction: column; gap: 8px; padding: 9px 10px 10px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-input); }
+          .lane.on { border-color: var(--accent-border); }
+          .lane.no { border-style: dashed; border-color: var(--border-default); }
+          .lane.no.on { border-style: solid; border-color: var(--accent-border); }
+          .lane-hd { display: flex; align-items: center; gap: 8px; font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .lane-hd .tg { margin-left: auto; font: 500 10px/1 var(--font-sans); color: var(--text-subtle); }
+          .lane .bi { width: 12px; height: 12px; font-size: 7px; }
+          .pills { display: flex; flex-wrap: wrap; gap: 5px; }
+          .pl { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border-subtle); background: var(--bg-panel); font: 500 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .pl.def { color: var(--text-muted); }
+          .pl.priv { border-style: dashed; color: var(--text-muted); }
+          .pl.on { background: var(--accent); border: 1px solid transparent; color: var(--accent-on); font-weight: 600; }
+          .compact .lane { gap: 5px; padding: 6px 8px 7px; }
+          .compact .pills { gap: 4px; }
+          .compact .pl { height: 22px; padding: 0 8px; }
+          /* menus */
+          .menu { position: absolute; z-index: 5; width: 260px; padding: 5px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); display: flex; flex-direction: column; }
+          .mi { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; font: 500 12px/1.2 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi .bi { width: 14px; height: 14px; font-size: 7px; }
+          .mi.hov { background: var(--bg-row-active); color: var(--accent-bright); }
+          .mi .ex { margin-left: auto; padding-left: 14px; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+          .msep { height: 1px; margin: 4px 2px; background: var(--border-faint); }
+          .mcap { padding: 6px 8px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .mfoot { padding: 6px 8px 4px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); white-space: normal; }
+          /* Activity rows, as in Activity Quick Add Rule 1a */
+          .ar { display: grid; grid-template-columns: 54px minmax(0, 1fr) 76px 110px 176px 48px 18px; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1 var(--font-sans); color: var(--text-secondary); position: relative; }
+          .ar:last-child { border-bottom: none; }
+          .ar.head { padding: 7px 14px; background: var(--bg-panel-elevated); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .ar .t { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .u { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: flex; align-items: center; gap: 7px; }
+          .ar .u .chip { font-size: 9px; padding: 3px 6px; }
+          .ar .ms { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .d { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+          .ar .d .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .ar .d.no { color: var(--text-muted); }
+          .ar .d .later { font: 500 10px/1 var(--font-sans); color: var(--text-subtle); }
+          .ar .more { color: var(--text-subtle); text-align: center; font: 600 12px/1 var(--font-mono); }
+          .ar.unr .tag { color: var(--warn-text); background: var(--warn-soft); border-color: transparent; }
+          .ar.held .tag.no { color: var(--text-secondary); background: var(--bg-panel-elevated); border-color: var(--border-default); }
+          .ar.sel { background: var(--bg-row-active); border-bottom: none; }
+          .ar.dim > * { opacity: 0.6; }
+          .toolbar { display: flex; align-items: center; gap: 8px; }
+          .toolbar .inp { width: 220px; }
+          .seg i { font-style: normal; margin-left: 5px; font: 600 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .ax { padding: 4px 14px 12px 80px; border-bottom: 1px solid var(--border-faint); background: var(--bg-row-active); display: flex; flex-direction: column; gap: 6px; position: relative; }
+          .ax .l { display: flex; align-items: center; gap: 8px; font: 400 11px/1.5 var(--font-sans); color: var(--text-muted); }
+          .ax .n { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 600 8.5px/1 var(--font-mono); background: var(--bg-panel-elevated); color: var(--text-subtle); flex: 0 0 auto; }
+          .ax .n.hit { background: var(--accent-soft); color: var(--accent-bright); }
+          .ax .url { font: 500 11.5px/16.5px var(--font-mono); color: var(--text-secondary); overflow-wrap: anywhere; }
+          .ax .acts { margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+          .ax .acts .kbd { height: 16px; font-size: 9.5px; }
+          .ax .acts .why { font: 400 10.5px/1.4 var(--font-sans); color: var(--text-subtle); }
+          .pop { position: absolute; z-index: 6; width: 300px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+          .pop .ph { display: flex; align-items: baseline; justify-content: space-between; padding: 2px 2px 0; font: 600 11.5px/1.2 var(--font-sans); color: var(--text-primary); }
+          .pop .ph span { font: 500 10px/1 var(--font-sans); color: var(--text-subtle); }
+          .pop .pf2 { padding: 0 2px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-subtle); }
+          /* Test a link's last step, as in App Baseline 1c */
+          .trace { display: flex; flex-direction: column; }
+          .ts { position: relative; display: grid; grid-template-columns: 22px 150px minmax(0, 1fr); gap: 0 12px; padding: 10px 14px; border-bottom: 1px solid var(--border-faint); }
+          .ts:last-child { border-bottom: none; }
+          .ts .n { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 600 9.5px/1 var(--font-mono); background: var(--bg-panel-elevated); border: 1px solid var(--border-default); color: var(--text-muted); }
+          .ts.hit .n { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-bright); }
+          .ts.end .n { background: var(--bg-panel-elevated); border-style: dashed; color: var(--text-secondary); }
+          .ts .k { font: 600 11.5px/1.4 var(--font-sans); color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }
+          .ts .k small { font: 500 10px/1.3 var(--font-mono); color: var(--text-subtle); }
+          .ts .v { min-width: 0; display: flex; flex-direction: column; gap: 5px; font: 400 11.5px/1.5 var(--font-sans); color: var(--text-muted); }
+          .ts .v b { color: var(--text-primary); font-weight: 600; }
+          .result { display: flex; align-items: center; gap: 12px; padding: 14px; }
+          .result .big { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font: 700 16px/1 var(--font-mono); color: var(--text-muted); border: 1px dashed var(--border-default); background: var(--bg-panel-elevated); }
+          .result .rt { display: flex; flex-direction: column; gap: 4px; }
+          .result .rt b { font: 600 15px/1.2 var(--font-sans); color: var(--text-primary); }
+          .result .rt span { font: 400 11px/1.4 var(--font-sans); color: var(--text-muted); }
+          /* the tray's recents, as in Tray and First Run 1a */
+          .tray { width: 300px; background: rgba(16,16,16,0.98); border: 1px solid var(--border-default); border-radius: 10px; display: flex; flex-direction: column; }
+          .tray .cap { padding: 8px 12px 4px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .rec { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 5px 12px; }
+          .rec .h { font: 500 11.5px/1.2 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+          .rec .b { grid-column: 1; font: 500 10px/1.2 var(--font-sans); color: var(--text-muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; }
+          .rec .b .bi { width: 11px; height: 11px; font-size: 6px; }
+          .rec .ago { grid-column: 2; grid-row: 1 / 3; align-self: center; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          /* the Overview's special card, as Overview and Setup's note describes */
+          .ocard { width: 320px; height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 12px; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-panel-elevated); position: relative; }
+          .ocard.lit { border-color: var(--accent-border); }
+          .ocard .ob { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font: 700 11px/1 var(--font-mono); color: var(--text-muted); border: 1px dashed var(--border-default); }
+          .ocard .on { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+          .ocard .on b { font: 600 13px/1 var(--font-sans); color: var(--text-primary); }
+          .ocard .on span { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .ocard .inf { font: 700 13px/1 var(--font-sans); color: var(--accent-bright); }
+          .ocard .port { position: absolute; left: -5px; top: 17px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+          .orow { width: 360px; height: 40px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); font: 500 11.5px/1 var(--font-sans); color: var(--text-secondary); position: relative; }
+          .orow .rk { font: 600 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .orow .tg2 { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+          .orow .port { position: absolute; right: -5px; top: 15px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+          .tbl td:first-child { white-space: nowrap; }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Choosing Don't open ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Don&rsquo;t open, as a place a rule or Everything else can send links</span></div>
+        <p class="dv-sub">A Finicky config could always say <code>browser: null</code>: the link is not opened anywhere. The visual rules could not, so the only way to keep unknown links out of a browser was JavaScript. Now <b>Don&rsquo;t open</b> is the last lane in Open in, wherever a rule&rsquo;s destination is picked, and a choice for Everything else. With Everything else on Don&rsquo;t open, only links a rule chooses reach a browser; the rest are recorded in Activity, where each can be opened, opened somewhere else, or turned into a rule. <code>rules.json</code> writes it as the browser word <code>"none"</code> (a rule&rsquo;s <code>browser</code> or the file&rsquo;s <code>defaultBrowser</code>). The router already records a <code>browser: null</code> link as <b>not opened</b>; this canvas gives that state a face on every surface.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Rule editor: the Don't open lane">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>The rule editor&rsquo;s Open in. After the browsers comes one more lane, <b>Don&rsquo;t open</b>: the not-opened badge (an em dash on a dashed tile, as the Overview&rsquo;s Not opened card draws it), the name, the tag &ldquo;kept in Activity&rdquo; and one pill, <b>Don&rsquo;t open</b>. Its border is dashed until it is chosen, so it never reads as a browser. Choosing it clears the rule&rsquo;s profile and private window (they mean nothing here) and the Keep row stays. Under the lanes one line says where its links go: &ldquo;Links this rule takes are not opened. Activity lists them under Not opened, where you can open one or add a rule.&rdquo; No missing-browser or profile warning applies. Try it reads &ldquo;This rule doesn&rsquo;t open that link.&rdquo; Right: the same rule on Rules, its target in secondary text with the badge.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <div class="row2">
+                <div class="rrail">
+                  <div class="rs"><h5>Match</h5><div class="inp mono">ads.example.net/*</div></div>
+                  <div class="rs"><h5>Open in</h5>
+                    <div class="lanes">
+                      <div class="lane"><div class="lane-hd"><span class="bi">Ch</span>Google Chrome<span class="tg">3 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl priv">Incognito</span></div></div>
+                      <div class="lane"><div class="lane-hd"><span class="bi">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl">default-release</span><span class="pl priv">Private window</span></div></div>
+                      <div class="lane"><div class="lane-hd"><span class="bi">Sf</span>Safari<span class="tg">no private window from a link</span></div><div class="pills"><span class="pl def">Default</span></div></div>
+                      <div class="lane no on"><div class="lane-hd"><span class="bi no">&mdash;</span>Don&rsquo;t open<span class="tg">kept in Activity</span></div><div class="pills"><span class="pl on">Don&rsquo;t open</span></div></div>
+                    </div>
+                  </div>
+                  <div class="rs"><h5>Try it</h5><div class="try"><span class="st"><i></i></span><span>This rule doesn&rsquo;t open that link.</span></div></div>
+                </div>
+                <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px;">
+                  <span class="lbl">Rules</span>
+                  <section class="card">
+                    <div class="rr"><span class="idx">01</span><div class="m"><span class="tag">*.example.com/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">212 today</span><span class="more">&#8943;</span></div>
+                    <div class="rr"><span class="idx">02</span><div class="m"><span class="tag">github.com/acme/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ch</span>Google Chrome<span class="pf">Work</span></div><span class="hits">48 today</span><span class="more">&#8943;</span></div>
+                    <div class="rr"><span class="idx">03</span><div class="m"><span class="tag">news.example.org/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                    <div class="rr sel"><span class="idx">04</span><div class="m"><span class="tag">ads.example.net/*</span></div><span class="arrow">&rarr;</span><div class="dest no"><span class="bi no">&mdash;</span>Don&rsquo;t open</div><span class="hits">31 today</span><span class="more">&#8943;</span></div>
+                    <div class="rr"><span class="idx">&infin;</span><div class="m"><span class="ev">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Sf</span>Safari</div><span class="hits">140 today</span><span class="more">&#8943;</span></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b Everything else: Don't open">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>Everything else. Its &ldquo;&#8943;&rdquo; menu lists the browsers that write <code>defaultBrowser</code>, then, under a rule, <b>Don&rsquo;t open</b> with the hint &ldquo;only rules open links&rdquo;. Chosen, the row reads <b>Don&rsquo;t open</b> and a line under the card says what it means and counts what is waiting. The menu&rsquo;s foot says the same in one sentence before the choice is made. The Overview&rsquo;s setup card and first run do not offer it: first run sets up a browser, and Don&rsquo;t open is a choice made once rules exist.</span></div>
+            <div class="dv-card crop" style="width: 1100px; height: 380px;">
+              <div class="row2">
+                <div style="width: 560px; display: flex; flex-direction: column; gap: 10px;">
+                  <span class="lbl">The menu</span>
+                  <section class="card">
+                    <div class="rr"><span class="idx">03</span><div class="m"><span class="tag">news.example.org/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                    <div class="rr sel"><span class="idx">&infin;</span><div class="m"><span class="ev">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Sf</span>Safari</div><span class="hits">140 today</span><span class="more" style="color: var(--accent-bright);">&#8943;</span></div>
+                  </section>
+                  <div class="menu" style="left: 320px; top: 118px;">
+                    <span class="mcap">Everything else opens in</span>
+                    <span class="mi"><span class="bi">Ch</span>Google Chrome<span class="ex">3 profiles</span></span>
+                    <span class="mi"><span class="bi">Ff</span>Firefox</span>
+                    <span class="mi"><span class="bi">Sf</span>Safari<span class="ex">&#10003;</span></span>
+                    <span class="msep"></span>
+                    <span class="mi hov"><span class="bi no">&mdash;</span>Don&rsquo;t open<span class="ex">only rules open links</span></span>
+                    <span class="mfoot">Links no rule chooses wait in Activity, where you can open them or add a rule.</span>
+                  </div>
+                </div>
+                <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px;">
+                  <span class="lbl">Chosen</span>
+                  <section class="card">
+                    <div class="rr"><span class="idx">03</span><div class="m"><span class="tag">news.example.org/*</span></div><span class="arrow">&rarr;</span><div class="dest"><span class="bi">Ff</span>Firefox</div><span class="hits">9 today</span><span class="more">&#8943;</span></div>
+                    <div class="rr"><span class="idx">&infin;</span><div class="m"><span class="ev">Everything else</span></div><span class="arrow">&rarr;</span><div class="dest no"><span class="bi no">&mdash;</span>Don&rsquo;t open</div><span class="hits">12 today</span><span class="more">&#8943;</span></div>
+                    <div class="card-foot">Only links your rules choose open. 12 links today were not opened; they wait in Activity.</div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Activity's Add a rule: Don't open">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Activity&rsquo;s Add a rule sheet draws the same lanes, so &ldquo;never open links like this&rdquo; is one pick: the Don&rsquo;t open lane comes last, as in the editor. Add stays disabled until a pill is on; the Added note is the one any rule gets. The tray&rsquo;s Send links destination does not offer it: sending the next links nowhere is Hold, which has its own control.</span></div>
+            <div class="dv-card crop" style="width: 620px;">
+              <span class="lbl">Open in</span>
+              <div class="lanes">
+                <div class="lane"><div class="lane-hd"><span class="bi">Sf</span>Safari<span class="tg">where it opened</span></div><div class="pills"><span class="pl def">Default</span></div></div>
+                <div class="lane"><div class="lane-hd"><span class="bi">Ch</span>Google Chrome<span class="tg">3 profiles</span></div><div class="pills"><span class="pl def">Default</span><span class="pl">Work</span><span class="pl">Personal</span><span class="pl">Travel</span><span class="pl priv">Incognito</span></div></div>
+                <div class="lane no"><div class="lane-hd"><span class="bi no">&mdash;</span>Don&rsquo;t open<span class="tg">kept in Activity</span></div><div class="pills"><span class="pl">Don&rsquo;t open</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= TURN 2 — A link that was not opened ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">A link that was not opened, and opening it</span></div>
+        <p class="dv-sub">A not-opened link is a decision waiting, so it must be easy to find and one step from opening. Activity gets a <b>Not opened</b> filter, each such row says who decided (a rule, Everything else, a config handler with <code>browser: null</code>, or Hold), and the expanded row leads with <b>Open in&hellip;</b>. Opening it never changes the rules; it dispatches the link once, to the destination picked, and the new row says it was opened from Activity. The same not-opened state serves Hold (the Hold canvas): only the reason differs.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a Activity: Not opened rows and filter">
+            <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span>Activity under All. A not-opened row&rsquo;s Opened in reads <b>Not opened</b> beside the badge, in muted text. Its Rule chip names who decided as every row does (&ldquo;rule 4&rdquo;; &ldquo;default&rdquo; for Everything else on Don&rsquo;t open, amber because no rule chose it; &ldquo;cfg h 2&rdquo; for a config&rsquo;s <code>browser: null</code>; &ldquo;held&rdquo; for Hold). Took shows the resolve time. <b>Not opened</b> joins the filters after Everything else, with its count; it lists every not-opened row whatever the reason. A row opened later keeps its place and adds &ldquo;opened later&rdquo; to Opened in, with the browser it went to.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <div class="toolbar"><div class="inp"><span class="ph">Search links</span></div><div class="seg"><span>All<i>24</i></span><span>Everything else<i>6</i></span><span class="on">Not opened<i>4</i></span><span>Failed<i>0</i></span><span>Rewritten<i>3</i></span><span>Private<i>1</i></span></div></div>
+              <section class="card">
+                <div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span><span></span></div>
+                <div class="ar unr"><span class="t">15:42:47</span><span class="u">https://unknown.example.org/welcome?ref=mail</span><span>Mail</span><span><span class="tag">default</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">3 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar"><span class="t">15:41:02</span><span class="u">https://ads.example.net/click?id=7</span><span>Chat</span><span><span class="tag">rule 4</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">2 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar"><span class="t">15:39:15</span><span class="u">https://tracker.example.com/t/88</span><span>Tracker</span><span><span class="tag">cfg h 2</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">4 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar unr"><span class="t">15:30:40</span><span class="u">https://forms.example.org/survey/2</span><span>Mail</span><span><span class="tag">default</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened<span class="later">&middot; opened later in Firefox</span></div><span class="ms">3 ms</span><span class="more">&#8943;</span></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Expanded: Open in… first">
+            <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><span>The expanded row of a not-opened link. Its trace ends &ldquo;not opened &middot; PwrRoute&rsquo;s default is Don&rsquo;t open&rdquo; (or &ldquo;&middot; rule 4 says Don&rsquo;t open&rdquo;, &ldquo;&middot; config handler 2 says browser: null&rdquo;, &ldquo;&middot; held&rdquo;). The actions lead with <b>Open in&hellip;</b>, primary, then <b>Add a rule&hellip;</b> with its key, then Re-test. Open in&hellip; opens the compact lanes (the tray&rsquo;s, Send Links 1b) in a panel under the actions, in the row&rsquo;s flow, not floating; a pill opens the link there at once and closes the panel. Open in&hellip; again closes it. The browser it opened in before, when there was one, is not a thing here: it never opened.</span></div>
+            <div class="dv-card crop" style="width: 1100px; height: 400px;">
+              <section class="card">
+                <div class="ar unr sel"><span class="t">15:42:47</span><span class="u">https://unknown.example.org/welcome?ref=mail</span><span>Mail</span><span><span class="tag">default</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">3 ms</span><span class="more">&#8943;</span></div>
+                <div class="ax"><span class="l"><span class="n">D</span>PwrRoute&rsquo;s default &middot; no rule matched</span><span class="l"><span class="n">&mdash;</span>not opened &middot; PwrRoute&rsquo;s default is Don&rsquo;t open</span>
+                  <span class="url">https://unknown.example.org/welcome?ref=mail</span>
+                  <div class="acts"><span class="btn sm primary">Open in&hellip;</span><span class="btn sm quiet">Add a rule&hellip;<span class="kbd">&#8984;N</span></span><span class="btn sm quiet">Re-test</span></div>
+                  <div class="pop compact" style="position: static; margin-top: 8px; width: 420px;">
+                    <div class="ph">Open this link in<span>once &middot; rules unchanged</span></div>
+                    <div class="lanes">
+                      <div class="lane"><div class="lane-hd"><span class="bi">Ch</span>Google Chrome</div><div class="pills"><span class="pl def">Default</span><span class="pl">Work</span><span class="pl">Personal</span><span class="pl priv">Incognito</span></div></div>
+                      <div class="lane"><div class="lane-hd"><span class="bi">Ff</span>Firefox</div><div class="pills"><span class="pl def">Default</span><span class="pl priv">Private window</span></div></div>
+                      <div class="lane"><div class="lane-hd"><span class="bi">Sf</span>Safari</div><div class="pills"><span class="pl def">Default</span></div></div>
+                    </div>
+                    <div class="pf2">Add a rule to send links like this somewhere every time.</div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2c" data-screen-label="2c Opened later, and rows that can't be opened">
+            <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a><span>After Open in&hellip;: a new row at the top, Rule chip <b>opened</b> in the accent (the user chose), Opened in the browser it went to, and its trace starts &ldquo;opened from Activity &middot; was not opened at 15:42&rdquo;. The old row stays, its button gone and &ldquo;opened later in Firefox&rdquo; in its place. A row that can no longer be opened (no longer kept by the router, or read back from the journal of an earlier run) shows no Open in&hellip;: the action line says why. A row kept as host only can still be opened: the router keeps the link in memory while it waits, whatever the rule&rsquo;s privacy, and Add a rule&hellip; stays offered only where a full link was kept, as today.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <section class="card">
+                <div class="ar"><span class="t">15:43:10</span><span class="u">https://unknown.example.org/welcome?ref=mail</span><span>Mail</span><span><span class="tag" style="color: var(--accent-bright);">opened</span></span><div class="d"><span class="bi">Ff</span>Firefox</div><span class="ms">41 ms</span><span class="more">&#8943;</span></div>
+                <div class="ar unr sel"><span class="t">15:42:47</span><span class="u">https://unknown.example.org/welcome?ref=mail</span><span>Mail</span><span><span class="tag">default</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened<span class="later">&middot; opened later in Firefox</span></div><span class="ms">3 ms</span><span class="more">&#8943;</span></div>
+                <div class="ax"><span class="l"><span class="n">D</span>PwrRoute&rsquo;s default &middot; no rule matched</span><span class="l"><span class="n">&mdash;</span>not opened &middot; PwrRoute&rsquo;s default is Don&rsquo;t open</span>
+                  <span class="url">https://unknown.example.org/welcome?ref=mail</span>
+                  <div class="acts"><span class="btn sm primary">Add a rule&hellip;<span class="kbd">&#8984;N</span></span><span class="btn sm quiet">Re-test</span><span class="why">Opened later in Firefox at 15:43.</span></div>
+                </div>
+                <div class="ar sel"><span class="t">09:20:05</span><span class="u">https://ads.example.net/click?id=3</span><span>Mail</span><span><span class="tag">rule 4</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">2 ms</span><span class="more">&#8943;</span></div>
+                <div class="ax"><span class="l"><span class="n hit">4</span>rule 4 &middot; ads.example.net/*</span><span class="l"><span class="n">&mdash;</span>not opened &middot; rule 4 says Don&rsquo;t open</span>
+                  <span class="url">https://ads.example.net/click?id=3</span>
+                  <div class="acts"><span class="btn sm primary">Add a rule&hellip;<span class="kbd">&#8984;N</span></span><span class="btn sm quiet">Re-test</span><span class="why">No longer kept, so this link can&rsquo;t be opened from here.</span></div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2d" data-screen-label="2d Test a link, the tray and the Overview">
+            <div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a><span>Left: Test a link ends on a dashed step and a result card that says <b>Not opened</b> and who decided; it opens nothing either way. Middle: the tray&rsquo;s recents show the host, the badge and &ldquo;not opened &middot; rule 4&rdquo; (&ldquo;not opened &middot; default&rdquo;); a click opens Activity on that row. Right: the Overview&rsquo;s Not opened card, which a config&rsquo;s <code>browser: null</code> already fed, now takes a rule&rsquo;s Don&rsquo;t open too, and holds the &infin; when Everything else is Don&rsquo;t open; its meta counts rules and today&rsquo;s links as a browser card does. The hero&rsquo;s detail adds &ldquo;Everything else isn&rsquo;t opened&rdquo;.</span></div>
+            <div class="dv-card crop" style="width: 1100px;">
+              <div class="row2">
+                <div style="width: 430px; display: flex; flex-direction: column; gap: 8px;">
+                  <span class="lbl">Test a link</span>
+                  <section class="card">
+                    <div class="result"><span class="big">&mdash;</span><div class="rt"><b>Not opened</b><span>rule 4 says Don&rsquo;t open &middot; Activity would keep it</span></div></div>
+                  </section>
+                  <section class="card"><div class="trace">
+                    <div class="ts hit"><span class="n">4</span><div class="k">Rule 4<small>ads.example.net/*</small></div><div class="v">matched</div></div>
+                    <div class="ts end"><span class="n">&mdash;</span><div class="k">Not opened</div><div class="v"><span><b>Don&rsquo;t open</b> &middot; nothing opens; Activity keeps the link so you can open it</span></div></div>
+                  </div></section>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                  <span class="lbl">Tray</span>
+                  <div class="tray">
+                    <span class="cap">Recent</span>
+                    <div class="rec"><span class="h">docs.example.com</span><span class="b"><span class="bi">Ch</span>Google Chrome &middot; rule 1</span><span class="ago">1m</span></div>
+                    <div class="rec"><span class="h">ads.example.net</span><span class="b"><span class="bi no">&mdash;</span>not opened &middot; rule 4</span><span class="ago">2m</span></div>
+                    <div class="rec"><span class="h">unknown.example.org</span><span class="b"><span class="bi no">&mdash;</span>not opened &middot; default</span><span class="ago">4m</span></div>
+                  </div>
+                </div>
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 10px;">
+                  <span class="lbl">Overview</span>
+                  <div style="display: flex; align-items: center; gap: 40px;">
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                      <div class="orow"><span class="rk">04</span><span class="tag">ads.example.net/*</span><span class="tg2"><span class="bi no">&mdash;</span>Don&rsquo;t open</span><span class="port"></span></div>
+                      <div class="orow"><span class="rk">&infin;</span><b style="color: var(--text-primary);">Everything else</b><span class="tg2"><span class="bi no">&mdash;</span>Don&rsquo;t open</span><span class="port"></span></div>
+                    </div>
+                    <div class="ocard lit"><span class="port"></span><span class="ob">&mdash;</span><div class="on"><b>Not opened</b><span>1 rule &middot; 43 links today</span></div><span class="inf">&infin;</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p class="dv-note"><b>How it behaves.</b></p>
+        <table class="tbl">
+          <tr><td><code>rules.json</code></td><td>A rule&rsquo;s <code>"browser": "none"</code>, or <code>"defaultBrowser": "none"</code>, compared ignoring case. A profile or private flag beside it is ignored. The engine hands Finicky <code>browser: null</code>, so the result is the config API&rsquo;s own not-opened browser and a config&rsquo;s <code>browser: null</code> behaves the same. A word, not <code>null</code>: a JSON Merge Patch (an agent&rsquo;s <code>pwrroute_rules_apply</code>) cannot set a field to <code>null</code>, and the Go host reads <code>null</code> as empty.</td></tr>
+          <tr><td>Precedence</td><td>Everything else on Don&rsquo;t open beside a Finicky config follows <code>precedence</code> as any default does: in the Go order the config&rsquo;s <code>defaultBrowser</code> keeps everything else; with &ldquo;Let PwrRoute&rsquo;s default take everything else&rdquo; on, unclaimed links are not opened. The config&rsquo;s handlers still open what they claim.</td></tr>
+          <tr><td>Never a fallback</td><td>A not-opened link launches nothing, so the fallback browser never takes it. Don&rsquo;t open as Everything else is not a browser to fall back to: when a chosen browser fails to open, or no config loads, the fallback browser takes the link, as with no default at all. The tray&rsquo;s Pause routing target skips it the same way.</td></tr>
+          <tr><td>What is kept</td><td>The record, at its rule&rsquo;s privacy level, like any dispatch. To open it later the router keeps the full link in memory while the record is kept (the retention count and hours); Open in&hellip; is offered only while it does, for a host-only record too (the link stays in memory, never in the record). A record read from the journal of an earlier run can&rsquo;t be opened. Nothing more reaches disk than the journal already writes.</td></tr>
+          <tr><td>Opening it</td><td>Open in&hellip; dispatches the link once to the picked browser and profile, after the rewrites, as a click would; the new record names the record it came from. The rules are not changed and the not-opened record is not edited.</td></tr>
+          <tr><td>Hold</td><td>Hold records links without opening them, too: the same not-opened record, with &ldquo;held&rdquo; as who decided, the same filter, the same Open in&hellip;.</td></tr>
+          <tr><td>Agents</td><td><code>pwrroute_resolve</code> says &ldquo;not opened&rdquo; and who decided. <code>pwrroute_activity</code> takes <code>filter: "notOpened"</code> and each not-opened entry carries a <code>reason</code> (<code>rule</code>, <code>default</code>, <code>hold</code>). <code>pwrroute_rules_apply</code> accepts <code>"none"</code> as a browser.</td></tr>
+        </table>
+        <p class="dv-next">Try next: &ldquo;a notification for a not-opened link with Open in&hellip;&rdquo; &middot; &ldquo;Not opened grouped by host, one Add a rule per host&rdquo; &middot; &ldquo;Don&rsquo;t open in first run, for an allow-list setup&rdquo;</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

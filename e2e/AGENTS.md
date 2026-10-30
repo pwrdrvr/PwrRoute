@@ -38,8 +38,7 @@ list (`os.rs`), real link hand-offs (`open -a`, a second launch).
 - **Never change this machine's default browser.** Scenarios that register
   PwrRoute or make it the default skip unless `PWRROUTE_E2E_DISPOSABLE=1`,
   which only GitHub-hosted runners set, and the app refuses the hook's
-  registration actions without it too. The `pwrdrvr-macos` Tart guests
-  persist and are shared: not disposable. Never set it locally.
+  registration actions without it too. Never set it locally.
 - **Isolated by default.** Each launch has its own router directory
   (`PWRROUTE_E2E_ROUTER_DIR`), socket and empty home, and passes
   `--dry-run`, so it never finds the developer's config. A shared launch

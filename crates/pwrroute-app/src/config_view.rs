@@ -9,12 +9,13 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::theme::px;
 use anyhow::Context as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, Context, Div, ElementId, InteractiveElement as _,
     IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    div, ease_out_quint, px,
+    div, ease_out_quint,
 };
 use pwrroute_engine::{
     AppType, BrowserSpec, Description, Engine, FunctionSpec, HandlerRule, MatcherSpec, Precedence,

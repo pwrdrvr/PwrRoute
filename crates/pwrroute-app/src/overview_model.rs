@@ -1637,8 +1637,12 @@ struct Dest {
 
 /// The browser a rule names, as the reader knows it: the installed app's
 /// name, else the catalog's, else the value as written (a path by its
-/// stem). `ghost` when the scan ran and did not find it.
+/// stem). `ghost` when the scan ran and did not find it. `rules.json`'s
+/// Don't open (`"none"`) is the Not opened card, as a config's `null` is.
 fn resolve(value: &str, installed: &[Installed]) -> Dest {
+    if pwrroute_engine::is_dont_open(value) {
+        return not_opened_dest();
+    }
     let value = value.trim();
     let canonical = Catalog::builtin()
         .find(value)
@@ -2159,8 +2163,9 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
     };
     let pwrroute_dest = || {
         let dest = resolve(&rules_json_name, installed);
-        let profile = (has_default && !rules.default_profile.is_empty())
-            .then(|| rules.default_profile.clone());
+        let profile =
+            (has_default && !rules.default_profile.is_empty() && dest.kind != CardKind::NotOpened)
+                .then(|| rules.default_profile.clone());
         let profile = canonical_profile(installed, &dest.key, profile);
         (dest, profile)
     };
@@ -2261,6 +2266,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
         for (index, rule) in rules.rules.iter().enumerate() {
             let target = if rule.browser.trim().is_empty() {
                 Target::Unset
+            } else if pwrroute_engine::is_dont_open(&rule.browser) {
+                // Don't open: the Not opened card, with no profile or
+                // private window to ask about.
+                cards.add(not_opened_dest(), None, &Ask::No)
             } else {
                 let profile = (!rule.profile.is_empty()).then(|| rule.profile.clone());
                 cards.add(resolve(&rule.browser, installed), profile, &Ask::rule(rule))
@@ -3360,6 +3369,75 @@ mod tests {
             map.focus_label(Focus::Node(0, incognito)).as_deref(),
             Some("Google Chrome \u{b7} Incognito")
         );
+    }
+
+    /// Don't open (`"none"`), a rule's and Everything else's, feeds the
+    /// Not opened card that a config's `browser: null` feeds, and today's
+    /// not-opened links count there (design: Not Opened 2d).
+    #[test]
+    fn dont_open_rules_and_default_feed_the_not_opened_card() {
+        use pwrroute_router::{DispatchId, Outcome, Privacy, Step, Timings};
+        let rules = RulesFile {
+            default_browser: "none".into(),
+            default_profile: "Work".into(),
+            rules: vec![
+                pwrroute_engine::Rule {
+                    patterns: vec!["work.example.com/*".into()],
+                    browser: "Firefox".into(),
+                    ..pwrroute_engine::Rule::default()
+                },
+                pwrroute_engine::Rule {
+                    patterns: vec!["ads.example.net/*".into()],
+                    browser: "none".into(),
+                    ..pwrroute_engine::Rule::default()
+                },
+            ],
+            ..RulesFile::default()
+        };
+        let not_opened = |id, by| {
+            let url = "https://ads.example.net/a";
+            DispatchRecord {
+                id: DispatchId(id),
+                received_at: SystemTime::now(),
+                privacy: Privacy::Full,
+                link: pwrroute_router::Link::new(url, pwrroute_router::Source::CommandLine),
+                forwarded: false,
+                final_url: Some(url.into()),
+                browser: None,
+                steps: vec![
+                    Step::Received { url: url.into() },
+                    Step::Matched { by },
+                    Step::NotOpened,
+                ],
+                outcome: Outcome::NotOpened,
+                timings: Timings::default(),
+            }
+        };
+        let day = vec![
+            not_opened(1, Matched::Rule { index: 1 }),
+            not_opened(
+                2,
+                Matched::Default {
+                    owner: Some(Owner::PwrRoute),
+                },
+            ),
+        ];
+        let map = World::new(rules, day).build().map;
+        let cards: Vec<&Card> = map
+            .cards
+            .iter()
+            .filter(|card| card.kind == CardKind::NotOpened)
+            .collect();
+        assert_eq!(cards.len(), 1, "one Not opened card: {:?}", names(&map));
+        assert_eq!(cards[0].name, "Not opened");
+        assert_eq!(cards[0].links, Some(2));
+        // No card is drawn for an app called "none".
+        assert!(
+            !names(&map)
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("none"))
+        );
+        assert!(matches!(map.rows[1].target, Target::NotOpened { .. }));
     }
 
     /// Today's private links count on the private-window node, the rest

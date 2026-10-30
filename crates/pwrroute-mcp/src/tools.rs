@@ -55,7 +55,7 @@ Use pwrroute_resolve to see where a link would go and why; it never opens anythi
 Every trace names who decided: a rules.json rule or rewrite (`source: rules`, `index` counting rules.json's lists), a Finicky config's handler or rewrite (`source: config`, counting the config's), or whose default browser took a link nothing claimed, PwrRoute's (rules.json's defaultBrowser) or the config's. \
 With a Finicky config in charge its handlers run before rules.json's rules and its defaultBrowser takes the rest, unless rules.json says \"precedence\": \"pwrroute\": then rules.json's rules run first and its defaultBrowser takes everything else. \
 pwrroute_open dispatches a link through the router as a click would, and is recorded in Activity against this agent. \
-pwrroute_activity lists recent dispatches; its `retention` says where they are kept and for how long, each entry's `privacy` says how much of the link it keeps, and `filter: \"unrouted\"` finds the links no rule chose. \
+pwrroute_activity lists recent dispatches; its `retention` says where they are kept and for how long, each entry's `privacy` says how much of the link it keeps, `filter: \"unrouted\"` finds the links no rule chose, and `filter: \"notOpened\"` the links a rule or default kept from opening (`rules.json`'s browser `\"none\"`, Don't open). \
 Read the rules with pwrroute_rules_list; pwrroute_suggest_rule proposes narrow patterns for a link and what else they would catch; \
 pwrroute_rules_test runs the saved examples and tests against a proposal without writing; \
 pwrroute_rules_apply writes a JSON Merge Patch, naming the revision you read, and refuses a change that fails a saved example or test unless force is true. \
@@ -136,6 +136,11 @@ enum ActivityFilter {
     Rewritten,
     /// Opened in a private window.
     Private,
+    /// Recorded and not opened anywhere: a rule, a default or a config
+    /// handler said Don't open (`rules.json`'s browser `"none"`, a
+    /// config's `browser: null`). These are the links waiting for a
+    /// decision.
+    NotOpened,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -288,7 +293,7 @@ fn specs() -> Vec<Spec> {
             "pwrroute_activity",
             Permission::ActivityHosts,
             "Recent activity",
-            "Recent dispatches with their traces, newest first, with where they are kept (retention) and how much of each link is kept (privacy). Filter for the unrouted, failed, rewritten or private ones. Agents without full-URL access see hosts only; the on-disk journal needs activity.journal.",
+            "Recent dispatches with their traces, newest first, with where they are kept (retention) and how much of each link is kept (privacy). Filter for the unrouted, failed, rewritten, private or not-opened ones. Agents without full-URL access see hosts only; the on-disk journal needs activity.journal.",
             read_only(),
         ),
     ]
@@ -585,6 +590,7 @@ fn keeps(filter: ActivityFilter, entry: &ActivityEntry) -> bool {
         ActivityFilter::Failed => entry.outcome == ActivityOutcome::Failed,
         ActivityFilter::Rewritten => entry.rewritten,
         ActivityFilter::Private => entry.private,
+        ActivityFilter::NotOpened => entry.outcome == ActivityOutcome::NotOpened,
     }
 }
 

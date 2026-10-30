@@ -8,11 +8,12 @@
 //! A failure row names the input, what the file expected, what happened and
 //! which rule won instead (Activity Privacy 3a).
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, Global, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    deferred, div, px, svg,
+    deferred, div, svg,
 };
 use pwrroute_engine::{Source, Stage, Step, TestFailure, TestSource, discovery};
 
@@ -286,14 +287,22 @@ pub(crate) fn rule_row(
     matchers: Option<Div>,
     more: Option<AnyElement>,
 ) -> Stateful<Div> {
-    // `.rr.off > * { opacity: .5 }`
-    let dim = |cell: Div| {
-        if rule.enabled {
-            cell
-        } else {
-            cell.opacity(0.5)
-        }
-    };
+    // `.rr.off > * { opacity: .5 }` would take its patterns to 2.2:1: a
+    // rule that is off is read before it is turned back on, so it is drawn
+    // dimmed (one step down the text ramp) and its "off" chip says why.
+    theme::dimmed_if(!rule.enabled, || {
+        rule_row_drawn(id, index, rule, state, matchers, more)
+    })
+}
+
+fn rule_row_drawn(
+    id: impl Into<ElementId>,
+    index: &str,
+    rule: &Rule,
+    state: RowState,
+    matchers: Option<Div>,
+    more: Option<AnyElement>,
+) -> Stateful<Div> {
     let not_saved = rule.badge == RowBadge::NotSaved;
     let grip = !rule.matchers.is_empty();
     let matchers = matchers.unwrap_or_else(|| {
@@ -348,64 +357,74 @@ pub(crate) fn rule_row(
             }
         })
         .when(!state.read_only, |row| {
-            row.child(dim(div()
-                .w(px(column::GRIP))
-                .flex_none()
-                .flex()
-                .justify_center()
-                .when(grip, |cell| {
-                    cell.child(
-                        svg()
-                            .path("pwrroute/grip.svg")
-                            .w(px(7.0))
-                            .h(px(12.0))
-                            .text_color(theme::text_subtle()),
-                    )
-                })))
+            row.child(
+                div()
+                    .w(px(column::GRIP))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .when(grip, |cell| {
+                        cell.child(
+                            svg()
+                                .path("pwrroute/grip.svg")
+                                .w(px(7.0))
+                                .h(px(12.0))
+                                .text_color(theme::text_subtle()),
+                        )
+                    }),
+            )
         })
-        .child(dim(div().w(px(column::INDEX)).flex_none().child(
-            if state.everything_else {
-                // `.rr.ee .idx`
-                mono(index.to_owned(), 13.0, 600.0, theme::accent_bright())
-            } else {
-                mono(
-                    index.to_owned(),
-                    10.5,
-                    600.0,
-                    // `.rr.bad .idx`
-                    if not_saved {
-                        theme::danger_text()
-                    } else {
-                        theme::text_subtle()
-                    },
-                )
-            },
-        )))
-        .child(dim(matchers))
-        .child(dim(div().w(px(column::ARROW)).flex_none().child(mono(
+        .child(
+            div()
+                .w(px(column::INDEX))
+                .flex_none()
+                .child(if state.everything_else {
+                    // `.rr.ee .idx`
+                    mono(index.to_owned(), 13.0, 600.0, theme::accent_bright())
+                } else {
+                    mono(
+                        index.to_owned(),
+                        10.5,
+                        600.0,
+                        // `.rr.bad .idx`
+                        if not_saved {
+                            theme::danger_text()
+                        } else {
+                            theme::text_subtle()
+                        },
+                    )
+                }),
+        )
+        .child(matchers)
+        .child(div().w(px(column::ARROW)).flex_none().child(mono(
             "\u{2192}",
             12.0,
             500.0,
             theme::text_subtle(),
-        ))))
-        .child(dim(div()
-            .w(px(destination_width))
-            .flex_none()
-            .min_w_0()
-            // `.rr .strike`: subtle is the primary text at 54%.
-            .when(state.struck, |cell| cell.line_through().opacity(0.54))
-            .child(destination(&rule.destination))))
+        )))
+        .child(
+            div()
+                .w(px(destination_width))
+                .flex_none()
+                .min_w_0()
+                // `.rr .strike`: the design fades it to 54%, 2.3:1. The
+                // strike says it is overridden; the text drops one step.
+                .when(state.struck, |cell| cell.line_through())
+                .child(theme::dimmed_if(state.struck, || {
+                    destination(&rule.destination)
+                })),
+        )
         .when(!state.read_only, |row| {
             // `.hits`, or `.badge` for a rule whose edit is not saved.
             let cell = div().w(px(column::HITS)).flex_none().flex().justify_end();
-            row.child(dim(if not_saved {
+            row.child(if not_saved {
                 cell.items_center()
                     .gap(px(5.0))
                     .child(theme::dot(theme::status_error()))
                     .child(text("not saved", 10.0, 600.0, theme::danger_text()))
             } else {
                 cell.child(mono(rule.hits.clone(), 10.5, 500.0, theme::text_subtle()))
-            }))
+            })
         })
         .child(
             div()
@@ -712,7 +731,7 @@ fn editable_row(
         this.select(selection, cx);
     }))
     .when(rule_menu::lifted(app, selection, cx), |row| {
-        row.opacity(0.4)
+        row.opacity(theme::LIFTED)
     })
     .children(rule_menu::drop_marker(app, selection, cx));
     rule_menu::draggable(row, selection, rule, cx)
@@ -794,7 +813,8 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
             ))
     };
     let rewrites = rewrites.when(rule_menu::dimmed_while_dragging(app, true, cx), |card| {
-        card.opacity(0.5)
+        // The other kind's card, while a drag cannot drop there.
+        card.opacity(theme::DISABLED)
     });
 
     let handler_rules: Vec<&Rule> = app.handlers.iter().map(|h| &h.rule).collect();
@@ -864,7 +884,7 @@ pub(crate) fn visual_cards(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Di
             ))
     };
     let handlers = handlers.when(rule_menu::dimmed_while_dragging(app, false, cx), |card| {
-        card.opacity(0.5)
+        card.opacity(theme::DISABLED)
     });
     // `.card-foot.bad`: which rule the file keeps an older version of.
     let not_saved: Vec<String> = app
@@ -1616,6 +1636,35 @@ pub fn pane(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoElement 
         ))),
         Some(more),
     ));
+    // Everything else on Don't open (design: Not Opened 1b): say what that
+    // means under the card, with today's count of links it kept.
+    let everything_else = if pwrroute_engine::is_dont_open(&app.store.edited().default_browser) {
+        let kept = crate::activity::feed(cx)
+            .map(|feed| feed.read(cx).today(std::time::SystemTime::now()).not_opened)
+            .unwrap_or(0);
+        let line = match kept {
+            0 => "Only links your rules choose open. Others wait in Activity under Not opened."
+                .to_owned(),
+            1 => "Only links your rules choose open. 1 link today was not opened; it waits in \
+                  Activity."
+                .to_owned(),
+            n => format!(
+                "Only links your rules choose open. {n} links today were not opened; they wait \
+                 in Activity."
+            ),
+        };
+        everything_else.child(
+            div()
+                .debug_selector(|| "everything-else-dont-open-note".into())
+                .px(px(12.0))
+                .py(px(9.0))
+                .border_t_1()
+                .border_color(theme::border_faint())
+                .child(text(line, 10.5, 500.0, theme::text_subtle())),
+        )
+    } else {
+        everything_else
+    };
 
     let (dot, status) = match app.store.status() {
         crate::rules_store::Status::Failed(_) | crate::rules_store::Status::Changed => {

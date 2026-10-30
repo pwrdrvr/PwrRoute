@@ -11,11 +11,12 @@
 
 use std::time::SystemTime;
 
+use crate::theme::px;
 use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Context, Div, InteractiveElement as _, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, deferred, div, px,
+    StatefulInteractiveElement as _, Styled as _, Window, deferred, div,
 };
 use pwrroute_engine::{Privacy, suggest_rule};
 use pwrroute_router::{DispatchRecord, Outcome};
@@ -221,15 +222,17 @@ pub fn section(app: &PwrRoute, index: usize, cx: &mut Context<'_, PwrRoute>) -> 
     if links.is_empty() && chosen.is_none() {
         return section
             .child(
+                // Nothing to pick: the field's edge goes quiet, and its
+                // words stay readable (muted, not faded).
                 input_box()
                     .debug_selector(|| "start-box".into())
                     .w_full()
-                    .opacity(0.55)
+                    .border_color(theme::border_default())
                     .child(crate::widgets::field_label(
                         "No links yet",
                         theme::text_muted(),
                     ))
-                    .child(caret()),
+                    .child(theme::dimmed(caret)),
             )
             .child(help(empty_reason(cx)));
     }

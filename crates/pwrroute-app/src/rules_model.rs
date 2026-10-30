@@ -9,7 +9,7 @@
 use gpui_kit::SharedString;
 use pwrroute_engine::{self as engine, Privacy, PrivacySetting, RewriteAction, RewriteExample};
 
-use crate::widgets::{AppBadge, badge_for};
+use crate::widgets::{AppBadge, DONT_OPEN, badge_for};
 
 /// One piece of a rule's match column.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,10 +201,12 @@ pub fn handler(rule: &engine::Rule, badge: RowBadge, problems: Vec<String>) -> H
         Destination::Unset("Choose a browser")
     } else {
         let name = crate::default_browser::browser_name(&rule.browser);
+        // Don't open has no profile to show, whatever the file kept.
+        let dont_open = engine::is_dont_open(&rule.browser);
         Destination::Browser {
             badge: badge_for(&name),
             name: name.into(),
-            profile: (!rule.profile.is_empty()).then(|| rule.profile.clone().into()),
+            profile: (!rule.profile.is_empty() && !dont_open).then(|| rule.profile.clone().into()),
         }
     };
     Handler {
@@ -290,8 +292,9 @@ pub fn everything_else(file: &engine::RulesFile) -> Rule {
         Destination::Browser {
             badge,
             name,
-            profile: (!file.default_profile.is_empty())
-                .then(|| file.default_profile.clone().into()),
+            profile: (!file.default_profile.is_empty()
+                && !engine::is_dont_open(&file.default_browser))
+            .then(|| file.default_profile.clone().into()),
         },
     )
 }
@@ -303,6 +306,8 @@ pub fn default_browser(file: &engine::RulesFile) -> (AppBadge, SharedString) {
         let fallback = engine::FALLBACK_BROWSER;
         let name = fallback.rsplit('.').next().unwrap_or(fallback);
         (badge_for(fallback), name.to_owned().into())
+    } else if engine::is_dont_open(&file.default_browser) {
+        (badge_for(DONT_OPEN), DONT_OPEN.into())
     } else {
         (
             badge_for(&file.default_browser),

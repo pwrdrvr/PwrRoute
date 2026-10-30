@@ -30,16 +30,17 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::SystemTime;
 
+use crate::theme::px;
 use chrono::{DateTime, Local, NaiveDate};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _,
     IntoElement, KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, px,
+    Styled as _, Subscription, Window, div,
 };
 use pwrroute_router::{
-    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, Options, Outcome, Owner,
-    Privacy, RetentionInfo, RouterHandle, Step,
+    DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, NotOpenedReason, Options,
+    Outcome, Owner, Privacy, RetentionInfo, RouterHandle, Step,
 };
 
 use crate::app::{PwrRoute, Screen};
@@ -76,6 +77,9 @@ pub struct Counts {
     pub rewritten: u64,
     /// Kept at host only or nothing: the rule that took it keeps less.
     pub private: u64,
+    /// Recorded and not opened: a rule, a default or a config handler
+    /// said Don't open, or the user held it.
+    pub not_opened: u64,
 }
 
 impl Counts {
@@ -106,6 +110,9 @@ impl Counts {
         if record.privacy != Privacy::Full {
             self.private += 1;
         }
+        if record.outcome == Outcome::NotOpened {
+            self.not_opened += 1;
+        }
     }
 
     /// The count a filter shows beside its label.
@@ -116,6 +123,7 @@ impl Counts {
             Filter::Failed => self.failed,
             Filter::Rewritten => self.rewritten,
             Filter::Private => self.private,
+            Filter::NotOpened => self.not_opened,
         }
     }
 
@@ -170,7 +178,9 @@ pub enum HitKey {
 /// names, never a host or URL. A paused or sent link counts for its
 /// browser only;
 /// a record kept at nothing has no browser, so it counts for its rule
-/// only.
+/// only. A link a rule or default kept from opening counts under the
+/// browser word `"none"` (`rules.json`'s Don't open), which the Overview
+/// draws as its Not opened card; a held link counts for its rule only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tally {
     rules: HashMap<HitKey, u64>,
@@ -208,6 +218,16 @@ impl Tally {
             *self
                 .browsers
                 .entry((browser.name.clone(), browser.profile.clone(), private))
+                .or_default() += 1;
+        } else if matches!(
+            record.not_opened_reason(),
+            Some(NotOpenedReason::Rule | NotOpenedReason::Default)
+        ) {
+            // Don't open (or a config's `browser: null`). A held link is
+            // the user's, not a destination's: no card counts it.
+            *self
+                .browsers
+                .entry((pwrroute_engine::DONT_OPEN.to_owned(), String::new(), false))
                 .or_default() += 1;
         }
     }
@@ -401,6 +421,20 @@ impl Feed {
         }
     }
 
+    /// The not-opened dispatches the router can still open; none without
+    /// a router.
+    pub fn pending(&self) -> HashSet<DispatchId> {
+        self.handle
+            .as_ref()
+            .map(|handle| handle.pending().into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// The router, for the actions that ask it to do something.
+    pub fn router(&self) -> Option<RouterHandle> {
+        self.handle.clone()
+    }
+
     /// The record behind a row: from memory, or from the journal for a
     /// journaled row (read again only when its files changed, like
     /// [`journal`](Self::journal)).
@@ -546,6 +580,13 @@ pub struct ActivityRow {
     pub privacy: Privacy,
     /// Listed from the journal, below the in-memory rows.
     pub journaled: bool,
+    /// Not opened, and the router still holds its link: Open in… can open
+    /// it now (`RouterHandle::pending`).
+    pub waiting: bool,
+    /// Not opened, then opened from Activity: where the later dispatch
+    /// went ("Firefox"), from the record that names this one as
+    /// `released_from`.
+    pub opened_later: Option<SharedString>,
 }
 
 /// Where a dispatch went.
@@ -606,12 +647,16 @@ pub enum Filter {
     Rewritten,
     /// Kept at host only or nothing: counts, and the host-only rows.
     Private,
+    /// Recorded and not opened (design: Not Opened 2a): the links waiting
+    /// for a decision, whoever said Don't open.
+    NotOpened,
 }
 
 impl Filter {
-    pub const ALL: [(Self, &'static str); 5] = [
+    pub const ALL: [(Self, &'static str); 6] = [
         (Self::All, "All"),
         (Self::Unrouted, "Everything else"),
+        (Self::NotOpened, "Not opened"),
         (Self::Failed, "Failed"),
         (Self::Rewritten, "Rewritten"),
         (Self::Private, "Private"),
@@ -701,7 +746,7 @@ impl ActivityRow {
             took: took_label(record.timings.total_us).into(),
             rewritten: is_rewritten(record),
             default: is_unrouted(record),
-            sent: sent_by(&record.steps).is_some(),
+            sent: sent_by(&record.steps).is_some() || opened_by_user(&record.steps),
             dry_run: record
                 .steps
                 .iter()
@@ -711,6 +756,27 @@ impl ActivityRow {
             final_url: record.final_url.as_deref().unwrap_or(received).into(),
             privacy: record.privacy,
             journaled,
+            waiting: false,
+            opened_later: None,
+        }
+    }
+
+    /// Marks each not-opened row that can still be opened (`pending`, the
+    /// router's waiting links) or was opened later (`later`, by the id it
+    /// was released from). Journaled rows are from another run's memory:
+    /// none waits.
+    pub fn mark_waiting(
+        rows: &mut [Self],
+        pending: &HashSet<DispatchId>,
+        later: &HashMap<DispatchId, String>,
+    ) {
+        for row in rows
+            .iter_mut()
+            .filter(|row| matches!(row.opened, Opened::Nowhere))
+        {
+            row.opened_later = later.get(&row.key.id).map(|to| to.clone().into());
+            row.waiting =
+                !row.key.journaled && row.opened_later.is_none() && pending.contains(&row.key.id);
         }
     }
 
@@ -725,6 +791,7 @@ impl ActivityRow {
             Filter::Rewritten => self.rewritten,
             Filter::Failed => self.failed(),
             Filter::Private => self.privacy != Privacy::Full,
+            Filter::NotOpened => matches!(self.opened, Opened::Nowhere),
         };
         if !kind {
             return false;
@@ -820,6 +887,12 @@ fn rule_label(steps: &[Step]) -> String {
     } else if unnumbered {
         parts.push("rw".into());
     }
+    // Opened from Activity where the user picked (design: Not Opened 2c):
+    // the user decided, so the chip says so in the accent, as a send's.
+    if opened_by_user(steps) {
+        parts.push("opened".into());
+        return parts.join(" \u{00b7} ");
+    }
     let sent = sent_by(steps);
     let paused = sent.is_some() || steps.iter().any(|step| matches!(step, Step::Paused { .. }));
     if let Some(sent) = sent {
@@ -889,6 +962,61 @@ fn matched_line(by: Matched, config: Option<&str>) -> String {
     }
 }
 
+/// A not-opened link the user opened later, to a destination they picked
+/// (`Step::Released { chosen: true }`).
+fn opened_by_user(steps: &[Step]) -> bool {
+    steps
+        .iter()
+        .any(|step| matches!(step, Step::Released { chosen: true, .. }))
+}
+
+/// Where each not-opened dispatch went when it was opened later: by the
+/// id it was released from, the browser the later dispatch opened in, as
+/// the reader knows it.
+fn opened_later(records: &[DispatchRecord]) -> HashMap<DispatchId, String> {
+    records
+        .iter()
+        .filter_map(|record| {
+            let from = record.released_from()?;
+            // A later record kept at nothing has no browser to name.
+            let to = match &record.browser {
+                Some(browser) => crate::default_browser::browser_name(&browser.name),
+                None => "a browser".to_owned(),
+            };
+            Some((from, to))
+        })
+        .collect()
+}
+
+/// The expanded row's line for a link that was not opened, naming who
+/// said so as the line before it does (design: Not Opened 2b): a
+/// `rules.json` rule or PwrRoute's default said Don't open (`"none"`), a
+/// config handler or default `browser: null`.
+fn not_opened_line(steps: &[Step], config: Option<&str>) -> String {
+    let by = steps.iter().find_map(|step| match step {
+        Step::Matched { by } => Some(*by),
+        _ => None,
+    });
+    let who = match by {
+        Some(Matched::Rule { index }) => format!("rule {} says Don't open", index + 1),
+        Some(Matched::Handler { index }) => {
+            format!("config handler {} says browser: null", index + 1)
+        }
+        Some(Matched::Default {
+            owner: Some(Owner::PwrRoute),
+        }) => "PwrRoute's default is Don't open".to_owned(),
+        Some(Matched::Default {
+            owner: Some(Owner::Config),
+        }) => format!(
+            "{}'s default is browser: null",
+            config.unwrap_or("the config")
+        ),
+        Some(Matched::Default { owner: None }) => "the default opens nothing".to_owned(),
+        Some(Matched::Unreported) | None => "the rule says Don't open".to_owned(),
+    };
+    format!("not opened \u{00b7} {who}")
+}
+
 /// What a pause or a send passed over.
 enum Skipped {
     /// `rules.json`'s rule, by its place in the file.
@@ -907,7 +1035,9 @@ fn skipped(steps: &[Step]) -> Option<Skipped> {
         _ => None,
     });
     let paused = steps.iter().find_map(|step| match step {
-        Step::Paused { skipped } | Step::Sent { skipped, .. } => *skipped,
+        Step::Paused { skipped } | Step::Sent { skipped, .. } | Step::Held { skipped, .. } => {
+            *skipped
+        }
         _ => None,
     });
     match (matched, paused) {
@@ -1048,9 +1178,29 @@ fn trace_lines(record: &DispatchRecord, config: Option<&str>) -> Vec<ActivitySte
                 StepMark::Hit(number),
                 held_line(&sent.label(), &record.steps),
             ),
+            Step::Held { held, .. } => (
+                StepMark::Miss(number),
+                held_line(&format!("held \u{00b7} {}", held.label()), &record.steps),
+            ),
+            Step::Released { from, chosen } => (
+                StepMark::Hit(number),
+                format!(
+                    "opened later \u{00b7} not opened as link {} \u{00b7} {}",
+                    from.0,
+                    if *chosen {
+                        "where you chose"
+                    } else {
+                        "by the rules"
+                    }
+                ),
+            ),
+            Step::NotOpened if record.not_opened_reason() == Some(NotOpenedReason::Hold) => (
+                StepMark::Miss(number),
+                "not opened \u{00b7} waiting for you".to_owned(),
+            ),
             Step::NotOpened => (
                 StepMark::Miss(number),
-                "not opened \u{00b7} the rule says browser: null".to_owned(),
+                not_opened_line(&record.steps, config),
             ),
             Step::Launched { dry_run } => {
                 let mut line = format!(
@@ -1138,6 +1288,10 @@ pub struct Activity {
     /// is on.
     pub journal_rows: Vec<ActivityRow>,
     pub expanded: Option<RowKey>,
+    /// The not-opened row whose Open in… lanes are open.
+    pub open_in: Option<RowKey>,
+    /// Why Open in… opened nothing, for the row it was on.
+    pub open_note: Option<(RowKey, String)>,
     /// The row under the pointer, which shows "+ Rule" ([`quick_add`]).
     pub hovered: Option<RowKey>,
     pub filter: Filter,
@@ -1163,6 +1317,8 @@ impl Activity {
             rows: Vec::new(),
             journal_rows: Vec::new(),
             expanded: None,
+            open_in: None,
+            open_note: None,
             hovered: None,
             filter: Filter::All,
             search: TextField::new("", cx),
@@ -1204,6 +1360,7 @@ impl Activity {
             .filter(|record| record.privacy != Privacy::None)
             .map(|record| ActivityRow::build(record, false, self.config.as_deref()))
             .collect();
+        ActivityRow::mark_waiting(&mut self.rows, &feed.pending(), &opened_later(records));
         self.retention = feed.retention();
         // The journal holds the same dispatches as memory, and more: only
         // what memory no longer has is listed again, below. A journal line
@@ -1234,6 +1391,13 @@ impl Activity {
                 .any(|row| row.key == key)
         }) {
             self.expanded = None;
+        }
+        // Open in… stays open only over a row that still waits.
+        if self
+            .open_in
+            .is_some_and(|key| !self.rows.iter().any(|row| row.key == key && row.waiting))
+        {
+            self.open_in = None;
         }
         // The rows may have moved under a pointer that did not: GPUI
         // reports hover only on a move, so nothing stays hovered until it
@@ -1393,6 +1557,12 @@ mod column {
     pub const TOOK: f32 = 48.0;
     pub const MORE: f32 = 18.0;
     pub const GAP: f32 = 12.0;
+    /// The link column's least width. Narrower than the columns need (View
+    /// › Zoom), the table scrolls sideways rather than squeeze the link
+    /// to nothing: a table keeps its columns (WCAG 1.4.10 exempts it).
+    pub const LINK_MIN: f32 = 160.0;
+    pub const TABLE_MIN: f32 =
+        28.0 + TIME + LINK_MIN + FROM + RULE + OPENED + TOOK + MORE + 6.0 * GAP + 2.0;
     /// Where the expanded trace starts: the link column.
     pub const TRACE_INDENT: f32 = 14.0 + TIME + GAP;
 }
@@ -1447,7 +1617,7 @@ fn clipped(content: SharedString, mono_font: bool, size: f32, color: gpui_kit::H
     one_line(content, family, weight, size, size, color)
 }
 
-fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
+fn opened_cell(opened: &Opened, dry_run: bool, later: Option<&SharedString>) -> Div {
     match opened {
         Opened::Browser {
             badge: badge_label,
@@ -1472,8 +1642,20 @@ fn opened_cell(opened: &Opened, dry_run: bool) -> Div {
             .flex()
             .items_center()
             .gap(px(6.0))
+            .overflow_hidden()
             .child(badge(NOT_OPENED_BADGE))
-            .child(text(NOT_OPENED, 11.5, 400.0, theme::text_muted())),
+            .child(text(NOT_OPENED, 11.5, 400.0, theme::text_muted()))
+            // Design: Not Opened 2a.
+            .when_some(later.cloned(), |cell, to| {
+                cell.child(crate::widgets::one_line(
+                    format!("\u{00b7} opened later in {to}"),
+                    theme::SANS,
+                    500.0,
+                    10.0,
+                    10.0,
+                    theme::text_subtle(),
+                ))
+            }),
         // `.ar .d`: the failure, then `.sub` with where the link went.
         Opened::Fallback {
             why,
@@ -1598,7 +1780,7 @@ fn row(
         link,
         clipped(row.from.clone(), false, 11.5, theme::text_secondary()),
         div().flex().child(rule),
-        opened_cell(&row.opened, row.dry_run),
+        opened_cell(&row.opened, row.dry_run, row.opened_later.as_ref()),
         // "+ Rule" takes the Took cell's place: the cell keeps its width and
         // the button the tag's height, so nothing moves.
         match quick {
@@ -1726,7 +1908,13 @@ fn quick_add_button(
 }
 
 /// `.ax`: the expanded row's trace and actions.
-fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, PwrRoute>) -> Div {
+fn expansion(
+    app: &PwrRoute,
+    index: usize,
+    row: &ActivityRow,
+    last: bool,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
     let line = |mark: StepMark, content: SharedString| {
         let (label, fill, color) = match mark {
             StepMark::Hit(n) => (n.to_string(), theme::accent_soft(), theme::accent_bright()),
@@ -1796,17 +1984,50 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
                 .child(row.final_url.clone()),
         )
         // Add a rule first, the primary action (design: Activity Quick Add
-        // Rule 1d), then the rest.
-        .child(
+        // Rule 1d), then the rest. A link that was not opened and still
+        // waits leads with Open in… instead (design: Not Opened 2b).
+        .child({
+            let not_opened = matches!(row.opened, Opened::Nowhere);
+            let open_in = not_opened && row.waiting;
+            let why = not_opened.then(|| not_opened_why(app, row)).flatten();
             div()
                 .mt(px(2.0))
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .when(whole, |actions| {
+                .when(open_in, |actions| {
                     actions.child(
-                        button("Add a rule\u{2026}", ButtonKind::Primary, true)
-                            .child(on_primary_key(shortcut))
+                        button("Open in\u{2026}", ButtonKind::Primary, true)
+                            .id(("activity-open-in", index))
+                            .debug_selector(move || format!("activity-open-in-{index}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.toggle_open_in(key, cx);
+                            })),
+                    )
+                })
+                .when(whole, |actions| {
+                    let kind = if open_in {
+                        ButtonKind::Quiet
+                    } else {
+                        ButtonKind::Primary
+                    };
+                    let cap = if open_in {
+                        key_cap_in(
+                            shortcut,
+                            16.0,
+                            9.5,
+                            theme::border_default(),
+                            theme::text_subtle(),
+                        )
+                        .flex_none()
+                        .px(px(4.0))
+                    } else {
+                        on_primary_key(shortcut)
+                    };
+                    actions.child(
+                        button("Add a rule\u{2026}", kind, true)
+                            .child(cap)
                             .id(("activity-add-rule", index))
                             .debug_selector(move || format!("activity-add-rule-{index}"))
                             .map(crate::accessibility::clickable)
@@ -1816,8 +2037,11 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
                             })),
                     )
                 })
-                // Opening again waits for the browser launcher.
-                .child(button("Open again", ButtonKind::Quiet, true))
+                // Opening again waits for the browser launcher. A link that
+                // never opened has nothing to open again.
+                .when(!not_opened, |actions| {
+                    actions.child(button("Open again", ButtonKind::Quiet, true))
+                })
                 .when(whole, |actions| {
                     actions.child(
                         button("Re-test", ButtonKind::Quiet, true)
@@ -1828,9 +2052,43 @@ fn expansion(index: usize, row: &ActivityRow, last: bool, cx: &mut Context<'_, P
                             })),
                     )
                 })
-                .when(row.journaled, |actions| actions.child(tag("from the journal"))),
-        )
+                .when(row.journaled, |actions| actions.child(tag("from the journal")))
+                .when_some(why, |actions, why| {
+                    actions.child(
+                        div()
+                            .debug_selector(move || format!("activity-not-opened-why-{index}"))
+                            .child(text(why, 10.5, 400.0, theme::text_subtle())),
+                    )
+                })
+        })
+        .when(app.activity.open_in == Some(key) && row.waiting, |ax| {
+            ax.child(crate::activity_actions::open_in_lanes(app, index, key, cx))
+        })
 }
+
+/// Beside a not-opened row's actions: why Open in… is not offered, or why
+/// it opened nothing (design: Not Opened 2c). `None` while it waits.
+fn not_opened_why(app: &PwrRoute, row: &ActivityRow) -> Option<String> {
+    if let Some((key, note)) = &app.activity.open_note
+        && *key == row.key
+    {
+        return Some(note.clone());
+    }
+    if let Some(to) = &row.opened_later {
+        return Some(format!("Opened later in {to}."));
+    }
+    if row.waiting {
+        return None;
+    }
+    Some(if row.journaled {
+        "From the journal: links from an earlier run can't be opened from here.".to_owned()
+    } else {
+        NO_LONGER_KEPT.to_owned()
+    })
+}
+
+/// Why a not-opened row the router no longer holds can't be opened.
+pub const NO_LONGER_KEPT: &str = "No longer kept, so this link can't be opened from here.";
 
 /// `.kbd` on a primary button: the accent's ink, on a faint edge.
 fn on_primary_key(label: &'static str) -> Div {
@@ -1900,9 +2158,11 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
                     })),
             )
         });
+    // Zoomed, the filters and the note wrap under the search.
     div()
         .flex()
         .flex_none()
+        .flex_wrap()
         .items_center()
         .gap(px(8.0))
         .child(div().w(px(260.0)).flex_none().flex().child(search))
@@ -2148,7 +2408,7 @@ pub fn pane(
                     let menu = row_menu(app, index, item.key, cx);
                     list.child(row(index, item, expanded, quick, menu, last, cx))
                         .when(expanded, |list| {
-                            list.child(expansion(index, item, last, cx))
+                            list.child(expansion(app, index, item, last, cx))
                         })
                 })
         };
@@ -2214,7 +2474,15 @@ pub fn pane(
                 ),
         )
         .child(toolbar(app, window, cx))
-        .child(crate::accessibility::exposed(list, gpui_kit::Role::List, "Recent links"))
+        .child(
+            div()
+                .id("activity-table")
+                .w_full()
+                .overflow_x_scroll()
+                .child(crate::accessibility::exposed(
+                    list.min_w(px(column::TABLE_MIN)), gpui_kit::Role::List, "Recent links",
+                )),
+        )
         // The router's sentence, verbatim: the same one Settings › Privacy
         // shows under the journal switch.
         .child(
@@ -2341,6 +2609,101 @@ mod tests {
         handle.set_journal(None).unwrap();
         assert!(feed.journal(10).is_empty());
         assert!(feed.journal_cache.borrow().read_as.is_none());
+    }
+
+    /// A link a Don't open rule kept waits in Activity: its row offers Open
+    /// in… while the router holds it, and once opened from there it says
+    /// where it went (design: Not Opened 2a to 2c). Against a real router
+    /// over a `rules.json` engine.
+    #[test]
+    fn a_not_opened_row_waits_until_it_is_opened_later() {
+        use std::rc::Rc;
+
+        use pwrroute_engine::{DefaultHost, Engine, Limits, Rule, RulesFile, Sources};
+        use pwrroute_router::{Destination, OpenAs, Resolver};
+
+        let rules = RulesFile {
+            default_browser: "Safari".into(),
+            rules: vec![Rule {
+                patterns: vec!["https://ads.example.net/*".into()],
+                browser: "none".into(),
+                ..Rule::default()
+            }],
+            ..RulesFile::default()
+        };
+        let launcher = DryRunLauncher::new();
+        let router = Router::spawn(
+            Options::default(),
+            Some(Box::new(move || {
+                let sources = Sources {
+                    config: None,
+                    rules,
+                };
+                let engine =
+                    Engine::from_sources(&sources, Rc::new(DefaultHost), Limits::default())?;
+                Ok(Box::new(engine) as Box<dyn Resolver>)
+            })),
+            launcher.clone(),
+        )
+        .unwrap();
+        let handle = router.handle();
+        let held = handle
+            .dispatch_and_wait(Link::new(
+                "https://ads.example.net/click?id=7",
+                Source::CommandLine,
+            ))
+            .unwrap();
+        assert_eq!(held.outcome, Outcome::NotOpened);
+        assert!(launcher.launched().is_empty());
+
+        let mut feed = Feed::new(Some(handle.clone()));
+        feed.push(held.clone());
+        let rows_now = |feed: &Feed| {
+            let mut rows: Vec<ActivityRow> = feed
+                .records()
+                .iter()
+                .map(|record| ActivityRow::build(record, false, None))
+                .collect();
+            ActivityRow::mark_waiting(&mut rows, &feed.pending(), &opened_later(feed.records()));
+            rows
+        };
+        let rows = rows_now(&feed);
+        assert!(rows[0].waiting && rows[0].opened_later.is_none());
+        assert_eq!(
+            rows[0].steps.last().unwrap().text.as_ref(),
+            "not opened \u{00b7} rule 1 says Don't open"
+        );
+
+        // Open in… Firefox: one dispatch, which names the one it came from.
+        let opened = handle
+            .open_not_opened(
+                held.id,
+                OpenAs::In(Destination {
+                    browser: "Firefox".into(),
+                    profile: String::new(),
+                    private: false,
+                }),
+            )
+            .unwrap();
+        assert_eq!(opened.released_from(), Some(held.id));
+        assert_eq!(launcher.launched().len(), 1);
+        // The new row says the user opened it, in the accent.
+        let new_row = ActivityRow::build(&opened, false, None);
+        assert_eq!(new_row.rule.as_ref(), "opened");
+        assert!(new_row.sent);
+        feed.push(opened);
+        let rows = rows_now(&feed);
+        let old = rows.iter().find(|row| row.key.id == held.id).unwrap();
+        assert!(!old.waiting);
+        assert_eq!(old.opened_later.as_deref(), Some("Firefox"));
+        // A journaled copy never waits: another run's memory is gone.
+        let mut journaled = vec![ActivityRow::build(&held, true, None)];
+        ActivityRow::mark_waiting(
+            &mut journaled,
+            &[held.id].into_iter().collect(),
+            &HashMap::new(),
+        );
+        assert!(!journaled[0].waiting);
     }
 
     fn browser(name: &str, profile: &str, url: &str) -> Browser {
@@ -2722,6 +3085,91 @@ mod tests {
     }
 
     #[test]
+    fn a_not_opened_link_says_who_decided_and_has_its_own_filter() {
+        let url = "https://ads.example.net/click?id=7";
+        let not_opened = |id, by| {
+            record(
+                id,
+                url,
+                Some("Mail"),
+                vec![
+                    Step::Received { url: url.into() },
+                    Step::Matched { by },
+                    Step::NotOpened,
+                ],
+            )
+        };
+        let line = |record: &DispatchRecord| {
+            let row = ActivityRow::from_record(record);
+            row.steps.last().unwrap().text.to_string()
+        };
+        let rule = not_opened(1, Matched::Rule { index: 3 });
+        assert_eq!(line(&rule), "not opened \u{00b7} rule 4 says Don't open");
+        let default = not_opened(
+            2,
+            Matched::Default {
+                owner: Some(Owner::PwrRoute),
+            },
+        );
+        assert_eq!(
+            line(&default),
+            "not opened \u{00b7} PwrRoute's default is Don't open"
+        );
+        let handler = not_opened(3, Matched::Handler { index: 1 });
+        assert_eq!(
+            line(&handler),
+            "not opened \u{00b7} config handler 2 says browser: null"
+        );
+        // The filter lists every not-opened row, whoever decided, and
+        // counts them.
+        let opened = record(
+            4,
+            "https://docs.example.com/",
+            None,
+            vec![
+                Step::Received {
+                    url: "https://docs.example.com/".into(),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        let rows = [&rule, &default, &handler, &opened].map(ActivityRow::from_record);
+        let kept: Vec<bool> = rows
+            .iter()
+            .map(|row| row.passes(Filter::NotOpened, ""))
+            .collect();
+        assert_eq!(kept, [true, true, true, false]);
+        // The Overview's Not opened card counts what Don't open kept, under
+        // the word "none"; a held link is the user's and counts for no card.
+        let mut held = not_opened(5, Matched::Rule { index: 0 });
+        held.steps.insert(
+            2,
+            Step::Held {
+                held: pwrroute_router::Sent::All,
+                skipped: None,
+                browser: None,
+            },
+        );
+        let mut tally = Tally::default();
+        for record in [&rule, &default, &held] {
+            tally.count(record);
+        }
+        assert_eq!(
+            tally
+                .browsers
+                .get(&("none".to_owned(), String::new(), false)),
+            Some(&2)
+        );
+        let feed = Feed::from_records(vec![rule, default, handler, opened]);
+        assert_eq!(feed.today(SystemTime::now()).of(Filter::NotOpened), 3);
+        assert!(
+            Filter::ALL
+                .iter()
+                .any(|(f, label)| *f == Filter::NotOpened && *label == "Not opened")
+        );
+    }
+
+    #[test]
     fn a_browser_that_could_not_open_shows_the_fallback_that_did() {
         let url = "https://zoom.us/j/8142201137";
         let mut record = record(
@@ -2872,6 +3320,7 @@ mod tests {
                 unrouted: 3,
                 rewritten: 0,
                 private: 0,
+                not_opened: 0,
             }
         );
         assert_eq!(feed.today(now).label(), "3 today \u{00b7} 1 failed");

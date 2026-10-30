@@ -164,9 +164,9 @@ When the launcher lands, R1 must keep holding: `--dry-run` never reaches it.
 The scenarios that hand a link over through the OS's handler for web links
 change machine-wide state, so they run only where `PWRROUTE_E2E_DISPOSABLE=1`
 marks a throwaway runner, and skip anywhere else. GitHub's hosted runners
-qualify. The self-hosted `pwrdrvr-macos` Tart guests do not: they persist
-between jobs and are shared with other repositories. Never set it on a
-developer machine.
+qualify, and every E2E job runs on one. Never set it on a developer
+machine. On macOS the registration scenarios still skip, until the harness
+can answer LaunchServices' prompt to confirm a new default browser.
 
 The hook provides:
 

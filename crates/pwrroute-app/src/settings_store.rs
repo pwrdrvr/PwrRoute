@@ -56,6 +56,33 @@ pub struct Settings {
     /// Help › Logs' view. Left out while it is the design's default.
     #[serde(skip_serializing_if = "LogsSettings::is_default")]
     pub logs: LogsSettings,
+    /// View › Zoom. Left out at Actual Size.
+    #[serde(skip_serializing_if = "ViewSettings::is_default")]
+    pub view: ViewSettings,
+}
+
+/// View's settings: the zoom (`zoom.rs`), in percent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ViewSettings {
+    pub zoom: u16,
+}
+
+impl Default for ViewSettings {
+    fn default() -> Self {
+        Self { zoom: 100 }
+    }
+}
+
+impl ViewSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The zoom as a factor, snapped to one of `theme::ZOOM_STEPS`.
+    pub fn zoom(&self) -> f32 {
+        crate::theme::snap_zoom(f32::from(self.zoom) / 100.0)
+    }
 }
 
 /// What the Logs window remembers. Never a line, a search or a link: the
@@ -353,6 +380,7 @@ impl Global for StoreGlobal {}
 /// Makes `store` the one Settings edits, applied to `router` when there is
 /// one (the window harness runs without).
 pub fn install(store: SettingsStore, router: Option<RouterHandle>, cx: &mut App) {
+    crate::theme::set_zoom(store.settings().view.zoom());
     let store = cx.new(|_| store);
     cx.set_global(StoreGlobal { store, router });
 }

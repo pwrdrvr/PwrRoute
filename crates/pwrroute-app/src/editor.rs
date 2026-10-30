@@ -11,11 +11,12 @@
 //! is the one way a link reaches `rules.json` from this rail, on Return, and
 //! the help under the field says so.
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, HighlightStyle, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Window, deferred, div, px,
+    Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{Privacy, TestSource};
 
@@ -792,13 +793,14 @@ fn choice_row(
 ) -> Stateful<Div> {
     let id: SharedString = selector.into();
     let on_click: OnClick = Box::new(on_click);
-    crate::widgets::menu_row(ElementId::Name(id.clone()), badge_label, label, hint)
-        .debug_selector(move || id.to_string())
-        .aria_selected(selected)
-        .when(selected, |row| row.bg(theme::bg_row_active()))
-        .when(dim, |row| row.opacity(0.6))
-        .hover(|row| row.bg(theme::bg_hover()))
-        .on_click(on_click)
+    theme::dimmed_if(dim, || {
+        crate::widgets::menu_row(ElementId::Name(id.clone()), badge_label, label, hint)
+    })
+    .debug_selector(move || id.to_string())
+    .aria_selected(selected)
+    .when(selected, |row| row.bg(theme::bg_row_active()))
+    .hover(|row| row.bg(theme::bg_hover()))
+    .on_click(on_click)
 }
 
 /// The list's way out to a typed value ("Other app…").
@@ -854,13 +856,16 @@ fn open_in_section(
 ) -> Div {
     let value = handler.browser.trim();
     let shown = crate::default_browser::browser_name(value);
-    let missing =
-        crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
-    let stray_profile = crate::destinations::unknown_profile(
-        &app.browsers,
-        &app.installed,
-        &crate::destinations::Choice::of(handler),
-    );
+    // Don't open names no app: never missing, and no profile to check.
+    let dont_open = pwrroute_engine::is_dont_open(value);
+    let missing = !dont_open
+        && crate::rule_pickers::is_missing(value, &app.browsers, &app.installed, scanned(app, cx));
+    let stray_profile = !dont_open
+        && crate::destinations::unknown_profile(
+            &app.browsers,
+            &app.installed,
+            &crate::destinations::Choice::of(handler),
+        );
     let keep = handler.keep();
     let keep_control = KEEP_LEVELS.iter().fold(segmented(), |seg, (level, label)| {
         let level = *level;
@@ -899,6 +904,14 @@ fn open_in_section(
                 ),
             ))
         })
+        .when(dont_open, |section| {
+            section.child(paragraph(
+                "Links this rule takes are not opened. Activity lists them under Not opened, \
+                 where you can open one or add a rule.",
+                10.5,
+                15.75,
+            ))
+        })
         .child(labeled_row("Activity keeps", keep_control).mt(px(4.0)))
         .children(problems_under(&handler.problems, Under::Keep))
         .child(paragraph(
@@ -921,6 +934,7 @@ fn lanes_destination(app: &PwrRoute, handler: &Handler, cx: &mut Context<'_, Pwr
         &current,
         None,
         scanned(app, cx),
+        true,
     );
     let hidden = app.installed.iter().filter(|a| a.hidden).count();
     let foot = div()
@@ -1018,7 +1032,7 @@ fn typed_destination(
                 .map(crate::accessibility::clickable)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_private(cx)))
         })
-        .when(!private_enabled, |switch| switch.opacity(0.45))
+        .when(!private_enabled, |switch| switch.opacity(theme::DISABLED))
         .role(gpui_kit::Role::Switch)
         .aria_label(private_label.clone())
         .aria_toggled(if handler.private {
@@ -1861,17 +1875,27 @@ pub enum DraftFrom {
     TestLink,
 }
 
-/// `.rrail`.
+/// The stacked layout's way back to the list (`app::Layout`).
+pub const BACK_ID: &str = "editor-back";
+
+/// `.rrail`. `stacked`: the window is too narrow for the list beside it,
+/// so the rail fills the pane and leads with "All rules".
 pub fn rail(
     app: &PwrRoute,
+    stacked: bool,
     window: &Window,
     cx: &mut Context<'_, PwrRoute>,
 ) -> impl IntoElement + use<> {
     let frame = div()
         .id("editor-rail")
         .debug_selector(|| "editor-rail".into())
-        .w(px(WIDTH))
-        .flex_none()
+        .map(|frame| {
+            if stacked {
+                frame.flex_1().min_w_0()
+            } else {
+                frame.w(px(WIDTH)).flex_none()
+            }
+        })
         .flex()
         .flex_col()
         .border_l_1()
@@ -1883,6 +1907,7 @@ pub fn rail(
     let (Some(selection), Some(rail)) = (app.selection, &app.rail) else {
         return frame;
     };
+    let frame = frame.when(stacked, |frame| frame.child(back(cx)));
     match selection {
         Selection::Handler(index) => match app.handlers.get(index) {
             Some(handler) => {
@@ -1963,4 +1988,31 @@ pub fn rail(
             None => frame,
         },
     }
+}
+
+/// "‹ All rules": back to the list from the stacked rail, as Esc is.
+fn back(cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
+    div().px(px(16.0)).pt(px(12.0)).child(
+        crate::widgets::keyboard_control(div(), false)
+            .id(BACK_ID)
+            .debug_selector(|| BACK_ID.into())
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .py(px(4.0))
+            .px(px(6.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(theme::transparent())
+            .cursor_pointer()
+            .hover(|back| back.bg(theme::bg_hover()))
+            .child(theme::text("\u{2039}", 14.0, 500.0, theme::accent_bright()))
+            .child(theme::text(
+                "All rules",
+                12.0,
+                500.0,
+                theme::accent_bright(),
+            ))
+            .on_click(cx.listener(|this, _, _, cx| this.deselect(cx))),
+    )
 }

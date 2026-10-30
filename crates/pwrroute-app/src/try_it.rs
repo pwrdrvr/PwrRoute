@@ -304,13 +304,28 @@ pub fn interpret(
     config: Option<&str>,
     selection: Selection,
 ) -> TryResult {
+    // Don't open (a rule's or default's `"none"`, a config's `null`): the
+    // link goes nowhere, so the sentences say so rather than name a browser.
+    let not_opened = trace.resolution.browser.app_type == pwrroute_engine::AppType::None;
     let browser = {
         let b = &trace.resolution.browser;
-        if b.profile.is_empty() {
+        if not_opened {
+            "not opened".to_owned()
+        } else if b.profile.is_empty() {
             b.name.clone()
         } else {
             format!("{} \u{00b7} {}", b.name, b.profile)
         }
+    };
+    let opens = if not_opened {
+        "doesn't open that link".to_owned()
+    } else {
+        format!("opens that link in {browser}")
+    };
+    let opens_it = if not_opened {
+        format!("{browser}.")
+    } else {
+        format!("{browser} opens it.")
     };
     let winner = trace.winner();
     let winner_name = winner.map_or_else(
@@ -323,7 +338,7 @@ pub fn interpret(
             if !enabled {
                 return TryResult::text(
                     Verdict::Passes,
-                    format!("Switched off: {winner_name} opens that link in {browser}."),
+                    format!("Switched off: {winner_name} {opens}."),
                 );
             }
             // Whether this handler was asked at all: openUrl stops at the
@@ -331,10 +346,9 @@ pub fn interpret(
             let ran = trace.steps.iter().any(|s| is_rule(s, Stage::Handler, h));
             let threw = trace.steps.iter().find(|s| s.error.is_some());
             match winner {
-                Some(step) if is_rule(step, Stage::Handler, h) => TryResult::text(
-                    Verdict::Takes,
-                    format!("This rule opens that link in {browser}."),
-                ),
+                Some(step) if is_rule(step, Stage::Handler, h) => {
+                    TryResult::text(Verdict::Takes, format!("This rule {opens}."))
+                }
                 Some(step)
                     if step.stage == Stage::Handler
                         && step_before(step, h, rules.rules_first()) =>
@@ -360,8 +374,7 @@ pub fn interpret(
                     Some(threw) if threw.matched => TryResult::text(
                         Verdict::Beaten,
                         format!(
-                            "{} matched but its browser failed: {}. {winner_name} opens that \
-                             link in {browser}.",
+                            "{} matched but its browser failed: {}. {winner_name} {opens}.",
                             step_name(threw, config),
                             threw.error.as_deref().unwrap_or_default()
                         ),
@@ -369,15 +382,14 @@ pub fn interpret(
                     Some(threw) => TryResult::text(
                         Verdict::Beaten,
                         format!(
-                            "{} threw before this rule ran: {}. {winner_name} opens that \
-                             link in {browser}.",
+                            "{} threw before this rule ran: {}. {winner_name} {opens}.",
                             step_name(threw, config),
                             threw.error.as_deref().unwrap_or_default()
                         ),
                     ),
                     None => TryResult::text(
                         Verdict::Passes,
-                        format!("No match. {winner_name} opens that link in {browser}."),
+                        format!("No match. {winner_name} {opens}."),
                     ),
                 },
             }
@@ -395,13 +407,11 @@ pub fn interpret(
                 Some((step, to)) if to != step.url => TryResult::Rewrote {
                     before: step.url.clone(),
                     after: to.to_owned(),
-                    then: format!("{winner_name} \u{00b7} {browser} opens it."),
+                    then: format!("{winner_name} \u{00b7} {opens_it}"),
                 },
                 Some(_) => TryResult::text(
                     Verdict::Takes,
-                    format!(
-                        "Matches, and changes nothing here. {winner_name} \u{00b7} {browser} opens it."
-                    ),
+                    format!("Matches, and changes nothing here. {winner_name} \u{00b7} {opens_it}"),
                 ),
                 None => TryResult::text(
                     Verdict::Passes,

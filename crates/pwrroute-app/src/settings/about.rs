@@ -4,8 +4,9 @@
 //! Help's rows open. The Source row and Copy build info follow the design's
 //! Build Identity 2a and 2b.
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{AnyElement, Context, Div, IntoElement, ParentElement as _, Styled as _, div, px};
+use gpui_kit::{AnyElement, Context, Div, IntoElement, ParentElement as _, Styled as _, div};
 
 use super::SettingsWindow;
 use super::controls::{

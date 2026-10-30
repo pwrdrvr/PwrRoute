@@ -18,12 +18,12 @@
 
 use std::collections::HashMap;
 
+use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Anchor, AnyElement, App, AppContext as _, Context, Div, DragMoveEvent, ElementId,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, Window, anchored, deferred, div, point,
-    px,
 };
 use pwrroute_engine::Opener;
 use pwrroute_router::Privacy;
@@ -1030,6 +1030,39 @@ fn everything_else_menu(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<A
             "No browsers found. Rescan in Settings \u{203a} Browsers.".into(),
         ));
     }
+    // Don't open, last and set apart (design: Not Opened 1b): only links a
+    // rule chooses reach a browser.
+    let dont_open = pwrroute_engine::is_dont_open(&file.default_browser);
+    items.push(
+        div()
+            .mx(px(2.0))
+            .my(px(4.0))
+            .h(px(1.0))
+            .bg(theme::border_faint())
+            .into_any_element(),
+    );
+    items.push(
+        menu_row(
+            "everything-else-dont-open",
+            Some(badge_for(pwrroute_engine::DONT_OPEN)),
+            crate::widgets::DONT_OPEN.to_owned(),
+            Some(if dont_open {
+                "\u{2713}".into()
+            } else {
+                "only rules open links".into()
+            }),
+        )
+        .debug_selector(|| "everything-else-dont-open".into())
+        .hover(|row| row.bg(theme::bg_row_active()))
+        .on_click(cx.listener(|this, _, _, cx| {
+            cx.stop_propagation();
+            this.set_everything_else(pwrroute_engine::DONT_OPEN, "", cx);
+        }))
+        .into_any_element(),
+    );
+    items.push(foot(
+        "Links no rule chooses wait in Activity, where you can open them or add a rule.".into(),
+    ));
     if let Some(reason) = &app.row_actions.refused {
         items.push(foot(format!("Not saved: {reason}")));
     }

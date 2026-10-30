@@ -24,18 +24,21 @@
 
 use std::time::SystemTime;
 
+use crate::theme::px;
 use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, HighlightStyle, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Window, deferred, div, px,
+    Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{
     self as engine, Expectation, Opener, Precedence, Privacy, RouteTest, Source, Stage,
     suggest_rule,
 };
-use pwrroute_router::{DispatchRecord, Matched, OpenerInfo, Outcome, Owner, Step};
+use pwrroute_router::{
+    Destination, DispatchRecord, Matched, OpenAs, OpenLaterError, OpenerInfo, Outcome, Owner, Step,
+};
 
 use crate::activity::{self, RowKey, matched_url};
 use crate::app::{PwrRoute, Selection};
@@ -842,6 +845,49 @@ impl PwrRoute {
         self.actions.menu = None;
         self.actions.note = None;
         cx.notify();
+    }
+
+    /// Open in… on a not-opened row: shows its lanes, or hides them.
+    pub fn toggle_open_in(&mut self, key: RowKey, cx: &mut Context<'_, Self>) {
+        self.activity.open_in = if self.activity.open_in == Some(key) {
+            None
+        } else {
+            Some(key)
+        };
+        self.activity.open_note = None;
+        cx.notify();
+    }
+
+    /// Opens a not-opened link now: once, `how` the user picked, as a new
+    /// dispatch that names the one it came from (`Step::Released`). The
+    /// rules are not changed. The router does it on its own thread; the
+    /// feed brings the new record, and a link no longer waiting says why
+    /// beside the row. Hold's rows open through here too.
+    pub fn open_not_opened(&mut self, key: RowKey, how: OpenAs, cx: &mut Context<'_, Self>) {
+        self.activity.open_in = None;
+        self.activity.open_note = None;
+        cx.notify();
+        let Some(router) = activity::feed(cx).and_then(|feed| feed.read(cx).router()) else {
+            self.activity.open_note = Some((key, "PwrRoute isn't routing links now.".to_owned()));
+            return;
+        };
+        let opened = cx
+            .background_executor()
+            .spawn(async move { router.open_not_opened(key.id, how) });
+        cx.spawn(async move |this, cx| {
+            let result = opened.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Err(error) = result {
+                    let note = match error {
+                        OpenLaterError::NotPending => activity::NO_LONGER_KEPT.to_owned(),
+                        OpenLaterError::Gone(_) => "PwrRoute isn't routing links now.".to_owned(),
+                    };
+                    this.activity.open_note = Some((key, note));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// ⌘N (Ctrl+N) on Activity: Add a rule for the row whose "⋯" menu is
@@ -1755,6 +1801,7 @@ fn open_in(app: &PwrRoute, sheet: &AddRule, cx: &mut Context<'_, PwrRoute>) -> D
             .as_deref()
             .map(|opened| (opened, "where it opened")),
         crate::editor::scanned(app, cx),
+        true,
     );
     let private_word = sheet
         .private
@@ -2107,7 +2154,7 @@ pub fn sheet(
             let add = button(label, ButtonKind::Primary, false)
                 .id("add-rule-save")
                 .debug_selector(|| "add-rule-save".into())
-                .when(!ready, |add| add.opacity(0.5))
+                .when(!ready, |add| add.opacity(theme::DISABLED))
                 .on_click(cx.listener(|this, _, _, cx| this.add_rule_from_sheet(cx)));
             (
                 sheet_body(app, sheet, window, cx),
@@ -2160,6 +2207,7 @@ pub fn sheet(
         .child(
             div()
                 .id("add-rule-body")
+                .debug_selector(|| "add-rule-body".into())
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
@@ -2189,6 +2237,83 @@ pub fn sheet(
             // away what the person has chosen so far.
             .child(panel),
     ))
+}
+
+/// Open in…'s lanes under a not-opened row (design: Not Opened 2b): the
+/// tray's compact lanes over the scan, no pill on, and a pill opens the
+/// link there at once.
+pub fn open_in_lanes(
+    app: &PwrRoute,
+    index: usize,
+    key: RowKey,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let lanes = destinations::lanes(
+        &app.browsers,
+        &app.installed,
+        &Choice::default(),
+        None,
+        crate::editor::scanned(app, cx),
+        false,
+    );
+    div()
+        .debug_selector(move || format!("activity-open-in-lanes-{index}"))
+        .mt(px(4.0))
+        .w(px(320.0))
+        .p(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(theme::border_default())
+        .bg(theme::bg_elevated())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(text(
+                    "Open this link in",
+                    11.5,
+                    600.0,
+                    theme::text_primary(),
+                ))
+                .child(text(
+                    "once \u{00b7} rules unchanged",
+                    10.0,
+                    500.0,
+                    theme::text_subtle(),
+                )),
+        )
+        .child(destinations::draw(
+            "activity-open-in",
+            &lanes,
+            destinations::Density::Compact,
+            move |this: &mut PwrRoute, choice, _, cx| {
+                let destination = Destination {
+                    browser: choice.browser,
+                    profile: choice.profile,
+                    private: choice.private,
+                };
+                this.open_not_opened(key, OpenAs::In(destination), cx);
+            },
+            cx,
+        ))
+        .when(app.browsers.is_empty(), |list| {
+            list.child(paragraph(
+                "No browsers found. Rescan in Settings \u{203a} Browsers.",
+                10.5,
+                15.2,
+                theme::text_subtle(),
+            ))
+        })
+        .child(paragraph(
+            "Add a rule to send links like this somewhere every time.",
+            10.5,
+            15.2,
+            theme::text_subtle(),
+        ))
 }
 
 #[cfg(test)]

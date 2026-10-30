@@ -201,6 +201,14 @@ impl Expectation {
     /// `com.apple.Safari`); a profile or URL only when given.
     pub fn is_met_by(&self, browser: &Browser) -> bool {
         let (name, profile) = self.name_and_profile();
+        // Don't open: the link must not open anywhere (`browser: null`).
+        if crate::rules::is_dont_open(name) {
+            return browser.app_type == crate::AppType::None
+                && self
+                    .url
+                    .as_deref()
+                    .is_none_or(|u| same_url(u, &browser.url));
+        }
         name.trim().eq_ignore_ascii_case(browser.name.trim())
             && profile.is_none_or(|p| p == browser.profile)
             && self
@@ -223,6 +231,12 @@ impl Expectation {
 impl std::fmt::Display for Expectation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, profile) = self.name_and_profile();
+        if crate::rules::is_dont_open(name) {
+            return match &self.url {
+                Some(url) => write!(f, "not opened, with {url}"),
+                None => write!(f, "not opened"),
+            };
+        }
         write!(f, "{name}")?;
         if let Some(profile) = profile.filter(|p| !p.is_empty()) {
             write!(f, " ({profile})")?;
@@ -265,7 +279,11 @@ fn describe_winner(trace: &Trace) -> String {
 }
 
 fn describe_browser(browser: &Browser, error: Option<&str>) -> String {
-    let mut text = browser.name.clone();
+    let mut text = if browser.app_type == crate::AppType::None {
+        "not opened".to_owned()
+    } else {
+        browser.name.clone()
+    };
     if !browser.profile.is_empty() {
         text.push_str(&format!(" ({})", browser.profile));
     }

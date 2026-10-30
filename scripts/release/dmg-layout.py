@@ -19,7 +19,7 @@ and the path inside it.
 
 The second reason is that driving Finder needs an Apple Events grant for
 whatever process runs the build. Packaging must work unattended on the
-self-hosted release runner, which has no one to answer a TCC prompt.
+release runner, which has no one to answer a TCC prompt.
 
 electron-builder reaches the same file through a downloaded `dmgbuild` binary,
 which also writes a volume-relative alias. This is that step, for a repository
