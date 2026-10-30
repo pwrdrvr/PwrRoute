@@ -78,6 +78,9 @@ pub const OPEN_ALL_ID: &str = "tray-held-open-all";
 pub const HELD_LANES_ID: &str = "tray-held-lanes";
 pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
 pub const QUIT_ID: &str = "tray-quit";
+/// The header: a click opens the main window, as the native menu's Open
+/// PwrRoute does.
+pub const HEADER_ID: &str = "tray-open";
 /// Sync's row (design: Synced Rules 3c).
 pub const SYNC_ID: &str = "tray-sync";
 /// The sections between the header and Quit, which scroll on a display too
@@ -686,7 +689,7 @@ fn card(
         .border_1()
         .border_color(theme::border_default())
         .rounded(px(10.0))
-        .child(header(model.chip()).flex_none())
+        .child(header(model.chip(), cx).flex_none())
         .child(
             div()
                 .id(BODY_ID)
@@ -733,8 +736,9 @@ fn caption(label: &str) -> Div {
         .child(tracked(label, 9.5, 600.0, 0.12, theme::text_subtle()))
 }
 
-/// `.th`: the mark, the wordmark and the state chip.
-fn header(chip: HeaderChip) -> Div {
+/// `.th`: the mark, the wordmark and the state chip. The whole row opens
+/// the main window.
+fn header(chip: HeaderChip, cx: &mut Context<'_, Dropdown>) -> gpui_kit::Stateful<Div> {
     let wordmark = StyledText::new("PwrRoute").with_highlights([(
         3..8,
         HighlightStyle {
@@ -762,6 +766,8 @@ fn header(chip: HeaderChip) -> Div {
         ),
     };
     div()
+        .id(HEADER_ID)
+        .debug_selector(|| HEADER_ID.into())
         .flex()
         .items_center()
         .gap(px(8.0))
@@ -769,6 +775,18 @@ fn header(chip: HeaderChip) -> Div {
         .py(px(10.0))
         .border_b_1()
         .border_color(theme::border_faint())
+        .cursor_pointer()
+        .hover(|row| row.bg(theme::bg_hover()))
+        // A tab stop like the rows, but focus shows as the row's fill: a
+        // focus border would grow the header past `HEADER`.
+        .role(gpui_kit::Role::Button)
+        .aria_label("Open PwrRoute")
+        .tab_index(0)
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+        .focus_visible(|row| row.bg(theme::bg_row_active()))
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.run(TrayCommand::OpenMain, window, cx);
+        }))
         .child(icon("pwrroute/mark.svg", 16.0, theme::accent()))
         .child(
             div()
