@@ -299,6 +299,7 @@ pub fn add_button(label: &'static str, primary: bool) -> Div {
     };
     let foreground = kind.foreground();
     button_frame(kind, false)
+        .map(|e| crate::accessibility::named(e, gpui_kit::Role::Button, label))
         .child(icon("pwrroute/plus.svg", 13.0, foreground))
         .child(text(label, 11.5, 550.0, foreground))
 }
@@ -357,8 +358,11 @@ fn button_frame(kind: ButtonKind, small: bool) -> Div {
 
 /// `.btn`, `.btn.sm` when `small`.
 pub fn button(label: impl Into<SharedString>, kind: ButtonKind, small: bool) -> Div {
+    let label = label.into();
     let size = if small { 11.0 } else { 11.5 };
-    button_frame(kind, small).child(text(label, size, 550.0, kind.foreground()))
+    button_frame(kind, small)
+        .map(|e| crate::accessibility::named(e, gpui_kit::Role::Button, label.clone()))
+        .child(text(label, size, 550.0, kind.foreground()))
 }
 
 /// `.inp`: a field's box. Content goes in as children.
@@ -469,13 +473,14 @@ pub fn segmented() -> Div {
 
 /// `.seg span`; `.on` when `selected`.
 pub fn segment(label: impl Into<SharedString>, selected: bool) -> Div {
+    let label = label.into();
     let foreground = if selected {
         theme::accent_bright()
     } else {
         theme::text_secondary()
     };
     // The 1px edge is the focus ring's, out of the design's 5/10 padding.
-    keyboard_control(div(), false)
+    crate::accessibility::selected(keyboard_control(div(), false), label.clone(), selected)
         .py(px(4.0))
         .px(px(9.0))
         .border_1()
@@ -487,8 +492,10 @@ pub fn segment(label: impl Into<SharedString>, selected: bool) -> Div {
 }
 
 /// `.strip-chip`: a status chip in the title strip, with its dot.
+#[track_caller]
 pub fn status_chip(label: impl Into<SharedString>, dot: Hsla) -> Div {
-    div()
+    let label = label.into();
+    crate::accessibility::exposed(div(), gpui_kit::Role::Status, &label)
         .flex()
         .flex_none()
         .items_center()
@@ -504,8 +511,10 @@ pub fn status_chip(label: impl Into<SharedString>, dot: Hsla) -> Div {
 }
 
 /// `.st`: a status dot and its word.
+#[track_caller]
 pub fn status(label: impl Into<SharedString>, dot: Hsla) -> Div {
-    div()
+    let label = label.into();
+    crate::accessibility::exposed(div(), gpui_kit::Role::Status, &label)
         .flex()
         .flex_none()
         .items_center()
@@ -541,6 +550,7 @@ pub fn key_cap_in(label: &'static str, height: f32, size: f32, border: Hsla, col
 /// `.btn` with its key cap after the label: `.btn.primary` gets the
 /// accent's ink on a faint edge.
 pub fn key_button(label: impl Into<SharedString>, key: &'static str, kind: ButtonKind) -> Div {
+    let label = label.into();
     let foreground = kind.foreground();
     let cap = if kind == ButtonKind::Primary {
         key_cap_in(
@@ -554,11 +564,13 @@ pub fn key_button(label: impl Into<SharedString>, key: &'static str, kind: Butto
         key_cap_in(key, 15.0, 9.0, theme::border_default(), theme::text_muted())
     };
     button_frame(kind, false)
+        .map(|e| crate::accessibility::named(e, gpui_kit::Role::Button, label.clone()))
         .child(text(label, 11.5, 550.0, foreground))
         .child(cap.px(px(4.0)))
 }
 
 /// A wrapping run of sans text: CSS `font: <weight> <size>/<line-height>`.
+#[track_caller]
 pub fn paragraph(
     content: impl Into<SharedString>,
     size: f32,
@@ -571,7 +583,7 @@ pub fn paragraph(
         .text_size(px(size))
         .line_height(px(line_height))
         .text_color(color)
-        .child(content.into())
+        .child(crate::accessibility::label(content))
 }
 
 /// `.note`: small subtle help text.
@@ -587,6 +599,7 @@ pub const NOT_OPENED_BADGE: &str = "\u{2014}";
 pub const DONT_OPEN: &str = "Don't open";
 
 /// One line of text that ends in an ellipsis when its box is too narrow.
+#[track_caller]
 pub fn one_line(
     content: impl Into<SharedString>,
     family: &'static str,
@@ -595,7 +608,7 @@ pub fn one_line(
     line_height: f32,
     color: Hsla,
 ) -> Div {
-    clip_x(content.into(), size, line_height)
+    clip_x(crate::accessibility::label(content), size, line_height)
         .whitespace_nowrap()
         .text_ellipsis()
         .font_family(family)
@@ -665,9 +678,10 @@ pub const MENU_MAX_HEIGHT: f32 = 280.0;
 /// children; past [`MENU_MAX_HEIGHT`] the card scrolls. The caller places
 /// it and gives it a width: a select's list is as wide as its field
 /// (`.absolute().left_0().right_0()`), never narrower.
-pub fn menu_card(id: impl Into<ElementId>) -> Stateful<Div> {
-    div()
-        .id(id)
+pub fn menu_card(id: impl Into<ElementId>) -> crate::accessibility::MenuCard {
+    let id = id.into();
+    let card = div()
+        .id(id.clone())
         .occlude()
         .flex()
         .flex_col()
@@ -678,7 +692,8 @@ pub fn menu_card(id: impl Into<ElementId>) -> Stateful<Div> {
         .border_1()
         .border_color(theme::border_default())
         .rounded(px(7.0))
-        .shadow_lg()
+        .shadow_lg();
+    crate::accessibility::MenuCard::new(id, card)
 }
 
 /// `.mi`: one menu row. The badge and the label come first; the dimmed mono
@@ -691,10 +706,12 @@ pub fn menu_row(
     label: impl Into<SharedString>,
     hint: Option<SharedString>,
 ) -> Stateful<Div> {
+    let label = label.into();
     let id = id.into();
     let hint_id = id.clone();
-    div()
-        .id(id)
+    crate::accessibility::clickable(div().id(id))
+        .role(gpui_kit::Role::MenuItem)
+        .aria_label(label.clone())
         .flex()
         .flex_none()
         .items_center()

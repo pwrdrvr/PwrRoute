@@ -30,6 +30,7 @@
 //! `macos::window_order` (the window server's list) and `win::app_icon`
 //! (the Shell's icon and GDI's pixels).
 
+pub mod accessibility;
 mod args;
 mod icon_pixels;
 #[cfg(target_os = "macos")]

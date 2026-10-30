@@ -6058,3 +6058,184 @@ fn dragging_a_row_moves_the_rule(cx: &mut TestAppContext) {
     assert_eq!(saved_patterns(cx, &path), after);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[gpui_kit::test]
+fn accessibility_escape_collapses_the_field_then_closes_the_sheet(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let dir = scratch("a11y-sheet-escape");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    view.update_in(cx, |app, window, cx| {
+        let sheet = app.actions.sheet.as_mut().expect("sheet");
+        sheet.pattern.select_all();
+        window.focus(&sheet.pattern.focus, cx);
+    });
+    draw(cx);
+    cx.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |app, _| app.actions.sheet.is_some()));
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()));
+    let focus = view.read_with(cx, |app, _| app.focus.clone());
+    assert!(cx.update(|window, _| focus.is_focused(window)));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn accessibility_picker_arrows_wrap_return_selects_and_escape_restores_focus(
+    cx: &mut TestAppContext,
+) {
+    cx.update(crate::app_menu::install);
+    let (view, cx) = open(cx);
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::TestLink, window, cx)
+    });
+    draw(cx);
+    click(cx, "test-opener");
+    draw(cx);
+    draw(cx);
+    cx.simulate_keystrokes("end");
+    draw(cx);
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+    });
+    draw(cx);
+    assert!(!view.read_with(cx, |app, _| app.test.picking));
+    assert!(view.read_with(cx, |app, _| app.test.opener > 0));
+    click(cx, "test-opener");
+    draw(cx);
+    draw(cx);
+    for key in ["home", "up", "down", "enter"] {
+        cx.simulate_keystrokes(key);
+        cx.simulate_event(gpui_kit::KeyUpEvent {
+            keystroke: gpui_kit::Keystroke::parse(key).unwrap(),
+        });
+        draw(cx);
+    }
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.test.opener), 0);
+    let trigger = cx.update(|window, cx| window.focused(cx));
+    click(cx, "test-opener");
+    draw(cx);
+    draw(cx);
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert!(!view.read_with(cx, |app, _| app.test.picking));
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), trigger);
+}
+
+#[gpui_kit::test]
+fn accessibility_profile_picker_recovers_focus_after_replacing_browser_rows(
+    cx: &mut TestAppContext,
+) {
+    cx.update(crate::app_menu::install);
+    let rules = RulesFile {
+        default_browser: String::new(),
+        default_profile: String::new(),
+        ..fixtures::overview_rules()
+    };
+    let (view, cx, path) = open_overview(cx, None, rules, Vec::new());
+    let profile = view.read_with(cx, |app, _| app.installed[0].profiles[0].clone());
+    let trigger = cx.update(|window, cx| window.focused(cx));
+    click(cx, "overview-setup-choose");
+    draw(cx);
+    // Return replaces the browser rows while the menu stays open.
+    activate_focused(cx);
+    assert!(cx.debug_bounds("overview-setup-choice-0").is_none());
+    assert!(cx.debug_bounds("overview-setup-profile-0").is_some());
+    keys(cx, "escape");
+    assert!(!view.read_with(cx, |app, _| app.overview.picking));
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), trigger);
+
+    click(cx, "overview-setup-choose");
+    draw(cx);
+    activate_focused(cx);
+    keys(cx, "down");
+    activate_focused(cx);
+    assert!(!view.read_with(cx, |app, _| app.overview.picking));
+    assert_eq!(saved(cx, &path).default_profile, profile);
+}
+
+fn activate_focused(cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+    });
+    cx.run_until_parked();
+    draw(cx);
+    draw(cx);
+}
+
+#[gpui_kit::test]
+fn accessibility_cancel_from_a_keyboard_menu_returns_to_the_activity_list(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let dir = scratch("a11y-menu-sheet-cancel");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    for escape in [false, true] {
+        click(cx, "activity-more-4");
+        draw(cx);
+        activate_focused(cx);
+        assert!(view.read_with(cx, |app, _| app.actions.sheet.is_some()));
+        assert!(cx.debug_bounds("activity-menu-4").is_none());
+        if escape {
+            // First Esc collapses the pattern's selection; the next closes.
+            keys(cx, "escape escape");
+        } else {
+            click(cx, "add-rule-cancel");
+        }
+        assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()));
+        let list = view.read_with(cx, |app, _| app.focus.clone());
+        assert!(cx.update(|window, _| list.is_focused(window)));
+        keys(cx, "secondary-n");
+        assert!(view.read_with(cx, |app, _| app.actions.sheet.is_some()));
+        click(cx, "add-rule-cancel");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn accessibility_sheet_tab_wraps_inside_the_dialog(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let dir = scratch("a11y-sheet-focus");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    draw(cx);
+    draw(cx);
+    let start = cx.update(|window, cx| window.focused(cx).expect("pattern focused"));
+    cx.simulate_keystrokes("shift-tab tab");
+    draw(cx);
+    let end = cx.update(|window, cx| window.focused(cx).expect("dialog focused"));
+    assert_eq!(start, end, "Tab and Shift-Tab return to the same field");
+    assert!(view.read_with(cx, |app, _| app.actions.sheet.is_some()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn accessibility_number_shortcuts_switch_the_main_screens(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::install);
+    let (view, cx) = open(cx);
+    for (key, screen) in [
+        ("1", Screen::Overview),
+        ("2", Screen::Rules),
+        ("3", Screen::TestLink),
+        ("4", Screen::Activity),
+    ] {
+        view.update(cx, |app, _| {
+            app.test.picking = app.screen == Screen::TestLink
+        });
+        let modifier = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        cx.simulate_keystrokes(&format!("{modifier}-{key}"));
+        cx.run_until_parked();
+        draw(cx);
+        assert_eq!(view.read_with(cx, |app, _| app.screen), screen);
+        assert!(!view.read_with(cx, |app, _| app.test.picking));
+    }
+}

@@ -1468,6 +1468,8 @@ impl Render for FirstRun {
         };
         div()
             .id(ROOT_ID)
+            .role(gpui_kit::Role::Pane)
+            .aria_label("Set up PwrRoute")
             .debug_selector(|| ROOT_ID.into())
             .track_focus(&self.focus)
             .size_full()
@@ -1476,6 +1478,13 @@ impl Render for FirstRun {
             .bg(theme::bg_app())
             .text_color(theme::text_primary())
             .font_family(theme::SANS)
+            .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.picking != Picking::None {
+                    this.picking = Picking::None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .child(strip(model.routing(), &self.menu_bar, window, cx))
             .child(
                 div()
@@ -2438,6 +2447,7 @@ fn select_field(
         .capture_any_mouse_down(cx.listener(|this, _, _, _| {
             this.was_picking = this.picking;
         }))
+        .map(crate::accessibility::clickable)
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.toggle_picker(which, cx);
         }))
@@ -2667,6 +2677,7 @@ enum Kind {
 }
 
 fn button(id: &'static str, label: impl Into<SharedString>, kind: Kind) -> Stateful<Div> {
+    let label = label.into();
     let (fill, border, color) = match kind {
         Kind::Primary => (theme::accent(), theme::transparent(), theme::accent_on()),
         Kind::Default => (
@@ -2686,6 +2697,8 @@ fn button(id: &'static str, label: impl Into<SharedString>, kind: Kind) -> State
     };
     keyboard_control(div(), matches!(kind, Kind::Primary))
         .id(id)
+        .role(gpui_kit::Role::Button)
+        .aria_label(label.clone())
         .debug_selector(move || id.into())
         .flex()
         .flex_none()

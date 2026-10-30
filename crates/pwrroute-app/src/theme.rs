@@ -114,7 +114,6 @@ pub fn set_increase_contrast(on: bool) {
     });
 }
 
-#[allow(dead_code, reason = "PWR-15: for the OS switch's own reads")]
 pub fn increase_contrast() -> bool {
     current().increase_contrast
 }
@@ -386,6 +385,7 @@ pub fn text_subtle() -> Hsla {
 }
 
 /// A single-line run of sans text: CSS `font: <weight> <size>/1`.
+#[track_caller]
 pub fn text(content: impl Into<SharedString>, size: f32, css_weight: f32, color: Hsla) -> Div {
     div()
         .flex_none()
@@ -395,10 +395,11 @@ pub fn text(content: impl Into<SharedString>, size: f32, css_weight: f32, color:
         .line_height(px(size))
         .text_color(color)
         .whitespace_nowrap()
-        .child(content.into())
+        .child(crate::accessibility::label(content))
 }
 
 /// The same in Geist Mono.
+#[track_caller]
 pub fn mono(content: impl Into<SharedString>, size: f32, css_weight: f32, color: Hsla) -> Div {
     text(content, size, css_weight, color).font_family(mono_family(css_weight))
 }
@@ -409,6 +410,7 @@ pub fn mono(content: impl Into<SharedString>, size: f32, css_weight: f32, color:
 /// tracking is the gap. GPUI rounds every measured text box up to a whole
 /// pixel, about 0.5 to 0.75px per glyph, so that much comes back out of the
 /// gap. Good for short eyebrows; not for running text.
+#[track_caller]
 pub fn tracked(content: &str, size: f32, css_weight: f32, em: f32, color: Hsla) -> Div {
     let mut row = div()
         .flex()
@@ -416,9 +418,17 @@ pub fn tracked(content: &str, size: f32, css_weight: f32, em: f32, color: Hsla) 
         .gap(px((size * em - 0.75).max(0.0)));
     for ch in content.to_uppercase().chars() {
         let glyph = if ch == ' ' { '\u{00a0}' } else { ch };
-        row = row.child(text(glyph.to_string(), size, css_weight, color));
+        row = row.child(
+            div()
+                .font_family(SANS)
+                .font_weight(weight(css_weight))
+                .text_size(px(size))
+                .line_height(px(size))
+                .text_color(color)
+                .child(glyph.to_string()),
+        );
     }
-    row
+    crate::accessibility::heading(row, content)
 }
 
 /// A monochrome SVG from the embedded assets, tinted with `color`.

@@ -96,6 +96,7 @@ pub struct DocWindow {
     focus: FocusHandle,
     menu_bar: Entity<MenuBar>,
     copied: bool,
+    scroll: gpui_kit::ScrollHandle,
 }
 
 enum Body {
@@ -124,6 +125,7 @@ impl DocWindow {
             focus: cx.focus_handle(),
             menu_bar: MenuBar::entity(doc.title(), cx),
             copied: false,
+            scroll: gpui_kit::ScrollHandle::new(),
         }
     }
 
@@ -149,6 +151,7 @@ impl Render for DocWindow {
         let body = match &self.body {
             Body::Changelog(blocks) => div()
                 .id("doc-scroll")
+                .track_scroll(&self.scroll)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
@@ -159,7 +162,12 @@ impl Render for DocWindow {
                         .py(px(24.0))
                         .flex()
                         .flex_col()
-                        .children(blocks.iter().map(draw_block)),
+                        .children(
+                            blocks
+                                .iter()
+                                .enumerate()
+                                .map(|(index, block)| draw_block(index, block)),
+                        ),
                 )
                 .into_any_element(),
             Body::Lines(lines, scroll) => {
@@ -179,14 +187,7 @@ impl Render for DocWindow {
                             .child(
                                 uniform_list("doc-lines", rows.len(), move |range, _, _| {
                                     range
-                                        .map(|index| {
-                                            div().h(px(LINE_HEIGHT)).px(px(16.0)).child(mono(
-                                                rows[index].clone(),
-                                                12.0,
-                                                400.0,
-                                                theme::text_secondary(),
-                                            ))
-                                        })
+                                        .map(|index| draw_line(index, rows[index].clone()))
                                         .collect()
                                 })
                                 .track_scroll(scroll)
@@ -197,7 +198,37 @@ impl Render for DocWindow {
             }
         };
         div()
+            .id("document-window")
+            .role(gpui_kit::Role::Document)
+            .aria_label(self.doc.title())
             .track_focus(&self.focus)
+            .on_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    if key == "escape" {
+                        window.remove_window();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if matches!(key, "pageup" | "pagedown" | "home" | "end") {
+                        let scroll = match &this.body {
+                            Body::Changelog(_) => this.scroll.clone(),
+                            Body::Lines(_, handle) => handle.0.borrow().base_handle.clone(),
+                        };
+                        let old = scroll.offset();
+                        let page = window.viewport_size().height * 0.8;
+                        let y = match key {
+                            "pageup" => (old.y + page).min(gpui_kit::px(0.0)),
+                            "pagedown" => old.y - page,
+                            "home" => gpui_kit::px(0.0),
+                            _ => gpui_kit::Pixels::MIN,
+                        };
+                        scroll.set_offset(gpui_kit::point(old.x, y));
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }),
+            )
             .size_full()
             .flex()
             .flex_col()
@@ -322,6 +353,14 @@ pub fn changelog(markdown: &str, version: &str) -> Vec<Block> {
     kept
 }
 
+fn draw_line(index: usize, content: SharedString) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(("doc-line", index))
+        .h(px(LINE_HEIGHT))
+        .px(px(16.0))
+        .child(mono(content, 12.0, 400.0, theme::text_secondary()))
+}
+
 /// "Area - what changed": the area in bold, as the changelog's convention.
 fn bullet_spans(item: &str) -> Vec<Span> {
     match item.split_once(" - ") {
@@ -390,8 +429,8 @@ pub fn spans(text: &str) -> Vec<Span> {
     out
 }
 
-fn draw_block(block: &Block) -> gpui_kit::AnyElement {
-    match block {
+fn draw_block(index: usize, block: &Block) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let block = match block {
         Block::Version {
             name,
             date,
@@ -409,8 +448,7 @@ fn draw_block(block: &Block) -> gpui_kit::AnyElement {
             .when_some(date.clone(), |row, date| {
                 row.child(mono(date, 11.0, 500.0, theme::text_muted()))
             })
-            .when(*current, |row| row.child(chip("This copy")))
-            .into_any_element(),
+            .when(*current, |row| row.child(chip("This copy"))),
         Block::Bullet(spans) => div()
             .flex()
             .gap(px(10.0))
@@ -421,10 +459,10 @@ fn draw_block(block: &Block) -> gpui_kit::AnyElement {
                     .pt(px(7.0))
                     .child(div().size(px(4.0)).rounded_full().bg(theme::accent())),
             )
-            .child(styled(spans).flex_1().min_w_0())
-            .into_any_element(),
-        Block::Paragraph(spans) => styled(spans).py(px(6.0)).into_any_element(),
-    }
+            .child(styled(spans).flex_1().min_w_0()),
+        Block::Paragraph(spans) => styled(spans).py(px(6.0)),
+    };
+    block.id(("doc-block", index))
 }
 
 /// Spans as one wrapping run: sans 12.5/1.6, bold in the primary color,
@@ -505,6 +543,32 @@ pub fn wrap(text: &str, columns: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::Element;
+
+    #[test]
+    fn repeated_document_text_has_distinct_stable_instance_ids() {
+        let lines: Vec<_> = ["", "", "Repeated", "Repeated"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, content)| Element::id(&draw_line(index, content.into())).unwrap())
+            .collect();
+        for (index, id) in lines.iter().enumerate() {
+            assert!(!lines[..index].contains(id));
+        }
+        assert_eq!(
+            Some(lines[0].clone()),
+            Element::id(&draw_line(0, "".into()))
+        );
+        let block = Block::Version {
+            name: "v0.1.0".into(),
+            date: Some("2026-10-29".into()),
+            current: true,
+        };
+        assert_ne!(
+            Element::id(&draw_block(0, &block)),
+            Element::id(&draw_block(1, &block))
+        );
+    }
 
     #[test]
     fn the_changelog_reads_as_versions_and_bullets() {

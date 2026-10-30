@@ -50,6 +50,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     # URLForApplicationWithBundleIdentifier, for a handler's display name,
     # and iconForFile:, for an app's icon.
     "NSWorkspace",
+    "NSAccessibility",
     # Path-specific default-browser requests (distinguishes worktree bundles).
     "block2",
     # Rendering that icon to a PNG.
@@ -92,3 +93,7 @@ windows = { version = "0.62", default-features = false, features = [
     "Win32_UI_Shell",
 ] }
 
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = ["Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"]

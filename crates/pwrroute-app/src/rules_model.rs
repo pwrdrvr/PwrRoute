@@ -78,6 +78,41 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// The same information as the row, in reading order for assistive tools.
+    pub fn accessible_name(&self) -> String {
+        let patterns = self
+            .matchers
+            .iter()
+            .map(|matcher| match matcher {
+                Matcher::Pattern(value) | Matcher::Regex(value) | Matcher::Privacy(value) => {
+                    value.to_string()
+                }
+                Matcher::Label(value) => (*value).to_owned(),
+                Matcher::App { name, .. } => name.to_string(),
+                Matcher::Function(_) => "JavaScript matcher".to_owned(),
+                Matcher::Off => "Off".to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let destination = match &self.destination {
+            Destination::Browser { name, profile, .. } => match profile {
+                Some(profile) => format!("{name}, {profile}"),
+                None => name.to_string(),
+            },
+            Destination::Rewrite(changes) => changes
+                .iter()
+                .map(|change| format!("{} {}", change.kind, change.value))
+                .collect::<Vec<_>>()
+                .join(", "),
+            Destination::Function(_) => "JavaScript destination".to_owned(),
+            Destination::Unset(value) => (*value).to_owned(),
+        };
+        format!(
+            "{patterns}, {destination}, {}",
+            if self.enabled { "enabled" } else { "disabled" }
+        )
+    }
+
     /// A read-only row: a config's, or the catch-all.
     pub fn plain(matchers: Vec<Matcher>, destination: Destination) -> Self {
         Self {

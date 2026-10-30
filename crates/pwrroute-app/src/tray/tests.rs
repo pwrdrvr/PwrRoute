@@ -559,3 +559,25 @@ fn the_tray_follows_the_routers_countdown(cx: &mut TestAppContext) {
     );
     assert_card_fits(&mut opened);
 }
+
+#[gpui_kit::test]
+fn accessibility_tray_arrows_wrap_when_every_tab_stop_is_inside_the_menu(cx: &mut TestAppContext) {
+    let opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    opened
+        .view
+        .update_in(opened.cx, |this, window, cx| window.focus(&this.focus, cx));
+    draw(opened.cx);
+    opened.cx.simulate_keystrokes("home");
+    draw(opened.cx);
+    let first = opened.cx.update(|window, cx| window.focused(cx));
+    opened.cx.simulate_keystrokes("end");
+    draw(opened.cx);
+    let last = opened.cx.update(|window, cx| window.focused(cx));
+    assert_ne!(first, last);
+    opened.cx.simulate_keystrokes("down");
+    draw(opened.cx);
+    assert_eq!(opened.cx.update(|window, cx| window.focused(cx)), first);
+    opened.cx.simulate_keystrokes("up");
+    draw(opened.cx);
+    assert_eq!(opened.cx.update(|window, cx| window.focused(cx)), last);
+}

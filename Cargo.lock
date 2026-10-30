@@ -5981,9 +5981,11 @@ name = "pwrroute-app"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "ashpd",
  "async-channel",
  "chrono",
  "embed-resource",
+ "futures",
  "gpui-kit",
  "interprocess",
  "log",
@@ -6087,6 +6089,7 @@ dependencies = [
  "pwrroute-router",
  "windows 0.62.2",
  "windows-registry 0.6.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
