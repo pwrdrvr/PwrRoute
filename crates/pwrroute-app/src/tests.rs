@@ -6325,3 +6325,89 @@ fn accessibility_number_shortcuts_switch_the_main_screens(cx: &mut TestAppContex
         assert!(!view.read_with(cx, |app, _| app.test.picking));
     }
 }
+
+#[gpui_kit::test]
+fn test_a_link_expands_before_matching_and_draws_both_urls(cx: &mut TestAppContext) {
+    struct Redirect;
+    impl pwrroute_engine::Network for Redirect {
+        fn request(
+            &self,
+            _: pwrroute_engine::Method,
+            url: &str,
+            _: std::time::Duration,
+        ) -> anyhow::Result<pwrroute_engine::Reply> {
+            Ok(if url == "https://bit.ly/neutral" {
+                pwrroute_engine::Reply {
+                    status: 302,
+                    location: Some("https://example.com/landing".into()),
+                }
+            } else {
+                pwrroute_engine::Reply {
+                    status: 200,
+                    location: None,
+                }
+            })
+        }
+    }
+    let dir = scratch("short-link");
+    let rules = RulesFile {
+        default_browser: "Safari".into(),
+        rules: vec![pwrroute_engine::Rule {
+            patterns: vec!["example.com/*".into()],
+            browser: "Firefox".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let path = dir.join("rules.json");
+    rules.save(&path).unwrap();
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path)));
+    click(cx, "nav-test");
+    view.update_in(cx, |app, _, cx| {
+        app.test.network = Some(std::sync::Arc::new(Redirect));
+        app.test.url.text = "https://bit.ly/neutral".into();
+        app.test.run(cx);
+        assert!(app.test.expanding);
+        assert!(app.test.outcome.is_none());
+    });
+    cx.run_until_parked();
+    let traced = trace(&view, cx);
+    assert_eq!(traced.result.title, "Firefox");
+    assert_eq!(traced.result.url, "https://example.com/landing");
+    assert_eq!(
+        &titles(&traced)[..3],
+        ["Received", "Expanded short link", "Rule 1"]
+    );
+    let copied = traced.to_text();
+    assert!(copied.contains("https://bit.ly/neutral"));
+    assert!(copied.contains("https://example.com/landing"));
+}
+
+#[gpui_kit::test]
+fn an_old_short_link_expansion_cannot_replace_a_new_test(cx: &mut TestAppContext) {
+    struct Offline;
+    impl pwrroute_engine::Network for Offline {
+        fn request(
+            &self,
+            _: pwrroute_engine::Method,
+            _: &str,
+            _: std::time::Duration,
+        ) -> anyhow::Result<pwrroute_engine::Reply> {
+            anyhow::bail!("offline")
+        }
+    }
+    let (view, cx) = open(cx);
+    view.update_in(cx, |app, _, cx| {
+        app.test.network = Some(std::sync::Arc::new(Offline));
+        app.test.url.text = "https://bit.ly/neutral".into();
+        app.test.run(cx);
+        assert!(app.test.expanding);
+        app.test.url.text = "https://example.com/new".into();
+        app.test.run(cx);
+        assert!(!app.test.expanding);
+    });
+    let latest = trace(&view, cx);
+    cx.run_until_parked();
+    assert_eq!(trace(&view, cx), latest);
+    assert_eq!(latest.result.url, "https://example.com/new");
+}

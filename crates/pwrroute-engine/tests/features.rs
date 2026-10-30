@@ -1695,3 +1695,91 @@ fn a_machine_layer_routes_links_while_saved_tests_stay_synced() {
         ("Google Chrome", "Work")
     );
 }
+
+#[test]
+fn js_and_ts_shortener_options_and_original_url_apply_through_expansion() {
+    struct NetworkStub;
+    impl Network for NetworkStub {
+        fn request(&self, _: Method, url: &str, _: Duration) -> Result<Reply> {
+            match url {
+                "https://go.example.com/neutral" => Ok(Reply {
+                    status: 302,
+                    location: Some("https://example.com/landing".into()),
+                }),
+                "https://example.com/landing" => Ok(Reply {
+                    status: 200,
+                    location: None,
+                }),
+                _ => panic!("an unlisted host was requested"),
+            }
+        }
+    }
+    for extension in ["js", "ts"] {
+        for (list, expands) in [(r#"["go.example.com"]"#, true), ("[]", false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format!("config.{extension}"));
+            let signature = if extension == "ts" {
+                "url: {hostname: string}, options: {originalUrl: {hostname: string}}"
+            } else {
+                "url, options"
+            };
+            std::fs::write(&path, format!(r#"export default {{
+                defaultBrowser: "Safari",
+                options: {{ urlShorteners: {list} }},
+                handlers: [{{ match: ({signature}) => url.hostname === "example.com" && options.originalUrl.hostname === "go.example.com", browser: "Firefox" }}],
+            }};"#)).unwrap();
+            let engine =
+                Engine::load(&path, Rc::new(NativeHost::new()), Limits::default()).unwrap();
+            let trace = engine
+                .trace(
+                    &engine
+                        .short_links()
+                        .expand("https://go.example.com/neutral", &NetworkStub),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                trace.resolution.browser.name,
+                if expands { "Firefox" } else { "Safari" }
+            );
+            assert_eq!(trace.original_url, "https://go.example.com/neutral");
+            // A replacement list excludes the defaults, including when empty.
+            assert!(!engine.short_links().is_short("https://bit.ly/neutral"));
+        }
+    }
+}
+
+#[test]
+fn each_method_gets_one_budget_shared_by_its_redirects() {
+    struct Budgets(RefCell<Vec<(Method, Duration)>>);
+    impl Network for Budgets {
+        fn request(&self, method: Method, url: &str, timeout: Duration) -> Result<Reply> {
+            self.0.borrow_mut().push((method, timeout));
+            if url.ends_with("/neutral") {
+                std::thread::sleep(Duration::from_millis(20));
+                Ok(Reply {
+                    status: 302,
+                    location: Some("https://example.com/landing".into()),
+                })
+            } else {
+                bail!("offline")
+            }
+        }
+    }
+    let network = Budgets(RefCell::new(Vec::new()));
+    let links = pwrroute_engine::ShortLinks::default();
+    assert_eq!(links.timeout, Duration::from_millis(750));
+    let link = links.expand("https://bit.ly/neutral", &network);
+    assert_eq!(link.url, "https://example.com/landing");
+    let asked = network.0.borrow();
+    assert_eq!(asked.len(), 4);
+    assert_eq!(
+        [asked[0].0, asked[1].0, asked[2].0, asked[3].0],
+        [Method::Head, Method::Head, Method::Get, Method::Get]
+    );
+    for attempt in asked.chunks(2) {
+        assert!(attempt[0].1 <= Duration::from_millis(750));
+        assert!(attempt[1].1 < attempt[0].1);
+    }
+    assert!(asked[2].1 > asked[1].1, "GET starts a fresh budget");
+}
