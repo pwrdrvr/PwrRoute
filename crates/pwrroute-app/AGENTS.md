@@ -805,6 +805,9 @@ their own modules.
   the step shows the wait and "Ask again", names an uncatalogued default
   by its bundle's name (`pwrroute_os::app_display_name`), and says why
   when the OS refuses the request with an error.
+  `DefaultState::OtherCopy` is another copy of PwrRoute holding the
+  default (its path, from `DefaultStatus::other_copy`); a request takes
+  it back with no prompt (`DefaultRequest::TookOverFromCopy`).
   It also re-reads every `RECHECK_EVERY` (a minute) for the life of the
   app and when the tray dropdown opens, so a router with no window
   notices losing the default; the tray chip and its Make default row

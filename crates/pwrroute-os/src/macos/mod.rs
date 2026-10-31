@@ -84,17 +84,48 @@ pub fn unregister() -> Result<()> {
     Ok(())
 }
 
+/// Apple's LaunchServices tool. No public API takes a bundle that is still
+/// on disk out of the database; `lsregister -u` does.
+const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/\
+                          LaunchServices.framework/Support/lsregister";
+
 /// Asks for one scheme, so macOS shows one prompt: each call puts up its
 /// own "change your default web browser?" dialog (macOS 27 stacks them),
 /// and the answer to `http`'s makes PwrRoute the default web browser,
 /// `https` and `public.html` with it. Only a request that left `https`
 /// behind asks for it, on the next try.
+///
+/// LaunchServices keeps the default browser as a bundle id and opens the
+/// highest-versioned copy with that id, so a newer dev build, or a copy on
+/// a mounted DMG, would take this copy's links, and macOS asks nothing when
+/// the id already holds the default. This copy is the one being asked for,
+/// so the other copies are taken out of LaunchServices first. One comes
+/// back when it is launched, rebuilt or rescanned. `set_default_browser`
+/// registered this copy already.
 pub fn set_default() -> Result<DefaultRequest> {
     let bundle = app_bundle()?;
-    let scheme = scheme_to_request(
-        is_current_handler("http", &bundle),
-        is_current_handler("https", &bundle),
-    );
+    let other_copy_held = status()?.other_copy.is_some();
+    forget_other_copies(&bundle);
+    let http = is_current_handler("http", &bundle);
+    let https = is_current_handler("https", &bundle);
+    if http && https {
+        return Ok(if other_copy_held {
+            DefaultRequest::TookOverFromCopy
+        } else {
+            DefaultRequest::Set
+        });
+    }
+    // Both schemes still name PwrRoute's id: LaunchServices has not caught
+    // up yet, or a copy would not go. macOS puts up no dialog for an id
+    // that already holds the default, so do not say it will; the read-back
+    // settles it.
+    let ids_ours = ["http", "https"]
+        .into_iter()
+        .all(|scheme| is_ours(launch_services::default_handler(scheme).as_deref()));
+    if other_copy_held && ids_ours {
+        return Ok(DefaultRequest::TookOverFromCopy);
+    }
+    let scheme = scheme_to_request(http, https);
     let workspace = NSWorkspace::sharedWorkspace();
     if workspace.respondsToSelector(sel!(
         setDefaultApplicationAtURL:toOpenURLsWithScheme:completionHandler:
@@ -112,6 +143,36 @@ pub fn set_default() -> Result<DefaultRequest> {
     Ok(DefaultRequest::Prompted)
 }
 
+/// Every copy of PwrRoute LaunchServices knows other than `current`: an
+/// install in `/Applications`, a mounted DMG, each checkout's dev build.
+fn other_copies(current: &Path) -> Vec<PathBuf> {
+    NSWorkspace::sharedWorkspace()
+        .URLsForApplicationsWithBundleIdentifier(&NSString::from_str(BUNDLE_ID))
+        .iter()
+        .filter_map(|url| url.path().map(|path| PathBuf::from(path.to_string())))
+        .filter(|path| !same_bundle(Some(path), current))
+        .collect()
+}
+
+/// Takes the other copies out of LaunchServices, in one `lsregister` run
+/// (it takes several paths), so the database sees one writer. The files
+/// stay. A copy that will not go is left, and the status read afterwards
+/// names it.
+fn forget_other_copies(current: &Path) {
+    use std::process::{Command, Stdio};
+    let copies = other_copies(current);
+    if copies.is_empty() {
+        return;
+    }
+    let _ = Command::new(LSREGISTER)
+        .arg("-u")
+        .args(&copies)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// Ask for `https` once `http` selects this bundle and `https` does not,
 /// otherwise `http`. Copies with the same bundle id can have different paths.
 fn scheme_to_request(http_is_current: bool, https_is_current: bool) -> &'static str {
@@ -124,21 +185,27 @@ fn scheme_to_request(http_is_current: bool, https_is_current: bool) -> &'static 
 
 /// System Settings › Desktop & Dock, which holds "Default web browser".
 pub fn open_settings() -> Result<()> {
-    std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.Desktop-Settings.extension")
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
+    open_settings_pane("x-apple.systempreferences:com.apple.Desktop-Settings.extension")
 }
 
 /// System Settings › Privacy & Security › Files & Folders, where each app's
 /// access to other apps' data is switched on.
 pub fn open_files_and_folders() -> Result<()> {
-    std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!("opening System Settings: {e}"))
+    open_settings_pane(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders",
+    )
+}
+
+/// Opens a System Settings pane through NSWorkspace, which says whether it
+/// did, rather than a spawned `open`, which does not.
+fn open_settings_pane(pane: &str) -> Result<()> {
+    let Some(url) = NSURL::URLWithString(&NSString::from_str(pane)) else {
+        bail!("not a System Settings URL: {pane}");
+    };
+    if !NSWorkspace::sharedWorkspace().openURL(&url) {
+        bail!("macOS did not open System Settings");
+    }
+    Ok(())
 }
 
 /// Lets the app with `bundle_id` bring itself forward, when this app is the
@@ -246,26 +313,41 @@ pub fn status() -> Result<DefaultStatus> {
     let http = launch_services::default_handler("http");
     let https = launch_services::default_handler("https");
     let mut is_default = is_ours(http.as_deref()) && is_ours(https.as_deref());
-    if is_default && let Ok(bundle) = app_bundle() {
-        is_default = ["http", "https"]
-            .into_iter()
-            .all(|scheme| is_current_handler(scheme, &bundle));
+    let mut other_copy = None;
+    if let Ok(bundle) = app_bundle() {
+        for (scheme, handler) in [("http", &http), ("https", &https)] {
+            if !is_ours(handler.as_deref()) {
+                continue;
+            }
+            let path = handler_path(scheme);
+            if !same_bundle(path.as_deref(), &bundle) {
+                is_default = false;
+                if other_copy.is_none() {
+                    other_copy = path.map(|path| path.to_string_lossy().into_owned());
+                }
+            }
+        }
     }
     Ok(DefaultStatus {
         is_default,
         http,
         https,
+        other_copy,
     })
 }
 
-fn is_current_handler(scheme: &str, bundle: &Path) -> bool {
+/// The bundle LaunchServices opens a `scheme` link with.
+fn handler_path(scheme: &str) -> Option<PathBuf> {
     let url = NSURL::URLWithString(&NSString::from_str(&format!("{scheme}://example.com")));
     let handler =
         url.and_then(|url| NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url));
-    let path = handler
+    handler
         .and_then(|url| url.path())
-        .map(|s| PathBuf::from(s.to_string()));
-    same_bundle(path.as_deref(), bundle)
+        .map(|s| PathBuf::from(s.to_string()))
+}
+
+fn is_current_handler(scheme: &str, bundle: &Path) -> bool {
+    same_bundle(handler_path(scheme).as_deref(), bundle)
 }
 
 fn same_bundle(handler: Option<&Path>, current: &Path) -> bool {

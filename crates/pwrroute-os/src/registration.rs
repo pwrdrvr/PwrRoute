@@ -8,7 +8,8 @@
 //!   which browser is the default.
 //! - [`set_default_browser`] asks for PwrRoute to *be* the default. Only an
 //!   explicit user action calls it, and the OS has the last word: macOS
-//!   shows its consent prompt, Windows opens Settings › Default apps (apps
+//!   shows its consent prompt (none when another copy of PwrRoute already
+//!   holds the default: this copy takes it over), Windows opens Settings › Default apps (apps
 //!   cannot set themselves default since Windows 8), and Linux asks
 //!   `xdg-settings`.
 //!
@@ -40,18 +41,30 @@ pub struct DefaultStatus {
     /// file id.
     pub http: Option<String>,
     pub https: Option<String>,
+    /// macOS: another copy of PwrRoute (same bundle id, another path, such
+    /// as an older dev build) that LaunchServices hands links to instead of
+    /// the running one. Its bundle's path.
+    pub other_copy: Option<String>,
 }
 
-/// What [`set_default_browser`] set in motion. In every case the OS has the
-/// final say; poll [`default_browser_status`] to see the result.
+/// What [`set_default_browser`] set in motion. Poll
+/// [`default_browser_status`] to see the result: the OS has the final say,
+/// except on a macOS takeover from another PwrRoute copy, which needs no
+/// consent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultRequest {
     /// macOS: the consent prompt is showing.
     Prompted,
     /// Windows: Settings › Default apps is open on PwrRoute.
     OpenedSettings,
-    /// Linux: `xdg-settings` made PwrRoute the default.
+    /// PwrRoute is the default with no prompt to answer: on Linux
+    /// `xdg-settings` set it; on macOS this copy already handled both
+    /// schemes.
     Set,
+    /// macOS: another copy of PwrRoute held the default. The other copies
+    /// were taken out of LaunchServices, so links reach this one with no
+    /// prompt to answer.
+    TookOverFromCopy,
 }
 
 /// Makes the OS list PwrRoute as a browser. Idempotent; never changes the
@@ -304,6 +317,7 @@ mod imp {
             is_default: http.as_deref() == Some(PROG_ID) && https.as_deref() == Some(PROG_ID),
             http,
             https,
+            other_copy: None,
         })
     }
 }
@@ -405,6 +419,7 @@ mod imp {
             is_default: http.as_deref() == Some(DESKTOP_ID) && https.as_deref() == Some(DESKTOP_ID),
             http,
             https,
+            other_copy: None,
         })
     }
 }
@@ -481,6 +496,14 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let plist = std::fs::read_to_string(root.join("packaging/macos/Info.plist.in")).unwrap();
         assert!(plist.contains(&format!("<string>{BUNDLE_ID}</string>")));
+        // macOS lists only apps that claim HTML documents as web browsers,
+        // in System Settings and in its consent prompt.
+        for claim in ["http", "https", "public.html", "public.xhtml"] {
+            assert!(
+                plist.contains(&format!("<string>{claim}</string>")),
+                "Info.plist.in must claim {claim}"
+            );
+        }
         assert!(root.join("packaging/linux").join(DESKTOP_ID).exists());
     }
 }

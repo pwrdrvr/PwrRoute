@@ -119,6 +119,20 @@ fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
                 str::to_owned,
             ),
         ),
+        DefaultState::OtherCopy(path) => (
+            chip("Another PwrRoute is default", Tone::Warn),
+            register(cx),
+            default.note.as_deref().map_or_else(
+                || {
+                    format!(
+                        "macOS opens links in the copy at {path}. Register this copy to take \
+                         them back; the other copies leave macOS\u{2019}s list until they \
+                         launch or are rebuilt."
+                    )
+                },
+                str::to_owned,
+            ),
+        ),
         DefaultState::Unknown => (
             chip("Default browser unknown", Tone::Neutral),
             register(cx),

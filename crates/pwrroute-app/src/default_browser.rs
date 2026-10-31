@@ -5,8 +5,9 @@
 //! The OS calls come in as [`Os`], so tests supply fakes and nothing here
 //! ever reaches `pwrroute_os` from a test. [`request`] runs only from a
 //! click (Settings, first run, the tray), or the explicit `--make-default`
-//! startup flag. The OS has the last word (a consent prompt on macOS,
-//! Settings › Default apps on Windows), so the answer is read back rather
+//! startup flag. The OS has the last word (a consent prompt on macOS, none
+//! when another PwrRoute copy held the default, Settings › Default apps on
+//! Windows), so the answer is read back rather
 //! than assumed: on every
 //! window activation ([`watch`]), when the tray dropdown opens, for a while
 //! after a request on a fast timer, every second while first run's step 3
@@ -64,6 +65,10 @@ pub enum DefaultState {
     /// Another app does, by the name the reader knows ("Google Chrome"),
     /// or by the id the OS gave when the catalog does not know it.
     Other(SharedString),
+    /// Another copy of PwrRoute (same bundle id, another path: an older dev
+    /// build, a mounted DMG) gets the links instead of this one. Its path,
+    /// with the home folder as `~`.
+    OtherCopy(SharedString),
     /// The OS did not say: no handler is set, or the query failed.
     Unknown,
 }
@@ -91,7 +96,13 @@ impl DefaultState {
             .find(|id| !ours(id))
         {
             Some(id) => Self::Other(handler_name(id, app_name).into()),
-            None => Self::Unknown,
+            None => match &status.other_copy {
+                Some(path) => {
+                    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                    Self::OtherCopy(tilde(path, home.as_deref()).into())
+                }
+                None => Self::Unknown,
+            },
         }
     }
 
@@ -104,9 +115,19 @@ impl DefaultState {
     pub fn current_name(&self) -> String {
         match self {
             Self::Other(name) => name.to_string(),
+            Self::OtherCopy(_) => "another copy of PwrRoute".to_owned(),
             Self::PwrRoute | Self::Unknown => "your current browser".to_owned(),
         }
     }
+}
+
+/// `path` with the home folder written `~`.
+fn tilde(path: &str, home: Option<&std::path::Path>) -> String {
+    home.and_then(|home| {
+        let rest = std::path::Path::new(path).strip_prefix(home).ok()?;
+        Some(format!("~/{}", rest.display()))
+    })
+    .unwrap_or_else(|| path.to_owned())
 }
 
 /// A browser or app as `rules.json`, a config or the router names it
@@ -298,6 +319,9 @@ impl Registrar {
             (None, true, DefaultState::Other(name)) => {
                 Some(format!("{name} is still the default.").into())
             }
+            (None, true, DefaultState::OtherCopy(path)) => {
+                Some(format!("The copy at {path} is still the default.").into())
+            }
             _ => None,
         };
         DefaultBrowser {
@@ -322,7 +346,10 @@ fn waiting_note(request: DefaultRequest) -> &'static str {
             "Finish in Windows Settings: select Set default on PwrRoute\u{2019}s page, or choose \
              PwrRoute for HTTP and for HTTPS."
         }
-        DefaultRequest::Set => "Set with xdg-settings; reading it back.",
+        DefaultRequest::Set => "PwrRoute is set as the default; reading it back.",
+        DefaultRequest::TookOverFromCopy => {
+            "Took the default from another copy of PwrRoute; reading it back."
+        }
     }
 }
 
@@ -506,6 +533,10 @@ pub fn chip() -> Div {
     let (label, dot) = match snapshot() {
         DefaultState::PwrRoute => ("default browser".to_owned(), theme::status_ok()),
         DefaultState::Other(name) => (format!("{name} is default"), theme::status_warning()),
+        DefaultState::OtherCopy(_) => (
+            "another PwrRoute is default".to_owned(),
+            theme::status_warning(),
+        ),
         DefaultState::Unknown => (
             "default browser unknown".to_owned(),
             theme::status_suspended(),
@@ -552,7 +583,45 @@ mod tests {
             is_default: ours(http) && ours(https),
             http: http.map(str::to_owned),
             https: https.map(str::to_owned),
+            other_copy: None,
         }
+    }
+
+    #[test]
+    fn another_copy_of_pwrroute_is_named_by_its_path() {
+        let none: &AppName = &|_| None;
+        let home = std::path::Path::new("/Users/someone");
+        assert_eq!(
+            tilde("/Users/someone/src/PwrRoute.app", Some(home)),
+            "~/src/PwrRoute.app"
+        );
+        assert_eq!(
+            tilde("/Applications/PwrRoute.app", Some(home)),
+            "/Applications/PwrRoute.app"
+        );
+        assert_eq!(tilde("/Users/someone/x.app", None), "/Users/someone/x.app");
+        let held = DefaultStatus {
+            is_default: false,
+            http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            https: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            other_copy: Some("/Volumes/PwrRoute/PwrRoute.app".to_owned()),
+        };
+        let state = DefaultState::from_status(Some(&held), none);
+        assert_eq!(
+            state,
+            DefaultState::OtherCopy("/Volumes/PwrRoute/PwrRoute.app".into())
+        );
+        assert!(!state.is_default());
+        assert_eq!(state.current_name(), "another copy of PwrRoute");
+        // Another browser on one scheme is named first: it is the one to fix.
+        let split = DefaultStatus {
+            https: Some("com.google.Chrome".to_owned()),
+            ..held
+        };
+        assert_eq!(
+            DefaultState::from_status(Some(&split), none),
+            DefaultState::Other("Google Chrome".into())
+        );
     }
 
     #[test]
@@ -631,6 +700,52 @@ mod tests {
             ),
             DefaultState::Other("Google Chrome".into())
         );
+    }
+
+    /// Another copy of PwrRoute holds the default: the takeover says so
+    /// while it reads back, and a takeover that did not stick names the copy.
+    #[gpui_kit::test]
+    fn a_takeover_from_another_copy_names_the_copy(cx: &mut TestAppContext) {
+        let held = DefaultStatus {
+            is_default: false,
+            http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            https: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            other_copy: Some("/Volumes/PwrRoute/PwrRoute.app".to_owned()),
+        };
+        let os_status = Rc::new(RefCell::new(Some(held)));
+        let os = Os {
+            set_default: Rc::new(|| Ok(DefaultRequest::TookOverFromCopy)),
+            ..Os::fake(os_status.clone(), Rc::new(Cell::new(0)))
+        };
+        cx.update(|cx| install(os, cx));
+        let card = |cx: &mut TestAppContext| cx.update(|cx| super::card(cx));
+        assert_eq!(
+            card(cx).state,
+            DefaultState::OtherCopy("/Volumes/PwrRoute/PwrRoute.app".into())
+        );
+
+        cx.update(|cx| request(cx).unwrap());
+        assert_eq!(
+            card(cx).note.as_deref(),
+            Some("Took the default from another copy of PwrRoute; reading it back.")
+        );
+
+        // The copy would not go: the settled answer names it.
+        cx.update(|cx| refresh(true, cx));
+        assert_eq!(
+            card(cx).note.as_deref(),
+            Some("The copy at /Volumes/PwrRoute/PwrRoute.app is still the default.")
+        );
+
+        // Asked again, and this copy has the links now.
+        cx.update(|cx| request(cx).unwrap());
+        *os_status.borrow_mut() = Some(status(
+            Some(pwrroute_os::BUNDLE_ID),
+            Some(pwrroute_os::BUNDLE_ID),
+        ));
+        cx.update(|cx| refresh(false, cx));
+        assert_eq!(card(cx).state, DefaultState::PwrRoute);
+        assert_eq!(card(cx).note, None);
     }
 
     #[gpui_kit::test]

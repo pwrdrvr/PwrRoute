@@ -36,6 +36,11 @@ impl Server {
                     Ok((mut stream, _)) => {
                         let requests = Arc::clone(&requests);
                         clients.push(thread::spawn(move || {
+                            // Windows hands out accepted sockets non-blocking
+                            // like the listener, so a request line that has not
+                            // arrived yet reads as WouldBlock and the request
+                            // is dropped unrecorded. Block, under the timeout.
+                            stream.set_nonblocking(false).unwrap();
                             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                             let mut reader = BufReader::new(&mut stream);
                             let mut line = String::new();

@@ -151,7 +151,9 @@ closed; a later launch forwards its links (or asks for the window) and exits.
 Quit from the app menu, or kill the process, to stop it.
 
 PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in`,
-`packaging/linux/pwrroute.desktop`), so the OS can offer it as a browser.
+`packaging/linux/pwrroute.desktop`), so the OS can offer it as a browser;
+macOS also needs the `public.html` and `public.xhtml` document types, or
+System Settings leaves it out of "Default web browser".
 Becoming the default requires an explicit app action or `--make-default`
 (PwrAgent's Start action passes it). That flag requests ownership of the
 running bundle's path, so a worktree build can replace `/Applications`.

@@ -312,7 +312,7 @@ impl Status {
             State::Sending
         } else {
             match self.default {
-                DefaultState::Other(_) => State::NotDefault,
+                DefaultState::Other(_) | DefaultState::OtherCopy(_) => State::NotDefault,
                 DefaultState::Unknown => State::Unknown,
                 DefaultState::PwrRoute => State::Routing,
             }
@@ -2931,7 +2931,7 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
 
     // The setup card: what is left.
     let other_default = match &status.default {
-        DefaultState::Other(name) => Some(name.to_string()),
+        DefaultState::Other(_) | DefaultState::OtherCopy(_) => Some(status.default.current_name()),
         _ => None,
     };
     let setup = (!has_default || other_default.is_some()).then(|| {
@@ -2968,6 +2968,10 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
                     DefaultState::Other(name) => format!(
                         "macOS will ask you to confirm. Until then, links keep opening in \
                          {name} and skip your rules."
+                    ),
+                    DefaultState::OtherCopy(path) => format!(
+                        "Links open in the copy of PwrRoute at {path}. Making this copy the \
+                         default takes them back, with no prompt."
                     ),
                     DefaultState::Unknown => "macOS will ask you to confirm. PwrRoute can't \
                                               tell which browser is the default now."
@@ -3061,10 +3065,16 @@ pub fn build(inputs: &Inputs<'_>) -> Overview {
             state,
             tone: Tone::Neutral,
             sentence: "Links aren't reaching PwrRoute yet.".to_owned(),
-            detail: vec![format!(
-                "{} is your default browser, so links open there and skip your rules.",
-                other_default.clone().unwrap_or_default()
-            )],
+            detail: vec![match &status.default {
+                DefaultState::OtherCopy(path) => format!(
+                    "Another copy of PwrRoute ({path}) is your default browser, so links open \
+                     there instead."
+                ),
+                _ => format!(
+                    "{} is your default browser, so links open there and skip your rules.",
+                    other_default.clone().unwrap_or_default()
+                ),
+            }],
             action: quiet_action(Action::MakeDefault),
         },
         State::Unknown => Hero {

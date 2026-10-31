@@ -2,10 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Rendered by `cargo xtask bundle`, which fills in @SHORT_VERSION@: the version without any
      prerelease suffix, because macOS wants three numbers here.
-     CFBundleURLTypes declares http and https, which is what lets macOS offer
-     PwrRoute as a default browser; the router receives them as kAEGetURL
-     Apple Events. Becoming the default is still an explicit action in the
-     app, answered by the OS consent prompt.
+     CFBundleURLTypes declares http and https, and CFBundleDocumentTypes
+     public.html and public.xhtml: macOS counts an app as a web browser (System
+     Settings' "Default web browser" menu, the consent prompt) only when it
+     claims both, as Safari, Chrome and Finicky do. The router receives links
+     as kAEGetURL Apple Events, and an HTML file as a file URL, which the rules
+     pass to a browser. Becoming the default is still an explicit action in
+     the app, answered by the OS consent prompt.
      The icon is two files from one source, as Xcode writes them: `cargo xtask
      bundle` compiles packaging/icon/PwrRoute.icon with actool into
      Contents/Resources/Assets.car, which CFBundleIconName names and macOS 26
@@ -37,6 +40,29 @@
 			<array>
 				<string>http</string>
 				<string>https</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>HTML Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>XHTML Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.xhtml</string>
 			</array>
 		</dict>
 	</array>

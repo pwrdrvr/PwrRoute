@@ -57,4 +57,12 @@ and Windows).
   test reads the packaging files to hold them together.
 - macOS requests target the running `.app` by URL through NSWorkspace
   (legacy bundle-id fallback on macOS 11). Status also compares the selected
-  handlers' paths, so an installed copy cannot count as the worktree copy.
+  handlers' paths, so an installed copy cannot count as the worktree copy,
+  and names that other copy (`DefaultStatus::other_copy`).
+- **LaunchServices keeps the default browser as a bundle id**, and opens the
+  highest-versioned copy with it. A newer dev build, or the DMG, takes the
+  links, and macOS shows no prompt for an id that is already the default.
+  So `set_default` first takes every other copy out of LaunchServices
+  (`lsregister -u`; the files stay, and a copy comes back when it is
+  launched, rebuilt or rescanned), then asks; a takeover from another copy
+  needs no prompt. Only that explicit request does this.
