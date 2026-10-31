@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.11.0 - 2026-10-31
+
+- Window menus - On Windows and Linux, File, Edit, View, Window and Help appear only in the main window. Settings, first run, the Finicky importer, Logs, Changelog, License and Third-Party Notices keep their title-strip branding and window buttons without a second menu bar. Keyboard shortcuts still work in those windows, and the main window's Window menu still lists and opens them. macOS menus are unchanged.
+- Downloads - The README offers direct download buttons for macOS, Windows, Linux x64 and Linux arm64, with links to portable archives and alternate installers. Releases include version-independent names for the macOS DMG and Linux deb and tar.gz downloads, so the buttons keep working as newer releases become Latest. Versioned packages remain available, and checksum manifests cover the added copies.
+
 ## v0.10.0 - 2026-10-30
 
 - Cloud Sync - Keep rules in step across machines through iCloud Drive, Google Drive, Dropbox or any folder another client syncs. Settings › Cloud Sync adds folders only when you choose them, reports syncing, unavailable files and conflicts, and offers Sync now and backups. If both sides changed, routing keeps using the local rules until you choose which copy to keep; replaced files are backed up, with the newest 20 retained. Sync copies rules.json, including saved example and test URLs, into the chosen folder; Activity, the journal and this machine's settings stay local. The tray and main window show sync status and lead to conflict resolution.
