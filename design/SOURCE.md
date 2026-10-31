@@ -274,6 +274,19 @@ the project and re-export here.
   compared by size and line count with the file here. The other canvases,
   `pwrroute.css` and `support.js` are unchanged.
 
+- Updated **2026-10-31**, PWR-23: `PwrRoute Appearance and Themes.dc.html`
+  gains turns 2 and 3, and `pwrroute-themes.css` is new. Turn 2 draws each of
+  PwrAgent's color themes (Tangerine, Gray, Blue and Phosphor dark; Catppuccin
+  Mocha, Solarized Dark; Tangerine, Gray and Blue light; Catppuccin Latte,
+  Solarized Light) on Contrast and Scale's specimen, with what moved to clear
+  PwrRoute's floor. Turn 3 draws each theme's own Increase Contrast variant,
+  derived by Tangerine's rule, rather than a fall back to Tangerine's. 1e is
+  now drawn in Catppuccin Mocha. `pwrroute-themes.css` holds every theme's
+  tokens as `.th-<id>` and `.th-<id>.hc` and is linked after `pwrroute.css`.
+  Both written to the project, then fetched back and compared byte for byte
+  with the files here (less the preview script the server injects into the
+  canvas). The other canvases, `pwrroute.css` and `support.js` are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -307,9 +320,10 @@ the project and re-export here.
 | `PwrRoute Synced Rules.dc.html` | Settings › Sync (turn 1): what syncs and who can read it, Sync to with the folders found and Choose a folder…, folders set up with their state chip and line, Sync now, the Finicky config switch, a conflict with both sides and backups, joining a folder that already has rules, the macOS permission step and its denied state, and every folder row state |
 | `PwrRoute Synced Rules Machine.dc.html` | Synced rules on each machine (turns 2 to 4): the This machine card with named destinations (synced or this Mac, a browser not installed) and rule sets on or off here; the Destinations lane and Rule set select in the rule editor and set headings on Rules; sync status in the rail foot, strip and menu bar dropdown; the Sync pane on Linux and Windows |
 | `PwrRoute Settings Sections.dc.html` | The Settings nav in groups with child rows for cloud folders and config files (turn 1: Config Files, Short Links, Cloud Sync); the Finicky config across machines (turn 2: on by default, Use it on this Mac, a config that is not syncing) |
-| `PwrRoute Appearance and Themes.dc.html` | Settings › General's Appearance card: Theme (System, Dark, Light) and what System follows, the pane in Light, the Dark theme and Light theme pickers with swatches, the pair offer, and how the setting behaves |
+| `PwrRoute Appearance and Themes.dc.html` | Settings › General's Appearance card: Theme (System, Dark, Light) and what System follows, the pane in Light, the Dark theme and Light theme pickers with swatches, the pair offer, and how the setting behaves; every color theme on the contrast specimen, and each theme's Increase Contrast variant |
 | `PwrRoute Short Links.dc.html` | Design proposal for rules.json short-link controls: Built-in / Custom / Off, explicit Finicky ownership, validation and save conflicts, and the established original/destination trace |
 | `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
+| `pwrroute-themes.css` | The color themes' tokens (PWR-23), each with its Increase Contrast variant, as `.th-<id>` classes; linked after `pwrroute.css` |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.
