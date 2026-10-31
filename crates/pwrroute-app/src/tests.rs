@@ -5389,7 +5389,9 @@ fn strip_rows_show_the_keymaps_shortcuts(cx: &mut TestAppContext) {
 /// and takes no Alt, but is listed.
 #[gpui_kit::test]
 fn the_window_menu_lists_the_open_windows(cx: &mut TestAppContext) {
-    let (_, main) = open_with_strip(cx);
+    let main_handle = open_with_strip(cx)
+        .1
+        .update(|window, _| window.window_handle());
     let (_, other) = cx.add_window_view(|_, cx| crate::logs_window::LogsWindow::new(None, cx));
     draw(other);
     other.update(|window, _| window.activate_window());
@@ -5403,6 +5405,7 @@ fn the_window_menu_lists_the_open_windows(cx: &mut TestAppContext) {
     keys(other, "alt");
     keys(other, "alt-w");
     assert!(other.debug_bounds("menu-card-window").is_none());
+    let main = &mut VisualTestContext::from_window(main_handle, cx);
     main.update(|window, _| window.activate_window());
     main.run_until_parked();
     draw(main);
