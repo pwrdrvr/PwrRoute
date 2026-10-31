@@ -20,8 +20,10 @@ mod experimental;
 pub mod fixtures;
 mod local_agents;
 pub mod model;
+pub mod nav;
 pub mod privacy;
 pub mod privacy_host;
+mod short_links;
 mod style;
 mod sync;
 pub mod sync_host;
@@ -40,14 +42,14 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
     FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Render, ScrollAnchor, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point,
 };
 
 use self::controls::{Heading, Kind, button, card, separated};
 use self::model::{SettingsModel, SettingsRequest};
 use crate::menu_bar::MenuBar;
-use crate::theme::{self, mono, text};
+use crate::theme::{self, text};
 
 pub use settings_actions::OpenSettings;
 
@@ -70,8 +72,9 @@ mod settings_actions {
 /// Cards and pane heads stop growing here.
 pub const CARD_MAX_WIDTH: f32 = 760.0;
 
-/// `.snav`.
-const NAV_WIDTH: f32 = 208.0;
+/// `.snav`: wide enough for a cloud folder's child row (Settings
+/// Sections 1a).
+const NAV_WIDTH: f32 = 232.0;
 
 /// The design's 1060px canvas; tall enough for a pane's first cards.
 const WINDOW_SIZE: (f32, f32) = (1060.0, 760.0);
@@ -101,6 +104,7 @@ pub enum Pane {
     About,
     Browsers,
     Configuration,
+    ShortLinks,
     Sync,
     Privacy,
     LocalAgents,
@@ -110,10 +114,11 @@ pub enum Pane {
 }
 
 impl Pane {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::About,
         Self::Browsers,
         Self::Configuration,
+        Self::ShortLinks,
         Self::Sync,
         Self::Privacy,
         Self::LocalAgents,
@@ -125,8 +130,9 @@ impl Pane {
     pub fn label(self) -> &'static str {
         match self {
             Self::Browsers => "Browsers",
-            Self::Configuration => "Configuration",
-            Self::Sync => "Sync",
+            Self::Configuration => "Config Files",
+            Self::ShortLinks => "Short Links",
+            Self::Sync => "Cloud Sync",
             Self::Privacy => "Privacy",
             Self::LocalAgents => "Local agents",
             Self::Updates => "Updates",
@@ -136,11 +142,24 @@ impl Pane {
         }
     }
 
+    /// The group label drawn above this pane, when it starts a group
+    /// (Settings Sections 1a).
+    pub fn group(self) -> Option<&'static str> {
+        match self {
+            Self::Browsers => Some("Routing"),
+            Self::Sync => Some("Across machines"),
+            Self::Privacy => Some("Data and agents"),
+            Self::Updates => Some("App"),
+            _ => None,
+        }
+    }
+
     /// The nav item's element id.
     pub fn nav_id(self) -> &'static str {
         match self {
             Self::Browsers => "settings-nav-browsers",
             Self::Configuration => "settings-nav-configuration",
+            Self::ShortLinks => "settings-nav-short-links",
             Self::Sync => "settings-nav-sync",
             Self::Privacy => "settings-nav-privacy",
             Self::LocalAgents => "settings-nav-local-agents",
@@ -156,6 +175,7 @@ impl Pane {
         match self {
             Self::Browsers => "settings-pane-browsers",
             Self::Configuration => "settings-pane-configuration",
+            Self::ShortLinks => "settings-pane-short-links",
             Self::Sync => "settings-pane-sync",
             Self::Privacy => "settings-pane-privacy",
             Self::LocalAgents => "settings-pane-local-agents",
@@ -315,6 +335,13 @@ pub struct SettingsWindow {
     pub(crate) privacy: privacy::State,
     pub(crate) configuration: configuration::State,
     pub(crate) sync: sync::State,
+    /// Nav groups folded shut, for as long as the window is open.
+    folded: HashSet<Pane>,
+    /// The row a nav child brought into view (a folder's root, a config
+    /// file's path), marked until the pane changes.
+    pub target: Option<SharedString>,
+    /// Scrolls the pane to `target`'s row.
+    anchor: ScrollAnchor,
     scroll: ScrollHandle,
     on_request: RequestHandler,
 }
@@ -329,6 +356,7 @@ impl SettingsWindow {
         let privacy = privacy::State::new(&model.privacy, cx);
         let configuration = configuration::State::new(cx);
         let sync = sync::State::new(&model.sync, cx);
+        let scroll = ScrollHandle::new();
         Self {
             focus: cx.focus_handle(),
             menu_bar: MenuBar::entity("Settings", cx),
@@ -341,7 +369,10 @@ impl SettingsWindow {
             privacy,
             configuration,
             sync,
-            scroll: ScrollHandle::new(),
+            folded: HashSet::new(),
+            target: None,
+            anchor: ScrollAnchor::for_handle(scroll.clone()),
+            scroll,
             on_request,
         }
     }
@@ -355,6 +386,7 @@ impl SettingsWindow {
             self.privacy.close_sheet();
             self.configuration.close_menu();
             self.sync.close();
+            self.target = None;
             self.scroll.set_offset(point(px(0.0), px(0.0)));
             cx.notify();
         }
@@ -459,35 +491,11 @@ impl SettingsWindow {
             .into_any_element()
     }
 
-    fn nav(&self, cx: &mut Context<'_, Self>) -> Div {
-        let agents = self.model.local_agents.active_sessions();
-        Pane::ALL.into_iter().fold(
-            div()
-                .w(px(NAV_WIDTH))
-                .flex_none()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .pt(px(10.0))
-                .px(px(10.0))
-                .pb(px(12.0))
-                .bg(theme::bg_sidebar())
-                .border_r_1()
-                .border_color(theme::border_subtle()),
-            |nav, pane| {
-                let count = (pane == Pane::LocalAgents && agents > 0).then(|| agents.to_string());
-                // Synced Rules 1c: a conflict marks Sync wherever the
-                // reader is in Settings.
-                let dot = pane == Pane::Sync && self.model.sync.has_conflict();
-                nav.child(nav_item(pane, self.pane == pane, count, dot, cx))
-            },
-        )
-    }
-
     fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
         match self.pane {
             Pane::Browsers => browsers::pane(self, cx),
             Pane::Configuration => configuration::pane(self, cx),
+            Pane::ShortLinks => short_links::pane(self, cx),
             Pane::Sync => sync::pane(self, window, cx),
             Pane::Privacy => privacy::pane(self, window, cx),
             Pane::LocalAgents => local_agents::pane(self, window, cx),
@@ -513,77 +521,8 @@ fn request_button(
     }))
 }
 
-/// `.snav .rail-item`; `.on` when `selected`.
-fn nav_item(
-    pane: Pane,
-    selected: bool,
-    count: Option<String>,
-    dot: bool,
-    cx: &mut Context<'_, SettingsWindow>,
-) -> Button {
-    let foreground = if selected {
-        theme::accent_bright()
-    } else {
-        theme::text_secondary()
-    };
-    // The 1px edge is the focus ring's, out of the design's 8/10 padding.
-    crate::widgets::focus_visible(Button::new(pane.nav_id()), false)
-        .selected(selected)
-        .accessibility_label(pane.label())
-        .relative()
-        .w_full()
-        .justify_start()
-        .gap(px(9.0))
-        .px(px(9.0))
-        .py(px(7.0))
-        .border_1()
-        .border_color(theme::transparent())
-        .rounded(px(7.0))
-        .cursor_pointer()
-        .map(|item| {
-            if selected {
-                // `.rail-item.on::before`: the 3px bar on the rail's edge.
-                item.bg(theme::bg_row_active()).child(
-                    div()
-                        .absolute()
-                        .left(px(-10.0))
-                        .top(px(7.0))
-                        .bottom(px(7.0))
-                        .w(px(3.0))
-                        .rounded_r(px(2.0))
-                        .bg(theme::accent()),
-                )
-            } else {
-                item.hover(|style| style.bg(theme::bg_hover()))
-            }
-        })
-        .map(crate::accessibility::clickable)
-        .on_click(cx.listener(move |this, _, _, cx| this.show(pane, cx)))
-        .child(text(pane.label(), 13.0, 500.0, foreground))
-        .when_some(count, |item, count| {
-            item.child(
-                div()
-                    .ml_auto()
-                    .child(mono(count, 10.5, 600.0, theme::text_subtle())),
-            )
-        })
-        .when(dot, |item| {
-            // `.rail-item .xdot`
-            item.child(
-                div()
-                    .id(SYNC_DOT_ID)
-                    .debug_selector(|| SYNC_DOT_ID.into())
-                    .ml_auto()
-                    .size(px(6.0))
-                    .rounded_full()
-                    .bg(theme::status_error())
-                    .test_support(),
-            )
-        })
-}
-
-/// The red dot on Sync's nav item while a folder is in conflict.
-pub const SYNC_DOT_ID: &str = "settings-nav-sync-dot";
+#[cfg(test)]
+use nav::SYNC_DOT_ID;
 
 /// `.strip`: the family title strip, with "Settings" as its crumb.
 fn title_strip(menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
@@ -610,23 +549,28 @@ impl Render for SettingsWindow {
             .font_family(theme::SANS)
             .child(title_strip(&self.menu_bar, window, cx))
             .child(
-                div().flex_1().min_h_0().flex().child(self.nav(cx)).child(
-                    div()
-                        .id(SCROLL_ID)
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .child(
-                            body.id(pane.pane_id())
-                                .flex()
-                                .flex_col()
-                                .gap(px(14.0))
-                                .py(px(22.0))
-                                .px(px(24.0))
-                                .test_support(),
-                        ),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(nav::draw(self, cx))
+                    .child(
+                        div()
+                            .id(SCROLL_ID)
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .child(
+                                body.id(pane.pane_id())
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(14.0))
+                                    .py(px(22.0))
+                                    .px(px(24.0))
+                                    .test_support(),
+                            ),
+                    ),
             )
     }
 }

@@ -1,4 +1,4 @@
-//! The producer behind Settings › Configuration: which file is in charge
+//! The producer behind Settings › Config Files: which file is in charge
 //! as the router reports it (`router::routing_source`), the counts of
 //! `rules.json` and of the Finicky config, the importer's summary of that
 //! config (discovered even while visual rules are in charge), and the files
@@ -26,8 +26,9 @@ use pwrroute_engine::{
 };
 
 use super::model::{
-    Configuration, DefaultChoice, DefaultOwner, EverythingElse, FinickyConfig, ImportCandidate,
-    ImportPlan, Piece, RulesSource, SettingsRequest,
+    CONFIG_FILES_SHOWN, ConfigFile, ConfigFileState, Configuration, DefaultChoice, DefaultOwner,
+    EverythingElse, FinickyConfig, ImportCandidate, ImportPlan, Piece, RulesSource,
+    SettingsRequest, ShortLinks, ShortLinksSource,
 };
 use crate::app::PwrRoute;
 use crate::browser_scan::{self, DetectedApp};
@@ -54,6 +55,9 @@ pub struct Facts {
     pub rules_modified: Option<SystemTime>,
     /// The config the router names, with its counts when it loads.
     pub config: Option<ConfigFacts>,
+    /// Every Finicky config file on disk, in discovery's order, with when
+    /// each was last changed.
+    pub config_files: Vec<(PathBuf, Option<SystemTime>)>,
     pub home: Option<PathBuf>,
     /// The browser scan less the apps hidden in Settings: what the
     /// Everything else select offers.
@@ -142,12 +146,22 @@ fn facts(cx: &mut App) -> Facts {
             path,
         }
     });
+    let config_files = discovery::config_candidates(&environment)
+        .into_iter()
+        .filter(|path| path.is_file())
+        .take(CONFIG_FILES_SHOWN)
+        .map(|path| {
+            let modified = modified(&path);
+            (path, modified)
+        })
+        .collect();
     Facts {
         source,
         rules_path,
         rules,
         rules_modified,
         config,
+        config_files,
         home: std::env::home_dir(),
         browsers: browsers(cx),
     }
@@ -227,12 +241,14 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
         visual_summary: visual_summary.into(),
         finicky,
         import,
-        shorteners: shorteners(facts),
+        short_links: short_links(facts, home),
+        config_files: config_files(facts, now),
         rules_path: facts.rules_path.as_deref().map_or_else(
             || SharedString::from("no data folder"),
             |path| display_path(path, home).into(),
         ),
         rules_status: rules_status.into(),
+        rules_loaded: facts.rules.as_ref().map(Result::is_ok),
         everything_else: facts
             .source
             .config
@@ -513,20 +529,114 @@ fn import_plan(description: &Description, review: Review) -> ImportPlan {
     ImportPlan { candidates }
 }
 
-/// The hosts expanded before matching: the loaded config's list, else the
-/// engine's built-in one, which is what `rules.json` alone gets.
-fn shorteners(facts: &Facts) -> Vec<SharedString> {
-    match facts
-        .config
-        .as_ref()
-        .and_then(|config| config.shorteners.as_ref())
-    {
-        Some(domains) => domains.iter().map(|host| host.clone().into()).collect(),
-        None => DEFAULT_SHORTENERS
+/// The hosts expanded before matching and whose list they are: the loaded
+/// config's `urlShorteners`, else the engine's built-in one, which is what
+/// `rules.json` alone gets.
+fn short_links(facts: &Facts, home: Option<&Path>) -> ShortLinks {
+    let built_in = || -> Vec<SharedString> {
+        DEFAULT_SHORTENERS
             .iter()
             .map(|host| (*host).into())
-            .collect(),
+            .collect()
+    };
+    let Some((config, domains)) = facts
+        .config
+        .as_ref()
+        .and_then(|config| Some((config, config.shorteners.as_ref()?)))
+    else {
+        // No config in charge, or one that did not load: the router runs
+        // rules.json alone, with the built-in list.
+        return ShortLinks {
+            hosts: built_in(),
+            source: ShortLinksSource::BuiltIn { config: None },
+        };
+    };
+    let shown: SharedString = display_path(&config.path, home).into();
+    if domains.is_empty() {
+        return ShortLinks {
+            hosts: Vec::new(),
+            source: ShortLinksSource::Off(shown),
+        };
     }
+    // The engine reads an absent urlShorteners as the built-in list.
+    let same = domains.len() == DEFAULT_SHORTENERS.len()
+        && DEFAULT_SHORTENERS
+            .iter()
+            .all(|host| domains.iter().any(|domain| domain == host));
+    if same {
+        ShortLinks {
+            hosts: built_in(),
+            source: ShortLinksSource::BuiltIn {
+                config: Some(shown),
+            },
+        }
+    } else {
+        ShortLinks {
+            hosts: domains.iter().map(|host| host.clone().into()).collect(),
+            source: ShortLinksSource::Config(shown),
+        }
+    }
+}
+
+/// The Finicky config files on disk, as Config Files lists them: the one
+/// the router runs, and why each other one does not.
+fn config_files(facts: &Facts, now: SystemTime) -> Vec<ConfigFile> {
+    let home = facts.home.as_deref();
+    let in_charge = facts.source.config.as_deref();
+    let same = |path: &Path| {
+        in_charge.is_some_and(|charge| {
+            path == charge || fs::canonicalize(path).is_ok_and(|real| real == charge)
+        })
+    };
+    let first: Option<SharedString> = facts
+        .config_files
+        .iter()
+        .find(|(path, _)| same(path))
+        .map(|(path, _)| display_path(path, home).into());
+    // A config kept in charge by path, where discovery does not look,
+    // leads the list too.
+    let kept = in_charge.filter(|_| first.is_none()).map(|path| {
+        (
+            path.to_path_buf(),
+            facts.config.as_ref().and_then(|c| c.modified),
+        )
+    });
+    let first = first.or_else(|| {
+        kept.as_ref()
+            .map(|(path, _)| display_path(path, home).into())
+    });
+    kept.iter()
+        .chain(facts.config_files.iter())
+        .take(CONFIG_FILES_SHOWN)
+        .map(|(path, modified)| {
+            let shown: SharedString = display_path(path, home).into();
+            let (state, line) = if same(path) {
+                match &facts.source.error {
+                    Some(error)
+                        if facts.source.config_not_loaded || facts.source.fallback.is_some() =>
+                    {
+                        (ConfigFileState::Failed, format!("Did not load: {error}"))
+                    }
+                    _ => (
+                        ConfigFileState::InCharge,
+                        format!("Loaded \u{00b7} {}", edited(*modified, now)),
+                    ),
+                }
+            } else {
+                let why = match &first {
+                    Some(first) => format!("{first} is in charge, so this one never runs."),
+                    None => "Not used: rules.json alone is in charge.".to_owned(),
+                };
+                (ConfigFileState::NotUsed, why)
+            };
+            ConfigFile {
+                shown,
+                path: path.clone(),
+                state,
+                line: line.into(),
+            }
+        })
+        .collect()
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -573,6 +683,7 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
             }
         }
         SettingsRequest::OpenDataFolder => open_data_folder(cx),
+        SettingsRequest::RevealConfig(path) => cx.reveal_path(path),
         SettingsRequest::ReviewImport => {
             let environment = discovery::Environment::current();
             let config = router::routing_source()
@@ -816,7 +927,7 @@ fn open_data_folder(cx: &App) {
 
 /// Reads the model again into the open window, when there is one, with
 /// Diagnostics, which reports the same router.
-fn refresh(cx: &mut App) {
+pub(crate) fn refresh(cx: &mut App) {
     if !settings::is_open(cx) {
         return;
     }
@@ -860,7 +971,8 @@ mod tests {
         assert_eq!(model.rules_path, "~/rules.json");
         assert!(model.finicky.is_none());
         assert!(model.import.is_none());
-        assert!(model.shorteners.iter().any(|host| host == "bit.ly"));
+        assert!(model.short_links.hosts.iter().any(|host| host == "bit.ly"));
+        assert!(model.config_files.is_empty());
     }
 
     #[test]
@@ -933,8 +1045,11 @@ mod tests {
         // rules.json alone, or a config that did not load: the built-in
         // list, as the engine applies it.
         let model = build(&Facts::default(), SystemTime::now());
-        assert_eq!(model.shorteners.len(), DEFAULT_SHORTENERS.len());
-        assert!(model.shorteners.iter().any(|host| host == "bit.ly"));
+        assert_eq!(model.short_links.hosts.len(), DEFAULT_SHORTENERS.len());
+        assert_eq!(
+            model.short_links.source,
+            ShortLinksSource::BuiltIn { config: None }
+        );
         let mut facts = rules(r#"{ "rules": [] }"#);
         let config = facts.home.clone().unwrap().join(".finicky.js");
         facts.source = RoutingSource {
@@ -950,20 +1065,90 @@ mod tests {
             default: None,
             catch_all: None,
         });
-        assert!(
-            build(&facts, SystemTime::now())
-                .shorteners
+        let model = build(&facts, SystemTime::now());
+        assert!(model.short_links.hosts.iter().any(|host| host == "bit.ly"));
+        assert_eq!(
+            model.short_links.source,
+            ShortLinksSource::BuiltIn { config: None }
+        );
+
+        // A loaded config without urlShorteners gets the built-in list.
+        facts.config.as_mut().unwrap().shorteners = Some(
+            DEFAULT_SHORTENERS
                 .iter()
-                .any(|host| host == "bit.ly")
+                .map(|host| (*host).to_owned())
+                .collect(),
+        );
+        assert_eq!(
+            build(&facts, SystemTime::now()).short_links.source,
+            ShortLinksSource::BuiltIn {
+                config: Some("~/.finicky.js".into())
+            }
         );
 
         // A config's own list replaces it; an empty one is expansion off.
-        let config = facts.config.as_mut().unwrap();
-        config.shorteners = Some(vec!["go.corp.example".into()]);
+        facts.config.as_mut().unwrap().shorteners = Some(vec!["go.example.com".into()]);
         let model = build(&facts, SystemTime::now());
-        assert_eq!(model.shorteners, ["go.corp.example"]);
+        assert_eq!(model.short_links.hosts, ["go.example.com"]);
+        assert_eq!(
+            model.short_links.source,
+            ShortLinksSource::Config("~/.finicky.js".into())
+        );
         facts.config.as_mut().unwrap().shorteners = Some(Vec::new());
-        assert!(build(&facts, SystemTime::now()).shorteners.is_empty());
+        let model = build(&facts, SystemTime::now());
+        assert!(model.short_links.hosts.is_empty());
+        assert_eq!(
+            model.short_links.source,
+            ShortLinksSource::Off("~/.finicky.js".into())
+        );
+    }
+
+    #[test]
+    fn config_files_say_which_one_runs() {
+        let mut facts = rules(r#"{ "rules": [] }"#);
+        let home = facts.home.clone().unwrap();
+        let (js, ts) = (
+            home.join(".finicky.js"),
+            home.join(".config/finicky/finicky.ts"),
+        );
+        facts.config_files = vec![(js.clone(), None), (ts.clone(), None)];
+
+        // Visual rules only: none of them runs.
+        let files = build(&facts, SystemTime::now()).config_files;
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|f| f.state == ConfigFileState::NotUsed));
+        assert_eq!(files[0].line, "Not used: rules.json alone is in charge.");
+
+        // The first is in charge; the later one never runs.
+        facts.source.config = Some(js.clone());
+        let files = build(&facts, SystemTime::now()).config_files;
+        assert_eq!(files[0].state, ConfigFileState::InCharge);
+        assert_eq!(files[0].shown, "~/.finicky.js");
+        assert_eq!(files[1].state, ConfigFileState::NotUsed);
+        assert_eq!(
+            files[1].line,
+            "~/.finicky.js is in charge, so this one never runs."
+        );
+
+        // One that never loaded failed.
+        facts.source.error = Some("SyntaxError".into());
+        facts.source.config_not_loaded = true;
+        let files = build(&facts, SystemTime::now()).config_files;
+        assert_eq!(files[0].state, ConfigFileState::Failed);
+        assert_eq!(files[0].line, "Did not load: SyntaxError");
+
+        // A config kept by path, where discovery does not look, leads.
+        facts.source = RoutingSource {
+            config: Some(home.join("elsewhere/finicky.js")),
+            ..RoutingSource::default()
+        };
+        let files = build(&facts, SystemTime::now()).config_files;
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].state, ConfigFileState::InCharge);
+        assert_eq!(
+            files[1].line,
+            "~/elsewhere/finicky.js is in charge, so this one never runs."
+        );
     }
 
     #[test]

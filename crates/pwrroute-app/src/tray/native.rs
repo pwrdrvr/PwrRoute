@@ -60,7 +60,7 @@ pub enum MenuEntry {
     /// "Held links (N)…", enabled while links wait.
     Held(String, bool),
     /// Sync's row (design: Synced Rules 3c): its words, and whether it
-    /// acts (only a conflict's opens Settings › Sync).
+    /// acts (only a conflict's opens Settings › Cloud Sync).
     Sync(String, bool),
     Separator,
 }

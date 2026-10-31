@@ -30,7 +30,7 @@ mod state;
 mod syncer;
 
 pub use decide::ConflictKind;
-pub use folder::{FOLDER, Folder, MANIFEST, Machine, Manifest, hash};
+pub use folder::{FOLDER, FileEntry, Folder, MANIFEST, Machine, Manifest, hash};
 pub use places::{Env, Kind, Os, Place, classify, detect};
 pub use schedule::{Schedule, Why};
 pub use service::{Clock, EVERY, Service, SystemClock, TICK};

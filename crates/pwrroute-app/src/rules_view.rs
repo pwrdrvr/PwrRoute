@@ -1427,7 +1427,7 @@ impl PwrRoute {
     }
 }
 
-/// The blank state's "Open Settings › Configuration".
+/// The blank state's "Open Settings › Config Files".
 pub const BLANK_SETTINGS_ID: &str = "blank-open-configuration";
 /// The blank state's "Choose browser…".
 pub const BLANK_BROWSER_ID: &str = "blank-choose-browser";
@@ -1664,7 +1664,7 @@ fn nothing_to_route_by(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Div {
                             "Any .js or .ts in Finicky v4 shape. It runs as written.",
                             div().child(
                                 button(
-                                    "Open Settings \u{203a} Configuration",
+                                    "Open Settings \u{203a} Config Files",
                                     ButtonKind::Default,
                                     true,
                                 )

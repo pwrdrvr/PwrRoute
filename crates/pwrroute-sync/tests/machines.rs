@@ -65,11 +65,7 @@ impl Mac {
         let data = tempfile::tempdir().unwrap();
         let rules = data.path().join(RULES);
         let mut syncer = Syncer::new(data.path(), name, "0.8.0");
-        syncer.set_items(vec![Item {
-            name: RULES.into(),
-            local: rules.clone(),
-            check: Arc::new(check),
-        }]);
+        syncer.set_items(vec![rules_item(&rules, None)]);
         syncer.set_targets(clouds.iter().map(|c| target(c)).collect());
         Self {
             _data: data,
@@ -87,6 +83,12 @@ impl Mac {
         fs::read(&self.rules).unwrap()
     }
 
+    /// Says which config this machine's rules.json runs after.
+    fn runs_after(&mut self, config: Option<&str>) {
+        let item = rules_item(&self.rules, config);
+        self.syncer.set_items(vec![item]);
+    }
+
     fn pass(&mut self, now: u64) -> Status {
         self.syncer.pass(now).clone()
     }
@@ -95,6 +97,15 @@ impl Mac {
     fn health(&mut self, now: u64, i: usize) -> Health {
         let status = self.pass(now);
         status.targets[i].files[0].health.clone()
+    }
+}
+
+fn rules_item(local: &Path, runs_after: Option<&str>) -> Item {
+    Item {
+        name: RULES.into(),
+        local: local.to_path_buf(),
+        check: Arc::new(check),
+        runs_after: runs_after.map(str::to_owned),
     }
 }
 
@@ -318,6 +329,7 @@ fn another_machines_write_is_applied_only_once_it_settles() {
             },
             6_000,
             "",
+            None,
         )
         .unwrap();
     assert_eq!(studio.health(7_000, 0), Health::Pulled);
@@ -473,6 +485,135 @@ fn the_manifest_is_written_after_the_file_and_staging_files_do_not_linger() {
     assert_eq!(names, vec![RULES.to_owned(), MANIFEST.to_owned()]);
 }
 
+const CONFIG: &str = "finicky.js";
+
+/// The manifest as written on disk, as JSON.
+fn manifest_json(cloud: &Path) -> Value {
+    serde_json::from_slice(&fs::read(Folder::new(cloud).file(MANIFEST)).unwrap()).unwrap()
+}
+
+#[test]
+fn runs_after_travels_with_the_version_that_wrote_it() {
+    let cloud = cloud();
+    let mut studio = Mac::new("Studio Mac", &[cloud.path()]);
+    let mut air = Mac::new("MacBook Air", &[cloud.path()]);
+    studio.runs_after(Some("~/.finicky.js"));
+    studio.save(&rules(&["a.example/*"]));
+    assert_eq!(studio.health(1_000, 0), Health::Pushed);
+    assert_eq!(
+        manifest_json(cloud.path())["files"][RULES]["runsAfter"],
+        "~/.finicky.js"
+    );
+
+    // The Air, with no config of its own, pulls and sees it; the pull
+    // leaves the manifest's runsAfter as written.
+    let status = air.pass(2_000);
+    assert_eq!(status.targets[0].files[0].health, Health::Pulled);
+    let entry = &status.targets[0].folder_files[RULES];
+    assert_eq!(entry.runs_after.as_deref(), Some("~/.finicky.js"));
+    assert_eq!(entry.saved_by.name, "Studio Mac");
+    assert_eq!(air.health(3_000, 0), Health::InSync);
+    let manifest = Folder::new(cloud.path()).manifest().unwrap();
+    assert_eq!(
+        manifest.files[RULES].runs_after.as_deref(),
+        Some("~/.finicky.js")
+    );
+    assert_eq!(manifest.saved_by.name, "Studio Mac");
+
+    // An edit pushed from the Air records that it runs after nothing.
+    air.save(&rules(&["a.example/*", "air.example/*"]));
+    assert_eq!(air.health(4_000, 0), Health::Pushed);
+    assert!(
+        manifest_json(cloud.path())["files"][RULES]
+            .get("runsAfter")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_new_runs_after_alone_does_not_rewrite_the_folder() {
+    let cloud = cloud();
+    let mut studio = Mac::new("Studio Mac", &[cloud.path()]);
+    studio.save(&rules(&["a.example/*"]));
+    studio.pass(1_000);
+    let before = fs::read(Folder::new(cloud.path()).file(MANIFEST)).unwrap();
+
+    studio.runs_after(Some("~/.finicky.ts"));
+    assert_eq!(studio.health(2_000, 0), Health::InSync);
+    assert_eq!(
+        fs::read(Folder::new(cloud.path()).file(MANIFEST)).unwrap(),
+        before,
+        "an unchanged file is not written again"
+    );
+
+    // The next edit carries it.
+    studio.save(&rules(&["a.example/*", "b.example/*"]));
+    assert_eq!(studio.health(3_000, 0), Health::Pushed);
+    let manifest = Folder::new(cloud.path()).manifest().unwrap();
+    assert_eq!(
+        manifest.files[RULES].runs_after.as_deref(),
+        Some("~/.finicky.ts")
+    );
+}
+
+#[test]
+fn the_folder_listing_shows_a_synced_config() {
+    let cloud = cloud();
+    let mut studio = Mac::new("Studio Mac", &[cloud.path()]);
+    let config = studio.rules.with_file_name(".finicky.js");
+    fs::write(&config, b"export default { defaultBrowser: \"Safari\" };\n").unwrap();
+    studio.save(&rules(&["a.example/*"]));
+    studio.syncer.set_items(vec![
+        rules_item(&studio.rules, Some("~/.finicky.js")),
+        Item {
+            name: CONFIG.into(),
+            local: config.clone(),
+            check: Arc::new(|_: &[u8]| Content::Valid),
+            runs_after: None,
+        },
+    ]);
+    let status = studio.pass(1_000);
+    let files = &status.targets[0].folder_files;
+    assert!(files.contains_key(CONFIG), "{files:?}");
+    assert_eq!(files[CONFIG].sha256, hash(&fs::read(&config).unwrap()));
+    assert_eq!(files[CONFIG].runs_after, None);
+
+    // A machine that syncs rules.json only still sees the config listed.
+    let mut air = Mac::new("MacBook Air", &[cloud.path()]);
+    let status = air.pass(2_000);
+    assert!(status.targets[0].folder_files.contains_key(CONFIG));
+    assert_eq!(
+        status.targets[0].folder_files[RULES].runs_after.as_deref(),
+        Some("~/.finicky.js")
+    );
+
+    // With no folder there is no listing.
+    let empty = Mac::new("thinkpad", &[&cloud.path().join("gone")]).pass(3_000);
+    assert!(empty.targets[0].folder_files.is_empty());
+}
+
+#[test]
+fn settled_reads_only_what_the_manifest_lists() {
+    let cloud = cloud();
+    let mut studio = Mac::new("Studio Mac", &[cloud.path()]);
+    studio.save(&rules(&["a.example/*"]));
+    studio.pass(1_000);
+    let folder = Folder::new(cloud.path());
+    assert_eq!(folder.settled(RULES).unwrap(), studio.local());
+
+    // Not listed: not in this folder, even when the bytes are there.
+    let err = folder.settled(CONFIG).unwrap_err().to_string();
+    assert_eq!(err, "finicky.js is not in this folder");
+    fs::write(folder.file(CONFIG), b"export default {};\n").unwrap();
+    let err = folder.settled(CONFIG).unwrap_err().to_string();
+    assert_eq!(err, "finicky.js is not in this folder");
+
+    // Bytes the manifest does not list are still arriving.
+    fs::write(folder.file(RULES), b"{ \"rules\": [").unwrap();
+    let err = folder.settled(RULES).unwrap_err().to_string();
+    assert_eq!(err, "rules.json is still arriving in this folder");
+}
+
 /// The clock a test moves by hand.
 #[derive(Clone, Default)]
 struct FakeClock(Arc<AtomicU64>);
@@ -494,6 +635,7 @@ fn the_service_runs_a_pass_on_its_thread_and_publishes() {
         name: RULES.into(),
         local: rules_path.clone(),
         check: Arc::new(check),
+        runs_after: None,
     }]);
     let clock = FakeClock::default();
     clock.0.store(1_000, Ordering::SeqCst);

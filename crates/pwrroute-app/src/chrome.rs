@@ -607,7 +607,7 @@ pub const SYNC_LINE_ID: &str = "rail-sync";
 
 /// Sync's line under the routing state (design: Synced Rules 3a): mono and
 /// lower case like its neighbours, quiet when all is well, a click to
-/// Settings › Sync.
+/// Settings › Cloud Sync.
 fn sync_line(line: &crate::sync::Line, cx: &mut Context<'_, PwrRoute>) -> AnyElement {
     let color = match line.tone {
         crate::sync::Tone::Quiet => theme::text_subtle(),

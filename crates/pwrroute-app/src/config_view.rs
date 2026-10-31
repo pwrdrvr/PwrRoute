@@ -568,9 +568,9 @@ impl PwrRoute {
     }
 
     /// "Stop using": the router reads no config from now on (`settings.json`
-    /// `source.visualOnly`, as Settings › Configuration's Visual rules), and
+    /// `source.visualOnly`, as Settings › Config Files's Visual rules), and
     /// the "Found …" notice does not come back for this file. The window
-    /// turns to the visual rules. Settings › Configuration turns it back on.
+    /// turns to the visual rules. Settings › Config Files turns it back on.
     pub fn stop_using_config(&mut self, cx: &mut Context<'_, Self>) {
         let Some(file) = self.config.as_ref().map(|config| config.file.clone()) else {
             return;

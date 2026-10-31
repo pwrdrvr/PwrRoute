@@ -607,7 +607,7 @@ impl FirstRunModel {
                 format!("{path} stays in charge. Edit it as you do now; PwrRoute reloads it.")
             }
             Some(ImportChoice::DontUse) => format!(
-                "PwrRoute won't read {path}. Turn it back on in Settings \u{203a} Configuration."
+                "PwrRoute won't read {path}. Turn it back on in Settings \u{203a} Config Files."
             ),
             None if config.error.is_some() => format!(
                 "Found {path}, but it doesn't load. Keep it and PwrRoute uses it once it loads; \
@@ -1915,7 +1915,7 @@ fn footer(model: &FirstRunModel, cx: &mut Context<'_, FirstRun>) -> Div {
         .gap(px(10.0))
         .child(
             text(
-                "Change any of this later in Settings \u{203a} Browsers and Configuration.",
+                "Change any of this later in Settings \u{203a} Browsers and Config Files.",
                 10.5,
                 400.0,
                 theme::text_subtle(),
@@ -2839,7 +2839,7 @@ mod tests {
         assert_eq!(
             model.config_detail(),
             "PwrRoute won't read ~/.finicky.ts. Turn it back on in Settings \u{203a} \
-             Configuration."
+             Config Files."
         );
 
         // Nothing importable, and a config that does not load.

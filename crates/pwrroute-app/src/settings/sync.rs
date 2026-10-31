@@ -1,4 +1,5 @@
-//! Sync (design: `PwrRoute Synced Rules.dc.html`): the folders `rules.json`
+//! Cloud Sync (design: `PwrRoute Synced Rules.dc.html`, and `PwrRoute
+//! Settings Sections.dc.html` for the Finicky config): the folders `rules.json`
 //! syncs with, how each stands, a conflict's two sides, and what the
 //! synced destinations and rule sets mean on this machine.
 //!
@@ -7,6 +8,7 @@
 //! Folders are only touched from a click (Add, Choose a folder…, Sync
 //! now); the producer looks for them when the pane is built.
 
+use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Div, InteractiveElement as _, IntoElement, KeyDownEvent,
@@ -19,7 +21,7 @@ use super::controls::{
     pane_head, row_actions, switch,
 };
 use super::model::{
-    DestinationRow, RuleSetRow, SettingsRequest, SyncConflict, SyncFolder, SyncTone,
+    DestinationRow, FolderConfig, RuleSetRow, SettingsRequest, SyncConflict, SyncFolder, SyncTone,
 };
 use super::style::{self, para};
 use crate::destinations::{self, Density};
@@ -28,10 +30,16 @@ use crate::theme::px;
 use crate::theme::{self, mono, text};
 
 pub const SYNC_NOW_ID: &str = "sync-now";
+/// The Sync to card, where each folder's row is.
+pub const FOLDERS_ID: &str = "sync-folders";
 pub const CHOOSE_ID: &str = "sync-choose";
 pub const NAME_ID: &str = "sync-machine-name";
 pub const CONFIG_ID: &str = "sync-config";
 pub const BACKUPS_ID: &str = "sync-backups";
+/// Use it on this Mac (Settings Sections 2a).
+pub const USE_CONFIG_ID: &str = "sync-use-folder-config";
+/// The folder's rules ran after a config it does not have (2b).
+pub const MISSING_CONFIG_ID: &str = "sync-missing-config";
 
 /// What the pane keeps while the window is open.
 pub struct State {
@@ -82,7 +90,7 @@ pub fn pane(
     div()
         .child(pane_head(
             "Across machines",
-            "Sync",
+            "Cloud Sync",
             "Keep the same rules on every machine through a folder your cloud drive already \
              syncs. PwrRoute reads and writes only its own PwrRoute folder there.",
             None,
@@ -171,7 +179,10 @@ fn folders_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
         .folders
         .iter()
         .enumerate()
-        .map(|(i, folder)| folder_row(i, folder, cx))
+        .map(|(i, folder)| {
+            let row = folder_row(i, folder, cx);
+            div().child(this.mark_target(&super::nav::folder_key(&folder.root), row))
+        })
         .collect();
     if !sync.offered.is_empty() {
         let found = if sync.folders.is_empty() {
@@ -189,7 +200,7 @@ fn folders_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
     }
     for (i, place) in sync.offered.iter().enumerate() {
         let root = place.root.clone();
-        rows.push(field(
+        let row = field(
             place.label.clone(),
             Some(path_line(place.shown.clone())),
             [button(("sync-add", i), "Add", Kind::Default, true)
@@ -197,7 +208,8 @@ fn folders_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
                     this.request(SettingsRequest::AddSyncFolder(root.clone()), window, cx);
                 }))
                 .into_any_element()],
-        ));
+        );
+        rows.push(div().child(this.mark_target(&super::nav::folder_key(&place.root), row)));
     }
     let other = if cfg!(target_os = "linux") {
         "An rclone, Insync or GNOME Online Accounts mount, or a network share."
@@ -253,7 +265,7 @@ fn folders_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
             )
         });
     this.disclosure(
-        "sync-folders",
+        FOLDERS_ID,
         heading("Cloud folders", "Sync to").description(card_description(
             "Add one or more. PwrRoute makes a PwrRoute folder inside and keeps rules.json there.",
         )),
@@ -263,8 +275,10 @@ fn folders_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
     )
 }
 
-/// What goes in the folder: rules.json always, the Finicky config when
-/// this machine says so.
+/// What goes in the folder: rules.json always, and the Finicky config in
+/// charge unless Also sync is off (Settings Sections 1a). When the
+/// folder's rules ran after a config this machine does not run, it says
+/// so: Use it on this Mac (2a), or where the config is (2b).
 fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> impl IntoElement {
     let sync = &this.model.sync;
     let mut rows = vec![field(
@@ -279,15 +293,12 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
             this.model.sync.config_on = *on;
             this.request(SettingsRequest::SetSyncConfig(*on), window, cx);
         });
-        let saved_as = if config.ends_with(".js") {
-            "finicky.js"
-        } else {
-            "finicky.ts"
-        };
+        let saved_as = crate::sync::config_name(std::path::Path::new(config.as_ref()))
+            .unwrap_or_else(|| "finicky.js".to_owned());
         rows.push(field(
             format!("Also sync {config}"),
             Some(para(
-                format!("On this machine only. Saved in the folder as {saved_as}."),
+                format!("Saved in the folder as {saved_as}. On unless you turn it off here."),
                 11.0,
                 400.0,
                 1.5,
@@ -299,12 +310,84 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
                     .on_change(move |on, _, window, cx| set(&on, window, cx))
                     .into_any_element(),
                 field_help(format!(
-                    "Only this file syncs; files it imports do not. The router keeps reading \
-                     {config}, never the cloud folder."
+                    "Its handlers run before rules.json\u{2019}s rules, so another machine \
+                     needs both. Only this file syncs; files it imports do not. The router \
+                     keeps reading {config}, never the cloud folder."
                 ))
                 .into_any_element(),
             ],
         ));
+    }
+    match &sync.folder_config {
+        Some(FolderConfig::Offer {
+            root,
+            name,
+            folder,
+            by,
+            at,
+            runs_after,
+            here,
+        }) => {
+            let (root, name_for) = (root.clone(), name.clone());
+            let here_word = super::sync_host::here();
+            rows.push(field(
+                name.clone(),
+                Some(para(
+                    format!("From {folder} \u{00b7} saved by {by} at {at}."),
+                    11.0,
+                    400.0,
+                    1.5,
+                    theme::text_muted(),
+                )),
+                [
+                    warn_note(format!(
+                        "On {by} these rules run after {runs_after}. {} has no Finicky config, \
+                         so here they run alone: its handlers and default browser are missing.",
+                        capitalized(here_word)
+                    ))
+                    .into_any_element(),
+                    row_actions()
+                        .child(
+                            button(
+                                USE_CONFIG_ID,
+                                format!("Use it on {here_word}"),
+                                Kind::Primary,
+                                true,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.request(
+                                        SettingsRequest::UseFolderConfig {
+                                            root: root.clone(),
+                                            name: name_for.clone(),
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(field_help(format!(
+                            "Writes {here} and puts it in charge. You can stop using it in \
+                             Config Files."
+                        )))
+                        .into_any_element(),
+                ],
+            ));
+        }
+        Some(FolderConfig::Missing { by, runs_after }) => rows.push(field(
+            "Finicky config",
+            Some(field_sub("Not in the folder.")),
+            [warn_note(format!(
+                "On {by} these rules run after {runs_after}, which is not syncing. Turn on \
+                 Also sync {runs_after} in Cloud Sync there, or import its rules into \
+                 rules.json."
+            ))
+            .id(MISSING_CONFIG_ID)
+            .test_support()
+            .into_any_element()],
+        )),
+        None => {}
     }
     this.disclosure(
         "sync-files",
@@ -313,6 +396,25 @@ fn files_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> im
         rows,
         cx,
     )
+}
+
+/// "this Mac" → "This Mac".
+fn capitalized(words: &str) -> String {
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// `.note-warn`: what is missing, in warning text on its soft wash.
+fn warn_note(words: String) -> Div {
+    div()
+        .max_w(px(460.0))
+        .py(px(8.0))
+        .px(px(10.0))
+        .rounded(px(6.0))
+        .bg(style::warn_soft())
+        .child(para(words, 11.0, 400.0, 1.5, style::warn_text()))
 }
 
 fn path_line(shown: SharedString) -> Div {

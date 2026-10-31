@@ -19,6 +19,11 @@ maps the modules; the PR that added it has the design note.
   launched through LaunchServices could stat, list, read and write inside
   iCloud Drive, Google Drive and Dropbox without a TCC prompt; still, the
   app only adds a folder (and writes the first file) from a click.
+- **`runsAfter` rides with content.** A manifest entry's `runsAfter` (the
+  config `rules.json` ran after on the machine that wrote it) is written
+  only with that file's bytes, by a push or a "keep this machine's"
+  resolution, never on its own and never by a pull. Otherwise two machines
+  with different configs would rewrite `sync.json` back and forth forever.
 - **A missing root is unavailable, never created.** `Folder::write` makes
   `PwrRoute/` inside an existing root only, so a client that is not running
   never gets a stray folder in its place.

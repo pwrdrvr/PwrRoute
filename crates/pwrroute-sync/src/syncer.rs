@@ -21,7 +21,7 @@
 //! next pass tries again. Other folders carry on either way.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs, io,
     path::{Path, PathBuf},
     sync::Arc,
@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     decide::{ConflictKind, Decision, Local, decide},
-    folder::{Folder, Machine, Manifest, Probe, Stamp, hash, write_atomic},
+    folder::{FileEntry, Folder, Machine, Manifest, Probe, Stamp, hash, write_atomic},
     places::Kind,
     state::{Backup, State},
 };
@@ -56,6 +56,12 @@ pub struct Item {
     pub name: String,
     pub local: PathBuf,
     pub check: Check,
+    /// The shown path of the config this file runs after on this machine
+    /// (`~/.finicky.js`), set by the app for `rules.json` only: a Finicky
+    /// config's handlers run before `rules.json`'s rules. Recorded in the
+    /// manifest ([`FileEntry::runs_after`]) with each version this machine
+    /// writes, so another machine can say so.
+    pub runs_after: Option<String>,
 }
 
 impl std::fmt::Debug for Item {
@@ -63,6 +69,7 @@ impl std::fmt::Debug for Item {
         f.debug_struct("Item")
             .field("name", &self.name)
             .field("local", &self.local)
+            .field("runs_after", &self.runs_after)
             .finish_non_exhaustive()
     }
 }
@@ -158,6 +165,10 @@ pub struct TargetStatus {
     /// The manifest's last writer and time.
     pub saved_by: Option<Machine>,
     pub saved_at: Option<u64>,
+    /// The manifest's files as this pass read them, by name: what the
+    /// folder holds (`finicky.js`, say) and who wrote each, with
+    /// [`FileEntry::runs_after`]. Empty with no manifest or no folder.
+    pub folder_files: BTreeMap<String, FileEntry>,
 }
 
 impl TargetStatus {
@@ -321,6 +332,7 @@ impl Syncer {
                 last_synced: None,
                 saved_by: None,
                 saved_at: None,
+                folder_files: BTreeMap::new(),
             })
             .collect();
         for item in self.items.clone() {
@@ -341,6 +353,7 @@ impl Syncer {
             if let Some(manifest) = status.target.folder().manifest() {
                 status.saved_by = Some(manifest.saved_by);
                 status.saved_at = Some(manifest.saved_at);
+                status.folder_files = manifest.files;
             }
         }
         self.save_state();
@@ -422,7 +435,15 @@ impl Syncer {
                         return Health::Error(format!("Backing up before syncing: {e:#}"));
                     }
                 }
-                match folder.write(&item.name, &bytes, &self.machine(), now, &self.app) {
+                let written = folder.write(
+                    &item.name,
+                    &bytes,
+                    &self.machine(),
+                    now,
+                    &self.app,
+                    item.runs_after.as_deref(),
+                );
+                match written {
                     Ok(()) => {
                         let sha = hash(&bytes);
                         self.state.set_base(&id, &item.name, &sha);
@@ -572,7 +593,8 @@ impl Syncer {
                     bail!("this machine has no {name} to keep");
                 };
                 self.back_up(name, &remote, &target.label, "Not kept in a conflict", now)?;
-                folder.write(name, &bytes, &self.machine(), now, &self.app)?;
+                let runs_after = item.runs_after.as_deref();
+                folder.write(name, &bytes, &self.machine(), now, &self.app, runs_after)?;
                 self.state.set_base(&id, name, &hash(&bytes));
             }
             Choice::UseFolder => {

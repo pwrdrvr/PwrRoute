@@ -1014,7 +1014,7 @@ fn named_destinations(
             .children(meaning.map(|line| paragraph(line, 10.5, 15.2)))
             .child(paragraph(
                 "A named destination means what each machine says it means (Settings \u{203a} \
-                 Sync). A browser below sends this rule there on every machine.",
+                 Cloud Sync). A browser below sends this rule there on every machine.",
                 10.5,
                 15.2,
             )),
@@ -1052,7 +1052,7 @@ fn name_destination_row(
     );
     let help = rail.name_note.clone().unwrap_or_else(|| {
         "Return names where this rule opens. Other rules can open the same name, and each \
-         machine can point it at its own browser and profile (Settings \u{203a} Sync)."
+         machine can point it at its own browser and profile (Settings \u{203a} Cloud Sync)."
             .to_owned()
     });
     Some(
@@ -1091,11 +1091,13 @@ fn rule_set_row(
     let file = app.store.edited();
     let help = match handler.set.as_deref() {
         Some(set) if !file.set_enabled_on(set, &crate::sync::machine()) => {
-            format!("Off on this machine. Settings \u{203a} Sync turns {set} on or off here.")
+            format!("Off on this machine. Settings \u{203a} Cloud Sync turns {set} on or off here.")
         }
-        Some(_) => "On on this machine. Settings \u{203a} Sync turns a set on or off for each \
+        Some(_) => {
+            "On on this machine. Settings \u{203a} Cloud Sync turns a set on or off for each \
                     machine."
-            .to_owned(),
+                .to_owned()
+        }
         None => {
             let names = file.set_names();
             if names.is_empty() {

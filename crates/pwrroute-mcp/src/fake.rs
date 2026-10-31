@@ -349,7 +349,7 @@ impl FakeRules {
         )
     }
 
-    /// Switches the source, as Settings › Configuration would.
+    /// Switches the source, as Settings › Config Files would.
     pub fn select(&self, source: RulesSource) {
         lock(&self.state).source = source;
     }
