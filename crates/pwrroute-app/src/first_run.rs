@@ -1142,7 +1142,7 @@ impl FirstRun {
             model,
             hooks,
             focus: cx.focus_handle(),
-            menu_bar: MenuBar::entity("Set up PwrRoute", cx),
+            menu_bar: MenuBar::listed("Set up PwrRoute", cx),
             picking: Picking::None,
             was_picking: Picking::None,
         }

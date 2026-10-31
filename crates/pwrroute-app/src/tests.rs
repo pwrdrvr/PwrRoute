@@ -5385,23 +5385,37 @@ fn strip_rows_show_the_keymaps_shortcuts(cx: &mut TestAppContext) {
 }
 
 /// Window lists the windows with a strip after Minimize, this one checked;
-/// a row brings its window forward.
+/// a row brings its window forward. A secondary window draws no menu bar
+/// and takes no Alt, but is listed.
 #[gpui_kit::test]
 fn the_window_menu_lists_the_open_windows(cx: &mut TestAppContext) {
-    let (_, main) = open_with_strip(cx);
-    let main_handle = main.update(|window, _| window.window_handle());
+    let main_handle = open_with_strip(cx)
+        .1
+        .update(|window, _| window.window_handle());
     let (_, other) = cx.add_window_view(|_, cx| crate::logs_window::LogsWindow::new(None, cx));
     draw(other);
     other.update(|window, _| window.activate_window());
     other.run_until_parked();
+    other
+        .executor()
+        .advance_clock(crate::menu_bar::FAKE_ALT_WINDOW);
     draw(other);
-    click(other, "menu-title-window");
-    assert!(other.debug_bounds("menu-row-window-minimize").is_some());
-    assert!(other.debug_bounds("menu-row-window-pwrroute").is_some());
-    assert!(other.debug_bounds("menu-row-window-logs").is_some());
-    click(other, "menu-row-window-pwrroute");
-    other.run_until_parked();
-    assert_eq!(cx.update(|cx| cx.active_window()), Some(main_handle));
+    let other_handle = other.update(|window, _| window.window_handle());
+    assert!(other.debug_bounds("menu-title-window").is_none());
+    keys(other, "alt");
+    keys(other, "alt-w");
+    assert!(other.debug_bounds("menu-card-window").is_none());
+    let main = &mut VisualTestContext::from_window(main_handle, cx);
+    main.update(|window, _| window.activate_window());
+    main.run_until_parked();
+    draw(main);
+    click(main, "menu-title-window");
+    assert!(main.debug_bounds("menu-row-window-minimize").is_some());
+    assert!(main.debug_bounds("menu-row-window-pwrroute").is_some());
+    assert!(main.debug_bounds("menu-row-window-logs").is_some());
+    click(main, "menu-row-window-logs");
+    main.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.active_window()), Some(other_handle));
 }
 
 /// View's rows open their screen in the window in front, from the menu
@@ -5421,8 +5435,8 @@ fn view_rows_open_their_screen_in_the_window_in_front(cx: &mut TestAppContext) {
     assert_eq!(screen(&view, cx), Screen::Overview);
 }
 
-/// Help › Changelog from the Changelog window's own strip brings that
-/// window forward; it never opens a second.
+/// Help › Changelog with the Changelog window in front brings that window
+/// forward; it never opens a second.
 #[gpui_kit::test]
 fn a_help_window_chosen_from_itself_stays_one_window(cx: &mut TestAppContext) {
     cx.update(|cx| crate::app_menu::install_for(crate::chrome::Chrome::Linux, cx));
@@ -5433,10 +5447,11 @@ fn a_help_window_chosen_from_itself_stays_one_window(cx: &mut TestAppContext) {
     doc.update(|window, _| window.activate_window());
     doc.run_until_parked();
     draw(doc);
-    // Linux: the menu bar, and the desktop's own caption buttons.
+    // Linux: no menu bar in a secondary window, and the desktop's own
+    // caption buttons.
+    assert!(doc.debug_bounds("menu-title-help").is_none());
     assert!(doc.debug_bounds("caption-close").is_none());
-    click(doc, "menu-title-help");
-    click(doc, "menu-row-help-changelog");
+    doc.dispatch_action(crate::help::OpenChangelog);
     doc.run_until_parked();
     let docs = cx.update(|cx| {
         cx.windows()

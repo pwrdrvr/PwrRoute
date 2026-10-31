@@ -194,7 +194,7 @@ impl LogsWindow {
             list: ListState::new(0, ListAlignment::Top, px(240.0)),
             list_keys: Vec::new(),
             list_generation: None,
-            menu_bar: MenuBar::entity("Logs", cx),
+            menu_bar: MenuBar::listed("Logs", cx),
             live: true,
             new_lines: 0,
             new_errors: 0,

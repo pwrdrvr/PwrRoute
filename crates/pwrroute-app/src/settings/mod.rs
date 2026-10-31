@@ -359,7 +359,7 @@ impl SettingsWindow {
         let scroll = ScrollHandle::new();
         Self {
             focus: cx.focus_handle(),
-            menu_bar: MenuBar::entity("Settings", cx),
+            menu_bar: MenuBar::listed("Settings", cx),
             // Browsers, not About: it is the pane people open Settings for.
             pane: Pane::Browsers,
             model,

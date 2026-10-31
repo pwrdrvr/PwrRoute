@@ -301,7 +301,7 @@ impl Importer {
         Self {
             model,
             focus: cx.focus_handle(),
-            menu_bar: MenuBar::entity("Import Finicky Config", cx),
+            menu_bar: MenuBar::listed("Import Finicky Config", cx),
             from_first_run: None,
         }
     }

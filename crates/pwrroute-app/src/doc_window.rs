@@ -123,7 +123,7 @@ impl DocWindow {
             doc,
             body,
             focus: cx.focus_handle(),
-            menu_bar: MenuBar::entity(doc.title(), cx),
+            menu_bar: MenuBar::listed(doc.title(), cx),
             copied: false,
             scroll: gpui_kit::ScrollHandle::new(),
         }
