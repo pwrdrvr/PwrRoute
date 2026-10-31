@@ -37,6 +37,8 @@ pub fn general() -> super::model::General {
     super::model::General {
         theme: crate::theme::ThemeChoice::System,
         showing: crate::theme::Appearance::Dark,
+        dark_theme: crate::theme::DarkTheme::Tangerine,
+        light_theme: crate::theme::LightTheme::Tangerine,
         increase_contrast: false,
         os: "macOS",
     }

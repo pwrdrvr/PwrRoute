@@ -9,9 +9,12 @@ Rules.dc.html` and its Machine file (Cloud Sync), and `design/PwrRoute
 Settings Sections.dc.html` (the grouped nav, Config Files, Short Links,
 Cloud Sync's Finicky config); Diagnostics and About follow the family's
 panes in the same controls. General (`general.rs`, design: Appearance and
-Themes 1a) holds Appearance: Theme, whose producer is `crate::appearance`
-(it saves, applies and reports back, also when the OS changes under
-System), and the OS's Increase Contrast as a read-only row. About leads
+Themes 1a-1e) holds Appearance: Theme, the Dark theme and Light theme
+selects (swatch, "Showing" beside the one drawn, a borrowed palette's
+credit, and once after a pick an offer of the other scheme's pair, which
+any other action drops), whose producer is `crate::appearance` (it saves,
+applies and reports back, also when the OS changes under System), and the
+OS's Increase Contrast as a read-only row. About leads
 the nav, General follows outside the groups, Browsers opens first.
 
 - **The nav (`nav.rs`) groups panes** (Routing, Across machines, Data and

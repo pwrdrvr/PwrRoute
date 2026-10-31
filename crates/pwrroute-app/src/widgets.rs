@@ -4,9 +4,9 @@
 use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Div, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement as _,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, StyledImage as _, div,
-    img,
+    AnyElement, Div, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton,
+    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    StyledImage as _, div, img,
 };
 
 use crate::theme::{self, icon, mono, text};
@@ -709,6 +709,22 @@ pub fn menu_row(
     label: impl Into<SharedString>,
     hint: Option<SharedString>,
 ) -> Stateful<Div> {
+    menu_row_with(
+        id,
+        badge_label.map(|label| badge(label).into_any_element()),
+        label,
+        hint,
+    )
+}
+
+/// [`menu_row`] led by something other than an app's badge: a theme's
+/// swatch.
+pub fn menu_row_with(
+    id: impl Into<ElementId>,
+    lead: Option<AnyElement>,
+    label: impl Into<SharedString>,
+    hint: Option<SharedString>,
+) -> Stateful<Div> {
     let label = label.into();
     let id = id.into();
     let hint_id = id.clone();
@@ -725,7 +741,7 @@ pub fn menu_row(
         .py(px(6.0))
         .rounded(px(5.0))
         .cursor_pointer()
-        .when_some(badge_label, |row, label| row.child(badge(label)))
+        .children(lead)
         .child(one_line(
             label,
             theme::SANS,

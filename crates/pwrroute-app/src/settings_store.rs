@@ -6,7 +6,8 @@
 //! channel picked in Settings › Updates (`updates`), the Logs window's
 //! view (`logs`: Wrap, Filter or Highlight, Context, Include diagnostics
 //! and the levels), the folders rules sync with (`sync`), View › Zoom
-//! (`view`) and Settings › General's Theme (`appearance`); other panes
+//! (`view`) and Settings › General's Theme, Dark theme and Light theme
+//! (`appearance`); other panes
 //! join as their producers land.
 //!
 //! [`Settings::load`] reads the file (absent means the defaults) and
@@ -33,7 +34,7 @@ use pwrroute_router::{JournalConfig, JournalMode, Retention, RouterHandle};
 use serde::{Deserialize, Serialize};
 
 use crate::log_view::{CONTEXT_CHOICES, SearchMode};
-use crate::theme::ThemeChoice;
+use crate::theme::{DarkTheme, LightTheme, ThemeChoice};
 use crate::update_channel::UpdateSettings;
 
 /// The file in `pwrroute_os::data_dir()`.
@@ -66,7 +67,7 @@ pub struct Settings {
     /// View › Zoom. Left out at Actual Size.
     #[serde(skip_serializing_if = "ViewSettings::is_default")]
     pub view: ViewSettings,
-    /// Settings › General's Appearance. Left out at System.
+    /// Settings › General's Appearance. Left out at System and Tangerine.
     #[serde(skip_serializing_if = "AppearanceSettings::is_default")]
     pub appearance: AppearanceSettings,
     /// Settings › Cloud Sync: the folders `rules.json` syncs with. Left out
@@ -113,12 +114,18 @@ impl ViewSettings {
     }
 }
 
-/// Settings › General's Appearance (`appearance.rs`): the Theme choice.
+/// Settings › General's Appearance (`appearance.rs`): the Theme choice,
+/// and the color theme for each scheme (PWR-23), by PwrAgent's ids. Each is
+/// left out at its default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppearanceSettings {
-    #[serde(with = "theme_choice")]
+    #[serde(with = "theme_choice", skip_serializing_if = "is_default")]
     pub theme: ThemeChoice,
+    #[serde(with = "dark_theme", skip_serializing_if = "is_default")]
+    pub dark_theme: DarkTheme,
+    #[serde(with = "light_theme", skip_serializing_if = "is_default")]
+    pub light_theme: LightTheme,
 }
 
 impl AppearanceSettings {
@@ -127,31 +134,48 @@ impl AppearanceSettings {
     }
 }
 
-/// `appearance.theme` as a word. A word this build does not know reads as
-/// System, so a hand edit (or a newer build's theme) never costs the rest
-/// of the file.
-mod theme_choice {
-    use serde::{Deserialize as _, Deserializer, Serializer};
-
-    use crate::theme::ThemeChoice;
-
-    pub fn serialize<S: Serializer>(
-        choice: &ThemeChoice,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(choice.key())
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<ThemeChoice, D::Error> {
-        let word = String::deserialize(deserializer)?;
-        Ok(ThemeChoice::from_key(&word).unwrap_or_else(|| {
-            log::warn!("settings.json: appearance.theme {word:?} is not a theme; using System");
-            ThemeChoice::System
-        }))
-    }
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
+
+/// A field kept as a word. A word this build does not know reads as the
+/// default, so a hand edit (or a newer build's theme) never costs the rest
+/// of the file.
+macro_rules! keyword {
+    ($module:ident, $type:ident, $field:literal) => {
+        mod $module {
+            use serde::{Deserialize as _, Deserializer, Serializer};
+
+            use crate::theme::$type;
+
+            pub fn serialize<S: Serializer>(
+                value: &$type,
+                serializer: S,
+            ) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(value.key())
+            }
+
+            pub fn deserialize<'de, D: Deserializer<'de>>(
+                deserializer: D,
+            ) -> Result<$type, D::Error> {
+                let word = String::deserialize(deserializer)?;
+                Ok($type::from_key(&word).unwrap_or_else(|| {
+                    let fallback = $type::default();
+                    log::warn!(
+                        "settings.json: {} {word:?} is not known; using {}",
+                        $field,
+                        fallback.key()
+                    );
+                    fallback
+                }))
+            }
+        }
+    };
+}
+
+keyword!(theme_choice, ThemeChoice, "appearance.theme");
+keyword!(dark_theme, DarkTheme, "appearance.darkTheme");
+keyword!(light_theme, LightTheme, "appearance.lightTheme");
 
 /// Which cloud folders this machine syncs its rules with, and whether the
 /// Finicky config syncs too. Paths of folders, never a link.
@@ -744,6 +768,51 @@ mod tests {
         let settings = Settings::load(dir.path()).unwrap();
         assert_eq!(settings.appearance.theme, ThemeChoice::System);
         assert_eq!(settings.view.zoom, 150);
+    }
+
+    #[test]
+    fn color_themes_round_trip_and_tangerine_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = SettingsStore::load(Some(dir.path().to_path_buf()));
+        store
+            .update(|settings| {
+                settings.appearance.dark_theme = DarkTheme::CatppuccinMocha;
+                settings.appearance.light_theme = LightTheme::SolarizedLight;
+            })
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(
+            text.contains("\"darkTheme\": \"catppuccin-mocha\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"lightTheme\": \"solarized-light\""),
+            "{text}"
+        );
+        // System is still left out beside them.
+        assert!(!text.contains("\"theme\""), "{text}");
+        let again = Settings::load(dir.path()).unwrap();
+        assert_eq!(again.appearance.dark_theme, DarkTheme::CatppuccinMocha);
+        assert_eq!(again.appearance.light_theme, LightTheme::SolarizedLight);
+
+        store
+            .update(|settings| {
+                settings.appearance.dark_theme = DarkTheme::Tangerine;
+                settings.appearance.light_theme = LightTheme::Tangerine;
+            })
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(!text.contains("appearance"), "{text}");
+
+        // An unknown theme costs only itself.
+        fs::write(
+            Settings::path(dir.path()),
+            r#"{"appearance": {"darkTheme": "neon", "lightTheme": "gray-light"}}"#,
+        )
+        .unwrap();
+        let settings = Settings::load(dir.path()).unwrap();
+        assert_eq!(settings.appearance.dark_theme, DarkTheme::Tangerine);
+        assert_eq!(settings.appearance.light_theme, LightTheme::Gray);
     }
 
     #[test]

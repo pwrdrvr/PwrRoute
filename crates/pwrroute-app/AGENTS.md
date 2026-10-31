@@ -636,8 +636,19 @@ their own modules.
   Activity's sheet). Never draw a field's text as a plain div: it loses
   the caret. Write the text only through `set`, so the caret follows.
 - **Colors, dimming and zoom come from `theme` (design: Contrast and
-  Scale).** Four palettes: dark and light, each with Increase Contrast,
-  which strengthens ink and edges, never tints. Which scheme draws is
+  Scale).** Each color theme (design: Appearance and Themes) has two
+  palettes, standard and with Increase Contrast, which strengthens ink and
+  edges, never tints: Tangerine, Gray, Blue, Phosphor, Catppuccin Mocha and
+  Solarized Dark for the dark scheme (`DarkTheme`), Tangerine, Gray, Blue,
+  Catppuccin Latte and Solarized Light for the light one (`LightTheme`).
+  The palettes are data in `theme_palettes.rs`, mirrored by
+  `design/pwrroute-themes.css` (a test holds the two together; Tangerine's
+  design values stay in `pwrroute.css`); a token is one field of
+  `Palette`, declared once in `theme.rs`'s `palette!` list. Settings ›
+  General's Dark theme and Light theme pick them, saved as
+  `appearance.darkTheme` / `appearance.lightTheme` by PwrAgent's ids and
+  installed with the Theme; a pick redraws at once when its scheme is
+  drawn. Which scheme draws is
   `appearance.rs`'s (design: Appearance and Themes): Settings › General's
   Theme, System (the default), Dark or Light, saved as `settings.json`'s
   `appearance.theme` and installed before the first window opens. System
@@ -646,9 +657,9 @@ their own modules.
   `accessibility_prefs`' poll and at once in an open main or Settings
   window (`appearance::watch`); Dark and Light also set the app's own
   appearance (`set_window_appearance`), so native chrome matches and no
-  window opens in the other scheme. A scheme change redraws every window,
-  the Windows and Linux tray icon (`tray::follow_scheme`, the accent) and
-  Settings › General. Tests never read the OS: System is dark there.
+  window opens in the other scheme. A scheme or theme change redraws every
+  window, the Windows and Linux tray icon (`tray::follow_scheme`, the
+  accent) and Settings › General. Tests never read the OS: System is dark there.
   `PWRROUTE_INCREASE_CONTRAST=1` previews Increase Contrast. The theme is
   thread-local: set it on the GPUI
   thread, then `cx.refresh_windows()`. Text never fades by `.opacity()`:
@@ -657,9 +668,9 @@ their own modules.
   "off" another way (a chip, a strike, the dashed frame). Opacity is for
   what is not text (`DIM_DECORATIVE`) and for passing states (`DISABLED`,
   `LIFTED`, `SPOTLIGHT`). Every text token clears 4.5:1 and every control
-  edge 3:1 on every surface, also dimmed. `theme`'s tests check that and
-  compare `src/contrast.snap` (rewrite it with `UPDATE_CONTRAST_SNAP=1`
-  and review the diff). `design/pwrroute.css` holds the same values.
+  edge 3:1 on every surface, also dimmed, in every theme's every palette.
+  `theme`'s tests check that and compare `src/contrast.snap` (rewrite it
+  with `UPDATE_CONTRAST_SNAP=1` and review the diff). `design/pwrroute.css` holds the same values.
   **Views size with `theme::px`, never `gpui_kit::px`:** it is the
   design's pixels times View › Zoom (`zoom.rs`: 100 to 200%, saved as
   `settings.json`'s `view.zoom`). A measured length goes back through
@@ -672,7 +683,8 @@ their own modules.
   shows the list or the editor (with "‹ All rules") when both do not fit;
   Activity's table scrolls sideways past `column::TABLE_MIN`; Today's
   tiles go in pairs. The `screens` example takes `--light`,
-  `--high-contrast`, `--zoom=1.5` and `--display=WxH`.
+  `--high-contrast`, `--zoom=1.5`, `--display=WxH`, and
+  `--dark-theme=<id>` / `--light-theme=<id>`.
 - **Never clip text at its line box.** `theme::text` and most one-line
   helpers set the line height to the font size, and Geist's glyphs are
   taller than that (1.14em, Geist Mono 1.3em), so `overflow_hidden` on

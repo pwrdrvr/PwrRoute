@@ -767,7 +767,12 @@ fn error_line(words: SharedString) -> gpui_kit::Stateful<Div> {
 }
 
 /// An `.inp` select trigger with its value and caret.
-fn trigger(id: ElementId, open: bool, width: f32, content: Div) -> gpui_kit::Stateful<Div> {
+pub(super) fn trigger(
+    id: ElementId,
+    open: bool,
+    width: f32,
+    content: Div,
+) -> gpui_kit::Stateful<Div> {
     div()
         .id(id)
         .w(px(width))
