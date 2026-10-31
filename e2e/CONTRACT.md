@@ -123,7 +123,7 @@ a strip with one chip).
 | `titleStrip`, `body` | the window root (`app.rs`) |
 | `rail`, `pane`, `editor` | the body (`app.rs`); `pane` is the screen's own content |
 | `titleStrip.brand`, `.chevron`, `.breadcrumb`, `.spacer`, `.chip1`, `.chip2` | `chrome::title_strip`; the chips depend on the screen. Off macOS `.menuBar` follows `.brand`, and on Windows `.captions` (the caption buttons, absolutely placed at the right edge) comes first |
-| `menuBar.file`, `.edit`, `.view`, `.window`, `.help` | `menu_bar::MenuBar`, Windows and Linux only |
+| `menuBar.file`, `.edit`, `.view`, `.window`, `.help` | `menu_bar::MenuBar`, Windows and Linux only, main window only |
 | `rail.overview`, `.rules`, `.test`, `.activity`, `.settingsHeading`, `.openSettings`, `.foot` | `chrome::nav_rail` |
 | `editor.title`, `editor.enabled` | `editor::header` |
 

@@ -314,7 +314,12 @@ their own modules.
 - **The strip is the menu bar off macOS (`chrome.rs`, `menu_bar.rs`;
   design: Windows and Linux Chrome 1a/1b).** Every window with a strip
   (main, Settings, the importer, first run, Help's) owns a `MenuBar` and
-  draws `chrome::strip`, never its own copy. `chrome::Chrome` decides:
+  draws `chrome::strip`, never its own copy. Only the main window's bar
+  (`MenuBar::entity`) draws titles and takes keys; the others are
+  `MenuBar::listed`, drawing nothing and taking no Alt, as a Windows app's
+  secondary windows have no menu bar, but still named in Window's list.
+  This departs from the design's "The Settings window takes the same
+  rules": its brand and captions, not the menus. `chrome::Chrome` decides:
   macOS keeps the brand at x=96 after the traffic lights; Windows and Linux
   start it at x=16 with the bar after it, built from
   `app_menu::menus(Platform::Other)` (no second list) plus Window's list of

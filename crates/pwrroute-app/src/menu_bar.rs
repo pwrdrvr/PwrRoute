@@ -9,6 +9,11 @@
 //! shortcut from the keymap and dispatches its action; Window's list of
 //! open windows follows Minimize.
 //!
+//! Only the main window draws the titles, as a Windows app's secondary
+//! windows (Settings, first run, the importer, Help's) have no menu bar.
+//! Those own a bar that draws nothing ([`MenuBar::listed`]): it names the
+//! window in Window's list and takes no keys.
+//!
 //! Keys reach the bar through a keystroke interceptor, which runs before
 //! any binding or field sees them, so focus never moves to the bar: a row
 //! dispatches in the window as it was, and Edit's rows replay their key
@@ -517,13 +522,19 @@ pub fn install(cx: &mut App) {
         let Some(bar) = bar_for(window.window_handle(), cx) else {
             return;
         };
-        if bar.update(cx, |bar, cx| bar.keystroke(&event.keystroke, window, cx)) {
+        if bar.read(cx).drawn
+            && bar.update(cx, |bar, cx| bar.keystroke(&event.keystroke, window, cx))
+        {
             cx.stop_propagation();
         }
     })
     .detach();
     cx.on_action(|_: &app_menu::FocusMenuBar, cx| {
-        let Some(bar) = cx.active_window().and_then(|window| bar_for(window, cx)) else {
+        let Some(bar) = cx
+            .active_window()
+            .and_then(|window| bar_for(window, cx))
+            .filter(|bar| bar.read(cx).drawn)
+        else {
             return;
         };
         let gpuis = alt_is_gpuis(cx);
@@ -540,10 +551,13 @@ pub fn install(cx: &mut App) {
 }
 
 /// One window's menu bar. Every window with a strip owns one; only the
-/// Windows and Linux strip draws it.
+/// main window's Windows and Linux strip draws it.
 pub struct MenuBar {
     /// The window's name in Window's list.
     name: SharedString,
+    /// Draws the titles and takes Alt, F10 and the menus' keys. A
+    /// secondary window's bar only lists the window.
+    drawn: bool,
     pub state: State,
     /// The titles' bounds as last painted: a press there is the title's,
     /// not a press outside the open menu.
@@ -558,6 +572,7 @@ impl MenuBar {
     pub fn new(name: impl Into<SharedString>) -> Self {
         Self {
             name: name.into(),
+            drawn: true,
             state: State::default(),
             titles: Rc::default(),
             alt_clicked: false,
@@ -566,10 +581,20 @@ impl MenuBar {
         }
     }
 
-    /// A bar for a window named `name`, as an entity.
+    /// The main window's bar, named `name`, as an entity.
     pub fn entity(name: impl Into<SharedString>, cx: &mut App) -> Entity<Self> {
         let name = name.into();
         cx.new(|_| Self::new(name))
+    }
+
+    /// A secondary window's bar: it draws nothing and takes no keys, but
+    /// lists the window, named `name`, in the main window's Window menu.
+    pub fn listed(name: impl Into<SharedString>, cx: &mut App) -> Entity<Self> {
+        let name = name.into();
+        cx.new(|_| Self {
+            drawn: false,
+            ..Self::new(name)
+        })
     }
 
     /// Joins the window on first draw: listed for Alt and Window's list,
@@ -822,6 +847,10 @@ impl MenuBar {
 impl Render for MenuBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         self.attach(window, cx);
+        if !self.drawn {
+            // Out of the strip's flow, so it leaves no gap after the brand.
+            return div().id("menu-bar-listed").absolute();
+        }
         // Under the strip, down to 8px above the window's bottom edge; past
         // that the card scrolls.
         let max_height =

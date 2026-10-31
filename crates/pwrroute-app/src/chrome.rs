@@ -342,7 +342,8 @@ const WINDOWS_REGIONS: &[&str] = &[
 
 /// `.strip` with its `.brand`: the mark and the wordmark, after the
 /// traffic lights on macOS; elsewhere at x=16 with `menu_bar` after it
-/// and, on Windows, the caption buttons on the right. The crumb and
+/// (titles in the main window only: a `MenuBar::listed` draws none) and,
+/// on Windows, the caption buttons on the right. The crumb and
 /// whatever follows go in as children.
 pub fn strip(menu_bar: &Entity<MenuBar>, window: &Window, cx: &App) -> Div {
     let chrome = current(cx);
