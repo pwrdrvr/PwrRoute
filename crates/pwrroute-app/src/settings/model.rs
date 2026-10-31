@@ -10,6 +10,7 @@
 use gpui_kit::SharedString;
 
 use crate::build_info::BuildInfo;
+use crate::theme::{Appearance, ThemeChoice};
 use crate::widgets::AppBadge;
 
 pub use crate::default_browser::DefaultState;
@@ -19,6 +20,7 @@ pub use crate::update_channel::Slot;
 /// Everything the Settings window draws.
 #[derive(Clone, Debug)]
 pub struct SettingsModel {
+    pub general: General,
     pub local_agents: LocalAgents,
     pub configuration: Configuration,
     pub sync: Sync,
@@ -28,6 +30,51 @@ pub struct SettingsModel {
     pub experimental: Experimental,
     pub diagnostics: Diagnostics,
     pub about: About,
+}
+
+// ---- General --------------------------------------------------------------
+
+/// Settings › General's Appearance card (design: Appearance and Themes
+/// 1a, 1b): the Theme choice and what it draws now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct General {
+    pub theme: ThemeChoice,
+    /// The scheme drawn now: what System resolves to while it follows the
+    /// OS.
+    pub showing: Appearance,
+    /// The OS's Increase Contrast, as PwrRoute follows it.
+    pub increase_contrast: bool,
+    /// Who System follows, in the reader's words: "macOS", "Windows", "your
+    /// desktop".
+    pub os: &'static str,
+}
+
+impl General {
+    /// The card's chip: "System · Dark", or the choice.
+    pub fn chip(&self) -> String {
+        match self.theme {
+            ThemeChoice::System => format!("System \u{00b7} {}", scheme_word(self.showing)),
+            choice => choice.label().to_owned(),
+        }
+    }
+
+    /// The line under Theme.
+    pub fn theme_help(&self) -> String {
+        match self.theme {
+            ThemeChoice::System => {
+                format!("Following {}: {} now.", self.os, scheme_word(self.showing))
+            }
+            ThemeChoice::Dark => format!("Always dark, whatever {} uses.", self.os),
+            ThemeChoice::Light => format!("Always light, whatever {} uses.", self.os),
+        }
+    }
+}
+
+fn scheme_word(scheme: Appearance) -> &'static str {
+    match scheme {
+        Appearance::Dark => "Dark",
+        Appearance::Light => "Light",
+    }
 }
 
 // ---- Local agents ---------------------------------------------------------
@@ -791,6 +838,8 @@ pub struct About {
 /// the window acts on the OS itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsRequest {
+    /// General: Theme, saved and applied at once.
+    SetTheme(ThemeChoice),
     SetYieldBrowserFocus(bool),
     SetAgentAccess(bool),
     SetSessionRole {

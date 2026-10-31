@@ -60,14 +60,60 @@ pub fn mono_family(css: f32) -> &'static str {
     }
 }
 
-/// Dark is PwrRoute's look; light is drawn by the `screens` example and
-/// `PWRROUTE_APPEARANCE=light` (a preview: the app does not follow the OS's
-/// appearance yet).
+/// The scheme being drawn: what [`ThemeChoice`] resolves to. Dark until
+/// `appearance.rs` reads the choice and the OS; the `screens` example
+/// draws light with `--light`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Appearance {
     #[default]
     Dark,
     Light,
+}
+
+/// Settings › General › Theme (PWR-22; design: Appearance and Themes 1a),
+/// as `settings.json`'s `appearance.theme` keeps it. System follows the
+/// OS while the app runs (`appearance.rs`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ThemeChoice {
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+impl ThemeChoice {
+    pub const ALL: [Self; 3] = [Self::System, Self::Dark, Self::Light];
+
+    /// The scheme drawn when the OS uses `os`.
+    pub fn resolve(self, os: Appearance) -> Appearance {
+        match self {
+            Self::System => os,
+            Self::Dark => Appearance::Dark,
+            Self::Light => Appearance::Light,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+        }
+    }
+
+    /// The word in `settings.json`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+
+    /// `key`'s inverse; `None` for a word it does not know.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|choice| choice.key() == key)
+    }
 }
 
 /// What every token and size reads.
@@ -88,6 +134,17 @@ impl Default for Theme {
             increase_contrast: false,
             zoom: 1.0,
         }
+    }
+}
+
+/// Puts the default theme back when dropped, even when a test fails.
+#[cfg(test)]
+pub struct DefaultOnDrop;
+
+#[cfg(test)]
+impl Drop for DefaultOnDrop {
+    fn drop(&mut self) {
+        set(Theme::default());
     }
 }
 
@@ -746,6 +803,19 @@ mod tests {
         assert!(!is_dimmed());
         assert_eq!(text_primary(), primary);
         assert_eq!(dimmed(text_muted), text_muted());
+    }
+
+    #[test]
+    fn a_theme_choice_resolves_against_the_os() {
+        for os in [Appearance::Dark, Appearance::Light] {
+            assert_eq!(ThemeChoice::System.resolve(os), os);
+            assert_eq!(ThemeChoice::Dark.resolve(os), Appearance::Dark);
+            assert_eq!(ThemeChoice::Light.resolve(os), Appearance::Light);
+        }
+        for choice in ThemeChoice::ALL {
+            assert_eq!(ThemeChoice::from_key(choice.key()), Some(choice));
+        }
+        assert_eq!(ThemeChoice::from_key("sepia"), None);
     }
 
     #[test]

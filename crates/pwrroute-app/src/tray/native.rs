@@ -257,6 +257,23 @@ impl NativeTray {
         })
     }
 
+    /// Draws the icon again in the accent of the scheme now in force.
+    /// macOS's template follows the menu bar by itself.
+    pub fn follow_scheme(&self) {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let bitmap = icon::colored();
+        match Icon::from_rgba(bitmap.rgba, bitmap.width, bitmap.height) {
+            Ok(image) => {
+                if let Err(error) = self.icon.set_icon(Some(image)) {
+                    log::warn!("could not recolor the tray icon: {error}");
+                }
+            }
+            Err(error) => log::warn!("could not recolor the tray icon: {error}"),
+        }
+    }
+
     /// A left click on the icon where it is now, as tray-icon would report
     /// it. `None` where the platform does not say (Linux).
     pub fn click_here(&self) -> Option<TrayEvent> {

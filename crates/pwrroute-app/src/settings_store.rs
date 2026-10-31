@@ -5,7 +5,8 @@
 //! picked, with the config notices dismissed (`source`), and the release
 //! channel picked in Settings › Updates (`updates`), the Logs window's
 //! view (`logs`: Wrap, Filter or Highlight, Context, Include diagnostics
-//! and the levels) and the folders rules sync with (`sync`); other panes
+//! and the levels), the folders rules sync with (`sync`), View › Zoom
+//! (`view`) and Settings › General's Theme (`appearance`); other panes
 //! join as their producers land.
 //!
 //! [`Settings::load`] reads the file (absent means the defaults) and
@@ -32,6 +33,7 @@ use pwrroute_router::{JournalConfig, JournalMode, Retention, RouterHandle};
 use serde::{Deserialize, Serialize};
 
 use crate::log_view::{CONTEXT_CHOICES, SearchMode};
+use crate::theme::ThemeChoice;
 use crate::update_channel::UpdateSettings;
 
 /// The file in `pwrroute_os::data_dir()`.
@@ -64,6 +66,9 @@ pub struct Settings {
     /// View › Zoom. Left out at Actual Size.
     #[serde(skip_serializing_if = "ViewSettings::is_default")]
     pub view: ViewSettings,
+    /// Settings › General's Appearance. Left out at System.
+    #[serde(skip_serializing_if = "AppearanceSettings::is_default")]
+    pub appearance: AppearanceSettings,
     /// Settings › Cloud Sync: the folders `rules.json` syncs with. Left out
     /// while nothing syncs.
     #[serde(skip_serializing_if = "SyncSettings::is_default")]
@@ -105,6 +110,46 @@ impl ViewSettings {
     /// The zoom as a factor, snapped to one of `theme::ZOOM_STEPS`.
     pub fn zoom(&self) -> f32 {
         crate::theme::snap_zoom(f32::from(self.zoom) / 100.0)
+    }
+}
+
+/// Settings › General's Appearance (`appearance.rs`): the Theme choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppearanceSettings {
+    #[serde(with = "theme_choice")]
+    pub theme: ThemeChoice,
+}
+
+impl AppearanceSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// `appearance.theme` as a word. A word this build does not know reads as
+/// System, so a hand edit (or a newer build's theme) never costs the rest
+/// of the file.
+mod theme_choice {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    use crate::theme::ThemeChoice;
+
+    pub fn serialize<S: Serializer>(
+        choice: &ThemeChoice,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(choice.key())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<ThemeChoice, D::Error> {
+        let word = String::deserialize(deserializer)?;
+        Ok(ThemeChoice::from_key(&word).unwrap_or_else(|| {
+            log::warn!("settings.json: appearance.theme {word:?} is not a theme; using System");
+            ThemeChoice::System
+        }))
     }
 }
 
@@ -666,6 +711,39 @@ mod tests {
         let result = none.update(|settings| settings.activity.journal_days = 2);
         assert!(result.is_err());
         assert_eq!(none.settings().activity.journal_days, 2);
+    }
+
+    #[test]
+    fn the_theme_round_trips_and_an_unknown_word_is_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = SettingsStore::load(Some(dir.path().to_path_buf()));
+        store
+            .update(|settings| settings.appearance.theme = ThemeChoice::Light)
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(
+            text.contains("\"appearance\": {\n    \"theme\": \"light\"\n  }"),
+            "{text}"
+        );
+        let again = Settings::load(dir.path()).unwrap();
+        assert_eq!(again.appearance.theme, ThemeChoice::Light);
+
+        // System is the default and is left out.
+        store
+            .update(|settings| settings.appearance.theme = ThemeChoice::System)
+            .unwrap();
+        let text = fs::read_to_string(Settings::path(dir.path())).unwrap();
+        assert!(!text.contains("appearance"), "{text}");
+
+        // A word this build does not know costs only itself.
+        fs::write(
+            Settings::path(dir.path()),
+            r#"{"appearance": {"theme": "sepia"}, "view": {"zoom": 150}}"#,
+        )
+        .unwrap();
+        let settings = Settings::load(dir.path()).unwrap();
+        assert_eq!(settings.appearance.theme, ThemeChoice::System);
+        assert_eq!(settings.view.zoom, 150);
     }
 
     #[test]

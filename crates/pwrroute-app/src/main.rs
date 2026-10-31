@@ -16,6 +16,7 @@ mod activity_actions;
 mod app;
 mod app_icons;
 mod app_menu;
+mod appearance;
 mod assets;
 mod aux_window;
 #[cfg(target_os = "windows")]
@@ -203,11 +204,9 @@ fn main() -> ExitCode {
     app.run(move |cx| {
         e2e::startup("launched");
         assets::load_fonts(cx);
-        // A preview of the light palette (design: Contrast and Scale); the
-        // app does not follow the OS's appearance yet.
-        if std::env::var("PWRROUTE_APPEARANCE").is_ok_and(|value| value == "light") {
-            theme::set_appearance(theme::Appearance::Light);
-        }
+        // Settings › General's Theme, before any window opens, so none
+        // opens in the other scheme first.
+        appearance::install(resident.settings.settings().appearance.theme, cx);
         // The Increase Contrast palette before the OS's setting reaches it.
         if std::env::var("PWRROUTE_INCREASE_CONTRAST").is_ok_and(|value| value == "1") {
             theme::set_increase_contrast(true);
@@ -502,8 +501,10 @@ pub(crate) fn show_main_window_on(display: Option<DisplayId>, cx: &mut App) {
             },
             |window, cx| {
                 e2e::startup("window");
-                // The strip's default-browser chip follows the OS's answer.
+                // The strip's default-browser chip follows the OS's answer,
+                // and the theme its appearance.
                 default_browser::watch(window, cx);
+                appearance::watch(window);
                 let view = cx.new(PwrRoute::new);
                 // And the Rules screen follows rules.json.
                 view.update(cx, |this, cx| this.watch_activation(window, cx));

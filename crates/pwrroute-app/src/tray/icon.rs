@@ -4,14 +4,12 @@
 //! macOS gets a template image: black strokes on transparent, which AppKit
 //! tints for the menu bar's appearance. The mark's back route keeps its 0.55
 //! opacity, so the template has the design's two tones. Windows and Linux
-//! have no template images, so they get the mark in the accent color.
+//! have no template images, so they get the mark in the accent of the
+//! scheme in force, drawn again when it changes (`tray::follow_scheme`).
 
 use resvg::{tiny_skia, usvg};
 
 const MARK: &str = include_str!("../../assets/icons/mark.svg");
-
-/// The accent, `--accent` in `design/pwrroute.css`.
-const ACCENT: &str = "#ff8a1f";
 
 /// An RGBA bitmap, row-major, straight (not premultiplied) alpha.
 #[derive(Debug)]
@@ -28,9 +26,22 @@ pub fn template() -> Bitmap {
     render("#000", 44, 32)
 }
 
-/// The Windows notification area and Linux StatusNotifierItem icon.
+/// The Windows notification area and Linux StatusNotifierItem icon, in
+/// `theme::accent()`.
 pub fn colored() -> Bitmap {
-    render(ACCENT, 32, 30)
+    render(&css_hex(crate::theme::accent()), 32, 30)
+}
+
+/// `color` as CSS `#rrggbb`, opaque.
+fn css_hex(color: gpui_kit::Hsla) -> String {
+    let rgba = gpui_kit::Rgba::from(color);
+    let byte = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(rgba.r),
+        byte(rgba.g),
+        byte(rgba.b)
+    )
 }
 
 /// The mark in `stroke`, `mark` px square, centered on a `canvas` px square.
@@ -107,5 +118,18 @@ mod tests {
             .find(|px| px[3] == 255)
             .expect("an opaque pixel");
         assert_eq!(&solid[..3], &[0xff, 0x8a, 0x1f]);
+    }
+
+    #[test]
+    fn the_colored_icon_follows_the_scheme() {
+        crate::theme::set_appearance(crate::theme::Appearance::Light);
+        let icon = colored();
+        crate::theme::set(crate::theme::Theme::default());
+        let solid = icon
+            .rgba
+            .chunks_exact(4)
+            .find(|px| px[3] == 255)
+            .expect("an opaque pixel");
+        assert_eq!(&solid[..3], &[0xa6, 0x44, 0x00]);
     }
 }

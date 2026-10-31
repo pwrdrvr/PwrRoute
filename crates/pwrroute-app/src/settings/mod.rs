@@ -18,6 +18,7 @@ mod controls;
 mod diagnostics;
 mod experimental;
 pub mod fixtures;
+pub mod general;
 mod local_agents;
 pub mod model;
 pub mod nav;
@@ -102,6 +103,7 @@ pub const SHORTCUT: &str = if cfg!(target_os = "macos") {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pane {
     About,
+    General,
     Browsers,
     Configuration,
     ShortLinks,
@@ -114,8 +116,9 @@ pub enum Pane {
 }
 
 impl Pane {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::About,
+        Self::General,
         Self::Browsers,
         Self::Configuration,
         Self::ShortLinks,
@@ -129,6 +132,7 @@ impl Pane {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::General => "General",
             Self::Browsers => "Browsers",
             Self::Configuration => "Config Files",
             Self::ShortLinks => "Short Links",
@@ -157,6 +161,7 @@ impl Pane {
     /// The nav item's element id.
     pub fn nav_id(self) -> &'static str {
         match self {
+            Self::General => "settings-nav-general",
             Self::Browsers => "settings-nav-browsers",
             Self::Configuration => "settings-nav-configuration",
             Self::ShortLinks => "settings-nav-short-links",
@@ -173,6 +178,7 @@ impl Pane {
     /// The pane body's element id.
     pub fn pane_id(self) -> &'static str {
         match self {
+            Self::General => "settings-pane-general",
             Self::Browsers => "settings-pane-browsers",
             Self::Configuration => "settings-pane-configuration",
             Self::ShortLinks => "settings-pane-short-links",
@@ -311,11 +317,21 @@ pub fn is_open(cx: &App) -> bool {
 /// back (the OS's answer on the default browser, say). Nothing happens when
 /// Settings is closed; the next open reads the producer afresh.
 pub fn update(cx: &mut App, edit: impl FnOnce(&mut SettingsModel)) {
+    update_if(cx, |model| {
+        edit(model);
+        Some(())
+    });
+}
+
+/// [`update`], redrawing only when `edit` says it changed something:
+/// for a producer that reports on a poll.
+pub fn update_if(cx: &mut App, edit: impl FnOnce(&mut SettingsModel) -> Option<()>) {
     let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
     if let Some(handle) = open {
         let _ = handle.update(cx, |view, _, cx| {
-            edit(&mut view.model);
-            cx.notify();
+            if edit(&mut view.model).is_some() {
+                cx.notify();
+            }
         });
     }
 }
@@ -493,6 +509,7 @@ impl SettingsWindow {
 
     fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
         match self.pane {
+            Pane::General => general::pane(self, cx),
             Pane::Browsers => browsers::pane(self, cx),
             Pane::Configuration => configuration::pane(self, cx),
             Pane::ShortLinks => short_links::pane(self, cx),

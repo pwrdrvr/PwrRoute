@@ -16,6 +16,7 @@ use super::model::{
 
 pub fn model() -> SettingsModel {
     SettingsModel {
+        general: general(),
         local_agents: local_agents(),
         configuration: configuration(),
         sync: sync(),
@@ -27,6 +28,17 @@ pub fn model() -> SettingsModel {
         },
         diagnostics: diagnostics(),
         about: about(),
+    }
+}
+
+/// General as the design's 1a draws it: System, following macOS into
+/// Dark.
+pub fn general() -> super::model::General {
+    super::model::General {
+        theme: crate::theme::ThemeChoice::System,
+        showing: crate::theme::Appearance::Dark,
+        increase_contrast: false,
+        os: "macOS",
     }
 }
 
