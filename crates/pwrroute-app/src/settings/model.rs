@@ -562,7 +562,7 @@ pub enum Usage {
 /// what the updater last said.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Updates {
-    /// "0.11.0".
+    /// "0.12.0".
     pub version: SharedString,
     /// "Stable · Latest": the release channel slot this copy follows.
     pub channel: SharedString,
@@ -626,7 +626,7 @@ pub struct Experimental {
 /// and states, never a link.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostics {
-    /// "0.11.0 · release · arm64".
+    /// "0.12.0 · release · arm64".
     pub version: SharedString,
     /// "macOS 15.6 (arm64)".
     pub os: SharedString,
@@ -847,7 +847,7 @@ pub struct About {
     /// Where to find the project: each a label and the address as text.
     /// Help's rows open them; here they are words to copy.
     pub links: Vec<(SharedString, SharedString)>,
-    /// This copy: the Version row ("PwrRoute 0.11.0", "debug build for
+    /// This copy: the Version row ("PwrRoute 0.12.0", "debug build for
     /// aarch64"), the Source row and Copy build info (design: Build
     /// Identity 2a, 2b).
     pub source: BuildInfo,

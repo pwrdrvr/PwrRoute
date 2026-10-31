@@ -168,7 +168,7 @@ fn routing(source: &RoutingSource, home: Option<&Path>) -> String {
     sentence
 }
 
-/// "0.11.0 · release · arm64 · 42a50803", the commit marked "+" when the
+/// "0.12.0 · release · arm64 · 42a50803", the commit marked "+" when the
 /// build had uncommitted changes.
 fn version_line(build: &BuildInfo) -> String {
     let mut line = format!(

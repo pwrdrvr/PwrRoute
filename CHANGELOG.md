@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.12.0 - 2026-10-31
+
+- Appearance - Settings › General returns with Theme choices System, Dark and Light. System is the default and follows the operating system while PwrRoute runs, including with its windows closed. An explicit Dark or Light choice also sets matching native window backgrounds, title bars, menus and panels before the first window opens. The choice is remembered, changes apply without restarting, and Windows and Linux tray icons follow the active scheme.
+- Color themes - Pick Dark theme and Light theme separately in Settings › General. Both offer Tangerine, Gray and Blue; dark also offers Phosphor, Catppuccin Mocha and Solarized Dark, while light offers Catppuccin Latte and Solarized Light. Tangerine remains the default palette. Pickers show color swatches, identify the theme being displayed and credit borrowed palettes. After a selection, Use it can apply the matching theme for the other scheme; that choice changes only when accepted. Active-theme changes redraw every window immediately and are remembered.
+- Increase Contrast - Each color theme has its own Increase Contrast variant, preserving the chosen palette when the OS setting changes. Quiet text becomes opaque and edges and selections become stronger. Audited text colors maintain at least 4.5:1 contrast, and control edges and status dots at least 3:1 across the themes. Settings › General shows the OS's current Increase Contrast state.
+
 ## v0.11.0 - 2026-10-31
 
 - Window menus - On Windows and Linux, File, Edit, View, Window and Help appear only in the main window. Settings, first run, the Finicky importer, Logs, Changelog, License and Third-Party Notices keep their title-strip branding and window buttons without a second menu bar. Keyboard shortcuts still work in those windows, and the main window's Window menu still lists and opens them. macOS menus are unchanged.
