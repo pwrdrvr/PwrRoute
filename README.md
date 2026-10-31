@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="packaging/icon/PwrRoute.svg" alt="" width="96" height="96">
+
 <h1>PwrRoute</h1>
 
 <strong>Every link to the right browser.</strong>
@@ -8,7 +10,23 @@
 rewrites, to the browser and profile your rules pick.<br>
 macOS, Windows and Linux. Runs your Finicky config.</p>
 
-<sub>Status: pre-release · MIT · by <a href="https://pwrdrvr.com">PwrDrvr LLC</a></sub>
+<p>
+  <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute.dmg"><img src="docs/assets/buttons/download-mac.png" alt="Download for Mac — Universal, Intel and Apple Silicon" width="250"></a>
+  <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-win-Setup.exe"><img src="docs/assets/buttons/download-windows.png" alt="Download for Windows — x64 installer" width="250"></a>
+</p>
+
+<p>
+  <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-x64.deb"><img src="docs/assets/buttons/download-linux-x64.png" alt="Download for Linux — x64 .deb for Debian and Ubuntu" width="250"></a>
+  <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-arm64.deb"><img src="docs/assets/buttons/download-linux-arm64.png" alt="Download for Linux — arm64 .deb for Debian and Ubuntu" width="250"></a>
+</p>
+
+<sub>Linux .tar.gz: <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-x64.tar.gz">x64</a> · <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-arm64.tar.gz">arm64</a> &nbsp;·&nbsp; Windows: <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-win.msi">.msi</a> · <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-win-Portable.zip">portable .zip</a> &nbsp;·&nbsp; macOS: <a href="https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-osx-Portable.zip">.zip</a></sub>
+
+<br><br>
+
+<sub>macOS 11 or newer, Intel and Apple silicon · Windows 10 or 11, x64 · Linux x64 and arm64 · MIT</sub><br>
+<sub>Signed and notarized for macOS, signed for Windows, and both keep themselves up to date.</sub><br>
+<sub>Status: pre-release · by <a href="https://pwrdrvr.com">PwrDrvr LLC</a></sub>
 
 </div>
 
@@ -37,15 +55,21 @@ locations, same API. You can try PwrRoute and go back to Finicky at any time.
 
 ## Install
 
-Download the latest build from
-[GitHub Releases](https://github.com/pwrdrvr/PwrRoute/releases). Releases
-are pre-releases until 1.0.
-
-| OS | Download | Then |
+| Platform | Download | Then |
 | --- | --- | --- |
-| macOS 11+ (Intel and Apple silicon) | `PwrRoute-<version>-universal.dmg` | Drag PwrRoute.app to Applications and open it once. The first-run window offers to make it the default browser, and macOS asks you to confirm. |
-| Windows 10/11 | `PwrRoute-win-Setup.exe` (or `PwrRoute-win.msi`) | Run the installer, then choose PwrRoute as the default browser in the first-run window or in Settings › Default apps. |
-| Linux (x64, arm64) | `.deb`, or `.tar.gz` for other distributions | Install it, then make it the default from the first-run window (or `xdg-settings set default-web-browser pwrroute.desktop`). |
+| macOS 11 or newer | [PwrRoute.dmg](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute.dmg) | Universal: Intel and Apple silicon. Drag PwrRoute.app to Applications and open it once. The first-run window offers to make it the default browser, and macOS asks you to confirm. |
+| Windows 10 / 11, x64 | [PwrRoute-win-Setup.exe](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-win-Setup.exe) | Run the installer, then choose PwrRoute as the default browser in the first-run window or in Settings › Default apps. |
+| Windows, for deployment tools | [PwrRoute-win.msi](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-win.msi) | Installs the same app as Setup.exe. |
+| Windows, portable | [PwrRoute-win-Portable.zip](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-win-Portable.zip) | Runs from wherever you unpack it. |
+| macOS, portable | [PwrRoute-osx-Portable.zip](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-osx-Portable.zip) | The same app as the DMG, zipped. |
+| Debian, Ubuntu, x64 | [PwrRoute-linux-x64.deb](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-x64.deb) | `sudo apt install ./PwrRoute-linux-x64.deb`, then make it the default from the first-run window (or `xdg-settings set default-web-browser pwrroute.desktop`). |
+| Debian, Ubuntu, arm64 | [PwrRoute-linux-arm64.deb](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-arm64.deb) | The same, for ARM. |
+| Other Linux, x64 / arm64 | [x64 .tar.gz](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-x64.tar.gz) · [arm64 .tar.gz](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-arm64.tar.gz) | Unpack it, put `pwrroute` on your `PATH` and `pwrroute.desktop` in `~/.local/share/applications`, then make it the default as above. |
+
+Every release, with SHA-256 checksums, is on the
+[releases page](https://github.com/pwrdrvr/PwrRoute/releases). The macOS
+app is signed with a Developer ID and notarized by Apple, and the Windows
+installers and app are Authenticode-signed. Linux packages are not signed.
 
 PwrRoute then stays in the menu bar (the system tray on Windows and Linux)
 with its windows closed. It updates itself on macOS and Windows; on Linux,
