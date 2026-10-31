@@ -77,6 +77,20 @@ pub enum Offer {
     Dark(DarkTheme),
 }
 
+impl Offer {
+    /// What a pick in `scheme`'s list offers, with `dark` and `light` the
+    /// themes after it: the other scheme's theme from the same palette,
+    /// unless it is already set.
+    pub fn after_pick(scheme: Appearance, dark: DarkTheme, light: LightTheme) -> Option<Self> {
+        match scheme {
+            Appearance::Dark => dark.pair().filter(|pair| *pair != light).map(Self::Light),
+            Appearance::Light => Some(light.pair())
+                .filter(|pair| *pair != dark)
+                .map(Self::Dark),
+        }
+    }
+}
+
 /// The pane's own view state: the open list and the offer. Neither is a
 /// preference; both go when the pane does.
 pub struct State {
@@ -572,7 +586,10 @@ impl SettingsWindow {
         let Some(menu) = self.general.menu.as_mut() else {
             return;
         };
-        let last = themes(menu.scheme).len().saturating_sub(1);
+        let last = match menu.scheme {
+            Appearance::Dark => DarkTheme::ALL.len(),
+            Appearance::Light => LightTheme::ALL.len(),
+        } - 1;
         menu.highlighted = menu.highlighted.saturating_add_signed(step).min(last);
         cx.notify();
     }
@@ -595,35 +612,28 @@ impl SettingsWindow {
         window.focus(&trigger, cx);
         let general = &mut self.model.general;
         let request = match scheme {
-            Appearance::Dark => {
-                let Some(&picked) = DarkTheme::ALL.get(index) else {
-                    return;
-                };
-                if picked == general.dark_theme {
-                    cx.notify();
-                    return;
-                }
-                general.dark_theme = picked;
-                self.general.offer = picked
-                    .pair()
-                    .filter(|pair| *pair != general.light_theme)
-                    .map(Offer::Light);
-                SettingsRequest::SetDarkTheme(picked)
-            }
-            Appearance::Light => {
-                let Some(&picked) = LightTheme::ALL.get(index) else {
-                    return;
-                };
-                if picked == general.light_theme {
-                    cx.notify();
-                    return;
-                }
-                general.light_theme = picked;
-                let pair = picked.pair();
-                self.general.offer = (pair != general.dark_theme).then_some(Offer::Dark(pair));
-                SettingsRequest::SetLightTheme(picked)
-            }
+            Appearance::Dark => DarkTheme::ALL
+                .get(index)
+                .filter(|picked| **picked != general.dark_theme)
+                .map(|&picked| {
+                    general.dark_theme = picked;
+                    SettingsRequest::SetDarkTheme(picked)
+                }),
+            Appearance::Light => LightTheme::ALL
+                .get(index)
+                .filter(|picked| **picked != general.light_theme)
+                .map(|&picked| {
+                    general.light_theme = picked;
+                    SettingsRequest::SetLightTheme(picked)
+                }),
         };
+        // The list closed either way; a pick of the theme in force (or a
+        // row the list does not have) changes nothing else.
+        let Some(request) = request else {
+            cx.notify();
+            return;
+        };
+        self.general.offer = Offer::after_pick(scheme, general.dark_theme, general.light_theme);
         self.request(request, window, cx);
         cx.notify();
     }

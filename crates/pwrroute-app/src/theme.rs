@@ -135,6 +135,22 @@ pub struct ThemeInfo {
     pub credit: Option<&'static str>,
 }
 
+impl ThemeInfo {
+    const fn new(
+        key: &'static str,
+        name: &'static str,
+        hint: &'static str,
+        credit: Option<&'static str>,
+    ) -> Self {
+        Self {
+            key,
+            name,
+            hint,
+            credit,
+        }
+    }
+}
+
 const CATPPUCCIN: Option<&str> = Some("Palette by Catppuccin (MIT).");
 const SOLARIZED: Option<&str> = Some("Solarized palette by Ethan Schoonover (MIT).");
 
@@ -163,25 +179,13 @@ impl DarkTheme {
     ];
 
     pub fn info(self) -> &'static ThemeInfo {
-        const fn info(
-            key: &'static str,
-            name: &'static str,
-            hint: &'static str,
-            credit: Option<&'static str>,
-        ) -> ThemeInfo {
-            ThemeInfo {
-                key,
-                name,
-                hint,
-                credit,
-            }
-        }
-        const TANGERINE: ThemeInfo = info("tangerine-dark", "Tangerine", "default", None);
-        const GRAY: ThemeInfo = info("gray-dark", "Gray", "charcoal", None);
-        const BLUE: ThemeInfo = info("blue-dark", "Blue", "navy", None);
-        const PHOSPHOR: ThemeInfo = info("phosphor-dark", "Phosphor", "dark only", None);
-        const MOCHA: ThemeInfo = info("catppuccin-mocha", "Catppuccin Mocha", "", CATPPUCCIN);
-        const SOLARIZED_DARK: ThemeInfo = info("solarized-dark", "Solarized Dark", "", SOLARIZED);
+        use ThemeInfo as T;
+        const TANGERINE: ThemeInfo = T::new("tangerine-dark", "Tangerine", "default", None);
+        const GRAY: ThemeInfo = T::new("gray-dark", "Gray", "charcoal", None);
+        const BLUE: ThemeInfo = T::new("blue-dark", "Blue", "navy", None);
+        const PHOSPHOR: ThemeInfo = T::new("phosphor-dark", "Phosphor", "dark only", None);
+        const MOCHA: ThemeInfo = T::new("catppuccin-mocha", "Catppuccin Mocha", "", CATPPUCCIN);
+        const SOLARIZED_DARK: ThemeInfo = T::new("solarized-dark", "Solarized Dark", "", SOLARIZED);
         match self {
             Self::Tangerine => &TANGERINE,
             Self::Gray => &GRAY,
@@ -256,25 +260,13 @@ impl LightTheme {
     ];
 
     pub fn info(self) -> &'static ThemeInfo {
-        const fn info(
-            key: &'static str,
-            name: &'static str,
-            hint: &'static str,
-            credit: Option<&'static str>,
-        ) -> ThemeInfo {
-            ThemeInfo {
-                key,
-                name,
-                hint,
-                credit,
-            }
-        }
-        const TANGERINE: ThemeInfo = info("tangerine-light", "Tangerine", "default", None);
-        const GRAY: ThemeInfo = info("gray-light", "Gray", "light gray", None);
-        const BLUE: ThemeInfo = info("blue-light", "Blue", "pale blue", None);
-        const LATTE: ThemeInfo = info("catppuccin-latte", "Catppuccin Latte", "", CATPPUCCIN);
+        use ThemeInfo as T;
+        const TANGERINE: ThemeInfo = T::new("tangerine-light", "Tangerine", "default", None);
+        const GRAY: ThemeInfo = T::new("gray-light", "Gray", "light gray", None);
+        const BLUE: ThemeInfo = T::new("blue-light", "Blue", "pale blue", None);
+        const LATTE: ThemeInfo = T::new("catppuccin-latte", "Catppuccin Latte", "", CATPPUCCIN);
         const SOLARIZED_LIGHT: ThemeInfo =
-            info("solarized-light", "Solarized Light", "", SOLARIZED);
+            T::new("solarized-light", "Solarized Light", "", SOLARIZED);
         match self {
             Self::Tangerine => &TANGERINE,
             Self::Gray => &GRAY,
@@ -820,11 +812,11 @@ mod tests {
     /// Runs `check` in each palette, with the test thread's theme back to
     /// the default afterwards.
     fn in_each_palette(mut check: impl FnMut(&str)) {
+        let _restore = DefaultOnDrop;
         for (name, theme) in palettes() {
             set(theme);
             check(&name);
         }
-        set(Theme::default());
     }
 
     /// Every fill a view draws text or a control on.
@@ -1016,6 +1008,7 @@ mod tests {
     /// strong as without, and no text is see-through.
     #[test]
     fn increase_contrast_only_strengthens() {
+        let _restore = DefaultOnDrop;
         let mut failing = Vec::new();
         for (theme_name, theme) in themes() {
             let read = |increase_contrast| {
@@ -1056,7 +1049,6 @@ mod tests {
                 }
             }
         }
-        set(Theme::default());
         assert!(failing.is_empty(), "{failing:#?}");
     }
 

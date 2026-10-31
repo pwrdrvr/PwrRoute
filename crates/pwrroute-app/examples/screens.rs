@@ -1455,16 +1455,11 @@ fn main() {
                         "settings-general-offer" => {
                             // As a pick would: only a pair not already set.
                             let now = theme::current();
-                            let offer = match scheme {
-                                theme::Appearance::Dark => now
-                                    .dark_theme
-                                    .pair()
-                                    .filter(|pair| *pair != now.light_theme)
-                                    .map(settings::general::Offer::Light),
-                                theme::Appearance::Light => Some(now.light_theme.pair())
-                                    .filter(|pair| *pair != now.dark_theme)
-                                    .map(settings::general::Offer::Dark),
-                            };
+                            let offer = settings::general::Offer::after_pick(
+                                scheme,
+                                now.dark_theme,
+                                now.light_theme,
+                            );
                             view.general.preview(None, offer);
                         }
                         _ => {}

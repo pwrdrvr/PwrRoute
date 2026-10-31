@@ -81,13 +81,10 @@ impl General {
             Appearance::Light => ("light", self.light_theme.info().credit),
         };
         let mut sub = format!("Colors used whenever PwrRoute is {word}.");
-        let locked = match self.theme {
-            ThemeChoice::Dark => Some(ThemeChoice::Dark),
-            ThemeChoice::Light => Some(ThemeChoice::Light),
-            ThemeChoice::System => None,
-        };
-        if let Some(locked) = locked.filter(|locked| locked.resolve(scheme) != scheme) {
-            sub.push_str(&format!(" Not used while Theme is {}.", locked.label()));
+        // System resolves to `scheme` itself; Dark or Light keeps the
+        // other scheme from drawing.
+        if self.theme.resolve(scheme) != scheme {
+            sub.push_str(&format!(" Not used while Theme is {}.", self.theme.label()));
         }
         if let Some(credit) = credit {
             sub.push(' ');
