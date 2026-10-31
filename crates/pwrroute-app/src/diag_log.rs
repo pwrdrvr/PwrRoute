@@ -233,6 +233,46 @@ mod tests {
     }
 
     #[test]
+    fn http_debug_logs_are_filtered_even_with_pwrroute_trace_logging() {
+        for own in [LevelFilter::Info, LevelFilter::Debug, LevelFilter::Trace] {
+            for target in ["ureq", "ureq::run", "ureq::unversioned::transport::tcp"] {
+                assert!(Level::Debug > level_for(target, own));
+                assert!(Level::Trace > level_for(target, own));
+            }
+        }
+    }
+
+    #[test]
+    fn http_request_details_never_reach_the_log_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger {
+            own: LevelFilter::Trace,
+            file: Mutex::new(Some(LogFile::open(dir.path()).unwrap())),
+            echo: false,
+        };
+        logger.log(
+            &Record::builder()
+                .level(Level::Debug)
+                .target("ureq::run")
+                .args(format_args!(
+                    "HEAD https://example.com/private?token=neutral"
+                ))
+                .build(),
+        );
+        logger.log(
+            &Record::builder()
+                .level(Level::Info)
+                .target("pwrroute")
+                .args(format_args!("safe marker"))
+                .build(),
+        );
+        let written = fs::read_to_string(dir.path().join(FILE)).unwrap();
+        assert!(written.contains("safe marker"));
+        assert!(!written.contains("example.com"));
+        assert!(!written.contains("token"));
+    }
+
+    #[test]
     fn the_log_moves_aside_past_its_limit_and_keeps_one_old_file() {
         let dir = tempfile::tempdir().unwrap();
         let mut log = LogFile::open(dir.path()).unwrap();

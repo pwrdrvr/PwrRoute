@@ -464,7 +464,7 @@ impl PwrRoute {
                     .position(|choice| choice.as_ref().is_some_and(|c| c.is_named(&opener)))
             })
             .unwrap_or(0);
-        self.test.run();
+        self.test.run(cx);
         self.navigate(Screen::TestLink, window, cx);
     }
 

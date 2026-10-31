@@ -323,6 +323,7 @@ impl FakeRules {
                 ..Rule::default()
             }],
             tests: vec![RouteTest {
+                original_url: None,
                 url: "https://example.net/".into(),
                 opener: None,
                 expect: Expectation {

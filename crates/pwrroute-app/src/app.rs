@@ -270,7 +270,7 @@ impl PwrRoute {
                 // Test a link tests the file as it is.
                 self.sync_with_disk(cx);
                 if !self.test.has_run() {
-                    self.test.run();
+                    self.test.run(cx);
                 }
                 window.focus(&self.test.url.focus, cx);
             }
