@@ -100,12 +100,12 @@ const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Fram
 /// a mounted DMG, would take this copy's links, and macOS asks nothing when
 /// the id already holds the default. This copy is the one being asked for,
 /// so the other copies are taken out of LaunchServices first. One comes
-/// back when it is launched again.
+/// back when it is launched, rebuilt or rescanned. `set_default_browser`
+/// registered this copy already.
 pub fn set_default() -> Result<DefaultRequest> {
     let bundle = app_bundle()?;
     let other_copy_held = status()?.other_copy.is_some();
     forget_other_copies(&bundle);
-    launch_services::register(&bundle)?;
     let http = is_current_handler("http", &bundle);
     let https = is_current_handler("https", &bundle);
     if http && https {

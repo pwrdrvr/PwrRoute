@@ -63,5 +63,6 @@ and Windows).
   highest-versioned copy with it. A newer dev build, or the DMG, takes the
   links, and macOS shows no prompt for an id that is already the default.
   So `set_default` first takes every other copy out of LaunchServices
-  (`lsregister -u`; the files stay, and a copy re-registers when it
-  launches), then asks. Only that explicit request does this.
+  (`lsregister -u`; the files stay, and a copy comes back when it is
+  launched, rebuilt or rescanned), then asks; a takeover from another copy
+  needs no prompt. Only that explicit request does this.

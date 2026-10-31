@@ -8,7 +8,8 @@
 //!   which browser is the default.
 //! - [`set_default_browser`] asks for PwrRoute to *be* the default. Only an
 //!   explicit user action calls it, and the OS has the last word: macOS
-//!   shows its consent prompt, Windows opens Settings › Default apps (apps
+//!   shows its consent prompt (none when another copy of PwrRoute already
+//!   holds the default: this copy takes it over), Windows opens Settings › Default apps (apps
 //!   cannot set themselves default since Windows 8), and Linux asks
 //!   `xdg-settings`.
 //!
@@ -46,8 +47,10 @@ pub struct DefaultStatus {
     pub other_copy: Option<String>,
 }
 
-/// What [`set_default_browser`] set in motion. In every case the OS has the
-/// final say; poll [`default_browser_status`] to see the result.
+/// What [`set_default_browser`] set in motion. Poll
+/// [`default_browser_status`] to see the result: the OS has the final say,
+/// except on a macOS takeover from another PwrRoute copy, which needs no
+/// consent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultRequest {
     /// macOS: the consent prompt is showing.

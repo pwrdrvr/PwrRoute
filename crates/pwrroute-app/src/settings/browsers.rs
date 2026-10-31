@@ -127,7 +127,7 @@ fn default_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> 
                     format!(
                         "macOS opens links in the copy at {path}. Register this copy to take \
                          them back; the other copies leave macOS\u{2019}s list until they \
-                         launch again."
+                         launch or are rebuilt."
                     )
                 },
                 str::to_owned,

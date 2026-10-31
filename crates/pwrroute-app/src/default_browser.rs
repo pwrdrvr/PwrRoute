@@ -5,8 +5,9 @@
 //! The OS calls come in as [`Os`], so tests supply fakes and nothing here
 //! ever reaches `pwrroute_os` from a test. [`request`] runs only from a
 //! click (Settings, first run, the tray), or the explicit `--make-default`
-//! startup flag. The OS has the last word (a consent prompt on macOS,
-//! Settings › Default apps on Windows), so the answer is read back rather
+//! startup flag. The OS has the last word (a consent prompt on macOS, none
+//! when another PwrRoute copy held the default, Settings › Default apps on
+//! Windows), so the answer is read back rather
 //! than assumed: on every
 //! window activation ([`watch`]), when the tray dropdown opens, for a while
 //! after a request on a fast timer, every second while first run's step 3
@@ -699,6 +700,52 @@ mod tests {
             ),
             DefaultState::Other("Google Chrome".into())
         );
+    }
+
+    /// Another copy of PwrRoute holds the default: the takeover says so
+    /// while it reads back, and a takeover that did not stick names the copy.
+    #[gpui_kit::test]
+    fn a_takeover_from_another_copy_names_the_copy(cx: &mut TestAppContext) {
+        let held = DefaultStatus {
+            is_default: false,
+            http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            https: Some(pwrroute_os::BUNDLE_ID.to_owned()),
+            other_copy: Some("/Volumes/PwrRoute/PwrRoute.app".to_owned()),
+        };
+        let os_status = Rc::new(RefCell::new(Some(held)));
+        let os = Os {
+            set_default: Rc::new(|| Ok(DefaultRequest::TookOverFromCopy)),
+            ..Os::fake(os_status.clone(), Rc::new(Cell::new(0)))
+        };
+        cx.update(|cx| install(os, cx));
+        let card = |cx: &mut TestAppContext| cx.update(|cx| super::card(cx));
+        assert_eq!(
+            card(cx).state,
+            DefaultState::OtherCopy("/Volumes/PwrRoute/PwrRoute.app".into())
+        );
+
+        cx.update(|cx| request(cx).unwrap());
+        assert_eq!(
+            card(cx).note.as_deref(),
+            Some("Took the default from another copy of PwrRoute; reading it back.")
+        );
+
+        // The copy would not go: the settled answer names it.
+        cx.update(|cx| refresh(true, cx));
+        assert_eq!(
+            card(cx).note.as_deref(),
+            Some("The copy at /Volumes/PwrRoute/PwrRoute.app is still the default.")
+        );
+
+        // Asked again, and this copy has the links now.
+        cx.update(|cx| request(cx).unwrap());
+        *os_status.borrow_mut() = Some(status(
+            Some(pwrroute_os::BUNDLE_ID),
+            Some(pwrroute_os::BUNDLE_ID),
+        ));
+        cx.update(|cx| refresh(false, cx));
+        assert_eq!(card(cx).state, DefaultState::PwrRoute);
+        assert_eq!(card(cx).note, None);
     }
 
     #[gpui_kit::test]

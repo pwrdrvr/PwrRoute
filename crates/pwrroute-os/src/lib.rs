@@ -9,7 +9,9 @@
 //! - **Registration.** [`register_browser`] makes the OS list PwrRoute as a
 //!   browser and [`unregister_browser`] takes it off, for installers.
 //!   [`set_default_browser`] asks the OS to make PwrRoute the default, which
-//!   always ends in the OS's own consent: a prompt or the Settings page.
+//!   ends in the OS's own consent (a prompt or the Settings page), except
+//!   when another copy of PwrRoute already holds the default on macOS:
+//!   then the running copy takes it over without a prompt.
 //!   [`open_default_apps_settings`] only shows that page, and
 //!   [`open_files_and_folders_settings`] the macOS pane where PwrRoute is
 //!   let read a browser's profile list.
