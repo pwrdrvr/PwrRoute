@@ -5,7 +5,7 @@ app in the Pwr family (siblings: PwrSnap, PwrGit, PwrAgnt) that becomes the
 OS default browser and routes each link to a browser and profile by rules.
 Keep this file short; see **Docs & conventions** below.
 
-## Status: early port
+## Workspace
 
 A Cargo workspace with a GPUI window, a Finicky-compatible rules engine, a
 resident router that receives links from the OS, and a browser launcher. The

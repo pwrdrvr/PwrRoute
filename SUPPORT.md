@@ -3,7 +3,7 @@
 PwrRoute is built by [PwrDrvr LLC](https://pwrdrvr.com). Support is
 best-effort and happens on GitHub — there is no ticket queue and no SLA.
 
-PwrRoute is pre-release. Builds for macOS, Windows and Linux are on
+Builds for macOS, Windows and Linux are on
 [GitHub Releases](https://github.com/pwrdrvr/PwrRoute/releases).
 
 ## Where to go

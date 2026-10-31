@@ -8,10 +8,8 @@ Use [GitHub Issues](https://github.com/pwrdrvr/PwrRoute/issues) for
 reproducible bugs and focused feature proposals. Do not report vulnerabilities
 publicly; follow [SECURITY.md](SECURITY.md) instead.
 
-PwrRoute is pre-release: expect the rules format and screens to keep
-changing until 1.0. Read [AGENTS.md](AGENTS.md) before starting a change;
-it and the `AGENTS.md` beside each crate hold the rules each part of the
-code keeps.
+Read [AGENTS.md](AGENTS.md) before starting a change; it and the
+`AGENTS.md` beside each crate hold the rules each part of the code keeps.
 
 For anything bigger than a small fix, open an issue first so we can agree on
 the shape before you spend time on it. The design in [design/](design/)

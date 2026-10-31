@@ -26,7 +26,7 @@ macOS, Windows and Linux. Runs your Finicky config.</p>
 
 <sub>macOS 11 or newer, Intel and Apple silicon · Windows 10 or 11, x64 · Linux x64 and arm64 · MIT</sub><br>
 <sub>Signed and notarized for macOS, signed for Windows, and both keep themselves up to date.</sub><br>
-<sub>Status: pre-release · by <a href="https://pwrdrvr.com">PwrDrvr LLC</a></sub>
+<sub>By <a href="https://pwrdrvr.com">PwrDrvr LLC</a></sub>
 
 </div>
 
@@ -67,7 +67,9 @@ locations, same API. You can try PwrRoute and go back to Finicky at any time.
 | Other Linux, x64 / arm64 | [x64 .tar.gz](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-x64.tar.gz) · [arm64 .tar.gz](https://github.com/pwrdrvr/PwrRoute/releases/latest/download/PwrRoute-linux-arm64.tar.gz) | Unpack it, put `pwrroute` on your `PATH` and `pwrroute.desktop` in `~/.local/share/applications`, then make it the default as above. |
 
 Every release, with SHA-256 checksums, is on the
-[releases page](https://github.com/pwrdrvr/PwrRoute/releases). The macOS
+[releases page](https://github.com/pwrdrvr/PwrRoute/releases). A new
+version is published as a GitHub pre-release and marked Latest once we've
+checked it; the links above always download Latest. The macOS
 app is signed with a Developer ID and notarized by Apple, and the Windows
 installers and app are Authenticode-signed. Linux packages are not signed.
 
