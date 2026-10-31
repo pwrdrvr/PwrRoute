@@ -637,9 +637,20 @@ their own modules.
   the caret. Write the text only through `set`, so the caret follows.
 - **Colors, dimming and zoom come from `theme` (design: Contrast and
   Scale).** Four palettes: dark and light, each with Increase Contrast,
-  which strengthens ink and edges, never tints. Light draws only as a
-  preview (`PWRROUTE_APPEARANCE=light`); `PWRROUTE_INCREASE_CONTRAST=1`
-  previews the other. The theme is thread-local: set it on the GPUI
+  which strengthens ink and edges, never tints. Which scheme draws is
+  `appearance.rs`'s (design: Appearance and Themes): Settings › General's
+  Theme, System (the default), Dark or Light, saved as `settings.json`'s
+  `appearance.theme` and installed before the first window opens. System
+  follows the OS through GPUI's `window_appearance` (macOS's effective
+  appearance, Windows' app mode, the portal's `color-scheme`), asked on
+  `accessibility_prefs`' poll and at once in an open main or Settings
+  window (`appearance::watch`); Dark and Light also set the app's own
+  appearance (`set_window_appearance`), so native chrome matches and no
+  window opens in the other scheme. A scheme change redraws every window,
+  the Windows and Linux tray icon (`tray::follow_scheme`, the accent) and
+  Settings › General. Tests never read the OS: System is dark there.
+  `PWRROUTE_INCREASE_CONTRAST=1` previews Increase Contrast. The theme is
+  thread-local: set it on the GPUI
   thread, then `cx.refresh_windows()`. Text never fades by `.opacity()`:
   wrap what is off or missed in `theme::dimmed` / `dimmed_if`, which step
   the neutral text ramp down one level (muted is the floor), and say

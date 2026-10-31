@@ -13,7 +13,7 @@
 //! installed keeps its letters.
 //!
 //! `--light` and `--high-contrast` draw the light palette and the Increase
-//! Contrast one (`theme.rs`); `--zoom=` draws at a View › Zoom step, in a
+//! Contrast one (`theme.rs`), whatever Settings › General's Theme says; `--zoom=` draws at a View › Zoom step, in a
 //! window that much larger, as the app opens one on a display with room.
 //!
 //! macOS only: the headless renderer is Metal, and GPUI's Mac platform must
@@ -1377,6 +1377,8 @@ fn main() {
             settings::Pane::Sync,
             1500.0,
         ),
+        // Appearance and Themes 1a and 1b: General's Theme.
+        ("settings-general", settings::Pane::General, 560.0),
         // The family's panes, at a height that holds their cards.
         ("settings-updates", settings::Pane::Updates, 760.0),
         ("settings-experimental", settings::Pane::Experimental, 760.0),
@@ -1396,6 +1398,11 @@ fn main() {
             .open_window(win(1058.0, height), |_, cx| {
                 cx.new(|cx| {
                     let mut model = settings::fixtures::model();
+                    // 1b: with --light, the reader chose Light.
+                    if theme::current().appearance == theme::Appearance::Light {
+                        model.general.theme = theme::ThemeChoice::Light;
+                        model.general.showing = theme::Appearance::Light;
+                    }
                     match name {
                         "settings-short-links" => {
                             model.configuration =

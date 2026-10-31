@@ -222,6 +222,16 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
     }
 }
 
+/// Redraws the icon after the scheme changed (`appearance.rs`).
+pub fn follow_scheme(cx: &App) {
+    if let Some(native) = cx
+        .try_global::<Tray>()
+        .and_then(|tray| tray.native.as_ref())
+    {
+        native.follow_scheme();
+    }
+}
+
 /// `PWRROUTE_TRAY_OPEN=1`: click the icon once the app is up, for
 /// screenshots and manual checks where the item cannot be reached (behind
 /// the notch on a full menu bar).

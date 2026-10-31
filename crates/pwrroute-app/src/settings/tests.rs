@@ -13,10 +13,11 @@ use super::local_agents::{ACCESS_SWITCH_ID, COLLAPSE_ALL_ID};
 use super::model::{DefaultState, RoleId, SessionId, SettingsRequest, UpdateState};
 use super::{
     Pane, SettingsHost, SettingsWindow, about, browsers, configuration, diagnostics, experimental,
-    fixtures, updates,
+    fixtures, general, updates,
 };
 use crate::app::PwrRoute;
 use crate::chrome::OPEN_SETTINGS_ID;
+use crate::theme::{Appearance, ThemeChoice};
 
 type Requests = Rc<RefCell<Vec<SettingsRequest>>>;
 
@@ -132,6 +133,7 @@ fn the_nav_switches_panes(cx: &mut TestAppContext) {
         Pane::Experimental,
         Pane::Diagnostics,
         Pane::About,
+        Pane::General,
         Pane::Browsers,
     ] {
         click(cx, target.nav_id());
@@ -419,6 +421,35 @@ fn the_updates_pane_checks_now_and_restarts_into_a_download(cx: &mut TestAppCont
     draw(cx);
     assert!(!visible(cx, updates::CHECK_ID));
     assert!(!visible(cx, updates::RESTART_ID));
+}
+
+#[gpui_kit::test]
+fn general_picks_a_theme_and_says_what_system_follows(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::General.nav_id());
+    assert!(visible(cx, Pane::General.pane_id()));
+    assert!(visible(cx, general::THEME_ID));
+    let general = view.read_with(cx, |view, _| view.model.general.clone());
+    assert_eq!(general.chip(), "System \u{00b7} Dark");
+    assert_eq!(general.theme_help(), "Following macOS: Dark now.");
+
+    // The window flips at once; the producer saves and applies.
+    click(cx, general::theme_id(ThemeChoice::Light));
+    let general = view.read_with(cx, |view, _| view.model.general.clone());
+    assert_eq!(general.theme, ThemeChoice::Light);
+    assert_eq!(general.showing, Appearance::Light);
+    assert_eq!(general.chip(), "Light");
+    assert_eq!(general.theme_help(), "Always light, whatever macOS uses.");
+    // The chosen answer again is not a request.
+    click(cx, general::theme_id(ThemeChoice::Light));
+    click(cx, general::theme_id(ThemeChoice::System));
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::SetTheme(ThemeChoice::Light),
+            SettingsRequest::SetTheme(ThemeChoice::System),
+        ]
+    );
 }
 
 #[gpui_kit::test]

@@ -1,5 +1,6 @@
 //! Live OS preferences. Palette values belong to theme; this module only
 //! follows the system and tells GPUI and the palette seam when it changes.
+//! The light or dark scheme is `appearance.rs`'s, asked on the same poll.
 
 use gpui_kit::{App, Global};
 use std::time::Duration;
@@ -32,6 +33,7 @@ fn refresh(contrast: Option<bool>, cx: &mut App) {
     if old != new {
         cx.refresh_windows();
     }
+    crate::appearance::follow_os(cx);
 }
 
 pub fn install(cx: &mut App) {

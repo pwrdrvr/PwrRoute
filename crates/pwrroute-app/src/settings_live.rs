@@ -11,7 +11,7 @@ use crate::settings::model::{SettingsModel, SettingsRequest};
 use crate::settings::{
     browsers_host, configuration_host, privacy_host, sync_host, system_host, updates_host,
 };
-use crate::{default_browser, mcp};
+use crate::{appearance, default_browser, mcp};
 
 /// Every pane, read fresh. The default-browser chip follows the window from
 /// here on, as the main window's does, and Configuration reads its files
@@ -19,9 +19,11 @@ use crate::{default_browser, mcp};
 /// them.
 pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
     default_browser::watch(window, cx);
+    appearance::watch(window);
     configuration_host::follow(window, cx);
     let local_agents = mcp::local_agents(cx);
     SettingsModel {
+        general: appearance::general(cx),
         browsers: browsers_host::model(cx),
         configuration: configuration_host::model(cx),
         sync: sync_host::model(cx),
@@ -37,7 +39,8 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
 /// Hands `request` to the first producer that answers it. The one request
 /// no producer takes is logged: nothing acts on the OS by default.
 pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
-    let handled = default_browser::handle_settings_request(request, cx)
+    let handled = appearance::handle_settings_request(request, cx)
+        || default_browser::handle_settings_request(request, cx)
         || privacy_host::handle_request(request, cx)
         || mcp::handle_settings_request(request, cx)
         || browsers_host::handle_request(request, cx)
