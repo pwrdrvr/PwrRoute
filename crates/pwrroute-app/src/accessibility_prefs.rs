@@ -33,19 +33,18 @@ fn refresh(contrast: Option<bool>, cx: &mut App) {
     if old != new {
         cx.refresh_windows();
     }
+    // Increase Contrast moves the light scheme's accent, which the
+    // Windows and Linux tray icon is drawn in.
+    if old.increase_contrast != new.increase_contrast {
+        crate::tray::follow_scheme(cx);
+    }
     crate::appearance::follow_os(cx);
 }
 
 pub fn install(cx: &mut App) {
     // Tests and the fixture renderer control motion themselves and must never
     // be woken by a real OS response or an endless timer.
-    if cx
-        .background_executor()
-        .scheduler_executor()
-        .scheduler()
-        .as_test()
-        .is_some()
-    {
+    if crate::appearance::in_test(cx) {
         return;
     }
     refresh(pwrroute_os::accessibility::increase_contrast(), cx);

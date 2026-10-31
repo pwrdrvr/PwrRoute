@@ -120,9 +120,18 @@ fn resolve(cx: &mut App) {
         crate::tray::follow_scheme(cx);
         cx.refresh_windows();
     }
-    let general = general(cx);
-    crate::settings::update_if(cx, |model| {
-        (model.general != general).then(|| model.general = general)
+    report(cx);
+}
+
+/// Tells Settings › General, when it shows something else. Deferred: a
+/// request and the Settings window's own appearance observer both run
+/// inside that window's update, where updating it again fails silently.
+fn report(cx: &mut App) {
+    cx.defer(|cx| {
+        let general = general(cx);
+        crate::settings::update_if(cx, |model| {
+            (model.general != general).then(|| model.general = general)
+        });
     });
 }
 
@@ -138,7 +147,8 @@ fn os_scheme(cx: &App) -> Appearance {
     }
 }
 
-fn in_test(cx: &App) -> bool {
+/// Tests and the fixture renderer: never read or set the OS's appearance.
+pub(crate) fn in_test(cx: &App) -> bool {
     cx.background_executor()
         .scheduler_executor()
         .scheduler()
@@ -152,6 +162,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_choice_draws_its_scheme_and_system_is_dark_in_tests(cx: &mut gpui_kit::TestAppContext) {
+        let _restore = theme::DefaultOnDrop;
         cx.update(|cx| {
             install(ThemeChoice::Light, cx);
             assert_eq!(theme::current().appearance, Appearance::Light);
@@ -162,6 +173,5 @@ mod tests {
             assert_eq!(theme::current().appearance, Appearance::Dark);
             assert_eq!(choice(cx), ThemeChoice::Dark);
         });
-        theme::set(theme::Theme::default());
     }
 }

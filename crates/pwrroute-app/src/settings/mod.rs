@@ -317,13 +317,10 @@ pub fn is_open(cx: &App) -> bool {
 /// back (the OS's answer on the default browser, say). Nothing happens when
 /// Settings is closed; the next open reads the producer afresh.
 pub fn update(cx: &mut App, edit: impl FnOnce(&mut SettingsModel)) {
-    let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
-    if let Some(handle) = open {
-        let _ = handle.update(cx, |view, _, cx| {
-            edit(&mut view.model);
-            cx.notify();
-        });
-    }
+    update_if(cx, |model| {
+        edit(model);
+        Some(())
+    });
 }
 
 /// [`update`], redrawing only when `edit` says it changed something:

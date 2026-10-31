@@ -137,6 +137,17 @@ impl Default for Theme {
     }
 }
 
+/// Puts the default theme back when dropped, even when a test fails.
+#[cfg(test)]
+pub struct DefaultOnDrop;
+
+#[cfg(test)]
+impl Drop for DefaultOnDrop {
+    fn drop(&mut self) {
+        set(Theme::default());
+    }
+}
+
 thread_local! {
     static THEME: Cell<Theme> = Cell::new(Theme::default());
     static DIMMED: Cell<bool> = const { Cell::new(false) };

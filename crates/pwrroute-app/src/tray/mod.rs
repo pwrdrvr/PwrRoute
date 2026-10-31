@@ -222,7 +222,8 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
     }
 }
 
-/// Redraws the icon after the scheme changed (`appearance.rs`).
+/// Redraws the icon after the palette changed: the scheme (`appearance.rs`)
+/// or Increase Contrast (`accessibility_prefs.rs`).
 pub fn follow_scheme(cx: &App) {
     if let Some(native) = cx
         .try_global::<Tray>()
