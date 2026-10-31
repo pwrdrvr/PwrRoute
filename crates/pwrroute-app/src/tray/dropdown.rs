@@ -78,6 +78,9 @@ pub const OPEN_ALL_ID: &str = "tray-held-open-all";
 pub const HELD_LANES_ID: &str = "tray-held-lanes";
 pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
 pub const QUIT_ID: &str = "tray-quit";
+/// The header: a click opens the main window, as the native menu's Open
+/// PwrRoute does.
+pub const HEADER_ID: &str = "tray-open";
 /// Sync's row (design: Synced Rules 3c).
 pub const SYNC_ID: &str = "tray-sync";
 /// The sections between the header and Quit, which scroll on a display too
@@ -686,7 +689,7 @@ fn card(
         .border_1()
         .border_color(theme::border_default())
         .rounded(px(10.0))
-        .child(header(model.chip()).flex_none())
+        .child(header(model.chip(), cx).flex_none())
         .child(
             div()
                 .id(BODY_ID)
@@ -733,8 +736,9 @@ fn caption(label: &str) -> Div {
         .child(tracked(label, 9.5, 600.0, 0.12, theme::text_subtle()))
 }
 
-/// `.th`: the mark, the wordmark and the state chip.
-fn header(chip: HeaderChip) -> Div {
+/// `.th`: the mark, the wordmark and the state chip. The whole row opens
+/// the main window.
+fn header(chip: HeaderChip, cx: &mut Context<'_, Dropdown>) -> gpui_kit::Stateful<Div> {
     let wordmark = StyledText::new("PwrRoute").with_highlights([(
         3..8,
         HighlightStyle {
@@ -762,6 +766,8 @@ fn header(chip: HeaderChip) -> Div {
         ),
     };
     div()
+        .id(HEADER_ID)
+        .debug_selector(|| HEADER_ID.into())
         .flex()
         .items_center()
         .gap(px(8.0))
@@ -769,6 +775,21 @@ fn header(chip: HeaderChip) -> Div {
         .py(px(10.0))
         .border_b_1()
         .border_color(theme::border_faint())
+        .cursor_pointer()
+        .hover(|row| row.bg(theme::bg_hover()))
+        .role(gpui_kit::Role::MenuItem)
+        .aria_label("Open PwrRoute")
+        .map(|row| crate::widgets::keyboard_control(row, false))
+        // Replaces `keyboard_control`'s ring: the header draws only a
+        // bottom edge, so focus also fills the row. A full border would
+        // grow it past `HEADER`.
+        .focus_visible(|row| {
+            row.bg(theme::bg_row_active())
+                .border_color(theme::focus_ring())
+        })
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.run(TrayCommand::OpenMain, window, cx);
+        }))
         .child(icon("pwrroute/mark.svg", 16.0, theme::accent()))
         .child(
             div()
@@ -1829,7 +1850,7 @@ fn label_text(label: &'static str, size: f32, color: gpui_kit::Hsla) -> AnyEleme
 // adds them up; a test holds it to the laid-out card.
 
 /// `.th`: 10px padding around the 20px chip, and its hairline.
-const HEADER: f32 = 10.0 + 20.0 + 10.0 + 1.0;
+pub const HEADER: f32 = 10.0 + 20.0 + 10.0 + 1.0;
 /// `.sec` padding, top and bottom.
 const SECTION_PADDING: f32 = 12.0;
 /// `.cap`: 9.5px text in 4px padding.

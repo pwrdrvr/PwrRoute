@@ -222,6 +222,7 @@ use tray_model as model;
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrayCommand {
+    OpenMain,
     TestLink,
     Rules,
     Activity,
