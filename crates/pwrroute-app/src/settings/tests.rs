@@ -17,7 +17,7 @@ use super::{
 };
 use crate::app::PwrRoute;
 use crate::chrome::OPEN_SETTINGS_ID;
-use crate::theme::{Appearance, ThemeChoice};
+use crate::theme::{Appearance, DarkTheme, LightTheme, ThemeChoice};
 
 type Requests = Rc<RefCell<Vec<SettingsRequest>>>;
 
@@ -448,6 +448,71 @@ fn general_picks_a_theme_and_says_what_system_follows(cx: &mut TestAppContext) {
         [
             SettingsRequest::SetTheme(ThemeChoice::Light),
             SettingsRequest::SetTheme(ThemeChoice::System),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn a_color_theme_is_picked_from_its_list_and_its_pair_offered(cx: &mut TestAppContext) {
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::General.nav_id());
+    assert!(visible(cx, general::DARK_THEME_ID));
+    assert!(visible(cx, general::LIGHT_THEME_ID));
+    let open_menu =
+        |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.general.open_menu());
+    let offer = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.general.offer());
+
+    // Catppuccin Mocha: the window flips, credits it and offers Latte.
+    click(cx, general::DARK_THEME_ID);
+    assert_eq!(open_menu(cx), Some(Appearance::Dark));
+    click(cx, (general::DARK_THEME_OPTION_ID, 4_usize));
+    assert_eq!(open_menu(cx), None);
+    let model = view.read_with(cx, |view, _| view.model.general.clone());
+    assert_eq!(model.dark_theme, DarkTheme::CatppuccinMocha);
+    assert_eq!(
+        model.theme_sub(Appearance::Dark),
+        "Colors used whenever PwrRoute is dark. Palette by Catppuccin (MIT)."
+    );
+    assert_eq!(
+        offer(cx),
+        Some(general::Offer::Light(LightTheme::CatppuccinLatte))
+    );
+    assert!(visible(cx, general::OFFER_ID));
+    click(cx, general::OFFER_USE_ID);
+    assert_eq!(offer(cx), None);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.model.general.light_theme),
+        LightTheme::CatppuccinLatte
+    );
+
+    // Phosphor is dark only: nothing to offer.
+    click(cx, general::DARK_THEME_ID);
+    click(cx, (general::DARK_THEME_OPTION_ID, 3_usize));
+    assert_eq!(offer(cx), None);
+
+    // Gray for light offers Gray for dark; Not now drops it unanswered.
+    click(cx, general::LIGHT_THEME_ID);
+    assert_eq!(open_menu(cx), Some(Appearance::Light));
+    click(cx, (general::LIGHT_THEME_OPTION_ID, 1_usize));
+    assert_eq!(offer(cx), Some(general::Offer::Dark(DarkTheme::Gray)));
+    click(cx, general::OFFER_DISMISS_ID);
+    assert_eq!(offer(cx), None);
+
+    // With Theme on Dark the light row says it is not used.
+    click(cx, general::theme_id(ThemeChoice::Dark));
+    let model = view.read_with(cx, |view, _| view.model.general.clone());
+    assert_eq!(
+        model.theme_sub(Appearance::Light),
+        "Colors used whenever PwrRoute is light. Not used while Theme is Dark."
+    );
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::SetDarkTheme(DarkTheme::CatppuccinMocha),
+            SettingsRequest::SetLightTheme(LightTheme::CatppuccinLatte),
+            SettingsRequest::SetDarkTheme(DarkTheme::Phosphor),
+            SettingsRequest::SetLightTheme(LightTheme::Gray),
+            SettingsRequest::SetTheme(ThemeChoice::Dark),
         ]
     );
 }

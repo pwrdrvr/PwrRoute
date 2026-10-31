@@ -10,7 +10,7 @@
 use gpui_kit::SharedString;
 
 use crate::build_info::BuildInfo;
-use crate::theme::{Appearance, ThemeChoice};
+use crate::theme::{Appearance, DarkTheme, LightTheme, ThemeChoice};
 use crate::widgets::AppBadge;
 
 pub use crate::default_browser::DefaultState;
@@ -42,6 +42,10 @@ pub struct General {
     /// The scheme drawn now: what System resolves to while it follows the
     /// OS.
     pub showing: Appearance,
+    /// The colors whenever PwrRoute is dark, and whenever it is light
+    /// (PWR-23; design: Appearance and Themes 1c-1e).
+    pub dark_theme: DarkTheme,
+    pub light_theme: LightTheme,
     /// The OS's Increase Contrast, as PwrRoute follows it.
     pub increase_contrast: bool,
     /// Who System follows, in the reader's words: "macOS", "Windows", "your
@@ -67,6 +71,26 @@ impl General {
             ThemeChoice::Dark => format!("Always dark, whatever {} uses.", self.os),
             ThemeChoice::Light => format!("Always light, whatever {} uses.", self.os),
         }
+    }
+
+    /// The line under a scheme's theme: what it is for, that Theme keeps
+    /// it from drawing, and a borrowed palette's credit.
+    pub fn theme_sub(&self, scheme: Appearance) -> String {
+        let (word, credit) = match scheme {
+            Appearance::Dark => ("dark", self.dark_theme.info().credit),
+            Appearance::Light => ("light", self.light_theme.info().credit),
+        };
+        let mut sub = format!("Colors used whenever PwrRoute is {word}.");
+        // System resolves to `scheme` itself; Dark or Light keeps the
+        // other scheme from drawing.
+        if self.theme.resolve(scheme) != scheme {
+            sub.push_str(&format!(" Not used while Theme is {}.", self.theme.label()));
+        }
+        if let Some(credit) = credit {
+            sub.push(' ');
+            sub.push_str(credit);
+        }
+        sub
     }
 }
 
@@ -840,6 +864,10 @@ pub struct About {
 pub enum SettingsRequest {
     /// General: Theme, saved and applied at once.
     SetTheme(ThemeChoice),
+    /// General: the Dark theme and the Light theme, saved and applied at
+    /// once (PWR-23).
+    SetDarkTheme(DarkTheme),
+    SetLightTheme(LightTheme),
     SetYieldBrowserFocus(bool),
     SetAgentAccess(bool),
     SetSessionRole {

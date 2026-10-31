@@ -5,6 +5,7 @@
 //! ```text
 //! cargo run -p pwrroute-app --example screens -- OUT_DIR [--app-icons]
 //!     [--light] [--high-contrast] [--zoom=1.5]
+//!     [--dark-theme=catppuccin-mocha] [--light-theme=solarized-light]
 //! ```
 //!
 //! The badges are letters, so every machine draws the same PNGs.
@@ -13,8 +14,11 @@
 //! installed keeps its letters.
 //!
 //! `--light` and `--high-contrast` draw the light palette and the Increase
-//! Contrast one (`theme.rs`), whatever Settings › General's Theme says; `--zoom=` draws at a View › Zoom step, in a
-//! window that much larger, as the app opens one on a display with room.
+//! Contrast one (`theme.rs`), whatever Settings › General's Theme says;
+//! `--dark-theme=` and `--light-theme=` pick the color theme each scheme
+//! draws, by its `settings.json` id; `--zoom=` draws at a View › Zoom step,
+//! in a window that much larger, as the app opens one on a display with
+//! room.
 //!
 //! macOS only: the headless renderer is Metal, and GPUI's Mac platform must
 //! be created on the main thread, which a libtest test never runs on. The
@@ -416,12 +420,25 @@ fn main() {
         .iter()
         .find_map(|flag| flag.to_string_lossy().strip_prefix("--zoom=")?.parse().ok())
         .unwrap_or(1.0);
+    let flag_value = |prefix: &str| {
+        flags
+            .iter()
+            .find_map(|flag| Some(flag.to_string_lossy().strip_prefix(prefix)?.to_owned()))
+    };
+    let dark_theme = flag_value("--dark-theme=").map_or_else(theme::DarkTheme::default, |key| {
+        theme::DarkTheme::from_key(&key).expect("--dark-theme= names a dark theme")
+    });
+    let light_theme = flag_value("--light-theme=").map_or_else(theme::LightTheme::default, |key| {
+        theme::LightTheme::from_key(&key).expect("--light-theme= names a light theme")
+    });
     theme::set(theme::Theme {
         appearance: if flags.iter().any(|flag| flag == "--light") {
             theme::Appearance::Light
         } else {
             theme::Appearance::Dark
         },
+        dark_theme,
+        light_theme,
         increase_contrast: flags.iter().any(|flag| flag == "--high-contrast"),
         zoom: theme::snap_zoom(zoom),
     });
@@ -1377,8 +1394,11 @@ fn main() {
             settings::Pane::Sync,
             1500.0,
         ),
-        // Appearance and Themes 1a and 1b: General's Theme.
-        ("settings-general", settings::Pane::General, 560.0),
+        // Appearance and Themes 1a-1e: General's Theme, the Dark theme
+        // list open, and the offer of the pair after a pick.
+        ("settings-general", settings::Pane::General, 620.0),
+        ("settings-general-list", settings::Pane::General, 620.0),
+        ("settings-general-offer", settings::Pane::General, 620.0),
         // The family's panes, at a height that holds their cards.
         ("settings-updates", settings::Pane::Updates, 760.0),
         ("settings-experimental", settings::Pane::Experimental, 760.0),
@@ -1403,6 +1423,8 @@ fn main() {
                         model.general.theme = theme::ThemeChoice::Light;
                         model.general.showing = theme::Appearance::Light;
                     }
+                    model.general.dark_theme = theme::current().dark_theme;
+                    model.general.light_theme = theme::current().light_theme;
                     match name {
                         "settings-short-links" => {
                             model.configuration =
@@ -1427,6 +1449,21 @@ fn main() {
                         settings::SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx);
                     view.pane = pane;
                     view.target = target;
+                    let scheme = theme::current().appearance;
+                    match name {
+                        "settings-general-list" => view.general.preview(Some(scheme), None),
+                        "settings-general-offer" => {
+                            // As a pick would: only a pair not already set.
+                            let now = theme::current();
+                            let offer = settings::general::Offer::after_pick(
+                                scheme,
+                                now.dark_theme,
+                                now.light_theme,
+                            );
+                            view.general.preview(None, offer);
+                        }
+                        _ => {}
+                    }
                     view
                 })
             })

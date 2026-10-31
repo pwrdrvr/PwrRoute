@@ -422,6 +422,19 @@ pub fn field(
     sub: Option<Div>,
     content: impl IntoIterator<Item = AnyElement>,
 ) -> Div {
+    field_with(
+        para(label, 12.0, 600.0, 1.3, theme::text_primary()),
+        sub,
+        content,
+    )
+}
+
+/// [`field`] with a label of its own: one with a chip beside it.
+pub fn field_with(
+    label: Div,
+    sub: Option<Div>,
+    content: impl IntoIterator<Item = AnyElement>,
+) -> Div {
     div()
         .flex()
         .gap(px(20.0))
@@ -434,7 +447,7 @@ pub fn field(
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(para(label, 12.0, 600.0, 1.3, theme::text_primary()))
+                .child(label)
                 .children(sub),
         )
         .child(

@@ -14,13 +14,19 @@
 //! rather than the OS, and no window opens in the other scheme first;
 //! System clears it.
 //!
-//! The palette is `theme`'s: this module only decides which scheme draws,
-//! then refreshes the windows, the tray icon and Settings › General.
+//! PWR-23 adds the Dark theme and the Light theme (design: Appearance and
+//! Themes 1c-1e), `appearance.darkTheme` and `appearance.lightTheme`, read
+//! with the Theme before the first window opens and applied live.
+//!
+//! The palettes are `theme`'s: this module only decides which scheme and
+//! themes draw, then refreshes the windows, the tray icon and Settings ›
+//! General.
 
 use gpui_kit::{App, Global, Window, WindowAppearance};
 
 use crate::settings::model::{General, SettingsRequest};
-use crate::theme::{self, Appearance, ThemeChoice};
+use crate::settings_store::AppearanceSettings;
+use crate::theme::{self, Appearance, DarkTheme, LightTheme, ThemeChoice};
 
 /// The choice in force.
 #[derive(Clone, Copy, Debug, Default)]
@@ -28,10 +34,12 @@ struct Chosen(ThemeChoice);
 
 impl Global for Chosen {}
 
-/// Reads `choice` (from `settings.json`) and applies it. Call before the
+/// Reads `settings.json`'s Appearance and applies it. Call before the
 /// first window opens.
-pub fn install(choice: ThemeChoice, cx: &mut App) {
-    cx.set_global(Chosen(choice));
+pub fn install(settings: AppearanceSettings, cx: &mut App) {
+    theme::set_dark_theme(settings.dark_theme);
+    theme::set_light_theme(settings.light_theme);
+    cx.set_global(Chosen(settings.theme));
     apply(cx);
 }
 
@@ -44,15 +52,53 @@ pub fn choice(cx: &App) -> ThemeChoice {
 
 /// Settings › General's Theme: saves `choice`, then applies it.
 pub fn set(choice: ThemeChoice, cx: &mut App) {
+    save(cx, "Theme", |appearance| appearance.theme = choice);
+    cx.set_global(Chosen(choice));
+    apply(cx);
+}
+
+/// Settings › General's Dark theme: saves it, then draws it at once when
+/// PwrRoute is dark.
+pub fn set_dark_theme(dark_theme: DarkTheme, cx: &mut App) {
+    save(cx, "Dark theme", |appearance| {
+        appearance.dark_theme = dark_theme
+    });
+    let drawn = theme::current().appearance == Appearance::Dark;
+    if theme::current().dark_theme != dark_theme {
+        theme::set_dark_theme(dark_theme);
+        if drawn {
+            log::info!("appearance: drawing {}", dark_theme.key());
+            redraw(cx);
+        }
+    }
+    report(cx);
+}
+
+/// Settings › General's Light theme: saves it, then draws it at once when
+/// PwrRoute is light.
+pub fn set_light_theme(light_theme: LightTheme, cx: &mut App) {
+    save(cx, "Light theme", |appearance| {
+        appearance.light_theme = light_theme;
+    });
+    let drawn = theme::current().appearance == Appearance::Light;
+    if theme::current().light_theme != light_theme {
+        theme::set_light_theme(light_theme);
+        if drawn {
+            log::info!("appearance: drawing {}", light_theme.key());
+            redraw(cx);
+        }
+    }
+    report(cx);
+}
+
+fn save(cx: &mut App, what: &str, edit: impl FnOnce(&mut AppearanceSettings)) {
     if let Some(store) = crate::settings_store::store(cx) {
         store.update(cx, |store, _| {
-            if let Err(error) = store.update(|settings| settings.appearance.theme = choice) {
-                log::warn!("Theme is not saved: {error:#}");
+            if let Err(error) = store.update(|settings| edit(&mut settings.appearance)) {
+                log::warn!("{what} is not saved: {error:#}");
             }
         });
     }
-    cx.set_global(Chosen(choice));
-    apply(cx);
 }
 
 /// Asks the OS again. A change matters only under System; Settings ›
@@ -75,6 +121,8 @@ pub fn general(cx: &App) -> General {
     General {
         theme: choice(cx),
         showing: current.appearance,
+        dark_theme: current.dark_theme,
+        light_theme: current.light_theme,
         increase_contrast: current.increase_contrast,
         os: if cfg!(target_os = "macos") {
             "macOS"
@@ -91,6 +139,14 @@ pub fn handle_settings_request(request: &SettingsRequest, cx: &mut App) -> bool 
     match request {
         SettingsRequest::SetTheme(choice) => {
             set(*choice, cx);
+            true
+        }
+        SettingsRequest::SetDarkTheme(dark_theme) => {
+            set_dark_theme(*dark_theme, cx);
+            true
+        }
+        SettingsRequest::SetLightTheme(light_theme) => {
+            set_light_theme(*light_theme, cx);
             true
         }
         _ => false,
@@ -117,10 +173,15 @@ fn resolve(cx: &mut App) {
     if theme::current().appearance != scheme {
         log::info!("appearance: drawing {scheme:?} (Theme: {})", chosen.label());
         theme::set_appearance(scheme);
-        crate::tray::follow_scheme(cx);
-        cx.refresh_windows();
+        redraw(cx);
     }
     report(cx);
+}
+
+/// Every window and the tray icon in the palette now in force.
+fn redraw(cx: &mut App) {
+    crate::tray::follow_scheme(cx);
+    cx.refresh_windows();
 }
 
 /// Tells Settings › General, when it shows something else. Deferred: a
@@ -164,7 +225,13 @@ mod tests {
     fn a_choice_draws_its_scheme_and_system_is_dark_in_tests(cx: &mut gpui_kit::TestAppContext) {
         let _restore = theme::DefaultOnDrop;
         cx.update(|cx| {
-            install(ThemeChoice::Light, cx);
+            install(
+                AppearanceSettings {
+                    theme: ThemeChoice::Light,
+                    ..AppearanceSettings::default()
+                },
+                cx,
+            );
             assert_eq!(theme::current().appearance, Appearance::Light);
             assert_eq!(general(cx).theme, ThemeChoice::Light);
             set(ThemeChoice::System, cx);
@@ -172,6 +239,32 @@ mod tests {
             set(ThemeChoice::Dark, cx);
             assert_eq!(theme::current().appearance, Appearance::Dark);
             assert_eq!(choice(cx), ThemeChoice::Dark);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_theme_pick_draws_in_its_own_scheme_only(cx: &mut gpui_kit::TestAppContext) {
+        let _restore = theme::DefaultOnDrop;
+        cx.update(|cx| {
+            install(
+                AppearanceSettings {
+                    theme: ThemeChoice::Dark,
+                    dark_theme: DarkTheme::Gray,
+                    light_theme: LightTheme::Blue,
+                },
+                cx,
+            );
+            assert_eq!(theme::palette(), DarkTheme::Gray.palette(false));
+            // The light theme waits for the light scheme.
+            set_light_theme(LightTheme::CatppuccinLatte, cx);
+            assert_eq!(theme::palette(), DarkTheme::Gray.palette(false));
+            set_dark_theme(DarkTheme::Phosphor, cx);
+            assert_eq!(theme::palette(), DarkTheme::Phosphor.palette(false));
+            set(ThemeChoice::Light, cx);
+            assert_eq!(theme::palette(), LightTheme::CatppuccinLatte.palette(false));
+            let general = general(cx);
+            assert_eq!(general.dark_theme, DarkTheme::Phosphor);
+            assert_eq!(general.light_theme, LightTheme::CatppuccinLatte);
         });
     }
 }

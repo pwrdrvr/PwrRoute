@@ -69,6 +69,346 @@ text_muted on log_warn_row           8.82
 text_muted on log_error_row          8.85
 accent_on on accent                  8.27
 
+[gray-dark]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  11.96       12.96      12.96    11.96    13.28       10.82    10.04            8.34          9.73      10.82
+text_secondary                 8.46        9.16       9.16     8.46     9.39        7.65     7.10            5.89          6.88       7.65
+text_muted                     7.46        8.07       8.07     7.46     8.28        6.74     6.26            5.20          6.06       6.74
+text_subtle                    6.82        7.25       7.25     6.82     7.38        6.31     5.95            5.13          5.80       6.31
+accent                         7.44        8.06       8.06     7.44     8.27        6.73     6.25            5.19          6.05       6.73
+accent_bright                  8.31        9.00       9.00     8.31     9.23        7.52     6.98            5.79          6.76       7.52
+danger_text                   10.98       11.89      11.89    10.98    12.19        9.93     9.22            7.65          8.93       9.93
+success_text                  10.36       11.22      11.22    10.36    11.50        9.37     8.70            7.22          8.42       9.37
+info_text                      9.85       10.66      10.66     9.85    10.93        8.91     8.27            6.86          8.01       8.91
+warn_text                      8.54        9.24       9.24     8.54     9.48        7.72     7.17            5.95          6.94       7.72
+log_target                     7.85        8.50       8.50     7.85     8.71        7.10     6.59            5.47          6.38       7.10
+border_control                 3.67        3.80       3.80     3.67     3.84        3.50     3.37            3.05          3.31       3.50
+accent_border                  3.95        4.16       4.16     3.95     4.22        3.69     3.51            3.07          3.44       3.69
+focus_ring                     7.44        8.06       8.06     7.44     8.27        6.73     6.25            5.19          6.05       6.73
+focus_ring_on_accent           1.21        1.11       1.11     1.21     1.09        1.33     1.44            1.73          1.48       1.33
+status_ok                      8.29        8.97       8.97     8.29     9.20        7.49     6.96            5.77          6.74       7.49
+status_error                   9.10        9.86       9.86     9.10    10.11        8.23     7.64            6.34          7.40       8.23
+status_warning                 8.54        9.24       9.24     8.54     9.48        7.72     7.17            5.95          6.94       7.72
+status_suspended               4.39        4.75       4.75     4.39     4.87        3.97     3.69            3.06          3.57       3.97
+accent on accent_soft                5.81
+accent_bright on accent_soft         6.49
+text_muted on accent_soft            5.82
+text_primary on accent_soft          9.34
+danger_text on danger_soft           6.72
+success_text on success_soft         6.84
+info_text on info_soft               6.99
+warn_text on warn_soft               6.16
+text_primary on log_selected         9.76
+text_muted on log_warn_row           6.75
+text_muted on log_error_row          6.46
+accent_on on accent                  8.97
+
+[gray-dark, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  11.96       12.96      12.96    11.96    13.28       10.82    10.04            8.34          9.73      10.82
+text_secondary                10.12       10.96      10.96    10.12    11.24        9.15     8.49            7.05          8.23       9.15
+text_muted                     8.46        9.16       9.16     8.46     9.39        7.65     7.10            5.89          6.88       7.65
+text_subtle                    8.46        9.16       9.16     8.46     9.39        7.65     7.10            5.89          6.88       7.65
+accent                         7.44        8.06       8.06     7.44     8.27        6.73     6.25            5.19          6.05       6.73
+accent_bright                 10.20       11.04      11.04    10.20    11.32        9.22     8.56            7.11          8.29       9.22
+danger_text                   13.27       14.37      14.37    13.27    14.73       12.00    11.14            9.25         10.79      12.00
+success_text                  12.43       13.45      13.45    12.43    13.80       11.24    10.43            8.66         10.10      11.24
+info_text                     11.87       12.86      12.86    11.87    13.18       10.74     9.97            8.27          9.65      10.74
+warn_text                     10.32       11.17      11.17    10.32    11.46        9.33     8.66            7.19          8.39       9.33
+log_target                     9.58       10.37      10.37     9.58    10.63        8.66     8.04            6.67          7.79       8.66
+border_control                 5.58        5.88       5.88     5.58     5.98        5.21     4.95            4.33          4.84       5.21
+accent_border                  7.44        8.06       8.06     7.44     8.27        6.73     6.25            5.19          6.05       6.73
+focus_ring                     7.44        8.06       8.06     7.44     8.27        6.73     6.25            5.19          6.05       6.73
+focus_ring_on_accent           1.21        1.11       1.11     1.21     1.09        1.33     1.44            1.73          1.48       1.33
+status_ok                     10.08       10.92      10.92    10.08    11.19        9.12     8.46            7.02          8.20       9.12
+status_error                  11.05       11.97      11.97    11.05    12.27        9.99     9.28            7.70          8.98       9.99
+status_warning                10.32       11.17      11.17    10.32    11.46        9.33     8.66            7.19          8.39       9.33
+status_suspended               5.97        6.46       6.46     5.97     6.63        5.40     5.01            4.16          4.85       5.40
+accent on accent_soft                5.81
+accent_bright on accent_soft         7.97
+text_muted on accent_soft            6.60
+text_primary on accent_soft          9.34
+danger_text on danger_soft           8.12
+success_text on success_soft         8.20
+info_text on info_soft               8.43
+warn_text on warn_soft               7.44
+text_primary on log_selected         9.76
+text_muted on log_warn_row           7.65
+text_muted on log_error_row          7.33
+accent_on on accent                  8.97
+
+[blue-dark]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  15.11       15.78      15.78    14.68    15.53       13.58    12.54           10.21         12.50      13.58
+text_secondary                10.18       10.64      10.64     9.90    10.47        9.16     8.45            6.88          8.43       9.16
+text_muted                     7.35        7.67       7.67     7.14     7.55        6.61     6.10            4.97          6.08       6.61
+text_subtle                    6.25        6.37       6.37     6.16     6.33        5.89     5.60            4.87          5.59       5.89
+accent                         7.39        7.72       7.72     7.19     7.60        6.65     6.13            5.00          6.12       6.65
+accent_bright                  8.24        8.60       8.60     8.00     8.47        7.41     6.83            5.57          6.82       7.41
+danger_text                   11.60       12.12      12.12    11.28    11.93       10.43     9.63            7.84          9.60      10.43
+success_text                  11.12       11.62      11.62    10.81    11.43       10.00     9.23            7.52          9.20      10.00
+info_text                     10.99       11.48      11.48    10.68    11.30        9.88     9.12            7.43          9.10       9.88
+warn_text                     10.23       10.69      10.69     9.94    10.52        9.20     8.49            6.92          8.47       9.20
+log_target                    10.48       10.94      10.94    10.18    10.77        9.42     8.69            7.08          8.67       9.42
+border_control                 3.51        3.51       3.51     3.50     3.51        3.43     3.34            3.05          3.33       3.43
+accent_border                  3.92        3.99       3.99     3.86     3.97        3.70     3.52            3.07          3.51       3.70
+focus_ring                     7.39        7.72       7.72     7.19     7.60        6.65     6.13            5.00          6.12       6.65
+focus_ring_on_accent          15.11       15.78      15.78    14.68    15.53       13.58    12.54           10.21         12.50      13.58
+status_ok                     11.12       11.62      11.62    10.81    11.43       10.00     9.23            7.52          9.20      10.00
+status_error                   9.18        9.59       9.59     8.92     9.43        8.25     7.61            6.20          7.59       8.25
+status_warning                10.23       10.69      10.69     9.94    10.52        9.20     8.49            6.92          8.47       9.20
+status_suspended               4.55        4.75       4.75     4.42     4.68        4.09     3.77            3.08          3.76       4.09
+accent on accent_soft                5.87
+accent_bright on accent_soft         6.54
+text_muted on accent_soft            5.83
+text_primary on accent_soft          12.00
+danger_text on danger_soft           6.69
+success_text on success_soft         7.11
+info_text on info_soft               7.40
+warn_text on warn_soft               7.46
+text_primary on log_selected         12.46
+text_muted on log_warn_row           6.59
+text_muted on log_error_row          6.24
+accent_on on accent                  7.80
+
+[blue-dark, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  15.11       15.78      15.78    14.68    15.53       13.58    12.54           10.21         12.50      13.58
+text_secondary                12.47       13.02      13.02    12.12    12.82       11.21    10.35            8.43         10.32      11.21
+text_muted                    10.18       10.64      10.64     9.90    10.47        9.16     8.45            6.88          8.43       9.16
+text_subtle                   10.18       10.64      10.64     9.90    10.47        9.16     8.45            6.88          8.43       9.16
+accent                         7.39        7.72       7.72     7.19     7.60        6.65     6.13            5.00          6.12       6.65
+accent_bright                 10.16       10.61      10.61     9.88    10.45        9.14     8.43            6.87          8.41       9.14
+danger_text                   14.19       14.82      14.82    13.79    14.58       12.76    11.77            9.59         11.74      12.76
+success_text                  13.48       14.08      14.08    13.10    13.85       12.12    11.18            9.11         11.15      12.12
+info_text                     13.34       13.94      13.94    12.97    13.72       12.00    11.07            9.02         11.04      12.00
+warn_text                     12.41       12.96      12.96    12.06    12.75       11.15    10.29            8.39         10.27      11.15
+log_target                    12.74       13.31      13.31    12.38    13.10       11.45    10.57            8.61         10.54      11.45
+border_control                 6.42        6.55       6.55     6.32     6.50        6.04     5.73            4.98          5.72       6.04
+accent_border                  7.39        7.72       7.72     7.19     7.60        6.65     6.13            5.00          6.12       6.65
+focus_ring                     7.39        7.72       7.72     7.19     7.60        6.65     6.13            5.00          6.12       6.65
+focus_ring_on_accent          15.11       15.78      15.78    14.68    15.53       13.58    12.54           10.21         12.50      13.58
+status_ok                     13.48       14.08      14.08    13.10    13.85       12.12    11.18            9.11         11.15      12.12
+status_error                  11.32       11.83      11.83    11.00    11.64       10.18     9.39            7.65          9.37      10.18
+status_warning                12.41       12.96      12.96    12.06    12.75       11.15    10.29            8.39         10.27      11.15
+status_suspended               6.23        6.51       6.51     6.05     6.40        5.60     5.17            4.21          5.16       5.60
+accent on accent_soft                5.87
+accent_bright on accent_soft         8.07
+text_muted on accent_soft            8.09
+text_primary on accent_soft          12.00
+danger_text on danger_soft           8.18
+success_text on success_soft         8.61
+info_text on info_soft               8.99
+warn_text on warn_soft               9.04
+text_primary on log_selected         12.46
+text_muted on log_warn_row           9.14
+text_muted on log_error_row          8.65
+accent_on on accent                  7.80
+
+[phosphor-dark]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  16.56       16.82      16.82    16.29    16.72       15.33    14.05           11.03         13.63      15.33
+text_secondary                11.46       11.65      11.65    11.27    11.58       10.61     9.73            7.63          9.44      10.61
+text_muted                     8.09        8.21       8.21     7.95     8.17        7.49     6.86            5.38          6.66       7.49
+text_subtle                    6.42        6.43       6.43     6.40     6.42        6.27     6.00            5.15          5.86       6.27
+accent                        14.61       14.85      14.85    14.37    14.76       13.53    12.40            9.73         12.03      13.53
+accent_bright                 15.51       15.75      15.75    15.25    15.66       14.36    13.16           10.33         12.76      14.36
+danger_text                    8.30        8.43       8.43     8.17     8.39        7.69     7.04            5.53          6.83       7.69
+success_text                  11.93       12.12      12.12    11.73    12.05       11.04    10.12            7.94          9.82      11.04
+info_text                      9.77        9.93       9.93     9.61     9.87        9.05     8.29            6.51          8.04       9.05
+warn_text                      9.93       10.09      10.09     9.77    10.03        9.20     8.43            6.61          8.18       9.20
+log_target                    11.30       11.48      11.48    11.12    11.42       10.47     9.59            7.53          9.30      10.47
+border_control                 3.31        3.28       3.28     3.34     3.29        3.38     3.35            3.09          3.30       3.38
+accent_border                  4.96        4.96       4.96     4.96     4.95        4.89     4.73            4.13          4.69       4.89
+focus_ring                    14.61       14.85      14.85    14.37    14.76       13.53    12.40            9.73         12.03      13.53
+focus_ring_on_accent           1.10        1.11       1.11     1.08     1.11        1.01     1.08            1.37          1.11       1.01
+status_ok                     11.46       11.64      11.64    11.27    11.57       10.61     9.72            7.63          9.43      10.61
+status_error                   9.13        9.27       9.27     8.98     9.22        8.45     7.75            6.08          7.51       8.45
+status_warning                 9.93       10.09      10.09     9.77    10.03        9.20     8.43            6.61          8.18       9.20
+status_suspended               4.61        4.68       4.68     4.53     4.65        4.27     3.91            3.07          3.79       4.27
+accent on accent_soft                11.42
+accent_bright on accent_soft         12.12
+text_muted on accent_soft            6.32
+text_primary on accent_soft          12.94
+danger_text on danger_soft           6.90
+success_text on success_soft         8.27
+info_text on info_soft               7.96
+warn_text on warn_soft               7.81
+text_primary on log_selected         13.60
+text_muted on log_warn_row           7.53
+text_muted on log_error_row          7.68
+accent_on on accent                  13.34
+
+[phosphor-dark, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  16.56       16.82      16.82    16.29    16.72       15.33    14.05           11.03         13.63      15.33
+text_secondary                13.96       14.19      14.19    13.73    14.10       12.93    11.85            9.30         11.49      12.93
+text_muted                    11.46       11.65      11.65    11.27    11.58       10.61     9.73            7.63          9.44      10.61
+text_subtle                   11.46       11.65      11.65    11.27    11.58       10.61     9.73            7.63          9.44      10.61
+accent                        14.61       14.85      14.85    14.37    14.76       13.53    12.40            9.73         12.03      13.53
+accent_bright                 17.88       18.17      18.17    17.59    18.06       16.56    15.17           11.91         14.72      16.56
+danger_text                   10.30       10.46      10.46    10.13    10.40        9.54     8.74            6.86          8.48       9.54
+success_text                  14.48       14.71      14.71    14.24    14.62       13.40    12.28            9.64         11.91      13.40
+info_text                     12.02       12.21      12.21    11.82    12.14       11.13    10.19            8.00          9.89      11.13
+warn_text                     12.15       12.34      12.34    11.95    12.27       11.25    10.31            8.09         10.00      11.25
+log_target                    13.76       13.98      13.98    13.53    13.89       12.74    11.67            9.16         11.32      12.74
+border_control                 6.60        6.62       6.62     6.58     6.61        6.44     6.15            5.26          6.01       6.44
+accent_border                 14.61       14.85      14.85    14.37    14.76       13.53    12.40            9.73         12.03      13.53
+focus_ring                    14.61       14.85      14.85    14.37    14.76       13.53    12.40            9.73         12.03      13.53
+focus_ring_on_accent           1.10        1.11       1.11     1.08     1.11        1.01     1.08            1.37          1.11       1.01
+status_ok                     13.96       14.18      14.18    13.73    14.09       12.92    11.84            9.29         11.49      12.92
+status_error                  11.44       11.62      11.62    11.25    11.56       10.59     9.71            7.62          9.42      10.59
+status_warning                12.15       12.34      12.34    11.95    12.27       11.25    10.31            8.09         10.00      11.25
+status_suspended               6.33        6.43       6.43     6.22     6.39        5.86     5.37            4.21          5.21       5.86
+accent on accent_soft                11.42
+accent_bright on accent_soft         13.98
+text_muted on accent_soft            8.96
+text_primary on accent_soft          12.94
+danger_text on danger_soft           8.56
+success_text on success_soft         10.03
+info_text on info_soft               9.79
+warn_text on warn_soft               9.56
+text_primary on log_selected         13.60
+text_muted on log_warn_row           10.67
+text_muted on log_error_row          10.88
+accent_on on accent                  13.34
+
+[catppuccin-mocha]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  11.34       12.14      12.14    11.34    12.14       10.40     9.89            8.47          9.21      10.40
+text_secondary                 9.26        9.91       9.91     9.26     9.91        8.49     8.08            6.91          7.52       8.49
+text_muted                     7.45        7.98       7.98     7.45     7.98        6.83     6.50            5.56          6.05       6.83
+text_subtle                    6.81        7.15       7.15     6.81     7.15        6.38     6.13            5.43          5.80       6.38
+accent                         9.27        9.92       9.92     9.27     9.92        8.49     8.08            6.92          7.52       8.49
+accent_bright                 10.10       10.81      10.81    10.10    10.81        9.26     8.81            7.54          8.20       9.26
+danger_text                   11.00       11.77      11.77    11.00    11.77       10.08     9.59            8.21          8.93      10.08
+success_text                  11.25       12.04      12.04    11.25    12.04       10.31     9.81            8.40          9.13      10.31
+info_text                      9.82       10.52      10.52     9.82    10.52        9.01     8.57            7.33          7.98       9.01
+warn_text                     12.91       13.81      13.81    12.91    13.81       11.83    11.25            9.63         10.48      11.83
+log_target                    11.01       11.79      11.79    11.01    11.79       10.10     9.60            8.22          8.94      10.10
+border_control                 3.49        3.56       3.56     3.49     3.56        3.38     3.31            3.07          3.20       3.38
+accent_border                  3.83        3.95       3.95     3.83     3.95        3.67     3.57            3.26          3.44       3.67
+focus_ring                     9.27        9.92       9.92     9.27     9.92        8.49     8.08            6.92          7.52       8.49
+focus_ring_on_accent           1.14        1.07       1.07     1.14     1.07        1.25     1.31            1.53          1.41       1.25
+status_ok                     11.03       11.81      11.81    11.03    11.81       10.11     9.62            8.23          8.96      10.11
+status_error                   7.93        8.49       8.49     7.93     8.49        7.27     6.92            5.92          6.44       7.27
+status_warning                12.91       13.81      13.81    12.91    13.81       11.83    11.25            9.63         10.48      11.83
+status_suspended               4.10        4.39       4.39     4.10     4.39        3.76     3.57            3.06          3.33       3.76
+accent on accent_soft                7.19
+accent_bright on accent_soft         7.84
+text_muted on accent_soft            5.78
+text_primary on accent_soft          8.80
+danger_text on danger_soft           6.96
+success_text on success_soft         7.18
+info_text on info_soft               7.14
+warn_text on warn_soft               8.86
+text_primary on log_selected         9.22
+text_muted on log_warn_row           6.69
+text_muted on log_error_row          6.58
+accent_on on accent                  10.59
+
+[catppuccin-mocha, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  11.34       12.14      12.14    11.34    12.14       10.40     9.89            8.47          9.21      10.40
+text_secondary                10.27       10.99      10.99    10.27    10.99        9.42     8.95            7.67          8.34       9.42
+text_muted                     9.26        9.91       9.91     9.26     9.91        8.49     8.08            6.91          7.52       8.49
+text_subtle                    9.26        9.91       9.91     9.26     9.91        8.49     8.08            6.91          7.52       8.49
+accent                         9.27        9.92       9.92     9.27     9.92        8.49     8.08            6.92          7.52       8.49
+accent_bright                 12.37       13.25      13.25    12.37    13.25       11.35    10.79            9.24         10.05      11.35
+danger_text                   13.42       14.37      14.37    13.42    14.37       12.31    11.70           10.02         10.90      12.31
+success_text                  13.54       14.49      14.49    13.54    14.49       12.42    11.81           10.11         11.00      12.42
+info_text                     11.90       12.74      12.74    11.90    12.74       10.91    10.38            8.89          9.67      10.91
+warn_text                     15.49       16.58      16.58    15.49    16.58       14.20    13.51           11.56         12.58      14.20
+log_target                    13.28       14.21      14.21    13.28    14.21       12.17    11.58            9.91         10.78      12.17
+border_control                 5.20        5.40       5.40     5.20     5.40        4.93     4.78            4.31          4.56       4.93
+accent_border                  9.27        9.92       9.92     9.27     9.92        8.49     8.08            6.92          7.52       8.49
+focus_ring                     9.27        9.92       9.92     9.27     9.92        8.49     8.08            6.92          7.52       8.49
+focus_ring_on_accent           1.14        1.07       1.07     1.14     1.07        1.25     1.31            1.53          1.41       1.25
+status_ok                     13.30       14.23      14.23    13.30    14.23       12.19    11.59            9.93         10.80      12.19
+status_error                   9.73       10.41      10.41     9.73    10.41        8.92     8.48            7.26          7.90       8.92
+status_warning                15.49       16.58      16.58    15.49    16.58       14.20    13.51           11.56         12.58      14.20
+status_suspended               5.62        6.02       6.02     5.62     6.02        5.15     4.90            4.20          4.56       5.15
+accent on accent_soft                7.19
+accent_bright on accent_soft         9.60
+text_muted on accent_soft            7.19
+text_primary on accent_soft          8.80
+danger_text on danger_soft           8.50
+success_text on success_soft         8.64
+info_text on info_soft               8.66
+warn_text on warn_soft               10.64
+text_primary on log_selected         9.22
+text_muted on log_warn_row           8.31
+text_muted on log_error_row          8.17
+accent_on on accent                  10.59
+
+[solarized-dark]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                   7.92        6.86       6.86     7.92     6.86        6.86     7.34            6.77          6.82       6.86
+text_secondary                 7.36        6.38       6.38     7.36     6.38        6.38     6.82            6.29          6.34       6.38
+text_muted                     6.81        5.89       5.89     6.81     5.89        5.89     6.31            5.82          5.86       5.89
+text_subtle                    6.56        5.76       5.76     6.56     5.76        5.76     6.12            5.69          5.74       5.76
+accent                         6.77        5.86       5.86     6.77     5.86        5.86     6.27            5.78          5.83       5.86
+accent_bright                  7.53        6.52       6.52     7.53     6.52        6.52     6.97            6.43          6.48       6.52
+danger_text                    7.53        6.52       6.52     7.53     6.52        6.52     6.97            6.43          6.48       6.52
+success_text                   8.40        7.27       7.27     8.40     7.27        7.27     7.78            7.18          7.23       7.27
+info_text                      8.02        6.94       6.94     8.02     6.94        6.94     7.43            6.85          6.90       6.94
+warn_text                      7.35        6.36       6.36     7.35     6.36        6.36     6.81            6.28          6.32       6.36
+log_target                     6.82        5.91       5.91     6.82     5.91        5.91     6.32            5.83          5.87       5.91
+border_control                 3.38        3.13       3.13     3.38     3.13        3.13     3.25            3.11          3.15       3.13
+accent_border                  3.43        3.13       3.13     3.43     3.13        3.13     3.27            3.10          3.18       3.13
+focus_ring                     6.77        5.86       5.86     6.77     5.86        5.86     6.27            5.78          5.83       5.86
+focus_ring_on_accent           1.00        1.15       1.15     1.00     1.15        1.15     1.08            1.17          1.16       1.15
+status_ok                      6.76        5.85       5.85     6.76     5.85        5.85     6.26            5.78          5.82       5.85
+status_error                   7.20        6.23       6.23     7.20     6.23        6.23     6.67            6.15          6.20       6.23
+status_warning                 7.35        6.36       6.36     7.35     6.36        6.36     6.81            6.28          6.32       6.36
+status_suspended               3.58        3.10       3.10     3.58     3.10        3.10     3.32            3.06          3.08       3.10
+accent on accent_soft                5.61
+accent_bright on accent_soft         6.24
+text_muted on accent_soft            5.64
+text_primary on accent_soft          6.56
+danger_text on danger_soft           6.51
+success_text on success_soft         6.59
+info_text on info_soft               6.47
+warn_text on warn_soft               5.80
+text_primary on log_selected         6.79
+text_muted on log_warn_row           6.35
+text_muted on log_error_row          6.61
+accent_on on accent                  6.77
+
+[solarized-dark, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                   7.92        6.86       6.86     7.92     6.86        6.86     7.34            6.77          6.82       6.86
+text_secondary                 7.61        6.59       6.59     7.61     6.59        6.59     7.05            6.50          6.55       6.59
+text_muted                     7.36        6.38       6.38     7.36     6.38        6.38     6.82            6.29          6.34       6.38
+text_subtle                    7.36        6.38       6.38     7.36     6.38        6.38     6.82            6.29          6.34       6.38
+accent                         6.77        5.86       5.86     6.77     5.86        5.86     6.27            5.78          5.83       5.86
+accent_bright                  9.20        7.96       7.96     9.20     7.96        7.96     8.52            7.86          7.92       7.96
+danger_text                    9.27        8.03       8.03     9.27     8.03        8.03     8.59            7.92          7.98       8.03
+success_text                  10.24        8.87       8.87    10.24     8.87        8.87     9.49            8.75          8.82       8.87
+info_text                      9.76        8.45       8.45     9.76     8.45        8.45     9.04            8.34          8.40       8.45
+warn_text                      8.99        7.78       7.78     8.99     7.78        7.78     8.33            7.68          7.74       7.78
+log_target                     8.43        7.30       7.30     8.43     7.30        7.30     7.81            7.20          7.25       7.30
+border_control                 3.92        3.58       3.58     3.92     3.58        3.58     3.74            3.55          3.60       3.58
+accent_border                  6.77        5.86       5.86     6.77     5.86        5.86     6.27            5.78          5.83       5.86
+focus_ring                     6.77        5.86       5.86     6.77     5.86        5.86     6.27            5.78          5.83       5.86
+focus_ring_on_accent           1.00        1.15       1.15     1.00     1.15        1.15     1.08            1.17          1.16       1.15
+status_ok                      8.37        7.25       7.25     8.37     7.25        7.25     7.76            7.16          7.21       7.25
+status_error                   8.86        7.67       7.67     8.86     7.67        7.67     8.21            7.57          7.63       7.67
+status_warning                 8.99        7.78       7.78     8.99     7.78        7.78     8.33            7.68          7.74       7.78
+status_suspended               4.91        4.25       4.25     4.91     4.25        4.25     4.55            4.20          4.23       4.25
+accent on accent_soft                5.61
+accent_bright on accent_soft         7.62
+text_muted on accent_soft            6.11
+text_primary on accent_soft          6.56
+danger_text on danger_soft           8.01
+success_text on success_soft         8.04
+info_text on info_soft               7.87
+warn_text on warn_soft               7.09
+text_primary on log_selected         6.79
+text_muted on log_warn_row           6.87
+text_muted on log_error_row          7.15
+accent_on on accent                  6.77
+
 [light]
                              bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
 text_primary                  17.99       16.40      16.40    17.54    17.99       17.99    15.83           14.35         16.69      17.99
@@ -136,3 +476,275 @@ text_primary on log_selected         15.13
 text_muted on log_warn_row           7.89
 text_muted on log_error_row          7.65
 accent_on on accent                  7.57
+
+[gray-light]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  14.12       13.01      13.01    14.51    15.57       15.57    12.41           10.52         12.87      15.57
+text_secondary                 8.00        7.36       7.36     8.22     8.81        8.81     7.03            5.95          7.29       8.81
+text_muted                     6.62        6.10       6.10     6.80     7.30        7.30     5.82            4.93          6.03       7.30
+text_subtle                    5.53        5.31       5.31     5.60     5.78        5.78     5.19            4.77          5.28       5.78
+accent                         6.62        6.09       6.09     6.80     7.29        7.29     5.82            4.93          6.03       7.29
+accent_bright                  7.37        6.79       6.79     7.57     8.12        8.12     6.48            5.49          6.71       8.12
+danger_text                    9.61        8.85       8.85     9.88    10.60       10.60     8.45            7.16          8.76      10.60
+success_text                   8.42        7.75       7.75     8.65     9.28        9.28     7.40            6.27          7.67       9.28
+info_text                      8.26        7.61       7.61     8.49     9.11        9.11     7.26            6.15          7.53       9.11
+warn_text                      7.23        6.66       6.66     7.43     7.97        7.97     6.35            5.38          6.59       7.97
+log_target                     6.57        6.05       6.05     6.75     7.25        7.25     5.78            4.90          5.99       7.25
+border_control                 3.41        3.33       3.33     3.44     3.50        3.50     3.28            3.12          3.32       3.50
+accent_border                  4.37        4.13       4.13     4.45     4.67        4.67     4.00            3.55          4.08       4.67
+focus_ring                     6.62        6.09       6.09     6.80     7.29        7.29     5.82            4.93          6.03       7.29
+focus_ring_on_accent           1.19        1.29       1.29     1.16     1.08        1.08     1.35            1.60          1.31       1.08
+status_ok                      6.75        6.21       6.21     6.93     7.44        7.44     5.93            5.02          6.15       7.44
+status_error                   7.91        7.28       7.28     8.13     8.72        8.72     6.95            5.89          7.21       8.72
+status_warning                 7.23        6.66       6.66     7.43     7.97        7.97     6.35            5.38          6.59       7.97
+status_suspended               4.13        3.80       3.80     4.24     4.55        4.55     3.63            3.07          3.76       4.55
+accent on accent_soft                5.82
+accent_bright on accent_soft         6.48
+text_muted on accent_soft            5.82
+text_primary on accent_soft          12.43
+danger_text on danger_soft           8.03
+success_text on success_soft         6.98
+info_text on info_soft               7.05
+warn_text on warn_soft               5.96
+text_primary on log_selected         12.43
+text_muted on log_warn_row           6.21
+text_muted on log_error_row          6.14
+accent_on on accent                  7.88
+
+[gray-light, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  14.12       13.01      13.01    14.51    15.57       15.57    12.41           10.52         12.87      15.57
+text_secondary                11.01       10.14      10.14    11.31    12.14       12.14     9.68            8.20         10.03      12.14
+text_muted                     8.00        7.36       7.36     8.22     8.81        8.81     7.03            5.95          7.29       8.81
+text_subtle                    8.00        7.36       7.36     8.22     8.81        8.81     7.03            5.95          7.29       8.81
+accent                         8.49        7.82       7.82     8.72     9.36        9.36     7.46            6.32          7.74       9.36
+accent_bright                  9.38        8.64       8.64     9.64    10.34       10.34     8.25            6.99          8.55      10.34
+danger_text                   11.98       11.03      11.03    12.31    13.21       13.21    10.53            8.92         10.91      13.21
+success_text                  10.63        9.79       9.79    10.93    11.72       11.72     9.35            7.92          9.69      11.72
+info_text                     10.57        9.73       9.73    10.86    11.65       11.65     9.29            7.87          9.63      11.65
+warn_text                      9.21        8.48       8.48     9.47    10.16       10.16     8.10            6.86          8.39      10.16
+log_target                     8.51        7.84       7.84     8.75     9.39        9.39     7.48            6.34          7.76       9.39
+border_control                 4.45        4.31       4.31     4.49     4.61        4.61     4.23            3.95          4.29       4.61
+accent_border                  8.49        7.82       7.82     8.72     9.36        9.36     7.46            6.32          7.74       9.36
+focus_ring                     8.49        7.82       7.82     8.72     9.36        9.36     7.46            6.32          7.74       9.36
+focus_ring_on_accent           1.19        1.29       1.29     1.16     1.08        1.08     1.35            1.60          1.31       1.08
+status_ok                      8.70        8.02       8.02     8.94     9.59        9.59     7.65            6.48          7.93       9.59
+status_error                  10.06        9.27       9.27    10.34    11.09       11.09     8.84            7.49          9.17      11.09
+status_warning                 9.21        8.48       8.48     9.47    10.16       10.16     8.10            6.86          8.39      10.16
+status_suspended               5.84        5.37       5.37     6.00     6.43        6.43     5.13            4.35          5.32       6.43
+accent on accent_soft                7.37
+accent_bright on accent_soft         8.14
+text_muted on accent_soft            6.94
+text_primary on accent_soft          12.26
+danger_text on danger_soft           10.01
+success_text on success_soft         8.82
+info_text on info_soft               9.02
+warn_text on warn_soft               7.60
+text_primary on log_selected         12.26
+text_muted on log_warn_row           7.50
+text_muted on log_error_row          7.42
+accent_on on accent                  10.11
+
+[blue-light]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  14.88       13.82      13.82    15.15    16.00       16.00    13.08           11.20         13.47      16.00
+text_secondary                 8.58        7.97       7.97     8.74     9.23        9.23     7.54            6.46          7.77       9.23
+text_muted                     6.60        6.13       6.13     6.72     7.10        7.10     5.80            4.97          5.97       7.10
+text_subtle                    5.61        5.41       5.41     5.66     5.80        5.80     5.27            4.87          5.34       5.80
+accent                         6.56        6.09       6.09     6.68     7.06        7.06     5.77            4.94          5.94       7.06
+accent_bright                  7.33        6.81       6.81     7.47     7.89        7.89     6.45            5.52          6.64       7.89
+danger_text                    9.58        8.90       8.90     9.76    10.31       10.31     8.43            7.21          8.68      10.31
+success_text                   8.45        7.85       7.85     8.61     9.09        9.09     7.43            6.36          7.65       9.09
+info_text                      8.28        7.70       7.70     8.44     8.91        8.91     7.28            6.23          7.50       8.91
+warn_text                      7.31        6.79       6.79     7.45     7.87        7.87     6.43            5.50          6.62       7.87
+log_target                     6.58        6.11       6.11     6.70     7.08        7.08     5.79            4.95          5.96       7.08
+border_control                 3.34        3.27       3.27     3.35     3.40        3.40     3.22            3.07          3.24       3.40
+accent_border                  4.25        4.03       4.03     4.30     4.47        4.47     3.88            3.47          3.96       4.47
+focus_ring                     6.56        6.09       6.09     6.68     7.06        7.06     5.77            4.94          5.94       7.06
+focus_ring_on_accent           1.08        1.16       1.16     1.06     1.00        1.00     1.22            1.43          1.19       1.00
+status_ok                      7.47        6.94       6.94     7.61     8.03        8.03     6.57            5.62          6.76       8.03
+status_error                   8.08        7.50       7.50     8.23     8.69        8.69     7.10            6.08          7.31       8.69
+status_warning                 7.31        6.79       6.79     7.45     7.87        7.87     6.43            5.50          6.62       7.87
+status_suspended               4.10        3.81       3.81     4.18     4.41        4.41     3.60            3.08          3.71       4.41
+accent on accent_soft                5.75
+accent_bright on accent_soft         6.43
+text_muted on accent_soft            5.79
+text_primary on accent_soft          13.04
+danger_text on danger_soft           7.97
+success_text on success_soft         6.91
+info_text on info_soft               6.95
+warn_text on warn_soft               5.99
+text_primary on log_selected         13.04
+text_muted on log_warn_row           6.13
+text_muted on log_error_row          6.08
+accent_on on accent                  7.06
+
+[blue-light, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  14.88       13.82      13.82    15.15    16.00       16.00    13.08           11.20         13.47      16.00
+text_secondary                11.62       10.79      10.79    11.83    12.50       12.50    10.21            8.74         10.52      12.50
+text_muted                     8.58        7.97       7.97     8.74     9.23        9.23     7.54            6.46          7.77       9.23
+text_subtle                    8.58        7.97       7.97     8.74     9.23        9.23     7.54            6.46          7.77       9.23
+accent                         8.51        7.90       7.90     8.67     9.15        9.15     7.48            6.40          7.70       9.15
+accent_bright                  9.51        8.83       8.83     9.69    10.23       10.23     8.36            7.16          8.61      10.23
+danger_text                   12.15       11.28      11.28    12.37    13.07       13.07    10.68            9.14         11.00      13.07
+success_text                  10.87       10.10      10.10    11.08    11.70       11.70     9.56            8.18          9.84      11.70
+info_text                     10.64        9.88       9.88    10.84    11.45       11.45     9.36            8.01          9.63      11.45
+warn_text                      9.38        8.71       8.71     9.56    10.09       10.09     8.25            7.06          8.49      10.09
+log_target                     8.54        7.93       7.93     8.70     9.18        9.18     7.50            6.42          7.73       9.18
+border_control                 4.49        4.37       4.37     4.52     4.62        4.62     4.27            4.01          4.32       4.62
+accent_border                  8.51        7.90       7.90     8.67     9.15        9.15     7.48            6.40          7.70       9.15
+focus_ring                     8.51        7.90       7.90     8.67     9.15        9.15     7.48            6.40          7.70       9.15
+focus_ring_on_accent           1.08        1.16       1.16     1.06     1.00        1.00     1.22            1.43          1.19       1.00
+status_ok                      9.63        8.95       8.95     9.81    10.36       10.36     8.47            7.25          8.72      10.36
+status_error                  10.36        9.63       9.63    10.56    11.15       11.15     9.11            7.80          9.38      11.15
+status_warning                 9.38        8.71       8.71     9.56    10.09       10.09     8.25            7.06          8.49      10.09
+status_suspended               5.75        5.34       5.34     5.86     6.19        6.19     5.06            4.33          5.21       6.19
+accent on accent_soft                7.33
+accent_bright on accent_soft         8.19
+text_muted on accent_soft            7.39
+text_primary on accent_soft          12.82
+danger_text on danger_soft           10.10
+success_text on success_soft         8.89
+info_text on info_soft               8.92
+warn_text on warn_soft               7.68
+text_primary on log_selected         12.82
+text_muted on log_warn_row           7.97
+text_muted on log_error_row          7.91
+accent_on on accent                  9.15
+
+[catppuccin-latte]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  10.51        9.77       9.77    10.51    11.18       11.18     9.59            8.73          9.50      11.18
+text_secondary                 8.11        7.54       7.54     8.11     8.63        8.63     7.41            6.74          7.33       8.63
+text_muted                     6.40        5.95       5.95     6.40     6.81        6.81     5.85            5.32          5.79       6.81
+text_subtle                    5.73        5.47       5.47     5.73     5.96        5.96     5.40            5.08          5.37       5.96
+accent                         6.40        5.95       5.95     6.40     6.81        6.81     5.84            5.32          5.78       6.81
+accent_bright                  7.03        6.54       6.54     7.03     7.48        7.48     6.42            5.84          6.35       7.48
+danger_text                    9.13        8.49       8.49     9.13     9.72        9.72     8.34            7.59          8.25       9.72
+success_text                   7.38        6.86       6.86     7.38     7.85        7.85     6.73            6.13          6.67       7.85
+info_text                      7.66        7.12       7.12     7.66     8.15        8.15     6.99            6.36          6.92       8.15
+warn_text                      6.39        5.94       5.94     6.39     6.80        6.80     5.83            5.31          5.78       6.80
+log_target                     6.45        5.99       5.99     6.45     6.86        6.86     5.88            5.35          5.82       6.86
+border_control                 3.34        3.25       3.25     3.34     3.42        3.42     3.23            3.11          3.22       3.42
+accent_border                  4.31        4.10       4.10     4.31     4.50        4.50     4.05            3.79          3.98       4.50
+focus_ring                     6.40        5.95       5.95     6.40     6.81        6.81     5.84            5.32          5.78       6.81
+focus_ring_on_accent           1.00        1.08       1.08     1.00     1.06        1.06     1.10            1.20          1.11       1.06
+status_ok                      6.42        5.97       5.97     6.42     6.84        6.84     5.86            5.34          5.81       6.84
+status_error                   6.38        5.94       5.94     6.38     6.79        6.79     5.83            5.30          5.77       6.79
+status_warning                 6.39        5.94       5.94     6.39     6.80        6.80     5.83            5.31          5.78       6.80
+status_suspended               3.71        3.45       3.45     3.71     3.95        3.95     3.39            3.08          3.35       3.95
+accent on accent_soft                5.49
+accent_bright on accent_soft         6.02
+text_muted on accent_soft            5.49
+text_primary on accent_soft          9.01
+danger_text on danger_soft           7.48
+success_text on success_soft         6.42
+info_text on info_soft               6.54
+warn_text on warn_soft               5.19
+text_primary on log_selected         9.01
+text_muted on log_warn_row           5.87
+text_muted on log_error_row          5.80
+accent_on on accent                  6.40
+
+[catppuccin-latte, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                  10.51        9.77       9.77    10.51    11.18       11.18     9.59            8.73          9.50      11.18
+text_secondary                 9.21        8.56       8.56     9.21     9.80        9.80     8.41            7.65          8.32       9.80
+text_muted                     8.11        7.54       7.54     8.11     8.63        8.63     7.41            6.74          7.33       8.63
+text_subtle                    8.11        7.54       7.54     8.11     8.63        8.63     7.41            6.74          7.33       8.63
+accent                         8.21        7.63       7.63     8.21     8.73        8.73     7.49            6.82          7.42       8.73
+accent_bright                  8.96        8.33       8.33     8.96     9.53        9.53     8.18            7.44          8.09       9.53
+danger_text                   11.43       10.62      10.62    11.43    12.16       12.16    10.43            9.49         10.33      12.16
+success_text                   9.50        8.84       8.84     9.50    10.11       10.11     8.68            7.89          8.59      10.11
+info_text                      9.81        9.12       9.12     9.81    10.44       10.44     8.96            8.15          8.87      10.44
+warn_text                      8.20        7.62       7.62     8.20     8.72        8.72     7.48            6.81          7.41       8.72
+log_target                     8.39        7.80       7.80     8.39     8.92        8.92     7.65            6.96          7.58       8.92
+border_control                 3.61        3.50       3.50     3.61     3.70        3.70     3.47            3.34          3.46       3.70
+accent_border                  8.21        7.63       7.63     8.21     8.73        8.73     7.49            6.82          7.42       8.73
+focus_ring                     8.21        7.63       7.63     8.21     8.73        8.73     7.49            6.82          7.42       8.73
+focus_ring_on_accent           1.00        1.08       1.08     1.00     1.06        1.06     1.10            1.20          1.11       1.06
+status_ok                      8.29        7.71       7.71     8.29     8.82        8.82     7.57            6.88          7.49       8.82
+status_error                   8.12        7.55       7.55     8.12     8.64        8.64     7.41            6.75          7.34       8.64
+status_warning                 8.20        7.62       7.62     8.20     8.72        8.72     7.48            6.81          7.41       8.72
+status_suspended               5.19        4.82       4.82     5.19     5.52        5.52     4.73            4.31          4.69       5.52
+accent on accent_soft                6.94
+accent_bright on accent_soft         7.58
+text_muted on accent_soft            6.87
+text_primary on accent_soft          8.89
+danger_text on danger_soft           9.36
+success_text on success_soft         8.27
+info_text on info_soft               8.39
+warn_text on warn_soft               6.66
+text_primary on log_selected         8.89
+text_muted on log_warn_row           7.44
+text_muted on log_error_row          7.35
+accent_on on accent                  8.21
+
+[solarized-light]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                   8.00        7.05       7.05     8.00     8.00        8.42     7.52            7.06          7.09       8.42
+text_secondary                 7.29        6.41       6.41     7.29     7.29        7.67     6.85            6.43          6.45       7.67
+text_muted                     6.63        5.84       5.84     6.63     6.63        6.98     6.23            5.85          5.87       6.98
+text_subtle                    6.31        5.67       5.67     6.31     6.31        6.59     5.99            5.68          5.70       6.59
+accent                         6.56        5.78       5.78     6.56     6.56        6.91     6.17            5.79          5.81       6.91
+accent_bright                  7.30        6.43       6.43     7.30     7.30        7.68     6.86            6.44          6.47       7.68
+danger_text                    8.79        7.74       7.74     8.79     8.79        9.25     8.26            7.75          7.78       9.25
+success_text                   7.51        6.62       6.62     7.51     7.51        7.91     7.06            6.63          6.66       7.91
+info_text                      7.56        6.66       6.66     7.56     7.56        7.96     7.11            6.67          6.70       7.96
+warn_text                      6.95        6.12       6.12     6.95     6.95        7.31     6.53            6.13          6.15       7.31
+log_target                     6.60        5.81       5.81     6.60     6.60        6.95     6.20            5.82          5.85       6.95
+border_control                 3.26        3.07       3.07     3.26     3.26        3.33     3.16            3.07          3.08       3.33
+accent_border                  4.34        3.97       3.97     4.34     4.34        4.51     4.16            3.98          3.97       4.51
+focus_ring                     6.56        5.78       5.78     6.56     6.56        6.91     6.17            5.79          5.81       6.91
+focus_ring_on_accent           1.00        1.14       1.14     1.00     1.00        1.05     1.06            1.13          1.13       1.05
+status_ok                      6.58        5.79       5.79     6.58     6.58        6.92     6.18            5.80          5.83       6.92
+status_error                   7.86        6.92       6.92     7.86     7.86        8.27     7.39            6.93          6.96       8.27
+status_warning                 6.95        6.12       6.12     6.95     6.95        7.31     6.53            6.13          6.15       7.31
+status_suspended               3.49        3.07       3.07     3.49     3.49        3.67     3.28            3.07          3.09       3.67
+accent on accent_soft                5.63
+accent_bright on accent_soft         6.26
+text_muted on accent_soft            5.69
+text_primary on accent_soft          6.87
+danger_text on danger_soft           7.41
+success_text on success_soft         6.57
+info_text on info_soft               6.61
+warn_text on warn_soft               5.63
+text_primary on log_selected         6.87
+text_muted on log_warn_row           6.07
+text_muted on log_error_row          6.09
+accent_on on accent                  6.56
+
+[solarized-light, increase contrast]
+                             bg_app bg_titlebar bg_sidebar bg_panel bg_input bg_elevated bg_hover bg_hover_strong bg_row_active bg_popover
+text_primary                   8.00        7.05       7.05     8.00     8.00        8.42     7.52            7.06          7.09       8.42
+text_secondary                 7.64        6.72       6.72     7.64     7.64        8.04     7.18            6.74          6.76       8.04
+text_muted                     7.29        6.41       6.41     7.29     7.29        7.67     6.85            6.43          6.45       7.67
+text_subtle                    7.29        6.41       6.41     7.29     7.29        7.67     6.85            6.43          6.45       7.67
+accent                         8.42        7.41       7.41     8.42     8.42        8.86     7.91            7.43          7.46       8.86
+accent_bright                  9.38        8.26       8.26     9.38     9.38        9.87     8.81            8.27          8.31       9.87
+danger_text                   11.16        9.82       9.82    11.16    11.16       11.74    10.48            9.84          9.88      11.74
+success_text                   9.67        8.51       8.51     9.67     9.67       10.18     9.09            8.53          8.57      10.18
+info_text                      9.78        8.61       8.61     9.78     9.78       10.29     9.19            8.62          8.66      10.29
+warn_text                      9.01        7.93       7.93     9.01     9.01        9.48     8.47            7.95          7.98       9.48
+log_target                     8.53        7.51       7.51     8.53     8.53        8.98     8.02            7.53          7.56       8.98
+border_control                 3.26        3.07       3.07     3.26     3.26        3.33     3.16            3.07          3.08       3.33
+accent_border                  8.42        7.41       7.41     8.42     8.42        8.86     7.91            7.43          7.46       8.86
+focus_ring                     8.42        7.41       7.41     8.42     8.42        8.86     7.91            7.43          7.46       8.86
+focus_ring_on_accent           1.00        1.14       1.14     1.00     1.00        1.05     1.06            1.13          1.13       1.05
+status_ok                      8.49        7.47       7.47     8.49     8.49        8.94     7.98            7.49          7.52       8.94
+status_error                  10.09        8.88       8.88    10.09    10.09       10.62     9.48            8.90          8.94      10.62
+status_warning                 9.01        7.93       7.93     9.01     9.01        9.48     8.47            7.95          7.98       9.48
+status_suspended               4.88        4.30       4.30     4.88     4.88        5.14     4.59            4.30          4.32       5.14
+accent on accent_soft                7.11
+accent_bright on accent_soft         7.92
+text_muted on accent_soft            6.16
+text_primary on accent_soft          6.76
+danger_text on danger_soft           9.41
+success_text on success_soft         8.45
+info_text on info_soft               8.55
+warn_text on warn_soft               7.30
+text_primary on log_selected         6.76
+text_muted on log_warn_row           6.67
+text_muted on log_error_row          6.70
+accent_on on accent                  8.42

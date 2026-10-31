@@ -204,9 +204,9 @@ fn main() -> ExitCode {
     app.run(move |cx| {
         e2e::startup("launched");
         assets::load_fonts(cx);
-        // Settings › General's Theme, before any window opens, so none
-        // opens in the other scheme first.
-        appearance::install(resident.settings.settings().appearance.theme, cx);
+        // Settings › General's Theme and color themes, before any window
+        // opens, so none opens in the other scheme or theme first.
+        appearance::install(resident.settings.settings().appearance, cx);
         // The Increase Contrast palette before the OS's setting reaches it.
         if std::env::var("PWRROUTE_INCREASE_CONTRAST").is_ok_and(|value| value == "1") {
             theme::set_increase_contrast(true);

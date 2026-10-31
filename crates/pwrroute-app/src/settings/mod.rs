@@ -350,6 +350,7 @@ pub struct SettingsWindow {
     pub(crate) agents: local_agents::State,
     pub(crate) privacy: privacy::State,
     pub(crate) configuration: configuration::State,
+    pub(crate) general: general::State,
     pub(crate) sync: sync::State,
     /// Nav groups folded shut, for as long as the window is open.
     folded: HashSet<Pane>,
@@ -371,6 +372,7 @@ impl SettingsWindow {
         let agents = local_agents::State::new(cx);
         let privacy = privacy::State::new(&model.privacy, cx);
         let configuration = configuration::State::new(cx);
+        let general = general::State::new(cx);
         let sync = sync::State::new(&model.sync, cx);
         let scroll = ScrollHandle::new();
         Self {
@@ -384,6 +386,7 @@ impl SettingsWindow {
             agents,
             privacy,
             configuration,
+            general,
             sync,
             folded: HashSet::new(),
             target: None,
@@ -401,6 +404,7 @@ impl SettingsWindow {
             self.agents.close_menu();
             self.privacy.close_sheet();
             self.configuration.close_menu();
+            self.general.close();
             self.sync.close();
             self.target = None;
             self.scroll.set_offset(point(px(0.0), px(0.0)));
