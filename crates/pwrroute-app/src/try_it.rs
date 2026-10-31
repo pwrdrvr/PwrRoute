@@ -638,6 +638,7 @@ mod tests {
             becomes: "https://xcancel.com/a".into(),
         }];
         rules.tests = vec![pwrroute_engine::RouteTest {
+            original_url: None,
             url: "https://www.apple.com/macos/".into(),
             opener: None,
             expect: pwrroute_engine::Expectation {

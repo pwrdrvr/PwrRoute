@@ -1303,6 +1303,7 @@ fn rules_with_examples() -> RulesFile {
         becomes: "https://xcancel.com/pwrdrvr/status/1842".into(),
     }];
     rules.tests = vec![RouteTest {
+        original_url: None,
         url: "https://www.apple.com/macos/".into(),
         opener: None,
         expect: pwrroute_engine::Expectation {
@@ -1568,6 +1569,7 @@ fn test_a_link_saves_the_run_as_a_test(cx: &mut TestAppContext) {
     assert_eq!(
         tests,
         [RouteTest {
+            original_url: None,
             url: fixtures::TEST_URL.into(),
             opener: Some("Slack:com.tinyspeck.slackmacgap".into()),
             expect: pwrroute_engine::Expectation {
@@ -6324,4 +6326,198 @@ fn accessibility_number_shortcuts_switch_the_main_screens(cx: &mut TestAppContex
         assert_eq!(view.read_with(cx, |app, _| app.screen), screen);
         assert!(!view.read_with(cx, |app, _| app.test.picking));
     }
+}
+
+#[gpui_kit::test]
+fn test_a_link_expands_before_matching_and_draws_both_urls(cx: &mut TestAppContext) {
+    struct Redirect;
+    impl pwrroute_engine::Network for Redirect {
+        fn request(
+            &self,
+            _: pwrroute_engine::Method,
+            url: &str,
+            _: std::time::Duration,
+        ) -> anyhow::Result<pwrroute_engine::Reply> {
+            Ok(if url == "https://bit.ly/neutral" {
+                pwrroute_engine::Reply {
+                    status: 302,
+                    location: Some("https://example.com/landing".into()),
+                }
+            } else {
+                pwrroute_engine::Reply {
+                    status: 200,
+                    location: None,
+                }
+            })
+        }
+    }
+    let dir = scratch("short-link");
+    let rules = RulesFile {
+        default_browser: "Safari".into(),
+        rules: vec![pwrroute_engine::Rule {
+            patterns: vec!["example.com/*".into()],
+            browser: "Firefox".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let path = dir.join("rules.json");
+    rules.save(&path).unwrap();
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path)));
+    click(cx, "nav-test");
+    view.update_in(cx, |app, _, cx| {
+        app.test.network = Some(std::sync::Arc::new(Redirect));
+        app.test.url.text = "https://bit.ly/neutral".into();
+        app.test.run(cx);
+        assert!(app.test.expanding);
+        assert!(app.test.outcome.is_none());
+    });
+    cx.run_until_parked();
+    let traced = trace(&view, cx);
+    assert_eq!(traced.result.title, "Firefox");
+    assert_eq!(traced.result.url, "https://example.com/landing");
+    assert_eq!(
+        &titles(&traced)[..3],
+        ["Received", "Expanded short link", "Rule 1"]
+    );
+    let copied = traced.to_text();
+    assert!(copied.contains("https://bit.ly/neutral"));
+    assert!(copied.contains("https://example.com/landing"));
+}
+
+#[gpui_kit::test]
+fn an_old_short_link_expansion_cannot_replace_a_new_test(cx: &mut TestAppContext) {
+    struct Offline;
+    impl pwrroute_engine::Network for Offline {
+        fn request(
+            &self,
+            _: pwrroute_engine::Method,
+            _: &str,
+            _: std::time::Duration,
+        ) -> anyhow::Result<pwrroute_engine::Reply> {
+            anyhow::bail!("offline")
+        }
+    }
+    let (view, cx) = open(cx);
+    view.update_in(cx, |app, _, cx| {
+        app.test.network = Some(std::sync::Arc::new(Offline));
+        app.test.url.text = "https://bit.ly/neutral".into();
+        app.test.run(cx);
+        assert!(app.test.expanding);
+        app.test.url.text = "https://example.com/new".into();
+        app.test.run(cx);
+        assert!(!app.test.expanding);
+    });
+    let latest = trace(&view, cx);
+    cx.run_until_parked();
+    assert_eq!(trace(&view, cx), latest);
+    assert_eq!(latest.result.url, "https://example.com/new");
+}
+
+const EXPANSION_CONTEXT_CONFIG: &str = r#"export default {
+    defaultBrowser: "Safari",
+    options: { urlShorteners: ["go.example.com"] },
+    rewrite: [{
+        match: (url, { originalUrl }) => url.hostname === "example.com" && originalUrl.hostname === "go.example.com",
+        url: url => { url.pathname = "/rewritten"; return url; },
+    }],
+    handlers: [{
+        match: (url, { originalUrl }) => url.pathname === "/rewritten" && originalUrl.hostname === "go.example.com",
+        browser: "Firefox",
+    }],
+};"#;
+
+struct ContextShortener;
+impl pwrroute_engine::Network for ContextShortener {
+    fn request(
+        &self,
+        _: pwrroute_engine::Method,
+        url: &str,
+        _: std::time::Duration,
+    ) -> anyhow::Result<pwrroute_engine::Reply> {
+        Ok(if url == "https://go.example.com/neutral" {
+            pwrroute_engine::Reply {
+                status: 302,
+                location: Some("https://example.com/landing".into()),
+            }
+        } else {
+            assert_eq!(url, "https://example.com/landing");
+            pwrroute_engine::Reply {
+                status: 200,
+                location: None,
+            }
+        })
+    }
+}
+
+#[gpui_kit::test]
+fn saving_an_expanded_run_keeps_original_url_and_replays_the_capture(cx: &mut TestAppContext) {
+    let dir = scratch("save-expansion-context");
+    let config = dir.join("config.ts");
+    std::fs::write(&config, EXPANSION_CONTEXT_CONFIG).unwrap();
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+    click(cx, "nav-test");
+    view.update_in(cx, |app, _, cx| {
+        app.test.network = Some(std::sync::Arc::new(ContextShortener));
+        app.test.url.text = "https://go.example.com/neutral".into();
+        app.test.run(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(trace(&view, cx).result.title, "Firefox");
+    assert_eq!(trace(&view, cx).result.url, "https://example.com/rewritten");
+    click(cx, "test-save");
+    let file = saved(cx, &path);
+    assert_eq!(file.tests.len(), 1);
+    assert_eq!(file.tests[0].url, "https://example.com/landing");
+    assert_eq!(
+        file.tests[0].original_url.as_deref(),
+        Some("https://go.example.com/neutral")
+    );
+    assert_eq!(
+        file.tests[0].expect.url.as_deref(),
+        Some("https://example.com/rewritten")
+    );
+    assert_eq!(
+        view.read_with(cx, |app, _| app.tests.passed(TestSource::Test { test: 0 })),
+        Some(true)
+    );
+    // Saved tests have no network dependency: the shortener can disappear.
+    let config = dir.join("config.ts");
+    let mut replay = crate::try_it::TestRuns::new(Some(config), file);
+    let report = replay.run().as_ref().unwrap();
+    assert_eq!((report.total, report.passed), (1, 1));
+}
+
+#[gpui_kit::test]
+fn changing_config_source_invalidates_the_old_test_instance_request(cx: &mut TestAppContext) {
+    let dir = scratch("replace-pending-test");
+    let config = dir.join("before.js");
+    std::fs::write(&config, EXPANSION_CONTEXT_CONFIG).unwrap();
+    let off = dir.join("off.js");
+    std::fs::write(
+        &off,
+        r#"export default { defaultBrowser: "Safari", options: { urlShorteners: [] } };"#,
+    )
+    .unwrap();
+    let (view, cx) = open_store(cx, Some(config), fixture_store(&dir));
+    view.update_in(cx, |app, _, cx| {
+        app.test.network = Some(std::sync::Arc::new(ContextShortener));
+        app.test.url.text = "https://go.example.com/neutral".into();
+        app.test.run(cx);
+        assert!(app.test.expanding);
+        app.set_config(Some(off), cx);
+        app.test.url.text = "https://go.example.com/neutral".into();
+        app.test.run(cx);
+        assert!(!app.test.expanding);
+    });
+    let latest = trace(&view, cx);
+    assert_eq!(latest.result.title, "Safari");
+    assert_eq!(latest.result.url, "https://go.example.com/neutral");
+    cx.run_until_parked();
+    assert_eq!(
+        trace(&view, cx),
+        latest,
+        "the old instance must not finish into the new one"
+    );
 }

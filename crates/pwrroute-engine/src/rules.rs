@@ -21,7 +21,7 @@
 //! | `rules[].private` | no | `true` opens the link in a private (incognito) window. When `privacy` is absent, it then defaults to `host`. |
 //! | `rules[].examples` | no | URLs that must resolve to this rule. Run by [`RulesFile::run_tests`]; a new rule cannot take them over unnoticed. |
 //! | `rewrites[].examples` | no | `{ "url", "becomes" }` pairs: this rewrite must match `url` and turn it into `becomes`. |
-//! | `tests` | no | `{ "url", "opener"?, "expect": { "browser", "profile"?, "url"? } }`: the whole config, JS included, must send `url` there. `opener` is an app name or bundle id (`Name:bundle.id` sets both). |
+//! | `tests` | no | `{ "url", "originalUrl"?, "opener"?, "expect": { "browser", "profile"?, "url"? } }`: the whole config, JS included, must send `url` there. `opener` is an app name or bundle id (`Name:bundle.id` sets both). `originalUrl` captures the pre-expansion link for offline replay; absent, it is `url`. |
 //! | `destinations` | no | Named targets for synced rules: `{ "name", "browser", "profile"?, "private"? }`, the binding every machine starts with. A machine's `machine.json` can bind a name to something else ([`MachineFile`](crate::MachineFile)). |
 //! | `rules[].destination`, `defaultDestination` | no | Open in this named target. `browser`/`profile` (or `defaultBrowser`/`defaultProfile`) are still written, copied from the synced binding, so a reader that ignores the name routes the same way. A name `destinations` does not define falls back to them. |
 //! | `rules[].set`, `rewrites[].set` | no | The rule set the entry belongs to. Absent: no set, always on. |
@@ -386,7 +386,12 @@ pub struct RewriteExample {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteTest {
+    /// The URL the rules start from, after any captured expansion.
     pub url: String,
+    /// The clicked URL before that expansion. When absent, it is `url`.
+    /// Saved tests replay this pair without contacting a shortener.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_url: Option<String>,
     /// The app the link comes from: a name or bundle id, or `Name:bundle.id`
     /// for both. The test's opener has that name and that bundle id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -583,6 +588,13 @@ impl RulesFile {
             let place = Place::Test(i);
             if !is_absolute_url(&test.url) {
                 flag(place, EXAMPLE_URL);
+            }
+            if test
+                .original_url
+                .as_deref()
+                .is_some_and(|url| !is_absolute_url(url))
+            {
+                flag(place, "The original URL must be a full URL.");
             }
             if test.expect.browser.trim().is_empty() {
                 flag(place, "Name the browser the link must open in.");

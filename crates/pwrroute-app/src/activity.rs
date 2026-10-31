@@ -2573,7 +2573,7 @@ impl PwrRoute {
             .position(|o| o.is_some_and(|o| o.name == from))
             .unwrap_or(0);
         // Run first, so opening the screen does not run its sample too.
-        self.test.run();
+        self.test.run(cx);
         self.navigate(Screen::TestLink, window, cx);
     }
 }

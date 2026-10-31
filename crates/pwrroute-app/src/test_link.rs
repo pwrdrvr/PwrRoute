@@ -21,6 +21,7 @@
 use std::{
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -32,7 +33,8 @@ use gpui_kit::{
     StrikethroughStyle, Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{
-    AppType, Engine, Expectation, Limits, Link, NativeHost, RouteTest, RulesFile, Sources, Trace,
+    AppType, Engine, Expectation, HttpNetwork, Limits, Link, NativeHost, Network, RouteTest,
+    RulesFile, Sources, Trace,
 };
 
 use crate::app::PwrRoute;
@@ -142,6 +144,10 @@ pub struct TestLink {
     /// test after any of them changes builds it again.
     loaded: Vec<(PathBuf, Option<SystemTime>)>,
     run: Option<Run>,
+    request_token: Rc<()>,
+    pub expanding: bool,
+    /// Tests inject a network; the real client is created off the UI thread.
+    pub(crate) network: Option<Arc<dyn Network + Send + Sync>>,
     /// The trace of the last run, or why it failed.
     pub outcome: Option<Result<TraceView, String>>,
 }
@@ -178,6 +184,9 @@ impl TestLink {
             loaded: engine.as_ref().map(stamps).unwrap_or_default(),
             engine,
             run: None,
+            request_token: Rc::new(()),
+            expanding: false,
+            network: None,
             outcome: None,
         }
     }
@@ -223,7 +232,9 @@ impl TestLink {
 
     /// Resolves the field's URL and records the trace. An empty field is
     /// nothing to test, not an error.
-    pub fn run(&mut self) {
+    pub fn run(&mut self, cx: &mut Context<'_, PwrRoute>) {
+        self.request_token = Rc::new(());
+        self.expanding = false;
         self.copied = false;
         self.saved_as = None;
         self.picking = false;
@@ -243,13 +254,61 @@ impl TestLink {
             }
         };
         let opener = self.opener();
+        let started = Instant::now();
+        let short_links = match self.engine() {
+            Ok(engine) => engine.short_links().clone(),
+            Err(error) => {
+                self.run = None;
+                self.outcome = Some(Err(error));
+                return;
+            }
+        };
+        if !short_links.is_short(&url) {
+            self.finish(Link::new(url), opener, started);
+            return;
+        }
+        self.run = None;
+        self.outcome = None;
+        self.expanding = true;
+        let request_token = Rc::clone(&self.request_token);
+        let field = self.url.text.clone();
+        let loaded = self.loaded.clone();
+        let network = self.network.clone();
+        let expanded = cx.background_executor().spawn(async move {
+            let network = network.unwrap_or_else(|| Arc::new(HttpNetwork::new()));
+            short_links.expand(&url, network.as_ref())
+        });
+        cx.spawn(async move |this, cx| {
+            let link = expanded.await;
+            let _ = this.update(cx, |this, cx| {
+                if Rc::ptr_eq(&this.test.request_token, &request_token) {
+                    this.test.expanding = false;
+                    if this.test.url.text == field && this.test.opener() == opener {
+                        if loaded.iter().any(|(path, at)| modified(path) != *at) {
+                            this.test.run(cx);
+                        } else {
+                            this.test.finish(link, opener, started);
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn finish(&mut self, link: Link, opener: Option<OpenerChoice>, started: Instant) {
         let engine_opener = opener.as_ref().map(|app| pwrroute_engine::Opener {
             name: app.name.to_string(),
             bundle_id: app.bundle_id.to_string(),
             ..pwrroute_engine::Opener::default()
         });
-        let started = Instant::now();
-        match self.trace(&url, engine_opener.as_ref()) {
+        let result = self.engine().and_then(|engine| {
+            engine
+                .trace(&link, engine_opener.as_ref())
+                .map_err(|error| format!("The rules failed: {error:#}"))
+        });
+        match result {
             Ok(trace) => {
                 let suggested = pwrroute_engine::suggest_rule(rules_url(&trace))
                     .candidates
@@ -270,14 +329,8 @@ impl TestLink {
         }
     }
 
-    /// Resolves a normalized URL as from `opener`, building the engine
-    /// first when it is missing or its files changed. The editor's Try it
-    /// uses this too; the screen's own run is left alone.
-    pub fn trace(
-        &mut self,
-        url: &str,
-        opener: Option<&pwrroute_engine::Opener>,
-    ) -> Result<Trace, String> {
+    /// Builds the engine when it is missing or its files changed.
+    fn engine(&mut self) -> Result<&Engine, String> {
         if self.loaded.iter().any(|(path, at)| modified(path) != *at) {
             self.engine = None;
         }
@@ -301,12 +354,9 @@ impl TestLink {
                 Err(error) => return Err(format!("The rules did not load: {error:#}")),
             }
         }
-        let Some(engine) = &self.engine else {
-            return Err("The rules did not load.".into());
-        };
-        engine
-            .trace(&Link::new(url), opener)
-            .map_err(|error| format!("The rules failed: {error:#}"))
+        self.engine
+            .as_ref()
+            .ok_or_else(|| "The rules did not load.".into())
     }
 
     /// Rebuilds the view of the last run, as after folding or unfolding.
@@ -340,6 +390,8 @@ impl TestLink {
             }
         });
         Some(RouteTest {
+            original_url: (run.trace.original_url != run.trace.url)
+                .then(|| run.trace.original_url.clone()),
             url: run.trace.url.clone(),
             opener,
             expect: Expectation {
@@ -369,6 +421,8 @@ impl TestLink {
             return;
         }
         self.rules = rules;
+        self.request_token = Rc::new(());
+        self.expanding = false;
         // An app only the old rules named is gone from the picker.
         if self.opener >= self.openers().len() {
             self.opener = 0;
@@ -406,7 +460,7 @@ impl TestLink {
 
     /// The trace was run at least once.
     pub fn has_run(&self) -> bool {
-        self.outcome.is_some()
+        self.outcome.is_some() || self.expanding
     }
 }
 
@@ -719,7 +773,7 @@ fn opener_picker(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> impl IntoEle
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.test.opener = index;
                 this.test.picking = false;
-                this.test.run();
+                this.test.run(cx);
                 cx.notify();
             }))
     };
@@ -954,6 +1008,12 @@ fn result_card(app: &PwrRoute, view: &TraceView, cx: &mut Context<'_, PwrRoute>)
                     .child(button("Open now", ButtonKind::Primary, false)),
                 ),
         )
+        .when(proposed.as_ref().is_some_and(|test| test.original_url.is_some()), |card| {
+            card.child(paragraph(
+                "Save as test stores both links in rules.json and replays this expansion without contacting the shortener.",
+                11.0, 16.5, theme::text_secondary(),
+            ).px(px(16.0)).pb(px(10.0)))
+        })
         .children(saved.map(|(test, index)| saved_banner(&test, index, cx)))
 }
 
@@ -987,7 +1047,7 @@ pub fn pane(
     )
     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
         match this.test.url.key(&event.keystroke, cx) {
-            Edit::Submit => this.test.run(),
+            Edit::Submit => this.test.run(cx),
             Edit::Changed | Edit::Handled => {}
             Edit::Ignored => return,
         }
@@ -1013,12 +1073,23 @@ pub fn pane(
                 .debug_selector(|| "test-run".into())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.sync_with_disk(cx);
-                    this.test.run();
+                    this.test.run(cx);
                     cx.notify();
                 })),
         );
 
     let outcome = match &app.test.outcome {
+        None if app.test.expanding => Some(
+            card()
+                .py(px(14.0))
+                .child(paragraph(
+                    "Expanding short link…",
+                    12.0,
+                    18.0,
+                    theme::text_muted(),
+                ))
+                .into_any_element(),
+        ),
         None => None,
         Some(Err(error)) => Some(
             card()

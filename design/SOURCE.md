@@ -281,10 +281,21 @@ the project and re-export here.
 | `PwrRoute Incoming Links.dc.html` | What the next links do: the Rules / Send / Hold / Pause switch with its For row and live line, in the dropdown (held links first, their actions, Pause, keyboard, the native menu) and the Overview hero; held links in Activity; how Hold behaves (where it applies, how long a held link waits, restart, words, agents) |
 | `PwrRoute Synced Rules.dc.html` | Settings › Sync (turn 1): what syncs and who can read it, Sync to with the folders found and Choose a folder…, folders set up with their state chip and line, Sync now, the Finicky config switch, a conflict with both sides and backups, joining a folder that already has rules, the macOS permission step and its denied state, and every folder row state |
 | `PwrRoute Synced Rules Machine.dc.html` | Synced rules on each machine (turns 2 to 4): the This machine card with named destinations (synced or this Mac, a browser not installed) and rule sets on or off here; the Destinations lane and Rule set select in the rule editor and set headings on Rules; sync status in the rail foot, strip and menu bar dropdown; the Sync pane on Linux and Windows |
+| `PwrRoute Short Links.dc.html` | Design proposal for rules.json short-link controls: Built-in / Custom / Off, explicit Finicky ownership, validation and save conflicts, and the established original/destination trace |
 | `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
 
 Open a `.dc.html` next to `support.js` and `pwrroute.css` in a browser to view it.
+
+## Short-link proposal export — 2026-10-30
+
+`PwrRoute Short Links.dc.html` was created and refined in the source project,
+then downloaded from its public preview on 2026-10-30. Only the two
+`data-omelette-injected` preview elements (one style and one script) were
+removed for this mirror. A raw-source hash comparison was unavailable;
+the canvas content was not edited locally. No other canvas, `pwrroute.css`
+or `support.js` changed. This is a design proposal; its rules.json controls
+are not implemented by the verification change.
 
 ## Reaching the project from Claude Code or Claude Desktop
 

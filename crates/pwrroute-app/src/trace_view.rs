@@ -124,10 +124,22 @@ impl TraceView {
                 None => "from no app".into(),
             },
             body: vec![StepBody::Url(vec![UrlPart {
-                text: trace.url.clone(),
+                text: trace.original_url.clone(),
                 mark: UrlMark::Same,
             }])],
         }];
+        if trace.original_url != trace.url {
+            steps.push(TraceStep {
+                number: Some(steps.len()),
+                state: StepState::Hit,
+                title: "Expanded short link".into(),
+                detail: "rules match the destination".into(),
+                body: vec![StepBody::Url(vec![UrlPart {
+                    text: trace.url.clone(),
+                    mark: UrlMark::Changed,
+                }])],
+            });
+        }
         // A rule that throws stops the handlers; the default follows.
         let threw = trace.steps.iter().any(|s| s.error.is_some());
         let not_opened = trace.resolution.browser.app_type == AppType::None;
