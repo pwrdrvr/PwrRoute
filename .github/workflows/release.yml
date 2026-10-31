@@ -428,6 +428,11 @@ jobs:
           if [ -f "releases/PwrRoute-$version-osx-delta.nupkg" ]; then
             cp "releases/PwrRoute-$version-osx-delta.nupkg" dist/
           fi
+          # The README's download button links
+          # .../releases/latest/download/PwrRoute.dmg, which needs a name
+          # without the version. Made here, after the signature checks' single
+          # `ls dist/*.dmg`, and before SHA256SUMS so the copy is listed too.
+          cp "dist/PwrRoute-$version-universal.dmg" dist/PwrRoute.dmg
           (cd dist && shasum -a 256 -- * > "PwrRoute-$version-macos-SHA256SUMS")
           ls -l dist
 
@@ -734,6 +739,22 @@ jobs:
       # Linux packages are not signed, matching PwrGit.
       - name: Package DEB and tar.gz
         run: cargo xtask package-linux
+
+      # The README's download links (.../releases/latest/download/...) need
+      # names without the version, so each package gets a stable copy. The
+      # manifest is rewritten, with package-linux's command, to list them too.
+      - name: Add version-free copies for the README's download links
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+        working-directory: target/package
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          cp "PwrRoute-$version-linux-$ARCH.deb" "PwrRoute-linux-$ARCH.deb"
+          cp "PwrRoute-$version-linux-$ARCH.tar.gz" "PwrRoute-linux-$ARCH.tar.gz"
+          sha256sum -- *.deb *.tar.gz > "PwrRoute-linux-$ARCH-SHA256SUMS"
+          cat "PwrRoute-linux-$ARCH-SHA256SUMS"
 
       - name: Upload Linux release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -189,13 +189,17 @@ version is promoted, Beta falls back to it.
 
 | Platform | Built on | Assets |
 |---|---|---|
-| macOS | Built on `macos-26`, both architectures joined with `lipo`; packed and signed on `macos-26` in a separate job | `PwrRoute-<v>-universal.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
+| macOS | Built on `macos-26`, both architectures joined with `lipo`; packed and signed on `macos-26` in a separate job | `PwrRoute-<v>-universal.dmg` and the same file as `PwrRoute.dmg`, `PwrRoute-osx-Portable.zip`, `PwrRoute-<v>-osx-full.nupkg` (and `-delta`), `releases.osx.json`, `assets.osx.json`, `RELEASES-osx`, `PwrRoute-<v>-macos-SHA256SUMS` |
 | Windows | windows-2025, static C runtime; packed by `vpk` | `PwrRoute-win-Setup.exe`, `PwrRoute-win.msi`, `PwrRoute-win-Portable.zip`, `PwrRoute-<v>-full.nupkg` (and `-delta`), `releases.win.json`, `assets.win.json`, `RELEASES`, `PwrRoute-<v>-windows-SHA256SUMS` |
-| Linux | ubuntu-22.04 and ubuntu-22.04-arm, for the oldest glibc floor | `PwrRoute-<v>-linux-<arch>.tar.gz`, `.deb`, `-SHA256SUMS` |
+| Linux | ubuntu-22.04 and ubuntu-22.04-arm, for the oldest glibc floor | `PwrRoute-<v>-linux-<arch>.tar.gz` and `.deb`, the same files as `PwrRoute-linux-<arch>.tar.gz` and `.deb`, and `PwrRoute-linux-<arch>-SHA256SUMS` |
 
-Velopack's installer and portable names carry no version, so
-`releases/latest/download/PwrRoute-win-Setup.exe` is a stable link once a
-release is promoted to Latest. The publish job downloads each platform's
+Velopack's installer and portable names carry no version, and the DMG and
+Linux packages get copies without one, so links such as
+`releases/latest/download/PwrRoute-win-Setup.exe` and
+`.../PwrRoute.dmg` stay good once a release is promoted to Latest. The
+README's download buttons and table link these names; rename one and update
+the README too. Each copy is made before its platform's SHA256SUMS is
+written, so the manifests list them. The publish job downloads each platform's
 artifact into its own directory and fails if two platforms produced the same
 file name, rather than letting one overwrite the other.
 
