@@ -96,11 +96,9 @@ async fn a_reader_sees_activity_as_hosts_only() {
     assert!(!text(&suggested).contains("/page"), "{}", text(&suggested));
     let suggested = suggested.structured_content.unwrap();
     assert_eq!(suggested["fullUrls"], false);
-    assert_eq!(suggested["collisions"][1]["count"], 1, "{suggested}");
-    assert_eq!(
-        suggested["collisions"][1]["urls"],
-        json!(["docs.example.org"])
-    );
+    let host = &suggested["candidates"][1]["alsoCatches"];
+    assert_eq!(host["count"], 1, "{suggested}");
+    assert_eq!(host["urls"], json!(["docs.example.org"]));
     opener.cancel().await.unwrap();
     reader.cancel().await.unwrap();
     h.finish().await;

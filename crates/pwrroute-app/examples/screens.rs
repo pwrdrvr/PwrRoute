@@ -887,6 +887,48 @@ fn main() {
         app.pick_any_from(cx);
     });
 
+    // Rule Pattern Scope 1b and 1c: a contrived link on a subdomain, with
+    // recent links on the bare domain, another subdomain and a look-alike;
+    // then the domain and every subdomain chosen.
+    fn subdomain_link(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+        let mut records = fixtures::activity();
+        let base = records[0].clone();
+        for (id, url) in [
+            (96, "https://example.com/pricing"),
+            (97, "https://api.example.com/v1/docs"),
+            (98, "https://notexample.com/"),
+            (99, "https://dash.example.com/somefolder/page?tab=billing"),
+        ] {
+            let mut record = base.clone();
+            record.id = pwrroute_router::DispatchId(id);
+            record.link.url = url.into();
+            record.final_url = Some(url.into());
+            if let Some(browser) = &mut record.browser {
+                browser.url = url.into();
+            }
+            for step in &mut record.steps {
+                match step {
+                    pwrroute_router::Step::Received { url: received } => *received = url.into(),
+                    pwrroute_router::Step::Browser { browser } => browser.url = url.into(),
+                    _ => {}
+                }
+            }
+            records.insert(0, record);
+        }
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        with_scan(app);
+    }
+    shoot("app-2b-add-rule-domain", None, &|app, window, cx| {
+        subdomain_link(app, cx);
+        open_long(app, window, cx);
+    });
+    shoot("app-2b-add-rule-domain-chosen", None, &|app, window, cx| {
+        subdomain_link(app, cx);
+        open_long(app, window, cx);
+        app.pick_candidate(2, cx);
+    });
+
     // The same sheet with the browser list open, over a browser with many
     // profiles and one with a long name (Popovers and Overflow 1a).
     shoot("app-2b-add-rule-browsers", None, &|app, window, cx| {
