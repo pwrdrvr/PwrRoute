@@ -319,6 +319,77 @@ fn arrow_keys_move_the_rule_selection() {
     .unwrap();
 }
 
+/// A rule's edits are a draft until Save (CONTRACT.md, "Rule drafts"):
+/// typing leaves `rules.json` as it was, Esc discards, closing the window
+/// asks first, and ⌘S (Ctrl+S) writes the file.
+#[test]
+fn a_rule_edit_reaches_rules_json_only_on_save() {
+    let harness = harness!("a_rule_edit_reaches_rules_json_only_on_save");
+    let app = harness.launch().unwrap();
+    app.wait_for_main_window().unwrap();
+    open_rules(&app);
+    let path = app.rules_file().expect("an isolated home");
+    let before = std::fs::read_to_string(&path).expect("the seeded rules.json");
+    let unsaved = |want: bool| {
+        move |s: &Value| (s["main"]["rules"]["unsaved"].as_bool() == Some(want)).then_some(())
+    };
+
+    // Typing makes a draft; the file is untouched.
+    app.click("editor.pattern").unwrap();
+    app.keys("end x").unwrap();
+    app.wait_for("a draft", pwrroute_e2e::WAIT, unsaved(true))
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+    // Esc discards it.
+    app.keys("escape").unwrap();
+    app.wait_for("the draft discarded", pwrroute_e2e::WAIT, unsaved(false))
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+    // Closing the window with a draft asks, and keeps the window.
+    app.click("editor.pattern").unwrap();
+    app.keys("end x").unwrap();
+    app.wait_for("a draft", pwrroute_e2e::WAIT, unsaved(true))
+        .unwrap();
+    app.action("closeWindow").unwrap();
+    let state = app
+        .wait_for("the leave prompt", pwrroute_e2e::WAIT, |s| {
+            s["main"]["rules"]["asking"].is_string().then(|| s.clone())
+        })
+        .unwrap();
+    assert!(
+        state["main"]["rules"]["asking"]
+            .as_str()
+            .unwrap()
+            .ends_with("before closing the window?"),
+        "{state:#}"
+    );
+
+    // ⌘S (Ctrl+S) answers Save: the file has the edit, and the window
+    // closes as asked.
+    let save = if cfg!(target_os = "macos") {
+        "cmd-s"
+    } else {
+        "ctrl-s"
+    };
+    app.keys(save).unwrap();
+    app.wait_for("saved and closed", pwrroute_e2e::WAIT, |s| {
+        s["main"].is_null().then_some(())
+    })
+    .unwrap();
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_ne!(after, before);
+    let file: Value = serde_json::from_str(&after).unwrap();
+    assert!(
+        file["rules"][0]["match"]
+            .as_array()
+            .map_or(file["rules"][0]["match"].as_str(), |m| m[0].as_str())
+            .is_some_and(|pattern| pattern.ends_with('x')),
+        "{file:#}"
+    );
+}
+
 #[test]
 fn closing_the_window_keeps_the_router_and_a_second_launch_reopens_it() {
     let harness = harness!("closing_the_window_keeps_the_router_and_a_second_launch_reopens_it");

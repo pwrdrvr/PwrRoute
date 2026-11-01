@@ -287,6 +287,15 @@ the project and re-export here.
   with the files here (less the preview script the server injects into the
   canvas). The other canvases, `pwrroute.css` and `support.js` are unchanged.
 
+- Updated **2026-11-01**: one canvas added, `PwrRoute Rule Drafts.dc.html`
+  (Rules › Draft, Save and Discard: selecting is not editing, the first
+  change makes a draft with Save and Discard, problems keep Save off, the
+  leave prompt, Discard with Undo, the file changing under a draft, a new
+  rule as a draft, and the keys). It supersedes Rule Editing 1a's "edits
+  save on change" and 5's "every other edit still saves". Written to the
+  project, then compared by size with the file here. The other canvases,
+  `pwrroute.css` and `support.js` are unchanged.
+
 ## Files
 
 | File | What it holds |
@@ -296,6 +305,7 @@ the project and re-export here.
 | `PwrRoute Settings.dc.html` | Settings window: Local agents (MCP, sessions, roles), Configuration (source, importer, short links, files), Browsers (OS default, detected apps, other apps) |
 | `PwrRoute Tray and First Run.dc.html` | macOS menu bar dropdown (normal and paused), Windows/Linux tray menu, first-run window |
 | `PwrRoute Rule Editing.dc.html` | Add a handler (rail or sheet), the rewrite editor and a new rewrite, reorder by drag and by keyboard, delete with undo (toast or tombstone), validation problems and warnings |
+| `PwrRoute Rule Drafts.dc.html` | Editing a rule as a draft: selecting vs. editing, the unsaved row and header chip, Save and Discard with their keys, problems that keep Save off, the leave prompt (another rule, Add rule, closing the window), Discard with Undo, the file changing under a draft, a new rule as a draft. Supersedes Rule Editing's save-on-change |
 | `PwrRoute Empty and Error States.dc.html` | No rules; no configuration; a config that fails to load while the last good one routes (window and menu bar); a matcher that timed out; a browser that is not installed |
 | `PwrRoute Windows and Linux Chrome.dc.html` | Main-window strip on Windows 11 and GNOME: brand at x=16, menu bar, caption buttons, and the rejected keep-the-gutter option |
 | `PwrRoute Updates and Default Browser.dc.html` | Velopack update states and Restart to update; becoming the default browser on macOS, Windows 11 and Linux |

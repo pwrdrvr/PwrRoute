@@ -388,12 +388,25 @@ impl PwrRoute {
         cx: &mut Context<'_, Self>,
     ) {
         self.row_actions.menu = None;
+        if self.store.draft_changed() {
+            self.leave_draft_then(
+                "duplicating it",
+                move |this, window, cx| this.duplicate_rule(selection, window, cx),
+                window,
+                cx,
+            );
+            return;
+        }
         let Some(copy) = self.store.duplicate(selection) else {
             return;
         };
         if let Selection::Handler(index) = copy {
             self.drafts_after_insert(index);
         }
+        // A command, not an edit: the copy is written now, then opens in
+        // the editor as a saved rule (design: Rule Drafts 1).
+        self.refresh(cx);
+        self.save_now(cx);
         self.selection = Some(copy);
         self.refresh(cx);
         self.rebuild_rail(cx);
@@ -1416,6 +1429,15 @@ pub fn dimmed_while_dragging(app: &PwrRoute, rewrites: bool, cx: &App) -> bool {
 /// The row being dragged, faded where it was.
 pub fn lifted(app: &PwrRoute, selection: Selection, cx: &App) -> bool {
     cx.has_active_drag() && app.row_actions.dragging == Some(selection)
+}
+
+/// Undo's key as the window's chrome writes it: ⌘Z on macOS, Ctrl+Z on
+/// Windows and Linux.
+pub fn undo_shortcut(cx: &gpui_kit::App) -> &'static str {
+    match crate::chrome::current(cx) {
+        crate::chrome::Chrome::Mac => "\u{2318}Z",
+        crate::chrome::Chrome::Windows | crate::chrome::Chrome::Linux => "Ctrl+Z",
+    }
 }
 
 #[cfg(test)]

@@ -68,6 +68,9 @@ pub enum RowBadge {
     Draft,
     /// An edit with problems: the file keeps the saved version.
     NotSaved,
+    /// The draft the editor holds, changed since it was saved: the file
+    /// keeps the saved version until Save (design: Rule Drafts 1b).
+    Unsaved,
 }
 
 /// One row of the rewrites or handlers card.
@@ -348,6 +351,7 @@ pub fn hits_label(badge: RowBadge, today: Option<u64>) -> SharedString {
     match (badge, today) {
         (RowBadge::Draft, _) => "draft".into(),
         (RowBadge::None, Some(n)) if n > 0 => crate::activity::thousands(n).into(),
+        (RowBadge::Unsaved, _) => "unsaved".into(),
         (RowBadge::None | RowBadge::NotSaved, _) => NO_HITS.into(),
     }
 }

@@ -369,6 +369,24 @@ impl App {
         Ok(app)
     }
 
+    /// The `rules.json` this launch's isolated home was seeded with, where
+    /// the app reads and writes it. `None` for a shared launch.
+    pub fn rules_file(&self) -> Option<PathBuf> {
+        self.router_dir.as_ref()?;
+        let var = |key: &str| {
+            self.env
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| PathBuf::from(v))
+        };
+        let home = var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+        discovery::rules_path(&discovery::Environment {
+            home: Some(home),
+            xdg_config_home: var("XDG_CONFIG_HOME"),
+            app_data: var("APPDATA"),
+        })
+    }
+
     pub fn pid(&self) -> u32 {
         self.pid
     }

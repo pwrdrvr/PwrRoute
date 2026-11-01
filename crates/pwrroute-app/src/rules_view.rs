@@ -334,6 +334,7 @@ fn rule_row_drawn(
     more: Option<AnyElement>,
 ) -> Stateful<Div> {
     let not_saved = rule.badge == RowBadge::NotSaved;
+    let unsaved = rule.badge == RowBadge::Unsaved;
     let grip = !rule.matchers.is_empty();
     let matchers = matchers.unwrap_or_else(|| {
         rule.matchers.iter().fold(
@@ -419,6 +420,9 @@ fn rule_row_drawn(
                         // `.rr.bad .idx`
                         if not_saved {
                             theme::danger_text()
+                        } else if unsaved {
+                            // `.rr.ed .idx`
+                            theme::warn_text()
                         } else {
                             theme::text_subtle()
                         },
@@ -453,6 +457,12 @@ fn rule_row_drawn(
                     .gap(px(5.0))
                     .child(theme::dot(theme::status_error()))
                     .child(text("not saved", 10.0, 600.0, theme::danger_text()))
+            } else if unsaved {
+                // `.badge.ed`: the draft's edits wait for Save.
+                cell.items_center()
+                    .gap(px(5.0))
+                    .child(theme::dot(theme::status_warning()))
+                    .child(text("unsaved", 10.0, 600.0, theme::warn_text()))
             } else {
                 cell.child(mono(rule.hits.clone(), 10.5, 500.0, theme::text_subtle()))
             })
@@ -516,6 +526,8 @@ pub(crate) enum ChipTone {
     Accent,
     /// `.chip.bad`: not saved.
     Bad,
+    /// `.chip.ed`: the draft has unsaved changes (Rule Drafts 1b).
+    Warn,
 }
 
 /// `.chip` in one of [`ChipTone`]'s colors.
@@ -523,6 +535,7 @@ pub(crate) fn chip_in(label: impl Into<SharedString>, tone: ChipTone) -> Div {
     let (background, foreground): (Hsla, Hsla) = match tone {
         ChipTone::Accent => (theme::accent_soft(), theme::accent_bright()),
         ChipTone::Bad => (theme::danger_soft(), theme::danger_text()),
+        ChipTone::Warn => (theme::warn_soft(), theme::warn_text()),
     };
     chip(label)
         .bg(background)
@@ -566,6 +579,13 @@ fn count_chip(rules: &[&Rule], noun: &str) -> Div {
         .count();
     if not_saved > 0 {
         return chip_in(format!("{not_saved} not saved"), ChipTone::Bad);
+    }
+    let unsaved = rules
+        .iter()
+        .filter(|r| r.badge == RowBadge::Unsaved)
+        .count();
+    if unsaved > 0 {
+        return chip_in(format!("{unsaved} unsaved"), ChipTone::Warn);
     }
     let mut parts = vec![crate::overview_model::plural(rules.len(), noun)];
     if off > 0 {

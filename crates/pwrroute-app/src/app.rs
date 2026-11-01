@@ -24,7 +24,7 @@ use crate::menu_bar::MenuBar;
 use crate::overview::OverviewState;
 use crate::overview_model::Installed;
 use crate::rules_model::{self, Handler, Rewrite};
-use crate::rules_store::{Disk, RulesStore};
+use crate::rules_store::{Discarded, Disk, RulesStore};
 use crate::settings_store::SourceSettings;
 use crate::test_link::TestLink;
 use crate::text_field::{Edit, TextField};
@@ -69,12 +69,53 @@ pub enum Selection {
     Handler(usize),
 }
 
+/// What a [`Leave::Then`] runs once the leave prompt is answered.
+pub type LeaveThen = Box<dyn FnOnce(&mut PwrRoute, &mut Window, &mut Context<'_, PwrRoute>)>;
+
+/// Somewhere to go from a changed draft (design: Rule Drafts 1d). It waits
+/// while the rail's foot asks, and goes ahead after Save or Discard.
+pub enum Leave {
+    /// Another row.
+    Select(Selection),
+    /// Back to the list ("‹ All rules", Esc in the stacked layout).
+    Deselect,
+    /// The window's close button or ⌘W.
+    Close,
+    /// Anything else that starts or opens another rule: Add rule, the
+    /// Overview's and Test a link's, Duplicate. `what` finishes the
+    /// question ("before starting a new rule?").
+    Then { what: &'static str, then: LeaveThen },
+}
+
+impl Leave {
+    /// "Save your changes to rule 4 before …?"
+    pub fn question(&self, draft: &str) -> String {
+        let to = match self {
+            Self::Select(Selection::Handler(i)) => format!("opening rule {}", i + 1),
+            Self::Select(Selection::Rewrite(i)) => format!("opening rewrite {}", i + 1),
+            Self::Deselect => "going back to all rules".to_owned(),
+            Self::Close => "closing the window".to_owned(),
+            Self::Then { what, .. } => (*what).to_owned(),
+        };
+        format!("Save your changes to {draft} before {to}?")
+    }
+}
+
+/// The leave prompt's answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaveAnswer {
+    KeepEditing,
+    Discard,
+    Save,
+}
+
 pub struct PwrRoute {
     pub focus: FocusHandle,
     /// The strip's menu bar off macOS (`menu_bar.rs`).
     pub menu_bar: Entity<MenuBar>,
     pub screen: Screen,
-    /// `rules.json`, read on open and written after every edit.
+    /// `rules.json`, read on open and written after every command, and on
+    /// Save for the editor's draft.
     pub store: RulesStore,
     /// The home directory, for paths shown as `~/…`.
     pub home: Option<PathBuf>,
@@ -141,6 +182,14 @@ pub struct PwrRoute {
     pub sync_line: Option<crate::sync::Line>,
     /// A debounced save is on its way.
     save_scheduled: bool,
+    /// Where the person asked to go from a changed draft, while the
+    /// rail's foot asks Save or Discard first (Rule Drafts 1d).
+    pub leaving: Option<Leave>,
+    /// The last Discard, for its Undo until the next edit (Rule Drafts 1e).
+    pub discarded: Option<Discarded>,
+    /// Why the last Save did nothing (problems, or a write the store
+    /// refused), until the next edit.
+    pub draft_note: Option<String>,
     /// Pausing from the tray redraws the Overview.
     _tray: Option<Subscription>,
     /// Each sync pass redraws the rail foot's line.
@@ -227,6 +276,9 @@ impl PwrRoute {
             build_copied: None,
             sync_line: crate::sync::line(cx),
             save_scheduled: false,
+            leaving: None,
+            discarded: None,
+            draft_note: None,
             _tray: tray,
             _sync: sync,
         };
@@ -254,6 +306,8 @@ impl PwrRoute {
             }
             self.actions.menu = None;
             self.row_actions.menu = None;
+            // The draft stays; the question about leaving it does not.
+            self.leaving = None;
             self.test.picking = false;
             crate::rules_view::set_picker_open(false, cx);
             if let Some(rail) = &mut self.rail {
@@ -301,13 +355,221 @@ impl PwrRoute {
             .collect()
     }
 
-    /// Select a row; one that is not in the lists is ignored.
+    /// Select a row; one that is not in the lists is ignored. From a
+    /// changed draft the rail's foot asks first (Rule Drafts 1d).
     pub fn select(&mut self, selection: Selection, cx: &mut Context<'_, Self>) {
         if Some(selection) != self.selection && self.order().contains(&selection) {
+            if self.ask_before_leaving(Leave::Select(selection), cx) {
+                return;
+            }
             self.selection = Some(selection);
+            self.follow_draft();
             self.rebuild_rail(cx);
             cx.notify();
         }
+    }
+
+    // --- the draft (design: Rule Drafts 1) --------------------------------
+
+    /// The store holds the selected rule as the draft; a changed draft
+    /// keeps the selection on its rule instead (after a reload or a move
+    /// put it at another index).
+    pub(crate) fn follow_draft(&mut self) {
+        if self.store.draft_changed()
+            && let Some(draft) = self.store.draft()
+        {
+            self.selection = Some(draft);
+            return;
+        }
+        match self.selection {
+            Some(selection) => self.store.hold(selection),
+            None => self.store.release(),
+        }
+    }
+
+    /// The draft's name in the leave prompt: "rule 4", "the new rule".
+    fn draft_name(&self) -> String {
+        match (self.store.draft(), self.store.draft_is_new()) {
+            (Some(Selection::Handler(_)), true) => "the new rule".to_owned(),
+            (Some(Selection::Rewrite(_)), true) => "the new rewrite".to_owned(),
+            (Some(Selection::Handler(i)), false) => format!("rule {}", i + 1),
+            (Some(Selection::Rewrite(i)), false) => format!("rewrite {}", i + 1),
+            (None, _) => "this rule".to_owned(),
+        }
+    }
+
+    /// The leave prompt's question, while it asks.
+    pub fn leave_question(&self) -> Option<String> {
+        self.leaving
+            .as_ref()
+            .map(|leave| leave.question(&self.draft_name()))
+    }
+
+    /// Whether `to` waits for the leave prompt: only from a changed draft.
+    /// Then the Rules screen shows the draft with the question at its foot,
+    /// and `to` goes ahead after Save or Discard ([`Self::answer_leave`]).
+    pub(crate) fn ask_before_leaving(&mut self, to: Leave, cx: &mut Context<'_, Self>) -> bool {
+        if !self.store.draft_changed() {
+            return false;
+        }
+        if let Some(draft) = self.store.draft() {
+            self.selection = Some(draft);
+        }
+        if self.screen != Screen::Rules {
+            if self.screen == Screen::Overview {
+                self.overview.leave();
+            }
+            self.screen = Screen::Rules;
+        }
+        self.visual_rules_expanded = true;
+        self.leaving = Some(to);
+        cx.notify();
+        true
+    }
+
+    /// Runs `then` now, or once the person answers the leave prompt.
+    pub(crate) fn leave_draft_then(
+        &mut self,
+        what: &'static str,
+        then: impl FnOnce(&mut PwrRoute, &mut Window, &mut Context<'_, PwrRoute>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        if self.store.draft_changed() {
+            self.ask_before_leaving(
+                Leave::Then {
+                    what,
+                    then: Box::new(then),
+                },
+                cx,
+            );
+            window.focus(&self.focus, cx);
+            return true;
+        }
+        false
+    }
+
+    /// The leave prompt's answer: stay, or Save or Discard and go on.
+    pub fn answer_leave(
+        &mut self,
+        answer: LeaveAnswer,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(to) = self.leaving.take() else {
+            return;
+        };
+        let removed = match answer {
+            LeaveAnswer::KeepEditing => {
+                cx.notify();
+                return;
+            }
+            LeaveAnswer::Save => {
+                if !self.save_draft(cx) {
+                    // The note says why; the prompt stays.
+                    self.leaving = Some(to);
+                    return;
+                }
+                None
+            }
+            LeaveAnswer::Discard => self.discard_draft(window, cx),
+        };
+        // A never-saved rule left its list: rows below it moved up one.
+        let shift = |selection: Selection| match (selection, removed) {
+            (Selection::Handler(i), Some(Selection::Handler(gone))) if i > gone => {
+                Selection::Handler(i - 1)
+            }
+            (Selection::Rewrite(i), Some(Selection::Rewrite(gone))) if i > gone => {
+                Selection::Rewrite(i - 1)
+            }
+            (selection, _) => selection,
+        };
+        match to {
+            Leave::Select(selection) => self.select(shift(selection), cx),
+            Leave::Deselect => self.deselect(cx),
+            Leave::Close => window.remove_window(),
+            Leave::Then { then, .. } => then(self, window, cx),
+        }
+        cx.notify();
+    }
+
+    /// Save (the button, ⌘S, Return in a rule's field): writes the draft
+    /// over the file as it stands. `false`, with the reason in the rail's
+    /// foot, when it has problems or the store refused the write.
+    pub fn save_draft(&mut self, cx: &mut Context<'_, Self>) -> bool {
+        // Another writer's change first: the draft rides on top of it.
+        self.sync_with_disk(cx);
+        match self.store.save_draft() {
+            Ok(()) => {
+                self.refresh(cx);
+                self.draft_note = None;
+                // Nothing is left to ask about.
+                self.leaving = None;
+                self.rebuild_rail_kept(cx);
+                if self.tests.counts() != (0, 0) {
+                    self.tests.run();
+                }
+                cx.notify();
+                true
+            }
+            Err(reason) => {
+                self.rewrites = self.store.rewrites();
+                self.handlers = self.store.handlers();
+                self.draft_note = Some(reason);
+                cx.notify();
+                false
+            }
+        }
+    }
+
+    /// Discard (the button, Esc): the rule back as saved, or a never-saved
+    /// one out of the list, with Undo until the next edit. Returns the
+    /// row a never-saved rule left.
+    pub fn discard_draft(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<Selection> {
+        let draft = self.store.draft();
+        let discarded = self.store.discard_draft()?;
+        let removed = matches!(discarded, Discarded::New(_))
+            .then_some(draft)
+            .flatten();
+        if let Some(gone) = removed {
+            if let Selection::Handler(index) = gone {
+                self.drafts_after_delete(index);
+            }
+            self.selection = None;
+        }
+        self.refresh(cx);
+        self.discarded = Some(discarded);
+        self.rebuild_rail(cx);
+        window.focus(&self.focus, cx);
+        cx.notify();
+        removed
+    }
+
+    /// Undo discard: the edits back as the draft. `false` with nothing to
+    /// undo.
+    pub fn undo_discard(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> bool {
+        if self.store.draft_changed() {
+            return false;
+        }
+        let Some(discarded) = self.discarded.take() else {
+            return false;
+        };
+        let new = matches!(discarded, Discarded::New(_));
+        let Some(selection) = self.store.undo_discard(discarded) else {
+            return false;
+        };
+        if new && let Selection::Handler(index) = selection {
+            self.drafts_after_insert(index);
+        }
+        self.selection = Some(selection);
+        self.refresh(cx);
+        self.rebuild_rail(cx);
+        window.focus(&self.focus, cx);
+        true
     }
 
     /// Moves the selection `by` rows through both lists, clamped at the ends.
@@ -335,6 +597,8 @@ impl PwrRoute {
             done.undoable = false;
         }
         self.row_actions.edited();
+        self.discarded = None;
+        self.draft_note = None;
         let disk = self.store.check_disk();
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
@@ -345,6 +609,9 @@ impl PwrRoute {
             Some(selection) if !order.contains(&selection) => order.last().copied(),
             selection => selection,
         };
+        self.follow_draft();
+        self.rewrites = self.store.rewrites();
+        self.handlers = self.store.handlers();
         self.test.set_rules(self.store.written());
         self.probe.set_rules(self.store.edited());
         self.tests.set_rules(self.store.edited());
@@ -504,6 +771,10 @@ impl PwrRoute {
         self.handlers = self.store.handlers();
         let order = self.order();
         self.selection = self.selection.filter(|s| order.contains(s));
+        // The draft stays on its rule, wherever the file put it.
+        self.follow_draft();
+        self.rewrites = self.store.rewrites();
+        self.handlers = self.store.handlers();
         self.rebuild_rail(cx);
         self.test.set_rules(self.store.written());
         self.probe.set_rules(self.store.edited());
@@ -527,6 +798,12 @@ impl PwrRoute {
     /// Checks the file each time the window comes to the front: an editor
     /// or a sync changed it while something else had the screen.
     pub fn watch_activation(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // The close button asks first while a draft has unsaved changes
+        // (Rule Drafts 1d); ⌘W does the same through `ask_before_close`.
+        let view = cx.entity();
+        window.on_window_should_close(cx, move |_, cx| {
+            !view.update(cx, |this, cx| this.ask_before_leaving(Leave::Close, cx))
+        });
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 // machine.json edited by hand: the rows and Try it follow,
@@ -554,6 +831,8 @@ impl PwrRoute {
     /// delete, an insert or a reload can put another rule at its index, so
     /// those use [`Self::rebuild_rail`].
     pub(crate) fn rebuild_rail_kept(&mut self, cx: &mut Context<'_, Self>) {
+        // The rule the rail shows is the one the store holds back.
+        self.follow_draft();
         let old = self.rail.take();
         self.rail = match self.selection {
             Some(Selection::Handler(i)) => self.handlers.get(i).map(|h| Rail::for_handler(h, cx)),
@@ -739,6 +1018,9 @@ impl PwrRoute {
     /// A new, empty rewrite at the end of its list, selected, with its
     /// first pattern ready to type.
     pub fn add_rewrite(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.leave_draft_then("starting a new rewrite", Self::add_rewrite, window, cx) {
+            return;
+        }
         // Under a config the visual rules are folded: open them, so the
         // new row is on screen beside its editor.
         self.visual_rules_expanded = true;
@@ -753,6 +1035,9 @@ impl PwrRoute {
     /// the last link the person opened (design: Rule From a Link 1a), or
     /// blank with its first pattern ready to type when there is none.
     pub fn add_handler(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.leave_draft_then("starting a new rule", Self::add_handler, window, cx) {
+            return;
+        }
         self.add_blank_handler(window, cx);
         self.start_from_last(window, cx);
     }
@@ -765,6 +1050,15 @@ impl PwrRoute {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.store.draft_changed() {
+            self.leave_draft_then(
+                "starting a new rule",
+                move |this, window, cx| this.add_handler_from(link, window, cx),
+                window,
+                cx,
+            );
+            return;
+        }
         self.add_blank_handler(window, cx);
         self.start_from(link, window, cx);
     }
@@ -772,6 +1066,9 @@ impl PwrRoute {
     /// A new, empty handler just above Everything else, selected, with its
     /// first pattern ready to type.
     pub fn add_blank_handler(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.leave_draft_then("starting a new rule", Self::add_blank_handler, window, cx) {
+            return;
+        }
         self.visual_rules_expanded = true;
         self.draft_from = None;
         let index = self.store.add_handler();
@@ -788,6 +1085,9 @@ impl PwrRoute {
     /// Rule Editor Pickers 5a, 5b). Nothing else is preset: the browser is
     /// the person's to choose.
     pub fn add_rule_from_test(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.leave_draft_then("starting a new rule", Self::add_rule_from_test, window, cx) {
+            return;
+        }
         // From the last run, not the field: rules match the URL after the
         // rewrites, and the field may have changed since.
         let Some((pattern, link)) = self.test.rule_start() else {
@@ -990,9 +1290,23 @@ impl PwrRoute {
                 true
             }
             Edit::Submit => {
-                if field == Field::Sample {
-                    self.try_it();
-                    cx.notify();
+                match field {
+                    Field::Sample => {
+                        self.try_it();
+                        cx.notify();
+                    }
+                    // Return in the rule's own fields saves the draft (Rule
+                    // Drafts keys); with nothing changed it does nothing.
+                    Field::Pattern(_)
+                    | Field::Browser
+                    | Field::Profile
+                    | Field::Value(_)
+                    | Field::Set => {
+                        if self.store.draft_changed() {
+                            self.save_draft(cx);
+                        }
+                    }
+                    Field::Example | Field::Becomes | Field::Name => {}
                 }
                 true
             }
@@ -1029,6 +1343,19 @@ impl PwrRoute {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        // ⌘S (Ctrl+S off macOS) saves the draft from anywhere on Rules,
+        // a field included: a field never takes a ⌘ key it has no use for.
+        let keystroke = &event.keystroke;
+        let m = &keystroke.modifiers;
+        if keystroke.key == "s" && m.secondary() && !m.alt && !m.shift && self.editing() {
+            if self.leaving.is_some() {
+                self.answer_leave(LeaveAnswer::Save, window, cx);
+            } else if self.store.draft_changed() {
+                self.save_draft(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         // An unhandled Esc bubbles out of a field after its selection is
         // collapsed. Dismiss only the innermost transient surface.
         if event.keystroke.key == "escape" {
@@ -1052,6 +1379,12 @@ impl PwrRoute {
                 crate::rules_view::set_picker_open(false, cx);
             } else if self.actions.sheet.is_some() {
                 self.cancel_add_rule(window, cx);
+            } else if self.leaving.is_some() {
+                // The leave prompt: Esc keeps editing (Rule Drafts 1d).
+                self.leaving = None;
+            } else if self.editing() && self.store.draft_changed() {
+                // Then Esc discards the draft, with Undo (1e).
+                self.discard_draft(window, cx);
             } else {
                 dismissed = false;
             }
@@ -1080,6 +1413,19 @@ impl PwrRoute {
                 self.overview_key(key, window, cx);
             }
             Screen::Rules if self.config.is_none() || self.visual_rules_expanded => {
+                if key == "enter" && self.leaving.is_some() {
+                    self.answer_leave(LeaveAnswer::Save, window, cx);
+                    return;
+                }
+                if key == "z"
+                    && m.secondary()
+                    && !m.alt
+                    && !m.shift
+                    && self.discarded.is_some()
+                    && self.undo_discard(window, cx)
+                {
+                    return;
+                }
                 if self.rules_list_key(event, window, cx) {
                     return;
                 }
@@ -1177,7 +1523,11 @@ impl PwrRoute {
     /// Back to the list with nothing selected: the stacked layout's "All
     /// rules" and Esc.
     pub fn deselect(&mut self, cx: &mut Context<'_, Self>) {
+        if self.selection.is_some() && self.ask_before_leaving(Leave::Deselect, cx) {
+            return;
+        }
         if self.selection.take().is_some() {
+            self.store.release();
             self.rebuild_rail(cx);
             cx.notify();
         }
