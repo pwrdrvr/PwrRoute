@@ -1237,3 +1237,52 @@ impl Render for PwrRoute {
             .children(sheet)
     }
 }
+
+impl crate::text_field::InputOwner for PwrRoute {
+    fn input_field(&mut self, focus: &FocusHandle) -> Option<&mut TextField> {
+        if let Some(sheet) = &mut self.actions.sheet {
+            return (sheet.pattern.focus == *focus).then_some(&mut sheet.pattern);
+        }
+        if self.test.url.focus == *focus {
+            return Some(&mut self.test.url);
+        }
+        if self.activity.search.focus == *focus {
+            return Some(&mut self.activity.search);
+        }
+        let rail = self.rail.as_mut()?;
+        let key = rail.input_field_key(focus)?;
+        rail.field_mut(key)
+    }
+
+    fn input_changed(&mut self, focus: &FocusHandle, cx: &mut Context<'_, Self>) {
+        if self
+            .actions
+            .sheet
+            .as_ref()
+            .is_some_and(|s| s.pattern.focus == *focus)
+        {
+            self.add_rule_input_changed(cx);
+            return;
+        }
+        let Some(key) = self.rail.as_ref().and_then(|r| r.input_field_key(focus)) else {
+            return;
+        };
+        let Some(field) = self.rail.as_mut().and_then(|r| r.field_mut(key)) else {
+            return;
+        };
+        let text = field.text.clone();
+        match key {
+            Field::Sample => {
+                if let Some(rail) = &mut self.rail {
+                    rail.sample_edited = true;
+                }
+                self.try_it();
+            }
+            Field::Example | Field::Becomes | Field::Name => {}
+            _ => {
+                self.apply_field(key, &text);
+                self.refresh(cx);
+            }
+        }
+    }
+}

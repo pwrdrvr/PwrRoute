@@ -48,11 +48,23 @@ with an assistive tool attached: `active` reports the adapter state and `tree`
 is null until it has built a frame. The keyboard regressions use real focus
 and key events, including key-up activation.
 
-The custom text fields expose a TextInput role, name and current value. They
-do not yet expose editable-text ranges, selection offsets or a SetValue
-accessibility action; adding that requires connecting their app-owned editing
-model to GPUI's native input/accessibility action layer. This is an app input
-integration gap, rather than a limitation of the role/label API. Metadata alone does not provide native screen-reader text editing.
+The custom text fields connect to GPUI's `EntityInputHandler` through
+`ElementInputHandler` during paint. The adapter addresses the existing field
+by its focus handle and keeps no text buffer. Native replacements and
+composition write through `TextField::set` and invoke the owner's normal
+model updates, including rule saving and Activity collision checks. Native
+ranges use UTF-16; the field's caret uses UTF-8 byte offsets. Printable keys
+fall through to the platform handler so IME and dead-key input is not inserted
+a second time by the raw-key handler.
+
+Each TextInput exposes text runs, character geometry, word starts and a
+selection with anchor and focus offsets. SetValue and SetTextSelection act on
+the addressed field, including when it starts unfocused. Long values are split
+into runs of at most 255 characters for AccessKit's word-start index type.
+The adapter and node APIs were checked against gpui-pre 0.3.6's `input.rs`,
+`window.rs`, `elements/div.rs` and `window/a11y.rs`, plus its AccessKit 0.24.1
+source. The tests exercise native insertion and composition callbacks; they
+do not establish that OS dictation or any screen reader works.
 
 Manual VoiceOver, Narrator/NVDA and Orca operation and live OS-setting changes
 still require platform testing. Linux sandbox checks do not establish macOS

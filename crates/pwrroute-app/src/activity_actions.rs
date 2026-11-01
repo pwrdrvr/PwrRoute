@@ -1752,10 +1752,9 @@ fn pattern_field(
         mono: true,
         placeholder: "example.com/*",
     };
-    let mut inner =
-        input_box()
-            .w_full()
-            .child(crate::text_field::text(&sheet.pattern, look, focused));
+    let mut inner = input_box()
+        .w_full()
+        .child(crate::text_field::text(&sheet.pattern, look, focused).input(&sheet.pattern, cx));
     if sheet.any_from {
         inner = inner.child(text("any link", 10.5, 500.0, theme::text_muted()).ml(px(2.0)));
     }
@@ -1772,7 +1771,7 @@ fn pattern_field(
     let area = div()
         .id("add-rule-pattern")
         .debug_selector(|| "add-rule-pattern".into());
-    crate::text_field::hit_area(area, &sheet.pattern)
+    crate::text_field::native_area(area, &sheet.pattern, cx)
         .aria_label("URL pattern")
         .w_full()
         .child(boxed)
@@ -2330,6 +2329,12 @@ pub fn open_in_lanes(
             15.2,
             theme::text_subtle(),
         ))
+}
+
+impl PwrRoute {
+    pub(crate) fn add_rule_input_changed(&mut self, cx: &mut Context<'_, Self>) {
+        self.change_match(AddRule::pattern_typed, cx);
+    }
 }
 
 #[cfg(test)]

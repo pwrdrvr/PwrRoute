@@ -589,7 +589,9 @@ fn machine_card(
         },
         None,
         window,
+        cx,
     )
+    .aria_label("Machine name")
     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
         match this.sync.name.key(&event.keystroke, cx) {
             Edit::Ignored => return,
@@ -781,4 +783,10 @@ fn set_row(i: usize, set: &RuleSetRow, cx: &mut Context<'_, SettingsWindow>) -> 
             field_help(help).into_any_element(),
         ],
     )
+}
+
+impl State {
+    pub(super) fn input_field(&mut self, focus: &gpui_kit::FocusHandle) -> Option<&mut TextField> {
+        (self.name.focus == *focus).then_some(&mut self.name)
+    }
 }

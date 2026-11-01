@@ -595,3 +595,15 @@ impl Render for SettingsWindow {
             )
     }
 }
+
+impl crate::text_field::InputOwner for SettingsWindow {
+    fn input_field(
+        &mut self,
+        focus: &gpui_kit::FocusHandle,
+    ) -> Option<&mut crate::text_field::TextField> {
+        self.privacy
+            .input_field(focus)
+            .or_else(|| self.sync.input_field(focus))
+    }
+    fn input_changed(&mut self, _: &gpui_kit::FocusHandle, _: &mut Context<'_, Self>) {}
+}
