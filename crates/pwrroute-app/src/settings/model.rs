@@ -266,6 +266,8 @@ pub struct Configuration {
     pub can_switch: bool,
     /// "rules.json · 3 rewrites · 7 handlers".
     pub visual_summary: SharedString,
+    /// Explicit Finicky host options and how PwrRoute treats them.
+    pub option_notices: Vec<SharedString>,
     /// The Finicky config discovery found, if any.
     pub finicky: Option<FinickyConfig>,
     /// What the importer offers from that config.

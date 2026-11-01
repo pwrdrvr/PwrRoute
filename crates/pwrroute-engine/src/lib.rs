@@ -290,6 +290,7 @@ pub struct Engine {
     synced: RulesFile,
     imports: Rc<RefCell<Vec<PathBuf>>>,
     short_links: ShortLinks,
+    host_options: RulesOptions,
     /// For each `rules.json` rewrite and handler the engine loaded, its
     /// position in the file (disabled and empty rules are not loaded).
     planned_rewrites: Vec<usize>,
@@ -376,11 +377,12 @@ impl Engine {
             synced: sources.rules.clone(),
             imports,
             short_links: ShortLinks::default(),
+            host_options: RulesOptions::default(),
             planned_rewrites: rules.planned_rewrites(),
             planned_rules: rules.planned_rules(),
         };
         let console = engine.console.clone();
-        let shorteners = engine.with_deadline(limits.load, |ctx| {
+        let (shorteners, host_options) = engine.with_deadline(limits.load, |ctx| {
             install_globals(&ctx, &host, &console)?;
             let base = match &config {
                 Some(_) => serde_json::Value::Null,
@@ -402,9 +404,14 @@ impl Engine {
                 .eval::<Option<Vec<String>>, _>("__pwrroute.shorteners()")
                 .catch(&ctx)
                 .map_err(|e| js_error("reading options.urlShorteners", &e))?;
-            Ok(list)
+            let options: String = ctx
+                .eval("JSON.stringify(__pwrroute.hostOptions())")
+                .catch(&ctx)
+                .map_err(|e| js_error("reading host options", &e))?;
+            Ok((list, serde_json::from_str(&options)?))
         })?;
         engine.short_links = ShortLinks::from_option(shorteners);
+        engine.host_options = host_options;
         Ok(engine)
     }
 
@@ -436,6 +443,14 @@ impl Engine {
     /// expansion can run off the engine's thread, as the router does it.
     pub fn short_links(&self) -> &ShortLinks {
         &self.short_links
+    }
+
+    /// Explicitly set Finicky host options, from the evaluated config (or
+    /// `rules.json` when it stands alone). PwrRoute deliberately ignores
+    /// these; callers show the values and direct users to its own settings.
+    /// Absent options stay `None`, including when Finicky has a default.
+    pub fn host_options(&self) -> &RulesOptions {
+        &self.host_options
     }
 
     /// Resolves one URL as it is, without short-link expansion. `opener` is

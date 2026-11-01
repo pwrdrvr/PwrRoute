@@ -128,6 +128,18 @@ PwrRoute never writes your config. Visual rules go to PwrRoute's own
 `rules.json`, which uses the schema of Finicky 4.4's `rules.json` plus
 optional fields, so Finicky's rules file loads as it is.
 
+Finicky's host options load but do not change PwrRoute's app settings.
+Settings › Config Files and the importer review explain each explicitly
+set value:
+
+- `keepRunning`: ignored; PwrRoute always stays resident.
+- `hideIcon`: ignored; the tray/menu-bar icon stays visible. PwrRoute has no
+  setting to hide it.
+- `checkForUpdates`: ignored, including `false`; use Settings › Updates.
+- `logRequests`: ignored; Activity records in memory. The optional disk
+  journal is off by default; choose it in Settings › Privacy › Journal.
+  A config never enables or disables the journal.
+
 | | PwrRoute | Finicky |
 | --- | --- | --- |
 | Platforms | macOS, Windows, Linux | macOS |

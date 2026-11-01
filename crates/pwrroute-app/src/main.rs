@@ -32,6 +32,7 @@ mod doc_window;
 mod dock;
 mod e2e;
 mod editor;
+mod finicky_options;
 mod first_run;
 mod fixtures;
 mod github_releases;

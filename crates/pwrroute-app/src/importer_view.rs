@@ -1411,15 +1411,23 @@ fn detail(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> 
         Kind::Handler => "Becomes a visual handler \u{00b7} position set in Place",
         Kind::Default => "Becomes Everything else",
     };
-    pane.child(heading(format!("{kind} \u{00b7} {}{at}", model.shown)))
-        .when_some(item.source.as_ref(), |pane, lines| {
-            pane.child(source_frame(&model.shown, lines))
-        })
-        .child(verdict_box(item))
-        .when(item.label() == Label::Imports, |pane| {
-            pane.child(heading(becomes_label)).children(becomes(item))
-        })
-        .children(suggestion(model, model.selected, cx))
+    pane.when(!model.option_notices.is_empty(), |pane| {
+        pane.child(heading("Finicky options")).children(
+            model
+                .option_notices
+                .iter()
+                .map(|notice| paragraph(notice.clone(), 11.5, 17.8, theme::text_secondary())),
+        )
+    })
+    .child(heading(format!("{kind} \u{00b7} {}{at}", model.shown)))
+    .when_some(item.source.as_ref(), |pane, lines| {
+        pane.child(source_frame(&model.shown, lines))
+    })
+    .child(verdict_box(item))
+    .when(item.label() == Label::Imports, |pane| {
+        pane.child(heading(becomes_label)).children(becomes(item))
+    })
+    .children(suggestion(model, model.selected, cx))
 }
 
 /// 3c: the config did not evaluate, so there is nothing to review.
