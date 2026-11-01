@@ -4054,6 +4054,7 @@ fn leaving_overview_forgets_its_fades_and_the_hand_off(cx: &mut TestAppContext) 
         fixtures::overview_config_rules(),
         fixtures::overview_config_day(),
     );
+    cx.update(|_, cx| cx.set_reduce_motion(false));
     scroll_to(cx, crate::overview::CALLOUT_BUTTON_ID);
     click(cx, crate::overview::CALLOUT_BUTTON_ID);
     let handoff =
@@ -4084,6 +4085,57 @@ fn leaving_overview_forgets_its_fades_and_the_hand_off(cx: &mut TestAppContext) 
     assert!(view.read_with(cx, |app, _| app.overview.fading().is_none()));
     click(cx, "nav-overview");
     assert_eq!(handoff(cx), None, "coming back does not replay it");
+}
+
+#[gpui_kit::test]
+fn reduced_motion_finishes_the_hand_off_without_delaying_the_override(cx: &mut TestAppContext) {
+    use pwrroute_engine::Precedence;
+    let (view, cx, path) = open_overview(
+        cx,
+        Some(fixtures::overview_config()),
+        fixtures::overview_config_rules(),
+        fixtures::overview_config_day(),
+    );
+    // open_overview starts with Reduce Motion. The real write and Undo
+    // still work, with no decorative state waiting for HANDOFF.
+    view.update(cx, |app, cx| app.set_override(true, cx));
+    assert_eq!(saved(cx, &path).precedence, Precedence::PwrRoute);
+    assert!(view.read_with(cx, |app, _| app.overview.just_overridden));
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.handing_off()),
+        None
+    );
+    view.update(cx, |app, cx| app.set_override(false, cx));
+    assert_eq!(saved(cx, &path).precedence, Precedence::Config);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.handing_off()),
+        None
+    );
+
+    // Enable motion, begin a pulse, then reduce it live before the timer
+    // expires. Re-enabling motion must not resurrect that pulse.
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    view.update(cx, |app, cx| app.set_override(true, cx));
+    assert!(view.read_with(cx, |app, _| app.overview.handing_off().is_some()));
+    cx.update(|_, cx| {
+        cx.set_reduce_motion(true);
+        cx.refresh_windows();
+    });
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.handing_off()),
+        None
+    );
+    cx.update(|_, cx| {
+        cx.set_reduce_motion(false);
+        cx.refresh_windows();
+    });
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.overview.handing_off()),
+        None
+    );
+    assert_eq!(saved(cx, &path).precedence, Precedence::PwrRoute);
 }
 
 /// The callout over a store that will not write (the file changed on disk

@@ -275,6 +275,12 @@ impl OverviewState {
         self.handoff
     }
 
+    /// A live Reduce Motion change ends the decorative pulse. Forget it so
+    /// turning motion back on before its timer expires cannot replay it.
+    pub fn finish_handoff(&mut self) {
+        self.handoff = None;
+    }
+
     /// What is fading out.
     #[cfg(test)]
     pub fn fading(&self) -> Option<FocusKey> {
@@ -617,17 +623,19 @@ impl PwrRoute {
         self.overview.just_overridden = on;
         self.overview.handoffs += 1;
         let handoff = self.overview.handoffs;
-        self.overview.handoff = Some(handoff);
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(HANDOFF).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.overview.handoff == Some(handoff) {
-                    this.overview.handoff = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        self.overview.handoff = (!cx.reduce_motion()).then_some(handoff);
+        if self.overview.handoff.is_some() {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(HANDOFF).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.overview.handoff == Some(handoff) {
+                        this.overview.finish_handoff();
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 

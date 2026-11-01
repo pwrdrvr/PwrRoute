@@ -85,7 +85,10 @@ in the test's artifacts records the stages and when the socket answered.
             "rules": { "rewrites": 3, "handlers": 7,
                        "selection": {"kind":"handler","index":2},
                        "selectionEnabled": true } },
-  "router": { "dryRun": true, "configError": null }
+  "router": { "dryRun": true, "configError": null },
+  "appearance": { "theme": "system", "showing": "dark",
+                  "darkTheme": "tangerine-dark", "lightTheme": "tangerine-light",
+                  "increaseContrast": false, "reduceMotion": false }
 }
 ```
 
@@ -108,6 +111,12 @@ read-only, and `editing` that the visual rules and their editor are shown
 instead. `selection` is the selected rule, a rewrite or a handler by index,
 or `null` until one is clicked or Down selects the first (Rules opens as a
 list), and `selectionEnabled` its switch.
+
+`appearance` reports the live app preferences, including when `main` is
+`null` and no windows are open. Theme ids are Settings' persisted ids;
+`showing` is the scheme currently drawn. `increaseContrast` and
+`reduceMotion` read the same palette and GPUI flag as the views; this hook
+does not override either OS setting.
 
 ### Regions
 

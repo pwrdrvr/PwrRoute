@@ -685,6 +685,56 @@ their own modules.
   tiles go in pairs. The `screens` example takes `--light`,
   `--high-contrast`, `--zoom=1.5`, `--display=WxH`, and
   `--dark-theme=<id>` / `--light-theme=<id>`.
+- **Live accessibility and motion (PWR-24; audit 2026-10-31).** Keep
+  `accessibility_prefs`' two-second macOS/Windows poll: it works with all
+  windows closed, catches changes across sleep and also follows the OS
+  scheme. `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`
+  would reduce display-options latency but would not replace the scheme
+  poll; there is no second observer. GPUI's `with_animation` and
+  `with_animations` consult `cx.reduce_motion()` on each frame (Overview's
+  route fades, pulse, shares and count-up; first run's progress; Rules and
+  Settings' config transitions). Overview's separate `HANDOFF` timer now
+  starts no pulse under Reduce Motion; a live change discards an active
+  pulse at render, so re-enabling motion cannot replay it. Regression
+  coverage checks the write, Undo and a change during a pulse.
+  The tray's 800 ms timer waits for the native icon's position before
+  opening a requested fixture dropdown; its one-second loop keeps a real
+  Send/Hold deadline and countdown. Neither animates, and skipping the
+  deadline would change routing. The remaining `cx.spawn` loops receive
+  data, poll state, debounce writes or expire status messages (copy feedback,
+  log notes, OAuth outcome countdown); none interpolates or flashes a
+  decorative state. Keep these functional delays under Reduce Motion.
+  `e2e`'s `state.appearance` reports the actual motion flag, contrast,
+  resolved scheme and both color-theme ids even with no window open.
+  **Verified on Ubuntu 24.04 x64 in Sandboxer:** workspace tests (including
+  the two handoff regressions and every theme's contrast checks) and Linux
+  Desktop E2E. These deterministic GPUI tests and Xfce/Xvfb E2E do not
+  establish real macOS/Windows preference behavior.
+  Live open-window, closed-window and tray-only checks, all 11 color
+  themes with contrast, System's live dark/light switch, forced Dark/Light,
+  and fixture-only recordings are still pending. On 2026-10-31 the
+  PwrSuiteLab macOS target `local/pwrsnap-dev` refused acquisition with
+  `e2e_capacity_recovery_required` and validated recovery with
+  `controller_refused_inspect_before_retry`; the control MCP listed no
+  Windows E2E target. Do not mark these checks verified from fixture
+  `--high-contrast` renders or close PWR-24 on code tests alone.
+  **GNOME:** PwrRoute follows the Settings portal's
+  `org.freedesktop.appearance` `contrast` and `reduced-motion` uint values
+  (1 means enabled), with change signals; it does not read GSettings
+  directly. See the [portal contract](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Settings.html)
+  and [GNOME backend mapping](https://github.com/GNOME/xdg-desktop-portal-gnome/blob/main/src/settings.c).
+  On a GNOME session, query each through `gdbus call --session --dest
+  org.freedesktop.portal.Desktop --object-path
+  /org/freedesktop/portal/desktop --method
+  org.freedesktop.portal.Settings.ReadOne org.freedesktop.appearance KEY`
+  before and after changing Accessibility's settings. Current GNOME's
+  backend maps `org.gnome.desktop.a11y.interface`'s `high-contrast` and
+  `reduced-motion`; inspect `gsettings range` before writing them. Older
+  desktops may offer only `org.gnome.desktop.interface enable-animations`:
+  changing that alone is not evidence the portal exports `reduced-motion`.
+  If the portal/key is missing, contrast remains standard and motion stays
+  at GPUI's existing value; there is no GSettings fallback. GNOME live
+  propagation is documented here, not verified by the Xfce/Xvfb E2E desktop.
 - **Never clip text at its line box.** `theme::text` and most one-line
   helpers set the line height to the font size, and Geist's glyphs are
   taller than that (1.14em, Geist Mono 1.3em), so `overflow_hidden` on

@@ -1185,6 +1185,9 @@ impl PwrRoute {
 
 impl Render for PwrRoute {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        if cx.reduce_motion() {
+            self.overview.finish_handoff();
+        }
         let layout = Layout::of(self, window);
         // One reading of the routing state for the strip, the rail foot and
         // the Overview, so they agree.

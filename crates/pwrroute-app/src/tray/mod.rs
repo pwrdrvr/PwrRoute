@@ -237,6 +237,8 @@ pub fn follow_scheme(cx: &App) {
 /// screenshots and manual checks where the item cannot be reached (behind
 /// the notch on a full menu bar).
 fn open_at_launch(cx: &mut App) {
+    // A startup delay for the native item to acquire its screen position,
+    // not an animation; Reduce Motion must still allow the tray to open.
     cx.spawn(async move |cx| {
         cx.background_executor()
             .timer(Duration::from_millis(800))
@@ -870,6 +872,8 @@ fn refresh_can_hold(model: &Entity<TrayModel>, cx: &mut App) {
 /// Every second while a send or a hold has a time left: the countdown,
 /// and the end of it.
 fn follow_clock(model: &Entity<TrayModel>, cx: &mut App) {
+    // Functional expiry/countdown, not decorative motion. Keep the real
+    // deadline under Reduce Motion; ending it now would change routing.
     let timed =
         |model: &TrayModel| matches!(model.scope(), Some(SendScope::All { until: Some(_) }));
     let live = cx.try_global::<Tray>().is_some_and(|tray| tray.live);
