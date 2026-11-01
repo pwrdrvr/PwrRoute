@@ -80,7 +80,7 @@ Where the tests run:
 | Rewrites: string, URL, function, legacy object, chained | unit; suites "functions", "rules after a TS config with rewrites", wiki suites |
 | Browser: name, bundle id, path, `name:profile`, object (`appType`, `profile`, `args`, `openInBackground`), function, `null` | unit; configs (`stress.ts`), suite "functions"; `finicky_compat.rs::null_browser_means_do_not_open` |
 | `options.urlShorteners` | `features.rs` (`a_configs_url_shorteners_replace_…`, `an_empty_url_shorteners_turns_…`) |
-| `options.logRequests`, `checkForUpdates`, `keepRunning`, `hideIcon` | validated: `finicky_suite.rs::every_documented_option_loads`; not acted on (see Gaps) |
+| `options.logRequests`, `checkForUpdates`, `keepRunning`, `hideIcon` | `finicky_suite.rs::every_documented_option_loads`, `host_options_preserve_explicit_false_and_source_ownership`; explicitly ignored, with notices in Config Files and import review (see Gaps) |
 | `opener.name`, `bundleId`, `path`, `null` | suites "openers", "Finicky resolver_test.go function handler", "Finicky wiki Configuration ideas" |
 | `opener.windowTitle` | engine: suite "openers" (`MAIL_INBOX`); not captured by the macOS host (see Gaps) |
 | `options.originalUrl` | suite "functions" (rewrites); `features.rs::a_config_sees_the_short_link_as_original_url` |
@@ -106,9 +106,19 @@ the same; these are host features around them.
 - Background opening when Finicky is not frontmost: Finicky's host asks for
   `open -g` unless the config sets `openInBackground`; PwrRoute brings the
   browser forward unless the config says otherwise.
-- `options.logRequests`, `checkForUpdates`, `keepRunning`, `hideIcon`
-  validate and are ignored: PwrRoute stays resident, records Activity in
-  memory, and has its own update and icon settings.
+- Finicky host options validate but are deliberately ignored. Settings ›
+  Config Files and importer Review show each explicitly set value (including
+  `false`) and explain the decision:
+  - `keepRunning`: PwrRoute always stays resident.
+  - `hideIcon`: the tray/menu-bar icon stays visible; there is no hide-icon
+    setting in PwrRoute.
+  - `checkForUpdates`: never changes PwrRoute's update checks, even when
+    `false`. Use Settings › Updates.
+  - `logRequests`: Activity records in memory; the disk journal is opt-in
+    in Settings › Privacy › Journal and is never changed by a config.
+  The engine exposes the evaluated values through `Engine::host_options`,
+  preserving absence and explicit `false`. App tests cover notices for both
+  values, Config Files with either source in charge, and importer review.
 - Finicky’s `rules.json` is now discovered at the exact
   `~/Library/Application Support/Finicky/rules.json` path and offered for copying
   in first run and Settings › Config Files. Imports append to PwrRoute’s file,

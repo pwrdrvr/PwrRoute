@@ -371,6 +371,18 @@ fn source_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) -> i
     {
         rows.push(everything_else_field(this, everything_else, cx));
     }
+    if !configuration.option_notices.is_empty() {
+        rows.push(field(
+            "Finicky options",
+            Some(field_sub(
+                "These options do not change PwrRoute's app settings.",
+            )),
+            configuration
+                .option_notices
+                .iter()
+                .map(|notice| field_help(notice.clone()).into_any_element()),
+        ));
+    }
     this.disclosure(
         "config-source",
         heading("Where rules come from", "Source"),

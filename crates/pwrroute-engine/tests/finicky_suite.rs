@@ -25,7 +25,7 @@ use std::{
 
 use pwrroute_engine::{
     AppType, DefaultHost, Engine, Host, Limits, LogLevel, ModifierKeys, Opener, PowerInfo, Rule,
-    RulesFile, Sources, SystemInfo,
+    RulesFile, RulesOptions, Sources, SystemInfo,
 };
 use serde::Deserialize;
 
@@ -653,6 +653,15 @@ fn every_documented_option_loads() {
     let engine = engine_for(Some(path), RulesFile::default(), Rc::new(DefaultHost));
     assert!(engine.short_links().is_short("https://s.example/abc"));
     assert_eq!(
+        engine.host_options(),
+        &RulesOptions {
+            keep_running: Some(true),
+            hide_icon: Some(true),
+            log_requests: Some(true),
+            check_for_updates: Some(false),
+        }
+    );
+    assert_eq!(
         engine
             .resolve("https://example.com/", None)
             .unwrap()
@@ -660,4 +669,39 @@ fn every_documented_option_loads() {
             .name,
         "Safari"
     );
+}
+
+/// Read evaluated exports, including imported values, without inventing
+/// defaults or letting rules.json's options replace a JS config's.
+#[test]
+fn host_options_preserve_explicit_false_and_source_ownership() {
+    let dir = temp_dir("host-options");
+    fs::write(dir.join("prefs.js"), "export const preferences = { hideIcon: false, logRequests: false, keepRunning: false, checkForUpdates: true };").unwrap();
+    let path = dir.join("finicky.ts");
+    fs::write(&path, "import { preferences } from './prefs.js'; export default { defaultBrowser: 'Safari', options: preferences };").unwrap();
+    let options = RulesOptions {
+        keep_running: Some(false),
+        hide_icon: Some(false),
+        log_requests: Some(false),
+        check_for_updates: Some(true),
+    };
+    let rules = RulesFile {
+        options: Some(RulesOptions {
+            log_requests: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let engine = engine_for(Some(path.clone()), rules.clone(), Rc::new(DefaultHost));
+    assert_eq!(engine.host_options(), &options);
+    assert_eq!(rules_only(rules).host_options().log_requests, Some(true));
+    assert_eq!(
+        rules_only(RulesFile::default()).host_options(),
+        &RulesOptions::default()
+    );
+
+    fs::write(&path, "export default { defaultBrowser: 'Safari' };").unwrap();
+    let engine = engine_for(Some(path), RulesFile::default(), Rc::new(DefaultHost));
+    assert_eq!(engine.host_options(), &RulesOptions::default());
+    fs::remove_dir_all(dir).unwrap();
 }

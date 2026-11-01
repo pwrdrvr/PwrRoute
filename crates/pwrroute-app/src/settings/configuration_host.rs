@@ -87,6 +87,7 @@ pub struct ConfigFacts {
     pub path: PathBuf,
     /// Rewrites and handlers, when the config loaded.
     pub counts: Option<(usize, usize)>,
+    pub host_options: pwrroute_engine::RulesOptions,
     /// The shortener domains the config expands, when it loaded: its
     /// `urlShorteners`, or the built-in list when it sets none. Empty when
     /// it turned expansion off.
@@ -147,6 +148,10 @@ fn facts(cx: &mut App) -> Facts {
             .zip(description.as_ref())
             .map(|(review, description)| import_plan(description, review));
         ConfigFacts {
+            host_options: engine
+                .as_ref()
+                .map(|e| *e.host_options())
+                .unwrap_or_default(),
             counts: description
                 .as_ref()
                 .map(|description| (description.rewrites.len(), description.handlers.len())),
@@ -256,6 +261,7 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
     };
     Configuration {
         active,
+        option_notices: option_notices(facts),
         can_switch: false,
         visual_summary: visual_summary.into(),
         finicky,
@@ -274,6 +280,27 @@ pub fn build(facts: &Facts, now: SystemTime) -> Configuration {
             .as_deref()
             .map(|config| everything_else(facts, config)),
     }
+}
+
+/// Notices identify the file even while it is only offered for import.
+fn option_notices(facts: &Facts) -> Vec<SharedString> {
+    let mut notices = Vec::new();
+    if let Some(config) = &facts.config {
+        let path = display_path(&config.path, facts.home.as_deref());
+        notices.extend(
+            crate::finicky_options::notices(&config.host_options)
+                .into_iter()
+                .map(|line| format!("{path}: {line}").into()),
+        );
+    }
+    if let Some(options) = rules_file(facts).and_then(|file| file.options.as_ref()) {
+        notices.extend(
+            crate::finicky_options::notices(options)
+                .into_iter()
+                .map(|line| format!("rules.json: {line}").into()),
+        );
+    }
+    notices
 }
 
 /// `rules.json` as loaded, when it did.
@@ -1039,6 +1066,7 @@ mod tests {
             error: None,
         };
         facts.config = Some(ConfigFacts {
+            host_options: Default::default(),
             path: config,
             counts: Some((2, 6)),
             shorteners: None,
@@ -1108,6 +1136,7 @@ mod tests {
             ..RoutingSource::default()
         };
         facts.config = Some(ConfigFacts {
+            host_options: Default::default(),
             path: config,
             counts: None,
             shorteners: None,
@@ -1185,6 +1214,41 @@ mod tests {
             ConfigFileState::FinickyRules { loaded: false }
         );
         assert!(model.config_files[0].line.starts_with("Did not load:"));
+    }
+
+    #[test]
+    fn config_options_are_explained_with_visual_rules_or_config_in_charge() {
+        let mut facts = rules(r#"{ "options": { "logRequests": true }, "rules": [] }"#);
+        let config = facts.home.as_ref().unwrap().join(".finicky.ts");
+        facts.config = Some(ConfigFacts {
+            path: config.clone(),
+            counts: Some((0, 0)),
+            host_options: pwrroute_engine::RulesOptions {
+                keep_running: Some(false),
+                hide_icon: Some(true),
+                check_for_updates: Some(false),
+                log_requests: Some(false),
+            },
+            shorteners: None,
+            modified: None,
+            import: None,
+            default: None,
+            catch_all: None,
+        });
+        let before = facts.rules.clone();
+        for in_charge in [None, Some(config)] {
+            facts.source.config = in_charge;
+            let model = build(&facts, SystemTime::now());
+            assert_eq!(model.option_notices.len(), 5);
+            assert!(model.option_notices[0].starts_with("~/.finicky.ts: keepRunning: false"));
+            assert!(model.option_notices[2].contains("Settings › Updates"));
+            assert!(model.option_notices[3].contains("Settings › Privacy › Journal"));
+            assert!(model.option_notices[4].starts_with("rules.json: logRequests: true"));
+            assert_eq!(facts.rules, before);
+        }
+        facts.config.as_mut().unwrap().host_options = Default::default();
+        facts.rules.as_mut().unwrap().as_mut().unwrap().options = None;
+        assert!(build(&facts, SystemTime::now()).option_notices.is_empty());
     }
 
     #[test]
@@ -1303,6 +1367,7 @@ mod tests {
             ..RoutingSource::default()
         };
         facts.config = Some(ConfigFacts {
+            host_options: Default::default(),
             path: config,
             counts: Some((2, 5)),
             shorteners: None,

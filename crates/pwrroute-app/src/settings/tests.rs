@@ -1108,6 +1108,7 @@ mod everything_else {
                 .then(|| RulesFile::load(path).map_err(|error| format!("{error:#}"))),
             rules_modified: None,
             config: Some(ConfigFacts {
+                host_options: Default::default(),
                 path: config,
                 counts: Some((0, 5)),
                 shorteners: None,

@@ -495,6 +495,7 @@ fn candidate(importable: bool, summary: Vec<Piece>) -> ImportCandidate {
 
 pub fn configuration() -> Configuration {
     Configuration {
+        option_notices: Vec::new(),
         active: RulesSource::Visual,
         can_switch: true,
         visual_summary: "rules.json \u{00b7} 3 rewrites \u{00b7} 7 rules".into(),
@@ -744,6 +745,7 @@ pub fn configuration_everything_else() -> Configuration {
         profiles: vec!["default-release".into()],
     };
     Configuration {
+        option_notices: Vec::new(),
         active: RulesSource::Finicky,
         can_switch: true,
         visual_summary: "rules.json \u{00b7} 1 rewrite \u{00b7} 3 rules".into(),

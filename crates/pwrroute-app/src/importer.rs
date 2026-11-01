@@ -238,6 +238,8 @@ pub struct ImportModel {
     /// As the design names it: `~/.finicky.ts`.
     pub shown: String,
     pub items: Vec<Item>,
+    /// Explicit Finicky host options; shown before any import is committed.
+    pub option_notices: Vec<String>,
     /// The item Review's detail pane shows.
     pub selected: usize,
     pub step: Step,
@@ -350,11 +352,19 @@ impl ImportModel {
         let reviewed = engine.and_then(|engine| {
             let description = engine.describe()?;
             let review = engine.review_import(recent)?;
-            Ok(description.zip(review))
+            Ok(description.zip(review).map(|(description, review)| {
+                (
+                    description,
+                    review,
+                    crate::finicky_options::notices(engine.host_options()),
+                )
+            }))
         });
         let mut model = match reviewed {
-            Ok(Some((description, review))) => {
-                Self::from_review(path, shown, &description, review, existing)
+            Ok(Some((description, review, notices))) => {
+                let mut model = Self::from_review(path, shown, &description, review, existing);
+                model.option_notices = notices;
+                model
             }
             Ok(None) => Self::failed(path, shown, "it is not a Finicky config".to_owned()),
             Err(error) => Self::failed(path, shown, format!("{error:#}")),
@@ -405,6 +415,7 @@ impl ImportModel {
             path: path.to_path_buf(),
             shown,
             items,
+            option_notices: Vec::new(),
             selected,
             step: Step::Review,
             placement: Placement::Before,
@@ -426,6 +437,7 @@ impl ImportModel {
             path: path.to_path_buf(),
             shown,
             items: Vec::new(),
+            option_notices: Vec::new(),
             selected: 0,
             step: Step::Review,
             placement: Placement::Before,
@@ -1052,13 +1064,17 @@ mod tests {
         let model = ImportModel::read_rules(&path, None, None, RulesFile::default());
         assert_eq!(model.problem, None);
         let mut store = crate::rules_store::RulesStore::load(Some(target.clone()));
-        model.validate_target(store.path(), &store.written()).unwrap();
+        model
+            .validate_target(store.path(), &store.written())
+            .unwrap();
         store.replace_all(model.plan(&store.written()).file);
         store.save().unwrap();
         assert_eq!(RulesFile::load(&target).unwrap(), source);
 
         let mut changed = model;
-        changed.rules_file.as_mut().unwrap().rules[0].patterns.insert(0, String::new());
+        changed.rules_file.as_mut().unwrap().rules[0]
+            .patterns
+            .insert(0, String::new());
         assert!(changed.validate_target(Some(&target), &source).is_err());
         assert_eq!(RulesFile::load(&target).unwrap(), source);
     }
@@ -1122,6 +1138,24 @@ mod tests {
     fn model(existing: RulesFile) -> ImportModel {
         let config = fixture_config();
         ImportModel::read(&config, None, Some(&config), &[], existing)
+    }
+
+    #[test]
+    fn review_explains_host_options_without_importing_them() {
+        let dir =
+            std::env::temp_dir().join(format!("pwrroute-import-options-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("finicky.js");
+        let source = "export default { defaultBrowser: 'Safari', options: { keepRunning: false, hideIcon: true, checkForUpdates: false, logRequests: true } };";
+        std::fs::write(&path, source).unwrap();
+        let model = ImportModel::read(&path, None, None, &[], RulesFile::default());
+        assert!(model.problem.is_none(), "{:?}", model.problem);
+        assert_eq!(model.option_notices.len(), 4);
+        assert!(model.option_notices[2].contains("Settings › Updates"));
+        assert!(model.option_notices[3].contains("Settings › Privacy › Journal"));
+        assert_eq!(model.found(), 1); // Only the default browser imports.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
