@@ -422,6 +422,16 @@ var __pwrroute = (function (api) {
     rememberHostnames: rememberHostnames,
     matches: matches,
     probe: probe,
+    // Only explicitly supplied host options. Do not substitute Finicky's
+    // defaults: the UI explains each setting the user actually supplied.
+    hostOptions: function () {
+      var options = {};
+      ["keepRunning", "hideIcon", "checkForUpdates", "logRequests"].forEach(function (key) {
+        var value = api.getOption(key, finalConfig, null);
+        if (typeof value === "boolean") options[key] = value;
+      });
+      return options;
+    },
     // `options.urlShorteners` as the config set it: null when it did not,
     // so the host can tell "use the built-in list" from "expand nothing".
     shorteners: function () {

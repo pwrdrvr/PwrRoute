@@ -105,6 +105,9 @@ mod placement {
     }
 }
 #[cfg(target_os = "macos")]
+#[path = "../src/finicky_options.rs"]
+mod finicky_options;
+#[cfg(target_os = "macos")]
 #[path = "../src/first_run.rs"]
 mod first_run;
 #[cfg(target_os = "macos")]
@@ -1315,6 +1318,7 @@ fn main() {
     for (name, step, selected) in [
         ("importer-review", importer::Step::Review, 3),
         ("importer-review-exact", importer::Step::Review, 4),
+        ("importer-options", importer::Step::Review, 4),
         ("importer-place", importer::Step::Place, 0),
         ("importer-source", importer::Step::Source, 0),
     ] {
@@ -1352,6 +1356,14 @@ fn main() {
         model.shown = "~/.finicky.ts".into();
         model.selected = selected;
         model.step = step;
+        if name == "importer-options" {
+            model.option_notices = finicky_options::notices(&pwrroute_engine::RulesOptions {
+                keep_running: Some(false),
+                hide_icon: Some(true),
+                check_for_updates: Some(false),
+                log_requests: Some(true),
+            });
+        }
         let handle = cx
             .open_window(win(1180.0, 640.0), |_, cx| {
                 cx.new(|cx| importer_view::Importer::new(model, cx))
@@ -1380,6 +1392,11 @@ fn main() {
     for (name, pane, height) in [
         ("settings-1a", settings::Pane::LocalAgents, 1603.0),
         ("settings-1b", settings::Pane::Configuration, 1315.0),
+        (
+            "settings-config-options",
+            settings::Pane::Configuration,
+            1550.0,
+        ),
         ("settings-1c", settings::Pane::Browsers, 880.0),
         ("settings-privacy", settings::Pane::Privacy, 1560.0),
         // Synced Rules 1b and 1c, with 2a's machine card.
@@ -1426,6 +1443,18 @@ fn main() {
                     model.general.dark_theme = theme::current().dark_theme;
                     model.general.light_theme = theme::current().light_theme;
                     match name {
+                        "settings-config-options" => {
+                            model.configuration.option_notices =
+                                finicky_options::notices(&pwrroute_engine::RulesOptions {
+                                    keep_running: Some(false),
+                                    hide_icon: Some(true),
+                                    check_for_updates: Some(false),
+                                    log_requests: Some(true),
+                                })
+                                .into_iter()
+                                .map(|line| format!("~/.finicky.ts: {line}").into())
+                                .collect();
+                        }
                         "settings-short-links" => {
                             model.configuration =
                                 settings::fixtures::configuration_everything_else();
