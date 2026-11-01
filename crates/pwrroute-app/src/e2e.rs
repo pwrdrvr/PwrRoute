@@ -555,7 +555,25 @@ fn state(cx: &mut App) -> Value {
             }
         });
     }
-    json!({ "windows": windows, "main": main })
+    // Read the live preference seam even with no windows. This lets OS
+    // checks distinguish an actual setting response from a fixture override.
+    let prefs = crate::accessibility_prefs::current(cx);
+    let theme = crate::theme::current();
+    json!({
+        "windows": windows,
+        "main": main,
+        "appearance": {
+            "theme": crate::appearance::choice(cx).key(),
+            "showing": match theme.appearance {
+                crate::theme::Appearance::Dark => "dark",
+                crate::theme::Appearance::Light => "light",
+            },
+            "darkTheme": theme.dark_theme.key(),
+            "lightTheme": theme.light_theme.key(),
+            "increaseContrast": prefs.increase_contrast,
+            "reduceMotion": prefs.reduce_motion,
+        },
+    })
 }
 
 /// The rail section on screen, as `e2e/CONTRACT.md` names it.

@@ -685,6 +685,80 @@ their own modules.
   tiles go in pairs. The `screens` example takes `--light`,
   `--high-contrast`, `--zoom=1.5`, `--display=WxH`, and
   `--dark-theme=<id>` / `--light-theme=<id>`.
+- **Live accessibility and motion (PWR-24; audit 2026-10-31).** Keep
+  `accessibility_prefs`' two-second macOS/Windows poll: it works with all
+  windows closed, catches changes across sleep and also follows the OS
+  scheme. `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`
+  would reduce display-options latency but would not replace the scheme
+  poll; there is no second observer. GPUI's `with_animation` and
+  `with_animations` consult `cx.reduce_motion()` on each frame (Overview's
+  route fades, pulse, shares and count-up; first run's progress; Rules and
+  Settings' config transitions). Overview's separate `HANDOFF` timer now
+  starts no pulse under Reduce Motion; a live change discards an active
+  pulse at render, so re-enabling motion cannot replay it. Regression
+  coverage checks the write, Undo and a change during a pulse.
+  The tray's 800 ms timer waits for the native icon's position before
+  opening a requested fixture dropdown; its one-second loop keeps a real
+  Send/Hold deadline and countdown. Neither animates, and skipping the
+  deadline would change routing. The remaining `cx.spawn` loops receive
+  data, poll state, debounce writes or expire status messages (copy feedback,
+  log notes, OAuth outcome countdown); none interpolates or flashes a
+  decorative state. Keep these functional delays under Reduce Motion.
+  `e2e`'s `state.appearance` reports the actual motion flag, contrast,
+  resolved scheme and both color-theme ids even with no window open.
+  **Verified on Ubuntu 24.04 x64 in Sandboxer:** workspace tests (including
+  the two handoff regressions and every theme's contrast checks) and Linux
+  Desktop E2E. These deterministic GPUI tests and Xfce/Xvfb E2E do not
+  establish real macOS/Windows preference behavior.
+  **Windows state verification (2026-11-01):** DESKTOP-17ISFOI, Windows
+  `10.0.26200.9711`, native Rust 1.97.1 build of `3916554c` (exit 0),
+  isolated `--dry-run` fixture processes and real Win32 setting changes.
+  High Contrast reached `state.appearance` with the main window open
+  (on/off 691/620 ms) and every window closed (1470/862 ms); Animation
+  effects reached it with windows closed (545/113 ms). Open-window
+  animation-on missed two seconds once (>3002 ms); quiet repeats matched
+  at 1975/1138 ms after OS readback, so the first failure remains open.
+  System's real app dark/light setting propagated with windows open
+  (725/1723 ms); closed-window dark missed two seconds (2706 ms), light
+  took 1132 ms. Forced Dark and Light held across both OS schemes.
+  Each of the six dark and five light palette ids was selected at startup
+  under real High Contrast. This verifies state selection, not visible
+  palette rendering, live picker interaction or stopped visual motion.
+  First run opened under Reduce Motion, but Settings and Rules/config
+  navigation hit GPUI 0.3.6's `Duplicate a11y node id` panic; precedence
+  switch/Undo and config motion remain unverified on Windows. Native
+  tray-only checks and valid visual/recording evidence are also pending:
+  exact-HWND GDI capture was black and CUA returned a different app, so
+  neither was attached. Original HC off (flags 126), animation effects off
+  and app light on were restored and read back; all owned processes exited.
+  Invalid initial pointer-based animation-setter measurements and an
+  OS-dark attempt that reverted are excluded. Full matrix and quiet-run
+  diagnostics are in [PR #155](https://github.com/pwrdrvr/PwrRoute/pull/155).
+  The poll's two-second cadence is a target, not an established latency
+  guarantee. **macOS remains unverified:** on 2026-10-31 the
+  PwrSuiteLab macOS target `local/pwrsnap-dev` refused acquisition with
+  `e2e_capacity_recovery_required` and validated recovery with
+  `controller_refused_inspect_before_retry`; the control MCP listed no
+  Windows E2E target (the Windows checks above used Federation).
+  Do not mark outstanding checks verified from fixture
+  `--high-contrast` renders or close PWR-24 on code tests alone.
+  **GNOME:** PwrRoute follows the Settings portal's
+  `org.freedesktop.appearance` `contrast` and `reduced-motion` uint values
+  (1 means enabled), with change signals; it does not read GSettings
+  directly. See the [portal contract](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Settings.html)
+  and [GNOME backend mapping](https://github.com/GNOME/xdg-desktop-portal-gnome/blob/main/src/settings.c).
+  On a GNOME session, query each through `gdbus call --session --dest
+  org.freedesktop.portal.Desktop --object-path
+  /org/freedesktop/portal/desktop --method
+  org.freedesktop.portal.Settings.ReadOne org.freedesktop.appearance KEY`
+  before and after changing Accessibility's settings. Current GNOME's
+  backend maps `org.gnome.desktop.a11y.interface`'s `high-contrast` and
+  `reduced-motion`; inspect `gsettings range` before writing them. Older
+  desktops may offer only `org.gnome.desktop.interface enable-animations`:
+  changing that alone is not evidence the portal exports `reduced-motion`.
+  If the portal/key is missing, contrast remains standard and motion stays
+  at GPUI's existing value; there is no GSettings fallback. GNOME live
+  propagation is documented here, not verified by the Xfce/Xvfb E2E desktop.
 - **Never clip text at its line box.** `theme::text` and most one-line
   helpers set the line height to the font size, and Geist's glyphs are
   taller than that (1.14em, Geist Mono 1.3em), so `overflow_hidden` on

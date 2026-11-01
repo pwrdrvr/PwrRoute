@@ -48,8 +48,12 @@ pub fn install(cx: &mut App) {
         return;
     }
     refresh(pwrroute_os::accessibility::increase_contrast(), cx);
-    // Resident apps must notice changes with no window open. These native
-    // reads are cheap; polling also catches settings changed during sleep.
+    // Keep the two-second poll on macOS as well as Windows. It follows
+    // preferences with no window open and catches changes during sleep;
+    // the cadence is not a latency guarantee when the UI thread is busy.
+    // An NSWorkspace display-options notification would still need this
+    // poll for the OS color scheme; a second observer adds lifecycle/thread
+    // handling without replacing it.
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(Duration::from_secs(2)).await;
