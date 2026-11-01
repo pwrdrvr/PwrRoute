@@ -902,6 +902,7 @@ impl LogsWindow {
             Some(icon("pwrroute/search.svg", 13.0, theme::text_subtle()).into_any_element()),
             Some(self.search_trailing(narrow, cx)),
             window,
+            cx,
         )
         .map(crate::accessibility::keyboard_only)
         .on_click(cx.listener(|this, _, window, cx| {
@@ -1809,6 +1810,15 @@ fn clip_highlights(
             (start < end).then(|| (start - segment.start..end - segment.start, *style))
         })
         .collect()
+}
+
+impl crate::text_field::InputOwner for LogsWindow {
+    fn input_field(&mut self, focus: &FocusHandle) -> Option<&mut TextField> {
+        (self.search.focus == *focus).then_some(&mut self.search)
+    }
+    fn input_changed(&mut self, _: &FocusHandle, _: &mut Context<'_, Self>) {
+        self.query_changed();
+    }
 }
 
 #[cfg(test)]

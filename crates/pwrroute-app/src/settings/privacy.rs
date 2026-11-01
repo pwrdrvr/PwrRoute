@@ -221,7 +221,13 @@ fn number_field(
         },
         None,
         window,
+        cx,
     )
+    .aria_label(if id == KEEP_COUNT_ID {
+        "Keep the last links"
+    } else {
+        "For at most hours"
+    })
     .test_support()
     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
         let edit = if this.privacy.count.focus.is_focused(window) {
@@ -859,4 +865,16 @@ fn sheet_overlay(
         ),
     )
     .into_any_element()
+}
+
+impl State {
+    pub(super) fn input_field(&mut self, focus: &FocusHandle) -> Option<&mut TextField> {
+        if self.count.focus == *focus {
+            Some(&mut self.count)
+        } else if self.hours.focus == *focus {
+            Some(&mut self.hours)
+        } else {
+            None
+        }
+    }
 }

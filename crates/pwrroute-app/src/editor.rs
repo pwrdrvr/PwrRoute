@@ -420,7 +420,7 @@ fn editable(
         .when(look.error, |input| {
             input.border_color(theme::status_error())
         })
-        .child(crate::text_field::text(text_field, shown, focused));
+        .child(crate::text_field::text(text_field, shown, focused).input(text_field, cx));
     inner = inner.when_some(trailing, |input, trailing| {
         input.pr(px(6.0)).child(div().ml_auto().child(trailing))
     });
@@ -429,7 +429,7 @@ fn editable(
     let area = div()
         .id(ElementId::Name(id.clone()))
         .debug_selector(move || id.to_string());
-    crate::text_field::hit_area(area, text_field)
+    crate::text_field::native_area(area, text_field, cx)
         .aria_label(match field {
             Field::Pattern(index) => format!("URL pattern {}", index + 1),
             Field::Browser => "Browser name".into(),
@@ -2257,4 +2257,27 @@ fn back(cx: &mut Context<'_, PwrRoute>) -> impl IntoElement + use<> {
             ))
             .on_click(cx.listener(|this, _, _, cx| this.deselect(cx))),
     )
+}
+
+impl Rail {
+    pub(crate) fn input_field_key(&self, focus: &gpui_kit::FocusHandle) -> Option<Field> {
+        let fields = self
+            .patterns
+            .iter()
+            .enumerate()
+            .map(|(i, _)| Field::Pattern(i))
+            .chain(self.values.iter().enumerate().map(|(i, _)| Field::Value(i)))
+            .chain([
+                Field::Browser,
+                Field::Profile,
+                Field::Sample,
+                Field::Example,
+                Field::Becomes,
+                Field::Set,
+                Field::Name,
+            ]);
+        fields
+            .into_iter()
+            .find(|key| self.field(*key).is_some_and(|f| f.focus == *focus))
+    }
 }

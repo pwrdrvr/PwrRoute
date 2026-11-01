@@ -1044,6 +1044,7 @@ pub fn pane(
         },
         None,
         window,
+        cx,
     )
     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
         match this.test.url.key(&event.keystroke, cx) {

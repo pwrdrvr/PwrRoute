@@ -25,6 +25,10 @@ use gpui_kit::{
     div, fill, font, point, relative,
 };
 
+#[path = "text_field/native.rs"]
+mod native;
+pub use native::{InputOwner, native_area};
+
 use crate::theme;
 use crate::widgets::{focus_ring, input_box};
 
@@ -32,6 +36,8 @@ use crate::widgets::{focus_ring, input_box};
 pub struct TextField {
     pub text: String,
     pub focus: FocusHandle,
+    /// Uncommitted IME text, in UTF-8 byte offsets.
+    marked: Option<Range<usize>>,
     /// Shared with the drawn text, which places the caret on a click.
     caret: Rc<RefCell<Caret>>,
 }
@@ -51,6 +57,9 @@ struct Caret {
     painted: Option<(ShapedLine, Pixels)>,
     /// A drag from a press in the field.
     drag: Option<Drag>,
+    bounds: Option<Bounds<Pixels>>,
+    scale: f32,
+    runs: Vec<(gpui_kit::accesskit::NodeId, Range<usize>)>,
 }
 
 /// What a drag selects by.
@@ -97,6 +106,7 @@ impl TextField {
         let end = text.len();
         Self {
             text,
+            marked: None,
             // Every field is in its window's Tab order.
             focus: cx.focus_handle().tab_stop(true),
             caret: Rc::new(RefCell::new(Caret {
@@ -114,6 +124,7 @@ impl TextField {
     /// Replaces the text, leaving the caret at its end.
     pub fn set(&mut self, text: impl Into<String>) {
         self.text = text.into();
+        self.marked = None;
         let end = self.text.len();
         self.select(end, end);
     }
@@ -169,7 +180,9 @@ impl TextField {
 
     /// Replaces `range` with `with`, the caret after it.
     fn replace(&mut self, range: Range<usize>, with: &str) {
-        self.text.replace_range(range.clone(), with);
+        let mut text = self.text.clone();
+        text.replace_range(range.clone(), with);
+        self.set(text);
         let at = range.start + with.len();
         self.select(at, at);
     }
@@ -287,20 +300,9 @@ impl TextField {
                 Edit::Handled
             }
             "escape" => Edit::Ignored,
-            key => {
-                let typed = keystroke.key_char.clone().or_else(|| match key {
-                    "space" => Some(" ".to_owned()),
-                    _ if key.chars().count() == 1 => Some(key.to_owned()),
-                    _ => None,
-                });
-                match typed {
-                    Some(text) if !text.chars().all(char::is_control) => {
-                        self.insert(&text);
-                        Edit::Changed
-                    }
-                    _ => Edit::Ignored,
-                }
-            }
+            // Printable input belongs to the platform handler, including
+            // dead keys, IME composition and dictation.
+            _ => Edit::Ignored,
         }
     }
 
@@ -413,32 +415,34 @@ pub struct Look {
 /// `.inp` for a field: its text, a caret while focused, and the focus ring.
 /// Leading content (a search icon) goes in `leading`. The caller adds the
 /// key handler (`on_key_down`) to the returned element.
-pub fn field(
+pub fn field<V: InputOwner>(
     id: &'static str,
     field: &TextField,
     look: Look,
     leading: Option<AnyElement>,
     window: &Window,
+    cx: &mut gpui_kit::Context<'_, V>,
 ) -> Stateful<Div> {
-    field_with(id, field, look, leading, None, window)
+    field_with(id, field, look, leading, None, window, cx)
 }
 
 /// [`field`] with content after the text, at the box's right edge (a
 /// search's match count and its steps).
-pub fn field_with(
+pub fn field_with<V: InputOwner>(
     id: &'static str,
     field: &TextField,
     look: Look,
     leading: Option<AnyElement>,
     trailing: Option<AnyElement>,
     window: &Window,
+    cx: &mut gpui_kit::Context<'_, V>,
 ) -> Stateful<Div> {
     let focused = field.focus.is_focused(window);
     let inner = input_box()
         .w_full()
         .gap(px(8.0))
         .when_some(leading, |row, leading| row.child(leading))
-        .child(text(field, look, focused))
+        .child(text(field, look, focused).input(field, cx))
         .when_some(trailing, |row, trailing| {
             row.child(
                 div()
@@ -450,8 +454,10 @@ pub fn field_with(
             )
         });
     let boxed = if focused { focus_ring(inner) } else { inner };
-    hit_area(div().id(id).debug_selector(|| id.into()), field)
-        .aria_label(look.placeholder)
+    native_area(div().id(id).debug_selector(|| id.into()), field, cx)
+        .when(!look.placeholder.is_empty(), |field| {
+            field.aria_label(look.placeholder)
+        })
         .aria_placeholder(look.placeholder)
         .flex_1()
         .min_w_0()
@@ -469,6 +475,7 @@ pub fn hit_area(mut element: Stateful<Div>, field: &TextField) -> Stateful<Div> 
         .map(ToString::to_string)
         .unwrap_or_else(|| "Text".into())
         .replace('-', " ");
+    let element = native::text_nodes(element, field);
     element
         .role(gpui_kit::Role::TextInput)
         .aria_label(name)
@@ -496,6 +503,7 @@ pub fn text(field: &TextField, look: Look, focused: bool) -> FieldText {
             ..font(family)
         },
         size: px(size),
+        input: None,
     }
 }
 
@@ -504,7 +512,10 @@ const CARET: (f32, f32) = (1.0, 14.0);
 
 /// A field's text, as a native field draws it: shaped once, scrolled to
 /// keep the caret in view, the selection behind it.
+type PaintInput = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App)>;
+
 pub struct FieldText {
+    input: Option<PaintInput>,
     text: SharedString,
     placeholder: SharedString,
     caret: Rc<RefCell<Caret>>,
@@ -636,6 +647,8 @@ impl Element for FieldText {
             (shown, px(0.))
         };
         caret.scroll = scroll;
+        caret.bounds = Some(bounds);
+        caret.scale = window.scale_factor();
         let origin_x = bounds.left() - scroll;
         let top = bounds.top() + (self.size - px(CARET.1)) / 2.;
         let span = |from: Pixels, to: Pixels| {
@@ -675,6 +688,9 @@ impl Element for FieldText {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if let Some(input) = self.input.take() {
+            input(bounds, window, cx);
+        }
         // Glyphs reach past a line box as tall as the font: clip sideways
         // only.
         let slack = self.size * 0.3 + px(1.);
@@ -757,6 +773,12 @@ mod tests {
                 keystroke.key_char = Some(keystroke.key.clone());
             }
             last = field.key(&keystroke, cx);
+            if last == Edit::Ignored
+                && let Some(text) = &keystroke.key_char
+            {
+                field.native_replace(None, text, None, false);
+                last = Edit::Changed;
+            }
         }
         last
     }

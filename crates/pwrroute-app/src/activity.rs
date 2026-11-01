@@ -2178,6 +2178,7 @@ fn toolbar(app: &PwrRoute, window: &mut Window, cx: &mut Context<'_, PwrRoute>) 
         },
         Some(icon("pwrroute/search.svg", 13.0, theme::text_subtle()).into_any_element()),
         window,
+        cx,
     )
     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
         match this.activity.search.key(&event.keystroke, cx) {
