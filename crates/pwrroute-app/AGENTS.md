@@ -710,13 +710,37 @@ their own modules.
   the two handoff regressions and every theme's contrast checks) and Linux
   Desktop E2E. These deterministic GPUI tests and Xfce/Xvfb E2E do not
   establish real macOS/Windows preference behavior.
-  Live open-window, closed-window and tray-only checks, all 11 color
-  themes with contrast, System's live dark/light switch, forced Dark/Light,
-  and fixture-only recordings are still pending. On 2026-10-31 the
+  **Windows state verification (2026-11-01):** DESKTOP-17ISFOI, Windows
+  `10.0.26200.9711`, native Rust 1.97.1 build of `3916554c` (exit 0),
+  isolated `--dry-run` fixture processes and real Win32 setting changes.
+  High Contrast reached `state.appearance` with the main window open
+  (on/off 691/620 ms) and every window closed (1470/862 ms); Animation
+  effects reached it with windows closed (545/113 ms). Open-window
+  animation-on missed two seconds once (>3002 ms); quiet repeats matched
+  at 1975/1138 ms after OS readback, so the first failure remains open.
+  System's real app dark/light setting propagated with windows open
+  (725/1723 ms); closed-window dark missed two seconds (2706 ms), light
+  took 1132 ms. Forced Dark and Light held across both OS schemes.
+  Each of the six dark and five light palette ids was selected at startup
+  under real High Contrast. This verifies state selection, not visible
+  palette rendering, live picker interaction or stopped visual motion.
+  First run opened under Reduce Motion, but Settings and Rules/config
+  navigation hit GPUI 0.3.6's `Duplicate a11y node id` panic; precedence
+  switch/Undo and config motion remain unverified on Windows. Native
+  tray-only checks and valid visual/recording evidence are also pending:
+  exact-HWND GDI capture was black and CUA returned a different app, so
+  neither was attached. Original HC off (flags 126), animation effects off
+  and app light on were restored and read back; all owned processes exited.
+  Invalid initial pointer-based animation-setter measurements and an
+  OS-dark attempt that reverted are excluded. Full matrix and quiet-run
+  diagnostics are in [PR #155](https://github.com/pwrdrvr/PwrRoute/pull/155).
+  The poll's two-second cadence is a target, not an established latency
+  guarantee. **macOS remains unverified:** on 2026-10-31 the
   PwrSuiteLab macOS target `local/pwrsnap-dev` refused acquisition with
   `e2e_capacity_recovery_required` and validated recovery with
   `controller_refused_inspect_before_retry`; the control MCP listed no
-  Windows E2E target. Do not mark these checks verified from fixture
+  Windows E2E target (the Windows checks above used Federation).
+  Do not mark outstanding checks verified from fixture
   `--high-contrast` renders or close PWR-24 on code tests alone.
   **GNOME:** PwrRoute follows the Settings portal's
   `org.freedesktop.appearance` `contrast` and `reduced-motion` uint values
