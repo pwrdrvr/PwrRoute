@@ -119,9 +119,11 @@ the same; these are host features around them.
   The engine exposes the evaluated values through `Engine::host_options`,
   preserving absence and explicit `false`. App tests cover notices for both
   values, Config Files with either source in charge, and importer review.
-- Finicky's `rules.json` (`~/Library/Application Support/Finicky/`) loads and
-  routes unchanged, but PwrRoute reads only its own file and does not offer
-  to import Finicky's.
+- Finicky’s `rules.json` is now discovered at the exact
+  `~/Library/Application Support/Finicky/rules.json` path and offered for copying
+  in first run and Settings › Config Files. Imports append to PwrRoute’s file,
+  preserve examples/tests and run them; Finicky’s file is never written or
+  watched. Using that file in place is intentionally not offered.
 
 ## Where the Go host is wrong
 

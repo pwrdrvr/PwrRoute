@@ -586,6 +586,8 @@ fn config_file_row(
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Div {
     let state = match file.state {
+        ConfigFileState::FinickyRules { loaded: true } => chip("Ready to copy", Tone::Ok),
+        ConfigFileState::FinickyRules { loaded: false } => chip("Did not load", Tone::Warn),
         ConfigFileState::InCharge => chip("In charge", Tone::Ok),
         ConfigFileState::Failed => chip("Did not load", Tone::Warn),
         ConfigFileState::NotUsed => chip("Not used", Tone::Neutral),
@@ -605,7 +607,22 @@ fn config_file_row(
         Some(div().flex().child(state)),
         [
             field_help(file.line.clone()).into_any_element(),
-            row_actions().child(reveal).into_any_element(),
+            row_actions()
+                .child(reveal)
+                .when(
+                    matches!(file.state, ConfigFileState::FinickyRules { .. }),
+                    |row| {
+                        row.child(request_button(
+                            "config-copy-finicky-rules",
+                            "Review copy…",
+                            Kind::Primary,
+                            false,
+                            SettingsRequest::ReviewFinickyRules(file.path.clone()),
+                            cx,
+                        ))
+                    },
+                )
+                .into_any_element(),
         ],
     );
     div().child(this.mark_target(&nav::config_key(&file.path), row))

@@ -58,10 +58,28 @@ pub struct Facts {
     /// Every Finicky config file on disk, in discovery's order, with when
     /// each was last changed.
     pub config_files: Vec<(PathBuf, Option<SystemTime>)>,
+    pub finicky_rules: Option<FinickyRulesFacts>,
     pub home: Option<PathBuf>,
     /// The browser scan less the apps hidden in Settings: what the
     /// Everything else select offers.
     pub browsers: Vec<DetectedApp>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FinickyRulesFacts {
+    pub path: PathBuf,
+    pub file: Result<RulesFile, String>,
+    pub modified: Option<SystemTime>,
+}
+
+impl FinickyRulesFacts {
+    pub fn read(path: PathBuf) -> Self {
+        Self {
+            file: RulesFile::load(&path).map_err(|error| format!("{error:#}")),
+            modified: modified(&path),
+            path,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -167,6 +185,7 @@ fn facts(cx: &mut App) -> Facts {
         rules_modified,
         config,
         config_files,
+        finicky_rules: discovery::find_finicky_rules(&environment).map(FinickyRulesFacts::read),
         home: std::env::home_dir(),
         browsers: browsers(cx),
     }
@@ -632,9 +651,10 @@ fn config_files(facts: &Facts, now: SystemTime) -> Vec<ConfigFile> {
         kept.as_ref()
             .map(|(path, _)| display_path(path, home).into())
     });
-    kept.iter()
+    let mut files: Vec<_> = kept
+        .iter()
         .chain(facts.config_files.iter())
-        .take(CONFIG_FILES_SHOWN)
+        .take(CONFIG_FILES_SHOWN - usize::from(facts.finicky_rules.is_some()))
         .map(|(path, modified)| {
             let shown: SharedString = display_path(path, home).into();
             let (state, line) = if same(path) {
@@ -663,7 +683,27 @@ fn config_files(facts: &Facts, now: SystemTime) -> Vec<ConfigFile> {
                 line: line.into(),
             }
         })
-        .collect()
+        .collect();
+    if let Some(found) = &facts.finicky_rules {
+        let line = match &found.file {
+            Ok(file) => format!(
+                "{} rules · {} rewrites · {} saved tests. Copy into PwrRoute; Finicky’s file is never changed.",
+                file.rules.len(),
+                file.rewrites.len(),
+                file.tests.len()
+            ),
+            Err(error) => format!("Did not load: {error}"),
+        };
+        files.push(ConfigFile {
+            shown: display_path(&found.path, home).into(),
+            path: found.path.clone(),
+            state: ConfigFileState::FinickyRules {
+                loaded: found.file.is_ok(),
+            },
+            line: line.into(),
+        });
+    }
+    files
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -711,6 +751,9 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
         }
         SettingsRequest::OpenDataFolder => open_data_folder(cx),
         SettingsRequest::RevealConfig(path) => cx.reveal_path(path),
+        SettingsRequest::ReviewFinickyRules(path) => {
+            crate::importer_view::open(path.clone(), false, cx)
+        }
         SettingsRequest::ReviewImport => {
             let environment = discovery::Environment::current();
             let config = router::routing_source()
@@ -864,6 +907,7 @@ struct Stamp {
     source: RoutingSource,
     rules: Option<SystemTime>,
     config: Option<SystemTime>,
+    finicky_rules: Option<SystemTime>,
 }
 
 fn stamp(facts: &Facts) -> Stamp {
@@ -871,6 +915,10 @@ fn stamp(facts: &Facts) -> Stamp {
         source: facts.source.clone(),
         rules: facts.rules_modified,
         config: facts.source.config.as_deref().and_then(modified),
+        finicky_rules: facts
+            .finicky_rules
+            .as_ref()
+            .and_then(|found| found.modified),
     }
 }
 
@@ -883,6 +931,9 @@ fn current_stamp() -> Stamp {
         source,
         rules,
         config,
+        finicky_rules: discovery::find_finicky_rules(&discovery::Environment::current())
+            .as_deref()
+            .and_then(modified),
     }
 }
 
@@ -1130,6 +1181,39 @@ mod tests {
             model.short_links.source,
             ShortLinksSource::Off("~/.finicky.js".into())
         );
+    }
+
+    #[test]
+    fn finicky_json_is_listed_for_copying_even_without_a_js_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir
+            .path()
+            .join("Library/Application Support/Finicky/rules.json");
+        RulesFile::default().save(&source).unwrap();
+        let mut facts = Facts {
+            home: Some(dir.path().to_path_buf()),
+            finicky_rules: Some(FinickyRulesFacts::read(source.clone())),
+            ..Default::default()
+        };
+        let model = build(&facts, SystemTime::now());
+        assert_eq!(model.config_files.len(), 1);
+        assert_eq!(
+            model.config_files[0].shown,
+            "~/Library/Application Support/Finicky/rules.json"
+        );
+        assert_eq!(
+            model.config_files[0].state,
+            ConfigFileState::FinickyRules { loaded: true }
+        );
+        assert!(model.config_files[0].line.contains("never changed"));
+        fs::write(&source, "{invalid").unwrap();
+        facts.finicky_rules = Some(FinickyRulesFacts::read(source));
+        let model = build(&facts, SystemTime::now());
+        assert_eq!(
+            model.config_files[0].state,
+            ConfigFileState::FinickyRules { loaded: false }
+        );
+        assert!(model.config_files[0].line.starts_with("Did not load:"));
     }
 
     #[test]

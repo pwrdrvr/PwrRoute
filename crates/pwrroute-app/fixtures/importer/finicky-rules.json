@@ -1,0 +1,8 @@
+{
+  "defaultBrowser": "Firefox",
+  "rules": [
+    {"match": "work.example.com/*", "browser": "Google Chrome", "profile": "Work", "examples": ["https://work.example.com/start"]},
+    {"match": "news.example.org/*", "browser": "Firefox"}
+  ],
+  "tests": [{"url": "https://news.example.org/story", "expect": {"browser": "Firefox"}}]
+}

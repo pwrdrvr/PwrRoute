@@ -311,6 +311,8 @@ pub struct ConfigFile {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigFileState {
+    /// Finicky’s visual rules: offered for copying, never selected in place.
+    FinickyRules { loaded: bool },
     /// The router runs it.
     InCharge,
     /// In charge, but it did not load.
@@ -899,6 +901,7 @@ pub enum SettingsRequest {
     },
     /// Open the importer on the Finicky config (Finicky Importer 1a).
     ReviewImport,
+    ReviewFinickyRules(std::path::PathBuf),
     RevealRules,
     OpenDataFolder,
     ReloadRules,

@@ -418,6 +418,7 @@ impl PwrRoute {
             return Err(reason);
         }
         let previous = self.store.written();
+        model.validate_target(self.store.path(), &previous)?;
         let plan = model.plan(&previous);
         self.store.replace_all(plan.file.clone());
         let saved = self.store.save();

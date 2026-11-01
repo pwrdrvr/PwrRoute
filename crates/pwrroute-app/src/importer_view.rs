@@ -177,7 +177,11 @@ pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBu
 /// window is never opened for it), and `on_done` hears how the importer was
 /// left.
 pub fn open_from_first_run(path: PathBuf, rules: Option<PathBuf>, on_done: OnDone, cx: &mut App) {
-    let in_charge = Some(path.clone());
+    let in_charge = if path.extension().is_some_and(|ext| ext == "json") {
+        crate::router::config_in_charge()
+    } else {
+        Some(path.clone())
+    };
     open_inner(
         path,
         true,
@@ -209,13 +213,17 @@ fn open_inner(
         });
     let recent = recent_links(cx);
     let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
-    let mut model = ImportModel::read(
-        &path,
-        home.as_deref(),
-        in_charge.as_deref(),
-        &refs,
-        existing,
-    );
+    let mut model = if path.extension().is_some_and(|ext| ext == "json") {
+        ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
+    } else {
+        ImportModel::read(
+            &path,
+            home.as_deref(),
+            in_charge.as_deref(),
+            &refs,
+            existing,
+        )
+    };
     if first_run {
         model.start_at_source();
     }
@@ -461,6 +469,7 @@ fn finish_for_first_run(
             if let Some(reason) = store.save_refused() {
                 return Err(reason);
             }
+            model.validate_target(store.path(), &store.written())?;
             let plan = model.plan(&store.written());
             store.replace_all(plan.file.clone());
             store.save()?;
@@ -892,7 +901,9 @@ fn title_strip(model: &ImportModel, menu_bar: &Entity<MenuBar>, window: &Window,
             500.0,
             theme::text_secondary(),
         ))
-        .child(stepper(model))
+        .when(model.rules_file.is_none(), |strip| {
+            strip.child(stepper(model))
+        })
 }
 
 /// What a row of Review's list says between its line number and its chip.
@@ -1846,10 +1857,59 @@ fn choose_source(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Statefu
         ))
 }
 
+/// Whole-file copy, using the importer's existing heading and rule rows.
+fn rules_review(model: &ImportModel) -> Stateful<Div> {
+    let file = model.rules_file.as_ref().expect("rules review");
+    let plan = model.plan(&model.existing);
+    let mut body = div().id("importer-rules-review").flex_1().min_w_0().flex().flex_col()
+        .gap(px(14.0)).py(px(20.0)).px(px(24.0)).overflow_y_scroll()
+        .child(step_heading("Review", "Copy Finicky’s visual rules".into(),
+            format!("Reads {}. Rules and rewrites are appended after yours; exact duplicates are skipped. Finicky’s file is never changed or used in place.", model.shown)))
+        .child(paragraph(if model.existing.default_browser.is_empty() {
+            format!("Default browser: {}. Your selected JavaScript config stays in charge, if any.", file.default_browser)
+        } else {
+            format!("Your default browser ({}) and selected JavaScript config are kept.", model.existing.default_browser)
+        }, 11.5, 18.4, theme::text_muted()))
+        .child(paragraph(format!("{} will be copied. All saved examples and tests run after import; failures appear in Rules.", plural(file.tests.len(), "saved test")), 11.5, 18.4, theme::text_muted()));
+    let rows = model
+        .items
+        .iter()
+        .enumerate()
+        .fold(card(), |rows, (i, item)| {
+            rows.child(rule_row(
+                ElementId::named_usize("importer-json-rule", i),
+                &format!("{:02}", i + 1),
+                &item.row,
+                RowState {
+                    last: i + 1 == model.items.len(),
+                    ..RowState::default()
+                },
+                None,
+                None,
+            ))
+        });
+    body = body.child(rows).child(paragraph(
+        format!(
+            "{}, {} and {} to add; {} exact duplicates skipped.",
+            plural(plan.handlers, "handler"),
+            plural(plan.rewrites, "rewrite"),
+            plural(plan.tests, "saved test"),
+            plan.duplicates
+        ),
+        11.5,
+        18.4,
+        theme::text_muted(),
+    ));
+    body
+}
+
 /// `.imp-foot`: the summary and the step's buttons.
 fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
     let plan = model.plan(&model.existing);
     let summary = match model.step {
+        Step::Review if model.rules_file.is_some() => {
+            "Copy into PwrRoute’s rules.json. Nothing is written yet.".into()
+        }
         Step::Review => model.review_footer(),
         Step::Place => "Rewrites go after yours, since every rewrite runs anyway.".to_owned(),
         Step::Source => model.plan_summary(&plan),
@@ -1857,10 +1917,14 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
     let next_label: SharedString = match model.next_step() {
         Some(Step::Place) => "Next: Place".into(),
         Some(Step::Source) => "Next: Choose source".into(),
+        _ if model.rules_file.is_some() => "Copy rules".into(),
         _ => model.import_label(&plan).into(),
     };
     let first = model.step == Step::Review;
-    let can_go = model.problem.is_none() && (model.next_step().is_some() || plan.count() > 0);
+    let can_go = model.problem.is_none()
+        && (model.next_step().is_some()
+            || plan.count() > 0
+            || (model.rules_file.is_some() && plan.file != model.existing));
     div()
         .flex()
         .flex_none()
@@ -1878,9 +1942,10 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .when(first && model.problem.is_none(), |row| {
-                    row.child(checkbox(model.checked() > 0, true))
-                })
+                .when(
+                    first && model.problem.is_none() && model.rules_file.is_none(),
+                    |row| row.child(checkbox(model.checked() > 0, true)),
+                )
                 .map(|row| match &model.refused {
                     Some(reason) => row.child(
                         div()
@@ -1929,6 +1994,7 @@ impl Render for Importer {
         let model = self.model.clone();
         let body = match (&model.problem, model.step) {
             (Some(problem_text), _) => problem(&model, problem_text, cx).into_any_element(),
+            (None, _) if model.rules_file.is_some() => rules_review(&model).into_any_element(),
             (None, Step::Review) => div()
                 .flex_1()
                 .min_h_0()

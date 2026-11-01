@@ -241,6 +241,7 @@ pub struct Facts {
     /// Everything else selects.
     pub browsers: Vec<BrowserChoice>,
     pub finicky: Option<FinickyFound>,
+    pub finicky_rules: Option<PathBuf>,
     /// `rules.json`'s `defaultBrowser`, empty when it names none.
     pub rules_default: String,
     /// `rules.json`'s `defaultProfile`, empty when it names none.
@@ -272,6 +273,7 @@ impl Facts {
             handler: default_browser::state(cx),
             browsers: choices(crate::browser_scan::apps(cx), &hidden(cx)),
             finicky: crate::router::config_in_charge().map(FinickyFound::read),
+            finicky_rules: discovery::find_finicky_rules(&env),
             rules_default: rules.default_browser,
             rules_profile: rules.default_profile,
             rules: rules.rules.len(),
@@ -373,6 +375,10 @@ pub fn model(facts: &Facts, home: Option<&Path>) -> FirstRunModel {
         fallback,
         browsers: facts.browsers.clone(),
         finicky,
+        finicky_rules: facts
+            .finicky_rules
+            .as_ref()
+            .map(|path| (path.clone(), tilde(path, home))),
         import,
         precedence: facts.precedence,
         rules: facts.rules,
@@ -504,7 +510,49 @@ pub fn hooks_with(
     let finish_dir = data_dir;
     let fallback_rules = rules_path.clone();
     let precedence_rules = rules_path.clone();
+    let copy_rules_path = rules_path.clone();
     FirstRunHooks {
+        on_import_rules: Rc::new(move |path, reply, cx| {
+            let rules = copy_rules_path.clone();
+            let on_done: crate::importer_view::OnDone = Rc::new(move |outcome, cx| {
+                let result = match outcome {
+                    crate::importer_view::ImportOutcome::Cancelled => None,
+                    crate::importer_view::ImportOutcome::Imported {
+                        count,
+                        keeps_config,
+                    } => {
+                        let config = crate::router::config_in_charge();
+                        let file = rules
+                            .as_deref()
+                            .and_then(|path| RulesFile::load(path).ok())
+                            .unwrap_or_default();
+                        let report = Engine::from_sources(
+                            &pwrroute_engine::Sources {
+                                config,
+                                rules: file,
+                                ..Default::default()
+                            },
+                            Rc::new(pwrroute_engine::NativeHost::new()),
+                            Limits::default(),
+                        )
+                        .and_then(|engine| engine.test_rules(None));
+                        let summary = match report {
+                            Ok(report) => format!(
+                                "Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.",
+                                report.passed, report.total
+                            ),
+                            Err(_) => format!(
+                                "Copied {count} entries. Saved examples and tests could not run; see Rules for details."
+                            ),
+                        };
+                        Some((imported(count, keeps_config, rules.as_deref()), summary))
+                    }
+                };
+                reply(result, cx);
+            });
+            let rules = copy_rules_path.clone();
+            cx.defer(move |cx| crate::importer_view::open_from_first_run(path, rules, on_done, cx));
+        }),
         on_fallback: Rc::new(move |choice: first_run::Fallback, _| {
             edit_rules(fallback_rules.as_deref(), |rules| {
                 rules.default_browser.clone_from(&choice.browser.value);
@@ -728,6 +776,7 @@ mod tests {
                 },
                 safari(),
             ],
+            finicky_rules: None,
             finicky: Some(FinickyFound {
                 path: PathBuf::from("/Users/u/.finicky.ts"),
                 rewrites: 2,
@@ -1222,6 +1271,56 @@ mod tests {
             .debug_bounds(id)
             .unwrap_or_else(|| panic!("{id} is drawn"));
         cx.simulate_click(bounds.center(), Modifiers::none());
+    }
+
+    #[gpui_kit::test]
+    fn first_run_copies_json_and_reports_saved_tests_without_opening_main(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Finicky/rules.json");
+        let target = dir.path().join("PwrRoute/rules.json");
+        let file: RulesFile = serde_json::from_str(r#"{
+            "defaultBrowser":"Firefox", "rules":[{"match":"example.com/*", "browser":"Safari", "examples":["https://example.com/a"]}],
+            "tests":[{"url":"https://example.com/a", "expect":{"browser":"Safari"}}]
+        }"#).unwrap();
+        file.save(&source).unwrap();
+        let original = fs::read(&source).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().join("PwrRoute")),
+            Some(target.clone()),
+            None,
+            no_source(),
+            Rc::new(|_, _| panic!("copy opens no main window")),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let start = |cx: &mut TestAppContext| {
+            let heard = replies.clone();
+            cx.update(|cx| {
+                (hooks.on_import_rules)(
+                    source.clone(),
+                    Rc::new(move |result, _| heard.borrow_mut().push(result)),
+                    cx,
+                )
+            });
+            importer_window(cx).expect("JSON copy review opened")
+        };
+        let window = start(cx);
+        let mut review = VisualTestContext::from_window(window.into(), cx);
+        press(&mut review, crate::importer_view::CANCEL_ID);
+        assert_eq!(*replies.borrow(), [None]);
+        assert!(!target.exists());
+        let window = start(cx);
+        let mut review = VisualTestContext::from_window(window.into(), cx);
+        press(&mut review, crate::importer_view::NEXT_ID);
+        assert!(importer_window(cx).is_none());
+        assert_eq!(RulesFile::load(&target).unwrap(), file);
+        assert_eq!(fs::read(source).unwrap(), original);
+        let replies = replies.borrow();
+        let Some((imported, summary)) = &replies[1] else {
+            panic!("import completed")
+        };
+        assert_eq!(imported.rules, 1);
+        assert!(summary.contains("2 of 2 passed"), "{summary}");
     }
 
     /// Import N rules from first run: the importer opens on its own, a

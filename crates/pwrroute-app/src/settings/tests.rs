@@ -1097,6 +1097,7 @@ mod everything_else {
     fn read_back(home: &Path, path: &Path) -> Configuration {
         let config = home.join(".finicky.ts");
         let facts = Facts {
+            finicky_rules: None,
             source: RoutingSource {
                 config: Some(config.clone()),
                 ..RoutingSource::default()

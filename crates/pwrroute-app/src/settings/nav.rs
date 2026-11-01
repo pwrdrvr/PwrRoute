@@ -102,6 +102,8 @@ pub fn children(model: &SettingsModel, pane: Pane) -> Vec<Child> {
                     label: file.shown.clone(),
                     account: None,
                     dot: match file.state {
+                        ConfigFileState::FinickyRules { loaded: true } => Dot::Ok,
+                        ConfigFileState::FinickyRules { loaded: false } => Dot::Warn,
                         ConfigFileState::InCharge => Dot::Ok,
                         ConfigFileState::Failed => Dot::Warn,
                         ConfigFileState::NotUsed => Dot::Off,
