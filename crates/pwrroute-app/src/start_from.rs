@@ -174,9 +174,16 @@ fn clock(at: SystemTime) -> String {
     DateTime::<Local>::from(at).format("%H:%M").to_string()
 }
 
-/// The patterns a link suggests, narrowest first.
+/// The patterns a link suggests, narrowest first: the one-pattern
+/// candidates, since a chip fills the rule's first field. A domain with its
+/// subdomains takes two fields, so the chips leave it to Activity's sheet.
 pub fn candidates(url: &str) -> Vec<String> {
-    suggest_rule(url).candidates
+    suggest_rule(url)
+        .candidates
+        .into_iter()
+        .filter(|candidate| candidate.patterns.len() == 1)
+        .flat_map(|candidate| candidate.patterns)
+        .collect()
 }
 
 /// The link the draft at `index` started from, if it still has one.

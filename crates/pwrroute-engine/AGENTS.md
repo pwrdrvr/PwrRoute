@@ -110,7 +110,11 @@ crate docs map the modules.
   `url` pins the expanded input, before rewrites. Replay that pair without
   network expansion; without `originalUrl`, both inputs are `url`.
   `suggest_rule` only shapes candidate patterns; whether one matches is
-  always the API's `isMatch`, through `Engine::collisions`.
+  always the API's `isMatch`, through `Engine::collisions`. A candidate
+  is a rule's pattern list: a domain with every subdomain is `d/*` plus
+  `*.d/*` (Finicky's `*.d/*` never matches `d`), widened no further than
+  the registrable domain by the `psl` crate's public suffix list, so a
+  file it writes is a plain `match` list Go and Finicky read.
 - **The importer reads what the config produced (`src/import.rs`).**
   `Engine::review_import` classifies `describe()`'s rules: wildcard
   matchers, fixed browsers (their `appType` must be the one `rules.json`

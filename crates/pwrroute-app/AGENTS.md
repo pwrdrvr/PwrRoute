@@ -111,7 +111,15 @@ their own modules.
   leaves on its own (off goes back to the narrowest pattern). With Sent
   from on, Also catches lists only that app's links, compared as
   `rules[].opener` is. No pattern carries the query or fragment
-  (`suggest_rule`: a one-segment page with a query is `host/page*`), and
+  (`suggest_rule`: a one-segment page with a query is `host/page*`).
+  Past the host the sheet offers its parent and registrable domain
+  (design: Rule Pattern Scope), each with every subdomain: two patterns,
+  `d/*` and `*.d/*`, since `*.d/*` alone misses `d`. The field holds a
+  candidate's patterns with a space between them (`AddRule::patterns`),
+  Add saves them as the rule's `match` list, Also catches counts a link
+  any of them takes, and Matches under the field lights the nearby hosts
+  they take (`AddRule::hosts`). The editor's Suggested chips keep to
+  one-pattern candidates (`start_from::candidates`). And
   a Match row's pattern ends in an ellipsis beside an explanation that
   keeps `WHY_MIN`, so a long one never pushes the row past the sheet.
   The feed also keeps today's `Tally` (links per rule, handler and default owner, and per

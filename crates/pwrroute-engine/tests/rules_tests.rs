@@ -563,20 +563,79 @@ fn every_candidate_matches_its_own_link_by_finickys_is_match() {
         "https://auth.example.com/authorize?client_id=demo&state=one",
         "https://example.com/page#top",
         "mailto:alice@example.com?subject=hi",
+        "https://dash.example.com/somefolder/page",
+        "https://eu.api.example.co.uk/v2/status",
+        "https://someone.github.io/blog/post",
+        "https://dash.example.com:8443/a/b",
+        "https://user@dash.example.com/a/b",
     ] {
         let suggestion = suggest_rule(url);
         assert!(!suggestion.candidates.is_empty(), "{url}");
         for candidate in &suggestion.candidates {
-            assert_eq!(
-                e.collisions(candidate, &[url]).unwrap(),
-                [url],
-                "{candidate} should match {url}"
-            );
-            assert!(
-                !candidate.contains("s3cret"),
-                "{candidate} carries a password"
-            );
+            // A rule's patterns: any one matching is a match.
+            let caught = candidate
+                .patterns
+                .iter()
+                .any(|p| !e.collisions(p, &[url]).unwrap().is_empty());
+            assert!(caught, "{:?} should match {url}", candidate.patterns);
+            for pattern in &candidate.patterns {
+                assert!(!pattern.contains("s3cret"), "{pattern} carries a password");
+            }
         }
+    }
+}
+
+#[test]
+fn a_domain_choice_routes_the_domain_and_every_subdomain_and_nothing_else() {
+    // Finicky's own matcher: `*.example.com/*` alone misses the domain.
+    let e = engine(None, RulesFile::default());
+    assert!(
+        e.collisions("*.example.com/*", &["https://example.com/"])
+            .unwrap()
+            .is_empty()
+    );
+    let suggestion = suggest_rule("https://dash.example.com/somefolder/page");
+    let domain = suggestion
+        .candidates
+        .iter()
+        .find(|c| c.domain.as_deref() == Some("example.com"))
+        .unwrap();
+    let patterns: Vec<&str> = domain.patterns.iter().map(String::as_str).collect();
+    assert_eq!(patterns, ["example.com/*", "*.example.com/*"]);
+    let file = RulesFile {
+        default_browser: "Firefox".into(),
+        rules: vec![rule(&patterns, "Safari")],
+        ..RulesFile::default()
+    };
+    // Saved, it is the list the Go host already reads.
+    assert_eq!(
+        serde_json::to_value(&file).unwrap()["rules"][0]["match"],
+        serde_json::json!(["example.com/*", "*.example.com/*"])
+    );
+    let routed = engine(None, file);
+    for url in [
+        "https://example.com/",
+        "https://example.com",
+        "http://example.com/pricing?x=1",
+        "https://dash.example.com/somefolder/page",
+        "https://a.b.example.com/x",
+    ] {
+        assert_eq!(
+            routed.resolve(url, None).unwrap().browser.name,
+            "Safari",
+            "{url}"
+        );
+    }
+    for url in [
+        "https://notexample.com/",
+        "https://example.com.evil.test/",
+        "https://example.org/",
+    ] {
+        assert_eq!(
+            routed.resolve(url, None).unwrap().browser.name,
+            "Firefox",
+            "{url}"
+        );
     }
 }
 
@@ -585,7 +644,7 @@ fn a_page_with_a_query_is_caught_again_with_another_query() {
     let e = engine(None, RulesFile::default());
     let first = "https://auth.example.com/authorize?client_id=demo&state=one";
     let again = "https://auth.example.com/authorize?client_id=demo&state=two";
-    let pattern = &suggest_rule(first).candidates[0];
+    let pattern = &suggest_rule(first).candidates[0].patterns[0];
     assert_eq!(e.collisions(pattern, &[again]).unwrap(), [again]);
 }
 

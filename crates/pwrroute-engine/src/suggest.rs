@@ -5,6 +5,12 @@
 //! The candidates are built from the URL's parts in Rust, but whether a
 //! pattern matches is only ever Finicky's `isMatch`, run through the engine
 //! ([`Engine::collisions`]), so the answer is exactly what routing would do.
+//!
+//! A domain and its subdomains take two patterns: Finicky's `*` needs the
+//! dot in `*.example.com/*`, so that pattern never matches `example.com`
+//! itself, and `*example.com/*` would also match `notexample.com`. A
+//! [`Candidate`] is therefore a list, saved as one rule's `match`, which the
+//! Go host and Finicky already read as "any of these".
 
 use anyhow::Result;
 use rquickjs::CatchResultExt;
@@ -14,27 +20,51 @@ use crate::{Engine, js_error};
 /// Patterns that would route one link.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Suggestion {
-    /// Wildcard patterns that match the link, narrowest first: the host with
-    /// the first path segment (`github.com/pwrdrvr/*`), then the host alone
-    /// (`github.com/*`). A link whose path stops at its first segment gets
-    /// itself, exactly, in place of the first; with a query or fragment it
-    /// gets its page and a `*` instead (`auth.example.com/authorize*`), since
-    /// the query and fragment never enter a pattern and a pattern without a
-    /// `*` must equal the whole link. A scheme outside the ones a
-    /// pattern matches implicitly (`http`, `https`, `ftp`, `mailto`,
-    /// `file`, `tel`, `sms`, `data`) is written out, and so is the scheme
-    /// of a link with a port, since `host:port` would read as a scheme, or
-    /// with a user name, which is written out too (`https://user@host/*`).
-    /// A password is never written: `user:*@` stands for it. Empty for text
-    /// that is not a URL.
-    pub candidates: Vec<String>,
+    /// Ways to match the link, narrowest first: the host with the first
+    /// path segment (`github.com/pwrdrvr/*`), the host alone
+    /// (`github.com/*`), then the host's parent domain and its registrable
+    /// domain, each with every subdomain (`["example.com/*",
+    /// "*.example.com/*"]`). A link whose path stops at its first segment
+    /// gets itself, exactly, in place of the first; with a query or
+    /// fragment it gets its page and a `*` instead
+    /// (`auth.example.com/authorize*`), since the query and fragment never
+    /// enter a pattern and a pattern without a `*` must equal the whole
+    /// link. A scheme outside the ones a pattern matches implicitly
+    /// (`http`, `https`, `ftp`, `mailto`, `file`, `tel`, `sms`, `data`) is
+    /// written out, and so is the scheme of a link with a port, since
+    /// `host:port` would read as a scheme, or with a user name, which is
+    /// written out too (`https://user@host/*`). A password is never
+    /// written: `user:*@` stands for it. Empty for text that is not a URL.
+    pub candidates: Vec<Candidate>,
     /// A wildcard cannot say what distinguishes this link, so a precise rule
     /// needs a JS config: a regex matcher, or a `url` function with a
     /// capture group for a rewrite. `why` says which.
     pub needs_js: bool,
-    /// One line per candidate, in order, then one per reason `needs_js` is
-    /// set.
+    /// One line per reason `needs_js` is set, or that the text is not a URL.
     pub why: Vec<&'static str>,
+}
+
+/// One way to match a link: the patterns of one rule's `match`, any one of
+/// which matching is a match.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Candidate {
+    /// One pattern, or two for a domain and its subdomains (the domain
+    /// first).
+    pub patterns: Vec<String>,
+    /// What it matches, in a sentence.
+    pub why: String,
+    /// The domain a domain choice widens to (`example.com`), else `None`.
+    pub domain: Option<String>,
+}
+
+impl Candidate {
+    fn one(pattern: String, why: &str) -> Self {
+        Self {
+            patterns: vec![pattern],
+            why: why.to_owned(),
+            domain: None,
+        }
+    }
 }
 
 /// Query parameters a redirect wrapper carries its destination in.
@@ -62,14 +92,15 @@ const IMPLICIT_SCHEMES: [&str; 8] = [
 const WHY_PAGE: &str = "Matches this page only.";
 const WHY_PAGE_ANY_QUERY: &str = "Matches paths that start here, any query.";
 const WHY_SECTION: &str = "Matches everything under the first part of the path.";
-const WHY_HOST: &str = "Matches everything on this host.";
+const WHY_HOST: &str = "Matches everything on this host, not its subdomains.";
 const WHY_SCHEME: &str = "Matches every link with this scheme.";
 const WHY_NOT_A_URL: &str = "This is not a URL PwrRoute can match.";
 const WHY_ID: &str = "The first part of the path looks like an id. A wildcard cannot limit a part to ids; a regex matcher in a JS config can.";
 const WHY_INNER_URL: &str = "A query parameter carries another URL. Unwrapping it is a rewrite with a capture group, which needs a url function in a JS config.";
 const WHY_USER_SECTION: &str =
     "Matches everything under the first part of the path, for this user name.";
-const WHY_USER_HOST: &str = "Matches everything on this host, for this user name.";
+const WHY_USER_HOST: &str =
+    "Matches everything on this host, not its subdomains, for this user name.";
 
 /// Wildcard patterns for a rule that would route `url`, and whether a rule
 /// that fits it precisely needs JS instead.
@@ -117,59 +148,75 @@ pub fn suggest_rule(url: &str) -> Suggestion {
     let Some(host) = parsed.host_str() else {
         // mailto:, tel:, data: and the like: the whole link, or every link
         // of its kind.
-        if tail {
-            suggestion
-                .candidates
-                .push(format!("{scheme}:{}*", escape(parsed.path())));
-            suggestion.why.push(WHY_PAGE_ANY_QUERY);
+        let page = if tail {
+            Candidate::one(
+                format!("{scheme}:{}*", escape(parsed.path())),
+                WHY_PAGE_ANY_QUERY,
+            )
         } else {
-            suggestion.candidates.push(link);
-            suggestion.why.push(WHY_PAGE);
-        }
-        suggestion.candidates.push(format!("{scheme}:*"));
-        suggestion.why.push(WHY_SCHEME);
+            Candidate::one(link, WHY_PAGE)
+        };
+        suggestion.candidates.push(page);
+        suggestion
+            .candidates
+            .push(Candidate::one(format!("{scheme}:*"), WHY_SCHEME));
         return suggestion;
     };
-    let origin = match parsed.port() {
-        Some(port) => format!("{prefix}{userinfo}{}:{port}", escape(host)),
-        None => format!("{prefix}{userinfo}{}", escape(host)),
-    };
+    let port = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    let origin = format!("{prefix}{userinfo}{}{port}", escape(host));
     let path = parsed.path();
     if path.is_empty() {
         // A scheme of its own (`slack://channel?id=1`) may have no path at
         // all, so `host/*` would not match it. With a query, `host*` is
         // already the page with any query.
         if !tail {
-            suggestion.candidates.push(link);
-            suggestion.why.push(WHY_PAGE);
+            suggestion.candidates.push(Candidate::one(link, WHY_PAGE));
         }
-        suggestion.candidates.push(format!("{origin}*"));
-        suggestion.why.push(why_host);
+        suggestion
+            .candidates
+            .push(Candidate::one(format!("{origin}*"), why_host));
         return suggestion;
     }
     let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
     if !first.is_empty() {
-        if path.starts_with(&format!("/{first}/")) {
-            suggestion
-                .candidates
-                .push(format!("{origin}/{}/*", escape(first)));
-            suggestion.why.push(why_section);
+        let narrowest = if path.starts_with(&format!("/{first}/")) {
+            Candidate::one(format!("{origin}/{}/*", escape(first)), why_section)
         } else if tail {
             // `host/first/*` needs a slash after the segment, which this
             // link does not have: the page, with any query.
-            suggestion
-                .candidates
-                .push(format!("{origin}{}*", escape(path)));
-            suggestion.why.push(WHY_PAGE_ANY_QUERY);
+            Candidate::one(format!("{origin}{}*", escape(path)), WHY_PAGE_ANY_QUERY)
         } else {
             // No slash after the segment and nothing after the path: the
             // link itself.
-            suggestion.candidates.push(link);
-            suggestion.why.push(WHY_PAGE);
+            Candidate::one(link, WHY_PAGE)
+        };
+        suggestion.candidates.push(narrowest);
+    }
+    suggestion
+        .candidates
+        .push(Candidate::one(format!("{origin}/*"), why_host));
+    if let Some(url::Host::Domain(domain)) = parsed.host() {
+        for wider in wider_domains(domain) {
+            let why = if userinfo.is_empty() {
+                format!("Matches {wider} and every subdomain.")
+            } else {
+                format!("Matches {wider} and every subdomain, for this user name.")
+            };
+            // A custom scheme's host may hold a literal `*`.
+            let host = escape(wider);
+            suggestion.candidates.push(Candidate {
+                patterns: vec![
+                    format!("{prefix}{userinfo}{host}{port}/*"),
+                    format!("{prefix}{userinfo}*.{host}{port}/*"),
+                ],
+                why,
+                domain: Some(wider.to_owned()),
+            });
         }
     }
-    suggestion.candidates.push(format!("{origin}/*"));
-    suggestion.why.push(why_host);
 
     if looks_like_id(first) {
         suggestion.needs_js = true;
@@ -188,6 +235,34 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         suggestion.why.push(WHY_INNER_URL);
     }
     suggestion
+}
+
+/// The domains a host widens to, narrowest first: its parent and its
+/// registrable domain (the public suffix list's, private suffixes
+/// included), or the host itself when it is the registrable domain. Never
+/// a public suffix (`co.uk`, `github.io`), and nothing for a one-label
+/// host, a suffix alone or a name the list cannot place.
+fn wider_domains(host: &str) -> Vec<&str> {
+    if host.ends_with('.') || !host.contains('.') {
+        return Vec::new();
+    }
+    // The list is lowercase, and a custom scheme's host keeps its case:
+    // look it up lowercased, then take the same bytes of the host as given.
+    let Some(registrable) = psl::domain_str(&host.to_ascii_lowercase()).map(str::len) else {
+        return Vec::new();
+    };
+    let registrable = &host[host.len() - registrable..];
+    if registrable == host {
+        return vec![host];
+    }
+    let mut wider = Vec::new();
+    if let Some((_, parent)) = host.split_once('.')
+        && parent != registrable
+    {
+        wider.push(parent);
+    }
+    wider.push(registrable);
+    wider
 }
 
 /// The link itself as a pattern: exact when it has no password, else the
@@ -267,18 +342,37 @@ impl Engine {
 mod tests {
     use super::*;
 
+    /// Each candidate as its patterns, a space between two.
     fn candidates(url: &str) -> Vec<String> {
-        suggest_rule(url).candidates
+        joined(&suggest_rule(url))
+    }
+
+    fn joined(s: &Suggestion) -> Vec<String> {
+        s.candidates.iter().map(|c| c.patterns.join(" ")).collect()
+    }
+
+    fn whys(s: &Suggestion) -> Vec<&str> {
+        s.candidates.iter().map(|c| c.why.as_str()).collect()
     }
 
     #[test]
-    fn candidates_go_from_the_section_to_the_host() {
+    fn candidates_go_from_the_section_to_the_domain() {
         assert_eq!(
             candidates("https://github.com/pwrdrvr/PwrRoute/pull/1"),
-            ["github.com/pwrdrvr/*", "github.com/*"]
+            [
+                "github.com/pwrdrvr/*",
+                "github.com/*",
+                "github.com/* *.github.com/*"
+            ]
         );
-        assert_eq!(candidates("https://example.com/"), ["example.com/*"]);
-        assert_eq!(candidates("https://example.com"), ["example.com/*"]);
+        assert_eq!(
+            candidates("https://example.com/"),
+            ["example.com/*", "example.com/* *.example.com/*"]
+        );
+        assert_eq!(
+            candidates("https://example.com"),
+            ["example.com/*", "example.com/* *.example.com/*"]
+        );
         assert_eq!(
             candidates("http://localhost:3000/app/x"),
             ["http://localhost:3000/app/*", "http://localhost:3000/*"]
@@ -286,20 +380,141 @@ mod tests {
     }
 
     #[test]
+    fn a_subdomain_widens_to_its_registrable_domain() {
+        let s = suggest_rule("https://dash.example.com/somefolder/page");
+        assert_eq!(
+            joined(&s),
+            [
+                "dash.example.com/somefolder/*",
+                "dash.example.com/*",
+                "example.com/* *.example.com/*"
+            ]
+        );
+        assert_eq!(
+            whys(&s),
+            [
+                WHY_SECTION,
+                WHY_HOST,
+                "Matches example.com and every subdomain."
+            ]
+        );
+        assert_eq!(s.candidates[2].domain.as_deref(), Some("example.com"));
+        assert_eq!(s.candidates[1].domain, None);
+    }
+
+    #[test]
+    fn a_deep_host_gets_its_parent_and_its_registrable_domain() {
+        assert_eq!(
+            candidates("https://eu.api.example.com/v2/status"),
+            [
+                "eu.api.example.com/v2/*",
+                "eu.api.example.com/*",
+                "api.example.com/* *.api.example.com/*",
+                "example.com/* *.example.com/*"
+            ]
+        );
+        // Never more than the parent and the registrable domain.
+        assert_eq!(
+            candidates("https://a.b.c.example.com/x")[2..],
+            [
+                "b.c.example.com/* *.b.c.example.com/*",
+                "example.com/* *.example.com/*"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_public_suffix_is_never_offered() {
+        assert_eq!(
+            candidates("https://shop.example.co.uk/cart")[2..],
+            ["example.co.uk/* *.example.co.uk/*"]
+        );
+        assert_eq!(
+            candidates("https://eu.api.example.co.uk/v2/status")[2..],
+            [
+                "api.example.co.uk/* *.api.example.co.uk/*",
+                "example.co.uk/* *.example.co.uk/*"
+            ]
+        );
+        // A private suffix: someone's site, not all of github.io.
+        assert_eq!(
+            candidates("https://someone.github.io/blog/post")[2..],
+            ["someone.github.io/* *.someone.github.io/*"]
+        );
+        for url in [
+            "https://co.uk/x",
+            "https://github.io/x",
+            "https://com/x",
+            "http://localhost:3000/app/x",
+            "https://127.0.0.1/x",
+            "https://[::1]/x",
+            "https://example.com./x",
+        ] {
+            let s = suggest_rule(url);
+            assert!(
+                s.candidates.iter().all(|c| c.domain.is_none()),
+                "{url}: {:?}",
+                joined(&s)
+            );
+        }
+    }
+
+    #[test]
+    fn a_custom_schemes_host_is_placed_whatever_its_case() {
+        // Only special schemes lowercase their host.
+        assert_eq!(
+            candidates("foo://Shop.Example.CO.UK/cart/x")[2..],
+            ["foo://Example.CO.UK/* foo://*.Example.CO.UK/*"]
+        );
+        // A literal `*` in a host stays literal.
+        assert_eq!(
+            candidates("foo://x.a*b.example.com/p/q")[2..],
+            [
+                "foo://a\\*b.example.com/* foo://*.a\\*b.example.com/*",
+                "foo://example.com/* foo://*.example.com/*"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_domain_choice_keeps_the_scheme_port_and_user_name() {
+        assert_eq!(
+            candidates("https://dash.example.com:8443/a/b")[2..],
+            ["https://example.com:8443/* https://*.example.com:8443/*"]
+        );
+        let s = suggest_rule("https://user@dash.example.com/a/b");
+        assert_eq!(
+            joined(&s)[2..],
+            ["https://user@example.com/* https://user@*.example.com/*"]
+        );
+        assert_eq!(
+            s.candidates[2].why,
+            "Matches example.com and every subdomain, for this user name."
+        );
+        assert_eq!(
+            candidates("zoommtg://zoom.example.com/join?confno=1")[2..],
+            ["zoommtg://example.com/* zoommtg://*.example.com/*"]
+        );
+    }
+
+    #[test]
     fn a_path_that_stops_at_its_first_part_is_matched_exactly() {
         let s = suggest_rule("https://github.com/pwrdrvr");
-        assert_eq!(s.candidates, ["https://github.com/pwrdrvr", "github.com/*"]);
-        assert_eq!(s.why, [WHY_PAGE, WHY_HOST]);
+        assert_eq!(
+            joined(&s)[..2],
+            ["https://github.com/pwrdrvr", "github.com/*"]
+        );
+        assert_eq!(whys(&s)[..2], [WHY_PAGE, WHY_HOST]);
         assert!(!s.needs_js);
     }
 
     #[test]
     fn the_query_and_fragment_never_enter_a_pattern() {
         let s = suggest_rule("https://github.com/pwrdrvr?tab=repositories");
-        assert_eq!(s.candidates, ["github.com/pwrdrvr*", "github.com/*"]);
-        assert_eq!(s.why, [WHY_PAGE_ANY_QUERY, WHY_HOST]);
+        assert_eq!(joined(&s)[..2], ["github.com/pwrdrvr*", "github.com/*"]);
+        assert_eq!(whys(&s)[..2], [WHY_PAGE_ANY_QUERY, WHY_HOST]);
         assert_eq!(
-            candidates("https://example.com/page#top"),
+            candidates("https://example.com/page#top")[..2],
             ["example.com/page*", "example.com/*"]
         );
         // An OAuth sign-in: one segment, a long query, a redirect_uri that
@@ -309,8 +524,12 @@ mod tests {
              &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback&state=demo-state-0001",
         );
         assert_eq!(
-            s.candidates,
-            ["auth.example.com/authorize*", "auth.example.com/*"]
+            joined(&s),
+            [
+                "auth.example.com/authorize*",
+                "auth.example.com/*",
+                "example.com/* *.example.com/*"
+            ]
         );
         assert!(!s.needs_js, "{:?}", s.why);
         // An MCP client's sign-in also names the server as `resource`.
@@ -327,9 +546,9 @@ mod tests {
                 .needs_js
         );
         assert!(
-            s.candidates.iter().all(|c| !c.contains('?')),
+            joined(&s).iter().all(|c| !c.contains('?')),
             "{:?}",
-            s.candidates
+            joined(&s)
         );
     }
 
@@ -354,42 +573,48 @@ mod tests {
     fn ids_and_wrapped_urls_need_js() {
         let s = suggest_rule("https://issues.example/12345/comments");
         assert!(s.needs_js);
-        assert_eq!(s.candidates, ["issues.example/12345/*", "issues.example/*"]);
-        assert_eq!(s.why.last(), Some(&WHY_ID));
+        assert_eq!(
+            joined(&s)[..2],
+            ["issues.example/12345/*", "issues.example/*"]
+        );
+        assert_eq!(s.why, [WHY_ID]);
         let s = suggest_rule("https://www.google.com/url?q=https://example.com/x");
         assert!(s.needs_js);
         assert!(s.why.contains(&WHY_INNER_URL));
         assert!(
             suggest_rule("https://l.example.com/l.php?u=https%3A%2F%2Fexample.com%2Fx").needs_js
         );
-        assert!(!suggest_rule("https://docs.example/guide/intro").needs_js);
+        let s = suggest_rule("https://docs.example/guide/intro");
+        assert!(!s.needs_js);
+        assert!(s.why.is_empty());
     }
 
     #[test]
     fn a_user_name_is_written_out_and_a_password_never_is() {
         let s = suggest_rule("https://user@host.example/a/b");
         assert_eq!(
-            s.candidates,
+            joined(&s),
             [
                 "https://user@host.example/a/*",
-                "https://user@host.example/*"
+                "https://user@host.example/*",
+                "https://user@host.example/* https://user@*.host.example/*"
             ]
         );
-        assert_eq!(s.why, [WHY_USER_SECTION, WHY_USER_HOST]);
+        assert_eq!(whys(&s)[..2], [WHY_USER_SECTION, WHY_USER_HOST]);
         assert!(!s.needs_js);
         assert_eq!(
-            candidates("https://user@host.example/"),
+            candidates("https://user@host.example/")[..1],
             ["https://user@host.example/*"]
         );
         let s = suggest_rule("https://user:s3cret@host.example/a?q=1#f");
         assert_eq!(
-            s.candidates,
+            joined(&s)[..2],
             [
                 "https://user:*@host.example/a*",
                 "https://user:*@host.example/*"
             ]
         );
-        assert!(s.candidates.iter().all(|c| !c.contains("s3cret")));
+        assert!(joined(&s).iter().all(|c| !c.contains("s3cret")));
         assert_eq!(
             candidates("http://user:s3cret@localhost:3000/x/y"),
             [
@@ -409,7 +634,7 @@ mod tests {
     #[test]
     fn a_literal_asterisk_is_escaped() {
         assert_eq!(
-            candidates("https://a.example/q*"),
+            candidates("https://a.example/q*")[..2],
             ["https://a.example/q\\*", "a.example/*"]
         );
     }

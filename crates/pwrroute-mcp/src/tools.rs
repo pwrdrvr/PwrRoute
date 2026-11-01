@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use pwrroute_engine::{Opener, Rule, RulesFile, TestFailure, TestReport, suggest_rule};
+use pwrroute_engine::{Candidate, Opener, Rule, RulesFile, TestFailure, TestReport, suggest_rule};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
@@ -56,9 +56,10 @@ Every trace names who decided: a rules.json rule or rewrite (`source: rules`, `i
 With a Finicky config in charge its handlers run before rules.json's rules and its defaultBrowser takes the rest, unless rules.json says \"precedence\": \"pwrroute\": then rules.json's rules run first and its defaultBrowser takes everything else. \
 pwrroute_open dispatches a link through the router as a click would, and is recorded in Activity against this agent. \
 pwrroute_activity lists recent dispatches; its `retention` says where they are kept and for how long, each entry's `privacy` says how much of the link it keeps, `filter: \"unrouted\"` finds the links no rule chose, `filter: \"notOpened\"` the links a rule or default kept from opening (`rules.json`'s browser `\"none\"`, Don't open) or the user held, and `filter: \"held\"` only those the user held; an entry still `waiting` can be opened from PwrRoute, and `hold` says whether the user is holding links now. \
-Read the rules with pwrroute_rules_list; pwrroute_suggest_rule proposes narrow patterns for a link and what else they would catch; \
+Read the rules with pwrroute_rules_list; pwrroute_suggest_rule proposes patterns for a link, narrowest first, and what else they would catch; \
 pwrroute_rules_test runs the saved examples and tests against a proposal without writing; \
 pwrroute_rules_apply writes a JSON Merge Patch, naming the revision you read, and refuses a change that fails a saved example or test unless force is true. \
+A rule's `match` is a Finicky wildcard or a list of them, any one matching: `*` is any run of characters (`\\*` a literal one), a pattern without a scheme also matches http and https, and one without `*` must equal the whole URL. `example.com/*` is that host only and `*.example.com/*` its subdomains, never example.com itself, so a domain and all its subdomains is both: [\"example.com/*\", \"*.example.com/*\"]. \
 Links that pass through these tools stay in memory; only the examples and tests you write into rules.json are saved. \
 The first call from a new client waits while the user approves it in PwrRoute's window; \
 the window stays up while this connection is open, so after approval_pending simply call again; \
@@ -278,7 +279,7 @@ fn specs() -> Vec<Spec> {
             "pwrroute_suggest_rule",
             Permission::RulesRead,
             "Suggest a rule",
-            "Wildcard patterns that would route a link, narrowest first, whether a precise rule needs a JS config and why, and which recent links each pattern would also catch.",
+            "Ways to match a link, narrowest first: its path section, its host alone, then its parent and registrable domains with every subdomain. Each candidate's `match` goes into a rule as it is (a domain is two patterns, since `*.example.com/*` misses example.com), with what it matches and which recent links it would also catch. Also says whether a precise rule needs a JS config, and why.",
             read_only(),
         ),
         spec::<RulesApplyInput>(
@@ -639,9 +640,14 @@ fn rules_test(b: &Backends, input: RulesTestInput) -> anyhow::Result<Value> {
         .iter()
         .map(|url| {
             let s = suggest_rule(url);
+            let candidates: Vec<Value> = s
+                .candidates
+                .iter()
+                .map(|c| candidate_json(c, None))
+                .collect();
             json!({
                 "url": url,
-                "candidates": s.candidates,
+                "candidates": candidates,
                 "needsJs": s.needs_js,
                 "why": s.why,
             })
@@ -683,9 +689,24 @@ fn suggest(b: &Backends, url: &str, full: bool) -> anyhow::Result<Value> {
         .collect();
     recent.sort();
     recent.dedup();
-    let mut collisions = Vec::new();
-    for pattern in &suggestion.candidates {
-        let hits = b.tester.collisions(pattern, &recent)?;
+    let mut candidates = Vec::new();
+    for candidate in &suggestion.candidates {
+        // A rule's patterns: a recent link any one of them matches.
+        let mut caught = vec![false; recent.len()];
+        for pattern in &candidate.patterns {
+            for hit in b.tester.collisions(pattern, &recent)? {
+                // `recent` is sorted and deduplicated.
+                if let Ok(at) = recent.binary_search(&hit) {
+                    caught[at] = true;
+                }
+            }
+        }
+        let hits: Vec<String> = recent
+            .iter()
+            .zip(&caught)
+            .filter(|(_, hit)| **hit)
+            .map(|(u, _)| u.clone())
+            .collect();
         let count = hits.len();
         let urls: Vec<String> = if full {
             hits
@@ -695,16 +716,33 @@ fn suggest(b: &Backends, url: &str, full: bool) -> anyhow::Result<Value> {
             hosts.dedup();
             hosts
         };
-        collisions.push(json!({ "pattern": pattern, "count": count, "urls": urls }));
+        candidates.push(candidate_json(
+            candidate,
+            Some(json!({ "count": count, "urls": urls })),
+        ));
     }
     Ok(json!({
         "url": url,
-        "candidates": suggestion.candidates,
+        "candidates": candidates,
         "needsJs": suggestion.needs_js,
         "why": suggestion.why,
-        "collisions": collisions,
         "fullUrls": full,
     }))
+}
+
+/// One suggested way to match a link: `match` goes into a rule as it is
+/// (two patterns for a domain and its subdomains), with what else it
+/// would catch when that was asked.
+fn candidate_json(candidate: &Candidate, also_catches: Option<Value>) -> Value {
+    let mut value = json!({
+        "match": candidate.patterns,
+        "why": candidate.why,
+        "domain": candidate.domain,
+    });
+    if let Some(also) = also_catches {
+        value["alsoCatches"] = also;
+    }
+    value
 }
 
 /// Patches, validates, tests and writes. A patch that makes a saved example

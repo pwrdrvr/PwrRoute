@@ -313,7 +313,8 @@ impl TestLink {
                 let suggested = pwrroute_engine::suggest_rule(rules_url(&trace))
                     .candidates
                     .into_iter()
-                    .next();
+                    .next()
+                    .and_then(|candidate| candidate.patterns.into_iter().next());
                 self.run = Some(Run {
                     trace,
                     opener,

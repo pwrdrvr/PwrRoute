@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          /* the Add a rule sheet, as in Activity Privacy and Route Tests 2c */
+          .sheet { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); width: 560px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-popover); display: flex; flex-direction: column; }
+          .sheet-hd { padding: 16px 18px 12px; border-bottom: 1px solid var(--border-faint); }
+          .sheet-hd .help { margin-top: 4px; }
+          .sheet-bd { padding: 4px 0; }
+          .sheet-bd .field { padding: 11px 18px; }
+          .sheet-bd .field-l { width: 136px; }
+          .sheet-ft { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-faint); }
+          .sheet-ft .note { flex: 1; }
+          .pats { display: flex; flex-direction: column; gap: 5px; width: 100%; }
+          .pat { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); }
+          .pat.on { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .pat .radio { width: 13px; height: 13px; }
+          .pat code { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); }
+          .pat .why { margin-left: auto; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .pat.on .why { color: var(--accent-bright); }
+          .radio { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          .coll { width: 100%; display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+          .coll .cr { display: grid; grid-template-columns: 50px minmax(0, 1fr) 150px; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); font: 400 11px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cr:last-child { border-bottom: none; }
+          .coll .cr .t { font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .coll .cr .u { font: 500 10.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .coll .cr .d { display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; font-size: 10.5px; }
+          .coll .cr .d .bi { width: 11px; height: 11px; font-size: 6px; }
+          .coll .cap { padding: 6px 10px; background: var(--bg-panel-elevated); font: 600 10.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .coll .cap i { font-style: normal; color: var(--text-subtle); font-weight: 500; }
+
+          /* this canvas: the sheet on its own, over the dimmed window */
+          .stage { position: relative; padding: 28px 34px; background: rgba(0,0,0,0.62); }
+          .stage .sheet { position: static; transform: none; margin: 0 auto; }
+          /* the link in the head: two lines, then Show full link */
+          .lnk { margin-top: 4px; font: 500 11px/16.5px var(--font-mono); color: var(--text-secondary); overflow-wrap: anywhere; }
+          .lnk.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+          .lnk.full { max-height: 132px; overflow-y: auto; }
+          .lnk-more { margin-top: 5px; display: flex; align-items: center; gap: 8px; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+          .lnk-more a { color: var(--accent-bright); text-decoration: none; }
+          .tall { outline: 1px dashed rgba(255,138,31,0.45); outline-offset: 2px; }
+          /* Match: any link from the app, above the patterns */
+          .pat.app .ab { width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font: 700 8px/1 var(--font-mono); color: #fff; background: #5e6ad2; flex: 0 0 auto; }
+          .pat.app b { font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .pats .pat code { white-space: nowrap; }
+          .pats .pat .why { white-space: normal; text-align: right; line-height: 14px; padding-left: 10px; }
+          .pat-or { margin: 3px 0 1px; font: 600 9px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-subtle); }
+          .inp .any { margin-left: 10px; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); }
+          .swrow { display: flex; align-items: center; gap: 10px; font: 500 11.5px/1 var(--font-sans); color: var(--text-primary); }
+          .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+          /* Rule Pattern Scope: a domain choice is two patterns saved as one rule */
+          .pat .two { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+          .pat .two code + code { color: var(--text-muted); font-size: 10.5px; }
+          .pat.on .two code + code { color: var(--text-secondary); }
+          .pat .lbl { font: 600 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .hosts { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+          .hosts code { padding: 3px 6px; border-radius: 5px; font: 500 10px/1 var(--font-mono); border: 1px solid var(--border-subtle); color: var(--text-secondary); }
+          .hosts code.y { border-color: var(--accent-border); color: var(--accent-bright); }
+          .hosts code.n { text-decoration: line-through; color: var(--text-subtle); }
+          .tbl { width: 100%; border-collapse: collapse; font: 400 11.5px/1.45 var(--font-sans); color: var(--text-secondary); }
+          .tbl th, .tbl td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border-faint); vertical-align: top; }
+          .tbl th { font-weight: 600; color: var(--text-primary); }
+          .tbl code { font: 500 11px/1 var(--font-mono); color: var(--text-primary); }
+        </style>
+      </helmet>
+
+      <!-- ================= TURN 1 — Pattern scope: the domain and every subdomain ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Activity &rsaquo; Add a rule: the domain and every subdomain, as one choice</span></div>
+        <p class="dv-sub">Activity&rsquo;s Add a rule sheet (Add Rule From an App 1b) stops at the link&rsquo;s host. For <code>dash.example.com</code> there was no way to say <b>all of example.com</b> without knowing that <code>*.example.com/*</code> misses the bare <code>example.com</code>. The sheet now offers the parent domain and the registrable domain, each as one choice that saves both patterns, and previews which hosts the chosen patterns match. Any link from the app, when the record names one, still leads the list as in Add Rule From an App; it is left out here.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Before: the host is the widest choice">
+            <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span>Today: the section and the host. Nothing wider, so a rule for every <code>example.com</code> site means typing <code>*.example.com/*</code>, which misses <code>example.com</code> itself.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 10:12:40</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://dash.example.com/somefolder/page</span>?tab=billing</p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats">
+                      <div class="pat on"><span class="radio on"></span><code>dash.example.com/somefolder/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>dash.example.com/*</code><span class="why">Everything on this host.</span></div>
+</div><div class="inp mono" style="width: 100%;">dash.example.com/somefolder/*<span class="caret" style="font-size: 10px;">edit</span></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b After: the domain and every subdomain">
+            <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span>A third choice: <b>example.com and every subdomain</b>, drawn as the two patterns it saves. The host choice now says it stops at the host. Under the field, <b>Matches</b> previews which hosts the chosen patterns take, by the same matcher routing uses: the link&rsquo;s host, each domain offered and its <code>www</code>, struck through when they miss.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 10:12:40</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://dash.example.com/somefolder/page</span>?tab=billing</p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats">
+                      <div class="pat on"><span class="radio on"></span><code>dash.example.com/somefolder/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>dash.example.com/*</code><span class="why">Everything on this host, not its subdomains.</span></div>
+                      <div class="pat"><span class="radio"></span><span class="two"><code>example.com/*</code><code>*.example.com/*</code></span><span class="why">example.com and every subdomain.</span></div>
+</div><div class="inp mono" style="width: 100%;">dash.example.com/somefolder/*<span class="caret" style="font-size: 10px;">edit</span></div><div class="hosts">Matches <code class="y">dash.example.com</code><code class="n">example.com</code><code class="n">www.example.com</code></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c After: the domain chosen">
+            <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span>Chosen, the field holds both patterns, a space between them (a URL never has a raw space, so a space always separates patterns). Matches lights the bare domain and the subdomains; Also catches lists recent links on either. Add saves <code>"match": ["example.com/*", "*.example.com/*"]</code>.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 10:12:40</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://dash.example.com/somefolder/page</span>?tab=billing</p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats">
+                      <div class="pat"><span class="radio"></span><code>dash.example.com/somefolder/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>dash.example.com/*</code><span class="why">Everything on this host, not its subdomains.</span></div>
+                      <div class="pat on"><span class="radio on"></span><span class="two"><code>example.com/*</code><code>*.example.com/*</code></span><span class="why">example.com and every subdomain.</span></div>
+</div><div class="inp mono" style="width: 100%;">example.com/* *.example.com/*<span class="caret" style="font-size: 10px;">edit</span></div><div class="hosts">Matches <code class="y">dash.example.com</code><code class="y">example.com</code><code class="y">www.example.com</code></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">Would also catch these 2 recent links <i>&middot; all unrouted, nothing changes hands</i></div><div class="cr"><span class="t">09:58</span><span class="u">https://example.com/pricing</span><span class="d"><span class="bi">Ed</span>Microsoft Edge <i style="font-style:normal;color:var(--text-subtle)">default</i></span></div><div class="cr"><span class="t">09:41</span><span class="u">https://api.example.com/v1/docs</span><span class="d"><span class="bi">Ed</span>Microsoft Edge <i style="font-style:normal;color:var(--text-subtle)">default</i></span></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1d" data-screen-label="1d A deep host and a public suffix">
+            <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span>A deep host gets its parent and its registrable domain, never more: <code>eu.api.example.co.uk</code> offers <code>api.example.co.uk</code> and <code>example.co.uk</code>, never <code>co.uk</code> or <code>uk</code>. The public suffix list decides, private suffixes included, so <code>someone.github.io</code> stops at itself.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 10:12:40</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://eu.api.example.co.uk/v2/status</span></p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats">
+                      <div class="pat on"><span class="radio on"></span><code>eu.api.example.co.uk/v2/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>eu.api.example.co.uk/*</code><span class="why">Everything on this host, not its subdomains.</span></div>
+                      <div class="pat"><span class="radio"></span><span class="two"><code>api.example.co.uk/*</code><code>*.api.example.co.uk/*</code></span><span class="why">api.example.co.uk and every subdomain.</span></div>
+                      <div class="pat"><span class="radio"></span><span class="two"><code>example.co.uk/*</code><code>*.example.co.uk/*</code></span><span class="why">example.co.uk and every subdomain.</span></div>
+</div><div class="inp mono" style="width: 100%;">eu.api.example.co.uk/v2/*<span class="caret" style="font-size: 10px;">edit</span></div><div class="hosts">Matches <code class="y">eu.api.example.co.uk</code><code class="n">api.example.co.uk</code><code class="n">example.co.uk</code><code class="n">www.example.co.uk</code></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1e" data-screen-label="1e A host that is its own domain; no domain for an IP">
+            <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><span>When the host is the registrable domain the choice is that host and every subdomain (<code>github.com</code> with <code>gist.github.com</code>). An IP address, <code>localhost</code> or another one-label host has no domain to widen to, so the sheet is as before.</span></div>
+            <div class="dv-card stage" style="width: 640px;">
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From Activity &middot; 10:12:40</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk clamp"><span style="color: var(--text-primary);">https://example.org/team/notes</span></p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats">
+                      <div class="pat on"><span class="radio on"></span><code>example.org/team/*</code><span class="why">Everything under the first part of the path.</span></div>
+                      <div class="pat"><span class="radio"></span><code>example.org/*</code><span class="why">Everything on this host, not its subdomains.</span></div>
+                      <div class="pat"><span class="radio"></span><span class="two"><code>example.org/*</code><code>*.example.org/*</code></span><span class="why">example.org and every subdomain.</span></div>
+</div><div class="inp mono" style="width: 100%;">example.org/team/*<span class="caret" style="font-size: 10px;">edit</span></div><div class="hosts">Matches <code class="y">example.org</code><code class="n">www.example.org</code></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ed</span>Microsoft Edge<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Why two patterns, not a new one.</b> Finicky&rsquo;s <code>*</code> matches any run of characters and a pattern that starts with it gets no scheme, so <code>*.example.com/*</code> needs a dot before <code>example</code> and never matches <code>https://example.com/</code>; <code>*example.com/*</code> would, but also matches <code>notexample.com</code>. A <code>rules.json</code> rule&rsquo;s <code>match</code> is already a string or a list, which the Go host and Finicky read as &ldquo;any of these&rdquo;, so the domain choice is the list <code>["example.com/*", "*.example.com/*"]</code>: the importer&rsquo;s existing form, readable by every older build, no new syntax.</p>
+        <table class="tbl" style="max-width: 820px; margin: 8px 0 0;">
+          <tr><th>Pattern</th><th><code>example.com</code></th><th><code>dash.example.com</code></th><th><code>notexample.com</code></th></tr>
+          <tr><td><code>example.com/*</code></td><td>yes</td><td>no</td><td>no</td></tr>
+          <tr><td><code>*.example.com/*</code></td><td>no</td><td>yes</td><td>no</td></tr>
+          <tr><td><code>*example.com/*</code></td><td>yes</td><td>yes</td><td>yes &mdash; never offered</td></tr>
+          <tr><td>both of the first two</td><td>yes</td><td>yes</td><td>no &mdash; the domain choice</td></tr>
+        </table>
+        <p class="dv-next">Try next: &ldquo;the domain choice as a chip in the rule editor&rsquo;s Suggested row&rdquo; &middot; &ldquo;Matches with the recent hosts it would take&rdquo;</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

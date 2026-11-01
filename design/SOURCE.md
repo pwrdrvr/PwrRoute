@@ -332,6 +332,7 @@ the project and re-export here.
 | `PwrRoute Settings Sections.dc.html` | The Settings nav in groups with child rows for cloud folders and config files (turn 1: Config Files, Short Links, Cloud Sync); the Finicky config across machines (turn 2: on by default, Use it on this Mac, a config that is not syncing) |
 | `PwrRoute Appearance and Themes.dc.html` | Settings › General's Appearance card: Theme (System, Dark, Light) and what System follows, the pane in Light, the Dark theme and Light theme pickers with swatches, the pair offer, and how the setting behaves; every color theme on the contrast specimen, and each theme's Increase Contrast variant |
 | `PwrRoute Short Links.dc.html` | Design proposal for rules.json short-link controls: Built-in / Custom / Off, explicit Finicky ownership, validation and save conflicts, and the established original/destination trace |
+| `PwrRoute Rule Pattern Scope.dc.html` | Activity's Add a rule sheet past the host: the parent and registrable domain, each with every subdomain as one choice saved as two patterns, Matches lighting the nearby hosts the patterns take, a public suffix never offered, and why `*.example.com/*` alone misses `example.com` |
 | `pwrroute.css` | Shared tokens and chrome for every canvas: family title strip, rail, cards, chips, controls |
 | `pwrroute-themes.css` | The color themes' tokens (PWR-23), each with its Increase Contrast variant, as `.th-<id>` classes; linked after `pwrroute.css` |
 | `support.js` | Claude Design's Design Components runtime, as written by the project. Not ours; do not edit |
@@ -363,3 +364,12 @@ project. See PwrGit's `design/SOURCE.md` for the same workflow in more detail.
 2. Write each file here under its project name. Check sizes against the
    listing.
 3. Update the "Exported" date above and commit.
+
+## Rule pattern scope — 2026-11-01
+
+`PwrRoute Rule Pattern Scope.dc.html` added: Activity's Add a rule sheet
+offers a link's parent and registrable domain, each with every subdomain,
+as one choice that saves `["d/*", "*.d/*"]`, and previews under the field
+which nearby hosts the patterns take. Written to the project from this
+file, then compared by size with the project listing. No other canvas,
+`pwrroute.css` or `support.js` changed.
