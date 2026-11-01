@@ -8,7 +8,10 @@
 //! The sheet takes one dispatch record, offers `suggest_rule`'s patterns
 //! narrowest first, and for the chosen pattern lists the recent links in
 //! memory it would also catch (`Engine::collisions`, through the window's
-//! probe). Browser and profile come from the browsers detected at launch,
+//! probe). A domain choice is two patterns (the domain and `*.` it), which
+//! the field holds with a space between them and the rule saves as its
+//! `match` list; under the field, Matches says which nearby hosts the
+//! patterns take (design: Rule Pattern Scope). Browser and profile come from the browsers detected at launch,
 //! and the rule's privacy from the same two controls the editor has. Add
 //! appends the rule to `rules.json` with the link as its first example and
 //! runs the tests; a record kept as host only or nothing has no URL to
@@ -163,8 +166,9 @@ pub struct AddRule {
     /// Why no rule can be written for this record: it was kept as host
     /// only or nothing.
     pub disabled: Option<String>,
-    /// `suggest_rule`'s patterns, narrowest first, each with its why.
-    pub candidates: Vec<(String, &'static str)>,
+    /// `suggest_rule`'s candidates, narrowest first: each a rule's
+    /// patterns and what they match.
+    pub candidates: Vec<engine::Candidate>,
     /// The reasons a precise rule needs a JS config, when it does.
     pub needs_js: Vec<&'static str>,
     /// Which candidate is selected, when the pattern is one of them.
@@ -172,6 +176,10 @@ pub struct AddRule {
     pub pattern: TextField,
     pub collisions: Vec<Collision>,
     pub collision_error: Option<String>,
+    /// Matches: hosts near the link's (its own, each domain offered and
+    /// its `www`), each with whether the patterns take the link on that
+    /// host. Empty when the sheet offers no domain.
+    pub hosts: Vec<(String, bool)>,
     /// `rules.json`'s rules run before the config's handlers: no config is
     /// in charge, or `"precedence": "pwrroute"`. Decides which collisions
     /// change hands.
@@ -232,21 +240,13 @@ impl AddRule {
         let url = matched_url(record).to_owned();
         let query_summary = query_summary(&url);
         let suggestion = suggest_rule(&url);
-        let candidates: Vec<(String, &'static str)> = suggestion
-            .candidates
-            .iter()
-            .cloned()
-            .zip(suggestion.why.iter().copied())
-            .collect();
+        let candidates = suggestion.candidates;
         let needs_js: Vec<&'static str> = if suggestion.needs_js {
-            suggestion.why[candidates.len()..].to_vec()
+            suggestion.why
         } else {
             Vec::new()
         };
-        let first = candidates
-            .first()
-            .map(|(p, _)| p.clone())
-            .unwrap_or_default();
+        let first = candidates.first().map(field_text).unwrap_or_default();
         Self {
             key: RowKey {
                 id: record.id,
@@ -263,6 +263,7 @@ impl AddRule {
             pattern: TextField::new(first, cx),
             collisions: Vec::new(),
             collision_error: None,
+            hosts: Vec::new(),
             rules_first: true,
             config: None,
             only_from: false,
@@ -368,10 +369,10 @@ impl AddRule {
     /// One of the suggested patterns. Leaving "Any link from <app>" puts
     /// Sent from back where it was.
     pub fn choose_candidate(&mut self, index: usize) {
-        let Some((pattern, _)) = self.candidates.get(index) else {
+        let Some(candidate) = self.candidates.get(index) else {
             return;
         };
-        self.pattern.set(pattern.clone());
+        self.pattern.set(field_text(candidate));
         self.selected = Some(index);
         if self.any_from {
             self.any_from = false;
@@ -389,8 +390,8 @@ impl AddRule {
             self.any_from = false;
             self.only_from = false;
             match self.candidates.first() {
-                Some((pattern, _)) => {
-                    self.pattern.set(pattern.clone());
+                Some(candidate) => {
+                    self.pattern.set(field_text(candidate));
                     self.selected = Some(0);
                 }
                 None => {
@@ -425,7 +426,11 @@ impl AddRule {
     /// After a keystroke in the pattern field: which choice it is now.
     fn pattern_typed(&mut self) {
         let typed = self.pattern.text.trim().to_owned();
-        self.selected = self.candidates.iter().position(|(p, _)| *p == typed);
+        let patterns = self.patterns();
+        self.selected = self
+            .candidates
+            .iter()
+            .position(|candidate| candidate.patterns == patterns);
         let any_from = typed == ANY_LINK && self.only_from && self.from.is_some();
         // Entering it by hand: Sent from was already on.
         if any_from && !self.any_from {
@@ -435,13 +440,58 @@ impl AddRule {
         self.problem = None;
     }
 
+    /// The field's patterns: a space separates them, since a URL never
+    /// holds a raw space.
+    pub fn patterns(&self) -> Vec<String> {
+        self.pattern
+            .text
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The hosts Matches previews: the link's own, each domain the sheet
+    /// offers and that domain's `www`, as the link on each host. None when
+    /// no domain is offered.
+    fn nearby_hosts(&self) -> Vec<(String, String)> {
+        let Ok(link) = url::Url::parse(&self.url) else {
+            return Vec::new();
+        };
+        let Some(own) = link.host_str() else {
+            return Vec::new();
+        };
+        let domains: Vec<&str> = self
+            .candidates
+            .iter()
+            .filter_map(|c| c.domain.as_deref())
+            .collect();
+        let Some(widest) = domains.last() else {
+            return Vec::new();
+        };
+        let www = format!("www.{widest}");
+        let mut hosts: Vec<&str> = vec![own];
+        for host in domains.iter().copied().chain([www.as_str()]) {
+            if !hosts.contains(&host) {
+                hosts.push(host);
+            }
+        }
+        hosts
+            .into_iter()
+            .filter_map(|host| {
+                let mut moved = link.clone();
+                moved.set_host(Some(host)).ok()?;
+                Some((host.to_owned(), moved.to_string()))
+            })
+            .collect()
+    }
+
     /// The rule the sheet would add, with the link as its example. A rule
     /// that requires the sending app gets no example, since examples run
     /// from no app: the link goes in as a test instead ([`AddRule::test`]).
     /// `None` while it has no pattern or browser.
     pub fn rule(&self) -> Option<engine::Rule> {
-        let pattern = self.pattern.text.trim();
-        if pattern.is_empty() || self.browser.trim().is_empty() || self.disabled.is_some() {
+        let patterns = self.patterns();
+        if patterns.is_empty() || self.browser.trim().is_empty() || self.disabled.is_some() {
             return None;
         }
         let opener = match self.sender_spec() {
@@ -461,7 +511,7 @@ impl AddRule {
             Vec::new()
         };
         Some(engine::Rule {
-            patterns: vec![pattern.to_owned()],
+            patterns,
             browser: self.browser.trim().to_owned(),
             profile: self.profile.trim().to_owned(),
             opener,
@@ -606,6 +656,12 @@ impl AddRule {
             format!("{head} \u{00b7} {}", parts.join("; "))
         }
     }
+}
+
+/// A candidate as the pattern field holds it: its patterns, a space
+/// between them.
+fn field_text(candidate: &engine::Candidate) -> String {
+    candidate.patterns.join(" ")
 }
 
 /// The pattern of "Any link from <app>": Finicky's wildcard for every link.
@@ -952,9 +1008,33 @@ impl PwrRoute {
     fn find_collisions(&mut self, sheet: &mut AddRule, cx: &App) {
         sheet.collisions.clear();
         sheet.collision_error = None;
-        let pattern = sheet.pattern.text.trim().to_owned();
-        if pattern.is_empty() || sheet.disabled.is_some() {
+        sheet.hosts.clear();
+        let patterns = sheet.patterns();
+        if patterns.is_empty() || sheet.disabled.is_some() {
             return;
+        }
+        // Any one of the rule's patterns matching is a match.
+        let mut caught = |urls: &[&str]| -> Result<Vec<bool>, String> {
+            let mut hit = vec![false; urls.len()];
+            for pattern in &patterns {
+                for url in self.probe.collisions(pattern, urls)? {
+                    for (at, candidate) in urls.iter().enumerate() {
+                        if *candidate == url {
+                            hit[at] = true;
+                        }
+                    }
+                }
+            }
+            Ok(hit)
+        };
+        let nearby = sheet.nearby_hosts();
+        let links: Vec<&str> = nearby.iter().map(|(_, link)| link.as_str()).collect();
+        if let Ok(hits) = caught(&links) {
+            sheet.hosts = nearby
+                .iter()
+                .zip(hits)
+                .map(|((host, _), hit)| (host.clone(), hit))
+                .collect();
         }
         let Some(feed) = activity::feed(cx) else {
             return;
@@ -974,12 +1054,13 @@ impl PwrRoute {
             .cloned()
             .collect();
         let urls: Vec<&str> = records.iter().map(matched_url).collect();
-        match self.probe.collisions(&pattern, &urls) {
+        match caught(&urls) {
             Ok(hits) => {
                 sheet.collisions = records
                     .iter()
-                    .filter(|r| hits.iter().any(|hit| hit == matched_url(r)))
-                    .map(|r| Collision {
+                    .zip(hits)
+                    .filter(|(_, hit)| *hit)
+                    .map(|(r, _)| Collision {
                         time: clock(r.received_at),
                         url: matched_url(r).to_owned(),
                         opened: opened_label(r),
@@ -1451,7 +1532,7 @@ fn choice_row(
     selector: String,
     selected: bool,
     chosen: Div,
-    why: &'static str,
+    why: impl Into<SharedString>,
 ) -> Stateful<Div> {
     let radio = div()
         .flex_none()
@@ -1519,33 +1600,100 @@ const WHY_MIN: f32 = 110.0;
 /// field under the choices.
 const PATTERN_FITS: usize = 24;
 
-/// One suggested pattern.
+/// One suggested candidate: its pattern, or a domain's two patterns on two
+/// lines, the subdomains' muted (design: Rule Pattern Scope 1b).
 fn candidate(
     index: usize,
-    pattern: &str,
-    why: &'static str,
+    candidate: &engine::Candidate,
     selected: bool,
     cx: &mut Context<'_, PwrRoute>,
 ) -> Stateful<Div> {
+    let line = |pattern: &str, size: f32, color| {
+        one_line(
+            pattern.to_owned(),
+            theme::mono_family(500.0),
+            500.0,
+            size,
+            size,
+            color,
+        )
+    };
+    let mut chosen = div().flex().flex_col().gap(px(4.0));
+    for (at, pattern) in candidate.patterns.iter().enumerate() {
+        chosen = chosen.child(if at == 0 {
+            line(pattern, 11.5, theme::text_primary())
+        } else if selected {
+            line(pattern, 10.5, theme::text_secondary())
+        } else {
+            line(pattern, 10.5, theme::text_muted())
+        });
+    }
+    let whole = candidate.patterns.join(" ");
     choice_row(
         ElementId::NamedInteger("add-rule-candidate".into(), index as u64),
         format!("add-rule-candidate-{index}"),
         selected,
-        div().child(one_line(
-            pattern.to_owned(),
-            theme::mono_family(500.0),
-            500.0,
-            11.5,
-            11.5,
-            theme::text_primary(),
-        )),
-        why,
+        chosen,
+        candidate.why.clone(),
     )
-    .when(pattern.chars().count() > PATTERN_FITS, |row| {
-        row.tooltip(crate::overview::tip(pattern.to_owned(), None))
-    })
+    .when(
+        candidate
+            .patterns
+            .iter()
+            .any(|p| p.chars().count() > PATTERN_FITS),
+        |row| row.tooltip(crate::overview::tip(whole, None)),
+    )
     .map(crate::accessibility::clickable)
     .on_click(cx.listener(move |this, _, _, cx| this.pick_candidate(index, cx)))
+}
+
+/// Matches: the hosts near the link's, lit where the patterns take the
+/// link on that host and struck through where they miss (design: Rule
+/// Pattern Scope 1b).
+fn matched_hosts(sheet: &AddRule) -> Option<Div> {
+    if sheet.hosts.is_empty() {
+        return None;
+    }
+    let row = div()
+        .debug_selector(|| "add-rule-hosts".into())
+        .mt(px(6.0))
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(5.0))
+        .child(text("Matches", 10.5, 500.0, theme::text_subtle()));
+    Some(
+        sheet
+            .hosts
+            .iter()
+            .enumerate()
+            .fold(row, |row, (at, (host, hit))| {
+                let chip = div()
+                    .debug_selector(move || {
+                        format!("add-rule-host-{at}-{}", if *hit { "hit" } else { "miss" })
+                    })
+                    .py(px(3.0))
+                    .px(px(6.0))
+                    .rounded(px(5.0))
+                    .border_1()
+                    .border_color(if *hit {
+                        theme::accent_border()
+                    } else {
+                        theme::border_subtle()
+                    })
+                    .child(mono(
+                        host.clone(),
+                        10.0,
+                        500.0,
+                        if *hit {
+                            theme::accent_bright()
+                        } else {
+                            theme::text_subtle()
+                        },
+                    ));
+                row.child(if *hit { chip } else { chip.line_through() })
+            }),
+    )
 }
 
 /// `.pat.app`: "Any link from <app>", above the patterns (design: Add Rule
@@ -1911,14 +2059,8 @@ fn sheet_body(
 ) -> Vec<AnyElement> {
     let candidates = sheet.candidates.iter().enumerate().fold(
         div().flex().flex_col().gap(px(5.0)),
-        |list, (index, (pattern, why))| {
-            list.child(candidate(
-                index,
-                pattern,
-                why,
-                sheet.selected == Some(index),
-                cx,
-            ))
+        |list, (index, choice)| {
+            list.child(candidate(index, choice, sheet.selected == Some(index), cx))
         },
     );
     let any_from = any_from_choice(sheet, cx);
@@ -1947,7 +2089,10 @@ fn sheet_body(
         field(
             "Match",
             Some(sub),
-            div().child(choices).child(pattern_field(sheet, window, cx)),
+            div()
+                .child(choices)
+                .child(pattern_field(sheet, window, cx))
+                .children(matched_hosts(sheet)),
         )
         .into_any_element(),
     );
@@ -2395,12 +2540,12 @@ mod tests {
             )
         );
         assert_eq!(
-            sheet
-                .candidates
-                .iter()
-                .map(|(p, _)| p.as_str())
-                .collect::<Vec<_>>(),
-            ["app.metrics.example/dashboard/*", "app.metrics.example/*"]
+            sheet.candidates.iter().map(field_text).collect::<Vec<_>>(),
+            [
+                "app.metrics.example/dashboard/*",
+                "app.metrics.example/*",
+                "metrics.example/* *.metrics.example/*"
+            ]
         );
         assert!(sheet.needs_js.is_empty());
         assert_eq!(sheet.selected, Some(0));
@@ -2647,7 +2792,8 @@ mod tests {
             sheet
                 .candidates
                 .iter()
-                .all(|(p, _)| p.starts_with("github.com/")),
+                .flat_map(|c| &c.patterns)
+                .all(|p| p.starts_with("github.com/") || p.starts_with("*.github.com/")),
             "{:?}",
             sheet.candidates
         );

@@ -185,7 +185,7 @@ The tools:
 | `pwrroute_browsers` | Reader | Installed browsers, their profiles, and whether PwrRoute is the OS default. |
 | `pwrroute_rules_list` | Reader | `rules.json` as written, with the revision a write must name. |
 | `pwrroute_rules_test` | Reader | Runs the examples and tests saved in `rules.json`, as they are or against a proposal: a whole file, or one extra handler with the links it must route. Writes nothing. |
-| `pwrroute_suggest_rule` | Reader | Wildcard patterns that would route a link, narrowest first, whether a precise rule needs a JS config, and which recent links each pattern would also catch. |
+| `pwrroute_suggest_rule` | Reader | Ways to match a link, narrowest first (its path section, its host, then its domains with every subdomain, as a rule's `match` list), whether a precise rule needs a JS config, and which recent links each would also catch. |
 | `pwrroute_activity` | Reader | Recent dispatches, newest first. `filter` finds the `unrouted`, `failed`, `rewritten` or `private` ones; `retention` says where they are kept and for how long; each entry's `privacy` says how much of the link it keeps. Readers see hosts only. `source: "journal"` reads the on-disk journal, when it is on, for Editors. |
 | `pwrroute_open` | Opener | Dispatches a link through the router, as a click would, recorded in Activity against the agent. |
 | `pwrroute_rules_apply` | Editor | Writes a JSON Merge Patch to `rules.json`, naming the revision read. It runs the saved examples and tests first and refuses, with the failures, a change that makes one fail, unless `force` is true. |

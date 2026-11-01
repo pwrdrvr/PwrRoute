@@ -56,8 +56,12 @@ async fn rules_test_runs_the_saved_file_or_a_proposal_without_writing() {
     let url = &proposed["urls"][0];
     assert_eq!(url["url"], "https://wiki.example.org/12345/x");
     assert_eq!(url["needsJs"], true, "an id in the path");
-    assert_eq!(url["candidates"][0], "wiki.example.org/12345/*");
-    assert!(url["why"].as_array().unwrap().len() >= 3);
+    assert_eq!(
+        url["candidates"][0]["match"],
+        json!(["wiki.example.org/12345/*"])
+    );
+    assert!(url["candidates"][0].get("alsoCatches").is_none());
+    assert_eq!(url["why"].as_array().unwrap().len(), 1, "{url}");
     assert_eq!(h.rules.read_revision(), "1", "nothing was written");
 
     // A whole proposed file replaces the saved one for the run.
@@ -94,6 +98,9 @@ async fn suggest_rule_names_patterns_and_what_else_they_catch() {
     h.router
         .record("https://app.metrics.example/settings", "Mail")
         .unwrap();
+    h.router
+        .record("https://metrics.example/status", "Mail")
+        .unwrap();
     // One kept as host only: it cannot be matched, so it is not offered.
     h.router
         .record("https://bank.example.org/account?token=1", "Mail")
@@ -104,20 +111,28 @@ async fn suggest_rule_names_patterns_and_what_else_they_catch() {
     assert_eq!(result.is_error, Some(false), "{}", text(&result));
     let rendered = text(&result);
     let body = result.structured_content.unwrap();
+    let candidates = body["candidates"].as_array().unwrap();
+    let matches: Vec<&Value> = candidates.iter().map(|c| &c["match"]).collect();
     assert_eq!(
-        body["candidates"],
-        json!(["app.metrics.example/dashboard/*", "app.metrics.example/*"])
+        matches,
+        [
+            &json!(["app.metrics.example/dashboard/*"]),
+            &json!(["app.metrics.example/*"]),
+            // The domain and every subdomain: two patterns, one rule.
+            &json!(["metrics.example/*", "*.metrics.example/*"]),
+        ]
     );
+    assert_eq!(candidates[2]["domain"], "metrics.example");
     assert_eq!(body["needsJs"], false);
     assert_eq!(body["fullUrls"], true);
-    let collisions = body["collisions"].as_array().unwrap();
-    assert_eq!(collisions[0]["pattern"], "app.metrics.example/dashboard/*");
-    assert_eq!(collisions[0]["count"], 1);
+    assert_eq!(candidates[0]["alsoCatches"]["count"], 1);
     assert_eq!(
-        collisions[0]["urls"],
+        candidates[0]["alsoCatches"]["urls"],
         json!(["https://app.metrics.example/dashboard/9f2e/x"])
     );
-    assert_eq!(collisions[1]["count"], 2, "{body}");
+    assert_eq!(candidates[1]["alsoCatches"]["count"], 2, "{body}");
+    // The bare domain too, which `*.metrics.example/*` alone would miss.
+    assert_eq!(candidates[2]["alsoCatches"]["count"], 3, "{body}");
     assert!(
         !rendered.contains("token=1"),
         "a host-only record stays out"

@@ -82,7 +82,7 @@ pub use rules::{
     RulesFile, RulesOptions, app_type_of, is_dont_open,
 };
 pub use shortlinks::{DEFAULT_SHORTENERS, Link, Method, Network, Reply, ShortLinks};
-pub use suggest::{Suggestion, suggest_rule};
+pub use suggest::{Candidate, Suggestion, suggest_rule};
 pub use trace::{Matcher, Source, Stage, Step, Trace};
 pub use verify::{TestFailure, TestReport, TestSource};
 

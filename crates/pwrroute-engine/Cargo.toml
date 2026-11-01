@@ -24,6 +24,9 @@ serde_json = { workspace = true }
 rquickjs = { version = "0.14", features = ["loader"] }
 oxc = { version = "0.154", features = ["transformer", "codegen", "semantic"] }
 url = "2"
+# The public suffix list, compiled in: a rule suggestion widens a host to its
+# registrable domain and never to a suffix (`co.uk`, `github.io`).
+psl = "2.1.245"
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"], optional = true }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 

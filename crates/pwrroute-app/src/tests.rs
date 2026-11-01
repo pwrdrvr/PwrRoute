@@ -2122,6 +2122,112 @@ fn the_add_rule_sheet_folds_a_long_link(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A link on a subdomain (design: Rule Pattern Scope 1b, 1c): the sheet
+/// offers the registrable domain with every subdomain as one choice, which
+/// fills the field with both patterns, saves them as one rule's `match`,
+/// catches recent links on the bare domain and its subdomains but not a
+/// look-alike, and lights the hosts it takes under the field.
+#[gpui_kit::test]
+fn the_add_rule_sheet_offers_the_domain_and_every_subdomain(cx: &mut TestAppContext) {
+    let dir = scratch("add-rule-domain");
+    let records = fixtures::activity();
+    let mut feed = records.clone();
+    for (id, url) in [
+        (95, "https://example.com/pricing"),
+        (96, "https://api.example.com/v1/docs"),
+        (97, "https://notexample.com/"),
+        (98, "https://dash.example.com/somefolder/page?tab=billing"),
+    ] {
+        feed.push(record_like(
+            &records[2],
+            id,
+            url,
+            Matched::Default { owner: None },
+        ));
+    }
+    cx.update(|cx| activity::install_feed(Feed::from_records(feed), cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    view.update_in(cx, |app, window, cx| {
+        app.add_rule(
+            RowKey {
+                id: DispatchId(98),
+                journaled: false,
+            },
+            window,
+            cx,
+        );
+    });
+    draw(cx);
+    let state = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let sheet = app.actions.sheet.as_ref().expect("the sheet is open");
+            (
+                sheet.pattern.text.clone(),
+                sheet.selected,
+                sheet
+                    .collisions
+                    .iter()
+                    .map(|c| c.url.clone())
+                    .collect::<Vec<_>>(),
+                sheet.hosts.clone(),
+            )
+        })
+    };
+    let hosts = |lit: [bool; 3]| {
+        ["dash.example.com", "example.com", "www.example.com"]
+            .into_iter()
+            .zip(lit)
+            .map(|(host, hit)| (host.to_owned(), hit))
+            .collect::<Vec<_>>()
+    };
+    let (pattern, selected, collisions, lit) = state(cx);
+    assert_eq!(pattern, "dash.example.com/somefolder/*");
+    assert_eq!(selected, Some(0));
+    assert!(collisions.is_empty(), "{collisions:?}");
+    assert_eq!(lit, hosts([true, false, false]));
+    assert!(cx.debug_bounds("add-rule-hosts").is_some());
+    assert!(cx.debug_bounds("add-rule-host-1-miss").is_some());
+
+    click(cx, "add-rule-candidate-2");
+    let (pattern, selected, collisions, lit) = state(cx);
+    assert_eq!(pattern, "example.com/* *.example.com/*");
+    assert_eq!(selected, Some(2));
+    assert_eq!(
+        collisions,
+        [
+            "https://example.com/pricing",
+            "https://api.example.com/v1/docs"
+        ]
+    );
+    assert_eq!(lit, hosts([true, true, true]));
+    assert!(cx.debug_bounds("add-rule-host-1-hit").is_some());
+    view.update(cx, |app, _| {
+        app.actions.sheet.as_mut().unwrap().browser = "Firefox".into();
+    });
+    let rule = view.read_with(cx, |app, _| {
+        app.actions.sheet.as_ref().unwrap().rule().unwrap()
+    });
+    assert_eq!(rule.patterns, ["example.com/*", "*.example.com/*"]);
+
+    // The host alone stops at the host.
+    click(cx, "add-rule-candidate-1");
+    let (pattern, _, collisions, lit) = state(cx);
+    assert_eq!(pattern, "dash.example.com/*");
+    assert!(collisions.is_empty(), "{collisions:?}");
+    assert_eq!(lit, hosts([true, false, false]));
+
+    // Typed by hand, the two patterns are the domain choice again.
+    click(cx, "add-rule-pattern");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("example.com/*  *.example.com/*");
+    draw(cx);
+    let (_, selected, collisions, _) = state(cx);
+    assert_eq!(selected, Some(2));
+    assert_eq!(collisions.len(), 2, "{collisions:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A sign-in link whose path is one segment and whose query is long: the
 /// patterns leave the query out (design: Activity Privacy and Route Tests
 /// 2c), an OAuth redirect_uri is no reason for JS, and a pattern too long
@@ -2174,21 +2280,25 @@ fn the_add_rule_sheet_keeps_long_patterns_in_their_rows(cx: &mut TestAppContext)
             sheet
                 .candidates
                 .iter()
-                .map(|(p, _)| p.clone())
+                .map(|c| c.patterns.join(" "))
                 .collect::<Vec<_>>(),
             sheet.needs_js.clone(),
         )
     });
     assert_eq!(
         candidates,
-        ["auth.example.com/authorize*", "auth.example.com/*"]
+        [
+            "auth.example.com/authorize*",
+            "auth.example.com/*",
+            "example.com/* *.example.com/*"
+        ]
     );
     assert!(needs_js.is_empty(), "{needs_js:?}");
     click(cx, "add-rule-cancel");
 
     open(99, &view, cx);
     let pattern = view.read_with(cx, |app, _| {
-        app.actions.sheet.as_ref().unwrap().candidates[0].0.clone()
+        app.actions.sheet.as_ref().unwrap().candidates[0].patterns[0].clone()
     });
     assert!(pattern.len() > 200 && !pattern.contains('?'), "{pattern}");
     let sheet = cx.debug_bounds("add-rule-sheet").expect("the sheet");
@@ -5082,6 +5192,7 @@ fn test_a_link_adds_a_rule_for_the_link(cx: &mut TestAppContext) {
     // pattern is for the URL the rules see, or the rule would never match.
     let expected = pwrroute_engine::suggest_rule("https://xcancel.com/pwrdrvr/status/1842?s=20")
         .candidates[0]
+        .patterns[0]
         .clone();
     assert!(expected.starts_with("xcancel.com/"), "{expected}");
     let (screen, selection, handler, sample, selected) = view.read_with(cx, |app, _| {
