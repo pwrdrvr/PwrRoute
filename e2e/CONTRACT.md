@@ -42,7 +42,7 @@ One request per connection, one line of JSON each way. Every answer carries
 | `{"cmd":"accessibility"}` | `active` and GPUI's last AccessKit `tree` snapshot; `tree` is null until assistive technology activates the platform adapter. |
 | `{"cmd":"key","keys":"down cmd-q"}` | Keystrokes in GPUI's syntax, dispatched to the main window with `Window::dispatch_keystroke`, followed by a `KeyUp` event, so bindings, field handlers and Return/Space activation run as for a physical key. |
 | `{"cmd":"click","region":"rail.activity"}` | A left mouse down and up at the center of a painted region, through `Window::dispatch_event`: hit testing and click handlers run as for a real click. |
-| `{"cmd":"action","name":"quit"}` | `quit` dispatches the app's `Quit` action (the menu bar's Quit, ⌘Q, Ctrl+Q). `closeWindow` closes the main window as its close button does. `showWindow` opens or raises it. |
+| `{"cmd":"action","name":"quit"}` | `quit` dispatches the app's `Quit` action (the menu bar's Quit, ⌘Q, Ctrl+Q). `closeWindow` closes the main window as its close button does (a rule draft with unsaved changes asks first, and the answer is `{"asked":true}`). `showWindow` opens or raises it. |
 | `{"cmd":"dispatches"}` | `{"dispatches":[…]}`: the router's recent `DispatchRecord`s, newest first, serialized as in `pwrroute-router` (camelCase). |
 | `{"cmd":"os"}` | Which app handles web links now: `pwrroute_os::default_browser_status()`, read-only, as `{"defaultBrowser": bool, "http": …, "https": …}`. A request of its own because on Linux it starts `xdg-mime`. |
 
@@ -84,7 +84,8 @@ in the test's artifacts records the stages and when the socket answered.
             "section": "rules", "configInCharge": false, "editing": true,
             "rules": { "rewrites": 3, "handlers": 7,
                        "selection": {"kind":"handler","index":2},
-                       "selectionEnabled": true } },
+                       "selectionEnabled": true,
+                       "unsaved": false, "asking": null } },
   "router": { "dryRun": true, "configError": null },
   "appearance": { "theme": "system", "showing": "dark",
                   "darkTheme": "tangerine-dark", "lightTheme": "tangerine-light",
@@ -110,7 +111,10 @@ screen shown (`overview`, `rules`, `test`, `activity`); every window opens on
 read-only, and `editing` that the visual rules and their editor are shown
 instead. `selection` is the selected rule, a rewrite or a handler by index,
 or `null` until one is clicked or Down selects the first (Rules opens as a
-list), and `selectionEnabled` its switch.
+list), and `selectionEnabled` its switch. `unsaved` says the editor's draft
+differs from `rules.json` (nothing reaches the file until Save), and `asking`
+is the leave prompt's question while it asks, else `null` (see "Rule
+drafts").
 
 `appearance` reports the live app preferences, including when `main` is
 `null` and no windows are open. Theme ids are Settings' persisted ids;
@@ -135,6 +139,7 @@ a strip with one chip).
 | `menuBar.file`, `.edit`, `.view`, `.window`, `.help` | `menu_bar::MenuBar`, Windows and Linux only, main window only |
 | `rail.overview`, `.rules`, `.test`, `.activity`, `.settingsHeading`, `.openSettings`, `.foot` | `chrome::nav_rail` |
 | `editor.title`, `editor.enabled` | `editor::header` |
+| `editor.pattern` | `editor::pattern_list`: the first URL pattern field |
 
 When you add, remove or reorder children of one of those divs, update its
 name list in the same change; the E2E layout tests catch a mismatch.
@@ -167,6 +172,21 @@ When the launcher lands, R1 must keep holding: `--dry-run` never reaches it.
   shows that section. Rules opens as a list with nothing selected, so the
   editor region is painted only once a rule is selected (a click, or Down),
   and on Rules only.
+
+## Rule drafts
+
+`a_rule_edit_reaches_rules_json_only_on_save` asserts (design: Rule Drafts
+1):
+
+- Typing in `editor.pattern` makes the selected rule a draft
+  (`state.main.rules.unsaved`) and leaves `rules.json` byte for byte as it
+  was.
+- Esc discards the draft.
+- `closeWindow` with a draft keeps the window and asks
+  (`state.main.rules.asking` ends "before closing the window?"), as the
+  close button does; with no draft it closes at once.
+- ⌘S (Ctrl+S off macOS) answers Save: the file has the edit and the window
+  then closes.
 
 ## Registration (disposable machines only)
 

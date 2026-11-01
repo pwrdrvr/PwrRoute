@@ -1119,7 +1119,15 @@ impl PwrRoute {
             save: None,
             added: Some(index),
         });
-        self.selection = Some(Selection::Handler(index));
+        // Add is a command, not an edit: the rule is written now rather
+        // than held as the editor's draft (design: Rule Drafts 1).
+        self.refresh(cx);
+        self.save_now(cx);
+        // A draft with unsaved changes keeps the editor; the menu's way to
+        // the new rule asks first.
+        if !self.store.draft_changed() {
+            self.selection = Some(Selection::Handler(index));
+        }
         // Beside a config the visual rules start collapsed: open them, or
         // the Rules screen shows the config's handlers without this one.
         self.visual_rules_expanded = true;
@@ -1227,7 +1235,9 @@ impl PwrRoute {
         let url = matched_url(&record).to_owned();
         match self.example_rule(&record) {
             Some(handler) => {
-                self.store.add_example(handler, &url);
+                // A command on the saved rule: it reaches the file even
+                // while the rule is the editor's draft.
+                self.store.add_saved_example(handler, &url);
                 self.actions.note = Some((
                     key,
                     format!(
@@ -1272,10 +1282,7 @@ impl PwrRoute {
 /// Add a rule's key as the window's chrome writes it: ⌘N on macOS,
 /// Ctrl+N on Windows and Linux. `PwrRoute::activity_key` handles it.
 pub fn add_rule_shortcut(cx: &App) -> &'static str {
-    match crate::chrome::current(cx) {
-        crate::chrome::Chrome::Mac => "\u{2318}N",
-        crate::chrome::Chrome::Windows | crate::chrome::Chrome::Linux => "Ctrl+N",
-    }
+    crate::chrome::secondary_key(cx, "\u{2318}N", "Ctrl+N")
 }
 
 /// `.menu`: the row's "⋯" menu (design 2b), under the button while

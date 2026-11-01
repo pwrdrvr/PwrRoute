@@ -410,7 +410,8 @@ fn first_line(error: &str) -> String {
 
 /// The screen's model as things stand.
 pub fn build(app: &PwrRoute, status: &Status, cx: &App) -> Overview {
-    let rules = app.store.edited();
+    // As the router routes: a draft's edits wait for Save.
+    let rules = app.store.routed();
     let tally = crate::activity::feed(cx)
         .map(|feed| feed.read(cx).tally(SystemTime::now()))
         .unwrap_or_default();
@@ -461,6 +462,16 @@ impl PwrRoute {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.store.draft_changed() {
+            let (browser, profile) = (browser.to_owned(), profile.to_owned());
+            self.leave_draft_then(
+                "starting a new rule",
+                move |this, window, cx| this.add_rule_for(&browser, &profile, private, window, cx),
+                window,
+                cx,
+            );
+            return;
+        }
         self.navigate(Screen::Rules, window, cx);
         if self.config.is_some() {
             self.visual_rules_expanded = true;
@@ -477,8 +488,8 @@ impl PwrRoute {
         self.add_pattern(window, cx);
         self.draft_from = Some((index, crate::editor::DraftFrom::Overview));
         // Start from offers the links but fills nothing in: with the
-        // browser set, a pattern would make the rule whole, and it would
-        // save before the person chose it.
+        // browser set, a pattern would make the rule whole before the
+        // person chose one.
         self.draft_link = Some((index, None));
     }
 

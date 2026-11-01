@@ -246,11 +246,39 @@ their own modules.
   atomic switch with the dispatch thread, so it applies to the next link
   without a restart. It gates only `yield_front_to`; the launcher's running
   browser detection and direct singleton delivery stay enabled.
+- **A rule's edits are a draft until Save (`rules_store.rs`, `editor.rs`;
+  design: Rule Drafts, which supersedes Rule Editing's "edits save on
+  change").** The store holds the selected rule (`RulesStore::hold`, kept
+  in step by `PwrRoute::follow_draft`): the editor's edits change its value
+  only, `written()` keeps the saved version (a rule never saved stays out),
+  and `needs_save` is `written()` against what the file holds, so a draft
+  never starts the debounce. Save (`save_draft`: the button, ⌘S/Ctrl+S,
+  Return in a rule's own field) writes it; Discard (`discard_draft`: the
+  button, Esc after menus and the field's selection) puts back the saved
+  rule, or takes a never-saved one out of the list, with Undo and ⌘Z until
+  the next edit. Commands on a whole rule are not draft edits: the header
+  switch and Turn off (`set_enabled`), Activity's Save as example
+  (`add_saved_example`) and Add a rule, Duplicate (which copies the saved
+  rule, then saves), moves and Delete act on the saved rule at once and
+  keep the draft. Only Add rule starts a draft with no saved version; the
+  store never holds an entry another command added and the debounce has
+  not written. Anything that would leave a changed draft (another row,
+  "‹ All rules", Add rule and the rules other screens start, Duplicate,
+  the window's close button and ⌘W) goes through
+  `PwrRoute::ask_before_leaving`: the rail's foot asks Save, Discard or
+  Keep editing (Return, Esc), and `answer_leave` goes on. The foot sits
+  under the scrolling fields, never below the fold. A reload, an import or
+  Undo import carries the draft onto the new file (`RulesStore::rebase`):
+  onto its rule, or as `Conflict::Changed` (same place, same length, same
+  neighbors) or `Removed` (kept as a rule of its own, never over another)
+  with a banner when the other writer changed or removed that rule. The Overview draws `routed()`, the rules as
+  the router has them. Quit does not ask.
 - **The Rules screen follows `rules.json`'s other writers.** The store
   (`rules_store.rs`) stamps the bytes it last read or wrote, and
   `RulesStore::check_disk` compares the file to them: changed with nothing
-  unsaved, it reads the file again (`Status::Reloaded`, "reloaded 09:41");
-  changed under unsaved edits, it keeps them, refuses the next save
+  unsaved, it reads the file again (`Status::Reloaded`, "reloaded 09:41"),
+  the draft riding on top (above); changed under unsaved edits (a command
+  the debounce has not written), it keeps them, refuses the next save
   (`Status::Changed`) and the rail foot offers Reload (drop the edits) and
   Overwrite (write them anyway). Its own saves restamp, so they are never
   a change. `PwrRoute::sync_with_disk` runs the check when the window

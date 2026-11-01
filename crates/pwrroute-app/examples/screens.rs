@@ -707,6 +707,41 @@ fn main() {
         app.select(Selection::Handler(4), cx);
         app.delete_rule(Selection::Handler(5), window, cx);
     });
+    // Rule Drafts 1b-1e: an edit is a draft until Save, problems keep
+    // Save off, leaving asks first, and Discard offers Undo. The edits are
+    // contrived and stay in the scratch store.
+    fn draft(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
+        app.select(Selection::Handler(1), cx);
+        app.store
+            .set_pattern(Selection::Handler(1), 1, "docs.example.com/*");
+        app.refresh(cx);
+        app.rebuild_rail_kept(cx);
+    }
+    shoot("app-drafts-1b-unsaved", None, &|app, window, cx| {
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        draft(app, cx);
+    });
+    shoot("app-drafts-1c-problems", None, &|app, window, cx| {
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        draft(app, cx);
+        app.store.set_browser(1, "");
+        app.refresh(cx);
+        app.rebuild_rail_kept(cx);
+    });
+    shoot("app-drafts-1d-leave", None, &|app, window, cx| {
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        draft(app, cx);
+        app.select(Selection::Handler(4), cx);
+    });
+    shoot("app-drafts-1e-discarded", None, &|app, window, cx| {
+        scratch_store(app, cx);
+        app.navigate(Screen::Rules, window, cx);
+        draft(app, cx);
+        app.discard_draft(window, cx);
+    });
     shoot("app-everything-else-menu", None, &|app, window, cx| {
         with_scan(app);
         scratch_store(app, cx);

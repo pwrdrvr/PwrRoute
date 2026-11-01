@@ -407,7 +407,15 @@ fn now(request: Request, cx: &mut App) -> Value {
             // What the window's close button does. Not `CloseWindow`: that
             // closes the active window, and a launched-under-test app is not
             // frontmost.
-            "closeWindow" => with_main_window(cx, |window, _| {
+            // A draft with unsaved changes asks first, as the button does.
+            "closeWindow" => with_main_window(cx, |window, cx| {
+                if let Some(Some(view)) = window.root::<PwrRoute>()
+                    && view.update(cx, |app, cx| {
+                        app.ask_before_leaving(crate::app::Leave::Close, cx)
+                    })
+                {
+                    return Ok(json!({ "asked": true }));
+                }
                 window.remove_window();
                 Ok(json!({}))
             }),
@@ -550,6 +558,11 @@ fn state(cx: &mut App) -> Value {
                         "handlers": app.handlers.len(),
                         "selection": app.selection.map(selection),
                         "selectionEnabled": selection_enabled(app),
+                        // The editor's draft differs from rules.json
+                        // (design: Rule Drafts 1).
+                        "unsaved": app.store.draft_changed(),
+                        // The leave prompt's question, while it asks.
+                        "asking": app.leave_question(),
                     },
                 });
             }

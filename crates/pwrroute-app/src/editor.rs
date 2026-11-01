@@ -1,15 +1,18 @@
 //! The right rail: the editor for the selected rewrite or handler.
 //!
 //! Every field writes to the store as it is typed (`PwrRoute::rail_key`),
-//! and the store writes the file after a short debounce. The design draws
+//! but the store holds the selected rule as a draft: nothing reaches
+//! `rules.json` until Save, and Discard puts back the saved rule (design:
+//! Rule Drafts 1). The foot carries Save and Discard while the draft
+//! differs, and asks before the editor moves to another rule. The design draws
 //! the handler editor (Rule Editing 1a) and the rewrite editor (2a); a draft
 //! has a chip where a saved rule has its switch, and a rule with problems
 //! shows them under the fields they belong to (5a, 5b). Open in carries
 //! "Open in a private window" and Keep (Activity Privacy 3b), and every
 //! rule has an Examples section: the URLs that must resolve to it, each with
 //! its result from the last test run, and a field that adds one. An example
-//! is the one way a link reaches `rules.json` from this rail, on Return, and
-//! the help under the field says so.
+//! is the one way a link reaches `rules.json` from this rail, on Return and
+//! then Save, and the help under the field says so.
 
 use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -20,7 +23,7 @@ use gpui_kit::{
 };
 use pwrroute_engine::{Privacy, TestSource};
 
-use crate::app::{PwrRoute, Selection};
+use crate::app::{LeaveAnswer, PwrRoute, Selection};
 use crate::e2e;
 use crate::rules_model::{Handler, KEEP_LEVELS, KINDS, Rewrite, RowBadge, Rule, kind_of};
 use crate::rules_view::{ChipTone, chip_in, example_mark, winner_label};
@@ -362,24 +365,43 @@ fn header(eyebrow: &str, title: SharedString, rule: &Rule, cx: &mut Context<'_, 
         .flex_row()
         .items_center()
         .gap(px(10.0))
+        // The title and its chip are one child: the regions are positional,
+        // and `editor.enabled` must stay the switch.
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
-                .flex_col()
-                .child(tracked(eyebrow, 9.5, 600.0, 0.14, theme::text_muted()))
+                .items_center()
+                .gap(px(10.0))
                 .child(
-                    crate::widgets::one_line(
-                        title,
-                        theme::SANS,
-                        700.0,
-                        15.0,
-                        18.0,
-                        theme::text_primary(),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(tracked(eyebrow, 9.5, 600.0, 0.14, theme::text_muted()))
+                        .child(
+                            crate::widgets::one_line(
+                                title,
+                                theme::SANS,
+                                700.0,
+                                15.0,
+                                18.0,
+                                theme::text_primary(),
+                            )
+                            .mt(px(6.0)),
+                        ),
+                )
+                // `.chip.ed`: the draft differs from its saved rule (Rule
+                // Drafts 1b).
+                .when(rule.badge == RowBadge::Unsaved, |title| {
+                    title.child(
+                        chip_in("unsaved", ChipTone::Warn)
+                            .id("editor-unsaved")
+                            .debug_selector(|| "editor-unsaved".into()),
                     )
-                    .mt(px(6.0)),
-                ),
+                }),
         )
         .child(state)
 }
@@ -445,10 +467,10 @@ fn editable(
         .w_full()
         .min_w_0()
         .child(boxed)
-        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             let taken = match field {
                 Field::Example | Field::Becomes | Field::Name => this.example_key(field, event, cx),
-                _ => this.rail_key(field, event, cx),
+                _ => this.rail_key(field, event, window, cx),
             };
             if taken {
                 cx.stop_propagation();
@@ -532,8 +554,14 @@ fn pattern_list(
     window: &Window,
     cx: &mut Context<'_, PwrRoute>,
 ) -> Vec<AnyElement> {
-    let list =
-        (0..rail.patterns.len()).fold(div().flex().flex_col().gap(px(5.0)), |list, index| {
+    // The first field is E2E's `editor.pattern` (Rule Drafts scenario).
+    let list = (0..rail.patterns.len()).fold(
+        div()
+            .on_children_prepainted(e2e::regions(&["editor.pattern"]))
+            .flex()
+            .flex_col()
+            .gap(px(5.0)),
+        |list, index| {
             let remove = remove_button(
                 format!("pattern-remove-{index}"),
                 move |this, window, cx| this.remove_pattern(index, window, cx),
@@ -552,7 +580,8 @@ fn pattern_list(
                 window,
                 cx,
             ))
-        });
+        },
+    );
     let mut rows = vec![
         label("URL patterns").into_any_element(),
         list.into_any_element(),
@@ -1368,7 +1397,7 @@ fn examples_section(
             (
                 "Examples \u{00b7} must resolve here",
                 rows,
-                "Return adds it to rules.json with the rule. Run tests checks it still \
+                "Return adds it to the rule; Save writes it to rules.json. Run tests checks it still \
                  resolves here; a rule that takes it later fails the run.",
             )
         }
@@ -1394,8 +1423,8 @@ fn examples_section(
             (
                 "Examples \u{00b7} what each becomes",
                 rows,
-                "Return adds it to rules.json with the rewrite: the URL and what it must \
-                 become. Run tests checks it on every save.",
+                "Return adds the URL and what it must become to the rewrite; Save writes them to \
+                 rules.json. Run tests checks it on every save.",
             )
         }
     };
@@ -2018,45 +2047,252 @@ fn kind_picker(
         })
 }
 
-/// `.rail-end`: delete (or discard), and where the rule stands with the
-/// file.
-fn rail_end(what: &'static str, draft: bool, note: String, cx: &mut Context<'_, PwrRoute>) -> Div {
-    let kind = if draft {
-        ButtonKind::Quiet
-    } else {
-        ButtonKind::Danger
-    };
-    div()
-        .mt_auto()
+/// Save's key as the window's chrome writes it: ⌘S on macOS, Ctrl+S on
+/// Windows and Linux. `PwrRoute::on_key_down` handles it.
+pub fn save_shortcut(cx: &App) -> &'static str {
+    crate::chrome::secondary_key(cx, "\u{2318}S", "Ctrl+S")
+}
+
+/// The ids of the rail foot's controls, for tests and Desktop E2E.
+pub const SAVE_ID: &str = "rail-save";
+pub const DISCARD_ID: &str = "rail-discard";
+pub const UNDO_DISCARD_ID: &str = "rail-undo-discard";
+pub const LEAVE_KEEP_ID: &str = "leave-keep";
+pub const LEAVE_DISCARD_ID: &str = "leave-discard";
+pub const LEAVE_SAVE_ID: &str = "leave-save";
+
+/// `.rail-end`. A rule as saved: Delete and where it stands with the file
+/// (or "Changes discarded · Undo"). A changed draft (Rule Drafts 1b, 1c,
+/// 1g): what Save would do, Discard and Save, off while it has problems.
+/// Leaving a changed draft (1d): the question, Keep editing, Discard and
+/// Save.
+fn rail_end(
+    app: &PwrRoute,
+    selection: Selection,
+    what: &'static str,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Div {
+    let frame = div()
+        .flex_none()
         .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(10.0))
         .py(px(12.0))
         .px(px(16.0))
         .border_t_1()
-        .border_color(theme::border_faint())
+        .border_color(theme::border_faint());
+    let changed = app.store.draft() == Some(selection) && app.store.draft_changed();
+    if !changed {
+        let note: AnyElement = match &app.discarded {
+            Some(_) => div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(text(
+                    "Changes discarded \u{00b7}",
+                    10.5,
+                    400.0,
+                    theme::text_subtle(),
+                ))
+                .child(
+                    div()
+                        .id(UNDO_DISCARD_ID)
+                        .debug_selector(|| UNDO_DISCARD_ID.into())
+                        .cursor_pointer()
+                        .map(|e| {
+                            crate::accessibility::named(e, gpui_kit::Role::Button, "Undo discard")
+                        })
+                        .child(text("Undo", 10.5, 600.0, theme::accent_bright()))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.undo_discard(window, cx);
+                        })),
+                )
+                .child(crate::widgets::key_cap(crate::rule_menu::undo_shortcut(cx)))
+                .into_any_element(),
+            None => crate::widgets::one_line(
+                app.store.rail_label(selection),
+                theme::SANS,
+                400.0,
+                10.5,
+                15.75,
+                theme::text_subtle(),
+            )
+            .into_any_element(),
+        };
+        return frame
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
+            .child(
+                button(what, ButtonKind::Danger, true)
+                    .id("rail-delete")
+                    .debug_selector(|| "rail-delete".into())
+                    .on_click(cx.listener(|this, _, window, cx| this.delete_selected(window, cx))),
+            )
+            .child(div().flex_1().min_w_0().flex().justify_end().child(note));
+    }
+    let problems = !app.store.draft_problems().is_empty();
+    let save_key = save_shortcut(cx);
+    if let Some(question) = app.leave_question() {
+        // `.rail-end.ask`
+        return frame
+            .flex_col()
+            .gap(px(8.0))
+            .bg(theme::warn_soft())
+            .border_color(theme::warn_text())
+            .child(
+                crate::accessibility::exposed(div(), gpui_kit::Role::Alert, &question)
+                    .id("leave-question")
+                    .debug_selector(|| "leave-question".into())
+                    .child(crate::widgets::paragraph(
+                        question.clone(),
+                        12.0,
+                        16.2,
+                        theme::text_primary(),
+                    )),
+            )
+            .children(
+                app.draft_note
+                    .clone()
+                    .map(|note| crate::widgets::paragraph(note, 10.5, 15.2, theme::danger_text())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        button("Keep editing", ButtonKind::Quiet, true)
+                            .id(LEAVE_KEEP_ID)
+                            .debug_selector(|| LEAVE_KEEP_ID.into())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.answer_leave(LeaveAnswer::KeepEditing, window, cx);
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        button("Discard", ButtonKind::Default, true)
+                            .id(LEAVE_DISCARD_ID)
+                            .debug_selector(|| LEAVE_DISCARD_ID.into())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.answer_leave(LeaveAnswer::Discard, window, cx);
+                            })),
+                    )
+                    .child(
+                        button("Save", ButtonKind::Primary, true)
+                            .id(LEAVE_SAVE_ID)
+                            .debug_selector(|| LEAVE_SAVE_ID.into())
+                            .when(problems, |save| save.opacity(theme::DISABLED))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.answer_leave(LeaveAnswer::Save, window, cx);
+                            })),
+                    ),
+            );
+    }
+    let new = app.store.draft_is_new();
+    let (why, tone) = match &app.draft_note {
+        Some(note) => (note.clone(), theme::danger_text()),
+        None if problems => (app.store.rail_label(selection), theme::danger_text()),
+        None => (app.store.rail_label(selection), theme::text_muted()),
+    };
+    frame
+        .flex_col()
+        .gap(px(8.0))
         .child(
-            button(what, kind, true)
-                .id("rail-delete")
-                .debug_selector(|| "rail-delete".into())
-                .on_click(cx.listener(|this, _, window, cx| this.delete_selected(window, cx))),
+            crate::accessibility::exposed(div(), gpui_kit::Role::Status, &why)
+                .id("rail-why")
+                .debug_selector(|| "rail-why".into())
+                .child(crate::widgets::paragraph(why.clone(), 10.5, 15.2, tone)),
         )
         .child(
             div()
-                .flex_1()
-                .min_w_0()
                 .flex()
-                .justify_end()
-                .child(crate::widgets::one_line(
-                    note,
-                    theme::SANS,
-                    400.0,
-                    10.5,
-                    15.75,
-                    theme::text_subtle(),
-                )),
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    crate::widgets::key_button(
+                        if new { "Discard draft" } else { "Discard" },
+                        "esc",
+                        ButtonKind::Default,
+                    )
+                    .id(DISCARD_ID)
+                    .debug_selector(|| DISCARD_ID.into())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.discard_draft(window, cx);
+                    })),
+                )
+                .child(div().flex_1())
+                .child(
+                    crate::widgets::key_button("Save", save_key, ButtonKind::Primary)
+                        .id(SAVE_ID)
+                        .debug_selector(|| SAVE_ID.into())
+                        .when(problems, |save| save.opacity(theme::DISABLED))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.save_draft(cx);
+                        })),
+                ),
         )
+}
+
+/// The file changed under the draft's own rule (Rule Drafts 1f): Save
+/// writes the draft over it, or the file's version can be taken instead.
+fn conflict_banner(
+    app: &PwrRoute,
+    selection: Selection,
+    cx: &mut Context<'_, PwrRoute>,
+) -> Option<Stateful<Div>> {
+    if app.store.draft() != Some(selection) || !app.store.draft_changed() {
+        return None;
+    }
+    let (noun, at) = match selection {
+        Selection::Rewrite(i) => ("Rewrite", i + 1),
+        Selection::Handler(i) => ("Rule", i + 1),
+    };
+    let (line, take) = match app.store.draft_conflict()? {
+        crate::rules_store::Conflict::Changed => (
+            format!(
+                "{noun} {at} changed in rules.json while you were editing it. Save writes your \
+                 version over the file's."
+            ),
+            "Use the file's version",
+        ),
+        crate::rules_store::Conflict::Removed => (
+            format!(
+                "This {} was removed from rules.json while you were editing it. Save adds your \
+                 version back.",
+                noun.to_lowercase()
+            ),
+            "Let it go",
+        ),
+    };
+    Some(
+        div()
+            .id("draft-conflict")
+            .debug_selector(|| "draft-conflict".into())
+            .mx(px(16.0))
+            .mt(px(12.0))
+            .py(px(9.0))
+            .px(px(11.0))
+            .rounded(px(7.0))
+            .bg(theme::warn_soft())
+            .flex()
+            .flex_col()
+            .gap(px(7.0))
+            .child(crate::widgets::paragraph(
+                line,
+                10.5,
+                15.75,
+                theme::text_primary(),
+            ))
+            .child(
+                div().flex().child(
+                    button(take, ButtonKind::Default, true)
+                        .id("draft-conflict-take")
+                        .debug_selector(|| "draft-conflict-take".into())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.discard_draft(window, cx);
+                        })),
+                ),
+            ),
+    )
 }
 
 /// Where a new rule came from and where it runs, above its fields while
@@ -2142,26 +2378,35 @@ pub fn rail(
         .flex_col()
         .border_l_1()
         .border_color(theme::border_subtle())
-        .bg(theme::bg_panel())
-        // The rail outgrows a short window now that it has Keep and
-        // Examples: scroll rather than clip the foot.
-        .overflow_y_scroll();
+        .bg(theme::bg_panel());
     let (Some(selection), Some(rail)) = (app.selection, &app.rail) else {
         return frame;
     };
-    let frame = frame.when(stacked, |frame| frame.child(back(cx)));
-    match selection {
+    // The fields outgrow a short window now that the rail has Keep and
+    // Examples: they scroll, and the foot stays in view under them, so
+    // Save, Discard and the leave prompt are never below the fold.
+    let body = div()
+        .id("editor-body")
+        .debug_selector(|| "editor-body".into())
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+        .when(stacked, |body| body.child(back(cx)));
+    let (body, foot) = match selection {
         Selection::Handler(index) => match app.handlers.get(index) {
             Some(handler) => {
                 let draft = handler.rule.badge == RowBadge::Draft;
                 let what = if draft { "New rule" } else { "Rule" };
-                frame
+                let body = body
                     .child(header(
                         &format!("{what} \u{00b7} {} of {}", index + 1, app.handlers.len()),
                         handler.title.clone(),
                         &handler.rule,
                         cx,
                     ))
+                    .children(conflict_banner(app, selection, cx))
                     .children(draft_note(app, index, draft))
                     .when(draft, |frame| {
                         frame.child(crate::start_from::section(app, index, cx))
@@ -2176,31 +2421,23 @@ pub fn rail(
                         window,
                         cx,
                     ))
-                    .child(try_section(rail, &handler.problems, window, cx))
-                    .child(rail_end(
-                        if draft {
-                            "Discard draft"
-                        } else {
-                            "Delete rule"
-                        },
-                        draft,
-                        app.store.rail_label(selection),
-                        cx,
-                    ))
+                    .child(try_section(rail, &handler.problems, window, cx));
+                (body, rail_end(app, selection, "Delete rule", cx))
             }
-            None => frame,
+            None => return frame,
         },
         Selection::Rewrite(index) => match app.rewrites.get(index) {
             Some(rewrite) => {
                 let draft = rewrite.rule.badge == RowBadge::Draft;
                 let what = if draft { "New rewrite" } else { "Rewrite" };
-                frame
+                let body = body
                     .child(header(
                         &format!("{what} \u{00b7} {} of {}", index + 1, app.rewrites.len()),
                         rewrite.title.clone(),
                         &rewrite.rule,
                         cx,
                     ))
+                    .children(conflict_banner(app, selection, cx))
                     .child(
                         section()
                             .child(section_title("Match"))
@@ -2215,21 +2452,13 @@ pub fn rail(
                         window,
                         cx,
                     ))
-                    .child(try_section(rail, &rewrite.problems, window, cx))
-                    .child(rail_end(
-                        if draft {
-                            "Discard draft"
-                        } else {
-                            "Delete rewrite"
-                        },
-                        draft,
-                        app.store.rail_label(selection),
-                        cx,
-                    ))
+                    .child(try_section(rail, &rewrite.problems, window, cx));
+                (body, rail_end(app, selection, "Delete rewrite", cx))
             }
-            None => frame,
+            None => return frame,
         },
-    }
+    };
+    frame.child(body).child(foot)
 }
 
 /// "‹ All rules": back to the list from the stacked rail, as Esc is.

@@ -131,7 +131,18 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
     });
     cx.on_action(|_: &ImportFinickyConfig, cx| crate::importer_view::prompt_for_config(cx));
     cx.on_action(|_: &CloseWindow, cx| {
-        in_front_window(cx, |window, _| window.remove_window());
+        in_front_window(cx, |window, cx| {
+            // The main window asks first while a draft has unsaved
+            // changes, as its close button does.
+            if let Some(Some(view)) = window.root::<crate::app::PwrRoute>()
+                && view.update(cx, |this, cx| {
+                    this.ask_before_leaving(crate::app::Leave::Close, cx)
+                })
+            {
+                return;
+            }
+            window.remove_window();
+        });
     });
     cx.on_action(|_: &Minimize, cx| {
         in_front_window(cx, |window, _| window.minimize_window());

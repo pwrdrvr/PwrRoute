@@ -93,6 +93,13 @@ fn saved(cx: &mut VisualTestContext, path: &Path) -> RulesFile {
     RulesFile::load(path).expect("read the rules back")
 }
 
+/// Save, from the rail's foot (design: Rule Drafts 1b): the draft goes to
+/// the file.
+fn save_rule(cx: &mut VisualTestContext) {
+    scroll_to(cx, crate::editor::SAVE_ID);
+    click(cx, crate::editor::SAVE_ID);
+}
+
 fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| {
         window.draw(cx).clear(cx);
@@ -116,7 +123,18 @@ fn scroll_to(cx: &mut VisualTestContext, selector: &'static str) {
         let bounds = cx
             .debug_bounds(selector)
             .unwrap_or_else(|| panic!("no element {selector} on screen"));
-        let height = cx.update(|window, _| window.viewport_size().height);
+        let mut height = cx.update(|window, _| window.viewport_size().height);
+        // In the editor the foot stays under the scrolling fields: an
+        // element is in view above it, not just inside the window.
+        // The foot's own controls (`editor::rail_end`) are always in view.
+        let in_foot = selector.starts_with("rail-") || selector.starts_with("leave-");
+        if let Some(body) = cx.debug_bounds("editor-body")
+            && !in_foot
+            && (body.left()..body.right()).contains(&bounds.center().x)
+            && bounds.top() >= body.top()
+        {
+            height = height.min(body.bottom());
+        }
         let below = bounds.bottom() + px(24.0) - height;
         // In view, or as far as its pane scrolls with the whole of it
         // inside the window (the last row of a pane that ends there).
@@ -778,9 +796,16 @@ fn editing_a_handler_writes_the_file(cx: &mut TestAppContext) {
         ["calendar.google.com/*", "*.google.com/*"]
     );
     assert_eq!(handler(cx).title, "calendar.google.com/*");
-    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+    // A draft until Save: the row says so and the file is as it was.
+    assert_eq!(handler(cx).rule.badge, RowBadge::Unsaved);
     // The rail still has the field focused: the rows redrew around it.
     assert!(cx.debug_bounds("pattern-0").is_some());
+    assert_eq!(
+        saved(cx, &path).rules[0].patterns,
+        ["meet.google.com/*", "*.google.com/*"]
+    );
+    save_rule(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
     assert_eq!(
         saved(cx, &path).rules[0].patterns,
         ["calendar.google.com/*", "*.google.com/*"]
@@ -799,6 +824,7 @@ fn editing_a_handler_writes_the_file(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("opener-other").is_some());
     click(cx, "opener-choice-0");
     draw(cx);
+    save_rule(cx);
     let file = saved(cx, &path);
     assert_eq!(file.rules[0].profile, "Personal");
     assert_eq!(file.rules[0].opener, ["com.tinyspeck.slackmacgap"]);
@@ -807,26 +833,188 @@ fn editing_a_handler_writes_the_file(cx: &mut TestAppContext) {
     // The row shows the app before the patterns.
     assert!(matches!(handler(cx).rule.matchers[1], Matcher::App { .. }));
 
-    // Clearing the browser is a problem: the row says so, the file keeps
-    // the saved browser, and Test a link routes by the saved version.
+    // Clearing the browser is a problem: the foot says so, Save writes
+    // nothing, and Test a link routes by the saved version.
     click(cx, "browser");
     cx.simulate_keystrokes("cmd-a backspace");
     draw(cx);
-    assert_eq!(handler(cx).rule.badge, RowBadge::NotSaved);
+    assert_eq!(handler(cx).rule.badge, RowBadge::Unsaved);
     assert_eq!(handler(cx).problems, ["Select a browser."]);
     assert_eq!(
         view.read_with(cx, |app, _| app.store.rail_label(Selection::Handler(0))),
-        "1 problem \u{00b7} not saved"
+        "1 problem \u{00b7} fix it to save"
     );
+    save_rule(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::Unsaved);
     assert_eq!(saved(cx, &path).rules[0].browser, "Google Chrome");
     assert_eq!(
         view.read_with(cx, |app, _| app.test.rules().rules[0].browser.clone()),
         "Google Chrome"
     );
+    click(cx, "browser");
     cx.simulate_input("Firefox");
+    draw(cx);
+    // Return in the field saves.
+    cx.simulate_keystrokes("enter");
     draw(cx);
     assert_eq!(handler(cx).rule.badge, RowBadge::None);
     assert_eq!(saved(cx, &path).rules[0].browser, "Firefox");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_rules_edits_are_a_draft_until_save_and_discard_undoes_them(cx: &mut TestAppContext) {
+    let dir = scratch("draft-keys");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let handler = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.handlers[0].clone());
+    // Selecting is not editing: the foot has Delete, no Save.
+    assert!(cx.debug_bounds("rail-delete").is_some());
+    assert!(cx.debug_bounds(crate::editor::SAVE_ID).is_none());
+
+    click(cx, "pattern-0");
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("calendar.google.com/*");
+    draw(cx);
+    // The draft: header chip, the rail's dot, Save and Discard.
+    assert_eq!(handler(cx).rule.badge, RowBadge::Unsaved);
+    assert!(cx.debug_bounds("editor-unsaved").is_some());
+    assert!(cx.debug_bounds("nav-rules-unsaved").is_some());
+    assert!(cx.debug_bounds(crate::editor::SAVE_ID).is_some());
+    assert!(cx.debug_bounds("rail-delete").is_none());
+    assert_eq!(saved(cx, &path).rules[0].patterns[0], "meet.google.com/*");
+
+    // Esc in the field discards (with Undo), ⌘Z puts the edit back.
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(handler(cx).patterns[0], "meet.google.com/*");
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+    assert!(cx.debug_bounds(crate::editor::UNDO_DISCARD_ID).is_some());
+    assert!(cx.debug_bounds("nav-rules-unsaved").is_none());
+    cx.simulate_keystrokes("secondary-z");
+    draw(cx);
+    assert_eq!(handler(cx).patterns[0], "calendar.google.com/*");
+    assert_eq!(handler(cx).rule.badge, RowBadge::Unsaved);
+    // The rail's fields show the draft again.
+    assert_eq!(
+        view.read_with(cx, |app, _| app.rail.as_ref().unwrap().patterns[0]
+            .text
+            .clone()),
+        "calendar.google.com/*"
+    );
+
+    // ⌘S saves from anywhere on Rules.
+    cx.simulate_keystrokes("secondary-s");
+    draw(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+    assert_eq!(
+        saved(cx, &path).rules[0].patterns[0],
+        "calendar.google.com/*"
+    );
+    assert!(cx.debug_bounds(crate::editor::SAVE_ID).is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn leaving_a_changed_draft_asks_save_or_discard_first(cx: &mut TestAppContext) {
+    let dir = scratch("draft-leave");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let edit = |cx: &mut VisualTestContext, profile: &'static str| {
+        view.update(cx, |app, cx| {
+            app.store.set_profile(0, profile);
+            app.refresh(cx);
+        });
+        draw(cx);
+    };
+    let selection = |cx: &mut VisualTestContext| view.read_with(cx, |app, _| app.selection);
+
+    // Another row: the selection stays and the foot asks.
+    edit(cx, "Home");
+    click(cx, "handler-2");
+    assert_eq!(selection(cx), Some(Selection::Handler(0)));
+    assert_eq!(
+        view.read_with(cx, |app, _| app.leave_question()),
+        Some("Save your changes to rule 1 before opening rule 3?".to_owned())
+    );
+    assert!(cx.debug_bounds("leave-question").is_some());
+    // Keep editing: nothing changes.
+    click(cx, crate::editor::LEAVE_KEEP_ID);
+    assert!(cx.debug_bounds("leave-question").is_none());
+    assert_eq!(selection(cx), Some(Selection::Handler(0)));
+    assert!(view.read_with(cx, |app, _| app.store.draft_changed()));
+
+    // Save, then go.
+    click(cx, "handler-2");
+    click(cx, crate::editor::LEAVE_SAVE_ID);
+    assert_eq!(selection(cx), Some(Selection::Handler(2)));
+    assert_eq!(saved(cx, &path).rules[0].profile, "Home");
+
+    // Discard, then go; Esc on the prompt keeps editing.
+    view.update(cx, |app, cx| app.select(Selection::Handler(0), cx));
+    edit(cx, "Travel");
+    click(cx, "handler-2");
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert!(cx.debug_bounds("leave-question").is_none());
+    assert_eq!(selection(cx), Some(Selection::Handler(0)));
+    click(cx, "handler-2");
+    click(cx, crate::editor::LEAVE_DISCARD_ID);
+    assert_eq!(selection(cx), Some(Selection::Handler(2)));
+    assert_eq!(
+        view.read_with(cx, |app, _| app.handlers[0].profile.clone()),
+        "Home"
+    );
+    assert_eq!(saved(cx, &path).rules[0].profile, "Home");
+    // Undo discard belongs to the rule it was discarded on.
+    assert!(view.read_with(cx, |app, _| app.discarded.is_none()));
+
+    // Return in a field while the prompt asks: Save, then go.
+    view.update(cx, |app, cx| app.select(Selection::Handler(0), cx));
+    edit(cx, "Field");
+    click(cx, "handler-2");
+    assert!(cx.debug_bounds("leave-question").is_some());
+    click(cx, "pattern-0");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(selection(cx), Some(Selection::Handler(2)));
+    assert_eq!(saved(cx, &path).rules[0].profile, "Field");
+
+    // A rule started elsewhere (Add rule, the Overview, Test a link) asks
+    // on Rules first; Return saves and then starts it.
+    view.update(cx, |app, cx| app.select(Selection::Handler(0), cx));
+    edit(cx, "Work 2");
+    view.update_in(cx, |app, window, cx| {
+        app.navigate(Screen::Overview, window, cx);
+        app.add_handler(window, cx);
+    });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.screen), Screen::Rules);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.leave_question()),
+        Some("Save your changes to rule 1 before starting a new rule?".to_owned())
+    );
+    view.update_in(cx, |app, window, cx| {
+        let focus = app.focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(saved(cx, &path).rules[0].profile, "Work 2");
+    assert_eq!(selection(cx), Some(Selection::Handler(7)));
+    assert!(view.read_with(cx, |app, _| app.store.draft_is_new()));
+
+    // Closing the window asks too.
+    view.update(cx, |app, cx| {
+        app.store
+            .set_pattern(Selection::Handler(7), 0, "notion.so/*");
+        app.refresh(cx);
+        assert!(app.ask_before_leaving(crate::app::Leave::Close, cx));
+    });
+    assert_eq!(
+        view.read_with(cx, |app, _| app.leave_question()),
+        Some("Save your changes to the new rule before closing the window?".to_owned())
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -860,7 +1048,13 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
     click(cx, "destination-typed");
     cx.simulate_input("Firefox");
     draw(cx);
-    assert_eq!(handler(cx).rule.badge, RowBadge::None);
+    // Still a draft, with nothing in the way of Save.
+    assert_eq!(handler(cx).rule.badge, RowBadge::Draft);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.rail_label(Selection::Handler(7))),
+        "Not in rules.json until you save it."
+    );
+    assert_eq!(saved(cx, &path).rules.len(), 7);
     let result = view.read_with(cx, |app, _| app.rail.as_ref().unwrap().try_result.clone());
     assert_eq!(
         result,
@@ -870,6 +1064,8 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
             bold: None,
         })
     );
+    save_rule(cx);
+    assert_eq!(handler(cx).rule.badge, RowBadge::None);
     let file = saved(cx, &path);
     assert_eq!(file.rules.len(), 8);
     assert_eq!(file.rules[7].patterns, ["notion.so/*"]);
@@ -888,6 +1084,8 @@ fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
     click(cx, "change-0");
     cx.simulate_input("https");
     draw(cx);
+    assert_eq!(saved(cx, &path).rewrites.len(), 3);
+    save_rule(cx);
     let file = saved(cx, &path);
     assert_eq!(file.rewrites.len(), 4);
     assert_eq!(
@@ -922,18 +1120,17 @@ fn with_nothing_to_route_by_the_pane_offers_a_first_handler(cx: &mut TestAppCont
     assert!(cx.debug_bounds("handler-0").is_some());
     // The rewrites card is empty, with its own Add.
     assert!(cx.debug_bounds("empty-add-rewrite").is_some());
-    // A draft is nothing to save; the file is written, empty, once the
-    // debounce runs.
-    assert!(saved(cx, &path).rules.is_empty());
-    assert!(path.is_file());
+    // A draft is nothing to save: no file is written for it.
+    cx.executor().advance_clock(crate::app::SAVE_DEBOUNCE);
+    cx.run_until_parked();
+    assert!(!path.is_file());
 
-    // Discarding the draft leaves two empty cards, not the blank: the file
-    // exists now.
-    scroll_to(cx, "rail-delete");
-    click(cx, "rail-delete");
-    assert!(cx.debug_bounds("rules-blank").is_none());
-    assert!(cx.debug_bounds("empty-add-handler").is_some());
+    // Discarding the draft leaves nothing to route by again, with Undo.
+    scroll_to(cx, crate::editor::DISCARD_ID);
+    click(cx, crate::editor::DISCARD_ID);
+    assert!(cx.debug_bounds("rules-blank").is_some());
     assert_eq!(view.read_with(cx, |app, _| app.selection), None);
+    assert!(!path.is_file());
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1429,7 +1626,8 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     let dir = scratch("editor-examples");
     let path = dir.join("rules.json");
     let (view, cx) = open_store(cx, None, fixture_store(&dir));
-    // Handler 1: an example, on Return. It is written with the rule.
+    // Handler 1: an example, on Return. It is written with the rule, on
+    // Save.
     click(cx, "example-add");
     cx.simulate_input("https://meet.google.com/abc-defg-hij");
     cx.simulate_keystrokes("enter");
@@ -1446,6 +1644,8 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("example-remove-0").is_some());
     assert!(cx.debug_bounds("handler-0-examples").is_some());
+    assert!(saved(cx, &path).rules[0].examples.is_empty());
+    save_rule(cx);
     assert_eq!(
         saved(cx, &path).rules[0].examples,
         ["https://meet.google.com/abc-defg-hij"]
@@ -1475,6 +1675,7 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     );
     click(cx, "keep-none");
     assert_eq!(handler(cx).keep(), Some(Privacy::None));
+    save_rule(cx);
     let file = saved(cx, &path);
     assert!(file.rules[0].private);
     assert_eq!(file.rules[0].privacy, Some(Privacy::None.into()));
@@ -1482,6 +1683,7 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     // went with the pick.
     click(cx, "destination-0-0");
     click(cx, "keep-full");
+    save_rule(cx);
     let file = saved(cx, &path);
     assert!(!file.rules[0].private);
     assert_eq!(file.rules[0].profile, "");
@@ -1492,9 +1694,10 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     cx.simulate_input("meet.google.com/x");
     cx.simulate_keystrokes("enter");
     draw(cx);
-    assert_eq!(handler(cx).rule.badge, RowBadge::NotSaved);
+    assert_eq!(handler(cx).rule.badge, RowBadge::Unsaved);
     assert!(handler(cx).problems[0].starts_with("Examples must be full URLs"));
     click(cx, "example-remove-1");
+    // Back as saved: nothing to save or discard.
     assert_eq!(handler(cx).rule.badge, RowBadge::None);
 
     // A rewrite's example says what the URL becomes.
@@ -1514,6 +1717,7 @@ fn the_editor_adds_examples_and_sets_private_and_keep(cx: &mut TestAppContext) {
     cx.simulate_input("https://xcancel.com/pwrdrvr/status/1842");
     cx.simulate_keystrokes("enter");
     draw(cx);
+    save_rule(cx);
     let file = saved(cx, &path);
     assert_eq!(
         file.rewrites[0].examples,
@@ -2588,30 +2792,85 @@ fn a_changed_rules_json_reloads_or_offers_reload_and_overwrite(cx: &mut TestAppC
         (Some(Selection::Handler(0)), Some("h0.example/*".to_owned()))
     );
 
-    // An edit over a file that changed meanwhile is kept on screen, not
-    // written, and the rail foot offers the two ways out.
-    written_by_someone_else(&path, 3);
+    // A draft over a file that changed meanwhile stays on its rule while
+    // the rest of the file reloads under it (design: Rule Drafts 1f).
     view.update(cx, |app, cx| {
         app.store.set_profile(0, "Work");
         app.refresh(cx);
     });
+    written_by_someone_else(&path, 3);
+    view.update(cx, |app, cx| {
+        assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
+    });
+    draw(cx);
+    let (rows, stored, _, dirty) = counts(cx);
+    assert_eq!((rows, stored, dirty), (3, 3, false));
+    assert_eq!(
+        view.read_with(cx, |app, _| (
+            app.selection,
+            app.store.draft_changed(),
+            app.handlers[0].profile.clone(),
+            app.store.draft_conflict(),
+        )),
+        (Some(Selection::Handler(0)), true, "Work".to_owned(), None)
+    );
+    assert!(cx.debug_bounds(crate::chrome::RELOAD_ID).is_none());
+    assert!(cx.debug_bounds("draft-conflict").is_none());
+    save_rule(cx);
+    let on_disk = saved(cx, &path);
+    assert_eq!(on_disk.rules.len(), 3);
+    assert_eq!(on_disk.rules[0].profile, "Work");
+
+    // When the file changes the draft's own rule, the rail says so, and
+    // the file's version is one click away.
+    view.update(cx, |app, cx| {
+        app.store.set_profile(0, "Home");
+        app.refresh(cx);
+    });
+    written_by_someone_else(&path, 3);
+    view.update(cx, |app, cx| {
+        assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
+    });
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.draft_conflict()),
+        Some(crate::rules_store::Conflict::Changed)
+    );
+    assert!(cx.debug_bounds("draft-conflict").is_some());
+    click(cx, "draft-conflict-take");
+    assert_eq!(
+        view.read_with(cx, |app, _| (
+            app.store.draft_changed(),
+            app.handlers[0].profile.clone()
+        )),
+        (false, String::new())
+    );
+    assert!(cx.debug_bounds("draft-conflict").is_none());
+
+    // A command not yet written (a rule turned off, before the debounce)
+    // over a file that changed meanwhile is kept on screen, not written,
+    // and the rail foot offers the two ways out.
+    written_by_someone_else(&path, 2);
+    view.update(cx, |app, cx| {
+        app.store.set_enabled(Selection::Handler(1), false);
+        app.refresh(cx);
+    });
     draw(cx);
     let (rows, _, label, dirty) = counts(cx);
-    assert_eq!((rows, dirty), (2, true), "the edit, not the file");
+    assert_eq!((rows, dirty), (3, true), "the edit, not the file");
     assert!(label.contains("changed on disk"), "{label}");
     assert!(cx.debug_bounds(crate::chrome::RELOAD_ID).is_some());
     assert!(cx.debug_bounds(crate::chrome::OVERWRITE_ID).is_some());
     // The debounced save runs and is refused.
     let on_disk = saved(cx, &path);
-    assert_eq!(on_disk.rules.len(), 3);
-    assert_eq!(on_disk.rules[0].profile, "");
+    assert_eq!(on_disk.rules.len(), 2);
     assert!(counts(cx).3, "still unsaved");
 
     // Overwrite writes the edit over the file.
     click(cx, crate::chrome::OVERWRITE_ID);
     let on_disk = saved(cx, &path);
-    assert_eq!(on_disk.rules.len(), 2);
-    assert_eq!(on_disk.rules[0].profile, "Work");
+    assert_eq!(on_disk.rules.len(), 3);
+    assert!(!on_disk.rules[1].enabled);
     let (_, _, label, dirty) = counts(cx);
     assert!(label.starts_with("saved "), "{label}");
     assert!(!dirty);
@@ -2619,14 +2878,10 @@ fn a_changed_rules_json_reloads_or_offers_reload_and_overwrite(cx: &mut TestAppC
 
     // Reload drops the edit and reads the file; the selection past the
     // end is cleared.
-    view.update(cx, |app, cx| {
-        app.select(Selection::Handler(1), cx);
-        app.store.set_profile(1, "Home");
-        app.refresh(cx);
-    });
+    view.update(cx, |app, cx| app.select(Selection::Handler(1), cx));
     written_by_someone_else(&path, 1);
     view.update(cx, |app, cx| {
-        app.store.set_browser(1, "Arc");
+        app.store.set_enabled(Selection::Handler(2), false);
         app.refresh(cx);
     });
     draw(cx);
@@ -4906,6 +5161,7 @@ fn open_in_and_profile_pick_from_the_scan(cx: &mut TestAppContext) {
     // Edge: Default, its four profiles, then InPrivate.
     click(cx, "destination-4-4");
     assert_eq!(rule(cx), ("Microsoft Edge".into(), "Travel".into(), false));
+    save_rule(cx);
     let file = saved(cx, &path);
     assert_eq!(
         (
@@ -5146,10 +5402,14 @@ fn a_browser_without_readable_profiles_still_takes_a_named_one(cx: &mut TestAppC
     let (view, cx) = open_with_scan(cx, &dir);
     click(cx, "add-handler");
     // Firefox, second on this Mac, with no profiles in the scan: Default
-    // and its private window.
+    // and its private window. (The new rule's draft foot sits under the
+    // fields, so Open in starts lower.)
+    scroll_to(cx, "destination-1-0");
     click(cx, "destination-1-0");
     assert!(cx.debug_bounds("destination-1-2").is_none());
+    scroll_to(cx, "destination-typed");
     click(cx, "destination-typed");
+    scroll_to(cx, "profile");
     click(cx, "profile");
     cx.simulate_input("default-release");
     draw(cx);
@@ -5158,6 +5418,7 @@ fn a_browser_without_readable_profiles_still_takes_a_named_one(cx: &mut TestAppC
         "default-release"
     );
     // Back in the lanes it is a pill of its own, on, and no warning.
+    scroll_to(cx, "browser-list");
     click(cx, "browser-list");
     assert!(cx.debug_bounds("destination-1-1").is_some());
     assert!(cx.debug_bounds("profile-warning").is_none());
@@ -5708,16 +5969,25 @@ fn a_rewritten_link_starts_a_rule_for_where_it_went(cx: &mut TestAppContext) {
     // A handler above the draft goes: the draft's link moves up with it,
     // and no other rule shows its suggestions.
     view.update_in(cx, |app, window, cx| {
-        app.select(Selection::Handler(0), cx);
-        app.delete_selected(window, cx);
+        app.delete_rule(Selection::Handler(0), window, cx);
     });
     draw(cx);
     assert_eq!(
-        view.read_with(cx, |app, _| app.draft_link.as_ref().map(|(at, _)| *at)),
-        Some(6)
+        view.read_with(cx, |app, _| (
+            app.draft_link.as_ref().map(|(at, _)| *at),
+            app.selection
+        )),
+        (Some(6), Some(Selection::Handler(6)))
     );
+    // Another rule waits for the draft to be saved or discarded.
     view.update_in(cx, |app, _, cx| app.select(Selection::Handler(5), cx));
     draw(cx);
+    assert!(cx.debug_bounds("leave-question").is_some());
+    click(cx, crate::editor::LEAVE_DISCARD_ID);
+    assert_eq!(
+        view.read_with(cx, |app, _| (app.selection, app.draft_link.is_some())),
+        (Some(Selection::Handler(5)), false)
+    );
     assert!(cx.debug_bounds("start-suggestions").is_none());
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -6078,6 +6348,7 @@ fn a_rule_can_be_set_to_dont_open(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("destination-lane-6").is_none());
     scroll_to(cx, "destination-5-0");
     click(cx, "destination-5-0");
+    save_rule(cx);
     let file = saved(cx, &path);
     assert_eq!(file.rules[0].browser, "none");
     assert_eq!(file.rules[0].profile, "");

@@ -1,5 +1,6 @@
 //! The visual rules on disk: `rules.json`, read on open and written after
-//! every edit.
+//! every command, and after Save for the rule the editor holds as a draft
+//! (design: Rule Drafts 1).
 //!
 //! The store keeps the engine's [`RulesFile`] as the source of truth, so a
 //! file written by the Go host, or by hand, comes back out with the fields
@@ -9,7 +10,8 @@
 //! pattern removed, a browser cleared) is not written, and the file keeps
 //! the saved version of that one rule while every other edit still saves,
 //! as the design's validation turn says. A rule that was never complete, a
-//! draft, is not in the file at all.
+//! draft, is not in the file at all. The editor's rule is held the same way
+//! until Save, problems or not ([`RulesStore::hold`]).
 //!
 //! Writes go through [`RulesFile::save`]: a sibling file renamed into place,
 //! so the router's watcher never reads half a file. Nothing here logs or
@@ -94,6 +96,83 @@ impl Stamp {
     }
 }
 
+/// The rule the editor holds back from the file, by id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Draft {
+    id: u64,
+    conflict: Option<Conflict>,
+}
+
+/// The file changed on disk under a draft, and the change touched the
+/// draft's own rule (design: Rule Drafts 1f).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Conflict {
+    /// The rule is still in the file, as another version: Save writes the
+    /// draft over it.
+    Changed,
+    /// The rule is gone from the file: Save adds the draft back as a new
+    /// rule.
+    Removed,
+}
+
+/// A draft [`RulesStore::discard_draft`] dropped, for Undo.
+#[derive(Clone, Debug)]
+pub enum Discarded {
+    Rewrite {
+        id: u64,
+        value: Box<engine::Rewrite>,
+    },
+    Rule {
+        id: u64,
+        value: Box<engine::Rule>,
+    },
+    /// A rule that was never saved: it left the list.
+    New(Box<Removed>),
+}
+
+/// The draft's rule across a reload: where it was, what it held, and the
+/// file's rules either side of it.
+struct Carry<T> {
+    at: usize,
+    len: usize,
+    before: Option<T>,
+    after: Option<T>,
+    value: T,
+    saved: Option<T>,
+}
+
+impl<T: Clone> Carry<T> {
+    /// The entry at `at` of `list`, with its neighbors as the file has them.
+    fn of(list: &[Entry<T>], saved: &HashMap<u64, T>, at: usize) -> Self {
+        let filed = |i: usize| {
+            list.get(i)
+                .map(|e| saved.get(&e.id).unwrap_or(&e.value).clone())
+        };
+        Self {
+            at,
+            len: list.len(),
+            before: at.checked_sub(1).and_then(filed),
+            after: filed(at + 1),
+            value: list[at].value.clone(),
+            saved: saved.get(&list[at].id).cloned(),
+        }
+    }
+}
+
+enum Carried {
+    Rewrite(Box<Carry<engine::Rewrite>>),
+    Rule(Box<Carry<engine::Rule>>),
+}
+
+/// Where `saved` landed in a list read again: the same place if it is
+/// still there, else the first place that holds it.
+fn find_saved<T: PartialEq>(list: &[Entry<T>], at: usize, saved: &T) -> Option<usize> {
+    if list.get(at).is_some_and(|entry| entry.value == *saved) {
+        return Some(at);
+    }
+    list.iter().position(|entry| entry.value == *saved)
+}
+
 /// A rewrite or handler for the session: its position is its place in the
 /// file, its id survives moves and renumbering.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,8 +202,17 @@ pub struct RulesStore {
     /// since.
     exists: bool,
     status: Status,
-    /// An edit has not reached the file.
-    dirty: bool,
+    /// What the file holds as far as this store knows: [`Self::written`]
+    /// when it was last read or written here. An edit is unsaved while
+    /// `written()` differs from it.
+    disk: RulesFile,
+    /// When the file was last written (by anyone, as read), for "saved 09:41".
+    saved_at: Option<SystemTime>,
+    /// The one rule the editor holds back from the file (design: Rule
+    /// Drafts 1). Its edits change the entry's value only; [`Self::written`]
+    /// keeps the saved version (or leaves a never-saved rule out) until
+    /// [`Self::save_draft`].
+    draft: Option<Draft>,
     /// The file could not be read: nothing is written over it until it
     /// changes on disk and reads, or the window is opened again.
     unreadable: bool,
@@ -191,7 +279,9 @@ impl RulesStore {
             next_id: 1,
             exists,
             status: Status::Saved { at },
-            dirty: false,
+            disk: RulesFile::default(),
+            saved_at: at,
+            draft: None,
             unreadable: false,
             stamp,
         };
@@ -205,6 +295,7 @@ impl RulesStore {
             store.saved_rules.insert(id, rule.clone());
             store.rules.push(Entry { id, value: rule });
         }
+        store.disk = store.written();
         store
     }
 
@@ -237,7 +328,6 @@ impl RulesStore {
         self.rewrites.is_empty() && self.rules.is_empty()
     }
 
-    #[cfg(test)]
     pub fn rewrite_count(&self) -> usize {
         self.rewrites.len()
     }
@@ -246,9 +336,10 @@ impl RulesStore {
         self.rules.len()
     }
 
-    /// An edit is waiting to be written.
+    /// An edit is waiting to be written: the file would change. A draft's
+    /// edits never count; they wait for [`Self::save_draft`].
     pub fn needs_save(&self) -> bool {
-        self.dirty
+        self.written() != self.disk
     }
 
     /// The file changed on disk under unsaved edits: the rail foot offers
@@ -267,9 +358,30 @@ impl RulesStore {
         }
     }
 
-    /// What the file holds once every saveable edit is written: an entry
-    /// with problems stands as its last saved version, and a draft is left
-    /// out. This is what the router routes by, so Test a link tests it.
+    /// Every rule as the router has it, in the editor's order: the draft as
+    /// its saved version (a rule never saved stays as drafted, so the rows
+    /// keep their numbers). The Overview's map draws this.
+    pub fn routed(&self) -> RulesFile {
+        let mut file = self.edited();
+        match self.draft() {
+            Some(Selection::Rewrite(i)) => {
+                if let Some(saved) = self.saved_rewrites.get(&self.rewrites[i].id) {
+                    file.rewrites[i] = saved.clone();
+                }
+            }
+            Some(Selection::Handler(i)) => {
+                if let Some(saved) = self.saved_rules.get(&self.rules[i].id) {
+                    file.rules[i] = saved.clone();
+                }
+            }
+            None => {}
+        }
+        file
+    }
+
+    /// What the file holds once every saveable edit is written: the draft
+    /// and an entry with problems stand as their last saved version, and a
+    /// rule never saved is left out. This is what the router routes by, so Test a link tests it.
     pub fn written(&self) -> RulesFile {
         let problems = self.problems();
         RulesFile {
@@ -278,7 +390,7 @@ impl RulesStore {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, entry)| {
-                    if problems.has(Place::Rewrite(i)) {
+                    if self.holds(entry.id) || problems.has(Place::Rewrite(i)) {
                         self.saved_rewrites.get(&entry.id).cloned()
                     } else {
                         Some(entry.value.clone())
@@ -290,7 +402,7 @@ impl RulesStore {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, entry)| {
-                    if problems.has(Place::Rule(i)) {
+                    if self.holds(entry.id) || problems.has(Place::Rule(i)) {
                         self.saved_rules.get(&entry.id).cloned()
                     } else {
                         Some(entry.value.clone())
@@ -322,7 +434,13 @@ impl RulesStore {
             .enumerate()
             .map(|(i, entry)| {
                 let problems = problems.at(Place::Rewrite(i));
-                let badge = self.badge(&problems, self.saved_rewrites.contains_key(&entry.id));
+                let saved = self.saved_rewrites.get(&entry.id);
+                let badge = self.badge(
+                    entry.id,
+                    &problems,
+                    saved.is_some(),
+                    saved != Some(&entry.value),
+                );
                 rules_model::rewrite(&entry.value, badge, problems)
             })
             .collect()
@@ -340,7 +458,13 @@ impl RulesStore {
             .enumerate()
             .map(|(i, entry)| {
                 let problems = problems.at(Place::Rule(i));
-                let badge = self.badge(&problems, self.saved_rules.contains_key(&entry.id));
+                let saved = self.saved_rules.get(&entry.id);
+                let badge = self.badge(
+                    entry.id,
+                    &problems,
+                    saved.is_some(),
+                    saved != Some(&entry.value),
+                );
                 let shown = match (&entry.value.destination, here.rules.get(i)) {
                     (Some(_), Some(routed)) => engine::Rule {
                         browser: routed.browser.clone(),
@@ -435,7 +559,18 @@ impl RulesStore {
         }
     }
 
-    fn badge(&self, problems: &[String], saved: bool) -> RowBadge {
+    /// A row's badge: the draft is "draft" until it was ever saved and
+    /// "unsaved" while it differs from its saved version; any other rule
+    /// with problems stands as its saved version ("not saved") or was
+    /// never written ("draft").
+    fn badge(&self, id: u64, problems: &[String], saved: bool, changed: bool) -> RowBadge {
+        if self.holds(id) {
+            return match (saved, changed) {
+                (false, _) => RowBadge::Draft,
+                (true, true) => RowBadge::Unsaved,
+                (true, false) => RowBadge::None,
+            };
+        }
         match (problems.is_empty(), saved) {
             (true, _) => RowBadge::None,
             (false, true) => RowBadge::NotSaved,
@@ -486,20 +621,310 @@ impl RulesStore {
 
     // --- edits -----------------------------------------------------------
 
+    /// After an edit: "unsaved" while the file would change, and back to
+    /// when it was saved when an edit (a draft's, or one undone) leaves it
+    /// as it is.
     fn touch(&mut self) {
-        self.dirty = true;
-        if !matches!(self.status, Status::Failed(_) | Status::Changed) {
-            self.status = Status::Unsaved;
+        if matches!(self.status, Status::Failed(_) | Status::Changed) {
+            return;
         }
+        if self.needs_save() {
+            self.status = Status::Unsaved;
+        } else if self.status == Status::Unsaved {
+            self.status = Status::Saved { at: self.saved_at };
+        }
+    }
+
+    // --- the draft (design: Rule Drafts 1) ---------------------------------
+
+    fn holds(&self, id: u64) -> bool {
+        self.draft.as_ref().is_some_and(|draft| draft.id == id)
+    }
+
+    fn id_of(&self, selection: Selection) -> Option<u64> {
+        match selection {
+            Selection::Rewrite(i) => self.rewrites.get(i).map(|e| e.id),
+            Selection::Handler(i) => self.rules.get(i).map(|e| e.id),
+        }
+    }
+
+    fn selection_of(&self, id: u64) -> Option<Selection> {
+        if let Some(i) = self.rewrites.iter().position(|e| e.id == id) {
+            return Some(Selection::Rewrite(i));
+        }
+        self.rules
+            .iter()
+            .position(|e| e.id == id)
+            .map(Selection::Handler)
+    }
+
+    /// The editor shows `selection`: its edits are held back from the file
+    /// from now on. A changed draft on another rule is discarded first. The
+    /// window asks before it moves on (`PwrRoute::leave_draft`), so this
+    /// only keeps a stray edit from reaching the file unasked.
+    pub fn hold(&mut self, selection: Selection) {
+        let Some(id) = self.id_of(selection) else {
+            self.release();
+            return;
+        };
+        if self.holds(id) {
+            return;
+        }
+        self.release();
+        // A rule another command added (Activity's sheet, an insert) and
+        // the debounce has not written yet is not the editor's to hold: it
+        // would never reach the file. Only Add rule starts a draft with no
+        // saved version.
+        let saved = self.saved_rewrites.contains_key(&id) || self.saved_rules.contains_key(&id);
+        if saved {
+            self.draft = Some(Draft { id, conflict: None });
+        }
+    }
+
+    /// Nothing is held: the editor closed. A changed draft is discarded,
+    /// as [`Self::hold`] does.
+    pub fn release(&mut self) {
+        if self.draft_changed() {
+            self.discard_draft();
+        }
+        self.draft = None;
+    }
+
+    /// The rule the editor holds, while it is in the lists.
+    pub fn draft(&self) -> Option<Selection> {
+        self.draft
+            .as_ref()
+            .and_then(|draft| self.selection_of(draft.id))
+    }
+
+    /// The held rule differs from what the file has: it was never saved, or
+    /// it was edited since. This is what Save and Discard act on, and what
+    /// leaving the rule asks about.
+    pub fn draft_changed(&self) -> bool {
+        match self.draft() {
+            Some(Selection::Rewrite(i)) => {
+                let entry = &self.rewrites[i];
+                self.saved_rewrites.get(&entry.id) != Some(&entry.value)
+            }
+            Some(Selection::Handler(i)) => {
+                let entry = &self.rules[i];
+                self.saved_rules.get(&entry.id) != Some(&entry.value)
+            }
+            None => false,
+        }
+    }
+
+    /// The held rule has never reached the file.
+    pub fn draft_is_new(&self) -> bool {
+        match self.draft() {
+            Some(Selection::Rewrite(i)) => !self.saved_rewrites.contains_key(&self.rewrites[i].id),
+            Some(Selection::Handler(i)) => !self.saved_rules.contains_key(&self.rules[i].id),
+            None => false,
+        }
+    }
+
+    /// How the file changed under the draft's own rule, if it did.
+    pub fn draft_conflict(&self) -> Option<Conflict> {
+        self.draft.as_ref().and_then(|draft| draft.conflict)
+    }
+
+    /// What keeps the draft from saving, in `RulesFile::problems`' words.
+    pub fn draft_problems(&self) -> Vec<String> {
+        let problems = self.problems();
+        match self.draft() {
+            Some(Selection::Rewrite(i)) => problems.at(Place::Rewrite(i)),
+            Some(Selection::Handler(i)) => problems.at(Place::Rule(i)),
+            None => Vec::new(),
+        }
+    }
+
+    /// Save: writes the draft, with any other edit waiting, and keeps
+    /// holding the same rule, now unchanged. A draft with problems, or a
+    /// file the store would not write, stays a draft; the error says why
+    /// (and a refused or failed write is also the status).
+    pub fn save_draft(&mut self) -> Result<(), String> {
+        let Some(draft) = self.draft.clone() else {
+            return self.save();
+        };
+        match self.draft_problems().len() {
+            0 => {}
+            1 => return Err("1 problem \u{00b7} fix it to save".into()),
+            n => return Err(format!("{n} problems \u{00b7} fix them to save")),
+        }
+        self.draft = None;
+        let saved = self.save();
+        self.draft = Some(match saved {
+            Ok(()) => Draft {
+                id: draft.id,
+                conflict: None,
+            },
+            Err(_) => draft,
+        });
+        saved
+    }
+
+    /// Discard: the held rule back to its saved version, or out of the list
+    /// when it was never saved. The file does not change. Returns what was
+    /// dropped, for [`Self::undo_discard`]; `None` when nothing differed.
+    pub fn discard_draft(&mut self) -> Option<Discarded> {
+        if !self.draft_changed() {
+            if let Some(draft) = &mut self.draft {
+                draft.conflict = None;
+            }
+            return None;
+        }
+        let selection = self.draft()?;
+        let draft = self.draft.take()?;
+        let id = draft.id;
+        let discarded = match selection {
+            Selection::Rewrite(i) => match self.saved_rewrites.get(&id).cloned() {
+                Some(saved) => Discarded::Rewrite {
+                    id,
+                    value: Box::new(std::mem::replace(&mut self.rewrites[i].value, saved)),
+                },
+                None => Discarded::New(Box::new(self.remove(selection)?)),
+            },
+            Selection::Handler(i) => match self.saved_rules.get(&id).cloned() {
+                Some(saved) => Discarded::Rule {
+                    id,
+                    value: Box::new(std::mem::replace(&mut self.rules[i].value, saved)),
+                },
+                None => Discarded::New(Box::new(self.remove(selection)?)),
+            },
+        };
+        if !matches!(discarded, Discarded::New(_)) {
+            self.draft = Some(Draft { id, conflict: None });
+        }
+        self.touch();
+        Some(discarded)
+    }
+
+    /// Undo discard: the dropped edits back as the draft, on the same rule
+    /// (or the never-saved rule back in its place). Returns where it is.
+    pub fn undo_discard(&mut self, discarded: Discarded) -> Option<Selection> {
+        let id = match discarded {
+            Discarded::Rewrite { id, value } => {
+                let entry = self.rewrites.iter_mut().find(|e| e.id == id)?;
+                entry.value = *value;
+                id
+            }
+            Discarded::Rule { id, value } => {
+                let entry = self.rules.iter_mut().find(|e| e.id == id)?;
+                entry.value = *value;
+                id
+            }
+            Discarded::New(removed) => {
+                let at = self.restore(*removed);
+                self.id_of(at)?
+            }
+        };
+        if !self.holds(id) {
+            self.release();
+            self.draft = Some(Draft { id, conflict: None });
+        }
+        self.touch();
+        self.selection_of(id)
+    }
+
+    /// The draft as it stands, to put back after the file is read again.
+    fn carry(&self) -> Option<Carried> {
+        if !self.draft_changed() {
+            return None;
+        }
+        Some(match self.draft()? {
+            Selection::Rewrite(at) => Carried::Rewrite(Box::new(Carry::of(
+                &self.rewrites,
+                &self.saved_rewrites,
+                at,
+            ))),
+            Selection::Handler(at) => {
+                Carried::Rule(Box::new(Carry::of(&self.rules, &self.saved_rules, at)))
+            }
+        })
+    }
+
+    /// Puts a carried draft back on the file just read (design: Rule
+    /// Drafts 1f): on its rule when the file still has the version it was
+    /// edited from; on the rule at its place, as [`Conflict::Changed`],
+    /// when that version is gone but the list is as long and the rules
+    /// either side are the same; else as a new rule at its place
+    /// ([`Conflict::Removed`], or no conflict for a rule never saved), so
+    /// Save never writes over a rule the draft did not start from.
+    fn rebase(&mut self, carried: Carried) {
+        fn place<T: Clone + PartialEq>(
+            list: &mut Vec<Entry<T>>,
+            next: &mut impl FnMut() -> u64,
+            carry: Carry<T>,
+        ) -> (u64, Option<Conflict>, Option<T>) {
+            let Carry {
+                at,
+                len,
+                before,
+                after,
+                value,
+                saved,
+            } = carry;
+            if let Some(saved) = &saved {
+                if let Some(i) = find_saved(list, at, saved) {
+                    let filed = std::mem::replace(&mut list[i].value, value);
+                    return (list[i].id, None, Some(filed));
+                }
+                // The same place only while the list around it is as it
+                // was: same length, same neighbors. A shifted list could put
+                // another rule there, and Save would write over it.
+                let around = |i: Option<usize>| i.and_then(|i| list.get(i)).map(|e| &e.value);
+                if list.len() == len
+                    && at < len
+                    && around(at.checked_sub(1)) == before.as_ref()
+                    && around(Some(at + 1)) == after.as_ref()
+                {
+                    let filed = std::mem::replace(&mut list[at].value, value);
+                    return (list[at].id, Some(Conflict::Changed), Some(filed));
+                }
+            }
+            let id = next();
+            let at = at.min(list.len());
+            list.insert(at, Entry { id, value });
+            (id, saved.map(|_| Conflict::Removed), None)
+        }
+        let mut next_id = self.next_id;
+        let mut next = || {
+            let id = next_id;
+            next_id += 1;
+            id
+        };
+        // The file's version of the rule is its saved version: what the file
+        // keeps until Save (a fresh `replace_all` has none recorded yet).
+        let (id, conflict) = match carried {
+            Carried::Rewrite(carry) => {
+                let (id, conflict, filed) = place(&mut self.rewrites, &mut next, *carry);
+                if let Some(filed) = filed {
+                    self.saved_rewrites.entry(id).or_insert(filed);
+                }
+                (id, conflict)
+            }
+            Carried::Rule(carry) => {
+                let (id, conflict, filed) = place(&mut self.rules, &mut next, *carry);
+                if let Some(filed) = filed {
+                    self.saved_rules.entry(id).or_insert(filed);
+                }
+                (id, conflict)
+            }
+        };
+        self.next_id = next_id;
+        self.draft = Some(Draft { id, conflict });
     }
 
     /// Appends an empty rewrite and returns its position.
     pub fn add_rewrite(&mut self) -> usize {
+        // A new rule is a draft from the start (Rule Drafts 1g).
+        self.release();
         let id = self.next();
         self.rewrites.push(Entry {
             id,
             value: engine::Rewrite::default(),
         });
+        self.draft = Some(Draft { id, conflict: None });
         self.touch();
         self.rewrites.len() - 1
     }
@@ -507,11 +932,14 @@ impl RulesStore {
     /// Appends an empty handler, just above Everything else, and returns its
     /// position.
     pub fn add_handler(&mut self) -> usize {
+        // A new rule is a draft from the start (Rule Drafts 1g).
+        self.release();
         let id = self.next();
         self.rules.push(Entry {
             id,
             value: engine::Rule::default(),
         });
+        self.draft = Some(Draft { id, conflict: None });
         self.touch();
         self.rules.len() - 1
     }
@@ -520,10 +948,18 @@ impl RulesStore {
     /// version go with it, so [`Self::restore`] puts back the same rule,
     /// saved or not as it was. `None` when it is not there.
     pub fn remove(&mut self, selection: Selection) -> Option<Removed> {
+        // The draft goes with its rule; Undo puts back the saved version.
+        let held = self.id_of(selection).is_some_and(|id| self.holds(id));
+        if held {
+            self.draft = None;
+        }
         let removed = match selection {
             Selection::Rewrite(i) if i < self.rewrites.len() => {
-                let entry = self.rewrites.remove(i);
+                let mut entry = self.rewrites.remove(i);
                 let saved = self.saved_rewrites.remove(&entry.id);
+                if held && let Some(saved) = &saved {
+                    entry.value = saved.clone();
+                }
                 Removed::Rewrite {
                     at: i,
                     entry,
@@ -531,8 +967,11 @@ impl RulesStore {
                 }
             }
             Selection::Handler(i) if i < self.rules.len() => {
-                let entry = self.rules.remove(i);
+                let mut entry = self.rules.remove(i);
                 let saved = self.saved_rules.remove(&entry.id);
+                if held && let Some(saved) = &saved {
+                    entry.value = saved.clone();
+                }
                 Removed::Rule {
                     at: i,
                     entry,
@@ -599,18 +1038,31 @@ impl RulesStore {
 
     /// A copy of a rule just below it, as a new rule. Its examples stay
     /// with the original: the copy runs second, so the same links would
-    /// fail as its examples. Returns the copy's position.
+    /// fail as its examples. The draft is copied as saved, without its
+    /// unsaved edits. Returns the copy's position.
     pub fn duplicate(&mut self, selection: Selection) -> Option<Selection> {
         let copy = match selection {
             Selection::Rewrite(i) => {
-                let mut value = self.rewrites.get(i)?.value.clone();
+                let entry = self.rewrites.get(i)?;
+                let mut value = self
+                    .saved_rewrites
+                    .get(&entry.id)
+                    .filter(|_| self.holds(entry.id))
+                    .unwrap_or(&entry.value)
+                    .clone();
                 value.examples.clear();
                 let id = self.next();
                 self.rewrites.insert(i + 1, Entry { id, value });
                 Selection::Rewrite(i + 1)
             }
             Selection::Handler(i) => {
-                let mut value = self.rules.get(i)?.value.clone();
+                let entry = self.rules.get(i)?;
+                let mut value = self
+                    .saved_rules
+                    .get(&entry.id)
+                    .filter(|_| self.holds(entry.id))
+                    .unwrap_or(&entry.value)
+                    .clone();
                 value.examples.clear();
                 let id = self.next();
                 self.rules.insert(i + 1, Entry { id, value });
@@ -636,15 +1088,26 @@ impl RulesStore {
         }
     }
 
+    /// Turns a rule on or off at once: the header switch and the row menu
+    /// act on the saved rule, so the draft's saved version follows and
+    /// the draft keeps its edits (Rule Drafts 1).
     pub fn set_enabled(&mut self, selection: Selection, enabled: bool) {
+        if let Some(id) = self.id_of(selection).filter(|id| self.holds(*id)) {
+            if let Some(saved) = self.saved_rewrites.get_mut(&id) {
+                saved.enabled = enabled;
+            }
+            if let Some(saved) = self.saved_rules.get_mut(&id) {
+                saved.enabled = enabled;
+            }
+        }
         let slot = match selection {
             Selection::Rewrite(i) => self.rewrites.get_mut(i).map(|e| &mut e.value.enabled),
             Selection::Handler(i) => self.rules.get_mut(i).map(|e| &mut e.value.enabled),
         };
-        if let Some(slot) = slot.filter(|slot| **slot != enabled) {
+        if let Some(slot) = slot {
             *slot = enabled;
-            self.touch();
         }
+        self.touch();
     }
 
     fn patterns_mut(&mut self, selection: Selection) -> Option<&mut Vec<String>> {
@@ -809,6 +1272,22 @@ impl RulesStore {
         Some(index)
     }
 
+    /// Activity's Save as example: like [`Self::add_example`], but a
+    /// command on the saved rule, so it reaches the file even while the
+    /// rule is the draft.
+    pub fn add_saved_example(&mut self, handler: usize, url: &str) -> Option<usize> {
+        let id = self.rules.get(handler)?.id;
+        if self.holds(id)
+            && let Some(saved) = self.saved_rules.get_mut(&id)
+        {
+            let url = url.trim();
+            if !url.is_empty() && !saved.examples.iter().any(|e| e == url) {
+                saved.examples.push(url.to_owned());
+            }
+        }
+        self.add_example(handler, url)
+    }
+
     pub fn remove_example(&mut self, handler: usize, index: usize) {
         if let Some(rule) = self.rule_mut(handler)
             && index < rule.examples.len()
@@ -894,8 +1373,11 @@ impl RulesStore {
             rules: Vec::new(),
             ..file.clone()
         };
+        // A draft with unsaved changes rides on the new file, as on a reload.
+        let carried = self.carry();
         self.rewrites.clear();
         self.rules.clear();
+        self.draft = None;
         for value in file.rewrites {
             let id = self.next();
             self.rewrites.push(Entry { id, value });
@@ -903,6 +1385,9 @@ impl RulesStore {
         for value in file.rules {
             let id = self.next();
             self.rules.push(Entry { id, value });
+        }
+        if let Some(carried) = carried {
+            self.rebase(carried);
         }
         self.touch();
     }
@@ -925,7 +1410,7 @@ impl RulesStore {
             }
             return Disk::Unchanged;
         }
-        if self.dirty {
+        if self.needs_save() {
             self.status = Status::Changed;
             return Disk::Changed;
         }
@@ -933,15 +1418,21 @@ impl RulesStore {
         Disk::Reloaded
     }
 
-    /// Reads the file again, dropping every unsaved edit. The entries get
-    /// new ids; the status says when.
+    /// Reads the file again, dropping every unsaved edit but the draft's,
+    /// which stays on its rule (see [`Self::rebase`]). The entries get new
+    /// ids; the status says when.
     pub fn reload(&mut self) {
+        let carried = self.carry();
         let path = self.path.take();
         *self = Self::load(path);
         if !self.unreadable {
             self.status = Status::Reloaded {
                 at: SystemTime::now(),
             };
+        }
+        // The draft stays, on its rule as the file now has it.
+        if let Some(carried) = carried {
+            self.rebase(carried);
         }
     }
 
@@ -1006,18 +1497,20 @@ impl RulesStore {
         self.stamp = Stamp::of(&path);
         // What was written is what each entry's saved version now is.
         let problems = self.problems();
+        let held = self.draft.as_ref().map(|draft| draft.id);
         for (i, entry) in self.rewrites.iter().enumerate() {
-            if !problems.has(Place::Rewrite(i)) {
+            if Some(entry.id) != held && !problems.has(Place::Rewrite(i)) {
                 self.saved_rewrites.insert(entry.id, entry.value.clone());
             }
         }
         for (i, entry) in self.rules.iter().enumerate() {
-            if !problems.has(Place::Rule(i)) {
+            if Some(entry.id) != held && !problems.has(Place::Rule(i)) {
                 self.saved_rules.insert(entry.id, entry.value.clone());
             }
         }
         self.exists = true;
-        self.dirty = false;
+        self.disk = file;
+        self.saved_at = Some(SystemTime::now());
         Ok(())
     }
 
@@ -1039,6 +1532,9 @@ impl RulesStore {
     /// The editor's foot for the selected rule: its own state first, then
     /// the file's.
     pub fn rail_label(&self, selection: Selection) -> String {
+        if self.draft() == Some(selection) && self.draft_changed() {
+            return self.draft_label(selection);
+        }
         let (problems, saved) = match selection {
             Selection::Rewrite(i) => (
                 self.problems().at(Place::Rewrite(i)),
@@ -1062,6 +1558,41 @@ impl RulesStore {
             (_, false, Selection::Rewrite(_)) => "saves once it has a pattern and a change".into(),
             (1, true, _) => "1 problem \u{00b7} not saved".into(),
             (n, true, _) => format!("{n} problems \u{00b7} not saved"),
+        }
+    }
+}
+
+impl RulesStore {
+    /// The foot of a changed draft (design: Rule Drafts 1b, 1c, 1f, 1g):
+    /// what Save would do, or what keeps it from saving.
+    fn draft_label(&self, selection: Selection) -> String {
+        let problems = self.draft_problems().len();
+        let new = self.draft_is_new();
+        match (problems, new, selection) {
+            (0, true, _) => "Not in rules.json until you save it.".into(),
+            (0, false, Selection::Rewrite(i) | Selection::Handler(i))
+                if self.draft_conflict() == Some(Conflict::Changed) =>
+            {
+                let noun = match selection {
+                    Selection::Rewrite(_) => "rewrite",
+                    Selection::Handler(_) => "rule",
+                };
+                format!(
+                    "Unsaved changes. Links route by the file's {noun} {}.",
+                    i + 1
+                )
+            }
+            (0, false, _) => match self.saved_at {
+                Some(at) => format!(
+                    "Unsaved changes. Links still route by the version saved at {}.",
+                    clock(at)
+                ),
+                None => "Unsaved changes. Links still route by the saved version.".into(),
+            },
+            (_, true, Selection::Handler(_)) => "saves once it has a pattern and a browser".into(),
+            (_, true, Selection::Rewrite(_)) => "saves once it has a pattern and a change".into(),
+            (1, false, _) => "1 problem \u{00b7} fix it to save".into(),
+            (n, false, _) => format!("{n} problems \u{00b7} fix them to save"),
         }
     }
 }
@@ -1314,12 +1845,13 @@ mod tests {
         assert!(store.is_empty());
         assert_eq!(store.status_label(), "no rules.json yet");
 
-        // A draft handler is not in the file until it has a pattern and a
-        // browser.
+        // A new handler is the editor's draft: not in the file until it is
+        // saved, and it saves once it has a pattern and a browser.
         let h = store.add_handler();
         assert_eq!(h, 0);
-        assert!(store.needs_save());
-        assert_eq!(store.status(), &Status::Unsaved);
+        assert!(!store.needs_save());
+        assert!(store.draft_changed() && store.draft_is_new());
+        assert_eq!(store.status(), &Status::Saved { at: None });
         assert_eq!(store.handlers()[0].rule.badge, RowBadge::Draft);
         assert_eq!(
             store.rail_label(Selection::Handler(0)),
@@ -1336,8 +1868,16 @@ mod tests {
         let i = store.add_pattern(Selection::Handler(0)).unwrap();
         store.set_pattern(Selection::Handler(0), i, "notion.so/*");
         store.set_browser(0, "Firefox");
-        assert_eq!(store.handlers()[0].rule.badge, RowBadge::None);
+        assert_eq!(store.handlers()[0].rule.badge, RowBadge::Draft);
         store.save().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&path).unwrap())
+                .unwrap()["rules"],
+            json!([]),
+            "a plain save leaves the draft out"
+        );
+        store.save_draft().unwrap();
+        assert_eq!(store.handlers()[0].rule.badge, RowBadge::None);
         let json = |path: &Path| -> serde_json::Value {
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
         };
@@ -1353,7 +1893,7 @@ mod tests {
         let a = store.add_action(r).unwrap();
         store.set_action(r, a, rules_model::action(0, "xcancel.com"));
         store.set_enabled(Selection::Rewrite(r), false);
-        store.save().unwrap();
+        store.save_draft().unwrap();
         assert_eq!(
             json(&path)["rewrites"],
             json!([{ "match": "x.com/*", "actions": [{ "setHost": "xcancel.com" }], "enabled": false }])
@@ -1495,6 +2035,7 @@ mod tests {
         assert_eq!(store.add_example(h, "https://bank.example/login"), Some(1));
         store.set_private(h, true);
         store.set_privacy(h, Privacy::None);
+        store.save_draft().unwrap();
         let r = store.add_rewrite();
         let p = store.add_pattern(Selection::Rewrite(r)).unwrap();
         store.set_pattern(Selection::Rewrite(r), p, "x.com/*");
@@ -1515,7 +2056,7 @@ mod tests {
             },
         });
         assert_eq!(t, 0);
-        store.save().unwrap();
+        store.save_draft().unwrap();
         let json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
@@ -1542,7 +2083,9 @@ mod tests {
         store.remove_example(h, 2);
         assert_eq!(store.handlers()[0].rule.badge, RowBadge::None);
         store.remove_example(h, 0);
+        // The rewrite is the editor's draft: its edit goes in on Save.
         store.remove_rewrite_example(r, 0);
+        store.save_draft().unwrap();
         store.remove_test(0);
         // Inserting a complete rule at the top renumbers the rest.
         let at = store.insert_rule(
@@ -1685,10 +2228,14 @@ mod tests {
         assert!(matches!(store.status(), Status::Failed(_)));
         store.add_handler();
         assert!(store.save().is_err(), "never written over");
+        assert!(store.save_draft().is_err(), "nor by Save");
         written_by_someone_else(&path, 3);
-        assert_eq!(store.check_disk(), Disk::Changed, "an edit is unsaved");
-        store.reload();
-        assert_eq!(store.handler_count(), 3);
+        // The new rule is the editor's draft, not an edit to the file: the
+        // file is read again under it and the draft stays.
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        assert_eq!(store.handler_count(), 4);
+        assert_eq!(store.draft(), Some(Selection::Handler(0)));
+        assert!(store.draft_is_new());
         assert!(matches!(store.status(), Status::Reloaded { .. }));
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1863,5 +2410,318 @@ mod tests {
                 .ends_with("\u{00b7} saved")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // --- the draft (design: Rule Drafts 1) ---------------------------------
+
+    fn on_disk(path: &Path) -> RulesFile {
+        RulesFile::load(path).unwrap()
+    }
+
+    #[test]
+    fn the_drafts_edits_wait_for_save_and_discard_puts_back_the_saved_rule() {
+        let dir = scratch("draft-save-discard");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 2);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(0));
+        assert_eq!(store.draft(), Some(Selection::Handler(0)));
+        assert!(!store.draft_changed(), "selecting is not editing");
+
+        // An edit is the draft's alone: nothing to write, the router's
+        // version is the file's, and the row says unsaved.
+        store.set_profile(0, "Work");
+        assert!(store.draft_changed());
+        assert!(!store.needs_save());
+        assert_eq!(store.written().rules[0].profile, "");
+        assert_eq!(store.routed().rules[0].profile, "");
+        assert_eq!(store.edited().rules[0].profile, "Work");
+        assert_eq!(store.handlers()[0].rule.badge, RowBadge::Unsaved);
+        assert_eq!(store.handlers()[0].rule.hits, "unsaved");
+        assert!(
+            store
+                .rail_label(Selection::Handler(0))
+                .starts_with("Unsaved changes. Links still route by the version saved at"),
+            "{}",
+            store.rail_label(Selection::Handler(0))
+        );
+        store.save().unwrap();
+        assert_eq!(on_disk(&path).rules[0].profile, "", "a plain save skips it");
+
+        // Discard: back as saved, with Undo.
+        let discarded = store.discard_draft().expect("something to discard");
+        assert!(!store.draft_changed());
+        assert_eq!(store.handlers()[0].profile, "");
+        assert_eq!(store.handlers()[0].rule.badge, RowBadge::None);
+        assert_eq!(store.draft(), Some(Selection::Handler(0)), "still held");
+        assert!(store.discard_draft().is_none(), "nothing more to discard");
+        assert_eq!(store.undo_discard(discarded), Some(Selection::Handler(0)));
+        assert_eq!(store.handlers()[0].profile, "Work");
+        assert!(store.draft_changed());
+
+        // A problem keeps Save from writing.
+        store.set_browser(0, "");
+        assert_eq!(
+            store.save_draft(),
+            Err("1 problem \u{00b7} fix it to save".to_owned())
+        );
+        assert_eq!(on_disk(&path).rules[0].browser, "Firefox");
+        assert_eq!(
+            store.rail_label(Selection::Handler(0)),
+            "1 problem \u{00b7} fix it to save"
+        );
+
+        // Save writes it, and the rule stays held, unchanged.
+        store.set_browser(0, "Arc");
+        store.save_draft().unwrap();
+        let file = on_disk(&path);
+        assert_eq!(
+            (
+                file.rules[0].browser.as_str(),
+                file.rules[0].profile.as_str()
+            ),
+            ("Arc", "Work")
+        );
+        assert_eq!(store.draft(), Some(Selection::Handler(0)));
+        assert!(!store.draft_changed());
+        assert!(matches!(store.status(), Status::Saved { at: Some(_) }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_rule_is_a_draft_that_discard_takes_out_and_undo_brings_back() {
+        let dir = scratch("draft-new");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 1);
+        let mut store = RulesStore::load(Some(path.clone()));
+        let h = store.add_handler();
+        let p = store.add_pattern(Selection::Handler(h)).unwrap();
+        store.set_pattern(Selection::Handler(h), p, "notion.so/*");
+        store.set_browser(h, "Firefox");
+        assert_eq!(store.handlers()[h].rule.badge, RowBadge::Draft);
+        assert_eq!(
+            store.rail_label(Selection::Handler(h)),
+            "Not in rules.json until you save it."
+        );
+        assert_eq!(store.written().rules.len(), 1);
+
+        let discarded = store.discard_draft().expect("the new rule");
+        assert_eq!(store.handler_count(), 1);
+        assert_eq!(store.draft(), None);
+        assert_eq!(store.undo_discard(discarded), Some(Selection::Handler(1)));
+        assert_eq!(store.handlers()[1].patterns, ["notion.so/*"]);
+        assert_eq!(store.draft(), Some(Selection::Handler(1)));
+
+        store.save_draft().unwrap();
+        assert_eq!(on_disk(&path).rules.len(), 2);
+        assert_eq!(store.handlers()[1].rule.badge, RowBadge::None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn commands_on_the_draft_act_on_the_saved_rule_and_keep_the_edits() {
+        let dir = scratch("draft-commands");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 2);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(0));
+        store.set_profile(0, "Work");
+
+        // Turn off reaches the file; the draft keeps its profile.
+        store.set_enabled(Selection::Handler(0), false);
+        assert!(store.needs_save());
+        store.save().unwrap();
+        let file = on_disk(&path);
+        assert!(!file.rules[0].enabled);
+        assert_eq!(file.rules[0].profile, "");
+        assert!(store.draft_changed());
+        assert!(!store.handlers()[0].rule.enabled);
+
+        // Activity's Save as example, too.
+        store.add_saved_example(0, "https://h0.example/a");
+        store.save().unwrap();
+        assert_eq!(on_disk(&path).rules[0].examples, ["https://h0.example/a"]);
+
+        // Duplicate copies the saved rule, not the edits.
+        let copy = store.duplicate(Selection::Handler(0)).unwrap();
+        assert_eq!(store.handlers()[1].profile, "");
+        assert_eq!(copy, Selection::Handler(1));
+
+        // Moving keeps the draft on its rule.
+        store.move_to(Selection::Handler(0), 2);
+        assert_eq!(store.draft(), Some(Selection::Handler(2)));
+        assert_eq!(store.handlers()[2].profile, "Work");
+
+        // Delete takes the draft with it; Undo puts back the saved rule.
+        let removed = store.remove(Selection::Handler(2)).unwrap();
+        assert_eq!(store.draft(), None);
+        let back = store.restore(removed);
+        assert_eq!(store.handlers()[position(back)].profile, "");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn position(selection: Selection) -> usize {
+        match selection {
+            Selection::Rewrite(i) | Selection::Handler(i) => i,
+        }
+    }
+
+    #[test]
+    fn holding_another_rule_never_writes_a_changed_draft() {
+        let dir = scratch("draft-switch");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 2);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(0));
+        store.set_profile(0, "Work");
+        // The window asks first; the store alone drops the edit rather
+        // than let it reach the file unasked.
+        store.hold(Selection::Handler(1));
+        assert_eq!(store.handlers()[0].profile, "");
+        assert!(!store.needs_save());
+        store.set_profile(1, "Home");
+        store.release();
+        assert_eq!(store.handlers()[1].profile, "");
+        assert_eq!(store.draft(), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_draft_stays_on_its_rule_when_the_file_changes_under_it() {
+        let dir = scratch("draft-rebase");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 2);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(1));
+        store.set_profile(1, "Work");
+
+        // An agent adds a rule above it: the file reloads and the draft
+        // follows its rule down, with no conflict.
+        let mut file = on_disk(&path);
+        file.rules.insert(
+            0,
+            engine::Rule {
+                patterns: vec!["agent.example/*".into()],
+                browser: "Safari".into(),
+                ..engine::Rule::default()
+            },
+        );
+        file.save(&path).unwrap();
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        assert_eq!(store.handler_count(), 3);
+        assert_eq!(store.draft(), Some(Selection::Handler(2)));
+        assert_eq!(store.handlers()[2].profile, "Work");
+        assert_eq!(store.draft_conflict(), None);
+        assert_eq!(store.handlers()[0].patterns, ["agent.example/*"]);
+
+        // The agent changes the draft's own rule: a conflict, and Save
+        // writes the draft over it.
+        let mut file = on_disk(&path);
+        file.rules[2].browser = "Arc".into();
+        file.save(&path).unwrap();
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        assert_eq!(store.draft(), Some(Selection::Handler(2)));
+        assert_eq!(store.draft_conflict(), Some(Conflict::Changed));
+        assert_eq!(
+            store.rail_label(Selection::Handler(2)),
+            "Unsaved changes. Links route by the file's rule 3."
+        );
+        assert_eq!(store.written().rules[2].browser, "Arc");
+        store.save_draft().unwrap();
+        let file = on_disk(&path);
+        assert_eq!(file.rules.len(), 3);
+        assert_eq!(
+            (
+                file.rules[2].browser.as_str(),
+                file.rules[2].profile.as_str()
+            ),
+            ("Firefox", "Work")
+        );
+        assert_eq!(store.draft_conflict(), None);
+
+        // The agent removes it: Save adds the draft back as a new rule.
+        store.set_profile(2, "Home");
+        let mut file = on_disk(&path);
+        file.rules.remove(2);
+        file.save(&path).unwrap();
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        assert_eq!(store.draft_conflict(), Some(Conflict::Removed));
+        assert!(store.draft_is_new());
+        assert_eq!(store.written().rules.len(), 2);
+        store.save_draft().unwrap();
+        assert_eq!(on_disk(&path).rules[2].profile, "Home");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_shifted_file_never_puts_the_draft_on_another_rule() {
+        let dir = scratch("draft-rebase-shifted");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 3);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(2));
+        store.set_profile(2, "Work");
+
+        // An agent adds a rule at the top and changes the draft's rule:
+        // the rule now at index 2 is the old rule 2, not the draft's.
+        let mut file = on_disk(&path);
+        file.rules[2].browser = "Arc".into();
+        file.rules.insert(
+            0,
+            engine::Rule {
+                patterns: vec!["agent.example/*".into()],
+                browser: "Safari".into(),
+                ..engine::Rule::default()
+            },
+        );
+        file.save(&path).unwrap();
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        // Kept as a rule of its own at its old place; Save adds it and
+        // touches no other.
+        assert_eq!(store.draft_conflict(), Some(Conflict::Removed));
+        assert_eq!(store.handler_count(), 5);
+        assert_eq!(store.draft(), Some(Selection::Handler(2)));
+        assert_eq!(store.handlers()[2].profile, "Work");
+        assert_eq!(store.handlers()[3].patterns, ["h1.example/*"]);
+        store.save_draft().unwrap();
+        let file = on_disk(&path);
+        assert_eq!(file.rules.len(), 5);
+        assert_eq!(file.rules[2].profile, "Work");
+        assert_eq!(file.rules[3].patterns, ["h1.example/*"]);
+        assert_eq!(file.rules[3].profile, "", "the old rule 2 is untouched");
+        assert_eq!(file.rules[4].browser, "Arc", "the agent's rule stays");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_import_keeps_the_draft_on_its_rule() {
+        let dir = scratch("draft-import");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 2);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(1));
+        store.set_profile(1, "Work");
+
+        // The importer's write: the file's rules plus one more.
+        let mut file = store.written();
+        file.rules.insert(
+            0,
+            engine::Rule {
+                patterns: vec!["imported.example/*".into()],
+                browser: "Safari".into(),
+                ..engine::Rule::default()
+            },
+        );
+        store.replace_all(file);
+        store.save().unwrap();
+        assert_eq!(store.draft(), Some(Selection::Handler(2)));
+        assert!(store.draft_changed());
+        assert_eq!(store.handlers()[2].profile, "Work");
+        let on_file = on_disk(&path);
+        assert_eq!(on_file.rules.len(), 3, "the draft's rule stays in the file");
+        assert_eq!(on_file.rules[2].profile, "");
+        store.save_draft().unwrap();
+        assert_eq!(on_disk(&path).rules[2].profile, "Work");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

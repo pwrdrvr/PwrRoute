@@ -113,6 +113,15 @@ pub fn set(chrome: Chrome, cx: &mut App) {
     cx.set_global(ChromeOverride(chrome));
 }
 
+/// A ⌘ shortcut as the window's chrome writes it: `mac` ("⌘S") on macOS,
+/// `other` ("Ctrl+S") on Windows and Linux.
+pub fn secondary_key(cx: &App, mac: &'static str, other: &'static str) -> &'static str {
+    match current(cx) {
+        Chrome::Mac => mac,
+        Chrome::Windows | Chrome::Linux => other,
+    }
+}
+
 /// The chrome the strip draws: the one installed, else the host's.
 pub fn current(cx: &App) -> Chrome {
     cx.try_global::<ChromeOverride>()
@@ -891,12 +900,28 @@ pub fn nav_rail(
                 .child(theme::dot(theme::status_warning()))
                 .into_any_element(),
         )
+    } else if app.store.draft_changed() {
+        // A draft with unsaved changes (design: Rule Drafts 1), whichever
+        // screen is in front.
+        Some(
+            div()
+                .id("nav-rules-unsaved")
+                .debug_selector(|| "nav-rules-unsaved".into())
+                .ml_auto()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(theme::dot(theme::status_warning()))
+                .children((rules_count > 0).then(|| count(rules_count.to_string())))
+                .into_any_element(),
+        )
     } else {
         (rules_count > 0).then(|| count(rules_count.to_string()))
     };
     let (dot, line) = routing_line(status);
     if compact {
-        let warning = app.config.is_some() && status.config_error.is_some();
+        let warning =
+            (app.config.is_some() && status.config_error.is_some()) || app.store.draft_changed();
         return compact_rail(app, warning, dot, line, cx);
     }
     let foot = div()
