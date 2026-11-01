@@ -658,6 +658,28 @@ impl AddRule {
     }
 }
 
+/// Which of `urls` a rule with `patterns` catches: any one pattern
+/// matching. The probe returns its hits in `urls`' order, so one walk
+/// lines them up.
+fn patterns_catch(
+    probe: &mut crate::try_it::Probe,
+    patterns: &[String],
+    urls: &[&str],
+) -> Result<Vec<bool>, String> {
+    let mut caught = vec![false; urls.len()];
+    for pattern in patterns {
+        let hits = probe.collisions(pattern, urls)?;
+        let mut hits = hits.iter().peekable();
+        for (at, url) in urls.iter().enumerate() {
+            if hits.peek().is_some_and(|hit| hit.as_str() == *url) {
+                caught[at] = true;
+                hits.next();
+            }
+        }
+    }
+    Ok(caught)
+}
+
 /// A candidate as the pattern field holds it: its patterns, a space
 /// between them.
 fn field_text(candidate: &engine::Candidate) -> String {
@@ -1013,53 +1035,45 @@ impl PwrRoute {
         if patterns.is_empty() || sheet.disabled.is_some() {
             return;
         }
-        // Any one of the rule's patterns matching is a match.
-        let mut caught = |urls: &[&str]| -> Result<Vec<bool>, String> {
-            let mut hit = vec![false; urls.len()];
-            for pattern in &patterns {
-                for url in self.probe.collisions(pattern, urls)? {
-                    for (at, candidate) in urls.iter().enumerate() {
-                        if *candidate == url {
-                            hit[at] = true;
-                        }
-                    }
-                }
-            }
-            Ok(hit)
-        };
-        let nearby = sheet.nearby_hosts();
-        let links: Vec<&str> = nearby.iter().map(|(_, link)| link.as_str()).collect();
-        if let Ok(hits) = caught(&links) {
-            sheet.hosts = nearby
-                .iter()
-                .zip(hits)
-                .map(|((host, _), hit)| (host.clone(), hit))
-                .collect();
-        }
-        let Some(feed) = activity::feed(cx) else {
-            return;
-        };
         // A rule that requires the app only ever sees that app's links.
         let opener = sheet.sender_spec().filter(|_| sheet.only_from);
-        let records: Vec<DispatchRecord> = feed
-            .read(cx)
-            .records()
-            .iter()
-            .filter(|r| (sheet.key.journaled || r.id != sheet.key.id) && r.privacy == Privacy::Full)
-            .filter(|r| !matches!(r.outcome, Outcome::Failed))
-            .filter(|r| match &opener {
-                Some(app) => sent_by(r, app),
-                None => true,
+        let records: Vec<DispatchRecord> = activity::feed(cx)
+            .map(|feed| {
+                feed.read(cx)
+                    .records()
+                    .iter()
+                    .filter(|r| {
+                        (sheet.key.journaled || r.id != sheet.key.id) && r.privacy == Privacy::Full
+                    })
+                    .filter(|r| !matches!(r.outcome, Outcome::Failed))
+                    .filter(|r| match &opener {
+                        Some(app) => sent_by(r, app),
+                        None => true,
+                    })
+                    .cloned()
+                    .collect()
             })
-            .cloned()
+            .unwrap_or_default();
+        // Matches' hosts and the recent links, probed together: one engine
+        // call per pattern.
+        let nearby = sheet.nearby_hosts();
+        let urls: Vec<&str> = nearby
+            .iter()
+            .map(|(_, link)| link.as_str())
+            .chain(records.iter().map(matched_url))
             .collect();
-        let urls: Vec<&str> = records.iter().map(matched_url).collect();
-        match caught(&urls) {
+        match patterns_catch(&mut self.probe, &patterns, &urls) {
             Ok(hits) => {
+                let (near, recent) = hits.split_at(nearby.len());
+                sheet.hosts = nearby
+                    .iter()
+                    .zip(near)
+                    .map(|((host, _), hit)| (host.clone(), *hit))
+                    .collect();
                 sheet.collisions = records
                     .iter()
-                    .zip(hits)
-                    .filter(|(_, hit)| *hit)
+                    .zip(recent)
+                    .filter(|(_, hit)| **hit)
                     .map(|(r, _)| Collision {
                         time: clock(r.received_at),
                         url: matched_url(r).to_owned(),

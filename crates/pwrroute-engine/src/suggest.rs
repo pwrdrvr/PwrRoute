@@ -205,10 +205,12 @@ pub fn suggest_rule(url: &str) -> Suggestion {
             } else {
                 format!("Matches {wider} and every subdomain, for this user name.")
             };
+            // A custom scheme's host may hold a literal `*`.
+            let host = escape(wider);
             suggestion.candidates.push(Candidate {
                 patterns: vec![
-                    format!("{prefix}{userinfo}{wider}{port}/*"),
-                    format!("{prefix}{userinfo}*.{wider}{port}/*"),
+                    format!("{prefix}{userinfo}{host}{port}/*"),
+                    format!("{prefix}{userinfo}*.{host}{port}/*"),
                 ],
                 why,
                 domain: Some(wider.to_owned()),
@@ -244,9 +246,12 @@ fn wider_domains(host: &str) -> Vec<&str> {
     if host.ends_with('.') || !host.contains('.') {
         return Vec::new();
     }
-    let Some(registrable) = psl::domain_str(host) else {
+    // The list is lowercase, and a custom scheme's host keeps its case:
+    // look it up lowercased, then take the same bytes of the host as given.
+    let Some(registrable) = psl::domain_str(&host.to_ascii_lowercase()).map(str::len) else {
         return Vec::new();
     };
+    let registrable = &host[host.len() - registrable..];
     if registrable == host {
         return vec![host];
     }
@@ -452,6 +457,23 @@ mod tests {
                 joined(&s)
             );
         }
+    }
+
+    #[test]
+    fn a_custom_schemes_host_is_placed_whatever_its_case() {
+        // Only special schemes lowercase their host.
+        assert_eq!(
+            candidates("foo://Shop.Example.CO.UK/cart/x")[2..],
+            ["foo://Example.CO.UK/* foo://*.Example.CO.UK/*"]
+        );
+        // A literal `*` in a host stays literal.
+        assert_eq!(
+            candidates("foo://x.a*b.example.com/p/q")[2..],
+            [
+                "foo://a\\*b.example.com/* foo://*.a\\*b.example.com/*",
+                "foo://example.com/* foo://*.example.com/*"
+            ]
+        );
     }
 
     #[test]

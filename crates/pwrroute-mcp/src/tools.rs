@@ -695,7 +695,8 @@ fn suggest(b: &Backends, url: &str, full: bool) -> anyhow::Result<Value> {
         let mut caught = vec![false; recent.len()];
         for pattern in &candidate.patterns {
             for hit in b.tester.collisions(pattern, &recent)? {
-                if let Some(at) = recent.iter().position(|u| *u == hit) {
+                // `recent` is sorted and deduplicated.
+                if let Ok(at) = recent.binary_search(&hit) {
                     caught[at] = true;
                 }
             }
