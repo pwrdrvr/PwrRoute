@@ -188,6 +188,17 @@ impl Charge {
 /// Whether `a` and `b` name one file: the same path, or the same file once
 /// links are followed.
 pub fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(a), Ok(b)) = (a.metadata(), b.metadata())
+            && a.dev() == b.dev()
+            && a.ino() == b.ino()
+        {
+            return true;
+        }
+    }
+
     a == b
         || matches!(
             (a.canonicalize(), b.canonicalize()),
@@ -207,6 +218,7 @@ pub struct Plan {
     pub duplicates: usize,
     /// Of the handlers, how many came from a suggestion.
     pub suggestions: usize,
+    pub tests: usize,
 }
 
 impl Plan {
@@ -219,6 +231,8 @@ impl Plan {
 /// The importer as the window draws it.
 #[derive(Clone, Debug)]
 pub struct ImportModel {
+    /// A whole Finicky rules file, copied without converting through JS.
+    pub rules_file: Option<RulesFile>,
     /// The config, as the engine loaded it.
     pub path: PathBuf,
     /// As the design names it: `~/.finicky.ts`.
@@ -245,6 +259,72 @@ pub struct ImportModel {
 }
 
 impl ImportModel {
+    /// Reads JSON directly so enabled flags, examples, tests and options survive.
+    pub fn read_rules(
+        path: &Path,
+        home: Option<&Path>,
+        in_charge: Option<&Path>,
+        existing: RulesFile,
+    ) -> Self {
+        let shown = display_path(path, home);
+        // Unlike RulesFile::load, a disappeared source is an error, not an empty file.
+        let loaded = std::fs::read_to_string(path)
+            .map_err(|error| error.to_string())
+            .and_then(|text| {
+                serde_json::from_str::<RulesFile>(&text).map_err(|error| error.to_string())
+            });
+        let mut model = Self::failed(path, shown, String::new());
+        model.charge = Charge::of(path, in_charge, home);
+        model.existing = existing;
+        match loaded {
+            Ok(file) => {
+                model.problem = None;
+                model.items = file
+                    .rewrites
+                    .iter()
+                    .cloned()
+                    .map(Visual::Rewrite)
+                    .chain(file.rules.iter().cloned().map(Visual::Handler))
+                    .map(|visual| Item {
+                        kind: match &visual {
+                            Visual::Rewrite(_) => Kind::Rewrite,
+                            _ => Kind::Handler,
+                        },
+                        row: visual_row(&visual),
+                        verdict: Verdict::Imports(visual),
+                        source: None,
+                        checked: true,
+                    })
+                    .collect();
+                model.rules_file = Some(file);
+            }
+            Err(error) => model.problem = Some(error),
+        }
+        model
+    }
+
+    /// Refuse aliases of Finicky's file and conflicting named metadata.
+    pub fn validate_target(&self, target: Option<&Path>, base: &RulesFile) -> Result<(), String> {
+        if let Some(source) = &self.rules_file {
+            let target = target.ok_or("No PwrRoute rules path to copy into.")?;
+            if same_file(&self.path, target) {
+                return Err("PwrRoute's rules path points to Finicky's file. Choose a separate file before copying.".into());
+            }
+            if source.destinations.iter().any(|incoming| {
+                base.destinations
+                    .iter()
+                    .any(|old| old.name == incoming.name && old != incoming)
+            }) || source.sets.iter().any(|incoming| {
+                base.sets
+                    .iter()
+                    .any(|old| old.name == incoming.name && old != incoming)
+            }) {
+                return Err("A destination or rule set with the same name has different settings. Rename it before copying.".into());
+            }
+        }
+        Ok(())
+    }
+
     /// Reads the config at `path` the way the router does and reviews it,
     /// probing suggestions on `recent` links too. `in_charge` is the config
     /// the router reads now, if any; `existing` is `rules.json` as it
@@ -313,6 +393,7 @@ impl ImportModel {
             .position(|item| item.label() == Label::Imports)
             .unwrap_or(0);
         Self {
+            rules_file: None,
             path: path.to_path_buf(),
             shown,
             items,
@@ -333,6 +414,7 @@ impl ImportModel {
     /// nothing.
     pub fn failed(path: &Path, shown: String, problem: String) -> Self {
         Self {
+            rules_file: None,
             path: path.to_path_buf(),
             shown,
             items: Vec::new(),
@@ -431,7 +513,8 @@ impl ImportModel {
     /// Place is a choice only when there are visual handlers already and
     /// handlers to put among them.
     pub fn place_needed(&self) -> bool {
-        !self.existing.rules.is_empty()
+        self.rules_file.is_none()
+            && !self.existing.rules.is_empty()
             && self
                 .items
                 .iter()
@@ -444,6 +527,9 @@ impl ImportModel {
     /// the reader turns that one off. With no config in charge there is
     /// nothing to choose.
     pub fn source_needed(&self) -> bool {
+        if self.rules_file.is_some() {
+            return false;
+        }
         match self.charge {
             Charge::This => self.items.iter().any(|item| !item.checked),
             Charge::Other { .. } => true,
@@ -459,6 +545,9 @@ impl ImportModel {
     /// The source the import ends with: the reader's choice, or visual
     /// rules when nothing stays in JS or no config is in charge.
     pub fn final_source(&self) -> SourceChoice {
+        if self.rules_file.is_some() {
+            return SourceChoice::KeepConfig;
+        }
         if self.source_needed() {
             self.source
         } else {
@@ -477,6 +566,9 @@ impl ImportModel {
     /// the file just imported is dismissed from the Rules screen's "Found
     /// …" notice.
     pub fn source_after(&self, current: &SourceSettings) -> SourceSettings {
+        if self.rules_file.is_some() {
+            return current.clone();
+        }
         let mut next = current.clone();
         if self.stops_config() {
             next.visual_only = true;
@@ -491,6 +583,9 @@ impl ImportModel {
     /// What the router reads after the import, for the Rules screen's
     /// banner.
     pub fn outcome(&self) -> String {
+        if self.rules_file.is_some() {
+            return "Copied into PwrRoute. Finicky’s file is unchanged.".into();
+        }
         match (self.final_source(), &self.charge) {
             (SourceChoice::KeepConfig, Charge::Other { shown, .. }) => {
                 format!("{shown} stays in charge and runs first.")
@@ -554,6 +649,9 @@ impl ImportModel {
     /// already holds is skipped, except when the import replaces the
     /// file's handlers.
     pub fn plan(&self, base: &RulesFile) -> Plan {
+        if let Some(source) = &self.rules_file {
+            return copy_rules(source, base);
+        }
         let mut file = base.clone();
         let duplicates = self.duplicates(base);
         let is_duplicate = |i: usize| duplicates.iter().any(|(item, _)| *item == i);
@@ -602,6 +700,7 @@ impl ImportModel {
             default: default.is_some(),
             duplicates: skipped,
             suggestions,
+            tests: 0,
         }
     }
 
@@ -643,6 +742,61 @@ impl ImportModel {
     /// "Import 5 rules"
     pub fn import_label(&self, plan: &Plan) -> String {
         format!("Import {}", plural(plan.count(), "rule"))
+    }
+}
+
+/// Append without changing existing precedence, defaults or rule ordering.
+/// Equality includes examples and flags, so different rules are never silently lost.
+fn copy_rules(source: &RulesFile, base: &RulesFile) -> Plan {
+    let mut file = base.clone();
+    let mut duplicates = 0;
+    for rule in &source.rules {
+        if base.rules.contains(rule) {
+            duplicates += 1;
+        } else {
+            file.rules.push(rule.clone());
+        }
+    }
+    for rewrite in &source.rewrites {
+        if base.rewrites.contains(rewrite) {
+            duplicates += 1;
+        } else {
+            file.rewrites.push(rewrite.clone());
+        }
+    }
+    for test in &source.tests {
+        if !base.tests.contains(test) {
+            file.tests.push(test.clone());
+        }
+    }
+    for destination in &source.destinations {
+        if !base.destinations.contains(destination) {
+            file.destinations.push(destination.clone());
+        }
+    }
+    for set in &source.sets {
+        if !base.sets.contains(set) {
+            file.sets.push(set.clone());
+        }
+    }
+    let default = base.default_browser.is_empty() && !source.default_browser.is_empty();
+    if default {
+        file.default_browser.clone_from(&source.default_browser);
+        file.default_profile.clone_from(&source.default_profile);
+        file.default_destination
+            .clone_from(&source.default_destination);
+    }
+    if file.options.is_none() {
+        file.options = source.options;
+    }
+    Plan {
+        handlers: file.rules.len() - base.rules.len(),
+        rewrites: file.rewrites.len() - base.rewrites.len(),
+        tests: file.tests.len() - base.tests.len(),
+        file,
+        default,
+        duplicates,
+        suggestions: 0,
     }
 }
 
@@ -701,6 +855,155 @@ fn shorten(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use pwrroute_engine::{Rewrite, RewriteAction};
+
+    fn json_source() -> RulesFile {
+        serde_json::from_str(
+            r#"{
+          "defaultBrowser":"Firefox", "defaultProfile":"Personal",
+          "options":{"keepRunning":false},
+          "rules":[
+            {"match":"example.com/*", "browser":"Safari", "examples":["https://example.com/a"]},
+            {"match":"disabled.example.org/*", "browser":"Firefox", "enabled":false}
+          ],
+          "tests":[{"url":"https://example.com/a", "expect":{"browser":"Safari"}}]
+        }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn copies_finicky_json_without_js_conversion_or_source_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_path = dir.path().join("Finicky/rules.json");
+        let source = json_source();
+        source.save(&source_path).unwrap();
+        let before = std::fs::read(&source_path).unwrap();
+        let config = dir.path().join(".finicky.js");
+        std::fs::write(&config, "export default {defaultBrowser: 'Firefox'}").unwrap();
+        let model =
+            ImportModel::read_rules(&source_path, None, Some(&config), RulesFile::default());
+        assert_eq!(model.problem, None);
+        assert!(!model.place_needed());
+        assert!(!model.source_needed());
+        let settings = SourceSettings {
+            config: Some(config.clone()),
+            ..Default::default()
+        };
+        assert_eq!(model.source_after(&settings), settings);
+        let plan = model.plan(&RulesFile::default());
+        assert_eq!(plan.file, source);
+        let target = dir.path().join("PwrRoute/rules.json");
+        model
+            .validate_target(Some(&target), &RulesFile::default())
+            .unwrap();
+        plan.file.save(&target).unwrap();
+        let engine = Engine::from_sources(
+            &pwrroute_engine::Sources {
+                config: Some(config),
+                rules: RulesFile::load(&target).unwrap(),
+                ..Default::default()
+            },
+            Rc::new(NativeHost::new()),
+            Limits::default(),
+        )
+        .unwrap();
+        let report = engine.test_rules(None).unwrap();
+        assert_eq!(report.total, 2);
+        assert_eq!(report.passed, 2);
+        assert_eq!(std::fs::read(source_path).unwrap(), before);
+    }
+
+    #[test]
+    fn json_copy_appends_and_repeated_copy_skips_exact_duplicates() {
+        let source = json_source();
+        let base = RulesFile {
+            default_browser: "Google Chrome".into(),
+            rules: vec![handler(
+                &["existing.example.net/*"],
+                "Google Chrome",
+                "Work",
+            )],
+            precedence: pwrroute_engine::Precedence::PwrRoute,
+            ..Default::default()
+        };
+        let plan = copy_rules(&source, &base);
+        assert_eq!(plan.file.rules[0], base.rules[0]);
+        assert_eq!(&plan.file.rules[1..], source.rules.as_slice());
+        assert_eq!(plan.file.default_browser, base.default_browser);
+        assert_eq!(plan.file.precedence, base.precedence);
+        assert_eq!(plan.file.tests, source.tests);
+        let again = copy_rules(&source, &plan.file);
+        assert_eq!(again.file, plan.file);
+        assert_eq!(again.duplicates, 2);
+        assert_eq!(again.count(), 0);
+    }
+
+    #[test]
+    fn conflicting_saved_examples_are_reported_after_appending() {
+        let source = json_source();
+        let base = RulesFile {
+            rules: vec![handler(&["example.com/*"], "Firefox", "")],
+            ..Default::default()
+        };
+        let plan = copy_rules(&source, &base);
+        let engine = Engine::from_sources(
+            &pwrroute_engine::Sources {
+                rules: plan.file,
+                ..Default::default()
+            },
+            Rc::new(NativeHost::new()),
+            Limits::default(),
+        )
+        .unwrap();
+        let report = engine.test_rules(None).unwrap();
+        assert_eq!(report.total, 2);
+        assert_eq!(report.failures.len(), 2);
+    }
+
+    #[test]
+    fn missing_or_malformed_json_cannot_be_imported() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.json");
+        assert!(
+            ImportModel::read_rules(&path, None, None, RulesFile::default())
+                .problem
+                .is_some()
+        );
+        std::fs::write(&path, "{bad").unwrap();
+        assert!(
+            ImportModel::read_rules(&path, None, None, RulesFile::default())
+                .problem
+                .is_some()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn json_copy_refuses_source_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.json");
+        json_source().save(&path).unwrap();
+        let model = ImportModel::read_rules(&path, None, None, RulesFile::default());
+        assert!(
+            model
+                .validate_target(Some(&path), &RulesFile::default())
+                .is_err()
+        );
+        let link = dir.path().join("symlink.json");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(
+            model
+                .validate_target(Some(&link), &RulesFile::default())
+                .is_err()
+        );
+        let hard = dir.path().join("hard.json");
+        std::fs::hard_link(&path, &hard).unwrap();
+        assert!(
+            model
+                .validate_target(Some(&hard), &RulesFile::default())
+                .is_err()
+        );
+    }
 
     /// The design's config (Finicky Importer 2a), from the fixtures.
     fn fixture_config() -> PathBuf {

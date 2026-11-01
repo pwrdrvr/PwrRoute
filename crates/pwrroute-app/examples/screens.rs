@@ -1240,6 +1240,7 @@ fn main() {
         };
         let chrome_work = || Some(BrowserLabel::new("Ch", "Google Chrome", Some("Work")));
         let hooks = || FirstRunHooks {
+            on_import_rules: std::rc::Rc::new(|_, reply, cx| reply(None, cx)),
             on_fallback: std::rc::Rc::new(|_, _| Ok(())),
             on_precedence: std::rc::Rc::new(|_, _| Ok(())),
             on_import: std::rc::Rc::new(|_, _, _| {}),
@@ -1313,6 +1314,7 @@ fn main() {
     let importer_config =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/importer/finicky.ts");
     for (name, step, selected) in [
+        ("importer-finicky-rules", importer::Step::Review, 0),
         ("importer-review", importer::Step::Review, 3),
         ("importer-review-exact", importer::Step::Review, 4),
         ("importer-place", importer::Step::Place, 0),
@@ -1341,15 +1343,33 @@ fn main() {
             ..pwrroute_engine::RulesFile::default()
         };
         // Read as the config in charge, as the design draws it.
-        let mut model = importer::ImportModel::read(
-            &importer_config,
-            None,
-            Some(&importer_config),
-            &[],
-            existing,
-        );
+        let mut model = if name == "importer-finicky-rules" {
+            importer::ImportModel::read_rules(
+                &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("fixtures/importer/finicky-rules.json"),
+                None,
+                None,
+                pwrroute_engine::RulesFile {
+                    default_browser: "Safari".into(),
+                    ..Default::default()
+                },
+            )
+        } else {
+            importer::ImportModel::read(
+                &importer_config,
+                None,
+                Some(&importer_config),
+                &[],
+                existing,
+            )
+        };
         // Shown as the design names it, not by the fixture's path.
-        model.shown = "~/.finicky.ts".into();
+        model.shown = if name == "importer-finicky-rules" {
+            "~/Library/Application Support/Finicky/rules.json"
+        } else {
+            "~/.finicky.ts"
+        }
+        .into();
         model.selected = selected;
         model.step = step;
         let handle = cx
@@ -1854,6 +1874,7 @@ fn main() {
             ..access_blocked.clone()
         };
         let hooks = || FirstRunHooks {
+            on_import_rules: std::rc::Rc::new(|_, reply, cx| reply(None, cx)),
             on_fallback: std::rc::Rc::new(|_, _| Ok(())),
             on_precedence: std::rc::Rc::new(|_, _| Ok(())),
             on_import: std::rc::Rc::new(|_, _, _| {}),
@@ -1863,7 +1884,15 @@ fn main() {
             on_set_default_browser: std::rc::Rc::new(|_| Ok(())),
             on_finish: std::rc::Rc::new(|_, _| {}),
         };
+        let finicky_rules = FirstRunModel {
+            finicky_rules: Some((
+                "/home/fixture/Library/Application Support/Finicky/rules.json".into(),
+                "~/Library/Application Support/Finicky/rules.json".into(),
+            )),
+            ..plain.clone()
+        };
         for (name, model, picking) in [
+            ("first-run-finicky-rules", finicky_rules, Picking::None),
             ("first-run-config", found, Picking::None),
             ("first-run-importing", importing, Picking::None),
             ("first-run-broken", broken, Picking::None),
@@ -2498,6 +2527,10 @@ fn main() {
     // not saved.
     for (name, configuration) in [
         (
+            "settings-configuration-finicky-rules",
+            settings::fixtures::configuration(),
+        ),
+        (
             "settings-configuration-everything-else",
             settings::fixtures::configuration_everything_else(),
         ),
@@ -2510,6 +2543,19 @@ fn main() {
             settings::fixtures::configuration_everything_else_not_saved(),
         ),
     ] {
+        let mut configuration = configuration;
+        if name == "settings-configuration-finicky-rules" {
+            configuration.import = None;
+            configuration.finicky = None;
+            configuration.can_switch = false;
+            configuration.config_files.clear();
+            configuration.config_files.push(settings::model::ConfigFile {
+                shown: "~/Library/Application Support/Finicky/rules.json".into(),
+                path: "/home/fixture/Library/Application Support/Finicky/rules.json".into(),
+                state: settings::model::ConfigFileState::FinickyRules { loaded: true },
+                line: "2 rules · 0 rewrites · 1 saved test. Copy into PwrRoute; Finicky’s file is never changed.".into(),
+            });
+        }
         let mut cx = HeadlessAppContext::with_platform(
             gpui_kit::platform::current_platform(true).text_system(),
             Arc::new(assets::Assets),
@@ -2520,16 +2566,29 @@ fn main() {
             settings::install(cx);
         });
         let handle = cx
-            .open_window(win(998.0, 620.0), |_, cx| {
-                cx.new(|cx| {
-                    let mut model = settings::fixtures::model();
-                    model.configuration = configuration;
-                    let mut view =
-                        settings::SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx);
-                    view.pane = settings::Pane::Configuration;
-                    view
-                })
-            })
+            .open_window(
+                win(
+                    998.0,
+                    if name == "settings-configuration-finicky-rules" {
+                        1000.0
+                    } else {
+                        620.0
+                    },
+                ),
+                |_, cx| {
+                    cx.new(|cx| {
+                        let mut model = settings::fixtures::model();
+                        model.configuration = configuration;
+                        let mut view = settings::SettingsWindow::new(
+                            model,
+                            std::rc::Rc::new(|_, _, _| {}),
+                            cx,
+                        );
+                        view.pane = settings::Pane::Configuration;
+                        view
+                    })
+                },
+            )
             .expect("open a headless window");
         cx.allow_parking();
         for _ in 0..draws() {

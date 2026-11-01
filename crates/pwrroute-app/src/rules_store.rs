@@ -134,6 +134,10 @@ pub struct RulesStore {
 }
 
 impl RulesStore {
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     /// Opens the rules at `path`. A missing file is empty; a file that does
     /// not parse opens empty too, with the error in [`RulesStore::status`],
     /// and is never overwritten.

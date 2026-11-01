@@ -219,6 +219,10 @@ pub struct FirstRunModel {
     /// The config step's subject. `None`: no Finicky config was found, and
     /// the window has two steps.
     pub finicky: Option<FinickyConfig>,
+    /// Finicky’s visual rules, independently of any JavaScript config.
+    pub finicky_rules: Option<(std::path::PathBuf, String)>,
+    pub rules_import_status: Option<String>,
+    pub copying_rules: bool,
     pub import: Option<ImportChoice>,
     /// The importer is open, from "Import N rules".
     pub importing: bool,
@@ -1037,6 +1041,10 @@ type ImportHook = Rc<dyn Fn(ImportChoice, ImportReply, &mut App)>;
 /// A hook that answers: the browsers read again, or why a request failed.
 type Ask<T> = Rc<dyn Fn(&mut App) -> T>;
 
+/// A copied file’s resulting rules and test summary; None when cancelled.
+pub type RulesImportReply = Rc<dyn Fn(Option<(Imported, String)>, &mut App)>;
+pub type RulesImportHook = Rc<dyn Fn(std::path::PathBuf, RulesImportReply, &mut App)>;
+
 /// How the window was left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Finish {
@@ -1068,6 +1076,7 @@ pub struct FirstRunHooks {
     /// The config step's answer. Keep and Don't use it are done at once;
     /// Import opens the importer, and the reply says how it was left.
     pub on_import: ImportHook,
+    pub on_import_rules: RulesImportHook,
     /// "Look again": the browsers on this machine, read again.
     pub on_rescan: Ask<Vec<BrowserChoice>>,
     /// The access step's "Open Files & Folders": System Settings at the
@@ -1503,6 +1512,9 @@ impl Render for FirstRun {
                             .px(px(28.0))
                             .pb(px(22.0))
                             .child(header)
+                            .when(model.finicky_rules.is_some(), |body| {
+                                body.child(rules_import_card(model, cx))
+                            })
                             .child(body)
                             .child(footer(model, cx)),
                     ),
@@ -2090,6 +2102,70 @@ fn detail_line(content: impl Into<SharedString>) -> Div {
         .line_height(px(15.75))
         .text_color(theme::text_subtle())
         .child(content.into())
+}
+
+/// Optional migration, following the first-run step card’s spacing and controls.
+fn rules_import_card(model: &FirstRunModel, cx: &mut Context<'_, FirstRun>) -> Div {
+    let Some((path, shown)) = &model.finicky_rules else {
+        return div();
+    };
+    let path = path.clone();
+    let mut body = div().flex().flex_col().gap(px(8.0))
+        .child(text("Bring your Finicky visual rules", 13.0, 600.0, theme::text_primary()))
+        .child(paragraph(format!("Found {shown}. Copy rules into PwrRoute, after any rules you already have. Finicky’s file is never changed.")));
+    if let Some(status) = &model.rules_import_status {
+        body = body.child(paragraph(status.clone()));
+    } else if model.copying_rules {
+        body = body.child(paragraph("Importing…"));
+    } else {
+        body = body.child(
+            button(
+                "first-run-copy-finicky-rules",
+                "Review copy…",
+                Kind::Primary,
+            )
+            .on_click(
+                cx.listener(move |this: &mut FirstRun, _: &ClickEvent, window, cx| {
+                    this.model.copying_rules = true;
+                    let handle = window.window_handle();
+                    let weak = cx.entity().downgrade();
+                    let reply: RulesImportReply = Rc::new(move |result, cx| {
+                        let _ = weak.update(cx, |this, cx| {
+                            this.model.copying_rules = false;
+                            if let Some((imported, status)) = result {
+                                this.model.rules = imported.rules;
+                                if !imported.default_browser.is_empty() {
+                                    this.model.fallback = Some(label_for(
+                                        &this.model.browsers,
+                                        &imported.default_browser,
+                                        &imported.default_profile,
+                                    ));
+                                }
+                                this.model.rules_import_status = Some(status);
+                            }
+                            cx.notify();
+                        });
+                        cx.defer(move |cx| {
+                            let _ = handle.update(cx, |_, window, cx| {
+                                crate::menu_bar::bring_forward(window, cx);
+                            });
+                        });
+                    });
+                    (this.hooks.on_import_rules)(path.clone(), reply, cx);
+                    cx.notify();
+                }),
+            )
+            .map(|button| div().flex().child(button)),
+        );
+    }
+    div()
+        .py(px(14.0))
+        .px(px(14.0))
+        .border_1()
+        .border_color(theme::border_default())
+        .rounded(px(10.0))
+        .bg(theme::bg_panel())
+        .child(body)
 }
 
 /// The config step (4a-4c): what was found and the three answers, or what
@@ -3124,6 +3200,7 @@ mod tests {
         let fallback_fails = calls.save_fails.clone();
         let precedence_fails = calls.save_fails.clone();
         let hooks = FirstRunHooks {
+            on_import_rules: Rc::new(|_, reply, cx| reply(None, cx)),
             on_fallback: Rc::new(move |choice, _| {
                 if let Some(reason) = fallback_fails.borrow().clone() {
                     return Err(reason);

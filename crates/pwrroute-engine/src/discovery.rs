@@ -93,6 +93,17 @@ pub fn find_config(candidates: &[PathBuf]) -> Option<PathBuf> {
         .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
 }
 
+/// Finicky 4.4-alpha's visual rules. Check only this exact file; never
+/// enumerate or watch its parent directory. Finicky is a macOS app, so
+/// this location stays the same even when importing a migrated home.
+pub fn find_finicky_rules(env: &Environment) -> Option<PathBuf> {
+    let path = env
+        .home
+        .as_ref()?
+        .join("Library/Application Support/Finicky/rules.json");
+    path.is_file().then_some(path)
+}
+
 /// Where PwrRoute keeps `rules.json`.
 pub fn rules_path(env: &Environment) -> Option<PathBuf> {
     config_dir(env).map(|d| d.join("PwrRoute").join("rules.json"))
@@ -211,6 +222,26 @@ mod tests {
             find_config(&config_candidates(&env)),
             Some(home.join("real.js"))
         );
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn finicky_rules_checks_only_the_exact_file() {
+        let home = scratch("finicky-rules");
+        let env = Environment {
+            home: Some(home.clone()),
+            ..Environment::default()
+        };
+        assert_eq!(find_finicky_rules(&env), None);
+        let path = home.join("Library/Application Support/Finicky/rules.json");
+        fs::create_dir_all(&path).unwrap();
+        assert_eq!(find_finicky_rules(&env), None);
+        fs::remove_dir(&path).unwrap();
+        fs::write(path.with_file_name("other.json"), "{}").unwrap();
+        assert_eq!(find_finicky_rules(&env), None);
+        fs::write(&path, "{}").unwrap();
+        assert_eq!(find_finicky_rules(&env), Some(path));
+        assert_eq!(find_finicky_rules(&Environment::default()), None);
         fs::remove_dir_all(home).unwrap();
     }
 
