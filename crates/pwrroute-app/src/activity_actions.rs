@@ -1282,10 +1282,7 @@ impl PwrRoute {
 /// Add a rule's key as the window's chrome writes it: ⌘N on macOS,
 /// Ctrl+N on Windows and Linux. `PwrRoute::activity_key` handles it.
 pub fn add_rule_shortcut(cx: &App) -> &'static str {
-    match crate::chrome::current(cx) {
-        crate::chrome::Chrome::Mac => "\u{2318}N",
-        crate::chrome::Chrome::Windows | crate::chrome::Chrome::Linux => "Ctrl+N",
-    }
+    crate::chrome::secondary_key(cx, "\u{2318}N", "Ctrl+N")
 }
 
 /// `.menu`: the row's "⋯" menu (design 2b), under the button while

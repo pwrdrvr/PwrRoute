@@ -1434,10 +1434,7 @@ pub fn lifted(app: &PwrRoute, selection: Selection, cx: &App) -> bool {
 /// Undo's key as the window's chrome writes it: ⌘Z on macOS, Ctrl+Z on
 /// Windows and Linux.
 pub fn undo_shortcut(cx: &gpui_kit::App) -> &'static str {
-    match crate::chrome::current(cx) {
-        crate::chrome::Chrome::Mac => "\u{2318}Z",
-        crate::chrome::Chrome::Windows | crate::chrome::Chrome::Linux => "Ctrl+Z",
-    }
+    crate::chrome::secondary_key(cx, "\u{2318}Z", "Ctrl+Z")
 }
 
 #[cfg(test)]

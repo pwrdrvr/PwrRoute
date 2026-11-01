@@ -267,10 +267,11 @@ their own modules.
   the window's close button and ⌘W) goes through
   `PwrRoute::ask_before_leaving`: the rail's foot asks Save, Discard or
   Keep editing (Return, Esc), and `answer_leave` goes on. The foot sits
-  under the scrolling fields, never below the fold. A reload carries the
-  draft onto the file as read (`RulesStore::rebase`): onto its rule, or as
-  `Conflict::Changed`/`Removed` with a banner when the other writer
-  changed or removed that rule. The Overview draws `routed()`, the rules as
+  under the scrolling fields, never below the fold. A reload, an import or
+  Undo import carries the draft onto the new file (`RulesStore::rebase`):
+  onto its rule, or as `Conflict::Changed` (same place, same length, same
+  neighbors) or `Removed` (kept as a rule of its own, never over another)
+  with a banner when the other writer changed or removed that rule. The Overview draws `routed()`, the rules as
   the router has them. Quit does not ask.
 - **The Rules screen follows `rules.json`'s other writers.** The store
   (`rules_store.rs`) stamps the bytes it last read or wrote, and

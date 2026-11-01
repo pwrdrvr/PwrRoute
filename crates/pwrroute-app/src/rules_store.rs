@@ -130,20 +130,38 @@ pub enum Discarded {
     New(Box<Removed>),
 }
 
-/// The draft's rule across a reload: where it was and what it held.
+/// The draft's rule across a reload: where it was, what it held, and the
+/// file's rules either side of it.
+struct Carry<T> {
+    at: usize,
+    len: usize,
+    before: Option<T>,
+    after: Option<T>,
+    value: T,
+    saved: Option<T>,
+}
+
+impl<T: Clone> Carry<T> {
+    /// The entry at `at` of `list`, with its neighbors as the file has them.
+    fn of(list: &[Entry<T>], saved: &HashMap<u64, T>, at: usize) -> Self {
+        let filed = |i: usize| {
+            list.get(i)
+                .map(|e| saved.get(&e.id).unwrap_or(&e.value).clone())
+        };
+        Self {
+            at,
+            len: list.len(),
+            before: at.checked_sub(1).and_then(filed),
+            after: filed(at + 1),
+            value: list[at].value.clone(),
+            saved: saved.get(&list[at].id).cloned(),
+        }
+    }
+}
+
 enum Carried {
-    Rewrite {
-        at: usize,
-        len: usize,
-        value: engine::Rewrite,
-        saved: Option<engine::Rewrite>,
-    },
-    Rule {
-        at: usize,
-        len: usize,
-        value: engine::Rule,
-        saved: Option<engine::Rule>,
-    },
+    Rewrite(Box<Carry<engine::Rewrite>>),
+    Rule(Box<Carry<engine::Rule>>),
 }
 
 /// Where `saved` landed in a list read again: the same place if it is
@@ -310,7 +328,6 @@ impl RulesStore {
         self.rewrites.is_empty() && self.rules.is_empty()
     }
 
-    #[cfg(test)]
     pub fn rewrite_count(&self) -> usize {
         self.rewrites.len()
     }
@@ -815,47 +832,60 @@ impl RulesStore {
             return None;
         }
         Some(match self.draft()? {
-            Selection::Rewrite(at) => Carried::Rewrite {
+            Selection::Rewrite(at) => Carried::Rewrite(Box::new(Carry::of(
+                &self.rewrites,
+                &self.saved_rewrites,
                 at,
-                len: self.rewrites.len(),
-                value: self.rewrites[at].value.clone(),
-                saved: self.saved_rewrites.get(&self.rewrites[at].id).cloned(),
-            },
-            Selection::Handler(at) => Carried::Rule {
-                at,
-                len: self.rules.len(),
-                value: self.rules[at].value.clone(),
-                saved: self.saved_rules.get(&self.rules[at].id).cloned(),
-            },
+            ))),
+            Selection::Handler(at) => {
+                Carried::Rule(Box::new(Carry::of(&self.rules, &self.saved_rules, at)))
+            }
         })
     }
 
     /// Puts a carried draft back on the file just read (design: Rule
     /// Drafts 1f): on its rule when the file still has the version it was
     /// edited from; on the rule at its place, as [`Conflict::Changed`],
-    /// when that version is gone but the list is as long; else as a new
-    /// rule at its place ([`Conflict::Removed`], or no conflict for a rule
-    /// that was never saved).
+    /// when that version is gone but the list is as long and the rules
+    /// either side are the same; else as a new rule at its place
+    /// ([`Conflict::Removed`], or no conflict for a rule never saved), so
+    /// Save never writes over a rule the draft did not start from.
     fn rebase(&mut self, carried: Carried) {
         fn place<T: Clone + PartialEq>(
             list: &mut Vec<Entry<T>>,
             next: &mut impl FnMut() -> u64,
-            (at, len, value, saved): (usize, usize, T, Option<T>),
-        ) -> (u64, Option<Conflict>) {
+            carry: Carry<T>,
+        ) -> (u64, Option<Conflict>, Option<T>) {
+            let Carry {
+                at,
+                len,
+                before,
+                after,
+                value,
+                saved,
+            } = carry;
             if let Some(saved) = &saved {
                 if let Some(i) = find_saved(list, at, saved) {
-                    list[i].value = value;
-                    return (list[i].id, None);
+                    let filed = std::mem::replace(&mut list[i].value, value);
+                    return (list[i].id, None, Some(filed));
                 }
-                if list.len() >= len && at < list.len() {
-                    list[at].value = value;
-                    return (list[at].id, Some(Conflict::Changed));
+                // The same place only while the list around it is as it
+                // was: same length, same neighbors. A shifted list could put
+                // another rule there, and Save would write over it.
+                let around = |i: Option<usize>| i.and_then(|i| list.get(i)).map(|e| &e.value);
+                if list.len() == len
+                    && at < len
+                    && around(at.checked_sub(1)) == before.as_ref()
+                    && around(Some(at + 1)) == after.as_ref()
+                {
+                    let filed = std::mem::replace(&mut list[at].value, value);
+                    return (list[at].id, Some(Conflict::Changed), Some(filed));
                 }
             }
             let id = next();
             let at = at.min(list.len());
             list.insert(at, Entry { id, value });
-            (id, saved.map(|_| Conflict::Removed))
+            (id, saved.map(|_| Conflict::Removed), None)
         }
         let mut next_id = self.next_id;
         let mut next = || {
@@ -863,19 +893,23 @@ impl RulesStore {
             next_id += 1;
             id
         };
+        // The file's version of the rule is its saved version: what the file
+        // keeps until Save (a fresh `replace_all` has none recorded yet).
         let (id, conflict) = match carried {
-            Carried::Rewrite {
-                at,
-                len,
-                value,
-                saved,
-            } => place(&mut self.rewrites, &mut next, (at, len, value, saved)),
-            Carried::Rule {
-                at,
-                len,
-                value,
-                saved,
-            } => place(&mut self.rules, &mut next, (at, len, value, saved)),
+            Carried::Rewrite(carry) => {
+                let (id, conflict, filed) = place(&mut self.rewrites, &mut next, *carry);
+                if let Some(filed) = filed {
+                    self.saved_rewrites.entry(id).or_insert(filed);
+                }
+                (id, conflict)
+            }
+            Carried::Rule(carry) => {
+                let (id, conflict, filed) = place(&mut self.rules, &mut next, *carry);
+                if let Some(filed) = filed {
+                    self.saved_rules.entry(id).or_insert(filed);
+                }
+                (id, conflict)
+            }
         };
         self.next_id = next_id;
         self.draft = Some(Draft { id, conflict });
@@ -1339,6 +1373,8 @@ impl RulesStore {
             rules: Vec::new(),
             ..file.clone()
         };
+        // A draft with unsaved changes rides on the new file, as on a reload.
+        let carried = self.carry();
         self.rewrites.clear();
         self.rules.clear();
         self.draft = None;
@@ -1349,6 +1385,9 @@ impl RulesStore {
         for value in file.rules {
             let id = self.next();
             self.rules.push(Entry { id, value });
+        }
+        if let Some(carried) = carried {
+            self.rebase(carried);
         }
         self.touch();
     }
@@ -2611,6 +2650,78 @@ mod tests {
         assert_eq!(store.written().rules.len(), 2);
         store.save_draft().unwrap();
         assert_eq!(on_disk(&path).rules[2].profile, "Home");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_shifted_file_never_puts_the_draft_on_another_rule() {
+        let dir = scratch("draft-rebase-shifted");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 3);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(2));
+        store.set_profile(2, "Work");
+
+        // An agent adds a rule at the top and changes the draft's rule:
+        // the rule now at index 2 is the old rule 2, not the draft's.
+        let mut file = on_disk(&path);
+        file.rules[2].browser = "Arc".into();
+        file.rules.insert(
+            0,
+            engine::Rule {
+                patterns: vec!["agent.example/*".into()],
+                browser: "Safari".into(),
+                ..engine::Rule::default()
+            },
+        );
+        file.save(&path).unwrap();
+        assert_eq!(store.check_disk(), Disk::Reloaded);
+        // Kept as a rule of its own at its old place; Save adds it and
+        // touches no other.
+        assert_eq!(store.draft_conflict(), Some(Conflict::Removed));
+        assert_eq!(store.handler_count(), 5);
+        assert_eq!(store.draft(), Some(Selection::Handler(2)));
+        assert_eq!(store.handlers()[2].profile, "Work");
+        assert_eq!(store.handlers()[3].patterns, ["h1.example/*"]);
+        store.save_draft().unwrap();
+        let file = on_disk(&path);
+        assert_eq!(file.rules.len(), 5);
+        assert_eq!(file.rules[2].profile, "Work");
+        assert_eq!(file.rules[3].patterns, ["h1.example/*"]);
+        assert_eq!(file.rules[3].profile, "", "the old rule 2 is untouched");
+        assert_eq!(file.rules[4].browser, "Arc", "the agent's rule stays");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_import_keeps_the_draft_on_its_rule() {
+        let dir = scratch("draft-import");
+        let path = dir.join("rules.json");
+        written_by_someone_else(&path, 2);
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.hold(Selection::Handler(1));
+        store.set_profile(1, "Work");
+
+        // The importer's write: the file's rules plus one more.
+        let mut file = store.written();
+        file.rules.insert(
+            0,
+            engine::Rule {
+                patterns: vec!["imported.example/*".into()],
+                browser: "Safari".into(),
+                ..engine::Rule::default()
+            },
+        );
+        store.replace_all(file);
+        store.save().unwrap();
+        assert_eq!(store.draft(), Some(Selection::Handler(2)));
+        assert!(store.draft_changed());
+        assert_eq!(store.handlers()[2].profile, "Work");
+        let on_file = on_disk(&path);
+        assert_eq!(on_file.rules.len(), 3, "the draft's rule stays in the file");
+        assert_eq!(on_file.rules[2].profile, "");
+        store.save_draft().unwrap();
+        assert_eq!(on_disk(&path).rules[2].profile, "Work");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

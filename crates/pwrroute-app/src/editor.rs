@@ -11,8 +11,8 @@
 //! "Open in a private window" and Keep (Activity Privacy 3b), and every
 //! rule has an Examples section: the URLs that must resolve to it, each with
 //! its result from the last test run, and a field that adds one. An example
-//! is the one way a link reaches `rules.json` from this rail, on Return, and
-//! the help under the field says so.
+//! is the one way a link reaches `rules.json` from this rail, on Return and
+//! then Save, and the help under the field says so.
 
 use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -365,33 +365,44 @@ fn header(eyebrow: &str, title: SharedString, rule: &Rule, cx: &mut Context<'_, 
         .flex_row()
         .items_center()
         .gap(px(10.0))
+        // The title and its chip are one child: the regions are positional,
+        // and `editor.enabled` must stay the switch.
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
-                .flex_col()
-                .child(tracked(eyebrow, 9.5, 600.0, 0.14, theme::text_muted()))
+                .items_center()
+                .gap(px(10.0))
                 .child(
-                    crate::widgets::one_line(
-                        title,
-                        theme::SANS,
-                        700.0,
-                        15.0,
-                        18.0,
-                        theme::text_primary(),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(tracked(eyebrow, 9.5, 600.0, 0.14, theme::text_muted()))
+                        .child(
+                            crate::widgets::one_line(
+                                title,
+                                theme::SANS,
+                                700.0,
+                                15.0,
+                                18.0,
+                                theme::text_primary(),
+                            )
+                            .mt(px(6.0)),
+                        ),
+                )
+                // `.chip.ed`: the draft differs from its saved rule (Rule
+                // Drafts 1b).
+                .when(rule.badge == RowBadge::Unsaved, |title| {
+                    title.child(
+                        chip_in("unsaved", ChipTone::Warn)
+                            .id("editor-unsaved")
+                            .debug_selector(|| "editor-unsaved".into()),
                     )
-                    .mt(px(6.0)),
-                ),
+                }),
         )
-        // `.chip.ed`: the draft differs from its saved rule (Rule Drafts 1b).
-        .when(rule.badge == RowBadge::Unsaved, |head| {
-            head.child(
-                chip_in("unsaved", ChipTone::Warn)
-                    .id("editor-unsaved")
-                    .debug_selector(|| "editor-unsaved".into()),
-            )
-        })
         .child(state)
 }
 
@@ -456,10 +467,10 @@ fn editable(
         .w_full()
         .min_w_0()
         .child(boxed)
-        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             let taken = match field {
                 Field::Example | Field::Becomes | Field::Name => this.example_key(field, event, cx),
-                _ => this.rail_key(field, event, cx),
+                _ => this.rail_key(field, event, window, cx),
             };
             if taken {
                 cx.stop_propagation();
@@ -1386,7 +1397,7 @@ fn examples_section(
             (
                 "Examples \u{00b7} must resolve here",
                 rows,
-                "Return adds it to rules.json with the rule. Run tests checks it still \
+                "Return adds it to the rule; Save writes it to rules.json. Run tests checks it still \
                  resolves here; a rule that takes it later fails the run.",
             )
         }
@@ -1412,8 +1423,8 @@ fn examples_section(
             (
                 "Examples \u{00b7} what each becomes",
                 rows,
-                "Return adds it to rules.json with the rewrite: the URL and what it must \
-                 become. Run tests checks it on every save.",
+                "Return adds the URL and what it must become to the rewrite; Save writes them to \
+                 rules.json. Run tests checks it on every save.",
             )
         }
     };
@@ -2039,10 +2050,7 @@ fn kind_picker(
 /// Save's key as the window's chrome writes it: ⌘S on macOS, Ctrl+S on
 /// Windows and Linux. `PwrRoute::on_key_down` handles it.
 pub fn save_shortcut(cx: &App) -> &'static str {
-    match crate::chrome::current(cx) {
-        crate::chrome::Chrome::Mac => "\u{2318}S",
-        crate::chrome::Chrome::Windows | crate::chrome::Chrome::Linux => "Ctrl+S",
-    }
+    crate::chrome::secondary_key(cx, "\u{2318}S", "Ctrl+S")
 }
 
 /// The ids of the rail foot's controls, for tests and Desktop E2E.

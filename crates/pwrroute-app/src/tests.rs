@@ -966,6 +966,19 @@ fn leaving_a_changed_draft_asks_save_or_discard_first(cx: &mut TestAppContext) {
         "Home"
     );
     assert_eq!(saved(cx, &path).rules[0].profile, "Home");
+    // Undo discard belongs to the rule it was discarded on.
+    assert!(view.read_with(cx, |app, _| app.discarded.is_none()));
+
+    // Return in a field while the prompt asks: Save, then go.
+    view.update(cx, |app, cx| app.select(Selection::Handler(0), cx));
+    edit(cx, "Field");
+    click(cx, "handler-2");
+    assert!(cx.debug_bounds("leave-question").is_some());
+    click(cx, "pattern-0");
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(selection(cx), Some(Selection::Handler(2)));
+    assert_eq!(saved(cx, &path).rules[0].profile, "Field");
 
     // A rule started elsewhere (Add rule, the Overview, Test a link) asks
     // on Rules first; Return saves and then starts it.

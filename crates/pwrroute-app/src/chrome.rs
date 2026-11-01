@@ -113,6 +113,15 @@ pub fn set(chrome: Chrome, cx: &mut App) {
     cx.set_global(ChromeOverride(chrome));
 }
 
+/// A ⌘ shortcut as the window's chrome writes it: `mac` ("⌘S") on macOS,
+/// `other` ("Ctrl+S") on Windows and Linux.
+pub fn secondary_key(cx: &App, mac: &'static str, other: &'static str) -> &'static str {
+    match current(cx) {
+        Chrome::Mac => mac,
+        Chrome::Windows | Chrome::Linux => other,
+    }
+}
+
 /// The chrome the strip draws: the one installed, else the host's.
 pub fn current(cx: &App) -> Chrome {
     cx.try_global::<ChromeOverride>()

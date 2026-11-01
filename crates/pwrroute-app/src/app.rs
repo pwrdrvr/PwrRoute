@@ -355,6 +355,23 @@ impl PwrRoute {
             .collect()
     }
 
+    /// The store has this row (the rows themselves may not be rebuilt yet).
+    fn in_store(&self, selection: Selection) -> bool {
+        match selection {
+            Selection::Rewrite(i) => i < self.store.rewrite_count(),
+            Selection::Handler(i) => i < self.store.handler_count(),
+        }
+    }
+
+    /// The store's last row in list order: rewrites, then handlers.
+    fn last_in_store(&self) -> Option<Selection> {
+        match (self.store.rewrite_count(), self.store.handler_count()) {
+            (_, h) if h > 0 => Some(Selection::Handler(h - 1)),
+            (r, _) if r > 0 => Some(Selection::Rewrite(r - 1)),
+            _ => None,
+        }
+    }
+
     /// Select a row; one that is not in the lists is ignored. From a
     /// changed draft the rail's foot asks first (Rule Drafts 1d).
     pub fn select(&mut self, selection: Selection, cx: &mut Context<'_, Self>) {
@@ -363,6 +380,8 @@ impl PwrRoute {
                 return;
             }
             self.selection = Some(selection);
+            // Undo discard belongs to the rule it was discarded on.
+            self.discarded = None;
             self.follow_draft();
             self.rebuild_rail(cx);
             cx.notify();
@@ -600,16 +619,14 @@ impl PwrRoute {
         self.discarded = None;
         self.draft_note = None;
         let disk = self.store.check_disk();
-        self.rewrites = self.store.rewrites();
-        self.handlers = self.store.handlers();
-        let order = self.order();
         // A selected row that is gone gives way to the last; no selection
         // stays none.
         self.selection = match self.selection {
-            Some(selection) if !order.contains(&selection) => order.last().copied(),
+            Some(selection) if !self.in_store(selection) => self.last_in_store(),
             selection => selection,
         };
         self.follow_draft();
+        // The rows once the hold is settled: it decides their badges.
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
         self.test.set_rules(self.store.written());
@@ -767,10 +784,7 @@ impl PwrRoute {
         // The rows may be other rules now: a menu, a drag or an Undo for
         // one of them would land on the wrong one.
         self.row_actions = crate::rule_menu::RowActions::default();
-        self.rewrites = self.store.rewrites();
-        self.handlers = self.store.handlers();
-        let order = self.order();
-        self.selection = self.selection.filter(|s| order.contains(s));
+        self.selection = self.selection.filter(|s| self.in_store(*s));
         // The draft stays on its rule, wherever the file put it.
         self.follow_draft();
         self.rewrites = self.store.rewrites();
@@ -1267,6 +1281,7 @@ impl PwrRoute {
         &mut self,
         field: Field,
         event: &KeyDownEvent,
+        window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
         let Some(text_field) = self.rail.as_mut().and_then(|rail| rail.field_mut(field)) else {
@@ -1302,7 +1317,10 @@ impl PwrRoute {
                     | Field::Profile
                     | Field::Value(_)
                     | Field::Set => {
-                        if self.store.draft_changed() {
+                        if self.leaving.is_some() {
+                            // The leave prompt's Return: save, then go.
+                            self.answer_leave(LeaveAnswer::Save, window, cx);
+                        } else if self.store.draft_changed() {
                             self.save_draft(cx);
                         }
                     }
@@ -1527,6 +1545,7 @@ impl PwrRoute {
             return;
         }
         if self.selection.take().is_some() {
+            self.discarded = None;
             self.store.release();
             self.rebuild_rail(cx);
             cx.notify();
