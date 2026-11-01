@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use pwrroute_engine::{
-    Description, Engine, Limits, NativeHost, Review, RulesFile, SourceLines, Verdict, Visual,
+    Description, Engine, Limits, NativeHost, Place, Review, RulesFile, SourceLines, Verdict, Visual,
 };
 
 use crate::config_view::{self, display_path};
@@ -272,6 +272,10 @@ impl ImportModel {
             .map_err(|error| error.to_string())
             .and_then(|text| {
                 serde_json::from_str::<RulesFile>(&text).map_err(|error| error.to_string())
+            })
+            .and_then(|file| {
+                validate_copied_entries(&file)?;
+                Ok(file)
             });
         let mut model = Self::failed(path, shown, String::new());
         model.charge = Charge::of(path, in_charge, home);
@@ -305,7 +309,11 @@ impl ImportModel {
 
     /// Refuse aliases of Finicky's file and conflicting named metadata.
     pub fn validate_target(&self, target: Option<&Path>, base: &RulesFile) -> Result<(), String> {
+        if let Some(problem) = &self.problem {
+            return Err(problem.clone());
+        }
         if let Some(source) = &self.rules_file {
+            validate_copied_entries(source)?;
             let target = target.ok_or("No PwrRoute rules path to copy into.")?;
             if same_file(&self.path, target) {
                 return Err("PwrRoute's rules path points to Finicky's file. Choose a separate file before copying.".into());
@@ -745,6 +753,25 @@ impl ImportModel {
     }
 }
 
+/// A new row with a problem has no saved version for RulesStore to fall back
+/// to, so written() would omit it. Refuse the copy rather than lose that row
+/// and its examples. A missing default is allowed, as it is by the store.
+fn validate_copied_entries(file: &RulesFile) -> Result<(), String> {
+    for problem in file.problems() {
+        let (kind, index) = match problem.place {
+            Place::Rule(index) => ("Rule", index),
+            Place::Rewrite(index) => ("Rewrite", index),
+            _ => continue,
+        };
+        return Err(format!(
+            "{kind} {} cannot be copied: {}",
+            index + 1,
+            problem.message
+        ));
+    }
+    Ok(())
+}
+
 /// Append without changing existing precedence, defaults or rule ordering.
 /// Equality includes examples and flags, so different rules are never silently lost.
 fn copy_rules(source: &RulesFile, base: &RulesFile) -> Plan {
@@ -975,6 +1002,65 @@ mod tests {
                 .problem
                 .is_some()
         );
+    }
+
+    #[test]
+    fn json_review_rejects_rows_the_store_would_omit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Finicky/rules.json");
+        let target = dir.path().join("PwrRoute/rules.json");
+        let base = json_source();
+        base.save(&target).unwrap();
+        let target_before = std::fs::read(&target).unwrap();
+        let mut bad_rule = json_source();
+        bad_rule.rules[0].patterns.insert(0, String::new());
+        let mut bad_example = json_source();
+        bad_example.rules[0].examples = vec!["not an absolute URL".into()];
+        let mut bad_rewrite = json_source();
+        bad_rewrite.rewrites.push(Rewrite {
+            patterns: vec!["example.com/*".into()],
+            ..Default::default()
+        });
+        for (source, label) in [
+            (bad_rule, "Rule 1"),
+            (bad_example, "Rule 1"),
+            (bad_rewrite, "Rewrite 1"),
+        ] {
+            source.save(&path).unwrap();
+            let source_before = std::fs::read(&path).unwrap();
+            let model = ImportModel::read_rules(&path, None, None, base.clone());
+            let reason = model.problem.as_deref().expect("copy is disabled");
+            assert!(reason.starts_with(label), "{reason}");
+            assert!(model.rules_file.is_none());
+            assert!(model.items.is_empty());
+            // Both import paths call this guard before replacing the store.
+            assert!(model.validate_target(Some(&target), &base).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), source_before);
+            assert_eq!(std::fs::read(&target).unwrap(), target_before);
+        }
+    }
+
+    #[test]
+    fn json_copy_without_a_default_keeps_every_row_and_example_through_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Finicky/rules.json");
+        let target = dir.path().join("PwrRoute/rules.json");
+        let mut source = json_source();
+        source.default_browser.clear();
+        source.default_profile.clear();
+        source.save(&path).unwrap();
+        let model = ImportModel::read_rules(&path, None, None, RulesFile::default());
+        assert_eq!(model.problem, None);
+        let mut store = crate::rules_store::RulesStore::load(Some(target.clone()));
+        model.validate_target(store.path(), &store.written()).unwrap();
+        store.replace_all(model.plan(&store.written()).file);
+        store.save().unwrap();
+        assert_eq!(RulesFile::load(&target).unwrap(), source);
+
+        let mut changed = model;
+        changed.rules_file.as_mut().unwrap().rules[0].patterns.insert(0, String::new());
+        assert!(changed.validate_target(Some(&target), &source).is_err());
+        assert_eq!(RulesFile::load(&target).unwrap(), source);
     }
 
     #[cfg(unix)]
