@@ -900,6 +900,14 @@ their own modules.
   is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays
   `unsafe`-free.
+- **A closed window stays closed for links (`reopen.rs`).** LaunchServices
+  sends a reopen beside some links, before or after the link's Apple
+  Event, and GPUI passes it on only while no window is open. A reopen
+  waits `REOPEN_GRACE` and opens the main window only when no link arrived
+  from `REOPEN_AFTER_LINK` before it until then; otherwise every link with
+  the window closed would bring it back and put PwrRoute in Cmd-Tab. Don't
+  narrow those windows without a lab measurement. Each decision is logged,
+  link timings only while links are kept.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
   buttons do; `onboarding.rs` builds the real ones and the model from
   `Facts` (tests write their own facts and count hook calls). `state.json`
