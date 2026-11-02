@@ -899,7 +899,12 @@ their own modules.
   Settings, first-run or one of Help's windows (`DocWindow`, `LogsWindow`)
   is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays
-  `unsafe`-free.
+  `unsafe`-free. LaunchServices makes an `Accessory` app `Regular` each
+  time it hands it a link (measured on macOS 27 with a bare AppKit app),
+  so `on_open_urls` calls `dock::after_link`, which puts back what the
+  windows asked for (`macos::restore_dock_icon`) inside the Apple Event;
+  macOS then hands focus straight back to the app in front. Without it,
+  every link with the windows closed puts PwrRoute in the Dock and Cmd-Tab.
 - **A closed window stays closed for links (`reopen.rs`).** LaunchServices
   sends a reopen beside some links, before or after the link's Apple
   Event, and GPUI passes it on only while no window is open. A reopen

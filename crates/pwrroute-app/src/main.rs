@@ -162,6 +162,9 @@ fn main() -> ExitCode {
     app.on_open_urls(move |urls| {
         seen.mark();
         router::dispatch_os_links(&links_handle, urls);
+        // LaunchServices put the app back in the Dock and Cmd-Tab to hand
+        // it the link. After the opener is read from the Apple Event.
+        dock::after_link();
     });
     // A reopen opens the window only when no link came near it
     // (`reopen.rs`): LaunchServices sends one beside some links.

@@ -10,11 +10,17 @@
 //! are safe, so this module needs no `unsafe`; keep any AppKit the app shell
 //! needs here, beside them.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gpui_kit::{Bounds, DisplayId, Pixels, Point, Size, point, px, size};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen, NSWindow};
 use objc2_foundation::NSRect;
 use objc2_foundation::{NSNumber, NSString};
+
+/// Whether the windows want the Dock icon: what [`set_dock_icon`] last
+/// asked for, and what [`restore_dock_icon`] puts back.
+static DOCK_ICON: AtomicBool = AtomicBool::new(false);
 
 /// Show or hide the Dock icon (and the app's menu bar while it is active).
 ///
@@ -24,12 +30,22 @@ pub fn set_dock_icon(visible: bool) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
+    DOCK_ICON.store(visible, Ordering::Relaxed);
     let policy = if visible {
         NSApplicationActivationPolicy::Regular
     } else {
         NSApplicationActivationPolicy::Accessory
     };
     NSApplication::sharedApplication(mtm).setActivationPolicy(policy);
+}
+
+/// Puts back the Dock icon the windows asked for. LaunchServices makes an
+/// `Accessory` app `Regular` whenever it hands it a link (before the app
+/// sees it), so with every window closed each link would put PwrRoute in the
+/// Dock and Cmd-Tab. Back to `Accessory` inside the link's Apple Event, macOS
+/// also gives the app in front its focus back at once. Main thread only.
+pub fn restore_dock_icon() {
+    set_dock_icon(DOCK_ICON.load(Ordering::Relaxed));
 }
 
 /// Where the menu bar item is, in the coordinates GPUI opens windows in.

@@ -41,6 +41,14 @@ pub fn install(cx: &mut App) {
     let _ = cx;
 }
 
+/// A link from the OS just arrived: keep the Dock icon as the windows want
+/// it (`macos::restore_dock_icon`). Call on the main thread, while the
+/// link's Apple Event is being handled.
+pub fn after_link() {
+    #[cfg(target_os = "macos")]
+    crate::macos::restore_dock_icon();
+}
+
 /// Whether a window that wants the Dock icon is open.
 #[cfg(target_os = "macos")]
 fn has_dock_window(cx: &App) -> bool {
