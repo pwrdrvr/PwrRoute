@@ -44,8 +44,11 @@ pub fn set_dock_icon(visible: bool) {
 /// sees it), so with every window closed each link would put PwrRoute in the
 /// Dock and Cmd-Tab. Back to `Accessory` inside the link's Apple Event, macOS
 /// also gives the app in front its focus back at once. Main thread only.
-pub fn restore_dock_icon() {
-    set_dock_icon(DOCK_ICON.load(Ordering::Relaxed));
+/// Returns whether the Dock icon shows: a window is open.
+pub fn restore_dock_icon() -> bool {
+    let visible = DOCK_ICON.load(Ordering::Relaxed);
+    set_dock_icon(visible);
+    visible
 }
 
 /// Where the menu bar item is, in the coordinates GPUI opens windows in.

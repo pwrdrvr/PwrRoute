@@ -159,12 +159,14 @@ fn main() -> ExitCode {
     e2e::startup("gpui");
     let seen = last_link.clone();
     let links_handle = handle.clone();
+    let yield_focus = resident.settings.yield_browser_focus();
     app.on_open_urls(move |urls| {
         seen.mark();
         router::dispatch_os_links(&links_handle, urls);
-        // LaunchServices put the app back in the Dock and Cmd-Tab to hand
-        // it the link. After the opener is read from the Apple Event.
-        dock::after_link();
+        // LaunchServices made the app active, and put it in the Dock and
+        // Cmd-Tab, to hand it the link. After the opener is read from the
+        // Apple Event.
+        dock::after_link(yield_focus.load(std::sync::atomic::Ordering::Relaxed));
     });
     // A reopen opens the window only when no link came near it
     // (`reopen.rs`): LaunchServices sends one beside some links.

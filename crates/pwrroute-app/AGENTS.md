@@ -905,6 +905,13 @@ their own modules.
   windows asked for (`macos::restore_dock_icon`) inside the Apple Event;
   macOS then hands focus straight back to the app in front. Without it,
   every link with the windows closed puts PwrRoute in the Dock and Cmd-Tab.
+  With a window open the same activation raises it and leaves PwrRoute
+  second in Cmd-Tab, behind the browser, so `after_link` then gives the
+  front back to the link's sender (`pwrroute_os::return_front_to_sender`),
+  and a browser comes forward over that app instead. Not while
+  `experimental.yieldBrowserFocus` is on: its yield needs PwrRoute still
+  active (measured with stand-in apps on macOS 27: handing back first
+  kept a cooperatively activating browser behind).
 - **A closed window stays closed for links (`reopen.rs`).** LaunchServices
   sends a reopen beside some links, before or after the link's Apple
   Event, and GPUI passes it on only while no window is open. A reopen

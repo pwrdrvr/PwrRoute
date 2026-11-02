@@ -226,6 +226,28 @@ pub fn current_opener() -> Option<OpenerInfo> {
     }
 }
 
+/// Gives the front back to the app that sent the link being handled, when
+/// the OS made this app the active one to hand it over. Returns whether it
+/// did.
+///
+/// On macOS call it from GPUI's open-URLs callback, as [`current_opener`]:
+/// LaunchServices activates PwrRoute to deliver a link, which raises its
+/// window and puts it second in Cmd-Tab behind the browser. Handing the
+/// front straight back to the sender leaves the order the click made, the
+/// browser then coming forward over the app the link was clicked in. Never
+/// before a [`yield_front_to`]: an app that is not active has nothing to
+/// yield. Elsewhere it does nothing.
+pub fn return_front_to_sender() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::return_front_to_apple_event_sender()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod window_order_tests {
     /// Needs a desktop session; run by hand with `--ignored`.
