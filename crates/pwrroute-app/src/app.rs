@@ -194,6 +194,8 @@ pub struct PwrRoute {
     _tray: Option<Subscription>,
     /// Each sync pass redraws the rail foot's line.
     _sync: Option<Subscription>,
+    /// The update toast and the strip's ready chip follow the updater.
+    _updates: Option<Subscription>,
 }
 
 impl PwrRoute {
@@ -237,6 +239,8 @@ impl PwrRoute {
                 cx.notify();
             })
         });
+        let updates = crate::update_notice::notices(cx)
+            .map(|notices| cx.observe(&notices, |_, _, cx| cx.notify()));
         // Rules opens as a list: the editor appears on a click (or Down).
         let mut this = Self {
             // A Tab stop, so Tab comes back round to the list and map keys.
@@ -281,6 +285,7 @@ impl PwrRoute {
             draft_note: None,
             _tray: tray,
             _sync: sync,
+            _updates: updates,
         };
         if this.config.is_none() {
             this.found_config = crate::importer_view::found_config(this.home.as_deref(), cx);
@@ -1608,6 +1613,14 @@ impl Render for PwrRoute {
                     .children(rail),
             )
             .children(sheet)
+            // The update toast (`toast.rs`), over the pane's lower right.
+            .children(crate::toast::update_toast(cx).map(|toast| {
+                div()
+                    .absolute()
+                    .right(theme::px(16.0))
+                    .bottom(theme::px(16.0))
+                    .child(toast)
+            }))
     }
 }
 

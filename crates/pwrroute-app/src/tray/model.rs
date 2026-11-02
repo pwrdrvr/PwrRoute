@@ -780,6 +780,10 @@ pub struct TrayModel {
     pub choices: DestinationChoices,
     /// Sync's row, while rules sync with a folder (`sync::tray_row_of`).
     pub sync: Option<SyncRow>,
+    /// A release downloaded for the slot in force (`updater::ready`): the
+    /// dropdown's banner and the native menu's Restart to update row
+    /// (design: Updates and Default Browser 1c).
+    pub update: Option<crate::updater::Ready>,
 }
 
 impl TrayModel {
@@ -846,6 +850,7 @@ impl TrayModel {
                 scanned: true,
             },
             sync: None,
+            update: None,
         }
     }
 
@@ -868,6 +873,7 @@ impl TrayModel {
             can_hold: true,
             choices: DestinationChoices::default(),
             sync: None,
+            update: None,
         }
     }
 

@@ -987,8 +987,27 @@ their own modules.
   tested there, the network in `github_releases.rs`, and the check's
   decision in `updater::plan`. Only a manual check (`Trigger::is_manual`)
   may switch back to an older release, and a switch back never installs
-  on quit.
-- **Manual checks on macOS:** `--dry-run --first-run` opens the first-run
+  on quit. `updater::ready` is the downloaded release this slot offers
+  (`ready_in`, the filter Settings › Updates uses); it reads the manifest
+  from disk, so surfaces read `update_notice`'s cache instead.
+- **Update notices (`update_notice.rs`, `toast.rs`; after PwrSnap's
+  `features/update`).** `update_notice::Notices` is plain data over the
+  updater's `State` (`updater::on_change` calls `follow` after each
+  change). Only the app menu's Check for Updates… raises the main window's
+  toast (`check_for_updates`; with no main window it opens Settings ›
+  Updates instead): Checking and Downloading with a track and no
+  countdown, then the answer (up to date, nothing published, unavailable,
+  failed) for `ANSWER_FOR` with a draining strip, or, when the check
+  downloaded something, Update ready. A startup, timer or Settings check
+  stays silent. Update ready stays until Restart or Later; Later puts away
+  that release only, and the tray row, the native menu's "Restart to
+  update to X" row and the strip chip ("X ready · Restart") keep offering
+  it (design: Updates and Default Browser 1c/1d, "no notification and no
+  modal"). The toast sits in the lower right, clear of the rail foot.
+  `toast::card` is the generic card for any later producer.
+- **Manual checks on macOS:** `PWRROUTE_UPDATE_FIXTURE=checking`,
+  `=downloading`, `=up-to-date`, `=failed` or `=ready` draws that update
+  notice (toast, strip chip, tray banner) without the network; `--dry-run --first-run` opens the first-run
   window; `PWRROUTE_TRAY_OPEN=1` opens the dropdown at launch (the item can
   sit behind the notch on a full menu bar); `PWRROUTE_TRAY_FIXTURE=routing`,
   `=paused` or `=holding` draws the design's tray fixture instead of the

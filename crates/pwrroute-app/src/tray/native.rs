@@ -62,6 +62,9 @@ pub enum MenuEntry {
     /// Sync's row (design: Synced Rules 3c): its words, and whether it
     /// acts (only a conflict's opens Settings › Cloud Sync).
     Sync(String, bool),
+    /// "Restart to update to 0.15.0", while a release is ready (design:
+    /// Updates and Default Browser 1c, "the native tray menu").
+    Update(String),
     Separator,
 }
 
@@ -128,8 +131,14 @@ pub fn menu_entries(model: &TrayModel) -> Vec<MenuEntry> {
         Item(TrayCommand::Settings, "Settings\u{2026}".into()),
         Item(TrayCommand::About, "About PwrRoute".into()),
         Separator,
-        Item(TrayCommand::Quit, quit.into()),
     ])
+    .chain(model.update.iter().flat_map(|ready| {
+        [
+            MenuEntry::Update(crate::update_notice::restart_label(ready)),
+            Separator,
+        ]
+    }))
+    .chain([Item(TrayCommand::Quit, quit.into())])
     .collect()
 }
 
@@ -148,6 +157,11 @@ pub struct NativeTray {
     sync_row: MenuItem,
     sync_separator: PredefinedMenuItem,
     sync_shown: std::cell::Cell<bool>,
+    /// Restart to update and the separator under it, above Quit, put in
+    /// and taken out as a release becomes ready and is installed.
+    update_row: MenuItem,
+    update_separator: PredefinedMenuItem,
+    update_shown: std::cell::Cell<bool>,
 }
 
 impl NativeTray {
@@ -164,6 +178,11 @@ impl NativeTray {
         let sync_separator = PredefinedMenuItem::separator();
         let mut sync_shown = false;
         let mut after_sync = false;
+        let update_row =
+            MenuItem::with_id(TrayCommand::RestartToUpdate.menu_id(), "", true, None);
+        let update_separator = PredefinedMenuItem::separator();
+        let mut update_shown = false;
+        let mut after_update = false;
         for entry in menu_entries(model) {
             let item: Box<dyn IsMenuItem> = match entry {
                 MenuEntry::Sync(label, enabled) => {
@@ -176,6 +195,16 @@ impl NativeTray {
                 MenuEntry::Separator if after_sync => {
                     after_sync = false;
                     Box::new(sync_separator.clone())
+                }
+                MenuEntry::Update(label) => {
+                    update_row.set_text(label);
+                    update_shown = true;
+                    after_update = true;
+                    Box::new(update_row.clone())
+                }
+                MenuEntry::Separator if after_update => {
+                    after_update = false;
+                    Box::new(update_separator.clone())
                 }
                 MenuEntry::Item(command, label) => {
                     Box::new(MenuItem::with_id(command.menu_id(), label, true, None))
@@ -254,6 +283,9 @@ impl NativeTray {
             sync_row,
             sync_separator,
             sync_shown: std::cell::Cell::new(sync_shown),
+            update_row,
+            update_separator,
+            update_shown: std::cell::Cell::new(update_shown),
         })
     }
 
@@ -302,7 +334,10 @@ impl NativeTray {
                         item.set_enabled(enabled);
                     }
                 }
-                MenuEntry::Item(..) | MenuEntry::Sync(..) | MenuEntry::Separator => {}
+                MenuEntry::Item(..)
+                | MenuEntry::Sync(..)
+                | MenuEntry::Update(..)
+                | MenuEntry::Separator => {}
             }
         }
         match &model.sync {
@@ -319,6 +354,25 @@ impl NativeTray {
                 let _ = self.menu.remove(&self.sync_row);
                 let _ = self.menu.remove(&self.sync_separator);
                 self.sync_shown.set(false);
+            }
+            None => {}
+        }
+        match &model.update {
+            Some(ready) => {
+                self.update_row
+                    .set_text(crate::update_notice::restart_label(ready));
+                if !self.update_shown.get() {
+                    // Above Quit, the menu's last item.
+                    let quit = self.menu.items().len().saturating_sub(1);
+                    let _ = self.menu.insert(&self.update_row, quit);
+                    let _ = self.menu.insert(&self.update_separator, quit + 1);
+                    self.update_shown.set(true);
+                }
+            }
+            None if self.update_shown.get() => {
+                let _ = self.menu.remove(&self.update_row);
+                let _ = self.menu.remove(&self.update_separator);
+                self.update_shown.set(false);
             }
             None => {}
         }
@@ -342,7 +396,8 @@ mod tests {
                 MenuEntry::Item(_, label)
                 | MenuEntry::Check(_, label, _)
                 | MenuEntry::Held(label, _)
-                | MenuEntry::Sync(label, _) => label.as_str(),
+                | MenuEntry::Sync(label, _)
+                | MenuEntry::Update(label) => label.as_str(),
                 MenuEntry::Separator => "-",
             })
             .collect();
@@ -439,6 +494,29 @@ mod tests {
             tone: SyncTone::Bad,
         });
         assert!(matches!(menu_entries(&model)[0], MenuEntry::Sync(_, true)));
+    }
+
+    #[test]
+    fn a_ready_release_puts_restart_to_update_above_quit() {
+        let mut model = TrayModel::fixture(SystemTime::now());
+        assert!(
+            !menu_entries(&model)
+                .iter()
+                .any(|entry| matches!(entry, MenuEntry::Update(_)))
+        );
+        model.update = Some(crate::updater::Ready {
+            version: "0.15.0".into(),
+            switch_back: false,
+        });
+        let entries = menu_entries(&model);
+        let n = entries.len();
+        assert!(matches!(&entries[n - 3], MenuEntry::Update(label) if label == "Restart to update to 0.15.0"));
+        assert!(matches!(entries[n - 2], MenuEntry::Separator));
+        assert!(matches!(entries[n - 1], MenuEntry::Item(TrayCommand::Quit, _)));
+        assert_eq!(
+            TrayCommand::from_menu_id(TrayCommand::RestartToUpdate.menu_id()),
+            Some(TrayCommand::RestartToUpdate)
+        );
     }
 
     #[test]

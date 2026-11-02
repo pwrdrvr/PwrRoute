@@ -78,6 +78,10 @@ pub const OPEN_ALL_ID: &str = "tray-held-open-all";
 pub const HELD_LANES_ID: &str = "tray-held-lanes";
 pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
 pub const QUIT_ID: &str = "tray-quit";
+/// The update banner (design: Updates and Default Browser 1c) and its
+/// Restart button.
+pub const UPDATE_ID: &str = "tray-update";
+pub const UPDATE_RESTART_ID: &str = "tray-update-restart";
 /// The header: a click opens the main window, as the native menu's Open
 /// PwrRoute does.
 pub const HEADER_ID: &str = "tray-open";
@@ -699,6 +703,12 @@ fn card(
                 .flex_shrink(1.0)
                 .min_h_0()
                 .overflow_y_scroll()
+                .children(
+                    model
+                        .update
+                        .as_ref()
+                        .map(|ready| section().child(update_banner(ready, cx)).flex_none()),
+                )
                 .when(!model.held.is_empty(), |body| {
                     body.child(held_section(model, hovered, unfolded, cx).flex_none())
                 })
@@ -1806,6 +1816,74 @@ fn sync_row(
         })
 }
 
+/// A release ready to install, at the top of the card as PwrSnap's tray
+/// strip is: what is ready and its Restart. The whole banner is the
+/// action; the button says so.
+fn update_banner(ready: &crate::updater::Ready, cx: &mut Context<'_, Dropdown>) -> impl IntoElement {
+    let verb = if ready.switch_back { "switch" } else { "install" };
+    div()
+        .id(UPDATE_ID)
+        .role(gpui_kit::Role::Button)
+        .aria_label(crate::update_notice::restart_label(ready))
+        .debug_selector(|| UPDATE_ID.into())
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .px(px(10.0))
+        .py(px(UPDATE_PADDING))
+        .rounded(px(8.0))
+        .bg(theme::accent_tint())
+        .border_1()
+        .border_color(theme::accent_border())
+        .cursor_pointer()
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.run(TrayCommand::RestartToUpdate, window, cx);
+        }))
+        .child(
+            div()
+                .size(px(UPDATE_ICON))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .bg(theme::accent_soft())
+                .border_1()
+                .border_color(theme::accent_border())
+                .child(text("\u{2193}", 12.0, 700.0, theme::accent_bright())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(UPDATE_GAP))
+                .child(text(
+                    crate::update_notice::ready_title(ready),
+                    UPDATE_TITLE,
+                    700.0,
+                    theme::accent_bright(),
+                ))
+                .child(one_line(
+                    format!("{} \u{00b7} restart to {verb}", ready.version),
+                    theme::mono_family(500.0),
+                    500.0,
+                    UPDATE_SUB,
+                    UPDATE_SUB,
+                    theme::text_secondary(),
+                )),
+        )
+        .child(
+            small_button(UPDATE_RESTART_ID.to_owned(), "Restart", true, false)
+                .map(|e| crate::widgets::keyboard_control(e, true))
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.run(TrayCommand::RestartToUpdate, window, cx);
+                })),
+        )
+}
+
 /// `.mi-row`'s box; `.hov` while the pointer is on it.
 fn row_frame(
     id: &'static str,
@@ -1853,6 +1931,14 @@ fn label_text(label: &'static str, size: f32, color: gpui_kit::Hsla) -> AnyEleme
 pub const HEADER: f32 = 10.0 + 20.0 + 10.0 + 1.0;
 /// `.sec` padding, top and bottom.
 const SECTION_PADDING: f32 = 12.0;
+/// The update banner: its padding, icon box, title and sub. The text
+/// column is the tallest thing in it.
+const UPDATE_PADDING: f32 = 8.0;
+const UPDATE_ICON: f32 = 22.0;
+const UPDATE_TITLE: f32 = 12.0;
+const UPDATE_GAP: f32 = 2.0;
+const UPDATE_SUB: f32 = 10.0;
+const UPDATE_BANNER: f32 = 2.0 + 2.0 * UPDATE_PADDING + UPDATE_TITLE + UPDATE_GAP + UPDATE_SUB;
 /// `.cap`: 9.5px text in 4px padding.
 const CAPTION: f32 = 4.0 + 9.5 + 4.0;
 /// `.rec .h` and `.rec .b`: 11.5px and 10px at line-height 1.2.
@@ -2042,6 +2128,12 @@ fn card_height_at(
     let commands = SECTION_PADDING
         + MENU_ROW * (3.0 + f32::from(u8::from(model.shows_make_default_row())))
         + 1.0;
+    // The update banner, while a release is ready.
+    let update = if model.update.is_some() {
+        SECTION_PADDING + UPDATE_BANNER + 1.0
+    } else {
+        0.0
+    };
     // Sync's row, while rules sync with a folder.
     let sync = if model.sync.is_some() {
         SECTION_PADDING + MENU_ROW + 1.0
@@ -2051,6 +2143,7 @@ fn card_height_at(
     let quit = SECTION_PADDING + MENU_ROW;
     px(2.0
         + HEADER
+        + update
         + held_height(model, unfolded, text_system)
         + recents
         + incoming_height(model, unfolded, now, text_system)

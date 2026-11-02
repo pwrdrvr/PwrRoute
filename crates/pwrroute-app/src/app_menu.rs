@@ -109,8 +109,10 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
     settings::install(cx);
     help::install(cx);
     // Registered on every platform so other surfaces can dispatch it.
-    cx.on_action(|_: &CheckForUpdates, _| {
-        updater::check_in_background(updater::Trigger::Menu);
+    // The main window's toast answers it (`update_notice`); without one,
+    // Settings › Updates opens. After the dispatch, which may hold a window.
+    cx.on_action(|_: &CheckForUpdates, cx| {
+        cx.defer(crate::update_notice::check_for_updates);
     });
     // About and View's rows update a window that may be the one the action
     // was dispatched in, so they wait for that dispatch to finish (as

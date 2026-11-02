@@ -68,9 +68,11 @@ mod tests;
 mod text_field;
 mod theme;
 mod trace_view;
+mod toast;
 mod tray;
 mod try_it;
 mod update_channel;
+mod update_notice;
 mod updater;
 mod widgets;
 mod zoom;
@@ -232,6 +234,7 @@ fn main() -> ExitCode {
             on_request: Rc::new(|request, _, cx| settings_live::handle_request(request, cx)),
         });
         updater::install(cx);
+        update_notice::install(cx);
         if let Some(hook) = e2e_hook {
             e2e::attach(hook, cx);
         } else {

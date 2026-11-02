@@ -5,7 +5,7 @@
 //! the app menu does; a slot picked here is saved to `settings.json` and
 //! checked at once. `updater::install` redraws the pane when a check ends.
 
-use std::{thread, time::SystemTime};
+use std::time::SystemTime;
 
 use chrono::{DateTime, Local};
 use gpui_kit::{App, SharedString};
@@ -56,12 +56,10 @@ pub fn build(
         }
     };
     let slot = selection.resolve(&version);
-    // A download for another slot is neither shown nor installed.
-    let held = state
-        .held
-        .as_ref()
-        .filter(|held| held.is_for(slot) && held.version != version);
-    let state_shown = match (not_updatable, state.checking, held, &state.last) {
+    // A download for another slot is neither shown nor installed: the
+    // rule the toast, the tray and the strip follow too.
+    let held = updater::ready_in(&version, selection, state);
+    let state_shown = match (not_updatable, state.checking, held.as_ref(), &state.last) {
         (Some(why), _, _, _) => UpdateState::NotUpdatable(why.into()),
         (None, true, _, _) => UpdateState::Checking,
         (None, false, Some(held), _) if held.switch_back => {
@@ -176,20 +174,7 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
             updater::set_selection(settings);
             refresh(cx);
         }
-        SettingsRequest::RestartToUpdate => {
-            // Velopack exits this process once the package is applied, so
-            // nothing here waits on it.
-            let spawned = thread::Builder::new()
-                .name("pwrroute-restart".to_owned())
-                .spawn(|| {
-                    if let Err(error) = updater::restart_to_update() {
-                        log::warn!("updates: could not restart to update: {error}");
-                    }
-                });
-            if let Err(error) = spawned {
-                log::warn!("updates: could not restart to update: {error}");
-            }
-        }
+        SettingsRequest::RestartToUpdate => updater::restart_in_background(),
         _ => return false,
     }
     true
