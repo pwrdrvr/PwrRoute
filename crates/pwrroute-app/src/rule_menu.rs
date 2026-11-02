@@ -576,7 +576,7 @@ impl PwrRoute {
         let keystroke = &event.keystroke;
         let m = &keystroke.modifiers;
         let secondary = m.secondary(cx);
-        let plain = !secondary && !m.alt && !m.shift && !m.control && !m.platform;
+        let plain = !m.alt && !m.shift && !m.control && !m.platform;
         // The keys the menu shows act on its row; with none open, on the
         // selected one.
         let target = match self.row_actions.menu {

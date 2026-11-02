@@ -76,8 +76,12 @@ fn render(stroke: &str, canvas: u32, mark: u32) -> Bitmap {
 mod tests {
     use super::*;
 
+    fn pixels(bitmap: &Bitmap) -> impl Iterator<Item = &[u8; 4]> {
+        bitmap.rgba.as_chunks::<4>().0.iter()
+    }
+
     fn alpha(bitmap: &Bitmap) -> impl Iterator<Item = u8> + '_ {
-        bitmap.rgba.as_chunks::<4>().0.iter().map(|px| px[3])
+        pixels(bitmap).map(|px| px[3])
     }
 
     #[test]
@@ -85,7 +89,7 @@ mod tests {
         let icon = template();
         assert_eq!((icon.width, icon.height), (44, 44));
         assert_eq!(icon.rgba.len(), 44 * 44 * 4);
-        for px in icon.rgba.as_chunks::<4>().0.iter().filter(|px| px[3] > 0) {
+        for px in pixels(&icon).filter(|px| px[3] > 0) {
             assert_eq!(&px[..3], &[0, 0, 0], "template pixels are black");
         }
         // Both tones are there: the solid route and the 0.55 one.
@@ -112,11 +116,7 @@ mod tests {
     fn the_colored_icon_uses_the_accent() {
         let icon = colored();
         assert_eq!((icon.width, icon.height), (32, 32));
-        let solid = icon
-            .rgba
-            .as_chunks::<4>()
-            .0
-            .iter()
+        let solid = pixels(&icon)
             .find(|px| px[3] == 255)
             .expect("an opaque pixel");
         assert_eq!(&solid[..3], &[0xff, 0x8a, 0x1f]);
@@ -127,11 +127,7 @@ mod tests {
         crate::theme::set_appearance(crate::theme::Appearance::Light);
         let icon = colored();
         crate::theme::set(crate::theme::Theme::default());
-        let solid = icon
-            .rgba
-            .as_chunks::<4>()
-            .0
-            .iter()
+        let solid = pixels(&icon)
             .find(|px| px[3] == 255)
             .expect("an opaque pixel");
         assert_eq!(&solid[..3], &[0xa6, 0x44, 0x00]);

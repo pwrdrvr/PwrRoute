@@ -815,6 +815,7 @@ impl LogsWindow {
             .line_wrapper(Self::mono_font(), px(TEXT_SIZE));
         let fragments = [LineFragment::text(raw)];
         let mut starts = vec![0];
+        // The rows draw their own hanging indent, so the wrapper adds none.
         starts.extend(
             wrapper
                 .wrap_line(&fragments, px(width), IndentAdjustment::NoIndent)

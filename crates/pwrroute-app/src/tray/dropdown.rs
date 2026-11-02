@@ -1956,6 +1956,7 @@ fn lines(runs: &[Run], width: f32, text_system: &std::sync::Arc<TextSystem>) -> 
     let text = super::model::runs_text(runs);
     let mut wrapper = text_system.line_wrapper(font, px(10.5));
     let fragments = [LineFragment::text(&text)];
+    // GPUI's text layout indents no continuation line, so neither does this.
     1 + wrapper
         .wrap_line(&fragments, px(width), IndentAdjustment::NoIndent)
         .count()

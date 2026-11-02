@@ -87,16 +87,6 @@ pub enum Platform {
     Other,
 }
 
-impl Platform {
-    pub fn current() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::Mac
-        } else {
-            Self::Other
-        }
-    }
-}
-
 /// Quit, from the menu (⌘Q) or the tray: a downloaded update is handed to
 /// Velopack first, which installs it once this process has exited.
 pub fn quit(cx: &mut App) {
@@ -230,12 +220,9 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
 /// nothing takes it. The key is bound only in [`MENU_ONLY`], so this never
 /// comes back here.
 fn replay(key: &str, cx: &mut App) {
-    let modifier = match Platform::current() {
-        Platform::Mac => "cmd",
-        Platform::Other => "ctrl",
-    };
+    // `secondary-` is ⌘ on macOS and Ctrl elsewhere.
     let os = cx.platform_info().os;
-    let Ok(keystroke) = Keystroke::parse_with_os(&format!("{modifier}-{key}"), os) else {
+    let Ok(keystroke) = Keystroke::parse_with_os(&format!("secondary-{key}"), os) else {
         return;
     };
     in_front_window(cx, move |window, cx| {

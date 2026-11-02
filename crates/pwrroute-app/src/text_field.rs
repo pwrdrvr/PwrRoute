@@ -767,8 +767,8 @@ mod tests {
     /// Presses each of `keys` ("alt-left", "a") in `field`.
     fn press(field: &mut TextField, keys: &str, cx: &mut App) -> Edit {
         let mut last = Edit::Ignored;
+        let os = cx.platform_info().os;
         for key in keys.split_whitespace() {
-            let os = cx.platform_info().os;
             let mut keystroke = Keystroke::parse_with_os(key, os).expect("a keystroke");
             if keystroke.key.chars().count() == 1 && !keystroke.modifiers.platform {
                 keystroke.key_char = Some(keystroke.key.clone());
