@@ -17,7 +17,10 @@ use std::{
 use anyhow::{Result, bail};
 use dispatch2::DispatchQueue;
 use objc2::{MainThreadMarker, rc::autoreleasepool, runtime::NSObjectProtocol, sel};
-use objc2_app_kit::{NSApplication, NSRunningApplication, NSWorkspace};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy,
+    NSRunningApplication, NSWorkspace,
+};
 use objc2_foundation::{NSAppleEventManager, NSBundle, NSProcessInfo, NSString, NSURL};
 use pwrroute_router::OpenerInfo;
 
@@ -58,6 +61,41 @@ pub fn current_apple_event_opener() -> Option<OpenerInfo> {
             .unwrap_or_default(),
         path,
         window_title: None,
+    })
+}
+
+/// Makes the app that sent the `kAEGetURL` event AppKit is handling the
+/// active one again, when LaunchServices made this app active to hand it
+/// the link. Activation, and Cmd-Tab's order, then go back to the app the
+/// link was clicked in, and a browser that brings itself forward lands in
+/// front of it, with PwrRoute behind both. Only for a sender with a Dock
+/// icon: a command-line `open` or a daemon has no front to go back to.
+pub fn return_front_to_apple_event_sender() -> bool {
+    autoreleasepool(|_| {
+        let me = NSRunningApplication::currentApplication();
+        if !me.isActive() {
+            return false;
+        }
+        let Some(event) = NSAppleEventManager::sharedAppleEventManager().currentAppleEvent() else {
+            return false;
+        };
+        let Some(pid) = event
+            .attributeDescriptorForKeyword(KEY_SENDER_PID)
+            .map(|descriptor| descriptor.int32Value())
+        else {
+            return false;
+        };
+        if pid <= 0 || pid == me.processIdentifier() {
+            return false;
+        }
+        let Some(sender) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        else {
+            return false;
+        };
+        if sender.activationPolicy() != NSApplicationActivationPolicy::Regular {
+            return false;
+        }
+        sender.activateWithOptions(NSApplicationActivationOptions::empty())
     })
 }
 

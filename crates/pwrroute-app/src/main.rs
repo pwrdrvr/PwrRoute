@@ -50,6 +50,7 @@ mod onboarding;
 mod overview;
 mod overview_model;
 mod placement;
+mod reopen;
 mod router;
 mod rule_menu;
 mod rule_pickers;
@@ -79,8 +80,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
     rc::Rc,
-    sync::{Arc, Mutex, PoisonError},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use gpui_kit::{
@@ -88,7 +88,11 @@ use gpui_kit::{
     WindowOptions, point, px,
 };
 
-use crate::{app::PwrRoute, router::Resident};
+use crate::{
+    app::PwrRoute,
+    reopen::{LINK_GRACE, LastLink, REOPEN_GRACE, Reopen},
+    router::Resident,
+};
 
 /// The window's default size: the design's 1240px width.
 const WINDOW_SIZE: (f32, f32) = (1240.0, 820.0);
@@ -96,39 +100,6 @@ const WINDOW_SIZE: (f32, f32) = (1240.0, 820.0);
 /// Where AppKit puts the close button, from the window's top-left. The family
 /// spec: 16px in, centered in the 40px strip.
 const TRAFFIC_LIGHTS: (f32, f32) = (16.0, 13.0);
-
-/// How long a macOS launch, or a reopen, waits for an Apple Event before it
-/// opens the window: a launch for a link must not show it.
-const LINK_GRACE: Duration = Duration::from_millis(250);
-
-/// LaunchServices can send a reopen beside a link's Apple Event, before or
-/// after it. A reopen this close to a link is part of that link, not a
-/// request for the window (as the PwrFinicky router coalesced them).
-const REOPEN_AFTER_LINK: Duration = Duration::from_millis(750);
-
-/// When the OS last handed the app a link.
-#[derive(Clone, Default)]
-struct LastLink(Arc<Mutex<Option<Instant>>>);
-
-impl LastLink {
-    fn mark(&self) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
-    }
-
-    fn within(&self, window: Duration) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some_and(|at| at.elapsed() < window)
-    }
-
-    fn ever(&self) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some()
-    }
-}
 
 /// Keeps the router alive for the life of the app.
 struct ResidentRouter(#[allow(dead_code, reason = "held for its Drop")] Resident);
@@ -187,16 +158,28 @@ fn main() -> ExitCode {
         .with_quit_mode(QuitMode::Explicit);
     e2e::startup("gpui");
     let seen = last_link.clone();
+    let links_handle = handle.clone();
+    let yield_focus = resident.settings.yield_browser_focus();
     app.on_open_urls(move |urls| {
         seen.mark();
-        router::dispatch_os_links(&handle, urls);
+        router::dispatch_os_links(&links_handle, urls);
+        // LaunchServices made the app active, and put it in the Dock and
+        // Cmd-Tab, to hand it the link. After the opener is read from the
+        // Apple Event.
+        dock::after_link(yield_focus.load(std::sync::atomic::Ordering::Relaxed));
     });
+    // A reopen opens the window only when no link came near it
+    // (`reopen.rs`): LaunchServices sends one beside some links.
     let reopened = last_link.clone();
     app.on_reopen(move |cx| {
+        let at = Instant::now();
         let last_link = reopened.clone();
+        let router = handle.clone();
         cx.spawn(async move |cx| {
-            cx.background_executor().timer(LINK_GRACE).await;
-            if !last_link.within(REOPEN_AFTER_LINK) {
+            cx.background_executor().timer(REOPEN_GRACE).await;
+            let decision = reopen::decide(at, last_link.at());
+            reopen::log(decision, router.retention().keeps_links());
+            if matches!(decision, Reopen::Window { .. }) {
                 cx.update(show_main_window);
             }
         })
@@ -258,6 +241,7 @@ fn main() -> ExitCode {
         let activate = resident.activate.clone();
         cx.spawn(async move |cx| {
             while activate.recv().await.is_ok() {
+                log::info!(target: "pwrroute", "another launch asked for the window");
                 cx.update(show_main_window);
             }
         })

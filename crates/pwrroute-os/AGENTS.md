@@ -42,6 +42,11 @@ and Windows).
   the yield must land before the browser hears of the link). It takes a
   bundle id: the launcher's `Plan::hand_off_to` names the copy, and is
   `None` when the link is meant for the background.
+- **`return_front_to_sender` undoes LaunchServices' activation** for a
+  link: from the open-URLs callback, it activates the `kAEGetURL` event's
+  sender (a `Regular` app, not PwrRoute) while PwrRoute is the active app,
+  so Cmd-Tab keeps the order the click made. The app skips it while it
+  yields to browsers: once PwrRoute is not active it has nothing to yield.
 - **`system_uptime` is `NSProcessInfo.systemUptime`**: time awake since
   boot, the clock Chromium's `TimeTicks` reads on macOS. Edge's singleton
   message carries it; the app passes it to the launcher's `with_uptime`.

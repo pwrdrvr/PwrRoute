@@ -899,7 +899,27 @@ their own modules.
   Settings, first-run or one of Help's windows (`DocWindow`, `LogsWindow`)
   is open (`Regular`) and goes when the last closes
   (`Accessory`). objc2's AppKit calls here are safe; this crate stays
-  `unsafe`-free.
+  `unsafe`-free. LaunchServices makes an `Accessory` app `Regular` each
+  time it hands it a link (measured on macOS 27 with a bare AppKit app),
+  so `on_open_urls` calls `dock::after_link`, which puts back what the
+  windows asked for (`macos::restore_dock_icon`) inside the Apple Event;
+  macOS then hands focus straight back to the app in front. Without it,
+  every link with the windows closed puts PwrRoute in the Dock and Cmd-Tab.
+  With a window open the same activation raises it and leaves PwrRoute
+  second in Cmd-Tab, behind the browser, so `after_link` then gives the
+  front back to the link's sender (`pwrroute_os::return_front_to_sender`),
+  and a browser comes forward over that app instead. Not while
+  `experimental.yieldBrowserFocus` is on: its yield needs PwrRoute still
+  active (measured with stand-in apps on macOS 27: handing back first
+  kept a cooperatively activating browser behind).
+- **A closed window stays closed for links (`reopen.rs`).** LaunchServices
+  sends a reopen beside some links, before or after the link's Apple
+  Event, and GPUI passes it on only while no window is open. A reopen
+  waits `REOPEN_GRACE` and opens the main window only when no link arrived
+  from `REOPEN_AFTER_LINK` before it until then; otherwise every link with
+  the window closed would bring it back and put PwrRoute in Cmd-Tab. Don't
+  narrow those windows without a lab measurement. Each decision is logged,
+  link timings only while links are kept.
 - **First run never touches the OS.** `FirstRunHooks` decides what its
   buttons do; `onboarding.rs` builds the real ones and the model from
   `Facts` (tests write their own facts and count hook calls). `state.json`

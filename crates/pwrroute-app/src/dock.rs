@@ -41,6 +41,26 @@ pub fn install(cx: &mut App) {
     let _ = cx;
 }
 
+/// A link from the OS just arrived: keep the Dock icon as the windows want
+/// it (`macos::restore_dock_icon`), and with a window open give the front
+/// back to the app the link came from. Call on the main thread, while the
+/// link's Apple Event is being handled.
+///
+/// With every window closed, going back to `Accessory` already hands the
+/// front back. With one open, LaunchServices' activation raised it and put
+/// PwrRoute second in Cmd-Tab, behind the browser, until the sender takes
+/// the front again. Not while Settings' "Yield focus to browsers" is on:
+/// its yield needs PwrRoute still active when the browser is handed the
+/// link, or the browser cannot come forward.
+pub fn after_link(yield_to_browser: bool) {
+    #[cfg(target_os = "macos")]
+    if crate::macos::restore_dock_icon() && !yield_to_browser {
+        pwrroute_os::return_front_to_sender();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = yield_to_browser;
+}
+
 /// Whether a window that wants the Dock icon is open.
 #[cfg(target_os = "macos")]
 fn has_dock_window(cx: &App) -> bool {
