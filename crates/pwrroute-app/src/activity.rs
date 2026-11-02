@@ -2499,7 +2499,7 @@ pub fn pane(
     };
     pane_frame("activity-pane")
         // A scroll moves the rows under a pointer that did not move.
-        .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+        .on_scroll(cx.listener(|this, _, _, cx| {
             if this.activity.hovered.take().is_some() {
                 cx.notify();
             }

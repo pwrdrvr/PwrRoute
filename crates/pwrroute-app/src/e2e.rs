@@ -352,9 +352,10 @@ fn answer(
 fn on_ui_thread(request: Request, cx: &mut App) -> (Value, Option<Then>) {
     match request {
         Request::Key { keys } => {
+            let os = cx.platform_info().os;
             let keystrokes = match keys
                 .split_whitespace()
-                .map(Keystroke::parse)
+                .map(|key| Keystroke::parse_with_os(key, os))
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(keystrokes) => keystrokes,

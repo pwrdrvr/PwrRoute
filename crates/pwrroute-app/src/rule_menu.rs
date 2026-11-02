@@ -575,7 +575,8 @@ impl PwrRoute {
     ) -> bool {
         let keystroke = &event.keystroke;
         let m = &keystroke.modifiers;
-        let plain = !m.secondary() && !m.alt && !m.shift && !m.control && !m.platform;
+        let secondary = m.secondary(cx);
+        let plain = !secondary && !m.alt && !m.shift && !m.control && !m.platform;
         // The keys the menu shows act on its row; with none open, on the
         // selected one.
         let target = match self.row_actions.menu {
@@ -594,16 +595,16 @@ impl PwrRoute {
                 self.close_row_actions(cx);
                 true
             }
-            "up" if m.secondary() && m.alt && !m.shift => self.step_rule(target, -1, window, cx),
-            "down" if m.secondary() && m.alt && !m.shift => self.step_rule(target, 1, window, cx),
-            "d" if m.secondary() && !m.alt && !m.shift => match target {
+            "up" if secondary && m.alt && !m.shift => self.step_rule(target, -1, window, cx),
+            "down" if secondary && m.alt && !m.shift => self.step_rule(target, 1, window, cx),
+            "d" if secondary && !m.alt && !m.shift => match target {
                 Some(selection) => {
                     self.duplicate_rule(selection, window, cx);
                     true
                 }
                 None => false,
             },
-            "z" if m.secondary() && !m.alt && !m.shift => self.undo_delete(window, cx),
+            "z" if secondary && !m.alt && !m.shift => self.undo_delete(window, cx),
             "backspace" | "delete" if plain => match target {
                 Some(selection) => {
                     self.delete_rule(selection, window, cx);
