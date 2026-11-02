@@ -2205,7 +2205,7 @@ fn a_caught_link_is_saved_and_opened_from_its_sheet(cx: &mut TestAppContext) {
     let dir = scratch("caught-link");
     let path = dir.join("rules.json");
     // No `on_dispatch`: the test scheduler forbids the dispatch thread
-    // waking a task, so the feed is seeded from the router's buffer.
+    // waking a task.
     let router =
         Router::spawn(Options::default(), None, DryRunLauncher::new()).expect("spawn the router");
     let handle = router.handle();
@@ -2221,7 +2221,9 @@ fn a_caught_link_is_saved_and_opened_from_its_sheet(cx: &mut TestAppContext) {
     assert!(!handle.catching_next(), "one link only");
     assert_eq!(handle.pending(), [caught.id]);
 
-    let (_sender, dispatched) = async_channel::unbounded();
+    // Sent from this thread, as `on_dispatch` would have.
+    let (sender, dispatched) = async_channel::unbounded();
+    sender.try_send(caught.clone()).expect("open");
     cx.update(|cx| activity::install(handle.clone(), dispatched, cx));
     let (view, cx) = open_store(cx, None, fixture_store(&dir));
     click(cx, "nav-activity");
