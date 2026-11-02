@@ -105,8 +105,11 @@ runs on every platform.
   `Worker::take_catch` clears it before the `Override` slot is read, so a
   send, hold or pause in force stays on and is not counted for that link.
   It never arms, and an armed one holds nothing, while the retention keeps
-  nothing. `DispatchRecord::held_for_rule()` reads it from the steps; the
-  app opens Add a rule for it. Memory only.
+  nothing. A link whose rule keeps less than the whole link (`Host`,
+  `None`, a private rule) passes by and the catch stays armed: a `None`
+  record keeps nothing waiting, so the link would be lost.
+  `DispatchRecord::held_for_rule()` reads it from the steps; the app opens
+  Add a rule for it. Memory only.
 - **A link that was not opened waits, in memory, to be opened.**
   `Worker::record` hands `RecentDispatches::push_waiting` the whole link
   (URL and opener) of every `NotOpened` record that keeps anything; it

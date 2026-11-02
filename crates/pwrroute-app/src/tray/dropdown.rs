@@ -249,6 +249,9 @@ pub struct Dropdown {
     /// The recent row under the pointer, which shows "+ Rule" where its
     /// age was (design: Tray Quick Add Rule 1a).
     pub hovered_recent: Option<usize>,
+    /// The recents' records as last drawn, so a model change that leaves
+    /// them alone keeps `hovered_recent`.
+    recent_ids: Vec<DispatchId>,
     pub unfolded: Unfolded,
     /// The tallest the window may be: the display's visible area under it.
     max_height: Pixels,
@@ -272,11 +275,18 @@ impl Dropdown {
             &cx.text_system().clone(),
             max_height,
         );
+        let ids = recent_ids(model.read(cx));
         let subscriptions = vec![
-            // The window follows the card. The recents may have moved under
-            // the pointer: GPUI reports hover only on a move, so forget it.
-            cx.observe_in(&model, window, |this, _, window, cx| {
-                this.hovered_recent = None;
+            // The window follows the card. When the recents change they may
+            // have moved under the pointer: GPUI reports hover only on a
+            // move, so forget it. A tick of the clock (every second while a
+            // send or a hold has a time) leaves the rows, and the hover, be.
+            cx.observe_in(&model, window, |this, model, window, cx| {
+                let ids = recent_ids(model.read(cx));
+                if ids != this.recent_ids {
+                    this.recent_ids = ids;
+                    this.hovered_recent = None;
+                }
                 this.fit(window, cx);
             }),
             // A click anywhere else takes focus away: close, as a menu does.
@@ -293,6 +303,7 @@ impl Dropdown {
             stops: Stops::new(cx),
             hovered: None,
             hovered_recent: None,
+            recent_ids: ids,
             unfolded: Unfolded::default(),
             max_height,
             height,
@@ -1792,6 +1803,11 @@ fn recent_row(
         })
 }
 
+/// Which records the recents show, in order.
+fn recent_ids(model: &TrayModel) -> Vec<DispatchId> {
+    model.recents.iter().map(|recent| recent.id).collect()
+}
+
 /// A recent row's "+ Rule", lit as Activity's is on the row under the
 /// pointer (`activity::quick_add_button`). Its click opens Add a rule
 /// without the row's own click (Open Activity).
@@ -1866,11 +1882,13 @@ fn catch_row(
                 cx.notify();
             }
         }))
-        .map(|e| crate::widgets::keyboard_control(e, false))
+        // Inert while dimmed: no tab stop, no click.
         .when(enabled, |row| {
-            row.on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                this.run(TrayCommand::CatchNext, window, cx);
-            }))
+            crate::widgets::keyboard_control(row, false).on_click(cx.listener(
+                |this, _: &ClickEvent, window, cx| {
+                    this.run(TrayCommand::CatchNext, window, cx);
+                },
+            ))
         })
         .child(
             div()

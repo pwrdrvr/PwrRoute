@@ -1057,7 +1057,10 @@ impl RouterHandle {
     /// opened, with [`Step::Held`]'s `held` [`Sent::ForRule`], so the user
     /// can write a rule for it and open it from Activity. It passes over a
     /// pause, a send or a hold for that one link without counting it; they
-    /// apply again from the link after. One link, then it disarms. Arming
+    /// apply again from the link after. One link, then it disarms. A link
+    /// whose rule keeps less than the whole link ([`Privacy::Host`] or
+    /// [`Privacy::None`]) is not caught: it opens by the rules and the
+    /// catch waits for the next. Arming
     /// while Activity keeps nothing in memory does nothing: the link would
     /// have nowhere to wait. Memory only.
     ///
@@ -1351,7 +1354,7 @@ impl Worker {
         let mut held = false;
         match mode {
             Mode::Dispatch => match self
-                .take_catch(record.link.source)
+                .take_catch(record.link.source, privacy)
                 .or_else(|| self.take_override())
             {
                 Some(Took::Paused(target)) => {
@@ -1610,9 +1613,15 @@ impl Worker {
     /// armed and the link came from the OS: it disarms, and the slot is
     /// not touched, so a send's or a hold's count is not used. Disarms
     /// without taking the link while Activity keeps nothing: it would have
-    /// nowhere to wait.
-    fn take_catch(&self, source: crate::link::Source) -> Option<Took> {
-        if source == crate::link::Source::Api || !self.catch.swap(false, Ordering::SeqCst) {
+    /// nowhere to wait. A link whose rule keeps less than the whole link
+    /// (`privacy` below `Full`) passes by and the catch stays armed: a
+    /// counted-only record keeps nothing waiting, so the link would be
+    /// lost, and a host-only one has no URL to write a rule from.
+    fn take_catch(&self, source: crate::link::Source, privacy: Privacy) -> Option<Took> {
+        if source == crate::link::Source::Api || privacy != Privacy::Full {
+            return None;
+        }
+        if !self.catch.swap(false, Ordering::SeqCst) {
             return None;
         }
         (self.recent.retention().count > 0).then_some(Took::Held(crate::trace::Sent::ForRule))

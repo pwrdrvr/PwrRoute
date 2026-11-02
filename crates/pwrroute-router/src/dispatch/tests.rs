@@ -2748,6 +2748,34 @@ fn a_caught_link_is_held_for_a_rule_once_and_passes_over_a_send_without_counting
     assert!(!opened.held_for_rule());
 }
 
+/// A link whose rule keeps less than the whole link is not caught: a
+/// counted-only record keeps nothing waiting (the link would be lost) and
+/// a host-only one has no URL for a rule. It opens by the rules, and the
+/// catch waits for a link it can keep.
+#[test]
+fn the_catch_passes_over_a_link_its_record_cannot_keep_whole() {
+    let (router, launcher) = rules_router(leveled_rules());
+    let handle = router.handle();
+    handle.catch_next(true);
+    for url in [
+        "https://none.example.com/a",
+        "https://host.example.com/a",
+        "https://private.example.com/a",
+    ] {
+        let record = handle.dispatch_and_wait(link(url)).unwrap();
+        assert!(!record.held_for_rule(), "{url}");
+        assert_ne!(record.outcome, Outcome::NotOpened, "{url}");
+        assert!(handle.catching_next(), "still armed after {url}");
+    }
+    assert_eq!(launcher.launched().len(), 3);
+    let caught = handle
+        .dispatch_and_wait(link("https://full.example.com/a"))
+        .unwrap();
+    assert!(caught.held_for_rule());
+    assert!(!handle.catching_next());
+    assert_eq!(handle.pending(), vec![caught.id]);
+}
+
 #[test]
 fn the_catch_can_be_cancelled_and_needs_somewhere_for_the_link_to_wait() {
     let (_dir, router, launcher) = engine_router(Options::default());

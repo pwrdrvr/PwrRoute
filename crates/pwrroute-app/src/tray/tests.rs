@@ -184,6 +184,10 @@ fn a_hovered_recent_offers_a_rule(cx: &mut TestAppContext) {
         "{quick:?} stands where {age:?} was"
     );
     assert_card_fits(&mut opened);
+    // A model change that leaves the rows alone (the clock's tick while a
+    // send has a time) keeps it.
+    opened.update_model(|_| {});
+    assert!(opened.cx.debug_bounds("tray-quick-rule-0").is_some());
 
     let detail = opened
         .cx

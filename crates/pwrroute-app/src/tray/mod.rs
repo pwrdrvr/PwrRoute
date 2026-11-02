@@ -492,6 +492,11 @@ fn open_caught(feed: &Entity<Feed>, cx: &mut App) {
         return;
     }
     let seen = cx.global::<Tray>().seen;
+    let newest = newest(feed.read(cx)).max(seen);
+    if newest == seen {
+        return;
+    }
+    cx.global_mut::<Tray>().seen = newest;
     let feed = feed.read(cx);
     let pending = feed.pending();
     let caught = feed
@@ -501,8 +506,6 @@ fn open_caught(feed: &Entity<Feed>, cx: &mut App) {
         .filter(|record| record.held_for_rule() && pending.contains(&record.id))
         .map(|record| record.id)
         .max();
-    let newest = newest(feed).max(seen);
-    cx.global_mut::<Tray>().seen = newest;
     if let Some(id) = caught {
         cx.defer(move |cx| open_rule_sheet(id, SheetFrom::Caught, cx));
     }

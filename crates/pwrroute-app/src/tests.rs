@@ -16,7 +16,7 @@ use pwrroute_router::{
 };
 
 use crate::activity::{self, EMPTY_ID, Feed, Filter, RowKey};
-use crate::activity_actions::{BrowserChoice, RowMenu, Save, SheetFrom};
+use crate::activity_actions::{AddRule, BrowserChoice, RowMenu, Save, SheetFrom};
 use crate::app::{PwrRoute, ROOT_ID, Screen, Selection};
 use crate::fixtures;
 use crate::rules_model::{Destination, Matcher, RowBadge};
@@ -2256,6 +2256,13 @@ fn a_caught_link_is_saved_and_opened_from_its_sheet(cx: &mut TestAppContext) {
 
     open_sheet(&view, cx);
     choose_sheet_browser(cx);
+    let chosen = view.read_with(cx, |app, _| {
+        app.actions
+            .sheet
+            .as_ref()
+            .and_then(AddRule::open_as)
+            .expect("a browser is picked")
+    });
     click(cx, "add-rule-save-open");
     cx.run_until_parked();
     assert!(cx.debug_bounds("add-rule-sheet").is_none());
@@ -2267,6 +2274,17 @@ fn a_caught_link_is_saved_and_opened_from_its_sheet(cx: &mut TestAppContext) {
         released[0].released_from(),
         Some(caught.id),
         "the link opened as a new record"
+    );
+    // In the destination picked, whatever runs before the new rule.
+    let pwrroute_router::OpenAs::In(destination) = chosen else {
+        panic!("a picked browser opens there");
+    };
+    assert_eq!(
+        released[0]
+            .browser
+            .as_ref()
+            .map(|browser| browser.name.clone()),
+        Some(destination.browser)
     );
     drop(router);
     let _ = std::fs::remove_dir_all(dir);

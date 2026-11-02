@@ -600,7 +600,9 @@ their own modules.
   Open all; they are not in Recent, and Quit says how many will be lost.
   Nothing about it is saved. Add a rule from the tray (design: Tray Quick
   Add Rule): a recent row under the pointer trades its age for "+ Rule"
-  (`Recent::can_rule`: never a host-only record), whose click opens the
+  (`Recent::can_rule`: never a host-only record; the hover survives a
+  model change that leaves the rows alone, `Dropdown::recent_ids`), whose
+  click opens the
   main window on Activity with the sheet (`tray::make_rule_for`,
   `SheetFrom::MenuBar`). "Add a rule for the next link…" leads the
   commands and the native menu (`TrayCommand::CatchNext`,
@@ -610,7 +612,9 @@ their own modules.
   feed past `Tray::seen` and opens the sheet for a caught link that still
   waits (`SheetFrom::Caught`). A sheet over a waiting link
   (`AddRule::waiting`) has Discard, Save and Save and open link
-  (`PwrRoute::add_rule_and_open`: the rule, then `OpenAs::Rules`). The
+  (`PwrRoute::add_rule_and_open`: the rule, then `AddRule::open_as`, the
+  destination picked, even past an earlier rule; Don't open leaves it to
+  the rules). The
   dropdown is keyboard-operable: Tab walks
   the card in draw order (its rows, then the switch as one stop, To,
   For, the stepper and the live button),

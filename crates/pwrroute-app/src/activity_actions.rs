@@ -352,7 +352,7 @@ impl AddRule {
     /// and where Save and open link sends the link.
     pub fn waiting_footer(&self, handler: usize) -> String {
         let footer = self.footer(handler);
-        if self.browser.trim().is_empty() {
+        if self.open_as().is_none() {
             return format!("{footer} The link waits in Activity until you open it.");
         }
         let mut to = crate::default_browser::browser_name(self.browser.trim());
@@ -362,6 +362,20 @@ impl AddRule {
             to.push_str(&format!(" \u{00b7} {}", self.profile.trim()));
         }
         format!("{footer} Save and open link opens it in {to}.")
+    }
+
+    /// Where Save and open link opens the waiting link: the destination
+    /// picked here, whatever runs before the new rule. None until a
+    /// browser is picked, or for Don't open, which opens nothing.
+    pub fn open_as(&self) -> Option<OpenAs> {
+        let browser = self.browser.trim();
+        (!browser.is_empty() && !engine::is_dont_open(browser)).then(|| {
+            OpenAs::In(Destination {
+                browser: browser.to_owned(),
+                profile: self.profile.trim().to_owned(),
+                private: self.private,
+            })
+        })
     }
 
     /// How the rule names the sending app: its bundle id, else its name,
@@ -1296,17 +1310,22 @@ impl PwrRoute {
     }
 
     /// Save and open link: adds the sheet's rule as Add does, then opens
-    /// the waiting link where the rules send it now, which is the new rule
-    /// when it takes the link (design: Tray Quick Add Rule 2d). The rule is
-    /// written before the router is asked, and the router reads the file
-    /// again before it routes. Nothing opens when the rule was not added
-    /// (the sheet stays open and says why).
+    /// the waiting link in the destination picked (design: Tray Quick Add
+    /// Rule 2d), even when an earlier rule or the config would still take
+    /// it ("Save anyway and open"). A rule that opens nothing (Don't open)
+    /// leaves it to the rules, as Open does. Nothing opens when the rule
+    /// was not added (the sheet stays open and says why).
     pub fn add_rule_and_open(&mut self, cx: &mut Context<'_, Self>) {
-        let Some(key) = self.actions.sheet.as_ref().map(|sheet| sheet.key) else {
+        let Some((key, how)) = self
+            .actions
+            .sheet
+            .as_ref()
+            .map(|sheet| (sheet.key, sheet.open_as().unwrap_or(OpenAs::Rules)))
+        else {
             return;
         };
         if self.add_rule_from_sheet(cx) {
-            self.open_not_opened(key, OpenAs::Rules, cx);
+            self.open_not_opened(key, how, cx);
         }
     }
 
