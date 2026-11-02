@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.13.0 - 2026-11-02
+
+- Rule drafts - Editing a rule in Rules now creates a draft with Save and Discard. Routing, Overview and Test a link keep using the saved rule until you save; Try it tests the draft. Use Command-S on macOS or Ctrl-S elsewhere to save, and Esc to discard. Unsaved badges mark pending edits, leaving a changed rule or closing the window asks first, and changes from another writer preserve your draft with a choice when the same rule changed on disk.
+- Domain rules - Activity's Add a rule sheet offers a domain and every subdomain as one choice, alongside the link's host and path. It saves separate patterns for the bare domain and its subdomains, stops at the registrable domain rather than a public suffix, and previews which nearby hosts match. Agent rule suggestions return each choice's complete pattern list and the recent links it also catches.
+- Finicky visual rules - First run and Settings › Config Files discover Finicky's visual rules and offer a copy review. Import appends rules and rewrites, skips exact duplicates, preserves profiles, examples and saved tests, and leaves Finicky's file untouched. Existing PwrRoute rules and defaults keep precedence; saved-test conflicts remain visible for review, and Undo import can remove the copied entries.
+- Finicky options - Settings › Config Files and importer Review show explicitly configured keepRunning, hideIcon, checkForUpdates and logRequests values, including false, and explain PwrRoute's behavior. These options leave PwrRoute's preferences unchanged; notices point to Settings › Updates and Privacy › Journal for the corresponding controls.
+- Text input - Text fields now use native text-input handling for composition, selection and multi-character replacement, and expose text ranges and selection actions to accessibility tools. This covers the rule editor, Test a link, Activity search and Add a rule, Privacy numbers, machine name and log search. Real screen-reader editing and OS dictation still need platform validation.
+- Reduce Motion - Overview skips its decorative handoff pulse when the OS's Reduce Motion setting is enabled. Turning it on during a pulse cancels the animation, while precedence changes and Undo still apply immediately.
+
 ## v0.12.0 - 2026-10-31
 
 - Appearance - Settings › General returns with Theme choices System, Dark and Light. System is the default and follows the operating system while PwrRoute runs, including with its windows closed. An explicit Dark or Light choice also sets matching native window backgrounds, title bars, menus and panels before the first window opens. The choice is remembered, changes apply without restarting, and Windows and Linux tray icons follow the active scheme.
