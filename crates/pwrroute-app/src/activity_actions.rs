@@ -152,9 +152,29 @@ impl Took {
     }
 }
 
+/// Where an Add a rule sheet was opened from, for its eyebrow.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SheetFrom {
+    /// Activity's row, its "⋯" menu or ⌘N.
+    #[default]
+    Activity,
+    /// The tray: a recent link's "+ Rule" or a held link's Make a rule…
+    /// (design: Tray Quick Add Rule 1b).
+    MenuBar,
+    /// The link "Add a rule for the next link" held (design: Tray Quick
+    /// Add Rule 2c).
+    Caught,
+}
+
 /// The Add a rule sheet's state, for one record.
 pub struct AddRule {
     pub key: RowKey,
+    /// Where the sheet was opened from.
+    pub from_where: SheetFrom,
+    /// The link was not opened and still waits to be (held, or a rule that
+    /// opens nothing): the footer offers Discard, Save and Save and open
+    /// link (design: Tray Quick Add Rule 2c, 2d).
+    pub waiting: bool,
     pub time: String,
     /// The link the rules saw (`matched_url`): where a short link landed,
     /// else as received. Empty when `disabled`.
@@ -252,6 +272,8 @@ impl AddRule {
                 id: record.id,
                 journaled: false,
             },
+            from_where: SheetFrom::Activity,
+            waiting: false,
             time: clock(record.received_at),
             url,
             from: record.link.opener.clone().filter(|o| !o.name.is_empty()),
@@ -308,15 +330,38 @@ impl AddRule {
         "Add a rule for this link"
     }
 
-    /// The eyebrow: "From Activity · 09:40:51 · sent from Slack".
+    /// The eyebrow: "From Activity · 09:40:51 · sent from Slack", "From
+    /// the menu bar · …", or "Caught by the menu bar · … · not opened".
     pub fn eyebrow(&self) -> String {
-        match &self.from {
-            Some(app) => format!(
-                "From Activity \u{00b7} {} \u{00b7} sent from {}",
-                self.time, app.name
-            ),
-            None => format!("From Activity \u{00b7} {}", self.time),
+        let place = match self.from_where {
+            SheetFrom::Activity => "From Activity",
+            SheetFrom::MenuBar => "From the menu bar",
+            SheetFrom::Caught => "Caught by the menu bar",
+        };
+        let mut eyebrow = format!("{place} \u{00b7} {}", self.time);
+        if let Some(app) = &self.from {
+            eyebrow.push_str(&format!(" \u{00b7} sent from {}", app.name));
         }
+        if self.from_where == SheetFrom::Caught {
+            eyebrow.push_str(" \u{00b7} not opened");
+        }
+        eyebrow
+    }
+
+    /// The footer of a sheet whose link still waits: where the rule lands,
+    /// and where Save and open link sends the link.
+    pub fn waiting_footer(&self, handler: usize) -> String {
+        let footer = self.footer(handler);
+        if self.browser.trim().is_empty() {
+            return format!("{footer} The link waits in Activity until you open it.");
+        }
+        let mut to = crate::default_browser::browser_name(self.browser.trim());
+        if self.private {
+            to.push_str(" \u{00b7} private window");
+        } else if !self.profile.trim().is_empty() {
+            to.push_str(&format!(" \u{00b7} {}", self.profile.trim()));
+        }
+        format!("{footer} Save and open link opens it in {to}.")
     }
 
     /// How the rule names the sending app: its bundle id, else its name,
@@ -920,9 +965,25 @@ impl PwrRoute {
     /// record, from the expanded row's "Add a rule…" or the "⋯" menu. A
     /// record kept as host only or nothing gets the sheet's disabled state.
     pub fn add_rule(&mut self, key: RowKey, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.add_rule_from(key, SheetFrom::Activity, window, cx);
+    }
+
+    /// [`add_rule`](Self::add_rule), saying where the sheet was opened
+    /// from. A link that still waits to be opened gets Discard, Save and
+    /// Save and open link.
+    pub fn add_rule_from(
+        &mut self,
+        key: RowKey,
+        from_where: SheetFrom,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         let Some(record) = record(key, cx) else {
             return;
         };
+        let waiting = !key.journaled
+            && record.outcome == Outcome::NotOpened
+            && activity::feed(cx).is_some_and(|feed| feed.read(cx).pending().contains(&key.id));
         // "Becomes rule N" counts the file as it is.
         self.sync_with_disk(cx);
         let mut sheet = if record.privacy == Privacy::Full {
@@ -931,6 +992,8 @@ impl PwrRoute {
             AddRule::disabled(&record, cx)
         };
         sheet.key = key;
+        sheet.from_where = from_where;
+        sheet.waiting = waiting;
         self.find_collisions(&mut sheet, cx);
         sheet.rules_first = self.rules_first();
         sheet.config = self.config.as_ref().map(|config| config.path.clone());
@@ -1151,19 +1214,19 @@ impl PwrRoute {
     /// link (an earlier rule or the config in charge takes it first, or
     /// its pattern misses) keeps the sheet open and says why; a second
     /// click adds it anyway.
-    pub fn add_rule_from_sheet(&mut self, cx: &mut Context<'_, Self>) {
+    pub fn add_rule_from_sheet(&mut self, cx: &mut Context<'_, Self>) -> bool {
         let Some(sheet) = &self.actions.sheet else {
-            return;
+            return false;
         };
         let Some(rule) = sheet.rule() else {
-            return;
+            return false;
         };
         let at = match sheet.position {
             Position::Top => 0,
             Position::Bottom => self.store.handler_count(),
         };
         let warning = match &sheet.problem {
-            Some(problem) if problem.kind == ProblemKind::Duplicate => return,
+            Some(problem) if problem.kind == ProblemKind::Duplicate => return false,
             Some(problem) => Some(problem.text.clone()),
             None => {
                 if let Some(problem) = self.check_new_rule(&rule, at) {
@@ -1171,13 +1234,13 @@ impl PwrRoute {
                         sheet.problem = Some(problem);
                     }
                     cx.notify();
-                    return;
+                    return false;
                 }
                 None
             }
         };
         let Some(sheet) = self.actions.sheet.take() else {
-            return;
+            return false;
         };
         let key = sheet.key;
         let test = sheet.test();
@@ -1229,6 +1292,22 @@ impl PwrRoute {
         self.refresh(cx);
         self.rebuild_rail(cx);
         self.run_tests(cx);
+        true
+    }
+
+    /// Save and open link: adds the sheet's rule as Add does, then opens
+    /// the waiting link where the rules send it now, which is the new rule
+    /// when it takes the link (design: Tray Quick Add Rule 2d). The rule is
+    /// written before the router is asked, and the router reads the file
+    /// again before it routes. Nothing opens when the rule was not added
+    /// (the sheet stays open and says why).
+    pub fn add_rule_and_open(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(key) = self.actions.sheet.as_ref().map(|sheet| sheet.key) else {
+            return;
+        };
+        if self.add_rule_from_sheet(cx) {
+            self.open_not_opened(key, OpenAs::Rules, cx);
+        }
     }
 
     /// Why `rule`, added at `at`, would not take the sheet's link: the
@@ -2327,28 +2406,84 @@ pub fn sheet(
                 .as_ref()
                 .is_some_and(|problem| problem.kind == ProblemKind::Duplicate);
             let ready = sheet.rule().is_some() && !duplicate;
-            let label = if !sheet.needs_js_now() && sheet.problem.is_none() {
-                "Add rule"
-            } else {
-                "Add anyway"
+            let anyway = sheet.needs_js_now() || sheet.problem.is_some();
+            let note = match &sheet.problem {
+                Some(problem) => problem_note(problem).flex_1().min_w_0().into_any_element(),
+                None => paragraph(
+                    if sheet.waiting {
+                        sheet.waiting_footer(handler)
+                    } else {
+                        sheet.footer(handler)
+                    },
+                    10.5,
+                    15.75,
+                    theme::text_subtle(),
+                )
+                .flex_1()
+                .min_w_0()
+                .into_any_element(),
             };
-            let add = button(label, ButtonKind::Primary, false)
+            let footer = if sheet.waiting {
+                // The link waits to be opened (design: Tray Quick Add Rule
+                // 2c): Discard keeps it waiting, Save writes the rule and
+                // keeps it waiting, Save and open link opens it by the
+                // rules, the new one first. The note gets its own line.
+                let save = button(
+                    if anyway { "Save anyway" } else { "Save" },
+                    ButtonKind::Default,
+                    false,
+                )
                 .id("add-rule-save")
                 .debug_selector(|| "add-rule-save".into())
-                .when(!ready, |add| add.opacity(theme::DISABLED))
-                .on_click(cx.listener(|this, _, _, cx| this.add_rule_from_sheet(cx)));
-            (
-                sheet_body(app, sheet, window, cx),
+                .when(!ready, |save| save.opacity(theme::DISABLED))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.add_rule_from_sheet(cx);
+                }));
+                let open = button(
+                    if anyway {
+                        "Save anyway and open"
+                    } else {
+                        "Save and open link"
+                    },
+                    ButtonKind::Primary,
+                    false,
+                )
+                .id("add-rule-save-open")
+                .debug_selector(|| "add-rule-save-open".into())
+                .when(!ready, |open| open.opacity(theme::DISABLED))
+                .on_click(cx.listener(|this, _, _, cx| this.add_rule_and_open(cx)));
                 div()
-                    .child(match &sheet.problem {
-                        Some(problem) => {
-                            problem_note(problem).flex_1().min_w_0().into_any_element()
-                        }
-                        None => paragraph(sheet.footer(handler), 10.5, 15.75, theme::text_subtle())
-                            .flex_1()
-                            .min_w_0()
-                            .into_any_element(),
-                    })
+                    .flex_col()
+                    .child(div().w_full().flex().child(note))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                button("Discard", ButtonKind::Default, false)
+                                    .id("add-rule-cancel")
+                                    .debug_selector(|| "add-rule-cancel".into())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.cancel_add_rule(window, cx);
+                                    })),
+                            )
+                            .child(div().flex_1())
+                            .child(save)
+                            .child(open),
+                    )
+            } else {
+                let label = if anyway { "Add anyway" } else { "Add rule" };
+                let add = button(label, ButtonKind::Primary, false)
+                    .id("add-rule-save")
+                    .debug_selector(|| "add-rule-save".into())
+                    .when(!ready, |add| add.opacity(theme::DISABLED))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.add_rule_from_sheet(cx);
+                    }));
+                div()
+                    .child(note)
                     .child(
                         button("Cancel", ButtonKind::Quiet, false)
                             .id("add-rule-cancel")
@@ -2357,8 +2492,9 @@ pub fn sheet(
                                 cx.listener(|this, _, window, cx| this.cancel_add_rule(window, cx)),
                             ),
                     )
-                    .child(add),
-            )
+                    .child(add)
+            };
+            (sheet_body(app, sheet, window, cx), footer)
         }
     };
     let footer = footer

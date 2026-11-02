@@ -177,8 +177,12 @@ pub fn runs_text(runs: &[Run]) -> String {
 pub struct Live {
     pub tone: Tone,
     pub runs: Vec<Run>,
-    /// "Back to rules", or "Resume" while paused.
+    /// "Back to rules", "Resume" while paused, or "Cancel" while the next
+    /// link is caught for a rule.
     pub button: &'static str,
+    /// The button cancels "Add a rule for the next link" and leaves the
+    /// switch as it is.
+    pub cancels_catch: bool,
 }
 
 /// Where Send links sends links: a browser, a profile or none (the
@@ -346,6 +350,11 @@ pub struct Recent {
     pub browser: BrowserLabel,
     pub route: RecentRoute,
     pub at: SystemTime,
+    /// The record's dispatch, which "+ Rule" opens Add a rule for.
+    pub id: DispatchId,
+    /// The record kept the whole link, so a rule can be written from it
+    /// (design: Tray Quick Add Rule 1c): a host-only row has no "+ Rule".
+    pub can_rule: bool,
 }
 
 impl Recent {
@@ -368,7 +377,17 @@ impl Recent {
             browser,
             route,
             at,
+            id: DispatchId(0),
+            can_rule: false,
         })
+    }
+
+    /// The same entry, naming its record: "+ Rule" offers a rule for it
+    /// when `can_rule`.
+    pub fn of_dispatch(mut self, id: DispatchId, can_rule: bool) -> Self {
+        self.id = id;
+        self.can_rule = can_rule;
+        self
     }
 
     /// A recent entry from a dispatch record. `None` when the link was
@@ -451,6 +470,7 @@ impl Recent {
             route,
             record.received_at,
         )
+        .map(|recent| recent.of_dispatch(record.id, record.privacy == Privacy::Full))
     }
 
     /// The second line: "Firefox · rewritten · rule 3".
@@ -690,6 +710,8 @@ pub enum HeaderChip {
     Sending(SendScope),
     /// `.chip.info` "holding".
     Holding,
+    /// `.chip.acc` "next link: rule": the next link opens Add a rule.
+    Catching,
 }
 
 impl HeaderChip {
@@ -702,6 +724,7 @@ impl HeaderChip {
             Self::Sending(SendScope::Next { of, .. }) => format!("next {of}"),
             Self::Sending(SendScope::All { .. }) => "all links".to_owned(),
             Self::Holding => "holding".to_owned(),
+            Self::Catching => "next link: rule".to_owned(),
         }
     }
 }
@@ -780,6 +803,10 @@ pub struct TrayModel {
     pub choices: DestinationChoices,
     /// Sync's row, while rules sync with a folder (`sync::tray_row_of`).
     pub sync: Option<SyncRow>,
+    /// "Add a rule for the next link" is armed: the router holds the next
+    /// link for a rule (`RouterHandle::catch_next`; design: Tray Quick Add
+    /// Rule 2b).
+    pub catching: bool,
 }
 
 impl TrayModel {
@@ -818,7 +845,12 @@ impl TrayModel {
             routing: Routing::Active,
             is_default_browser: true,
             pause_target: chrome(Some("Personal")),
-            recents: recents.into_iter().flatten().collect(),
+            recents: recents
+                .into_iter()
+                .flatten()
+                .zip(1..)
+                .map(|(recent, id)| recent.of_dispatch(DispatchId(id), true))
+                .collect(),
             held: Vec::new(),
             links_today: 1412,
             destination: SendDestination::profile(edge("Work")),
@@ -846,6 +878,7 @@ impl TrayModel {
                 scanned: true,
             },
             sync: None,
+            catching: false,
         }
     }
 
@@ -868,6 +901,7 @@ impl TrayModel {
             can_hold: true,
             choices: DestinationChoices::default(),
             sync: None,
+            catching: false,
         }
     }
 
@@ -1057,7 +1091,8 @@ impl TrayModel {
     /// The hint under the switch at rest (design: Incoming Links 2a): what
     /// Send and Hold would do, so the click is never a surprise.
     pub fn hint(&self) -> Option<Vec<Run>> {
-        (self.mode() == Mode::Rules).then(|| {
+        // While the next link is caught the live line says what it does.
+        (self.mode() == Mode::Rules && !self.catching).then(|| {
             vec![
                 Run::plain("Send goes to "),
                 Run::strong(self.destination.display()),
@@ -1069,6 +1104,19 @@ impl TrayModel {
     /// The live line while Send, Hold or Pause is on (design: Incoming
     /// Links 2b-2f): what happens, what is left, and the way back.
     pub fn live(&self, now: SystemTime) -> Option<Live> {
+        // The next link is caught whatever is on (design: Tray Quick Add
+        // Rule 2b); the switch's own line comes back once it is.
+        if self.catching {
+            return Some(Live {
+                tone: Tone::Send,
+                runs: vec![
+                    Run::strong("Next link"),
+                    Run::plain(" opens Add a rule, not a browser"),
+                ],
+                button: "Cancel",
+                cancels_catch: true,
+            });
+        }
         let (tone, scope) = match self.routing {
             Routing::Active => return None,
             Routing::Paused => {
@@ -1085,6 +1133,7 @@ impl TrayModel {
                     tone: Tone::Pause,
                     runs,
                     button: "Resume",
+                    cancels_catch: false,
                 });
             }
             Routing::Sending(scope) => (Tone::Send, scope),
@@ -1112,6 +1161,7 @@ impl TrayModel {
                     tone,
                     runs,
                     button: "Back to rules",
+                    cancels_catch: false,
                 });
             }
         };
@@ -1121,6 +1171,7 @@ impl TrayModel {
             tone,
             runs,
             button: "Back to rules",
+            cancels_catch: false,
         })
     }
 
@@ -1140,7 +1191,10 @@ impl TrayModel {
     }
 
     pub fn chip(&self) -> HeaderChip {
-        if self.is_paused() {
+        // The next link is caught whatever else is on.
+        if self.catching {
+            HeaderChip::Catching
+        } else if self.is_paused() {
             HeaderChip::Paused
         } else if let Some(scope) = self.sending() {
             HeaderChip::Sending(scope)
@@ -1193,6 +1247,7 @@ impl TrayModel {
                 );
             }
             HeaderChip::Holding => return "PwrRoute \u{00b7} holding".to_owned(),
+            HeaderChip::Catching => return "PwrRoute \u{00b7} next link: rule".to_owned(),
             _ => {}
         }
         if self.is_paused() {
@@ -1655,6 +1710,66 @@ mod tests {
             ]),
             "Firefox \u{00b7} paused \u{00b7} skipped rule 2"
         );
+    }
+
+    /// "+ Rule" names the record and only offers itself where the record
+    /// kept the whole link (design: Tray Quick Add Rule 1a, 1c).
+    #[test]
+    fn a_recent_names_its_record_and_whether_a_rule_can_be_written() {
+        let records = crate::fixtures::activity();
+        let full = records
+            .iter()
+            .find(|r| r.privacy == Privacy::Full && Recent::from_record(r).is_some())
+            .expect("the fixture has a full record that opened");
+        let recent = Recent::from_record(full).unwrap();
+        assert_eq!(recent.id, full.id);
+        assert!(recent.can_rule);
+
+        let mut host_only = full.clone();
+        host_only.reduce(Privacy::Host);
+        let recent = Recent::from_record(&host_only).expect("a host-only link is a recent");
+        assert_eq!(recent.id, full.id);
+        assert!(!recent.can_rule, "no URL to write a rule from");
+
+        // The design's fixture offers it on every row.
+        assert!(
+            TrayModel::fixture(now())
+                .recents
+                .iter()
+                .all(|recent| recent.can_rule && recent.id.0 > 0)
+        );
+    }
+
+    /// "Add a rule for the next link" (design: Tray Quick Add Rule 2b):
+    /// the chip and the live line say so, with Cancel, whatever the
+    /// switch says, and the hint gives way to it.
+    #[test]
+    fn catching_the_next_link_says_so_over_whatever_is_on() {
+        let mut model = TrayModel::fixture(now());
+        model.catching = true;
+        assert_eq!(model.chip(), HeaderChip::Catching);
+        assert_eq!(model.chip().label(), "next link: rule");
+        assert_eq!(model.tooltip(), "PwrRoute \u{00b7} next link: rule");
+        assert_eq!(model.hint(), None);
+        let live = model.live(now()).expect("the live line says what is on");
+        assert_eq!(live.tone, Tone::Send);
+        assert_eq!(live.button, "Cancel");
+        assert!(live.cancels_catch);
+        assert_eq!(
+            runs_text(&live.runs),
+            "Next link opens Add a rule, not a browser"
+        );
+
+        // Over a hold, the switch keeps its answer; its own line comes back
+        // once the link is caught.
+        let mut hold = with(Routing::Holding(SendScope::next(2)));
+        hold.catching = true;
+        assert_eq!(hold.mode(), Mode::Hold);
+        assert_eq!(hold.chip(), HeaderChip::Catching);
+        assert!(hold.live(now()).unwrap().cancels_catch);
+        hold.catching = false;
+        assert!(!hold.live(now()).unwrap().cancels_catch);
+        assert_eq!(hold.live(now()).unwrap().button, "Back to rules");
     }
 
     fn with(routing: Routing) -> TrayModel {

@@ -18,9 +18,9 @@ use pwrroute_router::{
 };
 
 use super::dropdown::{
-    BODY_ID, CARD_ID, DESTINATION_ID, DESTINATIONS_ID, Dropdown, FOR_IDS, HEADER, HEADER_ID,
-    HELD_LANES_ID, LANES_WIDTH, LIST_MAX, LIVE_BUTTON_ID, MAKE_DEFAULT_ID, MODE_IDS, OPEN_ALL_ID,
-    QUIT_ID, STEP_UP_ID, Unfolded, WIDTH, card_height, held_id, lanes_height,
+    BODY_ID, CARD_ID, CATCH_ID, DESTINATION_ID, DESTINATIONS_ID, Dropdown, FOR_IDS, HEADER,
+    HEADER_ID, HELD_LANES_ID, LANES_WIDTH, LIST_MAX, LIVE_BUTTON_ID, MAKE_DEFAULT_ID, MODE_IDS,
+    OPEN_ALL_ID, QUIT_ID, STEP_UP_ID, Unfolded, WIDTH, card_height, held_id, lanes_height,
 };
 use super::model::{
     BrowserLabel, Dispatched, ForKind, Mode, Recent, RecentRoute, Routing, TrayModel,
@@ -137,6 +137,102 @@ fn assert_card_fits(opened: &mut Opened<'_>) {
 fn the_routing_dropdown_is_as_tall_as_computed(cx: &mut TestAppContext) {
     let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
     assert_card_fits(&mut opened);
+}
+
+/// Catching the next link for a rule (design: Tray Quick Add Rule 2b): the
+/// live line and "Waiting…" keep the card the computed height.
+#[gpui_kit::test]
+fn the_catching_dropdown_is_as_tall_as_computed(cx: &mut TestAppContext) {
+    let mut model = TrayModel::fixture(SystemTime::now());
+    model.catching = true;
+    let mut opened = open(model, cx);
+    assert_card_fits(&mut opened);
+    assert!(opened.cx.debug_bounds(CATCH_ID).is_some());
+    assert!(opened.cx.debug_bounds(LIVE_BUTTON_ID).is_some());
+}
+
+/// A recent row under the pointer trades its age for "+ Rule" (design:
+/// Tray Quick Add Rule 1a), in the same place, so nothing moves; a row
+/// kept as host only has no URL to write a rule from and keeps its age.
+#[gpui_kit::test]
+fn a_hovered_recent_offers_a_rule(cx: &mut TestAppContext) {
+    let mut model = TrayModel::fixture(SystemTime::now());
+    if let Some(second) = model.recents.get_mut(1) {
+        second.can_rule = false;
+    }
+    let mut opened = open(model, cx);
+    assert!(opened.cx.debug_bounds("tray-quick-rule-0").is_none());
+    let age = opened
+        .cx
+        .debug_bounds("tray-recent-age-0")
+        .expect("the age at rest");
+    let detail = opened
+        .cx
+        .debug_bounds("tray-recent-detail-0")
+        .expect("the detail line");
+    opened
+        .cx
+        .simulate_mouse_move(detail.center(), None, Modifiers::none());
+    opened.settle();
+    let quick = opened
+        .cx
+        .debug_bounds("tray-quick-rule-0")
+        .expect("+ Rule on the hovered row");
+    assert!(opened.cx.debug_bounds("tray-recent-age-0").is_none());
+    assert!(
+        (quick.right() - age.right()).abs() <= px(1.0),
+        "{quick:?} stands where {age:?} was"
+    );
+    assert_card_fits(&mut opened);
+
+    let detail = opened
+        .cx
+        .debug_bounds("tray-recent-detail-1")
+        .expect("the second row");
+    opened
+        .cx
+        .simulate_mouse_move(detail.center(), None, Modifiers::none());
+    opened.settle();
+    assert!(opened.cx.debug_bounds("tray-quick-rule-0").is_none());
+    assert!(
+        opened.cx.debug_bounds("tray-quick-rule-1").is_none(),
+        "a host-only row offers no rule"
+    );
+    assert!(opened.cx.debug_bounds("tray-recent-age-1").is_some());
+}
+
+/// "Add a rule for the next link…" arms the router's catch and the live
+/// line's Cancel disarms it, leaving the switch on Rules; with nothing
+/// kept in memory the catch does not arm (the link would have nowhere to
+/// wait).
+#[gpui_kit::test]
+fn the_catch_row_arms_the_router_and_cancel_disarms_it(cx: &mut TestAppContext) {
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    let (_router, handle) = with_router(&mut opened);
+    let model = opened.model.clone();
+    opened
+        .cx
+        .update(|_, cx| super::run(super::TrayCommand::CatchNext, cx));
+    opened.settle();
+    assert!(handle.catching_next());
+    assert!(model.read_with(opened.cx, |model, _| model.catching));
+    assert_card_fits(&mut opened);
+    click(&mut opened, LIVE_BUTTON_ID);
+    assert!(!handle.catching_next());
+    assert!(!model.read_with(opened.cx, |model, _| model.catching));
+    assert_eq!(
+        model.read_with(opened.cx, |model, _| model.mode()),
+        Mode::Rules
+    );
+    assert_card_fits(&mut opened);
+
+    handle
+        .set_retention(Retention { count: 0, hours: 0 })
+        .unwrap();
+    opened
+        .cx
+        .update(|_, cx| super::run(super::TrayCommand::CatchNext, cx));
+    assert!(!handle.catching_next());
 }
 
 /// The header, which opens the main window, is the card's top row and
@@ -342,6 +438,7 @@ fn with_router(opened: &mut Opened<'_>) -> (Router, RouterHandle) {
             dropdown: None,
             dropdown_closed_at: None,
             clock: None,
+            seen: None,
         });
     });
     (router, handle)

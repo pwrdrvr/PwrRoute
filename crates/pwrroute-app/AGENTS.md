@@ -598,7 +598,20 @@ their own modules.
   Open (`tray::open_held`, `OpenAs::Rules`), "···" for Open in… (the
   lanes, `OpenAs::In`), Make a rule… (Activity's sheet) and Copy link, and
   Open all; they are not in Recent, and Quit says how many will be lost.
-  Nothing about it is saved. The dropdown is keyboard-operable: Tab walks
+  Nothing about it is saved. Add a rule from the tray (design: Tray Quick
+  Add Rule): a recent row under the pointer trades its age for "+ Rule"
+  (`Recent::can_rule`: never a host-only record), whose click opens the
+  main window on Activity with the sheet (`tray::make_rule_for`,
+  `SheetFrom::MenuBar`). "Add a rule for the next link…" leads the
+  commands and the native menu (`TrayCommand::CatchNext`,
+  `tray::catch_next`, the router's `catch_next`; inert while Hold would
+  be): the chip reads "next link: rule" and the live line has Cancel,
+  over any mode, which it leaves alone. `tray::open_caught` watches the
+  feed past `Tray::seen` and opens the sheet for a caught link that still
+  waits (`SheetFrom::Caught`). A sheet over a waiting link
+  (`AddRule::waiting`) has Discard, Save and Save and open link
+  (`PwrRoute::add_rule_and_open`: the rule, then `OpenAs::Rules`). The
+  dropdown is keyboard-operable: Tab walks
   the card in draw order (its rows, then the switch as one stop, To,
   For, the stepper and the live button),
   Left/Right move the switch and For, Up/Down step, and the focused stop

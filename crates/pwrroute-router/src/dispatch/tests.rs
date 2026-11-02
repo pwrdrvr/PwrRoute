@@ -2685,6 +2685,119 @@ fn a_hold_of_all_links_lasts_until_its_time_runs_out_or_it_is_ended() {
 }
 
 #[test]
+fn a_caught_link_is_held_for_a_rule_once_and_passes_over_a_send_without_counting_it() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.set_send_to(Some(next(2)));
+    handle.catch_next(true);
+    assert!(handle.catching_next());
+
+    // An agent's or the app's own link is not the one the user is waiting
+    // to click: it goes by the send, and the catch stays armed.
+    let agent = handle
+        .dispatch_and_wait(Link::new("https://example.org/agent", Source::Api))
+        .unwrap();
+    assert_eq!(held_step(&agent), None);
+    assert!(handle.catching_next());
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 1, of: 2 })
+    );
+
+    let caught = handle
+        .dispatch_and_wait(link("https://team.chat.example.com/1"))
+        .unwrap();
+    assert_eq!(caught.outcome, Outcome::NotOpened);
+    assert_eq!(
+        held_step(&caught),
+        Some((Sent::ForRule, Some(0), Some("Firefox".into()))),
+        "held for a rule, naming where the rules would open it"
+    );
+    assert!(caught.held_for_rule());
+    assert_eq!(caught.not_opened_reason(), Some(NotOpenedReason::Hold));
+    assert!(caught.log_line().contains("held=for-rule"));
+    assert!(!handle.catching_next(), "one link, then it disarms");
+    assert_eq!(
+        handle.send_to().map(|send| send.scope),
+        Some(SendScope::Next { left: 1, of: 2 }),
+        "the send in force did not count the caught link"
+    );
+    assert_eq!(handle.pending(), vec![caught.id]);
+
+    // The send applies again from the link after.
+    let sent = handle
+        .dispatch_and_wait(link("https://example.org/2"))
+        .unwrap();
+    assert!(matches!(
+        sent.steps.iter().find(|s| matches!(s, Step::Sent { .. })),
+        Some(Step::Sent {
+            sent: Sent::Next { nth: 2, of: 2 },
+            ..
+        })
+    ));
+    assert_eq!(
+        launcher.launched().len(),
+        2,
+        "the agent's link and the sent one"
+    );
+
+    // Opened later by the rules, it is a released dispatch as any held
+    // link's is.
+    let opened = handle.open_not_opened(caught.id, OpenAs::Rules).unwrap();
+    assert_eq!(opened.released_from(), Some(caught.id));
+    assert!(!opened.held_for_rule());
+}
+
+#[test]
+fn the_catch_can_be_cancelled_and_needs_somewhere_for_the_link_to_wait() {
+    let (_dir, router, launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.catch_next(true);
+    handle.catch_next(false);
+    let record = handle
+        .dispatch_and_wait(link("https://example.org/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(launcher.launched().len(), 1);
+
+    // With Activity keeping nothing, arming does nothing, and a catch armed
+    // before the retention changed lets the link open.
+    let (_dir, router, launcher) = engine_router(Options {
+        retention: Retention { count: 0, hours: 0 },
+        ..Options::default()
+    });
+    let handle = router.handle();
+    handle.catch_next(true);
+    assert!(!handle.catching_next());
+    let (_dir2, router2, launcher2) = engine_router(Options::default());
+    let handle2 = router2.handle();
+    handle2.catch_next(true);
+    handle2
+        .set_retention(Retention { count: 0, hours: 0 })
+        .unwrap();
+    let record = handle2
+        .dispatch_and_wait(link("https://example.org/"))
+        .unwrap();
+    assert_eq!(record.outcome, Outcome::DryRun);
+    assert_eq!(held_step(&record), None);
+    assert!(!handle2.catching_next());
+    assert_eq!(launcher2.launched().len(), 1);
+    assert!(launcher.launched().is_empty());
+}
+
+#[test]
+fn test_a_link_ignores_the_catch() {
+    let (_dir, router, _launcher) = engine_router(Options::default());
+    let handle = router.handle();
+    handle.catch_next(true);
+    let record = handle
+        .test(link("https://team.chat.example.com/x"))
+        .unwrap();
+    assert_eq!(held_step(&record), None);
+    assert!(handle.catching_next(), "a test is not the next link");
+}
+
+#[test]
 fn hold_send_and_pause_share_one_slot() {
     let (_dir, router, _launcher) = engine_router(Options::default());
     let handle = router.handle();
@@ -2951,6 +3064,17 @@ fn held_and_released_steps_read_back_from_json() {
         r#"{"kind":"held","held":{"kind":"next","nth":1,"of":3},"skipped":2}"#
     );
     assert_eq!(serde_json::from_str::<Step>(&json).unwrap(), held);
+    let for_rule = Step::Held {
+        held: Sent::ForRule,
+        skipped: None,
+        browser: None,
+    };
+    let json = serde_json::to_string(&for_rule).unwrap();
+    assert_eq!(
+        json,
+        r#"{"kind":"held","held":{"kind":"forRule"},"skipped":null}"#
+    );
+    assert_eq!(serde_json::from_str::<Step>(&json).unwrap(), for_rule);
     let released = Step::Released {
         from: DispatchId(7),
         chosen: true,

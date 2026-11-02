@@ -77,6 +77,8 @@ pub const OPEN_ALL_ID: &str = "tray-held-open-all";
 /// A held row's lanes, for Open in…: `tray-held-lanes-lane-{l}`, and so on.
 pub const HELD_LANES_ID: &str = "tray-held-lanes";
 pub const MAKE_DEFAULT_ID: &str = "tray-make-default";
+/// "Add a rule for the next link…" (design: Tray Quick Add Rule 2a).
+pub const CATCH_ID: &str = "tray-catch-next";
 pub const QUIT_ID: &str = "tray-quit";
 /// The header: a click opens the main window, as the native menu's Open
 /// PwrRoute does.
@@ -244,6 +246,9 @@ pub struct Dropdown {
     /// The command row under the pointer. GPUI resolves text color before it
     /// knows what is hovered, so the `.hov` label color comes from here.
     hovered: Option<&'static str>,
+    /// The recent row under the pointer, which shows "+ Rule" where its
+    /// age was (design: Tray Quick Add Rule 1a).
+    pub hovered_recent: Option<usize>,
     pub unfolded: Unfolded,
     /// The tallest the window may be: the display's visible area under it.
     max_height: Pixels,
@@ -268,8 +273,12 @@ impl Dropdown {
             max_height,
         );
         let subscriptions = vec![
-            // The window follows the card.
-            cx.observe_in(&model, window, |this, _, window, cx| this.fit(window, cx)),
+            // The window follows the card. The recents may have moved under
+            // the pointer: GPUI reports hover only on a move, so forget it.
+            cx.observe_in(&model, window, |this, _, window, cx| {
+                this.hovered_recent = None;
+                this.fit(window, cx);
+            }),
             // A click anywhere else takes focus away: close, as a menu does.
             cx.observe_window_activation(window, |_, window, cx| {
                 if !window.is_window_active() {
@@ -283,6 +292,7 @@ impl Dropdown {
             focus: cx.focus_handle(),
             stops: Stops::new(cx),
             hovered: None,
+            hovered_recent: None,
             unfolded: Unfolded::default(),
             max_height,
             height,
@@ -331,6 +341,31 @@ impl Dropdown {
         super::dropdown_closed(cx);
         window.remove_window();
         cx.defer(move |cx| super::run(command, cx));
+    }
+
+    /// A recent row's "+ Rule": the dropdown closes and the main window
+    /// opens on Activity with Add a rule for that link (design: Tray Quick
+    /// Add Rule 1b).
+    fn add_rule_for(&mut self, id: DispatchId, window: &mut Window, cx: &mut Context<'_, Self>) {
+        super::dropdown_closed(cx);
+        window.remove_window();
+        cx.defer(move |cx| super::make_rule_for(id, cx));
+    }
+
+    /// The live line's button: back to the rules, or, while the next link
+    /// is caught for a rule, Cancel, which leaves the switch alone.
+    fn live_button(
+        &mut self,
+        cancels_catch: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if cancels_catch {
+            super::catch_next(false, cx);
+            self.fit(window, cx);
+        } else {
+            self.set_mode(Mode::Rules, window, cx);
+        }
     }
 
     /// A segment of the switch. The dropdown stays open, so the user sees
@@ -474,7 +509,12 @@ impl Dropdown {
             // Up is more.
             self.step(if key == "up" { 1 } else { -1 }, window, cx);
         } else if self.stops.live.is_focused(window) && press {
-            self.set_mode(Mode::Rules, window, cx);
+            let cancels_catch = self
+                .model
+                .read(cx)
+                .live(SystemTime::now())
+                .is_some_and(|live| live.cancels_catch);
+            self.live_button(cancels_catch, window, cx);
             // The live line is gone: keep the keyboard on the switch.
             window.focus(&self.stops.switch, cx);
         } else {
@@ -536,6 +576,7 @@ impl Render for Dropdown {
                 &model,
                 SystemTime::now(),
                 self.hovered,
+                self.hovered_recent,
                 self.unfolded,
                 &self.stops,
                 ring,
@@ -594,10 +635,12 @@ fn focus_ring(radius: f32) -> Div {
 }
 
 /// `.tray`: the card, as tall as what it shows.
+#[allow(clippy::too_many_arguments, reason = "the card's inputs, drawn once")]
 fn card(
     model: &TrayModel,
     now: SystemTime,
     hovered: Option<&'static str>,
+    hovered_recent: Option<usize>,
     unfolded: Unfolded,
     stops: &Stops,
     ring: Ring,
@@ -605,7 +648,8 @@ fn card(
 ) -> gpui_kit::Stateful<Div> {
     let mut recents = section().child(caption("Recent"));
     for (index, recent) in model.shown_recents().iter().enumerate() {
-        recents = recents.child(recent_row(index, recent, now, cx));
+        let quick = hovered_recent == Some(index) && recent.can_rule;
+        recents = recents.child(recent_row(index, recent, now, quick, cx));
     }
     if model.shown_recents().is_empty() {
         recents = recents.child(small_row(
@@ -634,6 +678,7 @@ fn card(
         .map(|row| section().child(sync_row(row, hovered, cx)));
 
     let commands = section()
+        .child(catch_row(model, hovered, cx))
         .child(menu_row(
             "tray-test",
             "Test a link\u{2026}",
@@ -759,6 +804,11 @@ fn header(chip: HeaderChip, cx: &mut Context<'_, Dropdown>) -> gpui_kit::Statefu
             theme::accent_bright(),
         ),
         HeaderChip::Holding => (theme::info_soft(), theme::transparent(), theme::info_text()),
+        HeaderChip::Catching => (
+            theme::accent_soft(),
+            theme::transparent(),
+            theme::accent_bright(),
+        ),
         HeaderChip::NotDefault => (
             theme::bg_elevated(),
             theme::border_subtle(),
@@ -1604,9 +1654,12 @@ fn live_line(
                 .bg(theme::bg_panel())
                 .cursor_pointer()
                 .hover(|button| button.bg(theme::bg_hover()))
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.set_mode(Mode::Rules, window, cx);
-                }))
+                .on_click({
+                    let cancels_catch = live.cancels_catch;
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.live_button(cancels_catch, window, cx);
+                    })
+                })
                 .child(text(live.button, 10.5, 550.0, theme::text_primary()))
                 .when(ring.live, |button| button.child(focus_ring(6.0))),
         )
@@ -1614,7 +1667,11 @@ fn live_line(
 
 /// The live button's width: wide enough for its words.
 fn live_button_width(label: &str) -> f32 {
-    if label == "Resume" { 60.0 } else { 88.0 }
+    if matches!(label, "Resume" | "Cancel") {
+        60.0
+    } else {
+        88.0
+    }
 }
 
 /// `.sec`: a group of rows with a hairline under it.
@@ -1627,13 +1684,18 @@ fn section() -> Div {
         .border_color(theme::border_faint())
 }
 
-/// `.rec`: a host, where it went, and how long ago.
+/// `.rec`: a host, where it went, and how long ago. Under the pointer a
+/// row whose record kept the whole link shows "+ Rule" where its age was
+/// (`quick`; design: Tray Quick Add Rule 1a): the button is 20 high,
+/// inside the row's two lines, so nothing moves.
 fn recent_row(
     index: usize,
     recent: &Recent,
     now: SystemTime,
+    quick: bool,
     cx: &mut Context<'_, Dropdown>,
 ) -> impl IntoElement {
+    let id = recent.id;
     let host_line = div()
         .flex()
         .min_w_0()
@@ -1674,6 +1736,17 @@ fn recent_row(
             recent.detail(),
             recent.age(now)
         ))
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            let hovered = if *over {
+                Some(index)
+            } else {
+                this.hovered_recent.filter(|hovered| *hovered != index)
+            };
+            if hovered != this.hovered_recent {
+                this.hovered_recent = hovered;
+                cx.notify();
+            }
+        }))
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.run(TrayCommand::Activity, window, cx);
         }))
@@ -1707,10 +1780,115 @@ fn recent_row(
                         ),
                 ),
         )
+        .map(|row| {
+            if quick {
+                row.child(quick_add_button(index, id, cx))
+            } else {
+                row.child(
+                    mono(recent.age(now), 10.0, 500.0, theme::text_subtle())
+                        .debug_selector(move || format!("tray-recent-age-{index}")),
+                )
+            }
+        })
+}
+
+/// A recent row's "+ Rule", lit as Activity's is on the row under the
+/// pointer (`activity::quick_add_button`). Its click opens Add a rule
+/// without the row's own click (Open Activity).
+fn quick_add_button(
+    index: usize,
+    id: DispatchId,
+    cx: &mut Context<'_, Dropdown>,
+) -> impl IntoElement + use<> {
+    div()
+        .id(("tray-quick-rule", index))
+        .debug_selector(move || format!("tray-quick-rule-{index}"))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.0))
+        .h(px(20.0))
+        .px(px(7.0))
+        .rounded(px(5.0))
+        .border_1()
+        .border_color(theme::accent_border())
+        .bg(theme::accent_soft())
+        .cursor_pointer()
+        .child(text("+", 11.0, 700.0, theme::accent()))
+        .child(text("Rule", 10.5, 600.0, theme::accent_bright()))
+        .tooltip(crate::overview::tip("Add a rule for this link", None))
+        .map(crate::accessibility::clickable)
+        .aria_label("Add a rule for this link")
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            this.add_rule_for(id, window, cx);
+        }))
+}
+
+/// "Add a rule for the next link…" (design: Tray Quick Add Rule 2a, 2b):
+/// first among the commands, with the accent "+". A click arms it and
+/// closes the dropdown, so the person can go click the link; while armed
+/// it reads "Waiting…" and a click cancels. Dimmed, and inert, while
+/// Activity keeps nothing in memory: the link would have nowhere to wait.
+fn catch_row(
+    model: &TrayModel,
+    hovered: Option<&'static str>,
+    cx: &mut Context<'_, Dropdown>,
+) -> impl IntoElement {
+    let enabled = model.can_hold;
+    let lit = enabled && hovered == Some(CATCH_ID);
+    let color = if lit {
+        theme::accent_bright()
+    } else {
+        theme::text_primary()
+    };
+    div()
+        .id(CATCH_ID)
+        .role(gpui_kit::Role::MenuItem)
+        .debug_selector(|| CATCH_ID.into())
+        .h(px(MENU_ROW))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .p(px(6.0))
+        .rounded(px(6.0))
+        .when(!enabled, |row| row.opacity(theme::DISABLED))
+        .when(enabled, |row| row.cursor_pointer())
+        .when(lit, |row| row.bg(theme::bg_row_active()))
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            let hovered = if *over {
+                Some(CATCH_ID)
+            } else {
+                this.hovered.filter(|hovered| *hovered != CATCH_ID)
+            };
+            if hovered != this.hovered {
+                this.hovered = hovered;
+                cx.notify();
+            }
+        }))
+        .map(|e| crate::widgets::keyboard_control(e, false))
+        .when(enabled, |row| {
+            row.on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.run(TrayCommand::CatchNext, window, cx);
+            }))
+        })
         .child(
-            mono(recent.age(now), 10.0, 500.0, theme::text_subtle())
-                .debug_selector(move || format!("tray-recent-age-{index}")),
+            div()
+                .w(px(14.0))
+                .flex()
+                .flex_none()
+                .justify_center()
+                .child(text("+", 11.0, 700.0, theme::accent())),
         )
+        .child(label_text(
+            "Add a rule for the next link\u{2026}",
+            12.0,
+            color,
+        ))
+        .child(div().flex_1())
+        .when(model.catching, |row| {
+            row.child(text("Waiting\u{2026}", 10.0, 550.0, theme::accent_bright()))
+        })
 }
 
 /// The muted 11px row under the recents ("Open Activity").
@@ -2039,8 +2217,9 @@ fn card_height_at(
         + RECENT * recents_shown as f32
         + SMALL_ROW * small_rows as f32
         + 1.0;
+    // "Add a rule for the next link…", Test a link, Rules, Settings.
     let commands = SECTION_PADDING
-        + MENU_ROW * (3.0 + f32::from(u8::from(model.shows_make_default_row())))
+        + MENU_ROW * (4.0 + f32::from(u8::from(model.shows_make_default_row())))
         + 1.0;
     // Sync's row, while rules sync with a folder.
     let sync = if model.sync.is_some() {

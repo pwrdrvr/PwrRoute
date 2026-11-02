@@ -237,6 +237,7 @@ enum TrayCommand {
     TogglePause,
     MakeDefault,
     HeldLinks,
+    CatchNext,
     Sync,
     Quit,
 }
@@ -256,6 +257,9 @@ fn open_all_held(_: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn make_rule_for(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn catch_next(_: bool, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn copy_held(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
