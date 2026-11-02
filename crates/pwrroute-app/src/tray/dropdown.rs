@@ -1819,8 +1819,15 @@ fn sync_row(
 /// A release ready to install, at the top of the card as PwrSnap's tray
 /// strip is: what is ready and its Restart. The whole banner is the
 /// action; the button says so.
-fn update_banner(ready: &crate::updater::Ready, cx: &mut Context<'_, Dropdown>) -> impl IntoElement {
-    let verb = if ready.switch_back { "switch" } else { "install" };
+fn update_banner(
+    ready: &crate::updater::Ready,
+    cx: &mut Context<'_, Dropdown>,
+) -> impl IntoElement {
+    let verb = if ready.switch_back {
+        "switch"
+    } else {
+        "install"
+    };
     div()
         .id(UPDATE_ID)
         .role(gpui_kit::Role::Button)

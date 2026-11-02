@@ -268,14 +268,20 @@ fn the_update_banner_leads_the_card_while_a_release_is_ready(cx: &mut TestAppCon
             switch_back: false,
         });
     });
-    let banner = opened.cx.debug_bounds(UPDATE_ID).expect("the update banner");
+    let banner = opened
+        .cx
+        .debug_bounds(UPDATE_ID)
+        .expect("the update banner");
     let header = opened.cx.debug_bounds(HEADER_ID).expect("the header");
     let restart = opened
         .cx
         .debug_bounds(UPDATE_RESTART_ID)
         .expect("its Restart");
     assert!(banner.top() >= header.bottom(), "under the header");
-    assert!(restart.right() <= banner.right(), "Restart inside the banner");
+    assert!(
+        restart.right() <= banner.right(),
+        "Restart inside the banner"
+    );
     assert_card_fits(&mut opened);
     assert!(opened.window_height() > before);
 

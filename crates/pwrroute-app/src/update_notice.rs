@@ -208,7 +208,11 @@ pub fn ready_title(ready: &Ready) -> &'static str {
 
 /// "Restart to update to 0.15.0" (or "Restart to switch to 0.13.0").
 pub fn restart_label(ready: &Ready) -> String {
-    let verb = if ready.switch_back { "switch" } else { "update" };
+    let verb = if ready.switch_back {
+        "switch"
+    } else {
+        "update"
+    };
     format!("Restart to {verb} to {}", ready.version)
 }
 
@@ -227,7 +231,8 @@ impl Global for NoticesGlobal {}
 
 /// The entity the toast, the tray and the strip observe.
 pub fn notices(cx: &App) -> Option<Entity<Notices>> {
-    cx.try_global::<NoticesGlobal>().map(|global| global.0.clone())
+    cx.try_global::<NoticesGlobal>()
+        .map(|global| global.0.clone())
 }
 
 /// Makes [`notices`] and follows the updater. Call once, after
@@ -485,7 +490,11 @@ mod tests {
         notices.dismiss(Some(&ready));
         assert_eq!(notices.toast(&state, Some(&ready)), None);
         // A newer release comes back up.
-        assert!(notices.toast(&state, Some(&self::ready("0.15.1"))).is_some());
+        assert!(
+            notices
+                .toast(&state, Some(&self::ready("0.15.1")))
+                .is_some()
+        );
         // Asking again brings the dismissed one back.
         notices.ask(state.finished);
         finished(&mut state, Outcome::Pending("0.15.0".into()));
@@ -514,7 +523,10 @@ mod tests {
             version: "0.13.0".into(),
             switch_back: true,
         };
-        assert_eq!(restart_label(&ready("0.15.0")), "Restart to update to 0.15.0");
+        assert_eq!(
+            restart_label(&ready("0.15.0")),
+            "Restart to update to 0.15.0"
+        );
         assert_eq!(restart_label(&switch), "Restart to switch to 0.13.0");
         assert_eq!(ready_title(&switch), "Switch ready");
         assert_eq!(

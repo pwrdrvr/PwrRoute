@@ -158,7 +158,11 @@ pub const UPDATE_CHIP_ID: &str = "strip-update";
 /// "0.15.0 ready · Restart": an accent chip whose underlined verb is the
 /// action. It leaves on its own once the release is installed.
 fn update_chip(ready: &crate::updater::Ready) -> Div {
-    let verb = if ready.switch_back { "Switch" } else { "Restart" };
+    let verb = if ready.switch_back {
+        "Switch"
+    } else {
+        "Restart"
+    };
     div().child(
         crate::widgets::keyboard_control(
             div()

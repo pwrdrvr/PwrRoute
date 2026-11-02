@@ -136,10 +136,21 @@ fn progress(track: Track, reduce_motion: bool) -> AnyElement {
         .mt(px(5.0))
         .rounded_full()
         .bg(theme::bg_hover_strong());
-    let bar = || div().absolute().top_0().bottom_0().rounded_full().bg(theme::accent());
+    let bar = || {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .rounded_full()
+            .bg(theme::accent())
+    };
     match track {
         Track::Percent(percent) => groove
-            .child(bar().left_0().w(relative(f32::from(percent.min(100)) / 100.0)))
+            .child(
+                bar()
+                    .left_0()
+                    .w(relative(f32::from(percent.min(100)) / 100.0)),
+            )
             .into_any_element(),
         Track::Indeterminate if reduce_motion => groove
             .child(bar().left_0().right_0().opacity(0.5))
@@ -158,12 +169,7 @@ fn progress(track: Track, reduce_motion: bool) -> AnyElement {
 /// `.app-update-banner__timer`: 2px along the top edge, draining to the
 /// left over `length`.
 fn countdown(name: SharedString, length: Duration, color: Hsla, reduce_motion: bool) -> AnyElement {
-    let strip = div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .h(px(2.0))
-        .bg(color);
+    let strip = div().absolute().top_0().left_0().h(px(2.0)).bg(color);
     if reduce_motion {
         return strip.w_full().into_any_element();
     }
@@ -269,7 +275,11 @@ pub fn update_toast(cx: &App) -> Option<AnyElement> {
                     move |cx| crate::help::open_link(&url, cx),
                 ));
             }
-            let verb = if ready.switch_back { "switch" } else { "update" };
+            let verb = if ready.switch_back {
+                "switch"
+            } else {
+                "update"
+            };
             Card {
                 eyebrow: update_notice::ready_title(&ready).into(),
                 message: format!(

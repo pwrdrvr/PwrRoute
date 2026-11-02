@@ -178,8 +178,7 @@ impl NativeTray {
         let sync_separator = PredefinedMenuItem::separator();
         let mut sync_shown = false;
         let mut after_sync = false;
-        let update_row =
-            MenuItem::with_id(TrayCommand::RestartToUpdate.menu_id(), "", true, None);
+        let update_row = MenuItem::with_id(TrayCommand::RestartToUpdate.menu_id(), "", true, None);
         let update_separator = PredefinedMenuItem::separator();
         let mut update_shown = false;
         let mut after_update = false;
@@ -510,9 +509,14 @@ mod tests {
         });
         let entries = menu_entries(&model);
         let n = entries.len();
-        assert!(matches!(&entries[n - 3], MenuEntry::Update(label) if label == "Restart to update to 0.15.0"));
+        assert!(
+            matches!(&entries[n - 3], MenuEntry::Update(label) if label == "Restart to update to 0.15.0")
+        );
         assert!(matches!(entries[n - 2], MenuEntry::Separator));
-        assert!(matches!(entries[n - 1], MenuEntry::Item(TrayCommand::Quit, _)));
+        assert!(matches!(
+            entries[n - 1],
+            MenuEntry::Item(TrayCommand::Quit, _)
+        ));
         assert_eq!(
             TrayCommand::from_menu_id(TrayCommand::RestartToUpdate.menu_id()),
             Some(TrayCommand::RestartToUpdate)
