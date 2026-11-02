@@ -409,9 +409,11 @@ mod tests {
     #[test]
     fn only_a_menu_check_raises_a_toast_until_a_release_is_ready() {
         let mut notices = Notices::default();
-        let mut state = State::default();
         // The startup check runs and finds nothing: no toast.
-        state.checking = true;
+        let mut state = State {
+            checking: true,
+            ..State::default()
+        };
         assert_eq!(notices.toast(&state, None), None);
         finished(&mut state, Outcome::UpToDate("0.14.0".into()));
         assert_eq!(notices.follow(&state, None), None);
