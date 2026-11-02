@@ -2255,7 +2255,21 @@ fn a_caught_link_is_saved_and_opened_from_its_sheet(cx: &mut TestAppContext) {
     let before = saved(cx, &path).rules.len();
 
     open_sheet(&view, cx);
-    choose_sheet_browser(cx);
+    // No scan here and the link never opened, so the lanes hold only
+    // Don't open: pick a browser as a pill would.
+    view.update(cx, |app, cx| {
+        app.set_add_rule(
+            |sheet| {
+                sheet.choose(crate::destinations::Choice {
+                    browser: "Firefox".into(),
+                    profile: "Work".into(),
+                    private: false,
+                });
+            },
+            cx,
+        );
+    });
+    draw(cx);
     let chosen = view.read_with(cx, |app, _| {
         app.actions
             .sheet
