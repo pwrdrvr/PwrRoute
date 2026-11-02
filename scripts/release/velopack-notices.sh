@@ -68,5 +68,5 @@ HEADER
 
 echo "wrote licenses/velopack.txt; license ids in use:"
 sed -n '/^License Texts/,$p' "$repo/licenses/velopack.txt" \
-  | awk '/^-{20,}$/ && prev ~ /\)$/ { sub(/.*\(/, "", prev); sub(/\)$/, "", prev); print "  " prev } { prev = $0 }' \
+  | awk '/^--*$/ && length($0) >= 20 && prev ~ /\)$/ { sub(/.*\(/, "", prev); sub(/\)$/, "", prev); print "  " prev } { prev = $0 }' \
   | sort -u
