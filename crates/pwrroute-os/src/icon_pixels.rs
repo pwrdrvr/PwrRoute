@@ -7,10 +7,10 @@
 /// without a mask channel) is opaque.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn rgba_from_premultiplied_bgra(bgra: &[u8]) -> Vec<u8> {
-    let has_alpha = bgra.chunks_exact(4).any(|px| px[3] != 0);
+    let (pixels, _) = bgra.as_chunks::<4>();
+    let has_alpha = pixels.iter().any(|&[_, _, _, a]| a != 0);
     let mut rgba = Vec::with_capacity(bgra.len());
-    for px in bgra.chunks_exact(4) {
-        let (b, g, r, a) = (px[0], px[1], px[2], px[3]);
+    for &[b, g, r, a] in pixels {
         if !has_alpha {
             rgba.extend_from_slice(&[r, g, b, 255]);
             continue;

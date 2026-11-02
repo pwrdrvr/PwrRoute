@@ -77,7 +77,7 @@ mod tests {
     use super::*;
 
     fn alpha(bitmap: &Bitmap) -> impl Iterator<Item = u8> + '_ {
-        bitmap.rgba.chunks_exact(4).map(|px| px[3])
+        bitmap.rgba.as_chunks::<4>().0.iter().map(|px| px[3])
     }
 
     #[test]
@@ -85,7 +85,7 @@ mod tests {
         let icon = template();
         assert_eq!((icon.width, icon.height), (44, 44));
         assert_eq!(icon.rgba.len(), 44 * 44 * 4);
-        for px in icon.rgba.chunks_exact(4).filter(|px| px[3] > 0) {
+        for px in icon.rgba.as_chunks::<4>().0.iter().filter(|px| px[3] > 0) {
             assert_eq!(&px[..3], &[0, 0, 0], "template pixels are black");
         }
         // Both tones are there: the solid route and the 0.55 one.
@@ -114,7 +114,9 @@ mod tests {
         assert_eq!((icon.width, icon.height), (32, 32));
         let solid = icon
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .find(|px| px[3] == 255)
             .expect("an opaque pixel");
         assert_eq!(&solid[..3], &[0xff, 0x8a, 0x1f]);
@@ -127,7 +129,9 @@ mod tests {
         crate::theme::set(crate::theme::Theme::default());
         let solid = icon
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .find(|px| px[3] == 255)
             .expect("an opaque pixel");
         assert_eq!(&solid[..3], &[0xa6, 0x44, 0x00]);
