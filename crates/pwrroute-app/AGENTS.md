@@ -950,6 +950,12 @@ their own modules.
   `DefaultState::OtherCopy` is another copy of PwrRoute holding the
   default (its path, from `DefaultStatus::other_copy`); a request takes
   it back with no prompt (`DefaultRequest::TookOverFromCopy`).
+  On macOS either of PwrRoute's ids is the default: the app's, which every
+  "Make default browser" asks for, or the windowless link helper's
+  (`crates/pwrroute-link-helper`), which only Settings › Experimental's
+  "Use the link helper" asks for (`Registrar::request_link_helper`) and
+  its "Stop using" hands back to the app. `DefaultStatus::link_helper`
+  says which; nothing about it is in `settings.json`.
   It also re-reads every `RECHECK_EVERY` (a minute) for the life of the
   app and when the tray dropdown opens, so a router with no window
   notices losing the default; the tray chip and its Make default row

@@ -24,6 +24,15 @@ use anyhow::Result;
 
 /// The macOS bundle identifier, from `packaging/macos/Info.plist.in`.
 pub const BUNDLE_ID: &str = "com.pwrdrvr.pwrroute";
+/// The macOS link helper's bundle identifier, from
+/// `packaging/macos/LinkHelper.Info.plist.in`: the windowless app that
+/// [`set_default_handler`]`(`[`Handler::LinkHelper`]`)` makes the `http`
+/// and `https` handler, so a link never activates the app with the windows.
+/// Opt-in: [`set_default_browser`] asks for the app.
+pub const LINK_HELPER_ID: &str = "com.pwrdrvr.pwrroute.links";
+/// Where the link helper sits inside `PwrRoute.app`, as `cargo xtask bundle`
+/// nests it.
+pub const LINK_HELPER_PATH: &str = "Contents/Helpers/PwrRoute.app";
 /// The Windows ProgID that `http` and `https` point at.
 pub const PROG_ID: &str = "PwrRouteURL";
 /// The Windows `StartMenuInternet` and `RegisteredApplications` name.
@@ -37,6 +46,11 @@ pub struct DefaultStatus {
     /// PwrRoute handles both `http` and `https`. A bundled macOS app also
     /// checks that both select its path, rather than another installed copy.
     pub is_default: bool,
+    /// macOS: PwrRoute is the default through its link helper
+    /// ([`LINK_HELPER_ID`]) on both schemes, so a link never activates the
+    /// app. `false` while either scheme names the app itself, and always on
+    /// Windows and Linux.
+    pub link_helper: bool,
     /// The `http` handler as the OS names it: a bundle id, ProgID or desktop
     /// file id.
     pub http: Option<String>,
@@ -79,11 +93,54 @@ pub fn unregister_browser() -> Result<()> {
     imp::unregister()
 }
 
+/// Which of PwrRoute's bundles a default-browser request asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handler {
+    /// The app itself: what "Make default browser" asks for everywhere.
+    App,
+    /// macOS only: the windowless link helper nested in the app
+    /// ([`LINK_HELPER_PATH`]), which forwards each link to the running app
+    /// without activating it. Settings › Experimental asks for it.
+    LinkHelper,
+}
+
 /// Asks the OS to make PwrRoute the default browser. Call it only from an
 /// explicit user action. Registers first, so the OS can find PwrRoute.
 pub fn set_default_browser() -> Result<DefaultRequest> {
+    set_default_handler(Handler::App)
+}
+
+/// [`set_default_browser`] for one of PwrRoute's bundles: the app, or on
+/// macOS its link helper (registered with LaunchServices first; refused
+/// when the bundle has none, [`link_helper_bundled`]). Asking for the app
+/// while the helper is the default hands links back to the app. Call it
+/// only from an explicit user action.
+pub fn set_default_handler(handler: Handler) -> Result<DefaultRequest> {
     imp::register()?;
-    imp::set_default()
+    #[cfg(target_os = "macos")]
+    {
+        imp::set_default(handler)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if handler == Handler::LinkHelper {
+            anyhow::bail!("the link helper is macOS only");
+        }
+        imp::set_default()
+    }
+}
+
+/// Whether the running copy carries the link helper: a bundled macOS app
+/// built with it. Always `false` for a bare dev binary and off macOS.
+pub fn link_helper_bundled() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::link_helper_bundled()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 /// Which app handles `http` and `https` now. Reads only.
@@ -106,6 +163,56 @@ pub fn app_display_name(id: &str) -> Option<String> {
         let _ = id;
         None
     }
+}
+
+/// Whether a handler id the OS reports is PwrRoute: the link helper's or
+/// the app's bundle id on macOS, the ProgID on Windows, the desktop file id
+/// on Linux.
+pub fn is_pwrroute_handler(id: &str) -> bool {
+    [LINK_HELPER_ID, BUNDLE_ID, PROG_ID, DESKTOP_ID]
+        .iter()
+        .any(|ours| id.eq_ignore_ascii_case(ours))
+}
+
+/// macOS's answer for the `http` and `https` handlers. Either bundle id is
+/// PwrRoute: the app's own, which "Make default browser" asks for, and the
+/// link helper's, which Settings › Experimental asks for. Each must select
+/// this copy's bundle, or it is `other_copy`'s default. Both on the helper's
+/// id is `link_helper`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn macos_status(http: SchemeHandler, https: SchemeHandler) -> DefaultStatus {
+    let is =
+        |h: &SchemeHandler, id: &str| h.id.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(id));
+    let ours = |h: &SchemeHandler| is(h, BUNDLE_ID) || is(h, LINK_HELPER_ID);
+    // One of PwrRoute's ids at another copy's path is that copy's default,
+    // not this one's.
+    let elsewhere = |h: &SchemeHandler| ours(h) && !h.this_copy;
+    let other_copy = [&http, &https]
+        .into_iter()
+        .filter(|h| elsewhere(h))
+        .find_map(|h| h.path.clone());
+    let is_default = ours(&http) && ours(&https) && !elsewhere(&http) && !elsewhere(&https);
+    DefaultStatus {
+        is_default,
+        link_helper: is_default && is(&http, LINK_HELPER_ID) && is(&https, LINK_HELPER_ID),
+        http: http.id,
+        https: https.id,
+        other_copy,
+    }
+}
+
+/// One scheme's handler as macOS reports it, for [`macos_status`].
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct SchemeHandler {
+    /// Its bundle id.
+    pub id: Option<String>,
+    /// The bundle LaunchServices opens is this copy's: the running app, or
+    /// its nested helper for the helper's id. Always `true` for a bare dev
+    /// binary, which has no bundle to compare.
+    pub this_copy: bool,
+    /// That bundle's path.
+    pub path: Option<String>,
 }
 
 /// Opens the OS's own default-apps page, where the user can pick or change
@@ -315,6 +422,7 @@ mod imp {
         let (http, https) = (choice("http"), choice("https"));
         Ok(DefaultStatus {
             is_default: http.as_deref() == Some(PROG_ID) && https.as_deref() == Some(PROG_ID),
+            link_helper: false,
             http,
             https,
             other_copy: None,
@@ -417,6 +525,7 @@ mod imp {
         let (http, https) = (query("http"), query("https"));
         Ok(DefaultStatus {
             is_default: http.as_deref() == Some(DESKTOP_ID) && https.as_deref() == Some(DESKTOP_ID),
+            link_helper: false,
             http,
             https,
             other_copy: None,
@@ -504,6 +613,104 @@ mod tests {
                 "Info.plist.in must claim {claim}"
             );
         }
+        let helper =
+            std::fs::read_to_string(root.join("packaging/macos/LinkHelper.Info.plist.in")).unwrap();
+        assert!(helper.contains(&format!("<string>{LINK_HELPER_ID}</string>")));
+        // xtask nests the helper where the app looks for it.
+        let xtask = std::fs::read_to_string(root.join("xtask/src/macos.rs")).unwrap();
+        assert!(xtask.contains(&format!("\"{LINK_HELPER_PATH}\"")));
         assert!(root.join("packaging/linux").join(DESKTOP_ID).exists());
+    }
+
+    /// A handler at this copy's path.
+    fn here(id: Option<&str>) -> SchemeHandler {
+        SchemeHandler {
+            id: id.map(str::to_owned),
+            this_copy: true,
+            path: None,
+        }
+    }
+
+    fn mac(http: Option<&str>, https: Option<&str>) -> DefaultStatus {
+        macos_status(here(http), here(https))
+    }
+
+    #[test]
+    fn the_app_is_the_default_without_the_helper() {
+        let status = mac(Some(BUNDLE_ID), Some(BUNDLE_ID));
+        assert!(status.is_default && !status.link_helper);
+    }
+
+    #[test]
+    fn the_link_helper_on_both_schemes_is_the_default_through_it() {
+        let status = mac(Some(LINK_HELPER_ID), Some(LINK_HELPER_ID));
+        assert!(status.is_default && status.link_helper);
+        assert_eq!(status.http.as_deref(), Some(LINK_HELPER_ID));
+        // LaunchServices may report a different case.
+        let upper = LINK_HELPER_ID.to_uppercase();
+        assert!(mac(Some(&upper), Some(&upper)).link_helper);
+        // Half moved: still PwrRoute, but links on one scheme still reach
+        // the app, so the helper is not on.
+        let mixed = mac(Some(LINK_HELPER_ID), Some(BUNDLE_ID));
+        assert!(mixed.is_default && !mixed.link_helper);
+    }
+
+    #[test]
+    fn another_browser_on_either_scheme_is_not_the_default() {
+        for status in [
+            mac(Some("com.google.Chrome"), Some("com.google.Chrome")),
+            mac(Some(LINK_HELPER_ID), Some("com.apple.Safari")),
+            mac(Some("com.apple.Safari"), Some(BUNDLE_ID)),
+            mac(None, Some(LINK_HELPER_ID)),
+            mac(None, None),
+            mac(Some("com.pwrdrvr.pwrroute.other"), Some(LINK_HELPER_ID)),
+        ] {
+            assert!(!status.is_default && !status.link_helper, "{status:?}");
+            assert_eq!(status.other_copy, None);
+        }
+    }
+
+    #[test]
+    fn either_id_at_another_copys_path_is_that_copys_default() {
+        let installed = |id: &str| SchemeHandler {
+            id: Some(id.to_owned()),
+            this_copy: false,
+            path: Some("/Applications/PwrRoute.app".to_owned()),
+        };
+        for (http, https) in [
+            (installed(BUNDLE_ID), installed(BUNDLE_ID)),
+            (here(Some(BUNDLE_ID)), installed(BUNDLE_ID)),
+            (installed(LINK_HELPER_ID), here(Some(LINK_HELPER_ID))),
+        ] {
+            let status = macos_status(http, https);
+            assert!(!status.is_default && !status.link_helper, "{status:?}");
+            assert_eq!(
+                status.other_copy.as_deref(),
+                Some("/Applications/PwrRoute.app")
+            );
+        }
+        // Another app's path is not another copy of PwrRoute.
+        let chrome = SchemeHandler {
+            id: Some("com.google.Chrome".to_owned()),
+            this_copy: false,
+            path: Some("/Applications/Google Chrome.app".to_owned()),
+        };
+        assert_eq!(macos_status(chrome.clone(), chrome).other_copy, None);
+    }
+
+    #[test]
+    fn every_id_of_ours_is_a_pwrroute_handler() {
+        for id in [
+            LINK_HELPER_ID,
+            BUNDLE_ID,
+            PROG_ID,
+            DESKTOP_ID,
+            "COM.PWRDRVR.PWRROUTE",
+        ] {
+            assert!(is_pwrroute_handler(id), "{id}");
+        }
+        for id in ["com.google.Chrome", "com.pwrdrvr.pwrfinicky", ""] {
+            assert!(!is_pwrroute_handler(id), "{id}");
+        }
     }
 }

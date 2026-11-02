@@ -958,6 +958,7 @@ mod tests {
         let browsers = LiveBrowsers::new(Env::fixture(Platform::MacOs, &dir), || {
             Some(DefaultStatus {
                 is_default: false,
+                link_helper: false,
                 http: Some("com.apple.Safari".into()),
                 https: Some("com.apple.Safari".into()),
                 other_copy: None,

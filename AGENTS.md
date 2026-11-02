@@ -158,7 +158,11 @@ Quit from the app menu, or kill the process, to stop it.
 PwrRoute declares `http` and `https` (`packaging/macos/Info.plist.in`,
 `packaging/linux/pwrroute.desktop`), so the OS can offer it as a browser;
 macOS also needs the `public.html` and `public.xhtml` document types, or
-System Settings leaves it out of "Default web browser".
+System Settings leaves it out of "Default web browser". The macOS bundle
+also nests a windowless link helper (`LinkHelper.Info.plist.in`,
+`crates/pwrroute-link-helper`) with the same declarations. It is opt-in:
+"Make default browser" makes the app the handler, and only Settings ›
+Experimental's "Use the link helper" makes the helper the handler instead.
 Becoming the default requires an explicit app action or `--make-default`
 (PwrAgent's Start action passes it). That flag requests ownership of the
 running bundle's path, so a worktree build can replace `/Applications`.

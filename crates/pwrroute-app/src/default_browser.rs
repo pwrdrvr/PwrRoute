@@ -581,6 +581,7 @@ mod tests {
         let ours = |id: Option<&str>| id.is_some_and(|id| id == pwrroute_os::BUNDLE_ID);
         DefaultStatus {
             is_default: ours(http) && ours(https),
+            link_helper: false,
             http: http.map(str::to_owned),
             https: https.map(str::to_owned),
             other_copy: None,
@@ -602,6 +603,7 @@ mod tests {
         assert_eq!(tilde("/Users/someone/x.app", None), "/Users/someone/x.app");
         let held = DefaultStatus {
             is_default: false,
+            link_helper: false,
             http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
             https: Some(pwrroute_os::BUNDLE_ID.to_owned()),
             other_copy: Some("/Volumes/PwrRoute/PwrRoute.app".to_owned()),
@@ -708,6 +710,7 @@ mod tests {
     fn a_takeover_from_another_copy_names_the_copy(cx: &mut TestAppContext) {
         let held = DefaultStatus {
             is_default: false,
+            link_helper: false,
             http: Some(pwrroute_os::BUNDLE_ID.to_owned()),
             https: Some(pwrroute_os::BUNDLE_ID.to_owned()),
             other_copy: Some("/Volumes/PwrRoute/PwrRoute.app".to_owned()),

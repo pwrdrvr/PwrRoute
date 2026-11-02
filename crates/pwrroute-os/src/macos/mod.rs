@@ -23,7 +23,10 @@ use pwrroute_router::OpenerInfo;
 
 use crate::{
     Yield,
-    registration::{BUNDLE_ID, DefaultRequest, DefaultStatus},
+    registration::{
+        BUNDLE_ID, DefaultRequest, DefaultStatus, Handler, LINK_HELPER_ID, LINK_HELPER_PATH,
+        SchemeHandler, macos_status,
+    },
 };
 
 /// `keySenderPIDAttr` ('spid'): the pid of the process that sent the event.
@@ -73,6 +76,18 @@ fn app_bundle() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The link helper nested in `app` (`Contents/Helpers/PwrRoute.app`), when
+/// it is there and is the helper: `None` for a bundle built before it, or
+/// one put together by hand.
+fn link_helper(app: &Path) -> Option<PathBuf> {
+    let path = app.join(LINK_HELPER_PATH);
+    let bundle = NSBundle::bundleWithPath(&NSString::from_str(&path.to_string_lossy()))?;
+    let id = bundle.bundleIdentifier()?.to_string();
+    (id == LINK_HELPER_ID).then_some(path)
+}
+
+/// Lists the app with LaunchServices. Not its link helper: that is opt-in,
+/// and `set_default(Handler::LinkHelper)` registers it when asked for.
 pub fn register() -> Result<()> {
     launch_services::register(&app_bundle()?)
 }
@@ -89,25 +104,51 @@ pub fn unregister() -> Result<()> {
 const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/\
                           LaunchServices.framework/Support/lsregister";
 
-/// Asks for one scheme, so macOS shows one prompt: each call puts up its
-/// own "change your default web browser?" dialog (macOS 27 stacks them),
-/// and the answer to `http`'s makes PwrRoute the default web browser,
-/// `https` and `public.html` with it. Only a request that left `https`
-/// behind asks for it, on the next try.
+/// Whether this `PwrRoute.app` carries the link helper. `false` for a bare
+/// dev binary, which has no bundle at all.
+pub fn link_helper_bundled() -> bool {
+    app_bundle().is_ok_and(|app| link_helper(&app).is_some())
+}
+
+/// Asks for `handler` (the app, or the link helper nested in it) to open
+/// `http` and `https`, one scheme at a time, so macOS shows one prompt:
+/// each call puts up its own "change your default web browser?" dialog
+/// (macOS 27 stacks them), and the answer to `http`'s makes PwrRoute the
+/// default web browser, `https` and `public.html` with it. Only a request
+/// that left `https` behind asks for it, on the next try.
+///
+/// The helper is asked for only from Settings › Experimental: it is
+/// registered with LaunchServices first, by its own URL, since
+/// LaunchServices need not have scanned a bundle nested in another, and a
+/// bundle without it is refused.
 ///
 /// LaunchServices keeps the default browser as a bundle id and opens the
 /// highest-versioned copy with that id, so a newer dev build, or a copy on
 /// a mounted DMG, would take this copy's links, and macOS asks nothing when
 /// the id already holds the default. This copy is the one being asked for,
-/// so the other copies are taken out of LaunchServices first. One comes
-/// back when it is launched, rebuilt or rescanned. `set_default_browser`
-/// registered this copy already.
-pub fn set_default() -> Result<DefaultRequest> {
-    let bundle = app_bundle()?;
+/// so the other copies (of the app and of its helper) are taken out of
+/// LaunchServices first. One comes back when it is launched, rebuilt or
+/// rescanned. `set_default_browser` registered this copy already.
+pub fn set_default(handler: Handler) -> Result<DefaultRequest> {
+    let app = app_bundle()?;
+    let (target, id) = match handler {
+        Handler::App => (app.clone(), BUNDLE_ID),
+        Handler::LinkHelper => {
+            let Some(helper) = link_helper(&app) else {
+                bail!(
+                    "this PwrRoute.app has no link helper at {LINK_HELPER_PATH}; build it with \
+                     `cargo xtask bundle`"
+                );
+            };
+            launch_services::register(&helper)?;
+            (helper, LINK_HELPER_ID)
+        }
+    };
     let other_copy_held = status()?.other_copy.is_some();
-    forget_other_copies(&bundle);
-    let http = is_current_handler("http", &bundle);
-    let https = is_current_handler("https", &bundle);
+    forget_other_copies(&app, BUNDLE_ID);
+    forget_other_copies(&app.join(LINK_HELPER_PATH), LINK_HELPER_ID);
+    let http = is_current_handler("http", &target);
+    let https = is_current_handler("https", &target);
     if http && https {
         return Ok(if other_copy_held {
             DefaultRequest::TookOverFromCopy
@@ -115,14 +156,14 @@ pub fn set_default() -> Result<DefaultRequest> {
             DefaultRequest::Set
         });
     }
-    // Both schemes still name PwrRoute's id: LaunchServices has not caught
-    // up yet, or a copy would not go. macOS puts up no dialog for an id
-    // that already holds the default, so do not say it will; the read-back
-    // settles it.
-    let ids_ours = ["http", "https"]
-        .into_iter()
-        .all(|scheme| is_ours(launch_services::default_handler(scheme).as_deref()));
-    if other_copy_held && ids_ours {
+    // Both schemes still name the id asked for: LaunchServices has not
+    // caught up yet, or a copy would not go. macOS puts up no dialog for an
+    // id that already holds the default, so do not say it will; the
+    // read-back settles it.
+    let ids_asked_for = ["http", "https"].into_iter().all(|scheme| {
+        launch_services::default_handler(scheme).is_some_and(|h| h.eq_ignore_ascii_case(id))
+    });
+    if other_copy_held && ids_asked_for {
         return Ok(DefaultRequest::TookOverFromCopy);
     }
     let scheme = scheme_to_request(http, https);
@@ -130,7 +171,7 @@ pub fn set_default() -> Result<DefaultRequest> {
     if workspace.respondsToSelector(sel!(
         setDefaultApplicationAtURL:toOpenURLsWithScheme:completionHandler:
     )) {
-        let url = NSURL::fileURLWithPath(&NSString::from_str(&bundle.to_string_lossy()));
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&target.to_string_lossy()));
         workspace.setDefaultApplicationAtURL_toOpenURLsWithScheme_completionHandler(
             &url,
             &NSString::from_str(scheme),
@@ -138,16 +179,17 @@ pub fn set_default() -> Result<DefaultRequest> {
         );
     } else {
         // macOS 11 predates NSWorkspace's path-specific API.
-        launch_services::set_default_handler(scheme, BUNDLE_ID)?;
+        launch_services::set_default_handler(scheme, id)?;
     }
     Ok(DefaultRequest::Prompted)
 }
 
-/// Every copy of PwrRoute LaunchServices knows other than `current`: an
-/// install in `/Applications`, a mounted DMG, each checkout's dev build.
-fn other_copies(current: &Path) -> Vec<PathBuf> {
+/// Every copy of the bundle `id` names (the app's, or its link helper's)
+/// LaunchServices knows other than `current`: an install in
+/// `/Applications`, a mounted DMG, each checkout's dev build.
+fn other_copies(current: &Path, id: &str) -> Vec<PathBuf> {
     NSWorkspace::sharedWorkspace()
-        .URLsForApplicationsWithBundleIdentifier(&NSString::from_str(BUNDLE_ID))
+        .URLsForApplicationsWithBundleIdentifier(&NSString::from_str(id))
         .iter()
         .filter_map(|url| url.path().map(|path| PathBuf::from(path.to_string())))
         .filter(|path| !same_bundle(Some(path), current))
@@ -158,9 +200,9 @@ fn other_copies(current: &Path) -> Vec<PathBuf> {
 /// (it takes several paths), so the database sees one writer. The files
 /// stay. A copy that will not go is left, and the status read afterwards
 /// names it.
-fn forget_other_copies(current: &Path) {
+fn forget_other_copies(current: &Path, id: &str) {
     use std::process::{Command, Stdio};
-    let copies = other_copies(current);
+    let copies = other_copies(current, id);
     if copies.is_empty() {
         return;
     }
@@ -304,36 +346,30 @@ pub fn app_bundle_id(path: &Path) -> Option<String> {
     (!id.trim().is_empty()).then_some(id)
 }
 
-/// Whether a scheme's handler, as LaunchServices names it, is PwrRoute.
-fn is_ours(handler: Option<&str>) -> bool {
-    handler.is_some_and(|handler| handler.eq_ignore_ascii_case(BUNDLE_ID))
-}
-
 pub fn status() -> Result<DefaultStatus> {
-    let http = launch_services::default_handler("http");
-    let https = launch_services::default_handler("https");
-    let mut is_default = is_ours(http.as_deref()) && is_ours(https.as_deref());
-    let mut other_copy = None;
-    if let Ok(bundle) = app_bundle() {
-        for (scheme, handler) in [("http", &http), ("https", &https)] {
-            if !is_ours(handler.as_deref()) {
-                continue;
-            }
-            let path = handler_path(scheme);
-            if !same_bundle(path.as_deref(), &bundle) {
-                is_default = false;
-                if other_copy.is_none() {
-                    other_copy = path.map(|path| path.to_string_lossy().into_owned());
-                }
-            }
+    let app = app_bundle().ok();
+    let scheme = |scheme: &str| {
+        let id = launch_services::default_handler(scheme);
+        let path = handler_path(scheme);
+        // A bare dev binary has no bundle to compare with: any copy counts.
+        let this_copy = app.as_ref().is_none_or(|app| {
+            let ours = if id
+                .as_deref()
+                .is_some_and(|id| id.eq_ignore_ascii_case(LINK_HELPER_ID))
+            {
+                app.join(LINK_HELPER_PATH)
+            } else {
+                app.clone()
+            };
+            same_bundle(path.as_deref(), &ours)
+        });
+        SchemeHandler {
+            id,
+            this_copy,
+            path: path.map(|path| path.to_string_lossy().into_owned()),
         }
-    }
-    Ok(DefaultStatus {
-        is_default,
-        http,
-        https,
-        other_copy,
-    })
+    };
+    Ok(macos_status(scheme("http"), scheme("https")))
 }
 
 /// The bundle LaunchServices opens a `scheme` link with.

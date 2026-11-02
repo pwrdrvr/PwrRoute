@@ -203,6 +203,23 @@ fn a_route_back_to_pwrroute_goes_to_the_fallback() {
     assert_eq!(launcher.launched()[0].url, "https://loop.example.com/x");
 }
 
+/// The macOS link helper is PwrRoute too: a rule, a fallback or a pause
+/// that names it, by bundle id, name or path, would hand the link back.
+#[test]
+fn the_link_helper_is_pwrroute() {
+    for name in [
+        "PwrRoute",
+        "com.pwrdrvr.pwrroute",
+        "com.pwrdrvr.pwrroute.links",
+        "/Applications/PwrRoute.app/Contents/Helpers/PwrRoute.app",
+    ] {
+        assert!(is_self_name(name), "{name}");
+    }
+    assert!(!is_self_name("com.pwrdrvr.pwrfinicky"));
+    let fallback = FallbackSource::fixed("com.pwrdrvr.pwrroute.links", "Work");
+    assert_eq!(fallback.get(), (FALLBACK_BROWSER.to_owned(), String::new()));
+}
+
 fn pause_target() -> PauseTarget {
     PauseTarget {
         browser: "Google Chrome".into(),

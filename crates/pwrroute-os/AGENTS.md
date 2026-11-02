@@ -53,12 +53,22 @@ and Windows).
   does (`SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK`, premultiplied BGRA made
   straight RGBA in `icon_pixels.rs`, which is plain code tested on every
   platform). Linux returns `None` until it has an implementation.
-- Names (`BUNDLE_ID`, `PROG_ID`, `DESKTOP_ID`) must match `packaging/`; a
-  test reads the packaging files to hold them together.
+- Names (`BUNDLE_ID`, `LINK_HELPER_ID`, `LINK_HELPER_PATH`, `PROG_ID`,
+  `DESKTOP_ID`) must match `packaging/` and xtask; a test reads those files
+  to hold them together.
 - macOS requests target the running `.app` by URL through NSWorkspace
   (legacy bundle-id fallback on macOS 11). Status also compares the selected
   handlers' paths, so an installed copy cannot count as the worktree copy,
   and names that other copy (`DefaultStatus::other_copy`).
+- **The macOS link helper is opt-in.** `set_default_browser` asks for the
+  app (`Handler::App`); `set_default_handler(Handler::LinkHelper)` asks for
+  the helper nested at `LINK_HELPER_PATH`, registering it with
+  LaunchServices first (`LSRegisterURL`), and refuses a bundle without it
+  (`link_helper_bundled`). `default_browser_status` counts either id as
+  PwrRoute, each at this copy's path (the app, or its nested helper), and
+  sets `link_helper` only when both schemes name the helper;
+  `macos_status` is the pure mapping, tested everywhere. Windows and Linux
+  have no helper and never set it.
 - **LaunchServices keeps the default browser as a bundle id**, and opens the
   highest-versioned copy with it. A newer dev build, or the DMG, takes the
   links, and macOS shows no prompt for an id that is already the default.
