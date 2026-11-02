@@ -47,7 +47,7 @@ interprocess = "2.4"
 # Installer and auto-updater. Pinned with `=` because the `vpk` CLI that
 # packs releases must be the same version: VPK_VERSION (and its SHA-512) in
 # scripts/release/install-vpk.sh. Upgrade them together.
-velopack = "=1.2.161"
+velopack = "=1.3.39-g8d2844f"
 # The release channel: SemVer precedence for picking each slot's release.
 # Already in the tree through Velopack.
 semver = "1"
