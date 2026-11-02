@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.14.0 - 2026-11-02
+
+- macOS link handling - Receiving a link with every window closed no longer leaves PwrRoute in the Dock or Cmd-Tab, and reopen events accompanying a link keep the main window closed. With a window open, PwrRoute returns focus to the link's sending app before the browser handoff so its own window stays behind. Settings › Experimental's Yield focus to browsers keeps its existing handoff behavior when enabled.
+- Updates - Updated the installer and updater components to resolve a security advisory in their ZIP dependency. Update packages also sanitize the package filename before locating it for installation, and bundled third-party notices reflect the new versions.
+- Text wrapping - Logs and the tray dropdown use the full available width for continuation lines when text starts with whitespace, avoiding an extra indentation from the updated interface framework.
+
 ## v0.13.0 - 2026-11-02
 
 - Rule drafts - Editing a rule in Rules now creates a draft with Save and Discard. Routing, Overview and Test a link keep using the saved rule until you save; Try it tests the draft. Use Command-S on macOS or Ctrl-S elsewhere to save, and Esc to discard. Unsaved badges mark pending edits, leaving a changed rule or closing the window asks first, and changes from another writer preserve your draft with a choice when the same rule changed on disk.
