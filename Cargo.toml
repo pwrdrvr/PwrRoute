@@ -56,9 +56,3 @@ opt-level = 2
 lto = "thin"
 codegen-units = 1
 strip = true
-
-# gpui-pre-macros leaves a helper ungated in release builds while its module is
-# gated on debug_assertions; enable it for the host proc-macro only. From
-# disktree, which ships the same gpui-kit.
-[profile.release.package.gpui-pre-macros]
-debug-assertions = true
