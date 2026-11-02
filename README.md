@@ -198,7 +198,7 @@ separate, opt-in setting.
 
 ## Development
 
-PwrRoute is a Cargo workspace on Rust 1.97 (`rust-toolchain.toml`). See
+PwrRoute is a Cargo workspace on Rust 1.98 (`rust-toolchain.toml`). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 
 ```bash
