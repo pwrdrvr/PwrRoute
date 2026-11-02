@@ -34,7 +34,7 @@ async-channel = "2"
 # Local clock time for the saved label, and the local calendar day for
 # Activity: the Time column and "today". Already in the tree through GPUI.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-gpui-kit = { version = "=0.6.6", default-features = false, features = ["assets"] }
+gpui-kit = { version = "=0.8.1", default-features = false, features = ["assets"] }
 # Rasterizes the mark for the tray icon. The same version GPUI draws SVGs with.
 resvg = { version = "0.46", default-features = false }
 # The menu bar item (macOS) and notification-area icon (Windows, Linux), with
@@ -90,7 +90,7 @@ embed-resource = "3.0.12"
 
 [dev-dependencies]
 # The window harness: lets the smoke test open a real window and draw a frame.
-gpui-kit = { version = "=0.6.6", default-features = false, features = [
+gpui-kit = { version = "=0.8.1", default-features = false, features = [
     "assets",
     "test-support",
 ] }

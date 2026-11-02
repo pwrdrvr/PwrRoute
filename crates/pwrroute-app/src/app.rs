@@ -1365,7 +1365,7 @@ impl PwrRoute {
         // a field included: a field never takes a ⌘ key it has no use for.
         let keystroke = &event.keystroke;
         let m = &keystroke.modifiers;
-        if keystroke.key == "s" && m.secondary() && !m.alt && !m.shift && self.editing() {
+        if keystroke.key == "s" && m.secondary(cx) && !m.alt && !m.shift && self.editing() {
             if self.leaving.is_some() {
                 self.answer_leave(LeaveAnswer::Save, window, cx);
             } else if self.store.draft_changed() {
@@ -1436,7 +1436,7 @@ impl PwrRoute {
                     return;
                 }
                 if key == "z"
-                    && m.secondary()
+                    && m.secondary(cx)
                     && !m.alt
                     && !m.shift
                     && self.discarded.is_some()

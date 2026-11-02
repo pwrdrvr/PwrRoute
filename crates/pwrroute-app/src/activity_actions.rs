@@ -995,7 +995,7 @@ impl PwrRoute {
     ) -> bool {
         let keystroke = &event.keystroke;
         let modifiers = &keystroke.modifiers;
-        if keystroke.key != "n" || !modifiers.secondary() || modifiers.shift || modifiers.alt {
+        if keystroke.key != "n" || !modifiers.secondary(cx) || modifiers.shift || modifiers.alt {
             return false;
         }
         if self.actions.sheet.is_some() {

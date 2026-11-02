@@ -87,16 +87,6 @@ pub enum Platform {
     Other,
 }
 
-impl Platform {
-    pub fn current() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::Mac
-        } else {
-            Self::Other
-        }
-    }
-}
-
 /// Quit, from the menu (⌘Q) or the tray: a downloaded update is handed to
 /// Velopack first, which installs it once this process has exited.
 pub fn quit(cx: &mut App) {
@@ -170,31 +160,35 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
     });
 
     let platform = chrome.menus();
-    let modifier = match platform {
-        Platform::Mac => "cmd",
-        Platform::Other => "ctrl",
-    };
-    let key = |chord: &str| format!("{modifier}-{chord}");
+    // ⌘ on macOS, Ctrl elsewhere. `KeyBinding::new` takes static keys only.
+    macro_rules! chord {
+        ($key:literal) => {
+            match platform {
+                Platform::Mac => concat!("cmd-", $key),
+                Platform::Other => concat!("ctrl-", $key),
+            }
+        };
+    }
     cx.bind_keys([
-        KeyBinding::new(&key("1"), ShowOverview, None),
-        KeyBinding::new(&key("2"), ShowRules, None),
-        KeyBinding::new(&key("3"), ShowTestLink, None),
-        KeyBinding::new(&key("4"), ShowActivity, None),
-        KeyBinding::new(&key("q"), Quit, None),
-        KeyBinding::new(&key("w"), CloseWindow, None),
-        KeyBinding::new(&key("m"), Minimize, None),
-        KeyBinding::new(&key("x"), Cut, Some(MENU_ONLY)),
-        KeyBinding::new(&key("c"), Copy, Some(MENU_ONLY)),
-        KeyBinding::new(&key("v"), Paste, Some(MENU_ONLY)),
-        KeyBinding::new(&key("a"), SelectAll, Some(MENU_ONLY)),
+        KeyBinding::new(chord!("1"), ShowOverview, None),
+        KeyBinding::new(chord!("2"), ShowRules, None),
+        KeyBinding::new(chord!("3"), ShowTestLink, None),
+        KeyBinding::new(chord!("4"), ShowActivity, None),
+        KeyBinding::new(chord!("q"), Quit, None),
+        KeyBinding::new(chord!("w"), CloseWindow, None),
+        KeyBinding::new(chord!("m"), Minimize, None),
+        KeyBinding::new(chord!("x"), Cut, Some(MENU_ONLY)),
+        KeyBinding::new(chord!("c"), Copy, Some(MENU_ONLY)),
+        KeyBinding::new(chord!("v"), Paste, Some(MENU_ONLY)),
+        KeyBinding::new(chord!("a"), SelectAll, Some(MENU_ONLY)),
         // Every window's Tab order: the controls built on
         // `widgets::keyboard_control`, gpui-kit's controls and the text
         // fields, in the order they are drawn.
-        KeyBinding::new(&key("0"), ActualSize, None),
+        KeyBinding::new(chord!("0"), ActualSize, None),
         // ⌘+ is ⌘= on most layouts; both zoom in, as in a browser.
-        KeyBinding::new(&key("="), ZoomIn, None),
-        KeyBinding::new(&key("+"), ZoomIn, None),
-        KeyBinding::new(&key("-"), ZoomOut, None),
+        KeyBinding::new(chord!("="), ZoomIn, None),
+        KeyBinding::new(chord!("+"), ZoomIn, None),
+        KeyBinding::new(chord!("-"), ZoomOut, None),
         KeyBinding::new("tab", FocusNext, None),
         KeyBinding::new("shift-tab", FocusPrevious, None),
     ]);
@@ -214,7 +208,7 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
         // Settings binds the host's shortcut; drawing another OS's strip
         // (tests, `screens`) needs that OS's.
         if chrome != Chrome::host() {
-            cx.bind_keys([KeyBinding::new(&key(","), settings::OpenSettings, None)]);
+            cx.bind_keys([KeyBinding::new(chord!(","), settings::OpenSettings, None)]);
         }
         crate::menu_bar::install(cx);
     }
@@ -226,11 +220,9 @@ pub fn install_for(chrome: Chrome, cx: &mut App) {
 /// nothing takes it. The key is bound only in [`MENU_ONLY`], so this never
 /// comes back here.
 fn replay(key: &str, cx: &mut App) {
-    let modifier = match Platform::current() {
-        Platform::Mac => "cmd",
-        Platform::Other => "ctrl",
-    };
-    let Ok(keystroke) = Keystroke::parse(&format!("{modifier}-{key}")) else {
+    // `secondary-` is ⌘ on macOS and Ctrl elsewhere.
+    let os = cx.platform_info().os;
+    let Ok(keystroke) = Keystroke::parse_with_os(&format!("secondary-{key}"), os) else {
         return;
     };
     in_front_window(cx, move |window, cx| {

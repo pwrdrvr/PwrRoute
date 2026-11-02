@@ -499,7 +499,7 @@ impl PwrRoute {
     /// window's (`app_menu::FocusNext`), as everywhere.
     fn hero_key(&mut self, stop: HeroStop, event: &KeyDownEvent, cx: &mut Context<'_, Self>) {
         let keystroke = &event.keystroke;
-        if keystroke.modifiers.secondary() || keystroke.modifiers.alt {
+        if keystroke.modifiers.secondary(cx) || keystroke.modifiers.alt {
             return;
         }
         let incoming = status(self, cx).switch();
@@ -904,7 +904,7 @@ pub fn pane(
         .debug_selector(|| PANE_ID.into())
         // A scroll moves the map under a pointer that did not move: GPUI
         // reports hover only on a move, so nothing stays traced.
-        .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+        .on_scroll(cx.listener(|this, _, _, cx| {
             if this.overview.forget_pointer() {
                 cx.notify();
             }

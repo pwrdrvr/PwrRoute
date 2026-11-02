@@ -4014,7 +4014,7 @@ mod tests {
         let later = cx.debug_bounds("first-run-later").unwrap();
         // Laid out past the window's bottom, inside the scrolled body.
         assert!(later.bottom() > body.bottom(), "{later:?} in {body:?}");
-        cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        cx.simulate_event(gpui_kit::ScrollEvent {
             position: body.center(),
             delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(-2000.0))),
             ..Default::default()

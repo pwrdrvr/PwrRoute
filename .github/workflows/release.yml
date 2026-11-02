@@ -27,7 +27,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # One pin for every job; must equal ci.yml's, which is in its cache keys.
-  RUST_TOOLCHAIN: "1.97"
+  RUST_TOOLCHAIN: "1.98"
 
 jobs:
   # Stub. PwrGit's equivalent compares Winget and Homebrew with the release

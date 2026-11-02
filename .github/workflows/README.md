@@ -10,7 +10,7 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 | `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, Velopack Setup.exe and MSI, uploaded as workflow artifacts. |
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
-Every Rust job pins Rust 1.97, the version in `rust-toolchain.toml`.
+Every Rust job pins Rust 1.98, the version in `rust-toolchain.toml`.
 Every job that compiles prunes the image's other Rust toolchains before
 `Swatinem/rust-cache`, whose key hashes all installed toolchains. Only main
 saves CI caches.

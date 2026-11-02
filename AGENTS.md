@@ -53,7 +53,7 @@ not PwrRoute branding; the icon is by @uetchy and is not ours to reuse.
 
 ## Set up a checkout
 
-`rust-toolchain.toml` pins Rust 1.97, and rustup installs it on first use.
+`rust-toolchain.toml` pins Rust 1.98, and rustup installs it on first use.
 Linux also needs GPUI's system libraries: `scripts/ci/install-linux-deps.sh`.
 The lint chain needs Node.js 22 or newer for its dependency-free CI classifier
 tests, Python 3.9+ for mocked macOS packaging/signing checks, plus two cargo tools:

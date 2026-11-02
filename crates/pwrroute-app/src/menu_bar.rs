@@ -1084,7 +1084,7 @@ mod tests {
 
     #[test]
     fn keys_read_as_the_bar_reads_them() {
-        let key = |text: &str| Key::of(&Keystroke::parse(text).expect("a keystroke"));
+        let key = |text: &'static str| Key::of(&Keystroke::parse(text).expect("a keystroke"));
         assert_eq!(key("f10"), Key::F10);
         assert_eq!(key("alt-f"), Key::Alt('f'));
         assert_eq!(key("alt-f4"), Key::Chord);
@@ -1097,7 +1097,8 @@ mod tests {
 
     #[test]
     fn shortcuts_read_in_windows_words() {
-        let label = |text: &str| shortcut_label(&Keystroke::parse(text).expect("a keystroke"));
+        let label =
+            |text: &'static str| shortcut_label(&Keystroke::parse(text).expect("a keystroke"));
         assert_eq!(label("ctrl-w"), "Ctrl+W");
         assert_eq!(label("ctrl-,"), "Ctrl+,");
         assert_eq!(label("ctrl-shift-n"), "Ctrl+Shift+N");

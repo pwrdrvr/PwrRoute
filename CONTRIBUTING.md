@@ -17,7 +17,7 @@ decides how screens look and behave.
 
 ## Development setup
 
-PwrRoute is a Cargo workspace. `rust-toolchain.toml` pins Rust 1.97, and rustup
+PwrRoute is a Cargo workspace. `rust-toolchain.toml` pins Rust 1.98, and rustup
 installs it on first use. The lint chain needs cargo-deny, cargo-about,
 Node.js 22 or newer for the dependency-free CI classifier tests, and
 Python 3.9 or newer for the mocked macOS packaging checks.

@@ -25,10 +25,10 @@ use crate::theme::px;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Font, HighlightStyle,
-    Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, LineFragment, ListAlignment,
-    ListOffset, ListState, MouseButton, MouseDownEvent, ParentElement as _, Render,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
-    Window, WindowHandle, deferred, div, list,
+    Hsla, IndentAdjustment, InteractiveElement as _, IntoElement, KeyDownEvent, LineFragment,
+    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, ParentElement as _, Render,
+    ScrollEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText, Window,
+    WindowHandle, deferred, div, list,
 };
 
 use crate::aux_window::{self, Frame};
@@ -763,7 +763,7 @@ impl LogsWindow {
     /// The list scrolled first (its handler runs before this one); this
     /// pauses when that left the end, resumes when it reached it, and moves
     /// unwrapped text sideways.
-    fn scrolled(&mut self, event: &ScrollWheelEvent, cx: &mut Context<'_, Self>) {
+    fn scrolled(&mut self, event: &ScrollEvent, cx: &mut Context<'_, Self>) {
         let delta = event.delta.pixel_delta(px(ROW_HEIGHT));
         let (dx, dy) = (theme::css(delta.x), theme::css(delta.y));
         if !self.wrap && dx != 0.0 {
@@ -815,9 +815,10 @@ impl LogsWindow {
             .line_wrapper(Self::mono_font(), px(TEXT_SIZE));
         let fragments = [LineFragment::text(raw)];
         let mut starts = vec![0];
+        // The rows draw their own hanging indent, so the wrapper adds none.
         starts.extend(
             wrapper
-                .wrap_line(&fragments, px(width))
+                .wrap_line(&fragments, px(width), IndentAdjustment::NoIndent)
                 .map(|boundary| boundary.ix),
         );
         starts.push(raw.len());
@@ -1186,7 +1187,7 @@ impl LogsWindow {
                 div()
                     .id("logs-viewport")
                     .size_full()
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                    .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                         this.scrolled(event, cx);
                     }))
                     .child(rows),
@@ -2018,7 +2019,7 @@ mod tests {
             .expect("line 1's text")
             .origin
             .x;
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: row.center(),
             delta: ScrollDelta::Pixels(point(px(-120.0), px(0.0))),
             ..Default::default()
@@ -2034,7 +2035,7 @@ mod tests {
         let gutter = cx.debug_bounds("log-number-1").expect("line 1's number");
         assert!(gutter.origin.x < after + px(120.0));
         // It stops at the longest line's end.
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: row.center(),
             delta: ScrollDelta::Pixels(point(px(-100_000.0), px(0.0))),
             ..Default::default()
@@ -2294,7 +2295,7 @@ mod tests {
         click(cx, LIVE_ID);
         assert!(!view.read_with(cx, |logs, _| logs.live));
         let row = cx.debug_bounds("log-row-1").expect("line 1");
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: row.center(),
             delta: ScrollDelta::Pixels(point(px(0.0), px(-60.0))),
             ..Default::default()

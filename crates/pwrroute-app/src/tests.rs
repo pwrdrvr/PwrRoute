@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{
     Bounds, Entity, InputEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, Point, ScrollDelta,
-    ScrollWheelEvent, TestAppContext, VisualTestContext, point, px,
+    ScrollEvent, TestAppContext, VisualTestContext, point, px,
 };
 use pwrroute_engine::{Privacy, PrivacySetting, RouteTest, RulesFile, TestSource};
 use pwrroute_router::{
@@ -142,7 +142,7 @@ fn scroll_to(cx: &mut VisualTestContext, selector: &'static str) {
             return;
         }
         last = Some(bounds);
-        let event = ScrollWheelEvent {
+        let event = ScrollEvent {
             position: point(bounds.center().x, height / 2.0),
             delta: ScrollDelta::Pixels(point(px(0.0), -below)),
             ..Default::default()
@@ -174,7 +174,7 @@ fn click_within(cx: &mut VisualTestContext, pane: &'static str, selector: &'stat
             click(cx, selector);
             return;
         };
-        let event = ScrollWheelEvent {
+        let event = ScrollEvent {
             position: area.center(),
             delta: ScrollDelta::Pixels(point(px(0.0), delta)),
             ..Default::default()
@@ -4285,7 +4285,7 @@ fn a_scroll_lets_go_of_the_hover(cx: &mut TestAppContext) {
     hover(cx, "overview-row-1");
     assert!(view.read_with(cx, |app, _| app.overview.hovered.is_some()));
     let row = cx.debug_bounds("overview-row-1").expect("rule 2's row");
-    let event = ScrollWheelEvent {
+    let event = ScrollEvent {
         position: row.center(),
         delta: ScrollDelta::Pixels(point(px(0.0), px(-40.0))),
         ..Default::default()
