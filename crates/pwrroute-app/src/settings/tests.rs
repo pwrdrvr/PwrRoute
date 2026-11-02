@@ -547,6 +547,51 @@ fn experimental_focus_yield_switch_is_off_and_can_be_toggled(cx: &mut TestAppCon
     assert!(visible(cx, Pane::Experimental.pane_id()));
 }
 
+/// The link helper row asks for the helper when it is off and for the app
+/// when it is on, and asks nothing while macOS has the question or in a
+/// build without the helper.
+#[gpui_kit::test]
+fn experimental_link_helper_row_asks_for_the_side_it_is_not_on(cx: &mut TestAppContext) {
+    use super::model::{LinkHelperCard, LinkHelperState};
+    let (view, cx, requests) = settings(cx, |_| {});
+    click(cx, Pane::Experimental.nav_id());
+    assert!(visible(cx, experimental::LINK_HELPER_ID));
+    let set = |cx: &mut VisualTestContext, state: LinkHelperState, waiting: bool| {
+        view.update(cx, |view, cx| {
+            view.model.experimental.link_helper = Some(LinkHelperCard {
+                state,
+                waiting,
+                note: None,
+            });
+            cx.notify();
+        });
+        draw(cx);
+    };
+
+    click(cx, experimental::LINK_HELPER_ID);
+    set(cx, LinkHelperState::Off, true);
+    click(cx, experimental::LINK_HELPER_ID);
+    set(cx, LinkHelperState::On, false);
+    click(cx, experimental::LINK_HELPER_ID);
+    set(cx, LinkHelperState::Unavailable("no helper".into()), false);
+    click(cx, experimental::LINK_HELPER_ID);
+    assert_eq!(
+        *requests.borrow(),
+        [
+            SettingsRequest::UseLinkHelper(true),
+            SettingsRequest::UseLinkHelper(false),
+        ]
+    );
+
+    // Off macOS there is no row.
+    view.update(cx, |view, cx| {
+        view.model.experimental.link_helper = None;
+        cx.notify();
+    });
+    draw(cx);
+    assert!(!visible(cx, experimental::LINK_HELPER_ID));
+}
+
 #[gpui_kit::test]
 fn the_diagnostics_pane_copies_the_report_and_opens_the_data_folder(cx: &mut TestAppContext) {
     let (view, cx, requests) = settings(cx, |_| {});

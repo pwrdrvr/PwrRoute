@@ -100,7 +100,13 @@ the nav, General follows outside the groups, Browsers opens first.
   empty state. `system_host` builds its model and saves
   `experimental.yieldBrowserFocus` through the store; its shared atomic
   updates the launcher's next hand-off. Diagnostics still includes its value
-  in copied reports.
+  in copied reports. Its macOS-only "Windowless link helper" row
+  (`LinkHelperCard`) is the OS's answer, never `settings.json`: the
+  registrar fills it (`default_browser::helper_card`, kept current like
+  Browsers' card), its button sends `UseLinkHelper(true)` while off and
+  `UseLinkHelper(false)` ("Stop using") while on, waits while macOS has
+  the question, and is inert, with the reason, in a build without the
+  helper. Its copy is not in the design yet.
 - **Privacy (`privacy.rs`, `privacy_host.rs`).** The view keeps the two
   number fields (applied on Return, clamped to `COUNT_RANGE` /
   `HOURS_RANGE`) and the open sheet; Full URLs and the journal's Clear now

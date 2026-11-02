@@ -622,6 +622,31 @@ pub enum UpdateState {
 pub struct Experimental {
     /// macOS only; absent on platforms without this experiment.
     pub yield_browser_focus: Option<bool>,
+    /// macOS only: whether the windowless link helper is the default
+    /// browser. Absent on platforms without it.
+    pub link_helper: Option<LinkHelperCard>,
+}
+
+/// Settings › Experimental's link helper row, from the OS's answer
+/// (`default_browser::Registrar::helper_card`), never from `settings.json`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkHelperCard {
+    pub state: LinkHelperState,
+    /// A request for or against the helper is out: the row waits.
+    pub waiting: bool,
+    /// What the request is waiting for, or that macOS kept what it had.
+    pub note: Option<SharedString>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkHelperState {
+    /// The helper handles `http` and `https`: links never bring PwrRoute
+    /// forward.
+    On,
+    /// The app handles them, or another browser does.
+    Off,
+    /// This copy cannot use it, and why.
+    Unavailable(SharedString),
 }
 
 // ---- Diagnostics ----------------------------------------------------------
@@ -873,6 +898,10 @@ pub enum SettingsRequest {
     SetDarkTheme(DarkTheme),
     SetLightTheme(LightTheme),
     SetYieldBrowserFocus(bool),
+    /// Experimental (macOS): ask for the link helper as the default browser
+    /// (`true`), or hand links back to the app (`false`). macOS asks the
+    /// reader to confirm.
+    UseLinkHelper(bool),
     SetAgentAccess(bool),
     SetSessionRole {
         session: SessionId,

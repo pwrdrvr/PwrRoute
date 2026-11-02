@@ -2,12 +2,18 @@
 
 `pwrroute-links`, the macOS link helper: a windowless (`LSUIElement`) app
 nested at `PwrRoute.app/Contents/Helpers/PwrRoute.app` (bundle id
-`com.pwrdrvr.pwrroute.links`) that is the `http`/`https` handler once
-PwrRoute is the default. LaunchServices activates whichever app it hands a
-link to; the GPUI app is a regular app while a window is open, so as the
-handler it brought its window over the reader's app on every link. The
-helper takes that activation instead and forwards the link to the running
-router.
+`com.pwrdrvr.pwrroute.links`) that can be the `http`/`https` handler in
+the app's place. LaunchServices activates whichever app it hands a link to;
+the GPUI app is a regular app while a window is open, so as the handler it
+brings its window over the reader's app on every link. The helper takes
+that activation instead and forwards the link to the running router.
+
+- **Opt-in.** Every bundle carries it, but "Make default browser" asks for
+  the app; only Settings › Experimental's "Use the link helper"
+  (`default_browser::request_link_helper`) makes the helper the handler, and
+  its "Stop using" gives links back to the app. The app starts the helper
+  at launch only while it is the handler. A helper left running after Stop
+  using gets no links and idles until it exits (update, Trash) or logout.
 
 - **Small on purpose.** No GPUI, no engine: `forward.rs` is plain Rust over
   two traits (`Router`, `Apps`) and is tested on every OS; `macos.rs` is the

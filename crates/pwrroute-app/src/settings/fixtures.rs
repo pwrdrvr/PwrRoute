@@ -25,6 +25,11 @@ pub fn model() -> SettingsModel {
         updates: updates(),
         experimental: super::model::Experimental {
             yield_browser_focus: Some(false),
+            link_helper: Some(super::model::LinkHelperCard {
+                state: super::model::LinkHelperState::Off,
+                waiting: false,
+                note: None,
+            }),
         },
         diagnostics: diagnostics(),
         about: about(),

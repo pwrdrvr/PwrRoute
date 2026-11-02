@@ -57,6 +57,7 @@ pub fn experimental(cx: &App) -> Experimental {
             settings_store::store(cx)
                 .is_some_and(|store| store.read(cx).settings().experimental.yield_browser_focus)
         }),
+        link_helper: crate::default_browser::helper_card(cx),
     }
 }
 

@@ -5,7 +5,10 @@
 //! The OS calls come in as [`Os`], so tests supply fakes and nothing here
 //! ever reaches `pwrroute_os` from a test. [`request`] runs only from a
 //! click (Settings, first run, the tray), or the explicit `--make-default`
-//! startup flag. The OS has the last word (a consent prompt on macOS, none
+//! startup flag, and asks for the app. [`request_link_helper`] runs only
+//! from Settings › Experimental and asks for the macOS link helper (or the
+//! app back from it); [`Registrar::link_helper`] is the OS's answer to
+//! which, nothing saved. The OS has the last word (a consent prompt on macOS, none
 //! when another PwrRoute copy held the default, Settings › Default apps on
 //! Windows), so the answer is read back rather
 //! than assumed: on every
@@ -29,7 +32,7 @@ use gpui_kit::{App, AppContext as _, Context, Div, Entity, Global, SharedString,
 use pwrroute_browsers::Catalog;
 use pwrroute_os::{DefaultRequest, DefaultStatus};
 
-use crate::settings::model::{DefaultBrowser, SettingsRequest};
+use crate::settings::model::{DefaultBrowser, LinkHelperCard, LinkHelperState, SettingsRequest};
 use crate::theme;
 use crate::widgets::status_chip;
 
@@ -56,6 +59,10 @@ pub const RECHECK_EVERY: Duration = Duration::from_secs(60);
 /// A read of the OS's default browser this slow is logged: it runs on the
 /// main thread, which a link activating the window waits on.
 const SLOW_READ: Duration = Duration::from_millis(50);
+
+/// Why Settings › Experimental cannot offer the link helper.
+pub const NO_HELPER: &str = "This build has no link helper. Release builds and \
+     `cargo xtask bundle` include it.";
 
 /// Who the OS hands web links to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,12 +91,9 @@ impl DefaultState {
             return Self::PwrRoute;
         }
         // Windows can have the two schemes on different apps ("1 of 2
-        // done"); name the one that is not PwrRoute yet.
-        let ours = |id: &String| {
-            id.eq_ignore_ascii_case(pwrroute_os::BUNDLE_ID)
-                || id.eq_ignore_ascii_case(pwrroute_os::PROG_ID)
-                || id.eq_ignore_ascii_case(pwrroute_os::DESKTOP_ID)
-        };
+        // done"); name the one that is not PwrRoute yet. Either macOS id
+        // (the app's, the link helper's) is PwrRoute.
+        let ours = |id: &String| pwrroute_os::is_pwrroute_handler(id);
         match [&status.http, &status.https]
             .into_iter()
             .flatten()
@@ -183,6 +187,14 @@ pub struct Os {
     pub status: Rc<dyn Fn() -> Option<DefaultStatus>>,
     /// `pwrroute_os::set_default_browser`. Only [`request`] calls it.
     pub set_default: Rc<dyn Fn() -> anyhow::Result<DefaultRequest>>,
+    /// macOS: `pwrroute_os::set_default_handler` with the link helper
+    /// (`true`) or the app (`false`). Only [`request_link_helper`] calls it.
+    pub set_link_helper: Rc<dyn Fn(bool) -> anyhow::Result<DefaultRequest>>,
+    /// `pwrroute_os::link_helper_bundled`, read once at [`install`].
+    pub link_helper_bundled: Rc<dyn Fn() -> bool>,
+    /// `pwrroute_os::start_link_helper`: called when the helper becomes the
+    /// default, so the next link does not wait for it to launch.
+    pub start_link_helper: Rc<dyn Fn()>,
     /// `pwrroute_os::open_default_apps_settings`.
     pub open_settings: Rc<dyn Fn() -> anyhow::Result<()>>,
     /// `pwrroute_os::app_display_name`.
@@ -195,6 +207,15 @@ impl Os {
         Self {
             status: Rc::new(|| pwrroute_os::default_browser_status().ok()),
             set_default: Rc::new(pwrroute_os::set_default_browser),
+            set_link_helper: Rc::new(|on| {
+                pwrroute_os::set_default_handler(if on {
+                    pwrroute_os::Handler::LinkHelper
+                } else {
+                    pwrroute_os::Handler::App
+                })
+            }),
+            link_helper_bundled: Rc::new(pwrroute_os::link_helper_bundled),
+            start_link_helper: Rc::new(|| pwrroute_os::start_link_helper(true)),
             open_settings: Rc::new(pwrroute_os::open_default_apps_settings),
             app_name: Rc::new(pwrroute_os::app_display_name),
         }
@@ -208,30 +229,58 @@ impl Os {
         requests: Rc<std::cell::Cell<usize>>,
     ) -> Self {
         let read = status.clone();
+        let helper_requests = requests.clone();
         Self {
             status: Rc::new(move || read.borrow().clone()),
             set_default: Rc::new(move || {
                 requests.set(requests.get() + 1);
                 Ok(DefaultRequest::Prompted)
             }),
+            set_link_helper: Rc::new(move |_| {
+                helper_requests.set(helper_requests.get() + 1);
+                Ok(DefaultRequest::Prompted)
+            }),
+            link_helper_bundled: Rc::new(|| true),
+            start_link_helper: Rc::new(|| {}),
             open_settings: Rc::new(|| Ok(())),
             app_name: Rc::new(|_| None),
         }
     }
 
-    /// The OS's answer, read back and named.
-    fn read(&self) -> DefaultState {
-        DefaultState::from_status((self.status)().as_ref(), &*self.app_name)
+    /// The OS's answer, read back and named, and whether the link helper
+    /// is the default.
+    fn read(&self) -> (DefaultState, bool) {
+        let status = (self.status)();
+        (
+            DefaultState::from_status(status.as_ref(), &*self.app_name),
+            status.is_some_and(|status| status.link_helper),
+        )
     }
+}
+
+/// What the request that is out asks the OS for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Asked {
+    /// PwrRoute as the default, through either id: "Make default browser".
+    Default,
+    /// The link helper as the default (`true`), or the app instead of it
+    /// (`false`): Settings › Experimental.
+    LinkHelper(bool),
 }
 
 /// The glue's state: the last answer, and whether a request is out.
 pub struct Registrar {
     os: Os,
     pub state: DefaultState,
+    /// macOS: PwrRoute is the default through its windowless link helper.
+    pub link_helper: bool,
+    /// This copy carries the link helper (a bundle built with it).
+    helper_bundled: bool,
     /// A request went out and the OS has not answered since: the window
     /// says it is waiting.
     pub pending: Option<DefaultRequest>,
+    /// What that request, or the last one, asked for.
+    asked: Asked,
     /// The last request ended with the same browser as before: the OS said
     /// no, or the reader did. Shown once, until the next change.
     pub kept: bool,
@@ -246,11 +295,15 @@ pub struct Registrar {
 
 impl Registrar {
     fn new(os: Os) -> Self {
-        let state = os.read();
+        let (state, link_helper) = os.read();
+        let helper_bundled = (os.link_helper_bundled)();
         Self {
             os,
             state,
+            link_helper,
+            helper_bundled,
             pending: None,
+            asked: Asked::Default,
             kept: false,
             generation: 0,
             grace: None,
@@ -262,13 +315,21 @@ impl Registrar {
         self.pending.is_some()
     }
 
+    /// The OS now says what the last request asked for.
+    fn answered(&self) -> bool {
+        match self.asked {
+            Asked::Default => self.state.is_default(),
+            Asked::LinkHelper(on) => self.state.is_default() && self.link_helper == on,
+        }
+    }
+
     /// Re-reads the OS. `settled` says the OS had its chance to answer (the
     /// poll ran out, or ran [`ACTIVATION_GRACE`] past the window's return):
     /// an unchanged answer then means the request was refused, and the
     /// window stops waiting.
     fn refresh(&mut self, settled: bool, cx: &mut Context<'_, Self>) {
         let started = std::time::Instant::now();
-        let state = self.os.read();
+        let (state, link_helper) = self.os.read();
         let took = started.elapsed();
         if took >= SLOW_READ {
             log::warn!(
@@ -276,15 +337,21 @@ impl Registrar {
                 took.as_millis()
             );
         }
-        if state != self.state {
+        if (&state, link_helper) != (&self.state, self.link_helper) {
+            if link_helper && !self.link_helper {
+                // Have it up before the next link rather than launching it
+                // for that link.
+                (self.os.start_link_helper)();
+            }
             self.state = state;
+            self.link_helper = link_helper;
             self.pending = None;
             self.grace = None;
             self.kept = false;
             cx.notify();
         } else if settled && self.pending.take().is_some() {
             self.grace = None;
-            self.kept = !self.state.is_default();
+            self.kept = !self.answered();
             cx.notify();
         }
     }
@@ -312,9 +379,48 @@ impl Registrar {
         self.refresh(last || grace_over, cx);
     }
 
+    /// Settings › Experimental's link helper row for this state: the OS's
+    /// answer, the request out for it, or what macOS kept.
+    pub fn helper_card(&self) -> LinkHelperCard {
+        let state = if !self.helper_bundled {
+            LinkHelperState::Unavailable(NO_HELPER.into())
+        } else if self.link_helper {
+            LinkHelperState::On
+        } else {
+            LinkHelperState::Off
+        };
+        let ours = matches!(self.asked, Asked::LinkHelper(_));
+        let note = match (&self.pending, self.kept) {
+            (Some(request), _) if ours => Some(waiting_note(*request).into()),
+            (None, true) if ours => Some(
+                format!(
+                    "macOS kept {} as the default browser.",
+                    if self.link_helper {
+                        "the link helper".to_owned()
+                    } else if self.state.is_default() {
+                        "PwrRoute".to_owned()
+                    } else {
+                        self.state.current_name()
+                    }
+                )
+                .into(),
+            ),
+            _ => None,
+        };
+        LinkHelperCard {
+            state,
+            waiting: self.waiting(),
+            note,
+        }
+    }
+
     /// The Settings › Browsers card for this state.
     pub fn card(&self) -> DefaultBrowser {
-        let note = match (&self.pending, self.kept, &self.state) {
+        // A request for or against the link helper is Experimental's to
+        // describe; the card goes on showing who is the default.
+        let pending = self.pending.filter(|_| self.asked == Asked::Default);
+        let kept = self.kept && self.asked == Asked::Default;
+        let note = match (&pending, kept, &self.state) {
             (Some(request), _, _) => Some(waiting_note(*request).into()),
             (None, true, DefaultState::Other(name)) => {
                 Some(format!("{name} is still the default.").into())
@@ -378,7 +484,11 @@ pub fn install(os: Os, cx: &mut App) -> Entity<Registrar> {
         let state = registrar.read(cx).state.clone();
         SNAPSHOT.with(|snapshot| *snapshot.borrow_mut() = state);
         let card = registrar.read(cx).card();
-        crate::settings::update(cx, move |model| model.browsers.default = card);
+        let helper = helper_card(cx);
+        crate::settings::update(cx, move |model| {
+            model.browsers.default = card;
+            model.experimental.link_helper = helper;
+        });
         // The strip chip reads the snapshot: redraw it.
         cx.refresh_windows();
     })
@@ -417,6 +527,26 @@ pub fn card(cx: &App) -> DefaultBrowser {
         },
         |registrar| registrar.read(cx).card(),
     )
+}
+
+/// Settings › Experimental's link helper row: macOS only, `None` elsewhere.
+pub fn helper_card(cx: &App) -> Option<LinkHelperCard> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    Some(registrar(cx).map_or_else(
+        || LinkHelperCard {
+            state: LinkHelperState::Off,
+            waiting: false,
+            note: None,
+        },
+        |registrar| registrar.read(cx).helper_card(),
+    ))
+}
+
+/// Whether the link helper is the default browser now, as last read.
+pub fn link_helper_is_default(cx: &App) -> bool {
+    registrar(cx).is_some_and(|registrar| registrar.read(cx).link_helper)
 }
 
 /// Re-reads the OS now. `settled`: see [`Registrar::refresh`].
@@ -484,13 +614,34 @@ pub fn follow_while(keep: impl Fn(&mut App) -> bool + 'static, cx: &mut App) {
 /// answer settles the other way ([`ACTIVATION_GRACE`] after the window came to the front, or a
 /// newer request took over), or the time is up, which settles it too.
 pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
+    ask(Asked::Default, cx)
+}
+
+/// Settings › Experimental's explicit action: asks the OS to make the
+/// windowless link helper the default browser (`on`), or the app again
+/// (`!on`), then reads the answer back as [`request`] does. The only
+/// caller of `set_default_handler` in the app: wire it to a click only.
+/// Refused when this copy has no helper.
+pub fn request_link_helper(on: bool, cx: &mut App) -> anyhow::Result<DefaultRequest> {
+    ask(Asked::LinkHelper(on), cx)
+}
+
+fn ask(asked: Asked, cx: &mut App) -> anyhow::Result<DefaultRequest> {
     let Some(registrar) = registrar(cx) else {
         anyhow::bail!("default-browser registration is not installed");
     };
-    let os = registrar.read(cx).os.clone();
-    let request = (os.set_default)()?;
+    let (os, bundled) = {
+        let registrar = registrar.read(cx);
+        (registrar.os.clone(), registrar.helper_bundled)
+    };
+    let request = match asked {
+        Asked::Default => (os.set_default)()?,
+        Asked::LinkHelper(_) if !bundled => anyhow::bail!(NO_HELPER),
+        Asked::LinkHelper(on) => (os.set_link_helper)(on)?,
+    };
     let generation = registrar.update(cx, |registrar, cx| {
         registrar.pending = Some(request);
+        registrar.asked = asked;
         registrar.kept = false;
         registrar.grace = None;
         registrar.generation += 1;
@@ -508,7 +659,7 @@ pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
                 }
                 registrar.update(cx, |registrar, cx| registrar.poll(tick == ticks, cx));
                 let registrar = registrar.read(cx);
-                registrar.state.is_default() || !registrar.waiting()
+                registrar.answered() || !registrar.waiting()
             });
             if done {
                 break;
@@ -555,6 +706,17 @@ pub fn handle_settings_request(asked: &SettingsRequest, cx: &mut App) -> bool {
                 }
                 Err(error) => {
                     log::warn!("could not ask for the default browser: {error}");
+                }
+            }
+            true
+        }
+        SettingsRequest::UseLinkHelper(on) => {
+            match request_link_helper(*on, cx) {
+                Ok(outcome) => {
+                    log::info!("asked the OS for the link helper ({on}): {outcome:?}");
+                }
+                Err(error) => {
+                    log::warn!("could not ask for the link helper ({on}): {error}");
                 }
             }
             true
@@ -798,6 +960,160 @@ mod tests {
         assert_eq!(card(cx).state, DefaultState::PwrRoute);
         assert_eq!(card(cx).note, None);
         assert!(cx.update(|cx| state(cx).is_default()));
+    }
+
+    /// The OS's answer with the link helper on both schemes.
+    fn helper_status() -> DefaultStatus {
+        DefaultStatus {
+            is_default: true,
+            link_helper: true,
+            http: Some(pwrroute_os::LINK_HELPER_ID.to_owned()),
+            https: Some(pwrroute_os::LINK_HELPER_ID.to_owned()),
+            other_copy: None,
+        }
+    }
+
+    /// The app's id on both schemes.
+    fn app_status() -> DefaultStatus {
+        status(Some(pwrroute_os::BUNDLE_ID), Some(pwrroute_os::BUNDLE_ID))
+    }
+
+    /// The OS fake with its helper calls counted: requests, each with the
+    /// side it asked for, and starts.
+    fn helper_os(
+        os_status: &Rc<RefCell<Option<DefaultStatus>>>,
+        asked: &Rc<RefCell<Vec<bool>>>,
+        starts: &Rc<Cell<usize>>,
+        bundled: bool,
+    ) -> Os {
+        let (asked, starts) = (asked.clone(), starts.clone());
+        Os {
+            set_link_helper: Rc::new(move |on| {
+                asked.borrow_mut().push(on);
+                Ok(DefaultRequest::Prompted)
+            }),
+            start_link_helper: Rc::new(move || starts.set(starts.get() + 1)),
+            link_helper_bundled: Rc::new(move || bundled),
+            ..Os::fake(os_status.clone(), Rc::new(Cell::new(0)))
+        }
+    }
+
+    #[test]
+    fn the_link_helper_is_pwrroute_on_either_scheme() {
+        let none: &AppName = &|_| None;
+        assert_eq!(
+            DefaultState::from_status(Some(&helper_status()), none),
+            DefaultState::PwrRoute
+        );
+        // Moving over, and another browser took https: that one is named,
+        // never the helper's id.
+        let split = DefaultStatus {
+            is_default: false,
+            link_helper: false,
+            https: Some("com.google.Chrome".to_owned()),
+            ..helper_status()
+        };
+        assert_eq!(
+            DefaultState::from_status(Some(&split), none),
+            DefaultState::Other("Google Chrome".into())
+        );
+    }
+
+    /// "Use the link helper" while the app is already the default: the
+    /// request waits for the helper itself, not just for PwrRoute, starts
+    /// the helper once macOS reports it, and the Browsers card never
+    /// describes this request.
+    #[gpui_kit::test]
+    fn using_the_link_helper_waits_for_the_helper_and_starts_it(cx: &mut TestAppContext) {
+        let os_status = Rc::new(RefCell::new(Some(app_status())));
+        let (asked, starts) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(0)));
+        let registrar = cx.update(|cx| install(helper_os(&os_status, &asked, &starts, true), cx));
+        let helper = |cx: &mut TestAppContext| {
+            registrar.read_with(cx, |registrar, _| registrar.helper_card())
+        };
+        assert_eq!(helper(cx).state, LinkHelperState::Off);
+        assert!(!cx.update(|cx| link_helper_is_default(cx)));
+
+        cx.update(|cx| request_link_helper(true, cx).unwrap());
+        assert_eq!(*asked.borrow(), [true]);
+        assert!(helper(cx).waiting);
+        assert!(
+            helper(cx)
+                .note
+                .is_some_and(|note| note.starts_with("Waiting for macOS"))
+        );
+        assert_eq!(cx.update(|cx| super::card(cx)).note, None);
+
+        // A read while the app is still the default is no answer yet.
+        cx.update(|cx| refresh(false, cx));
+        assert!(helper(cx).waiting);
+        assert_eq!(starts.get(), 0);
+
+        *os_status.borrow_mut() = Some(helper_status());
+        cx.update(|cx| refresh(false, cx));
+        let card = helper(cx);
+        assert_eq!(card.state, LinkHelperState::On);
+        assert!(!card.waiting && card.note.is_none());
+        assert_eq!(
+            starts.get(),
+            1,
+            "the helper is started once it is the default"
+        );
+        assert!(cx.update(|cx| link_helper_is_default(cx)));
+        assert!(cx.update(|cx| state(cx).is_default()));
+
+        // Reading the same answer again starts nothing more.
+        cx.update(|cx| refresh(false, cx));
+        assert_eq!(starts.get(), 1);
+    }
+
+    /// "Stop using" asks for the app; a refusal is noted on the row.
+    #[gpui_kit::test]
+    fn stop_using_hands_links_back_to_the_app(cx: &mut TestAppContext) {
+        let os_status = Rc::new(RefCell::new(Some(helper_status())));
+        let (asked, starts) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(0)));
+        let registrar = cx.update(|cx| install(helper_os(&os_status, &asked, &starts, true), cx));
+        let helper = |cx: &mut TestAppContext| {
+            registrar.read_with(cx, |registrar, _| registrar.helper_card())
+        };
+        assert_eq!(helper(cx).state, LinkHelperState::On);
+
+        cx.update(|cx| request_link_helper(false, cx).unwrap());
+        assert_eq!(*asked.borrow(), [false]);
+        // The reader said no in macOS's dialog.
+        cx.update(|cx| refresh(true, cx));
+        let card = helper(cx);
+        assert_eq!(card.state, LinkHelperState::On);
+        assert!(!card.waiting);
+        assert_eq!(
+            card.note.as_deref(),
+            Some("macOS kept the link helper as the default browser.")
+        );
+        assert_eq!(cx.update(|cx| super::card(cx)).note, None);
+
+        cx.update(|cx| request_link_helper(false, cx).unwrap());
+        *os_status.borrow_mut() = Some(app_status());
+        cx.update(|cx| refresh(false, cx));
+        let card = helper(cx);
+        assert_eq!(card.state, LinkHelperState::Off);
+        assert!(!card.waiting && card.note.is_none());
+        assert!(cx.update(|cx| state(cx).is_default()));
+        assert_eq!(starts.get(), 0);
+    }
+
+    /// A copy without the helper (a bare dev binary) says so and never asks.
+    #[gpui_kit::test]
+    fn a_build_without_the_helper_is_never_asked_for_it(cx: &mut TestAppContext) {
+        let os_status = Rc::new(RefCell::new(Some(app_status())));
+        let (asked, starts) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(0)));
+        let registrar = cx.update(|cx| install(helper_os(&os_status, &asked, &starts, false), cx));
+        assert_eq!(
+            registrar.read_with(cx, |registrar, _| registrar.helper_card().state),
+            LinkHelperState::Unavailable(NO_HELPER.into())
+        );
+        assert!(cx.update(|cx| request_link_helper(true, cx)).is_err());
+        assert!(asked.borrow().is_empty());
+        assert!(registrar.read_with(cx, |registrar, _| !registrar.waiting()));
     }
 
     /// No window, no request: the slow re-read alone notices another
