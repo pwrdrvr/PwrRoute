@@ -54,11 +54,8 @@ pub fn install(cx: &mut App) {
 /// link, or the browser cannot come forward.
 pub fn after_link(yield_to_browser: bool) {
     #[cfg(target_os = "macos")]
-    if crate::macos::restore_dock_icon()
-        && !yield_to_browser
-        && pwrroute_os::return_front_to_sender()
-    {
-        log::debug!(target: "pwrroute", "gave the front back to the app the link came from");
+    if crate::macos::restore_dock_icon() && !yield_to_browser {
+        pwrroute_os::return_front_to_sender();
     }
     #[cfg(not(target_os = "macos"))]
     let _ = yield_to_browser;
