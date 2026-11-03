@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.15.0 - 2026-11-03
+
+- Tray rules - Hover a recent link in the tray dropdown and choose + Rule to open its Add a rule sheet in Activity. Add a rule for the next link catches the next eligible link you click, holds it without opening a browser and opens the sheet automatically. The tray shows when it is waiting and offers Cancel; Send, Hold and Pause keep their current settings. Links from PwrRoute or agents and links whose privacy rules keep less than the full address are not caught.
+- Waiting links - The Add a rule sheet for a caught, held or otherwise unopened link offers Discard, Save and Save and open link. Discard leaves the link waiting in Activity, Save writes the rule only, and Save and open link also opens it in the chosen destination even when an earlier rule would normally take it.
+- Update feedback - Check for Updates… in the app menu now shows checking, download percentage and the result in a main-window notice; with no main window open it opens Settings › Updates instead. Result notices close after 8 seconds, while Update ready stays until Restart to update or Later. Downloaded updates also appear in the title strip and tray with a restart action. Later dismisses the notice for that release while keeping the restart offers available. Automatic and Settings checks stay quiet, and Reduce Motion stops the decorative progress animation.
+- Update performance - Settings › Updates no longer rebuilds or rereads the installation manifest on every download percentage change. The download notice still shows each progress update.
+
 ## v0.14.0 - 2026-11-02
 
 - macOS link handling - Receiving a link with every window closed no longer leaves PwrRoute in the Dock or Cmd-Tab, and reopen events accompanying a link keep the main window closed. With a window open, PwrRoute returns focus to the link's sending app before the browser handoff so its own window stays behind. Settings › Experimental's Yield focus to browsers keeps its existing handoff behavior when enabled.
