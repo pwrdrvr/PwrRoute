@@ -713,8 +713,11 @@ fn expiry_boundary_and_rejected_normalization_do_not_consume_next() {
         until: Some(deadline),
     };
     let mut slot = Some(Override::Sending(send));
+    // Keep the pre-expiry instant distinct on Windows SystemTime as well.
+    let before_deadline = deadline - Duration::from_micros(1);
+    assert!(before_deadline < deadline);
     assert!(matches!(
-        take_override_from(&mut slot, false, deadline - Duration::from_nanos(1)),
+        take_override_from(&mut slot, false, before_deadline),
         Some(Took::Sent(_, Sent::All))
     ));
     assert!(take_override_from(&mut slot, false, deadline).is_none());
