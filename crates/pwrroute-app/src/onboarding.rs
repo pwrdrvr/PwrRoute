@@ -824,6 +824,10 @@ pub fn open(cx: &mut App) {
     }
     let facts = Facts::probe(cx);
     let config = crate::router::config_in_charge();
+    prepare(facts, config, cx);
+}
+
+fn prepare(facts: Facts, config: Option<PathBuf>, cx: &mut App) {
     if config.is_none() && !crate::browser_scan::is_loading(cx) && crate::browser_scan::error(cx).is_none() {
         open_ready(facts, cx);
         return;
@@ -2384,4 +2388,37 @@ mod tests {
         assert_eq!(main_window_display(Some(gone), None, &connected), None);
         assert_eq!(main_window_display(None, None, &connected), None);
     }
+    #[gpui_kit::test]
+    fn initial_scan_shows_preparing_and_close_cancels_without_opening_or_saving_setup(cx: &mut TestAppContext) {
+        let (release, wait) = async_channel::bounded(1);
+        cx.update(|cx| {
+            crate::browser_scan::install(pwrroute_browsers::Env::fixture(pwrroute_browsers::Platform::current(), std::env::temp_dir()), cx);
+            crate::browser_scan::set_test_producer(cx, std::sync::Arc::new(move || {
+                let wait = wait.clone();
+                Box::pin(async move { wait.recv().await.unwrap() })
+            }));
+            install(cx);
+            let _ = crate::browser_scan::apps(cx);
+            let mut facts = facts();
+            facts.finicky = None;
+            facts.browsers.clear();
+            prepare(facts, None, cx);
+            assert!(cx.has_global::<Opening>());
+            assert!(!cx.has_global::<Open>());
+            assert!(crate::settings_store::store(cx).is_none());
+        });
+        cx.run_until_parked();
+        let window = cx.update(|cx| cx.global::<Opening>().window);
+        let _ = window.update(cx, |view, window, _| { assert!(view.failure.is_none()); window.remove_window(); });
+        cx.run_until_parked();
+        release.try_send(Ok(vec![])).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!cx.has_global::<Opening>());
+            assert!(!cx.has_global::<Open>());
+            assert!(cx.windows().is_empty());
+            assert!(crate::settings_store::store(cx).is_none());
+        });
+    }
+
 }
