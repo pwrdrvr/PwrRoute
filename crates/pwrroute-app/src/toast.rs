@@ -194,9 +194,12 @@ fn action(
         .into_any_element()
 }
 
-/// The update toast for the main window, when there is one.
-pub fn update_toast(cx: &App) -> Option<AnyElement> {
-    let toast = update_notice::toast(cx)?;
+/// The update toast for the main window, when there is one. With
+/// `no_offer` the lasting Update ready card stays down (the strip's chip
+/// still offers it); the live cards and the answers still show.
+pub fn update_toast(no_offer: bool, cx: &App) -> Option<AnyElement> {
+    let toast = update_notice::toast(cx)
+        .filter(|toast| !(no_offer && matches!(toast, Toast::Ready { .. })))?;
     let reduce_motion = cx.reduce_motion();
     let content = match toast {
         Toast::Checking => Card {

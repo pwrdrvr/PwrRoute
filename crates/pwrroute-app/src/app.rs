@@ -1574,9 +1574,8 @@ impl Render for PwrRoute {
             (Screen::TestLink, _) => test_link::pane(self, window, cx).into_any_element(),
             (Screen::Activity, _) => activity::pane(self, window, cx).into_any_element(),
         };
-        let rail = self
-            .editing()
-            .then(|| editor::rail(self, layout.stacked, window, cx));
+        let editing = self.editing();
+        let rail = editing.then(|| editor::rail(self, layout.stacked, window, cx));
         // Stacked, the rule being edited takes the list's place.
         let pane = (rail.is_none() || !layout.stacked).then_some(pane);
         // Activity's Add a rule sheet, over everything.
@@ -1612,15 +1611,26 @@ impl Render for PwrRoute {
                     .children(pane)
                     .children(rail),
             )
+            // The update toast (`toast.rs`), over the pane's lower right:
+            // left of the editor beside the list, so its Save and Discard
+            // stay clear. A stacked editor fills the pane, so there the
+            // lasting Update ready card gives way to the strip's chip.
+            .children(
+                crate::toast::update_toast(editing && layout.stacked, cx).map(|toast| {
+                    let right = if editing && !layout.stacked {
+                        editor::WIDTH + 16.0
+                    } else {
+                        16.0
+                    };
+                    div()
+                        .absolute()
+                        .right(theme::px(right))
+                        .bottom(theme::px(16.0))
+                        .child(toast)
+                }),
+            )
+            // Over the toast: a sheet is modal.
             .children(sheet)
-            // The update toast (`toast.rs`), over the pane's lower right.
-            .children(crate::toast::update_toast(cx).map(|toast| {
-                div()
-                    .absolute()
-                    .right(theme::px(16.0))
-                    .bottom(theme::px(16.0))
-                    .child(toast)
-            }))
     }
 }
 

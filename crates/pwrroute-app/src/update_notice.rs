@@ -69,8 +69,6 @@ pub struct Notices {
     /// Later on this release: its toast stays down. The tray row and the
     /// strip chip still offer it.
     dismissed: Option<Ready>,
-    /// Restart was pressed: the process is about to be replaced.
-    restarting: bool,
     /// The updater as of its last change, and the release ready then:
     /// what the surfaces draw from, so a frame never reads the disk
     /// (`updater::ready` reads the install's manifest).
@@ -116,10 +114,6 @@ impl Notices {
         }
     }
 
-    pub fn restarting(&mut self) {
-        self.restarting = true;
-    }
-
     /// What the toast shows for `state`, with `ready` the release Restart
     /// to update would install.
     pub fn toast(&self, state: &State, ready: Option<&Ready>) -> Option<Toast> {
@@ -142,7 +136,7 @@ impl Notices {
         let ready = ready.filter(|ready| self.dismissed.as_ref() != Some(*ready))?;
         Some(Toast::Ready {
             ready: ready.clone(),
-            restarting: self.restarting,
+            restarting: state.restarting,
         })
     }
 }
@@ -305,7 +299,18 @@ fn follow(cx: &mut App) {
         return;
     };
     let state = updater::state();
-    let ready = updater::ready();
+    // A download reports every percent: while one runs and nothing new is
+    // held, the ready release is the one already read (`updater::ready`
+    // reads the install's manifest).
+    let unchanged = {
+        let notices = entity.read(cx);
+        state.download.is_some() && state.held == notices.seen.held
+    };
+    let ready = if unchanged {
+        entity.read(cx).ready.clone()
+    } else {
+        updater::ready()
+    };
     entity.update(cx, |notices, cx| {
         if let Some(generation) = notices.follow(&state, ready.as_ref()) {
             count_down(generation, cx);
@@ -350,14 +355,9 @@ pub fn check_for_updates(cx: &mut App) {
     updater::check_in_background(updater::Trigger::Menu);
 }
 
-/// Restart to update, from the toast, the tray or the strip.
-pub fn restart(cx: &mut App) {
-    if let Some(entity) = notices(cx) {
-        entity.update(cx, |notices, cx| {
-            notices.restarting();
-            cx.notify();
-        });
-    }
+/// Restart to update, from the toast, the tray or the strip. The toast
+/// says "Restarting…" from the updater's state (`State::restarting`).
+pub fn restart(_: &mut App) {
     updater::restart_in_background();
 }
 
@@ -489,6 +489,16 @@ mod tests {
                 restarting: false
             })
         );
+        // Restart pressed: the card says so until the restart fails.
+        state.restarting = true;
+        assert!(matches!(
+            notices.toast(&state, Some(&ready)),
+            Some(Toast::Ready {
+                restarting: true,
+                ..
+            })
+        ));
+        state.restarting = false;
         notices.dismiss(Some(&ready));
         assert_eq!(notices.toast(&state, Some(&ready)), None);
         // A newer release comes back up.

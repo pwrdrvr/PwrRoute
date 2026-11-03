@@ -65,6 +65,8 @@ pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// One check at a time: a second "Check for Updates…" while the startup
 /// check is still downloading would only contend for Velopack's lock.
 static CHECKING: AtomicBool = AtomicBool::new(false);
+/// A restart to update is under way: a second press waits for it.
+static RESTARTING: AtomicBool = AtomicBool::new(false);
 
 /// What [`run_startup_hooks`] tells Velopack, apart from the hooks. Kept
 /// as data so a test can hold the policy without a Velopack install.
@@ -216,6 +218,9 @@ pub struct State {
     /// How many checks have finished this launch: a check asked for from
     /// the menu waits for the next one (`update_notice`).
     pub finished: u64,
+    /// Restart to update was pressed and has not failed: the process is
+    /// about to be replaced ([`restart_in_background`]).
+    pub restarting: bool,
 }
 
 /// A download in progress.
@@ -269,6 +274,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     held: None,
     download: None,
     finished: 0,
+    restarting: false,
 });
 
 /// The release channel as `settings.json` has it; [`set_selection`] keeps
@@ -467,16 +473,27 @@ pub fn restart_to_update() -> Result<(), String> {
 /// [`restart_to_update`] on a thread of its own: Velopack exits this
 /// process once the package is applied, so nothing waits on it. Settings,
 /// the tray, the strip and the update toast all restart through this.
+/// One restart at a time ([`State::restarting`]); a failed one clears
+/// it, so the surfaces offer Restart again.
 pub fn restart_in_background() {
+    if RESTARTING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    set_state(|state| state.restarting = true);
+    let failed = |error: String| {
+        log::warn!("updates: could not restart to update: {error}");
+        RESTARTING.store(false, Ordering::Release);
+        set_state(|state| state.restarting = false);
+    };
     let spawned = thread::Builder::new()
         .name("pwrroute-restart".to_owned())
-        .spawn(|| {
+        .spawn(move || {
             if let Err(error) = restart_to_update() {
-                log::warn!("updates: could not restart to update: {error}");
+                failed(error);
             }
         });
     if let Err(error) = spawned {
-        log::warn!("updates: could not restart to update: {error}");
+        failed(error.to_string());
     }
 }
 
