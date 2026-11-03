@@ -3513,7 +3513,7 @@ fn review_source_retry_cannot_outlive_undo_import(cx: &mut TestAppContext) {
             .config
             .as_ref()
             .map(|config| config.file.clone())),
-        Some(config)
+        Some(config.canonicalize().unwrap())
     );
 }
 
