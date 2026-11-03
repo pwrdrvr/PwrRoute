@@ -279,6 +279,108 @@ fn different_browsers_progress_but_same_browser_profiles_and_fallback_wait() {
 }
 
 #[test]
+fn ipc_open_backpressures_past_the_reply_timeout_without_duplicate_admission() {
+    use crate::instance::{self, Claim, Client, Endpoint};
+
+    let dir = tempfile::Builder::new().prefix("pr").tempdir().unwrap();
+    let endpoint = Endpoint::new(dir.path().join("r"));
+    let Claim::Primary(primary) = instance::claim(&endpoint).unwrap() else {
+        panic!("fresh endpoint");
+    };
+    let (entered, started) = mpsc::channel();
+    let gate = Gate::default();
+    let router = Router::spawn(
+        Options::default(),
+        None,
+        BlockLaunch { entered, gate: gate.clone() },
+    ).unwrap();
+    let _release = Release(gate.clone());
+    let handle = router.handle();
+    for i in 0..super::super::pipeline::CAPACITY {
+        handle.dispatch(link(&format!("https://example.com/full/{i}"))).unwrap();
+    }
+    started.recv_timeout(DEADLINE).unwrap();
+    let (opening, opened) = mpsc::channel();
+    let (activate, activated) = mpsc::channel();
+    let h = handle.clone();
+    let server = primary.serve(move |request| {
+        if matches!(&request, Request::Open { .. }) {
+            opening.send(()).unwrap();
+        }
+        h.answer(request, || { activate.send(()).unwrap(); })
+    }).unwrap();
+    let client = Client::new(endpoint);
+    let c = client.clone();
+    let response = background(move || c.send(&Request::Open {
+        links: vec![link("https://example.com/forwarded/one"), link("https://example.com/forwarded/two")],
+    }, DEADLINE));
+    opened.recv_timeout(DEADLINE).unwrap();
+    // The launch gate holds every permit beyond the former two-second
+    // reply deadline. A timeout here would make app startup route locally
+    // while this same request remained queued in the primary.
+    assert!(matches!(response.recv_timeout(Duration::from_secs(4)), Err(mpsc::RecvTimeoutError::Timeout)));
+    assert!(client.send(&Request::Ping, DEADLINE).unwrap().ok);
+    assert!(client.send(&Request::Activate, DEADLINE).unwrap().ok);
+    activated.recv_timeout(DEADLINE).unwrap();
+    handle.status().unwrap();
+    gate.open();
+    let response = response.recv_timeout(DEADLINE).unwrap().unwrap();
+    assert!(response.ok);
+    assert_eq!(response.dispatched.len(), 2);
+    drop(server);
+    drop(router);
+    assert_eq!(handle.recent().len(), super::super::pipeline::CAPACITY + 2);
+    assert_eq!(handle.recent().iter().filter(|r| r.forwarded).count(), 2);
+    assert_eq!(started.try_iter().count() + 1, super::super::pipeline::CAPACITY + 2);
+}
+
+#[test]
+fn ipc_shutdown_reports_the_accepted_prefix_before_the_unadmitted_suffix() {
+    use crate::instance::{self, Claim, Client, Endpoint};
+
+    let dir = tempfile::Builder::new().prefix("pr").tempdir().unwrap();
+    let endpoint = Endpoint::new(dir.path().join("r"));
+    let Claim::Primary(primary) = instance::claim(&endpoint).unwrap() else {
+        panic!("fresh endpoint");
+    };
+    let (entered, started) = mpsc::channel();
+    let (received, receipts) = mpsc::channel();
+    let gate = Gate::default();
+    let router = Router::spawn(
+        Options { on_received: Some(Arc::new(move |id, _| { received.send(id).unwrap(); })), ..Options::default() },
+        None,
+        BlockLaunch { entered, gate: gate.clone() },
+    ).unwrap();
+    let _release = Release(gate.clone());
+    let handle = router.handle();
+    for i in 0..super::super::pipeline::CAPACITY - 1 {
+        let id = handle.dispatch(link(&format!("https://example.com/full/{i}"))).unwrap();
+        assert_eq!(receipts.recv_timeout(DEADLINE).unwrap(), id);
+    }
+    started.recv_timeout(DEADLINE).unwrap();
+    let h = handle.clone();
+    let server = primary.serve(move |request| h.answer(request, || {})).unwrap();
+    let client = Client::new(endpoint);
+    let response = background(move || client.send(&Request::Open {
+        links: vec![link("https://example.com/accepted"), link("https://example.com/unadmitted")],
+    }, DEADLINE));
+    let accepted = receipts.recv_timeout(DEADLINE).unwrap();
+    let shutdown = background(move || drop(router));
+    let response = response.recv_timeout(DEADLINE).unwrap().unwrap();
+    // The app must be able to fall back for only the suffix. The primary
+    // still owns the accepted prefix and drains it before shutdown ends.
+    assert!(!response.ok);
+    assert_eq!(response.dispatched, [accepted]);
+    assert!(shutdown.try_recv().is_err());
+    gate.open();
+    shutdown.recv_timeout(DEADLINE).unwrap();
+    drop(server);
+    assert!(handle.get(accepted).unwrap().forwarded);
+    assert_eq!(handle.recent().len(), super::super::pipeline::CAPACITY);
+    assert_eq!(started.try_iter().count() + 1, super::super::pipeline::CAPACITY);
+}
+
+#[test]
 fn admission_backpressures_every_public_ingress_without_losing_links() {
     let (entered, started) = mpsc::channel();
     let gate = Gate::default();
