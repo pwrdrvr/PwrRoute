@@ -1197,7 +1197,13 @@ mod tests {
         });
     }
 
-    fn gated_copy(cx: &mut gpui_kit::TestAppContext, change_source: bool) {
+    enum DuringCopy {
+        Source,
+        Discovery,
+        EqualSource,
+    }
+
+    fn gated_copy(cx: &mut gpui_kit::TestAppContext, change: DuringCopy) {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir(&home).unwrap();
@@ -1206,8 +1212,13 @@ mod tests {
             ..Default::default()
         };
         let expected = cx.update(|cx| {
+            let mut store =
+                crate::settings_store::SettingsStore::load(Some(dir.path().join("data")));
+            if matches!(change, DuringCopy::EqualSource) {
+                store.update(|settings| settings.source.visual_only = true).unwrap();
+            }
             crate::settings_store::install(
-                crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))),
+                store,
                 None,
                 cx,
             );
@@ -1230,7 +1241,7 @@ mod tests {
             })
         });
         reading.recv().unwrap();
-        if change_source {
+        if matches!(change, DuringCopy::Source) {
             cx.update(|cx| {
                 crate::settings_store::store(cx)
                     .unwrap()
@@ -1239,6 +1250,10 @@ mod tests {
                             .update(|settings| settings.source.visual_only = true)
                             .unwrap();
                     })
+            });
+        } else if matches!(change, DuringCopy::EqualSource) {
+            cx.update(|cx| {
+                crate::importer_view::set_source_and_show(expected.clone().unwrap(), cx).unwrap();
             });
         } else {
             std::fs::write(
@@ -1267,7 +1282,7 @@ mod tests {
                 .is_some_and(|ext| ext == "tmp")),
             "discarded preparations remove their staging files"
         );
-        if change_source {
+        if matches!(change, DuringCopy::Source) {
             cx.update(|cx| {
                 assert!(
                     crate::settings_store::store(cx)
@@ -1285,14 +1300,71 @@ mod tests {
     fn changed_source_during_remote_preparation_never_publishes_a_config(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        gated_copy(cx, true);
+        gated_copy(cx, DuringCopy::Source);
     }
 
     #[gpui_kit::test]
     fn a_config_discovered_during_remote_preparation_prevents_publication(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        gated_copy(cx, false);
+        gated_copy(cx, DuringCopy::Discovery);
+    }
+
+    #[gpui_kit::test]
+    fn an_equal_explicit_source_choice_during_preparation_prevents_publication(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        gated_copy(cx, DuringCopy::EqualSource);
+    }
+
+    #[gpui_kit::test]
+    fn the_real_source_save_result_keeps_a_copied_config_retry(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let data = dir.path().join("data");
+        std::fs::create_dir(&home).unwrap();
+        let expected = cx.update(|cx| {
+            let mut store = crate::settings_store::SettingsStore::load(Some(data.clone()));
+            store.update(|settings| settings.source.visual_only = true).unwrap();
+            let expected = Some(store.settings().source.clone());
+            crate::settings_store::install(store, None, cx);
+            expected
+        });
+        let prepared = prepare_folder_config_at(
+            "finicky.js",
+            &pwrroute_engine::discovery::Environment {
+                home: Some(home.clone()),
+                ..Default::default()
+            },
+            || Ok(b"export default { defaultBrowser: 'Safari' };".to_vec()),
+        ).unwrap();
+        let copied = home.canonicalize().unwrap().join(".finicky.js");
+        std::fs::create_dir(data.join("settings.json.saving")).unwrap();
+        let error = cx.update(|cx| finish_folder_config(expected, prepared, cx)).unwrap_err();
+        assert!(error.is::<CopiedNotSaved>());
+        assert!(error.to_string().contains("Source choice not saved"));
+        assert!(error.to_string().contains("session only"));
+        assert!(copied.is_file());
+        assert!(crate::settings_store::Settings::load(&data).unwrap().source.visual_only);
+        cx.update(|cx| {
+            let retained = cx.global::<CopiedConfig>().0.as_ref().unwrap();
+            assert_eq!(retained.config.as_ref(), Some(&copied));
+            assert_eq!(crate::settings_store::store(cx).unwrap().read(cx).settings().source, *retained);
+        });
+        let bytes = std::fs::read(&copied).unwrap();
+        // Persistence retry owns no discovery or provider work, even after a
+        // different discoverable config appears beside the published file.
+        std::fs::write(home.join(".finicky.ts"), "unrelated later config").unwrap();
+        std::fs::remove_dir(data.join("settings.json.saving")).unwrap();
+        cx.update(|cx| retry_copied_with(cx, persist_copied_source)).unwrap();
+        let saved = crate::settings_store::Settings::load(&data).unwrap();
+        assert_eq!(saved.source.config.as_ref(), Some(&copied));
+        assert!(!saved.source.visual_only);
+        assert!(saved.sync.syncs_config());
+        assert_eq!(std::fs::read(&copied).unwrap(), bytes);
+        cx.update(|cx| assert!(cx.global::<CopiedConfig>().0.is_none()));
     }
 
     fn copied_but_not_saved(cx: &mut gpui_kit::TestAppContext, sync_fails: bool) {
