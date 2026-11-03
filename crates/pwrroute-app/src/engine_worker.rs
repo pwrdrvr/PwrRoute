@@ -160,6 +160,13 @@ impl EngineWorker {
     }
 }
 impl Client {
+    #[cfg(any(test, target_os = "macos"))]
+    #[allow(dead_code, reason = "the macOS screens example compiles this module separately")]
+    pub fn is_idle(&self) -> bool {
+        let queue = self.shared.queue.lock().unwrap();
+        queue.pending.iter().all(Option::is_none) && self.shared.active.load(Ordering::Acquire) == 0
+    }
+
     pub fn cancel(&self, lane: Lane) {
         let mut queue = self.shared.queue.lock().unwrap();
         if let Some(token) = queue.tokens[lane as usize].take() {
@@ -283,12 +290,8 @@ impl Client {
     pub(crate) fn wait_idle(&self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
+            if self.is_idle() { return; }
             let queue = self.shared.queue.lock().unwrap();
-            if queue.pending.iter().all(Option::is_none)
-                && self.shared.active.load(Ordering::Acquire) == 0
-            {
-                return;
-            }
             assert!(Instant::now() < deadline, "UI engine worker did not settle");
             drop(
                 self.shared
