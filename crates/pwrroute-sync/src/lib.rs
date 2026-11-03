@@ -14,8 +14,8 @@
 //! - [`Syncer`] runs a pass over every file and folder, settles another
 //!   machine's write before applying it, backs up whatever it replaces and
 //!   holds conflicts for the user ([`Syncer::resolve`]).
-//! - [`Schedule`] says when a pass runs; [`Service`] is the thread that
-//!   runs them.
+//! - [`Schedule`] says when a pass runs; [`Service`] coordinates bounded
+//!   remote I/O and serializes local application with incremental status.
 //!
 //! What differs between machines is not synced: the engine's
 //! `machine.json` binds named destinations and switches rule sets per
@@ -25,6 +25,7 @@ pub mod decide;
 pub mod folder;
 mod local;
 pub mod places;
+mod remote;
 mod schedule;
 mod service;
 mod state;

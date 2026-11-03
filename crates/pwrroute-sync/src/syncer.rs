@@ -4,7 +4,7 @@
 //! when that syncs too) and each folder in the order the user added them,
 //! looks at both sides, and acts on [`decide`]'s answer:
 //!
-//! - **Push** writes the local file into the folder ([`Folder::write`]:
+//! - **Push** writes the local file into the folder ([`crate::Folder::write`]:
 //!   staged, renamed, then the manifest). The folder's old copy is backed
 //!   up first unless that version is already kept.
 //! - **Pull** applies the folder's file locally, only once it has
@@ -33,8 +33,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     LocalFile,
     decide::{ConflictKind, Decision, Local, decide},
-    folder::{FileEntry, Folder, Machine, Manifest, Probe, Stamp, hash, write_atomic},
+    folder::{FileEntry, Folder, Machine, Manifest, Stamp, hash, write_atomic},
     places::Kind,
+    remote::{Cancel, ManifestObservation, Observation, Write},
     state::{Backup, State},
 };
 
@@ -129,7 +130,7 @@ impl Health {
 pub enum Wait {
     /// iCloud has not downloaded it.
     NotDownloaded,
-    /// A remote observation or the local apply snapshot changed; retry.
+    /// Remote work is pending, or a remote/local observation must be retried.
     Settling,
 }
 
@@ -193,7 +194,7 @@ impl TargetStatus {
 pub struct Status {
     pub machine: Machine,
     pub targets: Vec<TargetStatus>,
-    /// When the last pass ran.
+    /// When the latest file result was published (or a synchronous pass ran).
     pub last_pass: Option<u64>,
     /// Newest first.
     pub backups: Vec<Backup>,
@@ -208,38 +209,19 @@ pub enum Choice {
     UseFolder,
 }
 
-/// A read either observed one metadata revision throughout, or must be
-/// retried on another pass. Only coherent observations enter `seen`.
-enum Observation {
-    Coherent(Seen),
-    Settling,
-}
-
 /// What a pass remembers about a folder's file between passes.
 #[derive(Debug, Clone)]
-struct Seen {
-    stamp: Stamp,
-    sha: String,
-    bytes: Vec<u8>,
+pub(crate) struct Seen {
+    pub(crate) stamp: Stamp,
+    pub(crate) sha: String,
+    pub(crate) bytes: Vec<u8>,
     /// Seen unchanged on an earlier pass too.
-    stable: bool,
+    pub(crate) stable: bool,
 }
 
 /// Largest file sync reads; a `rules.json` past this is not one PwrRoute
 /// wrote.
-const MAX_BYTES: u64 = 8 * 1024 * 1024;
-
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum IoPoint {
-    RemoteRead,
-    RemoteManifest,
-    RemoteWrite,
-    LocalBackup,
-}
-
-#[cfg(test)]
-type IoHook = Arc<dyn Fn(IoPoint, &Path) + Send + Sync>;
+pub(crate) const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 pub struct Syncer {
     data_dir: PathBuf,
@@ -250,8 +232,9 @@ pub struct Syncer {
     state: State,
     seen: HashMap<(String, String), Seen>,
     status: Status,
+    pub(crate) io: Arc<dyn crate::remote::Remote>,
     #[cfg(test)]
-    io_hook: Option<IoHook>,
+    io_hook: Option<crate::remote::IoHook>,
 }
 
 impl std::fmt::Debug for Syncer {
@@ -277,6 +260,7 @@ impl Syncer {
             state,
             seen: HashMap::new(),
             status: Status::default(),
+            io: Arc::new(crate::remote::Disk),
             #[cfg(test)]
             io_hook: None,
         }
@@ -391,39 +375,81 @@ impl Syncer {
     }
 
     fn sync_one(&mut self, item: &Item, target: &Target, now: u64) -> Health {
-        let id = target.id();
-        let folder = target.folder();
-
-        let remote = match folder.probe(&item.name) {
-            Probe::Unavailable(why) => return Health::Unavailable(why),
-            Probe::NotDownloaded => return Health::Waiting(Wait::NotDownloaded),
-            Probe::Missing => {
-                self.seen.remove(&(id.clone(), item.name.clone()));
-                None
-            }
-            Probe::Present { stamp, .. } => match self.read_remote(&folder, item, &id, stamp) {
-                Ok(Observation::Coherent(seen)) => Some(seen),
-                Ok(Observation::Settling) => return Health::Waiting(Wait::Settling),
-                // A File Provider file that cannot be downloaded right now
-                // (offline) fails to read: wait for it.
-                Err(e) => {
-                    return Health::Unavailable(match e.root_cause().downcast_ref::<io::Error>() {
-                        Some(io) => crate::folder::describe(io),
-                        None => format!("{e:#}"),
-                    });
+        let observed = self.observe(target, item, self.cached(target, item));
+        let (health, write) = self.prepare(item, target, observed, now);
+        match write {
+            Some(write) => {
+                #[cfg(test)]
+                if let Some(hook) = &self.io_hook {
+                    hook(IoPoint::RemoteWrite, &target.folder().file(&item.name));
                 }
-            },
-        };
+                let result = self.io.write(target, &write, &Cancel::default());
+                self.finish_push(item, target, &write, result.map(|_| ()))
+            }
+            None => health,
+        }
+    }
+
+    fn observe(&self, target: &Target, item: &Item, cached: Option<Seen>) -> Observation {
         #[cfg(test)]
         if let Some(hook) = &self.io_hook {
-            hook(IoPoint::RemoteManifest, &folder.file(crate::MANIFEST));
+            return crate::remote::Disk.read_with(
+                target,
+                &item.name,
+                cached,
+                &Cancel::default(),
+                |point, path| hook(point, path),
+            );
         }
-        let manifest = folder.manifest();
-        // Cloud reads can block on a provider. Only after they finish do we
-        // enter the local revision/backup/apply boundary shared with app and
-        // MCP writers. No cooperating save can slip between check and rename.
-        let held = match LocalFile::lock(&item.local) {
+        self.io.read(target, &item.name, cached, &Cancel::default())
+    }
+
+    pub(crate) fn cached(&self, target: &Target, item: &Item) -> Option<Seen> {
+        self.seen.get(&(target.id(), item.name.clone())).cloned()
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        item: &Item,
+        target: &Target,
+        observed: Observation,
+        now: u64,
+    ) -> (Health, Option<Write>) {
+        let mut write = None;
+        let health = self.prepare_health(item, target, observed, now, &mut write);
+        (health, write)
+    }
+
+    fn prepare_health(
+        &mut self,
+        item: &Item,
+        target: &Target,
+        observed: Observation,
+        now: u64,
+        write: &mut Option<Write>,
+    ) -> Health {
+        let id = target.id();
+        let manifest = observed.manifest.into_manifest();
+        let remote = match observed.file {
+            Ok(remote) => remote,
+            Err(health) => {
+                self.seen.remove(&(id.clone(), item.name.clone()));
+                return health;
+            }
+        };
+        if let Some(seen) = &remote {
+            self.seen
+                .insert((id.clone(), item.name.clone()), seen.clone());
+        } else {
+            self.seen.remove(&(id.clone(), item.name.clone()));
+        }
+        // Remote observations are complete before taking the shared writer
+        // guard. Contention must not turn into control-loop head-of-line blocking.
+        let held = match LocalFile::try_lock(&item.local) {
             Ok(held) => held,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                return Health::Waiting(Wait::Settling);
+            }
             Err(e) => return Health::Error(format!("Locking this machine's {}: {e}", item.name)),
         };
         let local = match read_local(held.path()) {
@@ -466,8 +492,6 @@ impl Syncer {
                 let Some(bytes) = local else {
                     return Health::Absent;
                 };
-                // A push only uses this snapshot; release the local lock
-                // before writing to a potentially blocked cloud provider.
                 drop(held);
                 if let Some(old) = &remote {
                     let why = "Replaced by this machine's version";
@@ -475,27 +499,16 @@ impl Syncer {
                         return Health::Error(format!("Backing up before syncing: {e:#}"));
                     }
                 }
-                #[cfg(test)]
-                if let Some(hook) = &self.io_hook {
-                    hook(IoPoint::RemoteWrite, &folder.file(&item.name));
-                }
-                let written = folder.write(
-                    &item.name,
-                    &bytes,
-                    &self.machine(),
-                    now,
-                    &self.app,
-                    item.runs_after.as_deref(),
-                );
-                match written {
-                    Ok(()) => {
-                        let sha = hash(&bytes);
-                        self.state.set_base(&id, &item.name, &sha);
-                        self.seen.remove(&(id, item.name.clone()));
-                        Health::Pushed
-                    }
-                    Err(e) => Health::Error(format!("Writing to {}: {e:#}", target.label)),
-                }
+                *write = Some(Write {
+                    name: item.name.clone(),
+                    bytes,
+                    expected: remote.as_ref().map(|r| r.sha.clone()),
+                    by: self.machine(),
+                    at: now,
+                    app: self.app.clone(),
+                    runs_after: item.runs_after.clone(),
+                });
+                Health::Waiting(Wait::Settling)
             }
             Decision::Pull | Decision::Conflict(_) if !settled => Health::Waiting(Wait::Settling),
             Decision::Pull => {
@@ -521,9 +534,6 @@ impl Syncer {
                 if let Some(hook) = &self.io_hook {
                     hook(IoPoint::LocalBackup, &item.local);
                 }
-                // Hand editors do not take our advisory lock. Refuse an
-                // observable edit during validation/backup; a noncooperating
-                // write after this check is still outside our guarantee.
                 match read_local(held.path()) {
                     Ok(current) if current == local => {}
                     Ok(_) => return Health::Waiting(Wait::Settling),
@@ -568,52 +578,6 @@ impl Syncer {
         }
     }
 
-    /// Reads the folder's file, or reuses the last read when its stamp has
-    /// not changed (so an evicted file is not downloaded on every pass).
-    fn read_remote(
-        &mut self,
-        folder: &Folder,
-        item: &Item,
-        id: &str,
-        stamp: Stamp,
-    ) -> Result<Observation> {
-        let key = (id.to_owned(), item.name.clone());
-        if let Some(seen) = self.seen.get_mut(&key)
-            && seen.stamp == stamp
-        {
-            seen.stable = true;
-            return Ok(Observation::Coherent(seen.clone()));
-        }
-        self.seen.remove(&key);
-        if stamp.len > MAX_BYTES {
-            bail!("{} is too large to be PwrRoute's", item.name);
-        }
-        let path = folder.file(&item.name);
-        let bytes = fs::read(&path).with_context(|| format!("reading {}", item.name))?;
-        #[cfg(test)]
-        if let Some(hook) = &self.io_hook {
-            hook(IoPoint::RemoteRead, &path);
-        }
-        let sha = hash(&bytes);
-        // Read again by stamp: a file still being written changes under us.
-        let after = fs::metadata(&path).map(|m| Stamp::of(&m));
-        match after {
-            Ok(after) if after == stamp && bytes.len() as u64 == stamp.len => {}
-            Ok(_) => return Ok(Observation::Settling),
-            Err(e) => {
-                return Err(e).with_context(|| format!("rechecking {}", item.name));
-            }
-        }
-        let seen = Seen {
-            stamp,
-            sha,
-            bytes,
-            stable: false,
-        };
-        self.seen.insert(key, seen.clone());
-        Ok(Observation::Coherent(seen))
-    }
-
     fn back_up(&mut self, name: &str, bytes: &[u8], from: &str, why: &str, now: u64) -> Result<()> {
         let dir = self.backups_dir();
         self.state
@@ -645,32 +609,65 @@ impl Syncer {
             .find(|i| i.name == name)
             .cloned()
             .context("that file no longer syncs")?;
-        let folder = target.folder();
+        let observed = self.observe(&target, &item, None);
+        if let Some(write) =
+            self.prepare_resolution(&target, &item, remote_sha, choice, observed, now)?
+        {
+            #[cfg(test)]
+            if let Some(hook) = &self.io_hook {
+                hook(IoPoint::RemoteWrite, &target.folder().file(name));
+            }
+            self.io.write(&target, &write, &Cancel::default())?;
+            self.state.set_base(&target.id(), name, &hash(&write.bytes));
+        }
+        self.seen.remove(&(target.id(), name.to_owned()));
+        self.save_state();
+        Ok(())
+    }
+
+    pub(crate) fn prepare_resolution(
+        &mut self,
+        target: &Target,
+        item: &Item,
+        remote_sha: &str,
+        choice: Choice,
+        observed: Observation,
+        now: u64,
+    ) -> Result<Option<Write>> {
+        let name = &item.name;
         let id = target.id();
-        let remote = fs::read(folder.file(name))
-            .with_context(|| format!("reading {name} in {}", target.label))?;
-        if hash(&remote) != remote_sha {
+        let remote = observed
+            .file
+            .map_err(|_| anyhow::anyhow!("{name} in {} is unavailable", target.label))?
+            .context("that file is no longer in the folder")?;
+        if remote.sha != remote_sha {
             bail!(
                 "{name} in {} changed again; look again before choosing",
                 target.label
             );
         }
-        let held = LocalFile::lock(&item.local)?;
+        let remote = remote.bytes;
+        let held = LocalFile::try_lock(&item.local)?;
         let local = read_local(held.path())?;
         match choice {
             Choice::KeepLocal => {
                 let Some(bytes) = local else {
                     bail!("this machine has no {name} to keep");
                 };
+                if let Content::Invalid(why) = (item.check)(&bytes) {
+                    bail!("this machine's {name} does not load ({why})");
+                }
                 drop(held);
                 self.back_up(name, &remote, &target.label, "Not kept in a conflict", now)?;
-                let runs_after = item.runs_after.as_deref();
-                #[cfg(test)]
-                if let Some(hook) = &self.io_hook {
-                    hook(IoPoint::RemoteWrite, &folder.file(name));
-                }
-                folder.write(name, &bytes, &self.machine(), now, &self.app, runs_after)?;
-                self.state.set_base(&id, name, &hash(&bytes));
+                return Ok(Some(Write {
+                    name: name.clone(),
+                    bytes,
+                    expected: Some(remote_sha.to_owned()),
+                    by: self.machine(),
+                    at: now,
+                    app: self.app.clone(),
+                    runs_after: item.runs_after.clone(),
+                }));
             }
             Choice::UseFolder => {
                 if let Content::Invalid(why) = (item.check)(&remote) {
@@ -692,7 +689,99 @@ impl Syncer {
         }
         self.seen.remove(&(id, name.to_owned()));
         self.save_state();
-        Ok(())
+        Ok(None)
+    }
+
+    pub(crate) fn finish_push(
+        &mut self,
+        item: &Item,
+        target: &Target,
+        write: &Write,
+        result: Result<()>,
+    ) -> Health {
+        match result {
+            Ok(()) => {
+                self.state
+                    .set_base(&target.id(), &item.name, &hash(&write.bytes));
+                self.seen.remove(&(target.id(), item.name.clone()));
+                Health::Pushed
+            }
+            Err(e) => Health::Error(format!("Writing to {}: {e:#}", target.label)),
+        }
+    }
+
+    pub(crate) fn begin_target(&mut self, target: &Target) {
+        let mut status = self
+            .status
+            .targets
+            .iter()
+            .find(|t| t.target.id() == target.id())
+            .cloned()
+            .unwrap_or_else(|| TargetStatus {
+                target: target.clone(),
+                files: Vec::new(),
+                last_synced: self.state.last_synced.get(&target.id()).copied(),
+                saved_by: None,
+                saved_at: None,
+                folder_files: BTreeMap::new(),
+            });
+        status.target = target.clone();
+        status.files = self
+            .items
+            .iter()
+            .map(|i| FileStatus {
+                name: i.name.clone(),
+                health: Health::Waiting(Wait::Settling),
+            })
+            .collect();
+        self.status.targets.retain(|t| t.target.id() != target.id());
+        self.status.targets.push(status);
+        self.status
+            .targets
+            .sort_by_key(|t| self.targets.iter().position(|x| x.id() == t.target.id()));
+        self.status.machine = self.machine();
+    }
+
+    pub(crate) fn record(
+        &mut self,
+        target: &Target,
+        name: &str,
+        health: Health,
+        manifest: ManifestObservation,
+        now: u64,
+        finished: bool,
+    ) {
+        if let Some(status) = self
+            .status
+            .targets
+            .iter_mut()
+            .find(|t| t.target.id() == target.id())
+        {
+            if let Some(file) = status.files.iter_mut().find(|f| f.name == name) {
+                file.health = health;
+            }
+            match manifest {
+                ManifestObservation::Observed(Some(manifest)) => {
+                    status.saved_by = Some(manifest.saved_by);
+                    status.saved_at = Some(manifest.saved_at);
+                    status.folder_files = manifest.files;
+                }
+                ManifestObservation::Observed(None) => {
+                    status.saved_by = None;
+                    status.saved_at = None;
+                    status.folder_files.clear();
+                }
+                ManifestObservation::Unobserved => {}
+            }
+            if finished && status.files.iter().all(|f| f.health.in_step()) {
+                self.state.last_synced.insert(target.id(), now);
+                status.last_synced = Some(now);
+            }
+        }
+        self.status.machine = self.machine();
+        self.status.last_pass = Some(now);
+        self.status.backups = self.state.backups.iter().rev().cloned().collect();
+        self.save_state();
     }
 
     fn save_state(&self) {
@@ -730,6 +819,9 @@ fn read_local(path: &Path) -> Result<Option<Vec<u8>>> {
 fn write_local(path: &Path, bytes: &[u8]) -> Result<()> {
     write_atomic(path, bytes, "sync")
 }
+
+#[cfg(test)]
+use crate::{folder::Probe, remote::IoPoint};
 
 #[cfg(test)]
 mod revision_tests {
@@ -852,7 +944,7 @@ mod revision_tests {
         let mut f = Fixture::new();
         f.remote(b"remote bytes");
         let folder = f.target.folder();
-        let Probe::Present { stamp, .. } = folder.probe(&f.item.name) else {
+        let Probe::Present { .. } = folder.probe(&f.item.name) else {
             panic!("present")
         };
         f.syncer.io_hook = Some(Arc::new(|point, path| {
@@ -860,11 +952,7 @@ mod revision_tests {
                 fs::remove_file(path).unwrap();
             }
         }));
-        assert!(
-            f.syncer
-                .read_remote(&folder, &f.item, &f.target.id(), stamp)
-                .is_err()
-        );
+        assert!(f.syncer.observe(&f.target, &f.item, None).file.is_err());
         assert!(
             !f.syncer
                 .seen
