@@ -8280,7 +8280,10 @@ fn review_regression_failed_config_check_allows_explicit_add_anyway(cx: &mut Tes
     assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
     view.update(cx, |app, cx| {
         app.set_add_rule(|sheet| sheet.pattern.set("changed.example.com/*"), cx);
-        assert!(!app.add_rule_from_sheet(cx), "changed rule reused unchecked validation");
+        assert!(
+            !app.add_rule_from_sheet(cx),
+            "changed rule reused unchecked validation"
+        );
     });
     draw(cx);
     assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
@@ -8301,19 +8304,61 @@ fn review_regression_failed_config_check_allows_explicit_add_anyway(cx: &mut Tes
 fn review_regression_example_commands_are_bounded_and_finish_in_order(cx: &mut TestAppContext) {
     let dir = scratch("bounded-example-commands");
     let base = fixtures::activity()[0].clone();
-    let records = (0..40).map(|i| routed_by_rule(&base, 1_100 + i, &format!("https://tickets.example.com/save-{i}"), 1, "Firefox", "")).collect();
+    let records = (0..40)
+        .map(|i| {
+            routed_by_rule(
+                &base,
+                1_100 + i,
+                &format!("https://tickets.example.com/save-{i}"),
+                1,
+                "Firefox",
+                "",
+            )
+        })
+        .collect();
     cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
     let (view, cx) = open_store(cx, None, store_for(&dir, &attribution_rules()));
     let gate = gate_engine(&view, cx);
     view.update(cx, |app, cx| {
-        for i in 0..40 { app.save_record_as_example(RowKey { id: DispatchId(1_100 + i), journaled: false }, cx); }
-        assert!(app.actions.note.as_ref().unwrap().1.contains("Too many example saves"));
-        app.toggle_row_menu(RowKey { id: DispatchId(1_139), journaled: false }, cx);
+        for i in 0..40 {
+            app.save_record_as_example(
+                RowKey {
+                    id: DispatchId(1_100 + i),
+                    journaled: false,
+                },
+                cx,
+            );
+        }
+        assert!(
+            app.actions
+                .note
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("Too many example saves")
+        );
+        app.toggle_row_menu(
+            RowKey {
+                id: DispatchId(1_139),
+                journaled: false,
+            },
+            cx,
+        );
     });
     drop(gate);
     draw(cx);
     let written = saved(cx, &dir.join("rules.json"));
     assert_eq!(written.rules[1].examples.len(), 32);
-    for i in 0..32 { assert!(written.rules[1].examples.contains(&format!("https://tickets.example.com/save-{i}"))); }
-    assert!(!written.rules[1].examples.contains(&"https://tickets.example.com/save-39".to_owned()));
+    for i in 0..32 {
+        assert!(
+            written.rules[1]
+                .examples
+                .contains(&format!("https://tickets.example.com/save-{i}"))
+        );
+    }
+    assert!(
+        !written.rules[1]
+            .examples
+            .contains(&"https://tickets.example.com/save-39".to_owned())
+    );
 }
