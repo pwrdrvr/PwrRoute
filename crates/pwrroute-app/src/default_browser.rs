@@ -934,6 +934,99 @@ mod tests {
         cx.run_until_parked();
     }
 
+    #[gpui_kit::test]
+    fn an_unavailable_read_does_not_end_the_request(cx: &mut TestAppContext) {
+        let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
+        let os_status = Rc::new(RefCell::new(Some(chrome())));
+        let requests = Rc::new(Cell::new(0));
+        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), requests.clone()), cx));
+        cx.update(|cx| request(cx).unwrap());
+
+        // A failed query is a live observation, but not the prompt's answer.
+        *os_status.borrow_mut() = None;
+        tick(cx);
+        assert_eq!(cx.update(|cx| state(cx)), DefaultState::Unknown);
+        assert_eq!(snapshot(), DefaultState::Unknown);
+        assert!(registrar.read_with(cx, |r, _| r.waiting()));
+        assert!(cx.update(|cx| super::card(cx)).note.is_some());
+
+        // No handlers is unavailable too. Returning to the original browser
+        // after either kind of Unknown must not look like a new outcome.
+        *os_status.borrow_mut() = Some(status(None, None));
+        tick(cx);
+        assert!(registrar.read_with(cx, |r, _| r.waiting()));
+        *os_status.borrow_mut() = Some(chrome());
+        tick(cx);
+        assert!(registrar.read_with(cx, |r, _| r.waiting()));
+
+        *os_status.borrow_mut() = Some(status(
+            Some(pwrroute_os::BUNDLE_ID),
+            Some(pwrroute_os::BUNDLE_ID),
+        ));
+        tick(cx);
+        assert!(cx.update(|cx| state(cx).is_default()));
+        assert!(registrar.read_with(cx, |r, _| !r.waiting() && !r.kept));
+        assert_eq!(cx.update(|cx| super::card(cx)).note, None);
+        assert_eq!(requests.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn unavailable_reads_wait_until_the_deadline_without_claiming_refusal(cx: &mut TestAppContext) {
+        let os_status = Rc::new(RefCell::new(Some(status(
+            Some("com.google.Chrome"),
+            Some("com.google.Chrome"),
+        ))));
+        let requests = Rc::new(Cell::new(0));
+        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), requests.clone()), cx));
+        cx.update(|cx| request(cx).unwrap());
+        *os_status.borrow_mut() = None;
+        cx.update(activated);
+
+        // Grace can establish a known refusal, not turn a missing answer
+        // into one. The hard deadline still bounds the request.
+        for _ in 1..reads_in(POLL_FOR) {
+            tick(cx);
+            assert!(registrar.read_with(cx, |r, _| r.waiting()));
+        }
+        tick(cx);
+        assert!(registrar.read_with(cx, |r, _| !r.waiting() && !r.kept));
+        assert_eq!(cx.update(|cx| state(cx)), DefaultState::Unknown);
+        assert_eq!(cx.update(|cx| super::card(cx)).note, None);
+
+        // A later observation still propagates, without retroactively
+        // calling the timed-out request a refusal or asking the OS again.
+        *os_status.borrow_mut() = Some(status(
+            Some("com.google.Chrome"),
+            Some("com.google.Chrome"),
+        ));
+        cx.update(|cx| refresh(false, cx));
+        assert_eq!(cx.update(|cx| super::card(cx)).note, None);
+        assert_eq!(requests.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn an_unavailable_read_preserves_the_activation_grace(cx: &mut TestAppContext) {
+        let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
+        let os_status = Rc::new(RefCell::new(Some(chrome())));
+        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), Rc::new(Cell::new(0))), cx));
+        cx.update(|cx| request(cx).unwrap());
+        cx.update(activated);
+
+        *os_status.borrow_mut() = None;
+        tick(cx);
+        *os_status.borrow_mut() = Some(chrome());
+        for _ in 1..reads_in(ACTIVATION_GRACE) - 1 {
+            tick(cx);
+            assert!(registrar.read_with(cx, |r, _| r.waiting()));
+        }
+        tick(cx);
+        assert!(registrar.read_with(cx, |r, _| !r.waiting() && r.kept));
+        assert_eq!(
+            cx.update(|cx| super::card(cx)).note.as_deref(),
+            Some("Google Chrome is still the default.")
+        );
+    }
+
     /// The field report: the dialog is approved, the window comes back to
     /// the front, and LaunchServices still names the old browser for a
     /// moment. That read is not a no: the poll keeps reading and the state
