@@ -526,7 +526,9 @@ fn when(ms: u64) -> String {
 /// for the window opening.
 pub fn load(cx: &mut App) {
     let Some(feed) = crate::sync::feed(cx) else {
-        super::load_with(cx, super::Pane::Sync, Sync::default, |model, sync, cx| apply_sync(model, sync, cx));
+        super::load_with(cx, super::Pane::Sync, Sync::default, |model, sync, cx| {
+            apply_sync(model, sync, cx)
+        });
         return;
     };
     let status = feed.read(cx).status.clone();
@@ -580,7 +582,9 @@ fn apply_sync(model: &mut super::model::SettingsModel, sync: Sync, cx: &App) {
     let problem = model.sync.problem.clone();
     model.sync = sync;
     model.sync.problem = problem;
-    model.sync.copy_retry = cx.try_global::<CopiedConfig>().is_some_and(|copy| copy.0.is_some());
+    model.sync.copy_retry = cx
+        .try_global::<CopiedConfig>()
+        .is_some_and(|copy| copy.0.is_some());
 }
 
 /// A config bigger than this is not one to copy (sync's own limit).
@@ -767,24 +771,44 @@ fn retry_copied_with(
     match persist(&source, cx) {
         Ok(()) => {
             cx.set_global(CopiedConfig(None));
-            cx.defer(|cx| super::update(cx, |model| { model.sync.problem = None; model.sync.copy_retry = false; }));
+            cx.defer(|cx| {
+                super::update(cx, |model| {
+                    model.sync.problem = None;
+                    model.sync.copy_retry = false;
+                })
+            });
             super::configuration_host::refresh(cx);
             Ok(())
         }
-        Err(reason) => Err(CopiedNotSaved(format!("Config copied, settings not saved. {reason} Retry saving source/sync settings here.")).into()),
+        Err(reason) => Err(CopiedNotSaved(format!(
+            "Config copied, settings not saved. {reason} Retry saving source/sync settings here."
+        ))
+        .into()),
     }
 }
 
 /// Both writes are attempted after publication. An earlier sync-settings
 /// failure must not bypass the source helper's session state and retry notice.
-fn persist_copied_source(source: &crate::settings_store::SourceSettings, cx: &mut App) -> Result<(), String> {
-    persist_copy_with(source, cx,
-        |cx| crate::sync::edit_settings(|sync| sync.config = Some(true), cx).map_err(|error| format!("Sync settings not saved: {error:#}")),
-        |source, cx| crate::importer_view::set_source_and_show(source.clone(), cx).saved(source, cx))
+fn persist_copied_source(
+    source: &crate::settings_store::SourceSettings,
+    cx: &mut App,
+) -> Result<(), String> {
+    persist_copy_with(
+        source,
+        cx,
+        |cx| {
+            crate::sync::edit_settings(|sync| sync.config = Some(true), cx)
+                .map_err(|error| format!("Sync settings not saved: {error:#}"))
+        },
+        |source, cx| {
+            crate::importer_view::set_source_and_show(source.clone(), cx).saved(source, cx)
+        },
+    )
 }
 
 fn persist_copy_with(
-    source: &crate::settings_store::SourceSettings, cx: &mut App,
+    source: &crate::settings_store::SourceSettings,
+    cx: &mut App,
     save_sync: impl FnOnce(&mut App) -> Result<(), String>,
     save_source: impl FnOnce(&crate::settings_store::SourceSettings, &mut App) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -1125,7 +1149,14 @@ mod tests {
             "stale source or discovery must refuse commit"
         );
         assert!(!home.join(".finicky.js").exists());
-        assert!(std::fs::read_dir(&home).unwrap().all(|entry| !entry.unwrap().path().extension().is_some_and(|ext| ext == "tmp")), "discarded preparations remove their staging files");
+        assert!(
+            std::fs::read_dir(&home).unwrap().all(|entry| !entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "tmp")),
+            "discarded preparations remove their staging files"
+        );
         if change_source {
             cx.update(|cx| {
                 assert!(
@@ -1187,12 +1218,25 @@ mod tests {
         let result = cx.update(|cx| {
             finish_folder_config_with(expected, prepared, cx, |source, cx| {
                 assert_eq!(source.config.as_ref(), Some(&path));
-                persist_copy_with(source, cx,
-                    |_| if sync_fails { Err("sync-save fixture failure".into()) } else { Ok(()) },
+                persist_copy_with(
+                    source,
+                    cx,
+                    |_| {
+                        if sync_fails {
+                            Err("sync-save fixture failure".into())
+                        } else {
+                            Ok(())
+                        }
+                    },
                     |_, _| {
                         observed.set(observed.get() + 1);
-                        if sync_fails { Ok(()) } else { Err("source-save fixture failure".into()) }
-                    })
+                        if sync_fails {
+                            Ok(())
+                        } else {
+                            Err("source-save fixture failure".into())
+                        }
+                    },
+                )
             })
         });
         let error = result.unwrap_err();
