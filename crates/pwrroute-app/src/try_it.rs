@@ -1125,7 +1125,10 @@ mod worker_tests {
     fn saved_test_result_tokens_reject_edits_new_requests_and_new_sources() {
         let mut runs = TestRuns::new(None, RulesFile::default());
         let (old, _, _) = runs.begin();
-        let changed = RulesFile { default_browser: "Firefox".into(), ..Default::default() };
+        let changed = RulesFile {
+            default_browser: "Firefox".into(),
+            ..Default::default()
+        };
         runs.set_rules(changed);
         assert!(!runs.complete(old, Ok(TestReport::default())));
         let (old, _, _) = runs.begin();

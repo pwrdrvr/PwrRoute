@@ -244,7 +244,6 @@ impl Drop for EngineWorker {
     }
 }
 
-
 pub type Stamps = Vec<(std::path::PathBuf, Option<std::time::SystemTime>)>;
 pub fn stamps(engine: &pwrroute_engine::Engine) -> Stamps {
     engine
@@ -304,7 +303,8 @@ impl Client {
 pub fn settle(cx: &mut gpui_kit::App) {
     for window in cx.windows() {
         if let Some(window) = window.downcast::<crate::app::PwrRoute>()
-            && let Ok(client) = window.read(cx).map(|app| app.engine_worker.client()) {
+            && let Ok(client) = window.read(cx).map(|app| app.engine_worker.client())
+        {
             client.wait_idle();
         }
     }
@@ -455,4 +455,3 @@ mod tests {
         assert!(result.recv_blocking().is_err());
     }
 }
-

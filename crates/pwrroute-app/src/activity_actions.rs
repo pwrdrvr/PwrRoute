@@ -1456,7 +1456,16 @@ impl PwrRoute {
             Position::Top => 0,
             Position::Bottom => self.store.handler_count(),
         };
-        if !sheet.verified.as_ref().is_some_and(|(checked, index, revision, stamps)| checked == &rule && *index == at && *revision == self.engine_revision && crate::engine_worker::unchanged(stamps)) {
+        if !sheet
+            .verified
+            .as_ref()
+            .is_some_and(|(checked, index, revision, stamps)| {
+                checked == &rule
+                    && *index == at
+                    && *revision == self.engine_revision
+                    && crate::engine_worker::unchanged(stamps)
+            })
+        {
             self.check_new_rule(rule, at, cx);
             return false;
         }
