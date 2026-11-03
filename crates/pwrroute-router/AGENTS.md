@@ -169,7 +169,15 @@ runs on every platform.
   `rules.json`'s `precedence` ran them in (`dispatch::rule_steps`).
 - **IPC:** one JSON line each way per connection (`ipc.rs`). Bump
   `PROTOCOL_VERSION` on any incompatible change; a mismatched launch routes
-  its own links rather than lose them.
+  its own links rather than lose them. Protocol v2 refuses legacy clients
+  before dispatch: their fixed reply deadline cannot honor blocking admission.
+  Connected `Open` requests wait through
+  admission backpressure without a reply deadline; connection retry and
+  Ping/Activate still time out. A stuck connected primary can keep an Open
+  caller waiting. An error response retains the accepted dispatch-id prefix,
+  even for normalization-rejected links; startup falls back only for the
+  unaccepted suffix. Transport failure after possible acceptance remains
+  ambiguous; never retry an explicitly accepted prefix.
 - **Single instance:** the file lock decides who is primary, never the
   socket. Tests use their own temp endpoint; never the real `router_dir()`.
 - `tests/forwarding.rs` re-runs its own test binary as the second process.

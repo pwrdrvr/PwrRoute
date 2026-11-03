@@ -292,33 +292,55 @@ fn ipc_open_backpressures_past_the_reply_timeout_without_duplicate_admission() {
     let router = Router::spawn(
         Options::default(),
         None,
-        BlockLaunch { entered, gate: gate.clone() },
-    ).unwrap();
+        BlockLaunch {
+            entered,
+            gate: gate.clone(),
+        },
+    )
+    .unwrap();
     let _release = Release(gate.clone());
     let handle = router.handle();
     for i in 0..super::super::pipeline::CAPACITY {
-        handle.dispatch(link(&format!("https://example.com/full/{i}"))).unwrap();
+        handle
+            .dispatch(link(&format!("https://example.com/full/{i}")))
+            .unwrap();
     }
     started.recv_timeout(DEADLINE).unwrap();
     let (opening, opened) = mpsc::channel();
     let (activate, activated) = mpsc::channel();
     let h = handle.clone();
-    let server = primary.serve(move |request| {
-        if matches!(&request, Request::Open { .. }) {
-            opening.send(()).unwrap();
-        }
-        h.answer(request, || { activate.send(()).unwrap(); })
-    }).unwrap();
+    let server = primary
+        .serve(move |request| {
+            if matches!(&request, Request::Open { .. }) {
+                opening.send(()).unwrap();
+            }
+            h.answer(request, || {
+                activate.send(()).unwrap();
+            })
+        })
+        .unwrap();
     let client = Client::new(endpoint);
     let c = client.clone();
-    let response = background(move || c.send(&Request::Open {
-        links: vec![link("https://example.com/forwarded/one"), link("https://example.com/forwarded/two")],
-    }, DEADLINE));
+    let response = background(move || {
+        c.send(
+            &Request::Open {
+                links: vec![
+                    link("https://example.com/forwarded/one"),
+                    link("https://example.com/forwarded/two"),
+                    link("relative/path"),
+                ],
+            },
+            DEADLINE,
+        )
+    });
     opened.recv_timeout(DEADLINE).unwrap();
     // The launch gate holds every permit beyond the former two-second
     // reply deadline. A timeout here would make app startup route locally
     // while this same request remained queued in the primary.
-    assert!(matches!(response.recv_timeout(Duration::from_secs(4)), Err(mpsc::RecvTimeoutError::Timeout)));
+    assert!(matches!(
+        response.recv_timeout(Duration::from_secs(4)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
     assert!(client.send(&Request::Ping, DEADLINE).unwrap().ok);
     assert!(client.send(&Request::Activate, DEADLINE).unwrap().ok);
     activated.recv_timeout(DEADLINE).unwrap();
@@ -326,12 +348,25 @@ fn ipc_open_backpressures_past_the_reply_timeout_without_duplicate_admission() {
     gate.open();
     let response = response.recv_timeout(DEADLINE).unwrap().unwrap();
     assert!(response.ok);
-    assert_eq!(response.dispatched.len(), 2);
+    assert_eq!(response.dispatched.len(), 3);
     drop(server);
     drop(router);
-    assert_eq!(handle.recent().len(), super::super::pipeline::CAPACITY + 2);
-    assert_eq!(handle.recent().iter().filter(|r| r.forwarded).count(), 2);
-    assert_eq!(started.try_iter().count() + 1, super::super::pipeline::CAPACITY + 2);
+    assert_eq!(handle.recent().len(), super::super::pipeline::CAPACITY + 3);
+    assert_eq!(handle.recent().iter().filter(|r| r.forwarded).count(), 3);
+    // Admission acknowledges the invalid link too; normalization produces
+    // its rejected record instead of making a forwarding caller retry it.
+    assert!(
+        handle
+            .get(response.dispatched[2])
+            .unwrap()
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::Rejected { .. }))
+    );
+    assert_eq!(
+        started.try_iter().count() + 1,
+        super::super::pipeline::CAPACITY + 2
+    );
 }
 
 #[test]
@@ -347,23 +382,44 @@ fn ipc_shutdown_reports_the_accepted_prefix_before_the_unadmitted_suffix() {
     let (received, receipts) = mpsc::channel();
     let gate = Gate::default();
     let router = Router::spawn(
-        Options { on_received: Some(Arc::new(move |id, _| { received.send(id).unwrap(); })), ..Options::default() },
+        Options {
+            on_received: Some(Arc::new(move |id, _| {
+                received.send(id).unwrap();
+            })),
+            ..Options::default()
+        },
         None,
-        BlockLaunch { entered, gate: gate.clone() },
-    ).unwrap();
+        BlockLaunch {
+            entered,
+            gate: gate.clone(),
+        },
+    )
+    .unwrap();
     let _release = Release(gate.clone());
     let handle = router.handle();
     for i in 0..super::super::pipeline::CAPACITY - 1 {
-        let id = handle.dispatch(link(&format!("https://example.com/full/{i}"))).unwrap();
+        let id = handle
+            .dispatch(link(&format!("https://example.com/full/{i}")))
+            .unwrap();
         assert_eq!(receipts.recv_timeout(DEADLINE).unwrap(), id);
     }
     started.recv_timeout(DEADLINE).unwrap();
     let h = handle.clone();
-    let server = primary.serve(move |request| h.answer(request, || {})).unwrap();
+    let server = primary
+        .serve(move |request| h.answer(request, || {}))
+        .unwrap();
     let client = Client::new(endpoint);
-    let response = background(move || client.send(&Request::Open {
-        links: vec![link("https://example.com/accepted"), link("https://example.com/unadmitted")],
-    }, DEADLINE));
+    let response = background(move || {
+        client.send(
+            &Request::Open {
+                links: vec![
+                    link("https://example.com/accepted"),
+                    link("https://example.com/unadmitted"),
+                ],
+            },
+            DEADLINE,
+        )
+    });
     let accepted = receipts.recv_timeout(DEADLINE).unwrap();
     let shutdown = background(move || drop(router));
     let response = response.recv_timeout(DEADLINE).unwrap().unwrap();
@@ -377,7 +433,10 @@ fn ipc_shutdown_reports_the_accepted_prefix_before_the_unadmitted_suffix() {
     drop(server);
     assert!(handle.get(accepted).unwrap().forwarded);
     assert_eq!(handle.recent().len(), super::super::pipeline::CAPACITY);
-    assert_eq!(started.try_iter().count() + 1, super::super::pipeline::CAPACITY);
+    assert_eq!(
+        started.try_iter().count() + 1,
+        super::super::pipeline::CAPACITY
+    );
 }
 
 #[test]

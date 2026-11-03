@@ -28,7 +28,7 @@ use crate::{
     link::Link,
 };
 
-/// How long a connection may take to send its request or read the answer.
+/// How long a connection may take to send its request or answer control.
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Where the router's lock and socket live.
@@ -178,9 +178,9 @@ impl Primary {
 /// Socket timeouts where the OS has them. Windows named pipes do not, so
 /// there a stalled peer holds only its own connection thread, and the client
 /// bounds its wait itself (see [`Client::send`]).
-fn set_io_timeouts(conn: &Stream) -> io::Result<()> {
+fn set_io_timeouts(conn: &Stream, receive: Option<Duration>) -> io::Result<()> {
     for set in [
-        conn.set_recv_timeout(Some(IO_TIMEOUT)),
+        conn.set_recv_timeout(receive),
         conn.set_send_timeout(Some(IO_TIMEOUT)),
     ] {
         match set {
@@ -192,7 +192,7 @@ fn set_io_timeouts(conn: &Stream) -> io::Result<()> {
 }
 
 fn answer(conn: Stream, handler: &dyn Fn(Request) -> Response) {
-    let _ = set_io_timeouts(&conn);
+    let _ = set_io_timeouts(&conn, Some(IO_TIMEOUT));
     let mut conn = BufReader::new(conn);
     let response = match ipc::read_message::<Request>(&mut conn) {
         Ok(request) => handler(request),
@@ -245,8 +245,10 @@ impl Client {
 
     /// Sends one request and reads the answer, retrying the connection until
     /// `timeout` passes: the router holds the lock a moment before it
-    /// listens. Once connected, the exchange gets [`IO_TIMEOUT`]; a router
-    /// that accepts but never answers is an error of kind `TimedOut`.
+    /// listens. Once connected, control exchanges get [`IO_TIMEOUT`]. An
+    /// `Open` waits for admission without a reply deadline: timing out while
+    /// the primary still owns that request would make startup open it twice.
+    /// A connected but stuck primary can therefore keep an `Open` waiting.
     pub fn send(&self, request: &Request, timeout: Duration) -> io::Result<Response> {
         let deadline = Instant::now() + timeout;
         let conn = loop {
@@ -259,10 +261,11 @@ impl Client {
                 Err(_) => thread::sleep(Duration::from_millis(25)),
             }
         };
-        set_io_timeouts(&conn)?;
-        // On a thread with a deadline, because a named pipe cannot time out
-        // its own reads. A stuck exchange leaves its thread to the process
-        // exit, which a forwarding launch reaches right after.
+        let open = matches!(request, Request::Open { .. });
+        set_io_timeouts(&conn, if open { None } else { Some(IO_TIMEOUT) })?;
+        // Named pipes cannot time out their own reads, so control callers
+        // bound the wait outside the exchange. Open callers deliberately
+        // propagate admission backpressure instead of abandoning a live request.
         let (tx, rx) = mpsc::channel();
         let request = request.clone();
         thread::Builder::new()
@@ -275,11 +278,16 @@ impl Client {
             })?;
         let timed_out =
             || io::Error::new(io::ErrorKind::TimedOut, "the router did not answer in time");
-        match rx.recv_timeout(IO_TIMEOUT) {
+        let result = if open {
+            rx.recv()
+                .map_err(|_| io::Error::other("the router exchange stopped"))?
+        } else {
+            rx.recv_timeout(IO_TIMEOUT).map_err(|_| timed_out())?
+        };
+        match result {
             // A Unix socket's own timeout reports `WouldBlock`.
-            Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => Err(timed_out()),
-            Ok(result) => result,
-            Err(_) => Err(timed_out()),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(timed_out()),
+            result => result,
         }
     }
 
@@ -399,6 +407,67 @@ mod tests {
             .open(Vec::new(), Duration::from_secs(2))
             .unwrap_err();
         assert_eq!(err.to_string(), "busy");
+    }
+
+    #[test]
+    fn legacy_open_is_refused_before_it_can_enter_blocking_admission() {
+        use std::io::Write as _;
+        use std::sync::atomic::AtomicUsize;
+
+        let (_dir, endpoint) = endpoint();
+        let Claim::Primary(primary) = claim(&endpoint).unwrap() else {
+            panic!("first claim should be primary");
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let invoked = calls.clone();
+        let _server = primary
+            .serve(move |_| {
+                invoked.fetch_add(1, Ordering::SeqCst);
+                Response::ok()
+            })
+            .unwrap();
+        let mut conn = Stream::connect(endpoint.name().unwrap()).unwrap();
+        set_io_timeouts(&conn, Some(IO_TIMEOUT)).unwrap();
+        conn.write_all(
+            b"{\"v\":1,\"op\":\"open\",\"links\":[{\"url\":\"https://example.com/legacy\"}]}\n",
+        )
+        .unwrap();
+        let response: Response = ipc::read_message(&mut BufReader::new(conn)).unwrap();
+        assert!(!response.ok);
+        assert!(response.dispatched.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_legacy_primary_refusal_returns_to_the_new_client_without_admission() {
+        use std::io::{BufRead as _, Write as _};
+
+        let (_dir, endpoint) = endpoint();
+        let Claim::Primary(_primary) = claim(&endpoint).unwrap() else {
+            panic!("first claim should be primary");
+        };
+        let listener = ListenerOptions::new()
+            .name(endpoint.name().unwrap())
+            .create_sync()
+            .unwrap();
+        let old_primary = thread::spawn(move || {
+            let mut conn = BufReader::new(listener.accept().unwrap());
+            let mut line = String::new();
+            conn.read_line(&mut line).unwrap();
+            let envelope: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(envelope["v"], 2);
+            // The published v1 parser checks the envelope version before
+            // deserializing or dispatching its Open body.
+            conn.get_mut().write_all(b"{\"v\":1,\"ok\":false,\"error\":\"protocol version 2 (expected 1)\",\"pid\":7}\n").unwrap();
+        });
+        let error = Client::new(endpoint)
+            .open(
+                vec![Link::new("https://example.com/new", Source::CommandLine)],
+                IO_TIMEOUT,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        old_primary.join().unwrap();
     }
 
     #[cfg(unix)]

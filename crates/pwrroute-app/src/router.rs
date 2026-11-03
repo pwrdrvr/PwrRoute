@@ -29,12 +29,12 @@ use pwrroute_router::{
     Browser, DispatchRecord, DryRunLauncher, FallbackSource, Launcher, Link, Opener, Options,
     Resolved, Resolver, ResolverFactory, Router, RouterHandle, Source,
     instance::{self, Claim, Endpoint, Server},
-    ipc::Request,
+    ipc::{Request, Response},
 };
 
 use crate::settings_store::SettingsStore;
 
-/// How long a second launch waits for the running router to answer.
+/// How long a second launch retries connecting to the running router.
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How often the config, its imports and `rules.json` are rechecked for a
@@ -158,7 +158,7 @@ impl Resident {
 
 /// Becomes the router, or hands the links to the one already running.
 pub fn start(args: &Args) -> Start {
-    let links: Vec<Link> = args
+    let mut links: Vec<Link> = args
         .links
         .iter()
         .map(|url| Link::new(url.as_str(), Source::CommandLine))
@@ -181,13 +181,18 @@ pub fn start(args: &Args) -> Start {
             };
             match client.send(&request, FORWARD_TIMEOUT) {
                 Ok(response) if response.ok => return Start::Exit,
-                Ok(response) => log::warn!(
-                    "the running router refused the request: {}",
-                    response.error.unwrap_or_default()
-                ),
+                Ok(response) => {
+                    links = unaccepted_links(links, &response);
+                    log::warn!(
+                        "the running router refused the request: {}",
+                        response.error.unwrap_or_default()
+                    );
+                }
                 Err(e) => log::warn!("the running router did not answer: {e}"),
             }
-            // Never lose a link to a stuck router: route it here, then go.
+            // A connected Open waits through admission backpressure. On a
+            // known partial shutdown, only its unaccepted suffix falls back.
+            // A transport error can still leave acceptance ambiguous.
             if !links.is_empty() {
                 route_here_and_exit(args, links);
             }
@@ -231,6 +236,15 @@ pub fn start(args: &Args) -> Start {
         launched_with_links,
         settings,
     }))
+}
+
+/// An Open response owns its accepted prefix even when the rest failed.
+fn unaccepted_links(links: Vec<Link>, response: &Response) -> Vec<Link> {
+    if response.ok {
+        Vec::new()
+    } else {
+        links.into_iter().skip(response.dispatched.len()).collect()
+    }
 }
 
 /// Links the OS handed over while the app runs: GPUI's open-URLs callback.
@@ -898,6 +912,25 @@ mod tests {
             !parse(&["pwrroute", "--make-default", "--dry-run"]).request_default_on_startup(false)
         );
         assert!(!parse(&["pwrroute", "--make-default"]).request_default_on_startup(true));
+    }
+
+    #[test]
+    fn forwarding_falls_back_only_for_the_unaccepted_suffix() {
+        use pwrroute_router::DispatchId;
+
+        // Even a rejected normalized link is accepted work once it has an
+        // id. Never route that prefix again after partial shutdown.
+        let links = vec![
+            Link::new("relative/path", Source::CommandLine),
+            Link::new("https://example.com/unaccepted", Source::CommandLine),
+        ];
+        let mut response = Response::error("the router has stopped");
+        assert_eq!(unaccepted_links(links.clone(), &response), links);
+        response.dispatched.push(DispatchId(41));
+        assert_eq!(unaccepted_links(links.clone(), &response), links[1..]);
+        response.dispatched.push(DispatchId(42));
+        assert!(unaccepted_links(links.clone(), &response).is_empty());
+        assert!(unaccepted_links(links, &Response::ok()).is_empty());
     }
 
     fn browser(name: &str, app_type: AppType) -> Browser {

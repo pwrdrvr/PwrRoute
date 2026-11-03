@@ -1127,7 +1127,11 @@ impl RouterHandle {
                 for link in links {
                     match self.dispatch_forwarded(link) {
                         Ok(id) => response.dispatched.push(id),
-                        Err(e) => return Response::error(e.to_string()),
+                        Err(e) => {
+                            response.ok = false;
+                            response.error = Some(e.to_string());
+                            return response;
+                        }
                     }
                 }
                 response
