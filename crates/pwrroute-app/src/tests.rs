@@ -8118,23 +8118,46 @@ fn engine_review_link_policy_changed_during_http_is_reloaded(cx: &mut TestAppCon
     let dir = scratch("link-policy-during-http");
     let config = dir.join("config.js");
     let policy = dir.join("policy.js");
-    std::fs::write(&config, "import policy from './policy.js'; export default policy;").unwrap();
+    std::fs::write(
+        &config,
+        "import policy from './policy.js'; export default policy;",
+    )
+    .unwrap();
     let write = |body: &str, seconds| {
         std::fs::write(&policy, body).unwrap();
-        std::fs::File::open(&policy).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+        std::fs::File::open(&policy)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            )
+            .unwrap();
     };
-    write("export default { defaultBrowser: 'Safari', options: { urlShorteners: ['bit.ly'] } };", 10);
+    write(
+        "export default { defaultBrowser: 'Safari', options: { urlShorteners: ['bit.ly'] } };",
+        10,
+    );
     let (view, cx) = open_with(cx, Some(config));
     let (entered, started) = std::sync::mpsc::channel();
     let (release, blocked) = std::sync::mpsc::channel();
-    let gate = EngineGate { release: Some(release), _result: async_channel::bounded(1).1 };
+    let gate = EngineGate {
+        release: Some(release),
+        _result: async_channel::bounded(1).1,
+    };
     view.update(cx, |app, cx| {
-        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork { entered, release: std::sync::Mutex::new(Some(blocked)) }));
+        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork {
+            entered,
+            release: std::sync::Mutex::new(Some(blocked)),
+        }));
         app.test.url.text = "https://bit.ly/neutral".into();
         app.test.run(cx);
     });
-    started.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-    write("export default { defaultBrowser: 'Firefox', options: { urlShorteners: [] } };", 20);
+    started
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    write(
+        "export default { defaultBrowser: 'Firefox', options: { urlShorteners: [] } };",
+        20,
+    );
     drop(gate);
     let traced = trace(&view, cx);
     assert_eq!(traced.result.title, "Firefox");
@@ -8146,15 +8169,29 @@ fn engine_review_closing_link_owner_cancels_gated_completion(cx: &mut TestAppCon
     let (view, cx) = open(cx);
     let (entered, started) = std::sync::mpsc::channel();
     let (release, blocked) = std::sync::mpsc::channel();
-    let gate = EngineGate { release: Some(release), _result: async_channel::bounded(1).1 };
+    let gate = EngineGate {
+        release: Some(release),
+        _result: async_channel::bounded(1).1,
+    };
     view.update(cx, |app, cx| {
-        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork { entered, release: std::sync::Mutex::new(Some(blocked)) }));
+        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork {
+            entered,
+            release: std::sync::Mutex::new(Some(blocked)),
+        }));
         app.test.url.text = "https://bit.ly/neutral".into();
         app.test.run(cx);
     });
-    started.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    started
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
     view.update(cx, |app, cx| {
-        app.test = crate::test_link::TestLink::new(None, None, app.engine_worker.client(), app.store.written(), cx);
+        app.test = crate::test_link::TestLink::new(
+            None,
+            None,
+            app.engine_worker.client(),
+            app.store.written(),
+            cx,
+        );
     });
     drop(gate);
     draw(cx);

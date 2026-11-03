@@ -639,20 +639,32 @@ mod tests {
         assert_ne!(finished.recv().unwrap(), thread::current().id());
         assert!(result.recv_blocking().is_err());
     }
-    fn io_wake() -> Wake { Wake { ready: Arc::new(AtomicBool::new(false)), shared: Weak::new() } }
+    fn io_wake() -> Wake {
+        Wake {
+            ready: Arc::new(AtomicBool::new(false)),
+            shared: Weak::new(),
+        }
+    }
 
     #[test]
     fn link_io_is_bounded_coalesced_and_shutdown_suppresses_results() {
         let io = IoWorker::new();
         let (entered, started) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
-        let first = io.client().submit(io_wake(), move || { entered.send(()).unwrap(); blocked.recv().unwrap(); 0 });
+        let first = io.client().submit(io_wake(), move || {
+            entered.send(()).unwrap();
+            blocked.recv().unwrap();
+            0
+        });
         started.recv().unwrap();
         let ran = Arc::new(AtomicUsize::new(0));
         let mut latest = None;
         for n in 1..1000 {
             let ran = ran.clone();
-            latest = Some(io.client().submit(io_wake(), move || { ran.fetch_add(1, Ordering::Relaxed); n }));
+            latest = Some(io.client().submit(io_wake(), move || {
+                ran.fetch_add(1, Ordering::Relaxed);
+                n
+            }));
         }
         assert!(io.client.shared.queue.lock().unwrap().pending.is_some());
         release.send(()).unwrap();
@@ -662,9 +674,15 @@ mod tests {
 
         let (entered, started) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
-        let active = io.client().submit(io_wake(), move || { entered.send(()).unwrap(); blocked.recv().unwrap(); 1 });
+        let active = io.client().submit(io_wake(), move || {
+            entered.send(()).unwrap();
+            blocked.recv().unwrap();
+            1
+        });
         started.recv().unwrap();
-        let pending = io.client().submit(io_wake(), || panic!("closed I/O owner ran pending request"));
+        let pending = io
+            .client()
+            .submit(io_wake(), || panic!("closed I/O owner ran pending request"));
         drop(io);
         assert!(pending.recv_blocking().is_err());
         release.send(()).unwrap();
@@ -685,7 +703,9 @@ mod tests {
                 if let Some(ready) = ready.take() {
                     ready.send(wake.clone()).unwrap();
                     std::task::Poll::Pending
-                } else { std::task::Poll::Ready(Some(*owned)) }
+                } else {
+                    std::task::Poll::Ready(Some(*owned))
+                }
             }
         });
         let wake = started.recv().unwrap();
@@ -696,5 +716,4 @@ mod tests {
         assert_eq!(result.recv_blocking().unwrap(), 42);
         assert_eq!(steps.load(Ordering::Relaxed), 2);
     }
-
 }
