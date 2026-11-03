@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v0.16.0 - 2026-11-03
+
+- Link routing - A slow short-link expansion or browser launch no longer holds up unrelated links and routing controls. Different browsers can open links independently, while ready launches for the same browser keep their order. A later direct link can open before an earlier short link finishes expanding; Activity and the tray still list links by when they arrived. Rule and privacy changes made during expansion apply before the link is opened.
+- Cloud folders - A blocked cloud provider no longer prevents healthy folders from syncing or keeps sync controls and shutdown waiting for its remote I/O. Busy folders are skipped while other work proceeds, and removing a folder prevents late results from changing its sync status. Remote work is bounded; if all four operations are stuck, further remote work waits while controls remain responsive.
+- Sync conflicts - A cloud pull rechecks local rules and config changes before applying, so an intervening edit is preserved and produces a conflict or deferred apply. Remote files that change while being read must settle before they are accepted. When another PwrRoute writer holds the local save lock, the app keeps unsaved edits and reports that saving should be retried.
+- Update channels - Changing the selected release channel during a check now queues a check for the latest selection. Old results, timestamps and download progress cannot overwrite the newly selected channel, and a manual check made during an automatic check keeps its permission to switch back to an older release.
+- Update discovery - The first GitHub release lookups run together and reuse the first results page. All discovery requests share one 20-second deadline, so a slow multi-page search no longer receives another full timeout for each page. A timed-out or interrupted search reports failure without offering partial results.
+- Default browser - An explicit registration request keeps waiting when the operating system temporarily cannot report the current default. Later approval can still be detected by the fast poll; an unavailable answer alone is not reported as refusal.
+- Rule drafts - If rules reload while a changed draft is asking to open or duplicate another rule, the pending action is cancelled and the draft stays open. Choose the destination again to continue; a moved row can no longer send the action to the wrong rule.
+- Import and first run - Finicky imports and source choices report partial success and offer a retry when settings could not be saved, instead of claiming completion. Already imported rules are retained for a source-only retry, Undo keeps its recovery state when a write fails, and stale first-run answers must be reviewed again. Stopping a config or adopting a synced config also reports source-save failures.
+- Browser profiles - Settings › Browsers shows the cached-profile and blocked-access note alongside profile names when macOS prevents a live read, making the saved copy's status visible even when profiles are listed.
+- Agent suggestions - Rule suggestions evaluate candidate collisions together against one engine snapshot. The four-pattern regression case now uses one engine job instead of four while preserving match counts and privacy filtering. Config-load failures report the underlying error instead of incorrectly saying the engine thread stopped.
+
 ## v0.15.0 - 2026-11-03
 
 - Tray rules - Hover a recent link in the tray dropdown and choose + Rule to open its Add a rule sheet in Activity. Add a rule for the next link catches the next eligible link you click, holds it without opening a browser and opens the sheet automatically. The tray shows when it is waiting and offers Cancel; Send, Hold and Pause keep their current settings. Links from PwrRoute or agents and links whose privacy rules keep less than the full address are not caught.
