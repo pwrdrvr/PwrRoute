@@ -52,3 +52,25 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
         log::warn!("settings: {request:?} is not wired up yet");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use gpui_kit::TestAppContext;
+    use crate::{browser_scan, settings};
+
+    #[gpui_kit::test]
+    fn opening_about_does_not_scan_browsers(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            browser_scan::install(pwrroute_browsers::Env::fixture(
+                pwrroute_browsers::Platform::current(), std::env::temp_dir()), cx);
+            settings::install(cx);
+            cx.set_global(settings::SettingsHost {
+                model: Rc::new(super::model),
+                on_request: Rc::new(|request, _, cx| super::handle_request(request, cx)),
+            });
+            settings::open(cx, Some(settings::Pane::About));
+            assert!(!browser_scan::has_run(cx), "About must not run another pane's browser scan");
+        });
+    }
+}
