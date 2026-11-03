@@ -640,13 +640,28 @@ fn prepare_folder_config_at(
 struct CopyingConfig(bool);
 impl gpui_kit::Global for CopyingConfig {}
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SourceSnapshot {
+    source: Option<crate::settings_store::SourceSettings>,
+    revision: u64,
+}
+
+impl SourceSnapshot {
+    fn capture(cx: &App) -> Self {
+        Self {
+            source: crate::settings_store::store(cx)
+                .map(|store| store.read(cx).settings().source.clone()),
+            revision: crate::importer_view::source_revision(cx),
+        }
+    }
+}
+
 fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()> {
     if cx.try_global::<CopyingConfig>().is_some_and(|copy| copy.0) {
         anyhow::bail!("still copying the earlier config");
     }
     cx.set_global(CopyingConfig(true));
-    let expected =
-        crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+    let expected = SourceSnapshot::capture(cx);
     let (root, name) = (root.to_path_buf(), name.to_owned());
     let work = cx
         .background_executor()
@@ -719,7 +734,7 @@ fn stage_config(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
 }
 
 #[derive(Default)]
-struct CopiedConfig(Option<crate::settings_store::SourceSettings>);
+struct CopiedConfig(Option<crate::settings_store::SourceSettings>, SourceSnapshot);
 impl gpui_kit::Global for CopiedConfig {}
 
 #[derive(Debug)]
@@ -732,35 +747,35 @@ impl std::fmt::Display for CopiedNotSaved {
 impl std::error::Error for CopiedNotSaved {}
 
 fn finish_folder_config(
-    expected: Option<crate::settings_store::SourceSettings>,
+    expected: SourceSnapshot,
     prepared: PreparedConfig,
     cx: &mut App,
 ) -> anyhow::Result<()> {
-    finish_folder_config_with(expected, prepared, cx, persist_copied_source)
+    finish_folder_config_with(expected, prepared, cx, apply_copied_source)
 }
 
 fn finish_folder_config_with(
-    expected: Option<crate::settings_store::SourceSettings>,
+    expected: SourceSnapshot,
     prepared: PreparedConfig,
     cx: &mut App,
     persist: impl FnOnce(&crate::settings_store::SourceSettings, &mut App) -> Result<(), String>,
 ) -> anyhow::Result<()> {
-    let current =
-        crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+    let current = SourceSnapshot::capture(cx);
     anyhow::ensure!(
         expected == current,
         "routing source changed while the config was prepared"
     );
     let path = prepared.publish()?;
-    let mut source = current.unwrap_or_default();
+    let mut source = current.source.unwrap_or_default();
     source.visual_only = false;
     // Pin the copied file: saving again must not discover a different config.
     source.config = Some(path.clone());
     if !source.dismissed.contains(&path) {
         source.dismissed.push(path);
     }
-    cx.set_global(CopiedConfig(Some(source)));
-    retry_copied_with(cx, persist)
+    let result = persist(&source, cx);
+    cx.set_global(CopiedConfig(Some(source), SourceSnapshot::capture(cx)));
+    finish_copy_save(result, cx)
 }
 
 fn retry_copied_with(
@@ -771,9 +786,20 @@ fn retry_copied_with(
         .try_global::<CopiedConfig>()
         .and_then(|copy| copy.0.clone())
         .ok_or_else(|| anyhow::anyhow!("no copied config to save"))?;
-    match persist(&source, cx) {
+    let current = SourceSnapshot::capture(cx);
+    if cx.global::<CopiedConfig>().1 != current {
+        cx.set_global(CopiedConfig(None, current));
+        return Err(CopiedNotSaved(
+            "Config copied, but the source choice changed. Review the current source in Rules before saving.".into(),
+        ).into());
+    }
+    finish_copy_save(persist(&source, cx), cx)
+}
+
+fn finish_copy_save(result: Result<(), String>, cx: &mut App) -> anyhow::Result<()> {
+    match result {
         Ok(()) => {
-            cx.set_global(CopiedConfig(None));
+            cx.set_global(CopiedConfig(None, SourceSnapshot::capture(cx)));
             cx.defer(|cx| {
                 super::update(cx, |model| {
                     model.sync.problem = None;
@@ -792,7 +818,7 @@ fn retry_copied_with(
 
 /// Both writes are attempted after publication. An earlier sync-settings
 /// failure must not bypass the source helper's session state and retry notice.
-fn persist_copied_source(
+fn apply_copied_source(
     source: &crate::settings_store::SourceSettings,
     cx: &mut App,
 ) -> Result<(), String> {
@@ -805,6 +831,19 @@ fn persist_copied_source(
         },
         |source, cx| crate::importer_view::set_source_and_show(source.clone(), cx),
     )
+}
+
+fn persist_copied_source(
+    source: &crate::settings_store::SourceSettings,
+    cx: &mut App,
+) -> Result<(), String> {
+    let revision = cx.global::<CopiedConfig>().1.revision;
+    // The source receipt validates any import/Undo guards before even the
+    // sync-settings write can persist the in-memory source in settings.json.
+    crate::importer_view::retry_source_save(source, revision, cx)
+        .map_err(|error| format!("Source choice not saved: {error}"))?;
+    crate::sync::edit_settings(|sync| sync.config = Some(true), cx)
+        .map_err(|error| format!("Sync settings not saved: {error:#}"))
 }
 
 fn persist_copy_with(
@@ -1081,14 +1120,7 @@ mod tests {
                 None,
                 cx,
             );
-            Some(
-                crate::settings_store::store(cx)
-                    .unwrap()
-                    .read(cx)
-                    .settings()
-                    .source
-                    .clone(),
-            )
+            SourceSnapshot::capture(cx)
         });
         let prepare = || {
             prepare_folder_config_at("finicky.js", &env, || {
@@ -1121,14 +1153,7 @@ mod tests {
         );
         cx.update(|cx| {
             assert_eq!(
-                Some(
-                    crate::settings_store::store(cx)
-                        .unwrap()
-                        .read(cx)
-                        .settings()
-                        .source
-                        .clone()
-                ),
+                SourceSnapshot::capture(cx),
                 expected
             )
         });
@@ -1189,14 +1214,7 @@ mod tests {
                 None,
                 cx,
             );
-            Some(
-                crate::settings_store::store(cx)
-                    .unwrap()
-                    .read(cx)
-                    .settings()
-                    .source
-                    .clone(),
-            )
+            SourceSnapshot::capture(cx)
         });
         let (entered, reading) = std::sync::mpsc::channel();
         let (release, wait) = std::sync::mpsc::channel();
@@ -1220,7 +1238,7 @@ mod tests {
             });
         } else if matches!(change, DuringCopy::EqualSource) {
             cx.update(|cx| {
-                crate::importer_view::set_source_and_show(expected.clone().unwrap(), cx).unwrap();
+                crate::importer_view::set_source_and_show(expected.source.clone().unwrap(), cx).unwrap();
             });
         } else {
             std::fs::write(
@@ -1295,9 +1313,8 @@ mod tests {
         let expected = cx.update(|cx| {
             let mut store = crate::settings_store::SettingsStore::load(Some(data.clone()));
             store.update(|settings| settings.source.visual_only = true).unwrap();
-            let expected = Some(store.settings().source.clone());
             crate::settings_store::install(store, None, cx);
-            expected
+            SourceSnapshot::capture(cx)
         });
         let prepared = prepare_folder_config_at(
             "finicky.js",
@@ -1331,7 +1348,10 @@ mod tests {
                 crate::importer_view::set_source_and_show(source, cx).unwrap();
             });
         }
+        let revision = cx.update(|cx| crate::importer_view::source_revision(cx));
         let result = cx.update(|cx| retry_copied_with(cx, persist_copied_source));
+        cx.update(|cx| assert_eq!(crate::importer_view::source_revision(cx), revision,
+            "retry must not apply the source again"));
         if competing_choice {
             assert!(result.is_err(), "a later equal source application invalidates this retry");
         } else {
@@ -1341,7 +1361,7 @@ mod tests {
         let saved = crate::settings_store::Settings::load(&data).unwrap();
         assert_eq!(saved.source.config.as_ref(), Some(&copied));
         assert!(!saved.source.visual_only);
-        assert!(saved.sync.syncs_config());
+        assert_eq!(saved.sync.config, Some(true));
         assert_eq!(std::fs::read(&copied).unwrap(), bytes);
     }
 
@@ -1380,14 +1400,7 @@ mod tests {
                 None,
                 cx,
             );
-            Some(
-                crate::settings_store::store(cx)
-                    .unwrap()
-                    .read(cx)
-                    .settings()
-                    .source
-                    .clone(),
-            )
+            SourceSnapshot::capture(cx)
         });
         let result = cx.update(|cx| {
             finish_folder_config_with(expected, prepared, cx, |source, cx| {
