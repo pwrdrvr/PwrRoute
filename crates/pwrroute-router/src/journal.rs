@@ -543,7 +543,10 @@ mod tests {
     fn recreated_writer_seeds_receipt_watermark_before_a_late_completion() {
         for days in [1, 2] {
             let dir = tempfile::tempdir().unwrap();
-            let config = JournalConfig { days: 1, ..JournalConfig::new(dir.path(), JournalMode::Full) };
+            let config = JournalConfig {
+                days: 1,
+                ..JournalConfig::new(dir.path(), JournalMode::Full)
+            };
             let old_day = NOON - 3 * 86_400;
             let mut journal = Journal::new(config.clone());
             journal.append(&record(1, at(old_day), Privacy::Full));
@@ -551,11 +554,25 @@ mod tests {
             let old_path = dir.path().join(Day::from(at(old_day)).file_name());
             assert!(!old_path.exists());
             drop(journal);
-            let mut recreated = Journal::new(JournalConfig { days, ..config.clone() });
+            let mut recreated = Journal::new(JournalConfig {
+                days,
+                ..config.clone()
+            });
             recreated.append(&record(2, at(old_day + 1), Privacy::Full));
             assert_eq!(recreated.error(), None);
-            assert!(!old_path.exists(), "recreating with days={days} resurrected an expired day");
-            assert_eq!(config.read(10).unwrap().iter().map(|r| r.id.0).collect::<Vec<_>>(), [3]);
+            assert!(
+                !old_path.exists(),
+                "recreating with days={days} resurrected an expired day"
+            );
+            assert_eq!(
+                config
+                    .read(10)
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.id.0)
+                    .collect::<Vec<_>>(),
+                [3]
+            );
         }
     }
 

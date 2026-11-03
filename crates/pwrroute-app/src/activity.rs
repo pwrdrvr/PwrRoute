@@ -3365,11 +3365,20 @@ mod tests {
 
     fn feed_completion(id: u64, at: SystemTime, privacy: Privacy) -> DispatchRecord {
         let url = "https://completion.example/fixture";
-        let mut completion = record(id, url, None, vec![
-            Step::Matched { by: Matched::Rule { index: id as usize } },
-            Step::Browser { browser: browser("Firefox", "Fixture", url) },
-            Step::Launched { dry_run: false },
-        ]);
+        let mut completion = record(
+            id,
+            url,
+            None,
+            vec![
+                Step::Matched {
+                    by: Matched::Rule { index: id as usize },
+                },
+                Step::Browser {
+                    browser: browser("Firefox", "Fixture", url),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
         completion.received_at = at;
         completion.reduce(privacy);
         completion
@@ -3381,9 +3390,20 @@ mod tests {
         let mut feed = Feed::new(None);
         feed.capacity = 1;
         feed.push(feed_completion(2, at, Privacy::Full));
-        feed.push(feed_completion(1, at - Duration::from_secs(1), Privacy::Host));
-        assert_eq!(feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(), [2]);
-        assert_eq!(feed.today(at).routed, 2, "retention does not discard today's counts");
+        feed.push(feed_completion(
+            1,
+            at - Duration::from_secs(1),
+            Privacy::Host,
+        ));
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [2]
+        );
+        assert_eq!(
+            feed.today(at).routed,
+            2,
+            "retention does not discard today's counts"
+        );
     }
 
     #[test]
@@ -3393,7 +3413,10 @@ mod tests {
         feed.capacity = 1;
         feed.push(feed_completion(2, at, Privacy::None));
         feed.push(feed_completion(1, at, Privacy::Full));
-        assert_eq!(feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(), [2]);
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [2]
+        );
         assert_eq!(feed.records()[0].privacy, Privacy::None);
         assert_eq!(feed.today(at).routed, 2);
         assert_eq!(feed.today(at).private, 1);
@@ -3414,21 +3437,42 @@ mod tests {
         assert_eq!(feed.day, Some(local_day(at)));
         assert_eq!(feed.today(at), counts);
         assert_eq!(feed.tally(at), tally);
-        assert_eq!(feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(), [3, 2]);
-        feed.push(feed_completion(4, at + Duration::from_secs(1), Privacy::None));
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [3, 2]
+        );
+        feed.push(feed_completion(
+            4,
+            at + Duration::from_secs(1),
+            Privacy::None,
+        ));
         assert_eq!(feed.today(at).routed, 2);
         assert_eq!(feed.today(at).private, 1);
         assert_eq!(feed.tally(at).rule(HitKey::Rule(3)), 1);
         assert_eq!(feed.tally(at).rule(HitKey::Rule(4)), 1);
         assert_eq!(feed.tally(at).rule(HitKey::Rule(2)), 0);
-        assert_eq!(feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(), [4, 3]);
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [4, 3]
+        );
         assert_eq!(feed.records()[0].privacy, Privacy::None);
-        assert_eq!(feed.records().iter().filter(|r| r.privacy != Privacy::None).count(), 1, "counted-only records still use buffer capacity");
+        assert_eq!(
+            feed.records()
+                .iter()
+                .filter(|r| r.privacy != Privacy::None)
+                .count(),
+            1,
+            "counted-only records still use buffer capacity"
+        );
         feed.clear();
         assert_eq!(feed.today(at).routed, 2);
         assert_eq!(feed.tally(at).rule(HitKey::Rule(3)), 1);
         feed.capacity = 0;
-        feed.push(feed_completion(5, at + Duration::from_secs(2), Privacy::Host));
+        feed.push(feed_completion(
+            5,
+            at + Duration::from_secs(2),
+            Privacy::Host,
+        ));
         assert!(feed.records().is_empty());
         assert_eq!(feed.today(at).routed, 3);
         assert_eq!(feed.today(at).private, 2);

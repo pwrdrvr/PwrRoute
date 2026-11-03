@@ -1038,14 +1038,25 @@ fn resolver_replacement_during_expansion_uses_current_rules_and_privacy() {
 fn set_journal_recreation_preserves_watermark_while_an_old_dispatch_is_expanding() {
     for days in [1, 2] {
         let dir = tempfile::tempdir().unwrap();
-        let config = JournalConfig { days: 1, ..JournalConfig::new(dir.path(), JournalMode::Full) };
+        let config = JournalConfig {
+            days: 1,
+            ..JournalConfig::new(dir.path(), JournalMode::Full)
+        };
         let (entered, started) = mpsc::channel();
         let gate = Gate::default();
-        let router = Router::spawn(Options {
-            journal: Some(config.clone()),
-            network: Some(Arc::new(BlockNetwork { entered, gate: gate.clone() })),
-            ..Options::default()
-        }, Some(rules_factory(github_rules())), DryRunLauncher::new()).unwrap();
+        let router = Router::spawn(
+            Options {
+                journal: Some(config.clone()),
+                network: Some(Arc::new(BlockNetwork {
+                    entered,
+                    gate: gate.clone(),
+                })),
+                ..Options::default()
+            },
+            Some(rules_factory(github_rules())),
+            DryRunLauncher::new(),
+        )
+        .unwrap();
         let _release = Release(gate.clone());
         let handle = router.handle();
         let enqueue_at = |url: &str, at: SystemTime| {
@@ -1054,18 +1065,37 @@ fn set_journal_recreation_preserves_watermark_while_an_old_dispatch_is_expanding
             let mut request = handle.request(link(url), false).unwrap();
             request.received_at = at;
             let (reply, rx) = mpsc::channel();
-            handle.send(Command::Dispatch { request, reply: Some(reply) }).unwrap();
+            handle
+                .send(Command::Dispatch {
+                    request,
+                    reply: Some(reply),
+                })
+                .unwrap();
             rx
         };
         let today = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
-        let old = enqueue_at("https://bit.ly/old-receipt", today - Duration::from_secs(3 * 86_400));
+        let old = enqueue_at(
+            "https://bit.ly/old-receipt",
+            today - Duration::from_secs(3 * 86_400),
+        );
         started.recv_timeout(DEADLINE).unwrap();
-        let newer = enqueue_at("https://completion.example/newer", today).recv_timeout(DEADLINE).unwrap();
-        handle.set_journal(Some(JournalConfig { days, ..config.clone() })).unwrap();
+        let newer = enqueue_at("https://completion.example/newer", today)
+            .recv_timeout(DEADLINE)
+            .unwrap();
+        handle
+            .set_journal(Some(JournalConfig {
+                days,
+                ..config.clone()
+            }))
+            .unwrap();
         gate.open();
         old.recv_timeout(DEADLINE).unwrap();
         let journaled = handle.journal(10).unwrap();
-        assert_eq!(journaled.iter().map(|r| r.id).collect::<Vec<_>>(), [newer.id], "set_journal days={days} resurrected an expired receipt");
+        assert_eq!(
+            journaled.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [newer.id],
+            "set_journal days={days} resurrected an expired receipt"
+        );
         drop(router);
     }
 }
