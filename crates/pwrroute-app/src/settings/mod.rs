@@ -116,11 +116,6 @@ pub enum Pane {
 }
 
 impl Pane {
-    /// Config Files and Short Links share one engine evaluation.
-    pub fn load_key(self) -> Self {
-        if self == Self::ShortLinks { Self::Configuration } else { self }
-    }
-
     pub const ALL: [Self; 11] = [
         Self::About,
         Self::General,
@@ -351,10 +346,9 @@ fn reload_now(cx: &mut App, pane: Pane) {
     let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
     if let Some(handle) = open {
         let _ = handle.update(cx, |view, _, cx| {
-            let pane = pane.load_key();
             if let Some(dirty) = view.loads.get_mut(&pane) {
                 *dirty = true;
-            } else if view.requested.remove(&pane) || view.pane.load_key() == pane {
+            } else if view.requested.remove(&pane) || view.pane == pane {
                 view.model.pending.insert(pane);
                 view.model.problems.remove(&pane);
                 cx.notify();
@@ -422,7 +416,6 @@ fn load_future<T: Send + 'static>(
     apply: impl FnOnce(&mut SettingsModel, T, &mut App) + 'static,
 ) {
     let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else { return; };
-    let pane = pane.load_key();
     let Ok(start) = handle.update(cx, |view, _, _| {
         if let Some(dirty) = view.loads.get_mut(&pane) {
             *dirty = true;
@@ -655,7 +648,7 @@ impl SettingsWindow {
     }
 
     fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
-        let pane = self.pane.load_key();
+        let pane = self.pane;
         if self.model.pending.contains(&pane) || self.model.problems.contains_key(&pane) {
             if self.model.pending.contains(&pane) && self.requested.insert(pane) {
                 self.request(SettingsRequest::LoadPane(pane), window, cx);

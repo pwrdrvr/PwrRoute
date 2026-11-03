@@ -449,6 +449,31 @@ mod tests {
     use super::super::model::JournalLevel;
     use super::*;
 
+    #[gpui_kit::test]
+    fn privacy_saves_before_queuing_and_a_failed_save_does_not_apply(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (sender, receiver) = async_channel::bounded::<Command>(16);
+        cx.update(|cx| {
+            settings_store::install(SettingsStore::load(Some(dir.path().into())), None, cx);
+            cx.set_global(Commands(sender));
+            handle_request(&SettingsRequest::SetRetention { count: 321, hours: 48 }, cx);
+            assert_eq!(crate::settings_store::Settings::load(dir.path()).unwrap().activity.keep.count, 321);
+            assert_eq!(receiver.len(), 1);
+        });
+        receiver.try_recv().unwrap()().unwrap();
+        // A regular file cannot hold settings.json; the in-memory setting and
+        // command queue must remain unchanged when persistence fails.
+        let blocked = dir.path().join("blocked");
+        fs::write(&blocked, "fixture").unwrap();
+        cx.update(|cx| {
+            settings_store::install(SettingsStore::load(Some(blocked)), None, cx);
+            let before = settings_store::store(cx).unwrap().read(cx).retention();
+            handle_request(&SettingsRequest::SetRetention { count: 654, hours: 96 }, cx);
+            assert_eq!(settings_store::store(cx).unwrap().read(cx).retention(), before);
+            assert!(receiver.is_empty());
+        });
+    }
+
     #[test]
     fn the_model_describes_the_defaults_without_a_router() {
         let privacy = build(None, None, None, None);

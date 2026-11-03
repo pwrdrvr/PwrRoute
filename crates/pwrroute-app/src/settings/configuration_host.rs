@@ -80,7 +80,7 @@ impl FinickyRulesFacts {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ConfigFacts {
     pub path: PathBuf,
     /// Rewrites and handlers, when the config loaded.
@@ -116,8 +116,21 @@ pub fn load(cx: &mut App) {
         |model, configuration| {
             let problem = model.configuration.everything_else.as_ref().and_then(|field| field.problem.clone());
             model.configuration = configuration;
+            model.pending.remove(&super::Pane::ShortLinks);
             if let Some(field) = model.configuration.everything_else.as_mut() { field.problem = problem; }
         });
+}
+
+/// Short Links needs no browser scan, rule descriptions or import probes.
+pub fn load_short_links(cx: &mut App) {
+    let source = router::routing_source();
+    settings::load(cx, super::Pane::ShortLinks, move || {
+        let config = source.config.and_then(|path| {
+            let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).ok()?;
+            Some(ConfigFacts { path, shorteners: Some(engine.short_links().domains.clone()), ..Default::default() })
+        });
+        short_links(&Facts { config, ..Default::default() }, std::env::home_dir().as_deref())
+    }, |model, short_links| model.configuration.short_links = short_links);
 }
 
 /// Cached readback for the save handler; evaluating the config is asynchronous.
@@ -957,6 +970,7 @@ pub(crate) fn refresh(cx: &mut App) {
         return;
     }
     settings::reload(cx, super::Pane::Configuration);
+    settings::reload(cx, super::Pane::ShortLinks);
     super::system_host::refresh_diagnostics(cx);
 }
 

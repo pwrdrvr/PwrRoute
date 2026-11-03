@@ -33,7 +33,12 @@ the nav, General follows outside the groups, Browsers opens first.
   window never depends on their crates (`crate::mcp` fills Local agents).
   `fixtures.rs` is contrived data transcribed from the design; keep it that
   way: it draws the `screens` example and `tests.rs`, never the shipped
-  window, which `settings_live.rs` fills from the producers below.
+  window, which `settings_live.rs` seeds with cheap initial values. Expensive
+  panes stay pending until selected. `settings::load` runs pure producers on
+  the background executor, with one active and one replacement per pane
+  across close/reopen; completion checks the original window and discards
+  invalidated results. Loading and errors keep the nav available. Short Links
+  loads only its domains, without a browser scan or import review.
 - **Producers (`*_host.rs`).** Each builds its pane from the real thing and
   answers its requests; each has a pure `build` over plain facts, which the
   tests feed from tempdirs, never from the user's files. `browsers_host`:
@@ -66,8 +71,9 @@ the nav, General follows outside the groups, Browsers opens first.
   back after a change (`settle`) is deferred; a change that was not
   saved comes back as the `.errl` line "Not saved: {reason}." and the
   control shows what the file still says.
-  `follow` reads the pane again when the window comes to the front and
-  the router's source or either file's time changed. `sync_host`: the
+  `follow` invalidates a visited pane on activation; its producer reads files
+  and the engine offthread. Save and conflict checks still go through the
+  main window's `RulesStore`. Never evaluate an engine in a readback callback. `sync_host`: the
   sync service's `Status` (`crate::sync::feed`), the places
   `pwrroute_sync::detect` finds, `machine.json` and the synced
   destinations and sets; a folder is added only from Add or Choose…, a

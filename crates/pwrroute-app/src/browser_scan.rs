@@ -114,7 +114,8 @@ struct ScanGlobal {
 impl Global for ScanGlobal {}
 
 /// Makes `env` the machine the scan reads. Nothing is read until
-/// [`apps`] is first asked.
+/// [`apps`] is first asked; that call starts background work and returns
+/// the last completed snapshot immediately.
 pub fn install(env: Env, cx: &mut App) {
     cx.set_global(ScanGlobal { env, apps: None, error: None, running: false, again: false,
         callbacks: Vec::new(), #[cfg(test)] producer: None });
@@ -130,9 +131,9 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
     });
 }
 
-/// The browsers on this machine, scanned the first time this is called.
-/// Before [`install`] (the window harness) the real machine is read each
-/// time, as the pickers always did.
+/// The last completed scan, starting the initial scan if needed. Before
+/// completion, callers use `is_loading` instead of treating empty as no apps.
+/// Without installation (the window harness), no machine is read.
 pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() { return Vec::new(); }
     if !has_run(cx) && error(cx).is_none() { start(cx, false); }
@@ -212,7 +213,8 @@ pub fn location_of(value: &str, cx: &App) -> Option<PathBuf> {
         .map(|app| app.location.clone())
 }
 
-/// Reads the machine again: Settings' Rescan and first run's Look again.
+/// Requests another scan and returns the cached snapshot immediately.
+/// Concurrent rescans coalesce; completion refreshes consumers on GPUI.
 /// The apps' icons are read again too.
 pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
     crate::app_icons::forget(cx);

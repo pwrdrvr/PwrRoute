@@ -13,10 +13,8 @@ use crate::settings::{
 };
 use crate::{appearance, default_browser, mcp};
 
-/// Every pane, read fresh. The default-browser chip follows the window from
-/// here on, as the main window's does, and Configuration reads its files
-/// again when the window comes to the front after another writer changed
-/// them.
+/// A cheap initial model. Expensive panes stay pending until selected;
+/// producers capture GPUI data and build their snapshots in the background.
 pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
     default_browser::watch(window, cx);
     appearance::watch(window);
@@ -24,7 +22,7 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
     let local_agents = mcp::local_agents(cx);
     SettingsModel {
         pending: [crate::settings::Pane::Browsers, crate::settings::Pane::Configuration,
-            crate::settings::Pane::Privacy, crate::settings::Pane::Sync,
+            crate::settings::Pane::Privacy, crate::settings::Pane::ShortLinks, crate::settings::Pane::Sync,
             crate::settings::Pane::Diagnostics, crate::settings::Pane::Updates].into(),
         problems: Default::default(),
         general: appearance::general(cx),
@@ -50,10 +48,11 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
     }
     if let SettingsRequest::LoadPane(pane) = request {
         use crate::settings::{self, Pane};
-        let pane = pane.load_key();
+        let pane = *pane;
         cx.defer(move |cx| match pane {
             Pane::Browsers => browsers_host::load(cx),
             Pane::Configuration => configuration_host::load(cx),
+            Pane::ShortLinks => configuration_host::load_short_links(cx),
             Pane::Privacy => privacy_host::load(cx),
             Pane::Sync => sync_host::load(cx),
             Pane::Diagnostics => system_host::load(cx),
@@ -95,6 +94,31 @@ mod tests {
             });
             settings::open(cx, Some(settings::Pane::About));
             assert!(!browser_scan::has_run(cx), "About must not run another pane's browser scan");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn short_links_loads_without_starting_the_browser_or_configuration_panes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            browser_scan::install(pwrroute_browsers::Env::fixture(
+                pwrroute_browsers::Platform::current(), std::env::temp_dir()), cx);
+            settings::install(cx);
+            cx.set_global(settings::SettingsHost {
+                model: Rc::new(super::model),
+                on_request: Rc::new(|request, _, cx| super::handle_request(request, cx)),
+            });
+            settings::open(cx, Some(settings::Pane::ShortLinks));
+            super::handle_request(&settings::model::SettingsRequest::LoadPane(settings::Pane::ShortLinks), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!browser_scan::is_loading(cx));
+            assert!(!browser_scan::has_run(cx));
+            let handle = cx.windows().into_iter().find_map(|window| window.downcast::<settings::SettingsWindow>()).unwrap();
+            handle.update(cx, |view, _, _| {
+                assert!(!view.model.pending.contains(&settings::Pane::ShortLinks));
+                assert!(view.model.pending.contains(&settings::Pane::Configuration));
+            }).unwrap();
         });
     }
 }
