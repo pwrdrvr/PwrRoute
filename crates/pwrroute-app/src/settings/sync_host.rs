@@ -673,15 +673,18 @@ struct PreparedConfig {
 }
 
 impl PreparedConfig {
-    fn publish(&self) -> anyhow::Result<()> {
+    fn publish(&self) -> anyhow::Result<PathBuf> {
+        // Cooperate with sync's final revision/write boundary. GPUI must
+        // refuse contention immediately rather than wait for a provider pass.
+        let held = pwrroute_sync::LocalFile::try_lock(&self.path)?;
         if let Some(found) = self.candidates.iter().find(|path| path.is_file()) {
             anyhow::bail!(
                 "{} appeared while the config was being prepared",
                 found.display()
             );
         }
-        std::fs::hard_link(&self.staging, &self.path)?;
-        Ok(())
+        std::fs::hard_link(&self.staging, held.path())?;
+        Ok(held.path().to_path_buf())
     }
 }
 
@@ -748,13 +751,13 @@ fn finish_folder_config_with(
         expected == current,
         "routing source changed while the config was prepared"
     );
-    prepared.publish()?;
+    let path = prepared.publish()?;
     let mut source = current.unwrap_or_default();
     source.visual_only = false;
     // Pin the copied file: saving again must not discover a different config.
-    source.config = Some(prepared.path.clone());
-    if !source.dismissed.contains(&prepared.path) {
-        source.dismissed.push(prepared.path.clone());
+    source.config = Some(path.clone());
+    if !source.dismissed.contains(&path) {
+        source.dismissed.push(path);
     }
     cx.set_global(CopiedConfig(Some(source)));
     retry_copied_with(cx, persist)
@@ -1244,7 +1247,7 @@ mod tests {
             Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())
         })
         .unwrap();
-        let path = home.join(".finicky.js");
+        let path = home.canonicalize().unwrap().join(".finicky.js");
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
         let observed = calls.clone();
         let expected = cx.update(|cx| {
