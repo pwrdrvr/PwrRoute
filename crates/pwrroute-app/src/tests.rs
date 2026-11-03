@@ -7752,3 +7752,122 @@ fn engine_work_menu_opens_before_impact_counts(cx: &mut TestAppContext) {
             "opening the menu evaluated recent links on GPUI");
     });
 }
+
+struct EngineGate {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    _result: async_channel::Receiver<()>,
+}
+impl Drop for EngineGate {
+    fn drop(&mut self) { if let Some(release) = self.release.take() { let _ = release.send(()); } }
+}
+fn gate_engine(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> EngineGate {
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let result = view.read_with(cx, |app, _| app.engine_worker.once(crate::engine_worker::Lane::Config, move || {
+        entered.send(()).unwrap();
+        blocked.recv().unwrap();
+    }));
+    started.recv().unwrap();
+    EngineGate { release: Some(release), _result: result }
+}
+
+#[gpui_kit::test]
+fn engine_work_slow_job_keeps_menu_and_edits_immediate(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        let row = crate::rule_menu::MenuRow::Rule(Selection::Handler(2));
+        app.toggle_row_actions(row, cx);
+        assert_eq!(app.row_actions.menu, Some(row));
+        app.store.set_pattern(Selection::Handler(0), 0, "new.example.com/*");
+        app.refresh(cx);
+        assert_eq!(app.store.edited().rules[0].patterns[0], "new.example.com/*");
+        assert!(app.rail.as_ref().unwrap().try_result.is_none());
+    });
+    drop(gate);
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.rail.as_ref().unwrap().try_result.is_some()));
+}
+
+#[gpui_kit::test]
+fn engine_work_ready_old_preview_cannot_replace_new_edit_or_source(cx: &mut TestAppContext) {
+    let dir = scratch("stale-preview-source");
+    let one = dir.join("one.js");
+    let two = dir.join("two.js");
+    std::fs::write(&one, "export default { defaultBrowser: 'Safari' }").unwrap();
+    std::fs::write(&two, "export default { defaultBrowser: 'Firefox' }").unwrap();
+    let (view, cx) = open(cx);
+    view.update(cx, |app, cx| {
+        app.set_config(Some(one), cx);
+        let rail = app.rail.as_mut().unwrap();
+        rail.sample_edited = true;
+        rail.sample.set("https://unmatched.example.com/old");
+        app.try_it(cx);
+    });
+    // Completion is ready, but GPUI has not delivered it yet.
+    view.read_with(cx, |app, _| app.engine_worker.client()).wait_idle();
+    view.update(cx, |app, cx| {
+        app.set_config(Some(two.clone()), cx);
+        app.store.set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
+        app.refresh(cx);
+    });
+    draw(cx);
+    let (path, result) = view.read_with(cx, |app, _| (app.config.as_ref().unwrap().file.clone(), app.rail.as_ref().unwrap().try_result.clone()));
+    assert_eq!(path, two);
+    let result = format!("{result:?}");
+    assert!(result.contains("Firefox"), "{result}");
+    assert!(!result.contains("Safari"), "{result}");
+}
+
+#[gpui_kit::test]
+fn engine_work_sheet_rejects_changed_validation_and_cancelled_identity(cx: &mut TestAppContext) {
+    let dir = scratch("stale-sheet-validation");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    let before = view.read_with(cx, |app, _| app.store.written());
+    view.update(cx, |app, cx| app.set_add_rule(|s| { s.browser = "Firefox".into(); s.pattern.set("github.com/*"); }, cx));
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx));
+        app.set_add_rule(|s| { s.browser = "Safari".into(); s.only_from = !s.only_from; s.position = crate::activity_actions::Position::Bottom; }, cx);
+        assert_eq!(app.store.written(), before);
+    });
+    drop(gate);
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before, "stale validation added a different rule");
+    // A second gated check belongs to this sheet alone.
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| { assert!(!app.add_rule_from_sheet(cx)); });
+    view.update_in(cx, |app, window, cx| { app.cancel_add_rule(window, cx); });
+    drop(gate);
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()));
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
+}
+
+#[gpui_kit::test]
+fn engine_work_collision_revision_never_claims_old_pattern_is_clear(cx: &mut TestAppContext) {
+    let dir = scratch("stale-sheet-collisions");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        app.set_add_rule(|s| s.pattern.set("github.com/*"), cx);
+        app.add_rule_input_changed(cx);
+        app.set_add_rule(|s| s.pattern.set("never.example.com/*"), cx);
+        app.add_rule_input_changed(cx);
+        app.store.set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
+        app.refresh(cx);
+        assert_eq!(app.actions.sheet.as_ref().unwrap().collision_error.as_deref(), Some("Checking matches…"));
+    });
+    drop(gate);
+    draw(cx);
+    view.read_with(cx, |app, _| {
+        let sheet = app.actions.sheet.as_ref().unwrap();
+        assert_eq!(sheet.pattern.text, "never.example.com/*");
+        assert!(sheet.collisions.is_empty());
+        assert!(sheet.collision_error.is_none());
+    });
+}

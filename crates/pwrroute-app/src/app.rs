@@ -689,6 +689,7 @@ impl PwrRoute {
             self.rebuild_rail(cx);
         }
         self.try_it(cx);
+        self.refresh_add_rule_checks(cx);
         if self.store.needs_save() {
             self.schedule_save(cx);
         }
@@ -848,6 +849,7 @@ impl PwrRoute {
         let shown = self.config.as_ref().map(|config| config.path.clone());
         self.activity.set_config(shown, cx);
         self.try_it(cx);
+        self.refresh_add_rule_checks(cx);
         cx.notify();
     }
 
@@ -869,6 +871,7 @@ impl PwrRoute {
         self.probe.set_rules(self.store.edited());
         self.tests.set_rules(self.store.edited());
         self.rebuild_rail(cx);
+        self.refresh_add_rule_checks(cx);
         if self.tests.counts() != (0, 0) {
             self.schedule_tests(cx);
         }
@@ -1606,7 +1609,7 @@ impl PwrRoute {
             let engine = Engine::load(&path, Rc::new(NativeHost::new()), Limits::default());
             let description = engine.as_ref().ok().and_then(|engine| engine.describe().ok().flatten());
             let config = ConfigInCharge::new(&path, home.as_deref(), engine.as_ref());
-            let stamps = engine.as_ref().map_or_else(|| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
+            let stamps = engine.as_ref().map_or_else(|_| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
             (config, description, stamps)
         });
         self.engine_tasks[Lane::Config as usize] = Some(cx.spawn(async move |this, cx| {

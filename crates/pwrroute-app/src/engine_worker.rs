@@ -201,7 +201,7 @@ pub fn service(cx: &mut gpui_kit::App) -> Client {
 
 #[cfg(test)]
 impl Client {
-    fn wait_idle(&self) {
+    pub(crate) fn wait_idle(&self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let queue = self.shared.queue.lock().unwrap();

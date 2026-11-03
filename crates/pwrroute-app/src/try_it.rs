@@ -1019,3 +1019,41 @@ pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> 
     ;
     move || step().map(|report| (report, stamps.clone()))
 }
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+    #[test]
+    fn saved_test_steps_match_engine_completion_and_failure() {
+        let mut rules = crate::fixtures::rules_file();
+        rules.rules[0].examples = vec!["https://meet.google.com/contrived".into(), "https://unmatched.example.com/".into()];
+        rules.tests.push(pwrroute_engine::RouteTest { original_url: None, url: "https://example.com/".into(), opener: None,
+            expect: pwrroute_engine::Expectation { browser: "Firefox".into(), profile: None, url: None } });
+        let expected = load(None, &rules).unwrap().test_rules(None).unwrap();
+        assert!(expected.total > 0);
+        let mut steps = test_steps(None, rules);
+        let report = loop { if let Some((report, _)) = steps() { break report.unwrap(); } };
+        assert_eq!(report, expected);
+        let mut failed = test_steps(Some(PathBuf::from("/missing/contrived-config.js")), RulesFile::default());
+        assert!(failed().unwrap().0.is_err());
+    }
+    #[test]
+    fn saved_test_result_tokens_reject_edits_new_requests_and_new_sources() {
+        let mut runs = TestRuns::new(None, RulesFile::default());
+        let (old, _, _) = runs.begin();
+        let mut changed = RulesFile::default();
+        changed.default_browser = "Firefox".into();
+        runs.set_rules(changed);
+        assert!(!runs.complete(old, Ok(TestReport::default())));
+        let (old, _, _) = runs.begin();
+        let (latest, _, _) = runs.begin();
+        assert!(!runs.complete(old, Ok(TestReport::default())));
+        assert!(runs.complete(latest, Err("contrived failure".into())));
+        assert!(matches!(runs.report(), Some(Err(_))));
+        assert!(runs.ran_at().is_some());
+        let (previous_source, _, _) = runs.begin();
+        let mut replacement = TestRuns::new(Some(PathBuf::from("other.js")), RulesFile::default());
+        let _ = replacement.begin();
+        assert!(!replacement.complete(previous_source, Ok(TestReport::default())));
+    }
+}

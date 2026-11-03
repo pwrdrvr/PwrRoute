@@ -1209,6 +1209,9 @@ impl PwrRoute {
     /// The recent links in memory the sheet's pattern would also catch,
     /// by Finicky's own matching.
     fn find_collisions(&mut self, sheet: &mut AddRule, cx: &mut Context<'_, Self>) {
+        sheet.check_request = std::rc::Rc::new(());
+        sheet.verified = None;
+        self.engine_worker.cancel(crate::engine_worker::Lane::CheckRule);
         sheet.match_request = std::rc::Rc::new(());
         self.engine_worker.cancel(crate::engine_worker::Lane::Collisions);
         sheet.collisions.clear();
@@ -1289,6 +1292,14 @@ impl PwrRoute {
         }));
     }
 
+    pub(crate) fn refresh_add_rule_checks(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(mut sheet) = self.actions.sheet.take() {
+            sheet.problem = None;
+            self.find_collisions(&mut sheet, cx);
+            self.actions.sheet = Some(sheet);
+        }
+    }
+
     /// Picks one of the suggested patterns.
     pub fn pick_candidate(&mut self, index: usize, cx: &mut Context<'_, Self>) {
         let Some(mut sheet) = self.actions.sheet.take() else {
@@ -1340,6 +1351,9 @@ impl PwrRoute {
     pub fn set_add_rule(&mut self, change: impl FnOnce(&mut AddRule), cx: &mut Context<'_, Self>) {
         if let Some(sheet) = &mut self.actions.sheet {
             change(sheet);
+            sheet.check_request = std::rc::Rc::new(());
+            sheet.verified = None;
+            self.engine_worker.cancel(crate::engine_worker::Lane::CheckRule);
             sheet.problem = None;
             cx.notify();
         }
