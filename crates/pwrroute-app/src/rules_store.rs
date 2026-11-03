@@ -1482,19 +1482,25 @@ impl RulesStore {
     }
 
     fn write(&mut self, force: bool) -> Result<(), String> {
+        let file_lock = self
+            .path
+            .as_deref()
+            .map(pwrroute_sync::LocalFile::try_lock)
+            .transpose()
+            .map_err(|error| format!("Could not lock rules.json: {error}"))?;
         if let Some(reason) = self.refusal(force) {
             return Err(reason);
         }
-        let Some(path) = self.path.clone() else {
+        let Some(path) = file_lock.as_ref().map(pwrroute_sync::LocalFile::path) else {
             return Err("No configuration directory: edits last for this session.".into());
         };
         self.status = Status::Saving;
         let file = self.written();
-        file.save(&path)
+        file.save(path)
             .map_err(|error| format!("Could not save rules.json: {error:#}"))?;
         // The file as written is the file as read: the store's own save is
         // not a change on disk.
-        self.stamp = Stamp::of(&path);
+        self.stamp = Stamp::of(path);
         // What was written is what each entry's saved version now is.
         let problems = self.problems();
         let held = self.draft.as_ref().map(|draft| draft.id);
@@ -1651,6 +1657,29 @@ mod tests {
 
     fn fixture() -> RulesFile {
         crate::fixtures::rules_file()
+    }
+
+    #[test]
+    fn sync_contention_preserves_unsaved_rules_and_a_later_save_rechecks_disk() {
+        let dir = scratch("sync-contention");
+        let path = dir.join("rules.json");
+        fixture().save(&path).unwrap();
+        let mut store = RulesStore::load(Some(path.clone()));
+        store.set_default_browser("Firefox", "");
+        let held = pwrroute_sync::LocalFile::lock(&path).unwrap();
+        assert!(store.save().unwrap_err().contains("try saving again"));
+        assert!(store.needs_save());
+        assert_eq!(store.edited().default_browser, "Firefox");
+        let remote = RulesFile {
+            default_browser: "Arc".into(),
+            ..fixture()
+        };
+        remote.save(held.path()).unwrap();
+        drop(held);
+        assert_eq!(store.save(), Err(CHANGED_ON_DISK.to_owned()));
+        assert_eq!(RulesFile::load(&path).unwrap().default_browser, "Arc");
+        assert_eq!(store.edited().default_browser, "Firefox");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

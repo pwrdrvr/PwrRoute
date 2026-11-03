@@ -10,6 +10,11 @@ maps the modules; the PR that added it has the design note.
   nothing until `Syncer::resolve`. Whatever a pull, a push or a resolution
   replaces is backed up first (`state.rs`, the newest `KEEP_BACKUPS`).
   Never add a "newest wins" shortcut.
+- **Coordinate local writes.** `LocalFile` locks a persistent sibling of the
+  resolved target. Observe the cloud outside the guard; hold it from the
+  current local read through backup/apply, and recheck content before apply.
+  App and MCP writers share it; UI saves use `try_lock` and report contention.
+  Hand editors need not honor it: this is not a filesystem compare-and-swap.
 - **Settle before applying.** Another machine's file is applied only once
   the manifest lists its hash, or it stayed the same across two passes, and
   it passes the item's `Check`. A half-synced file must never be applied.

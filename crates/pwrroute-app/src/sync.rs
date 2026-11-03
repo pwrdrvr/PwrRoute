@@ -10,8 +10,8 @@
 //! does; the router's reloader already follows the file.
 //!
 //! Every writer of `rules.json` (the Rules screen's store, first run,
-//! Settings, `pwrroute_rules_apply`) writes the local file as before; the
-//! sync thread is the only thing that copies it to or from a folder. A
+//! Settings, `pwrroute_rules_apply`) shares `LocalFile` with sync around its
+//! revision check and write; the sync thread is the only thing that copies it to or from a folder. A
 //! save is a local change the schedule notices within two ticks, and the
 //! window coming to the front, an MCP write and Sync now wake it at once.
 

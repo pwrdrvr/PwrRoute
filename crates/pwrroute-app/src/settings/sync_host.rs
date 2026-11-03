@@ -628,6 +628,8 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
 /// there: a staging file beside it, then a hard link, which fails if
 /// `path` exists, so discovery never reads half a config.
 fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let held = pwrroute_sync::LocalFile::try_lock(path)?;
+    let path = held.path();
     let staging = path.with_extension(format!("pwrroute-{}.tmp", std::process::id()));
     let written = std::fs::write(&staging, bytes).and_then(|()| std::fs::hard_link(&staging, path));
     let _ = std::fs::remove_file(&staging);

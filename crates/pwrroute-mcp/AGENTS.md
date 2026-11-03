@@ -69,6 +69,8 @@ door; this crate supersedes that part of it.
   it. Backend calls run on blocking threads. `LiveRules` holds one lock
   from the revision check to the write (and across a read), so two agents
   writing at once cannot both pass the check; the loser gets a conflict.
+  `LocalFile` from pwrroute-sync also guards its read and revision/check/write
+  against sync and the app's other writers.
 - **Tests run a real server.** `tests/` start one on a private socket (a
   pipe on Windows) with the fakes, and drive it with rmcp clients over the
   link and through the `pwrroute-mcp-proxy` binary. CI runs them on macOS,

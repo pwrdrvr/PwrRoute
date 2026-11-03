@@ -6073,6 +6073,7 @@ dependencies = [
  "pwrroute-engine",
  "pwrroute-os",
  "pwrroute-router",
+ "pwrroute-sync",
  "rmcp",
  "schemars",
  "serde",
