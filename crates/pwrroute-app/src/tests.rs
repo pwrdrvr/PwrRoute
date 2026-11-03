@@ -3517,6 +3517,57 @@ fn review_source_retry_cannot_outlive_undo_import(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui_kit::test]
+fn review_rules_retry_does_not_invalidate_the_open_importer_stage(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let config = importer_config();
+    let mut settings = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+    settings
+        .update(|settings| settings.source.config = Some(config.clone()))
+        .unwrap();
+    cx.update(|cx| crate::settings_store::install(settings, None, cx));
+    let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(dir.path()));
+    std::fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
+    cx.cx.update(|cx| {
+        crate::importer_view::open_with(config.clone(), true, Some(config.clone()), cx)
+    });
+    let window = importer_window(cx).unwrap();
+    window
+        .update(&mut cx.cx, |view, _, _| {
+            view.model.source = crate::importer::SourceChoice::VisualOnly
+        })
+        .unwrap();
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    let button = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .unwrap();
+    importer.simulate_click(button.center(), Modifiers::default());
+    let window = importer_window(cx).unwrap();
+    let done = view
+        .read_with(cx, |app, _| app.last_import.clone())
+        .unwrap();
+    std::fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
+    click(cx, crate::importer_view::SOURCE_RETRY_ID);
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    let retry = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .unwrap();
+    importer.simulate_click(retry.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        importer_window(cx).is_none(),
+        "its own persistence retry keeps the import stage valid"
+    );
+    let after = view
+        .read_with(cx, |app, _| app.last_import.clone())
+        .unwrap();
+    assert!(after.problem.is_none());
+    assert_eq!(after.count, done.count);
+    assert_eq!(after.previous, done.previous);
+}
+
 /// Neither an import save nor either half of Undo may consume the
 /// original snapshot on a transient file-save failure.
 #[gpui_kit::test]

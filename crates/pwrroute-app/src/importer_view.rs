@@ -236,7 +236,7 @@ impl ImportSession {
             .ok_or("The import is no longer pending. Review it again.")?;
         saved.validate(cx)?;
         if let Some(source) = saved.source {
-            let result = persist_source(source, false, cx);
+            let result = persist_source(source, cx);
             if cx.has_global::<SourceNotice>() {
                 cx.global_mut::<SourceNotice>().rules = Some(saved.rules);
             }
@@ -721,13 +721,13 @@ fn switch_source(model: &ImportModel, cx: &mut App) -> Result<(), String> {
     if model.final_source() == SourceChoice::KeepConfig {
         // Keep owns no routing transition. In particular, --config may
         // differ from settings.json; persisting must not replace it.
-        return persist_source(current, false, cx);
+        return persist_source(current, cx);
     }
     let wanted = model.source_after(&current);
     if model.stops_config() {
         set_source_and_show(wanted, cx)
     } else {
-        persist_source(wanted, false, cx)
+        persist_source(wanted, cx)
     }
 }
 
@@ -747,7 +747,6 @@ fn source_revision(cx: &App) -> u64 {
 struct SourceNotice {
     source: SourceSettings,
     reason: String,
-    apply: bool,
     source_revision: u64,
     rules: Option<SavedRules>,
 }
@@ -755,7 +754,7 @@ struct SourceNotice {
 impl Global for SourceNotice {}
 
 impl SourceNotice {
-    fn retry(&self, app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Result<(), String> {
+    fn retry(&self, cx: &mut App) -> Result<(), String> {
         if self.source_revision != source_revision(cx) {
             if let Some(rules) = &self.rules {
                 rules.invalidate();
@@ -763,22 +762,17 @@ impl SourceNotice {
             return Err("The source choice changed. Review it again before saving.".to_owned());
         }
         let result = (|| {
-            if !self.apply
-                && settings_store::store(cx)
-                    .is_none_or(|store| store.read(cx).settings().source != self.source)
+            if settings_store::store(cx)
+                .is_none_or(|store| store.read(cx).settings().source != self.source)
             {
                 return Err("The source choice changed. Review it again before saving.".to_owned());
             }
             if let Some(rules) = &self.rules {
                 rules.check()?;
             }
-            if self.apply {
-                let applied = set_source(self.source.clone(), cx);
-                app.set_config(applied.config, cx);
-                applied.saved
-            } else {
-                persist_source(self.source.clone(), false, cx)
-            }
+            // The failed choice already applied to this session. Retrying
+            // persistence must not create another routing transition.
+            persist_source(self.source.clone(), cx)
         })();
         if cx.has_global::<SourceNotice>() {
             let notice = cx.global_mut::<SourceNotice>();
@@ -793,7 +787,7 @@ impl SourceNotice {
 
 /// Persist metadata or a pending answer without recomputing routing from
 /// settings; a command-line override is deliberately outside that file.
-fn persist_source(source: SourceSettings, apply: bool, cx: &mut App) -> Result<(), String> {
+fn persist_source(source: SourceSettings, cx: &mut App) -> Result<(), String> {
     let saved = match settings_store::store(cx) {
         Some(store) => store.update(cx, |store, _| {
             store.update(|settings| settings.source = source.clone())
@@ -810,7 +804,6 @@ fn persist_source(source: SourceSettings, apply: bool, cx: &mut App) -> Result<(
         Err(reason) => cx.set_global(SourceNotice {
             source,
             reason: reason.clone(),
-            apply,
             source_revision: source_revision(cx),
             rules: None,
         }),
@@ -831,7 +824,7 @@ pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> SourceApplied 
     let choice = source.choice(discovery::config_candidates(
         &discovery::Environment::current(),
     ));
-    let saved = persist_source(source, true, cx);
+    let saved = persist_source(source, cx);
     let config = match &choice {
         ConfigChoice::None => None,
         ConfigChoice::Path(path) => Some(path.canonicalize().unwrap_or_else(|_| path.clone())),
@@ -977,8 +970,8 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
                 .child(
                     small_button(SOURCE_RETRY_ID, "Retry saving source", false)
                         .map(crate::accessibility::clickable)
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            let _ = notice.retry(this, cx);
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            let _ = notice.retry(cx);
                             cx.notify();
                         })),
                 ),
@@ -1007,7 +1000,7 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
                 row.child(small_button(SOURCE_RETRY_ID, "Retry saving source", false)
                     .map(crate::accessibility::clickable)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        let result = notice.retry(this, cx);
+                        let result = notice.retry(cx);
                         if let Some(done) = &mut this.last_import {
                             done.problem = result.err();
                         }
