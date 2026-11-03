@@ -184,6 +184,14 @@ impl RulesTester for LazyTester {
     fn collisions(&self, pattern: &str, urls: &[String]) -> anyhow::Result<Vec<String>> {
         self.get()?.collisions(pattern, urls)
     }
+
+    fn collisions_batch(
+        &self,
+        patterns: &[String],
+        urls: &[String],
+    ) -> anyhow::Result<Vec<Vec<String>>> {
+        self.get()?.collisions_batch(patterns, urls)
+    }
 }
 
 /// What a prompt asks of the window thread.
@@ -1594,6 +1602,38 @@ mod tests {
 
     use super::*;
     use crate::settings::{Pane, SettingsWindow};
+
+    #[test]
+    fn lazy_tester_forwards_one_batch_to_one_engine_job() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = reads.clone();
+        let engine = EngineTester::over(
+            move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                ("1".to_owned(), pwrroute_engine::RulesFile::default())
+            },
+            Limits::default(),
+        )
+        .unwrap();
+        let tester = LazyTester {
+            choice: ConfigChoice::None,
+            rules_path: None,
+            tester: Mutex::new(Some(engine)),
+        };
+        let patterns = ["docs.example.org/*", "*.example.org/*"].map(str::to_owned);
+        let urls = ["https://docs.example.org/page".to_owned()];
+        assert_eq!(
+            tester.collisions_batch(&patterns, &urls).unwrap(),
+            vec![urls.to_vec(), urls.to_vec()]
+        );
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            2,
+            "initial load plus one batch job"
+        );
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir =

@@ -23,7 +23,9 @@ use pwrroute_engine::{
     Opener, Reloader, RulesFile, Source, Sources, Stage, TestReport,
 };
 
-use crate::backend::{Resolver, RulesTester, StepKind, StepSource, Trace, TraceStep};
+use crate::backend::{
+    Resolver, RulesTester, StepKind, StepSource, Trace, TraceStep, match_patterns,
+};
 
 /// What the thread owns and keeps current. Built on the thread, so it may
 /// hold an [`Engine`].
@@ -57,11 +59,10 @@ impl Loader for Following {
     }
 }
 
-type Job = Box<dyn FnOnce(&Engine) -> Result<serde_json::Value> + Send>;
+type Job = Box<dyn FnOnce(Result<&Engine>) + Send>;
 
-/// Hands jobs to an engine on its own thread, one at a time, and returns
-/// each answer as JSON (the engine's types all serialize) so the thread
-/// stays generic over what is asked of it.
+/// Hands jobs to an engine on its own thread, one at a time. Each job
+/// returns its typed answer or the loader's error through its own channel.
 #[derive(Debug, Clone)]
 pub struct EngineThread {
     jobs: mpsc::Sender<Job>,
@@ -92,7 +93,7 @@ impl EngineThread {
                 for job in inbox {
                     // The answer is sent inside the job; a job whose asker
                     // has gone just drops its answer.
-                    let _ = loader.engine().and_then(job);
+                    job(loader.engine());
                 }
             })
             .context("starting the engine thread")?;
@@ -109,9 +110,8 @@ impl EngineThread {
     ) -> Result<T> {
         let (reply, answer) = mpsc::channel::<Result<T>>();
         let job: Job = Box::new(move |engine| {
-            let result = f(engine);
+            let result = engine.and_then(f);
             let _ = reply.send(result);
-            Ok(serde_json::Value::Null)
         });
         self.jobs
             .send(job)
@@ -277,6 +277,108 @@ impl RulesTester for EngineTester {
             let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
             engine.collisions(&pattern, &refs)
         })
+    }
+
+    fn collisions_batch(&self, patterns: &[String], urls: &[String]) -> Result<Vec<Vec<String>>> {
+        let patterns = patterns.to_vec();
+        let urls = urls.to_vec();
+        self.thread.run(move |engine| {
+            let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+            match_patterns(&patterns, |pattern| engine.collisions(pattern, &refs))
+        })
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_collision_batch_reads_the_loader_once_and_preserves_duplicate_positions() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = reads.clone();
+        let tester = EngineTester::over(
+            move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                ("1".to_owned(), RulesFile::default())
+            },
+            Limits::default(),
+        )
+        .unwrap();
+        let patterns = [
+            "docs.example.org/*",
+            "*.example.org/*",
+            "docs.example.org/*",
+        ]
+        .map(str::to_owned);
+        let urls = [
+            "https://wiki.example.org/b",
+            "https://docs.example.org/a",
+            "https://elsewhere.example/",
+        ]
+        .map(str::to_owned);
+        let result = tester.collisions_batch(&patterns, &urls).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                vec![urls[1].clone()],
+                vec![urls[0].clone(), urls[1].clone()],
+                vec![urls[1].clone()]
+            ]
+        );
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            2,
+            "initial load plus exactly one batch job"
+        );
+    }
+
+    #[test]
+    fn a_collision_batch_preserves_loader_errors_and_the_thread_can_recover() {
+        struct FailingLoader {
+            engine: Engine,
+            reads: usize,
+        }
+        impl Loader for FailingLoader {
+            fn engine(&mut self) -> Result<&Engine> {
+                self.reads += 1;
+                if self.reads <= 2 {
+                    anyhow::bail!("fixture reload failed");
+                }
+                Ok(&self.engine)
+            }
+        }
+        let thread = EngineThread::spawn("batch-errors", || {
+            Ok(FailingLoader {
+                engine: build(&RulesFile::default(), Limits::default())?,
+                reads: 0,
+            })
+        })
+        .unwrap();
+        let caller = thread.clone();
+        let (reply, answer) = mpsc::channel();
+        thread::spawn(move || reply.send(caller.run(|_| Ok(()))).unwrap());
+        let error = answer
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the direct caller must receive its loader error")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("fixture reload failed"),
+            "{error:#}"
+        );
+        let tester = EngineTester { thread };
+        let patterns = ["example.org/*".to_owned()];
+        let urls = ["https://example.org/page".to_owned()];
+        let error = tester.collisions_batch(&patterns, &urls).unwrap_err();
+        assert!(
+            error.to_string().contains("fixture reload failed"),
+            "{error:#}"
+        );
+        assert_eq!(
+            tester.collisions_batch(&patterns, &urls).unwrap(),
+            vec![urls.to_vec()]
+        );
     }
 }
 

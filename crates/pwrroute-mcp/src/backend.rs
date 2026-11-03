@@ -9,7 +9,10 @@
 //! so an implementation may wait on its own thread or lock without stalling
 //! the link.
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    sync::Arc,
+};
 
 use pwrroute_engine::{Browser, Opener, Privacy, RulesFile, TestReport};
 use schemars::JsonSchema;
@@ -230,6 +233,33 @@ pub trait RulesTester: Send + Sync + 'static {
 
     /// Which of `urls` `pattern` matches, by Finicky's own `isMatch`.
     fn collisions(&self, pattern: &str, urls: &[String]) -> anyhow::Result<Vec<String>>;
+
+    /// Matches each pattern against the same URLs, returning one list per
+    /// input pattern in order, evaluating duplicate patterns once. Threaded
+    /// backends override this to use one engine snapshot; the default
+    /// keeps existing single-pattern implementations usable.
+    fn collisions_batch(
+        &self,
+        patterns: &[String],
+        urls: &[String],
+    ) -> anyhow::Result<Vec<Vec<String>>> {
+        match_patterns(patterns, |p| self.collisions(p, urls))
+    }
+}
+
+/// Evaluate distinct patterns once while preserving every input position.
+pub(crate) fn match_patterns(
+    patterns: &[String],
+    mut evaluate: impl FnMut(&str) -> anyhow::Result<Vec<String>>,
+) -> anyhow::Result<Vec<Vec<String>>> {
+    let mut matches: HashMap<&str, Vec<String>> = HashMap::new();
+    patterns
+        .iter()
+        .map(|pattern| match matches.entry(pattern.as_str()) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => Ok(entry.insert(evaluate(pattern)?).clone()),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -9,6 +9,7 @@
 //! closed unanswered does not, and the next call raises it again.
 
 use std::{
+    collections::HashMap,
     sync::{
         Arc, LazyLock, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -689,14 +690,47 @@ fn suggest(b: &Backends, url: &str, full: bool) -> anyhow::Result<Value> {
         .collect();
     recent.sort();
     recent.dedup();
-    let mut candidates = Vec::new();
-    for candidate in &suggestion.candidates {
+    let candidates = suggest_candidates(b, &suggestion.candidates, &recent, full)?;
+    Ok(json!({
+        "url": url,
+        "candidates": candidates,
+        "needsJs": suggestion.needs_js,
+        "why": suggestion.why,
+        "fullUrls": full,
+    }))
+}
+
+fn suggest_candidates(
+    b: &Backends,
+    candidates: &[Candidate],
+    recent: &[String],
+    full: bool,
+) -> anyhow::Result<Vec<Value>> {
+    let mut patterns = Vec::new();
+    for pattern in candidates.iter().flat_map(|c| &c.patterns) {
+        if !patterns.contains(pattern) {
+            patterns.push(pattern.clone());
+        }
+    }
+    if patterns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let matches = b.tester.collisions_batch(&patterns, recent)?;
+    anyhow::ensure!(
+        matches.len() == patterns.len(),
+        "matching candidate patterns: expected {} result lists, received {}",
+        patterns.len(),
+        matches.len()
+    );
+    let matches: HashMap<_, _> = patterns.iter().zip(matches).collect();
+    let mut result = Vec::new();
+    for candidate in candidates {
         // A rule's patterns: a recent link any one of them matches.
         let mut caught = vec![false; recent.len()];
         for pattern in &candidate.patterns {
-            for hit in b.tester.collisions(pattern, &recent)? {
+            for hit in &matches[pattern] {
                 // `recent` is sorted and deduplicated.
-                if let Ok(at) = recent.binary_search(&hit) {
+                if let Ok(at) = recent.binary_search(hit) {
                     caught[at] = true;
                 }
             }
@@ -716,18 +750,12 @@ fn suggest(b: &Backends, url: &str, full: bool) -> anyhow::Result<Value> {
             hosts.dedup();
             hosts
         };
-        candidates.push(candidate_json(
+        result.push(candidate_json(
             candidate,
             Some(json!({ "count": count, "urls": urls })),
         ));
     }
-    Ok(json!({
-        "url": url,
-        "candidates": candidates,
-        "needsJs": suggestion.needs_js,
-        "why": suggestion.why,
-        "fullUrls": full,
-    }))
+    Ok(result)
 }
 
 /// One suggested way to match a link: `match` goes into a rule as it is
@@ -1012,6 +1040,71 @@ pub(crate) fn tool_permissions() -> Vec<(&'static str, Permission)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestion_candidates_share_patterns_and_union_overlapping_hits() {
+        use crate::RulesTester;
+
+        struct Tester {
+            inner: Arc<dyn RulesTester>,
+            batches: Mutex<Vec<Vec<String>>>,
+        }
+        impl RulesTester for Tester {
+            fn test(&self, _: Option<&RulesFile>) -> anyhow::Result<TestReport> {
+                unreachable!()
+            }
+            fn collisions(&self, _: &str, _: &[String]) -> anyhow::Result<Vec<String>> {
+                panic!("a suggestion must use the batch operation")
+            }
+            fn collisions_batch(
+                &self,
+                patterns: &[String],
+                urls: &[String],
+            ) -> anyhow::Result<Vec<Vec<String>>> {
+                self.batches.lock().unwrap().push(patterns.to_vec());
+                self.inner.collisions_batch(patterns, urls)
+            }
+        }
+        let (mut b, _, _) = crate::fake::backends();
+        let tester = Arc::new(Tester {
+            inner: b.tester.clone(),
+            batches: Mutex::default(),
+        });
+        b.tester = tester.clone();
+        let candidate = |patterns: &[&str]| Candidate {
+            patterns: patterns.iter().map(|p| (*p).to_owned()).collect(),
+            ..Candidate::default()
+        };
+        let candidates = [
+            candidate(&["docs.example.org/*"]),
+            candidate(&[
+                "docs.example.org/*",
+                "*.example.org/*",
+                "docs.example.org/*",
+            ]),
+            candidate(&["docs.example.org/*"]),
+        ];
+        let recent =
+            ["https://docs.example.org/a", "https://wiki.example.org/b"].map(str::to_owned);
+        let result = suggest_candidates(&b, &candidates, &recent, true).unwrap();
+        assert_eq!(
+            *tester.batches.lock().unwrap(),
+            vec![vec!["docs.example.org/*", "*.example.org/*"]]
+        );
+        assert_eq!(
+            result
+                .iter()
+                .map(|c| c["alsoCatches"]["count"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!(1), json!(2), json!(1)]
+        );
+        assert_eq!(
+            result[0], result[2],
+            "duplicate candidates keep their positions"
+        );
+        assert_eq!(result[1]["match"], json!(candidates[1].patterns));
+        assert_eq!(result[1]["alsoCatches"]["urls"], json!(recent));
+    }
 
     #[test]
     fn merge_patch_follows_rfc_7396() {
