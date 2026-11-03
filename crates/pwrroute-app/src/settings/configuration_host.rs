@@ -108,29 +108,57 @@ pub fn initial() -> Configuration {
 pub fn load(cx: &mut App) {
     let apps = browser_scan::apps(cx);
     let hidden = settings_store::store(cx)
-        .map(|store| store.read(cx).settings().browsers.clone()).unwrap_or_default();
-    let browsers = apps.into_iter().filter(|app| !hidden.is_hidden(app.id())).collect();
+        .map(|store| store.read(cx).settings().browsers.clone())
+        .unwrap_or_default();
+    let browsers = apps
+        .into_iter()
+        .filter(|app| !hidden.is_hidden(app.id()))
+        .collect();
     let source = router::routing_source();
-    settings::load(cx, super::Pane::Configuration,
+    settings::load(
+        cx,
+        super::Pane::Configuration,
         move || build(&facts(source, browsers), SystemTime::now()),
         |model, configuration| {
-            let problem = model.configuration.everything_else.as_ref().and_then(|field| field.problem.clone());
+            let problem = model
+                .configuration
+                .everything_else
+                .as_ref()
+                .and_then(|field| field.problem.clone());
             model.configuration = configuration;
             model.pending.remove(&super::Pane::ShortLinks);
-            if let Some(field) = model.configuration.everything_else.as_mut() { field.problem = problem; }
-        });
+            if let Some(field) = model.configuration.everything_else.as_mut() {
+                field.problem = problem;
+            }
+        },
+    );
 }
 
 /// Short Links needs no browser scan, rule descriptions or import probes.
 pub fn load_short_links(cx: &mut App) {
     let source = router::routing_source();
-    settings::load(cx, super::Pane::ShortLinks, move || {
-        let config = source.config.and_then(|path| {
-            let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).ok()?;
-            Some(ConfigFacts { path, shorteners: Some(engine.short_links().domains.clone()), ..Default::default() })
-        });
-        short_links(&Facts { config, ..Default::default() }, std::env::home_dir().as_deref())
-    }, |model, short_links| model.configuration.short_links = short_links);
+    settings::load(
+        cx,
+        super::Pane::ShortLinks,
+        move || {
+            let config = source.config.and_then(|path| {
+                let engine = Engine::load(&path, Rc::new(DefaultHost), Limits::default()).ok()?;
+                Some(ConfigFacts {
+                    path,
+                    shorteners: Some(engine.short_links().domains.clone()),
+                    ..Default::default()
+                })
+            });
+            short_links(
+                &Facts {
+                    config,
+                    ..Default::default()
+                },
+                std::env::home_dir().as_deref(),
+            )
+        },
+        |model, short_links| model.configuration.short_links = short_links,
+    );
 }
 
 /// Cached readback for the save handler; evaluating the config is asynchronous.
@@ -935,8 +963,11 @@ pub fn follow(window: &mut Window, cx: &mut App) {
     };
     observer.update(cx, |_, cx| {
         cx.observe_window_activation(window, |_, window, cx| {
-            if window.is_window_active() { cx.defer(refresh); }
-        }).detach();
+            if window.is_window_active() {
+                cx.defer(refresh);
+            }
+        })
+        .detach();
     });
 }
 

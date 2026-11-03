@@ -108,7 +108,14 @@ struct ScanGlobal {
     again: bool,
     callbacks: Vec<Rc<dyn Fn(&mut App)>>,
     #[cfg(test)]
-    producer: Option<std::sync::Arc<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>> + Send + Sync>>,
+    producer: Option<
+        std::sync::Arc<
+            dyn Fn()
+                    -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>>
+                + Send
+                + Sync,
+        >,
+    >,
 }
 
 impl Global for ScanGlobal {}
@@ -117,8 +124,16 @@ impl Global for ScanGlobal {}
 /// [`apps`] is first asked; that call starts background work and returns
 /// the last completed snapshot immediately.
 pub fn install(env: Env, cx: &mut App) {
-    cx.set_global(ScanGlobal { env, apps: None, error: None, running: false, again: false,
-        callbacks: Vec::new(), #[cfg(test)] producer: None });
+    cx.set_global(ScanGlobal {
+        env,
+        apps: None,
+        error: None,
+        running: false,
+        again: false,
+        callbacks: Vec::new(),
+        #[cfg(test)]
+        producer: None,
+    });
 }
 
 /// A scan a test or screenshot supplies, in place of reading the machine.
@@ -127,7 +142,11 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
     cx.set_global(ScanGlobal {
         env: Env::fixture(pwrroute_browsers::Platform::current(), std::env::temp_dir()),
         apps: Some(apps),
-        error: None, running: false, again: false, callbacks: Vec::new(), producer: None,
+        error: None,
+        running: false,
+        again: false,
+        callbacks: Vec::new(),
+        producer: None,
     });
 }
 
@@ -135,40 +154,59 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
 /// completion, callers use `is_loading` instead of treating empty as no apps.
 /// Without installation (the window harness), no machine is read.
 pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
-    if !cx.has_global::<ScanGlobal>() { return Vec::new(); }
-    if !has_run(cx) && error(cx).is_none() { start(cx, false); }
+    if !cx.has_global::<ScanGlobal>() {
+        return Vec::new();
+    }
+    if !has_run(cx) && error(cx).is_none() {
+        start(cx, false);
+    }
     cx.global::<ScanGlobal>().apps.clone().unwrap_or_default()
 }
 
 pub fn error(cx: &App) -> Option<String> {
-    cx.try_global::<ScanGlobal>().and_then(|scan| scan.error.clone())
+    cx.try_global::<ScanGlobal>()
+        .and_then(|scan| scan.error.clone())
 }
 
 pub fn is_loading(cx: &App) -> bool {
-    cx.try_global::<ScanGlobal>().is_some_and(|scan| scan.running)
+    cx.try_global::<ScanGlobal>()
+        .is_some_and(|scan| scan.running)
 }
 
 /// Register once per consumer, during installation. Called on GPUI after each
 /// completed scan, including the initial one; never from the scanning thread.
 pub fn on_complete(cx: &mut App, callback: Rc<dyn Fn(&mut App)>) {
-    if !cx.has_global::<ScanGlobal>() { install(environment(), cx); }
+    if !cx.has_global::<ScanGlobal>() {
+        install(environment(), cx);
+    }
     cx.update_global(|scan: &mut ScanGlobal, _| scan.callbacks.push(callback));
 }
 
 fn start(cx: &mut App, force: bool) {
-    let Some(scan) = cx.try_global::<ScanGlobal>() else { return; };
+    let Some(scan) = cx.try_global::<ScanGlobal>() else {
+        return;
+    };
     if scan.running {
-        if force { cx.update_global(|scan: &mut ScanGlobal, _| scan.again = true); }
+        if force {
+            cx.update_global(|scan: &mut ScanGlobal, _| scan.again = true);
+        }
         return;
     }
-    if !force && scan.apps.is_some() { return; }
+    if !force && scan.apps.is_some() {
+        return;
+    }
     let env = scan.env.clone();
     #[cfg(test)]
     let producer = scan.producer.clone();
-    cx.update_global(|scan: &mut ScanGlobal, _| { scan.running = true; scan.error = None; });
+    cx.update_global(|scan: &mut ScanGlobal, _| {
+        scan.running = true;
+        scan.error = None;
+    });
     let work = cx.background_executor().spawn(async move {
         #[cfg(test)]
-        if let Some(producer) = producer { return Ok(producer().await); }
+        if let Some(producer) = producer {
+            return Ok(producer().await);
+        }
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self::scan(&env)))
             .map_err(|_| "Could not scan browsers. Try again.".to_owned())
     });
@@ -184,16 +222,29 @@ fn start(cx: &mut App, force: bool) {
                         Err(error) => scan.error = Some(error),
                     }
                 }
-                (again, if scan.error.is_none() { scan.callbacks.clone() } else { Vec::new() })
+                (
+                    again,
+                    if scan.error.is_none() {
+                        scan.callbacks.clone()
+                    } else {
+                        Vec::new()
+                    },
+                )
             });
-            if again { start(cx, true); return; }
+            if again {
+                start(cx, true);
+                return;
+            }
             refresh_windows(cx);
             crate::settings::reload(cx, crate::settings::Pane::Browsers);
             crate::settings::reload(cx, crate::settings::Pane::Configuration);
             crate::settings::reload(cx, crate::settings::Pane::Sync);
-            for callback in callbacks { callback(cx); }
+            for callback in callbacks {
+                callback(cx);
+            }
         });
-    }).detach();
+    })
+    .detach();
 }
 
 /// Whether the scan has run, so [`location_of`] can answer.
@@ -226,7 +277,9 @@ pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
 /// [`rescan`], but the icons stay, as the apps did not change.
 pub fn reread(cx: &mut App) -> Vec<DetectedApp> {
     start(cx, true);
-    cx.try_global::<ScanGlobal>().and_then(|scan| scan.apps.clone()).unwrap_or_default()
+    cx.try_global::<ScanGlobal>()
+        .and_then(|scan| scan.apps.clone())
+        .unwrap_or_default()
 }
 
 /// What a scan found, for the diagnostic log: each app's name and how
@@ -317,8 +370,13 @@ mod tests {
     use super::*;
 
     #[gpui_kit::test]
-    fn scan_readers_share_work_and_rescan_publishes_only_the_latest_result(cx: &mut gpui_kit::TestAppContext) {
-        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    fn scan_readers_share_work_and_rescan_publishes_only_the_latest_result(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
         let (_dir, env) = machine_with(&[]);
         let started = Arc::new(AtomicUsize::new(0));
         let (release, wait) = async_channel::bounded(2);
@@ -327,15 +385,23 @@ mod tests {
         let observed = completed.clone();
         cx.update(|cx| {
             install(env, cx);
-            cx.update_global(|scan: &mut ScanGlobal, _| scan.producer = Some(Arc::new(move || {
-                let index = calls.fetch_add(1, Ordering::SeqCst);
-                let wait = wait.clone();
-                Box::pin(async move {
-                    wait.recv().await.unwrap();
-                    vec![DetectedApp { name: format!("Browser {index}"), bundle_id: None,
-                        location: "/fixture/browser".into(), profiles: vec![], directories: vec![], profiles_blocked: false }]
-                })
-            })));
+            cx.update_global(|scan: &mut ScanGlobal, _| {
+                scan.producer = Some(Arc::new(move || {
+                    let index = calls.fetch_add(1, Ordering::SeqCst);
+                    let wait = wait.clone();
+                    Box::pin(async move {
+                        wait.recv().await.unwrap();
+                        vec![DetectedApp {
+                            name: format!("Browser {index}"),
+                            bundle_id: None,
+                            location: "/fixture/browser".into(),
+                            profiles: vec![],
+                            directories: vec![],
+                            profiles_blocked: false,
+                        }]
+                    })
+                }))
+            });
             on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
             assert!(apps(cx).is_empty());
             assert!(choices(cx).is_empty());
@@ -345,10 +411,17 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(started.load(Ordering::SeqCst), 1);
-        cx.update(|cx| { rescan(cx); rescan(cx); });
+        cx.update(|cx| {
+            rescan(cx);
+            rescan(cx);
+        });
         release.try_send(()).unwrap();
         cx.run_until_parked();
-        assert_eq!(started.load(Ordering::SeqCst), 2, "rescan requests coalesce");
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            2,
+            "rescan requests coalesce"
+        );
         assert_eq!(completed.get(), 0, "superseded scan is not published");
         release.try_send(()).unwrap();
         cx.run_until_parked();

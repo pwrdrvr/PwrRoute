@@ -525,36 +525,58 @@ fn when(ms: u64) -> String {
 /// for the window opening.
 pub fn load(cx: &mut App) {
     let Some(feed) = crate::sync::feed(cx) else {
-        super::load(cx, super::Pane::Sync, Sync::default, |model, sync| model.sync = sync);
+        super::load(cx, super::Pane::Sync, Sync::default, |model, sync| {
+            model.sync = sync
+        });
         return;
     };
     let status = feed.read(cx).status.clone();
     let settings = crate::settings_store::store(cx)
-        .map(|store| store.read(cx).settings().sync.clone()).unwrap_or_default();
+        .map(|store| store.read(cx).settings().sync.clone())
+        .unwrap_or_default();
     let choices = crate::browser_scan::choices(cx);
     let installed = crate::browser_scan::installed(cx);
-    super::load_with(cx, super::Pane::Sync, move || {
-        let places = crate::sync::SyncFeed::look_for_places();
-        let rules = crate::sync::rules_path().and_then(|p| RulesFile::load(&p).ok()).unwrap_or_default();
-        let machine = crate::sync::machine();
-        let home = std::env::home_dir();
-        let config = crate::router::config_in_charge()
-            .map(|p| crate::config_view::display_path(&p, home.as_deref()));
-        let sync = build(&Facts {
-            status: &status, targets: &settings.targets, places: &places,
-            rules: &rules, machine: &machine, computer_name: &crate::sync::computer_name(),
-            config, config_found: pwrroute_engine::discovery::config_candidates(
-                &pwrroute_engine::discovery::Environment::current()).iter().any(|path| path.is_file()),
-            config_on: settings.syncs_config(), choices: &choices, installed: &installed,
-            home: home.as_deref(), here: here(), when: &when,
-        });
-        (sync, places)
-    }, move |model, (sync, places), cx| {
-        feed.update(cx, |feed, _| feed.places = places);
-        let problem = model.sync.problem.clone();
-        model.sync = sync;
-        model.sync.problem = problem;
-    });
+    super::load_with(
+        cx,
+        super::Pane::Sync,
+        move || {
+            let places = crate::sync::SyncFeed::look_for_places();
+            let rules = crate::sync::rules_path()
+                .and_then(|p| RulesFile::load(&p).ok())
+                .unwrap_or_default();
+            let machine = crate::sync::machine();
+            let home = std::env::home_dir();
+            let config = crate::router::config_in_charge()
+                .map(|p| crate::config_view::display_path(&p, home.as_deref()));
+            let sync = build(&Facts {
+                status: &status,
+                targets: &settings.targets,
+                places: &places,
+                rules: &rules,
+                machine: &machine,
+                computer_name: &crate::sync::computer_name(),
+                config,
+                config_found: pwrroute_engine::discovery::config_candidates(
+                    &pwrroute_engine::discovery::Environment::current(),
+                )
+                .iter()
+                .any(|path| path.is_file()),
+                config_on: settings.syncs_config(),
+                choices: &choices,
+                installed: &installed,
+                home: home.as_deref(),
+                here: here(),
+                when: &when,
+            });
+            (sync, places)
+        },
+        move |model, (sync, places), cx| {
+            feed.update(cx, |feed, _| feed.places = places);
+            let problem = model.sync.problem.clone();
+            model.sync = sync;
+            model.sync.problem = problem;
+        },
+    );
 }
 
 /// A config bigger than this is not one to copy (sync's own limit).
@@ -601,22 +623,33 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
         anyhow::bail!("still copying the earlier config");
     }
     cx.set_global(CopyingConfig(true));
-    let expected = crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+    let expected =
+        crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
     let (root, name) = (root.to_path_buf(), name.to_owned());
-    let work = cx.background_executor().spawn(async move { prepare_folder_config(&root, &name) });
+    let work = cx
+        .background_executor()
+        .spawn(async move { prepare_folder_config(&root, &name) });
     cx.spawn(async move |cx| {
         let result = work.await;
         cx.update(|cx| {
             cx.set_global(CopyingConfig(false));
             let result = result.and_then(|path| {
-                let current = crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
-                anyhow::ensure!(expected == current, "routing source changed while the config was copied");
+                let current = crate::settings_store::store(cx)
+                    .map(|store| store.read(cx).settings().source.clone());
+                anyhow::ensure!(
+                    expected == current,
+                    "routing source changed while the config was copied"
+                );
                 crate::sync::edit_settings(|sync| sync.config = Some(true), cx)?;
                 let mut source = current.unwrap_or_default();
                 source.visual_only = false;
                 let env = pwrroute_engine::discovery::Environment::current();
-                source.config = (!pwrroute_engine::discovery::config_candidates(&env).contains(&path)).then(|| path.clone());
-                if !source.dismissed.contains(&path) { source.dismissed.push(path); }
+                source.config = (!pwrroute_engine::discovery::config_candidates(&env)
+                    .contains(&path))
+                .then(|| path.clone());
+                if !source.dismissed.contains(&path) {
+                    source.dismissed.push(path);
+                }
                 crate::importer_view::set_source_and_show(source, cx);
                 super::configuration_host::refresh(cx);
                 Ok(())
@@ -626,7 +659,8 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
                 Err(error) => report(format!("Not changed: {error:#}."), cx),
             }
         });
-    }).detach();
+    })
+    .detach();
     Ok(())
 }
 

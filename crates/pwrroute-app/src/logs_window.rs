@@ -648,8 +648,13 @@ impl LogsWindow {
         if self.include_diagnostics {
             let diagnostics = crate::help::diagnostics_report(cx);
             self.set_note("Preparing diagnostics…", cx);
-            self.copy_with_diagnostics(diagnostics, generation, out,
-                format!("Copied {count} {lines} with diagnostics"), cx);
+            self.copy_with_diagnostics(
+                diagnostics,
+                generation,
+                out,
+                format!("Copied {count} {lines} with diagnostics"),
+                cx,
+            );
         } else {
             cx.write_to_clipboard(ClipboardItem::new_string(out));
             self.set_note(format!("Copied {count} {lines}"), cx);
@@ -667,11 +672,14 @@ impl LogsWindow {
         cx.spawn(async move |view, cx| {
             let report = diagnostics.await;
             let _ = view.update(cx, |view, cx| {
-                if view.copy_generation != generation { return; }
+                if view.copy_generation != generation {
+                    return;
+                }
                 cx.write_to_clipboard(ClipboardItem::new_string(format!("{report}{out}")));
                 view.set_note(note, cx);
             });
-        }).detach();
+        })
+        .detach();
     }
 
     /// "Log lines: 215–219 (5 of 1,204; levels: Error, Warning, Info)",
@@ -1947,18 +1955,31 @@ mod tests {
         let (release, wait) = async_channel::bounded(1);
         view.update(cx, |logs, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string("earlier".into()));
-            logs.copy_with_diagnostics(async move { wait.recv().await.unwrap() },
-                logs.copy_generation, "selected\n".into(), "Copied".into(), cx);
+            logs.copy_with_diagnostics(
+                async move { wait.recv().await.unwrap() },
+                logs.copy_generation,
+                "selected\n".into(),
+                "Copied".into(),
+                cx,
+            );
         });
         cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("earlier"));
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("earlier")
+        );
         view.update(cx, |logs, cx| {
             logs.copy_generation += 1;
             cx.write_to_clipboard(ClipboardItem::new_string("newer".into()));
         });
         release.try_send("diagnostics\n".into()).unwrap();
         cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("newer"));
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("newer")
+        );
     }
 
     /// The search field has focus when the window opens; a click in the

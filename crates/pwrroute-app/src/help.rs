@@ -98,7 +98,8 @@ pub fn open_link(url: &str, cx: &mut App) {
 pub fn diagnostics_report(cx: &mut App) -> gpui_kit::Task<String> {
     let agents = mcp::local_agents(cx);
     let diagnostics = settings::system_host::diagnostics(cx, &agents);
-    cx.background_executor().spawn(async move { diagnostics.await.report() })
+    cx.background_executor()
+        .spawn(async move { diagnostics.await.report() })
 }
 
 /// [`diagnostics_report`] on the clipboard, as Diagnostics' Copy does.
@@ -110,7 +111,8 @@ pub fn copy_diagnostics(cx: &mut App) {
             cx.write_to_clipboard(ClipboardItem::new_string(report));
             log::info!(target: "pwrroute", "help: copied diagnostics info");
         });
-    }).detach();
+    })
+    .detach();
 }
 
 #[cfg(test)]

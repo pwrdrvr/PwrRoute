@@ -27,23 +27,47 @@ fn a_blocked_pane_allows_navigation_and_ignores_invalidated_results(cx: &mut Tes
     cx.update(|cx| super::open(cx, Some(Pane::Privacy)));
     let handle = settings_windows(cx)[0];
     let (release, wait) = async_channel::bounded(1);
-    cx.update(|cx| super::load_async(cx, Pane::Privacy, async move {
-        wait.recv().await.unwrap();
-        Ok(99)
-    }, |model, count| model.privacy.keep_count = count));
+    cx.update(|cx| {
+        super::load_async(
+            cx,
+            Pane::Privacy,
+            async move {
+                wait.recv().await.unwrap();
+                Ok(99)
+            },
+            |model, count| model.privacy.keep_count = count,
+        )
+    });
     cx.run_until_parked();
     // The producer is suspended: opening/reopening and navigating still run.
     cx.update(|cx| {
         super::reload(cx, Pane::Privacy);
         super::open(cx, Some(Pane::About));
-        handle.update(cx, |view, _, _| assert_eq!(view.pane, Pane::About)).unwrap();
+        handle
+            .update(cx, |view, _, _| assert_eq!(view.pane, Pane::About))
+            .unwrap();
     });
     release.try_send(()).unwrap();
     cx.run_until_parked();
-    handle.update(cx, |view, _, _| assert_ne!(view.model.privacy.keep_count, 99)).unwrap();
-    cx.update(|cx| super::load(cx, Pane::Privacy, || 321, |model, count| model.privacy.keep_count = count));
+    handle
+        .update(cx, |view, _, _| {
+            assert_ne!(view.model.privacy.keep_count, 99)
+        })
+        .unwrap();
+    cx.update(|cx| {
+        super::load(
+            cx,
+            Pane::Privacy,
+            || 321,
+            |model, count| model.privacy.keep_count = count,
+        )
+    });
     cx.run_until_parked();
-    handle.update(cx, |view, _, _| assert_eq!(view.model.privacy.keep_count, 321)).unwrap();
+    handle
+        .update(cx, |view, _, _| {
+            assert_eq!(view.model.privacy.keep_count, 321)
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -52,17 +76,29 @@ fn a_closed_windows_pane_cannot_change_its_replacement(cx: &mut TestAppContext) 
     cx.update(|cx| super::open(cx, Some(Pane::Privacy)));
     let old = settings_windows(cx)[0];
     let (release, wait) = async_channel::bounded(1);
-    cx.update(|cx| super::load_async(cx, Pane::Privacy, async move {
-        wait.recv().await.unwrap();
-        Ok(99)
-    }, |model, count| model.privacy.keep_count = count));
+    cx.update(|cx| {
+        super::load_async(
+            cx,
+            Pane::Privacy,
+            async move {
+                wait.recv().await.unwrap();
+                Ok(99)
+            },
+            |model, count| model.privacy.keep_count = count,
+        )
+    });
     cx.run_until_parked();
-    old.update(cx, |_, window, _| window.remove_window()).unwrap();
+    old.update(cx, |_, window, _| window.remove_window())
+        .unwrap();
     cx.update(|cx| super::open(cx, Some(Pane::Privacy)));
     let replacement = settings_windows(cx)[0];
     release.try_send(()).unwrap();
     cx.run_until_parked();
-    replacement.update(cx, |view, _, _| assert_ne!(view.model.privacy.keep_count, 99)).unwrap();
+    replacement
+        .update(cx, |view, _, _| {
+            assert_ne!(view.model.privacy.keep_count, 99)
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -70,16 +106,27 @@ fn a_pane_error_keeps_navigation_available_and_can_be_retried(cx: &mut TestAppCo
     install(cx);
     cx.update(|cx| {
         super::open(cx, Some(Pane::Privacy));
-        super::load_async(cx, Pane::Privacy, async { Err::<(), _>("Read failed".into()) }, |_, _| {});
+        super::load_async(
+            cx,
+            Pane::Privacy,
+            async { Err::<(), _>("Read failed".into()) },
+            |_, _| {},
+        );
     });
     cx.run_until_parked();
     let handle = settings_windows(cx)[0];
-    handle.update(cx, |view, _, _| {
-        assert_eq!(view.model.problems[&Pane::Privacy].as_ref(), "Read failed");
-    }).unwrap();
+    handle
+        .update(cx, |view, _, _| {
+            assert_eq!(view.model.problems[&Pane::Privacy].as_ref(), "Read failed");
+        })
+        .unwrap();
     cx.update(|cx| super::load(cx, Pane::Privacy, || (), |_, _| {}));
     cx.run_until_parked();
-    handle.update(cx, |view, _, _| assert!(!view.model.problems.contains_key(&Pane::Privacy))).unwrap();
+    handle
+        .update(cx, |view, _, _| {
+            assert!(!view.model.problems.contains_key(&Pane::Privacy))
+        })
+        .unwrap();
 }
 
 /// Install the shortcut and a handler that records every request.

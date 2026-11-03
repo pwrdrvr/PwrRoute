@@ -49,12 +49,19 @@ pub fn load(cx: &mut App) {
     let mut agents = None;
     settings::update(cx, |model| agents = Some(model.local_agents.clone()));
     let produce = snapshot(cx, agents.as_ref());
-    settings::load(cx, super::Pane::Diagnostics, produce,
-        |model, diagnostics| model.diagnostics = diagnostics);
+    settings::load(
+        cx,
+        super::Pane::Diagnostics,
+        produce,
+        |model, diagnostics| model.diagnostics = diagnostics,
+    );
 }
 
 /// Capture GPUI-owned values now; all OS/file/router reads happen when run.
-fn snapshot(cx: &App, agents: Option<&LocalAgents>) -> impl FnOnce() -> Diagnostics + Send + 'static {
+fn snapshot(
+    cx: &App,
+    agents: Option<&LocalAgents>,
+) -> impl FnOnce() -> Diagnostics + Send + 'static {
     let router = settings_store::router(cx);
     let experimental = experimental(cx);
     let agents = agents.map(|agents| (agents.listener.clone(), agents.endpoint.clone()));

@@ -41,10 +41,11 @@ use crate::theme::px;
 use gpui_kit::base::{Button, TestSupportExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
-    FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, ScrollAnchor, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point,
+    AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, ClipboardItem, Context, Div,
+    ElementId, Entity, FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding,
+    ParentElement as _, Render, ScrollAnchor, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
+    WindowHandle, WindowOptions, div, point,
 };
 
 use self::controls::{Heading, Kind, button, card, separated};
@@ -362,7 +363,9 @@ pub fn problem(cx: &mut App, pane: Pane, problem: String) {
         let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
         if let Some(handle) = open {
             let _ = handle.update(cx, |view, _, cx| {
-                if let Some(dirty) = view.loads.get_mut(&pane) { *dirty = true; }
+                if let Some(dirty) = view.loads.get_mut(&pane) {
+                    *dirty = true;
+                }
                 view.model.pending.remove(&pane);
                 view.model.problems.insert(pane, problem.into());
                 cx.notify();
@@ -379,7 +382,9 @@ pub fn load<T: Send + 'static>(
     produce: impl FnOnce() -> T + Send + 'static,
     apply: impl FnOnce(&mut SettingsModel, T) + 'static,
 ) {
-    load_with(cx, pane, produce, move |model, value, _| apply(model, value));
+    load_with(cx, pane, produce, move |model, value, _| {
+        apply(model, value)
+    });
 }
 
 pub fn load_with<T: Send + 'static>(
@@ -388,10 +393,15 @@ pub fn load_with<T: Send + 'static>(
     produce: impl FnOnce() -> T + Send + 'static,
     apply: impl FnOnce(&mut SettingsModel, T, &mut App) + 'static,
 ) {
-    load_future(cx, pane, async move {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
-            .map_err(|_| "Could not load this pane. Try again.".to_owned())
-    }, apply);
+    load_future(
+        cx,
+        pane,
+        async move {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
+                .map_err(|_| "Could not load this pane. Try again.".to_owned())
+        },
+        apply,
+    );
 }
 
 #[cfg(test)]
@@ -401,7 +411,9 @@ fn load_async<T: Send + 'static>(
     produce: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
     apply: impl FnOnce(&mut SettingsModel, T) + 'static,
 ) {
-    load_future(cx, pane, produce, move |model, value, _| apply(model, value));
+    load_future(cx, pane, produce, move |model, value, _| {
+        apply(model, value)
+    });
 }
 
 type QueuedLoad = Box<dyn FnOnce(&mut App)>;
@@ -415,7 +427,9 @@ fn load_future<T: Send + 'static>(
     produce: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
     apply: impl FnOnce(&mut SettingsModel, T, &mut App) + 'static,
 ) {
-    let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else { return; };
+    let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else {
+        return;
+    };
     let Ok(start) = handle.update(cx, |view, _, _| {
         if let Some(dirty) = view.loads.get_mut(&pane) {
             *dirty = true;
@@ -424,21 +438,34 @@ fn load_future<T: Send + 'static>(
             view.loads.insert(pane, false);
             true
         }
-    }) else { return; };
-    if !start { return; }
-    if !cx.has_global::<LoadJobs>() { cx.set_global(LoadJobs::default()); }
+    }) else {
+        return;
+    };
+    if !start {
+        return;
+    }
+    if !cx.has_global::<LoadJobs>() {
+        cx.set_global(LoadJobs::default());
+    }
     if cx.global::<LoadJobs>().0.contains_key(&pane) {
-        let _ = handle.update(cx, |view, _, _| { view.loads.remove(&pane); });
+        let _ = handle.update(cx, |view, _, _| {
+            view.loads.remove(&pane);
+        });
         cx.update_global(|jobs: &mut LoadJobs, _| {
-            jobs.0.insert(pane, Some(Box::new(move |cx| {
-                if cx.try_global::<OpenWindow>().and_then(|open| open.0) == Some(handle) {
-                    load_future(cx, pane, produce, apply);
-                }
-            })));
+            jobs.0.insert(
+                pane,
+                Some(Box::new(move |cx| {
+                    if cx.try_global::<OpenWindow>().and_then(|open| open.0) == Some(handle) {
+                        load_future(cx, pane, produce, apply);
+                    }
+                })),
+            );
         });
         return;
     }
-    cx.update_global(|jobs: &mut LoadJobs, _| { jobs.0.insert(pane, None); });
+    cx.update_global(|jobs: &mut LoadJobs, _| {
+        jobs.0.insert(pane, None);
+    });
     let work = cx.background_executor().spawn(produce);
     cx.spawn(async move |cx| {
         let result = work.await;
@@ -455,17 +482,22 @@ fn load_future<T: Send + 'static>(
                         if pane == Pane::Privacy {
                             view.privacy = privacy::State::new(&view.model.privacy, cx);
                         }
-                    },
-                    Err(error) => { view.model.problems.insert(pane, error.into()); }
+                    }
+                    Err(error) => {
+                        view.model.problems.insert(pane, error.into());
+                    }
                 }
             }
             cx.notify();
         });
         cx.update(|cx| {
             let queued = cx.update_global(|jobs: &mut LoadJobs, _| jobs.0.remove(&pane).flatten());
-            if let Some(queued) = queued { queued(cx); }
+            if let Some(queued) = queued {
+                queued(cx);
+            }
         });
-    }).detach();
+    })
+    .detach();
 }
 
 /// The Settings window's view.
@@ -656,11 +688,22 @@ impl SettingsWindow {
             let problem = self.model.problems.get(&pane);
             return div()
                 .child(text(self.pane.label(), 22.0, 600.0, theme::text_primary()))
-                .child(text(problem.cloned().unwrap_or_else(|| "Loading…".into()),
-                    13.0, 400.0, theme::text_secondary()))
-                .when(problem.is_some(), |body| body.child(request_button(
-                    "settings-retry", "Try again", Kind::Default, false,
-                    SettingsRequest::RetryPane(pane), cx)));
+                .child(text(
+                    problem.cloned().unwrap_or_else(|| "Loading…".into()),
+                    13.0,
+                    400.0,
+                    theme::text_secondary(),
+                ))
+                .when(problem.is_some(), |body| {
+                    body.child(request_button(
+                        "settings-retry",
+                        "Try again",
+                        Kind::Default,
+                        false,
+                        SettingsRequest::RetryPane(pane),
+                        cx,
+                    ))
+                });
         }
         match self.pane {
             Pane::General => general::pane(self, cx),

@@ -33,10 +33,20 @@ pub const EXPORT_NAME: &str = "pwrroute-activity.json";
 pub fn load(cx: &mut App) {
     let store = settings_store::store(cx).map(|store| store.read(cx).clone());
     let router = settings_store::router(cx);
-    super::load(cx, super::Pane::Privacy, move || {
-        let rules = discovery::rules_path(&discovery::Environment::current());
-        build(store.as_ref(), router.as_ref(), std::env::home_dir().as_deref(), rules.as_deref())
-    }, |model, privacy| model.privacy = privacy);
+    super::load(
+        cx,
+        super::Pane::Privacy,
+        move || {
+            let rules = discovery::rules_path(&discovery::Environment::current());
+            build(
+                store.as_ref(),
+                router.as_ref(),
+                std::env::home_dir().as_deref(),
+                rules.as_deref(),
+            )
+        },
+        |model, privacy| model.privacy = privacy,
+    );
 }
 
 /// The model from its parts. `store` is `None` only before `install` ran
@@ -218,24 +228,39 @@ fn rules_keep_less(path: Option<&Path>) -> Option<SharedString> {
 
 /// The Settings requests this module answers. `false` for any other.
 pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
-    if matches!(request, SettingsRequest::SetRetention { .. } | SettingsRequest::SetJournal(_) | SettingsRequest::ClearJournal)
-        && !available(cx) { return true; }
+    if matches!(
+        request,
+        SettingsRequest::SetRetention { .. }
+            | SettingsRequest::SetJournal(_)
+            | SettingsRequest::ClearJournal
+    ) && !available(cx)
+    {
+        return true;
+    }
     match request {
         SettingsRequest::SetRetention { count, hours } => {
             let retention = Retention {
                 count: *count,
                 hours: *hours,
             };
-            if !save(cx, |settings| settings.activity.keep = retention) { return true; }
+            if !save(cx, |settings| settings.activity.keep = retention) {
+                return true;
+            }
             command(cx, move |router, _| {
-                if let Some(router) = router { router.set_retention(retention).map_err(|e| e.to_string())?; }
+                if let Some(router) = router {
+                    router.set_retention(retention).map_err(|e| e.to_string())?;
+                }
                 Ok(())
             });
         }
         SettingsRequest::SetJournal(level) => {
-            if !save(cx, |settings| settings.activity.journal = *level) { return true; }
+            if !save(cx, |settings| settings.activity.journal = *level) {
+                return true;
+            }
             command(cx, |router, config| {
-                if let Some(router) = router { router.set_journal(config).map_err(|e| e.to_string())?; }
+                if let Some(router) = router {
+                    router.set_journal(config).map_err(|e| e.to_string())?;
+                }
                 Ok(())
             });
         }
@@ -247,8 +272,12 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
         SettingsRequest::ClearJournal => {
             let dir = journal_dir(cx);
             command(cx, move |router, config| {
-                if let Some(router) = &router { router.set_journal(None).map_err(|e| e.to_string())?; }
-                if let Some(dir) = dir { delete_journal_files(&dir); }
+                if let Some(router) = &router {
+                    router.set_journal(None).map_err(|e| e.to_string())?;
+                }
+                if let Some(dir) = dir {
+                    delete_journal_files(&dir);
+                }
                 if let Some(router) = &router {
                     router.set_journal(config).map_err(|e| e.to_string())?;
                     router.clear_recent();
@@ -271,7 +300,9 @@ fn save(cx: &mut App, edit: impl FnOnce(&mut crate::settings_store::Settings)) -
         Some(store) => store.update(cx, |store, _| {
             let before = store.clone();
             let result = store.update(edit).map_err(|error| format!("{error:#}"));
-            if result.is_err() { *store = before; }
+            if result.is_err() {
+                *store = before;
+            }
             result
         }),
         None => Err("no settings store".into()),
@@ -279,7 +310,9 @@ fn save(cx: &mut App, edit: impl FnOnce(&mut crate::settings_store::Settings)) -
     if let Err(error) = result {
         super::problem(cx, super::Pane::Privacy, format!("Not saved: {error}"));
         false
-    } else { true }
+    } else {
+        true
+    }
 }
 
 fn journal_dir(cx: &App) -> Option<PathBuf> {
@@ -298,33 +331,60 @@ fn available(cx: &mut App) -> bool {
         cx.set_global(Commands(sender));
         cx.spawn(async move |cx| {
             while let Ok(command) = receiver.recv().await {
-                let result = cx.background_executor().spawn(async move { command() }).await;
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { command() })
+                    .await;
                 cx.update(|cx| {
                     if let Some(feed) = activity::feed(cx) {
-                        feed.update(cx, |feed, cx| { feed.reload(); cx.notify(); });
+                        feed.update(cx, |feed, cx| {
+                            feed.reload();
+                            cx.notify();
+                        });
                     }
                     match result {
                         Ok(()) => refresh(cx),
-                        Err(error) => super::problem(cx, super::Pane::Privacy, format!("Could not apply: {error}")),
+                        Err(error) => super::problem(
+                            cx,
+                            super::Pane::Privacy,
+                            format!("Could not apply: {error}"),
+                        ),
                     }
                 });
             }
-        }).detach();
+        })
+        .detach();
     }
     if cx.global::<Commands>().0.is_full() {
-        super::problem(cx, super::Pane::Privacy, "Still applying earlier changes. Try again.".into());
+        super::problem(
+            cx,
+            super::Pane::Privacy,
+            "Still applying earlier changes. Try again.".into(),
+        );
         false
-    } else { true }
+    } else {
+        true
+    }
 }
 
-fn command(cx: &mut App, action: impl FnOnce(Option<RouterHandle>, Option<JournalConfig>) -> Result<(), String> + Send + 'static) {
+fn command(
+    cx: &mut App,
+    action: impl FnOnce(Option<RouterHandle>, Option<JournalConfig>) -> Result<(), String>
+    + Send
+    + 'static,
+) {
     let router = settings_store::router(cx);
     let config = settings_store::store(cx).and_then(|store| store.read(cx).journal());
     // Capacity was reserved before saving; the only other consumer can free it.
-    let _ = cx.global::<Commands>().0.try_send(Box::new(move || action(router, config)));
+    let _ = cx
+        .global::<Commands>()
+        .0
+        .try_send(Box::new(move || action(router, config)));
 }
 
-fn refresh(cx: &mut App) { super::reload(cx, super::Pane::Privacy); }
+fn refresh(cx: &mut App) {
+    super::reload(cx, super::Pane::Privacy);
+}
 
 /// Shows the journal's directory in Finder or the file manager, creating
 /// it (owner only) when the journal is on but has not written yet. Opens
@@ -334,23 +394,27 @@ fn reveal(dir: PathBuf, cx: &mut App) {
         if !dir.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true);
-            #[cfg(unix)] {
+            #[cfg(unix)]
+            {
                 use std::os::unix::fs::DirBuilderExt as _;
                 builder.mode(0o700);
             }
             builder.create(&dir)?;
         }
-        let newest = list_journal_files(&dir).ok().and_then(|mut files| {
-            files.sort(); files.pop().map(|(_, path)| path)
-        }).unwrap_or(dir);
+        let newest = list_journal_files(&dir)
+            .ok()
+            .and_then(|mut files| {
+                files.sort();
+                files.pop().map(|(_, path)| path)
+            })
+            .unwrap_or(dir);
         Ok::<_, io::Error>(newest)
     });
-    cx.spawn(async move |cx| {
-        match work.await {
-            Ok(path) => cx.update(|cx| cx.reveal_path(&path)),
-            Err(error) => log::warn!("cannot reveal journal: {error}"),
-        }
-    }).detach();
+    cx.spawn(async move |cx| match work.await {
+        Ok(path) => cx.update(|cx| cx.reveal_path(&path)),
+        Err(error) => log::warn!("cannot reveal journal: {error}"),
+    })
+    .detach();
 }
 
 /// Deletes every `activity-*.jsonl` under `dir`, reporting what could not
@@ -402,11 +466,13 @@ pub fn export(cx: &mut App) {
     let chosen = cx.prompt_for_new_path(&directory, Some(EXPORT_NAME));
     cx.spawn(async move |cx| match chosen.await {
         Ok(Ok(Some(path))) => {
-            cx.background_executor().spawn(async move {
-                if let Err(error) = write_export(&router, &path) {
-                    log::warn!("cannot export Activity to {}: {error}", path.display());
-                }
-            }).await;
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(error) = write_export(&router, &path) {
+                        log::warn!("cannot export Activity to {}: {error}", path.display());
+                    }
+                })
+                .await;
         }
         Ok(Ok(None)) => {}
         Ok(Err(error)) => log::warn!("the save dialog failed: {error:#}"),
@@ -450,14 +516,29 @@ mod tests {
     use super::*;
 
     #[gpui_kit::test]
-    fn privacy_saves_before_queuing_and_a_failed_save_does_not_apply(cx: &mut gpui_kit::TestAppContext) {
+    fn privacy_saves_before_queuing_and_a_failed_save_does_not_apply(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let (sender, receiver) = async_channel::bounded::<Command>(16);
         cx.update(|cx| {
             settings_store::install(SettingsStore::load(Some(dir.path().into())), None, cx);
             cx.set_global(Commands(sender));
-            handle_request(&SettingsRequest::SetRetention { count: 321, hours: 48 }, cx);
-            assert_eq!(crate::settings_store::Settings::load(dir.path()).unwrap().activity.keep.count, 321);
+            handle_request(
+                &SettingsRequest::SetRetention {
+                    count: 321,
+                    hours: 48,
+                },
+                cx,
+            );
+            assert_eq!(
+                crate::settings_store::Settings::load(dir.path())
+                    .unwrap()
+                    .activity
+                    .keep
+                    .count,
+                321
+            );
             assert_eq!(receiver.len(), 1);
         });
         receiver.try_recv().unwrap()().unwrap();
@@ -468,8 +549,17 @@ mod tests {
         cx.update(|cx| {
             settings_store::install(SettingsStore::load(Some(blocked)), None, cx);
             let before = settings_store::store(cx).unwrap().read(cx).retention();
-            handle_request(&SettingsRequest::SetRetention { count: 654, hours: 96 }, cx);
-            assert_eq!(settings_store::store(cx).unwrap().read(cx).retention(), before);
+            handle_request(
+                &SettingsRequest::SetRetention {
+                    count: 654,
+                    hours: 96,
+                },
+                cx,
+            );
+            assert_eq!(
+                settings_store::store(cx).unwrap().read(cx).retention(),
+                before
+            );
             assert!(receiver.is_empty());
         });
     }

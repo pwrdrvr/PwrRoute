@@ -17,8 +17,14 @@ use crate::update_channel::{self, Slot, Track, Train, UpdateSettings};
 use crate::updater::{self, Installation, Outcome, State};
 
 pub fn initial() -> Updates {
-    build(&Installation::NotInstalled { why: "Loading…".into() },
-        &UpdateSettings::default(), &State::default(), Local::now())
+    build(
+        &Installation::NotInstalled {
+            why: "Loading…".into(),
+        },
+        &UpdateSettings::default(),
+        &State::default(),
+        Local::now(),
+    )
 }
 
 /// The pane's model as things stand.

@@ -24,21 +24,29 @@ pub fn initial(cx: &App) -> Browsers {
 pub fn load(cx: &mut App) {
     let apps = browser_scan::apps(cx);
     // Empty is not a result while the initial scan is still running.
-    if browser_scan::is_loading(cx) { return; }
+    if browser_scan::is_loading(cx) {
+        return;
+    }
     if let Some(error) = browser_scan::error(cx) {
         settings::problem(cx, super::Pane::Browsers, error);
         return;
     }
     let hidden = settings_store::store(cx)
-        .map(|store| store.read(cx).settings().browsers.clone()).unwrap_or_default();
+        .map(|store| store.read(cx).settings().browsers.clone())
+        .unwrap_or_default();
     let default = default_browser::card(cx);
-    settings::load(cx, super::Pane::Browsers, move || {
-        let facts = facts(hidden);
-        build(&apps, &facts, default)
-    }, |model, mut browsers| {
-        browsers.default = model.browsers.default.clone();
-        model.browsers = browsers;
-    });
+    settings::load(
+        cx,
+        super::Pane::Browsers,
+        move || {
+            let facts = facts(hidden);
+            build(&apps, &facts, default)
+        },
+        |model, mut browsers| {
+            browsers.default = model.browsers.default.clone();
+            model.browsers = browsers;
+        },
+    );
 }
 
 /// What the model is built from besides the scan: the rules and the
