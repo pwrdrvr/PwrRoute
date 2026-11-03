@@ -541,7 +541,8 @@ pub struct BrowserApp {
     /// "com.google.Chrome · /Applications/Google Chrome.app".
     pub location: SharedString,
     pub profiles: Vec<SharedString>,
-    /// Shown instead of profiles when there are none: "no profiles".
+    /// Under the profiles, or in their place when there are none: "no
+    /// profiles", or "using cached profiles; access blocked".
     pub note: Option<SharedString>,
     pub usage: Usage,
     /// Off hides it from pickers; rules that name it still resolve.

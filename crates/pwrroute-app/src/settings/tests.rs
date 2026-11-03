@@ -355,6 +355,21 @@ fn the_browsers_pane_hides_an_app_and_rescans(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn cached_profiles_keep_their_note_beside_the_chips(cx: &mut TestAppContext) {
+    // macOS blocked the live read, so the names come from the cache: the
+    // row must say so, or they pass for a fresh read.
+    let (_, cx, _) = settings(cx, |model| {
+        let chrome = &mut model.browsers.detected[0];
+        chrome.profiles = vec!["Work".into()];
+        chrome.note = Some("using cached profiles; access blocked".into());
+        model.browsers.detected[1].note = None;
+    });
+    assert!(cx.debug_bounds("browsers-profiles-note-0").is_some());
+    // A live read has no note under its chips.
+    assert!(cx.debug_bounds("browsers-profiles-note-1").is_none());
+}
+
+#[gpui_kit::test]
 fn the_release_channel_tiles_pick_a_slot_and_a_switch_back_restarts(cx: &mut TestAppContext) {
     use super::model::Slot;
     let (view, cx, requests) = settings(cx, |_| {});
