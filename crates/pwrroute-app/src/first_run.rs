@@ -4167,7 +4167,7 @@ mod tests {
         assert!(calls.fallbacks.borrow().is_empty());
         assert!(calls.precedences.borrow().is_empty());
         assert!(calls.imports.borrow().is_empty());
-        cx.update(|_, cx| assert!(cx.windows().iter().all(|w| w.downcast::<FirstRun>().is_none())));
+        assert!(cx.windows().iter().all(|w| w.downcast::<FirstRun>().is_none()));
     }
 
 }
