@@ -267,6 +267,29 @@ pub struct FirstRunModel {
 }
 
 impl FirstRunModel {
+    /// Apply a completed browser snapshot without replacing setup choices.
+    /// A late scan can discover the profile-access step for the first time.
+    pub(crate) fn refresh_browsers(&mut self, browsers: Vec<BrowserChoice>, access_pane: bool) {
+        let before = self.still_blocked().len();
+        self.browsers = browsers;
+        let blocked: Vec<_> = self.browsers.iter()
+            .filter(|browser| browser.profiles_blocked)
+            .map(|browser| browser.label.clone())
+            .collect();
+        if self.access.is_none() && access_pane && !blocked.is_empty() {
+            self.access = Some(ProfileAccess { browsers: blocked, ..Default::default() });
+        } else if let Some(access) = self.access.as_mut() {
+            for label in blocked {
+                if !access.browsers.iter().any(|known| known.name == label.name) {
+                    access.browsers.push(label);
+                }
+            }
+            if before > self.still_blocked().len() {
+                self.access.as_mut().unwrap().still_blocked = false;
+            }
+        }
+    }
+
     /// The design's 4a: a config found with 3 of its rules importable, the
     /// Everything else browser preselected from its default.
     #[cfg(test)]
@@ -1353,7 +1376,7 @@ impl FirstRun {
         }
         let (before, asked) = self.access_recheck.take().unwrap_or((before, false));
         if self.model.browser_error.is_none() {
-            self.model.browsers = browsers;
+            self.model.refresh_browsers(browsers, cfg!(target_os = "macos"));
             let after = self.model.still_blocked().len();
             if let Some(access) = self.model.access.as_mut() {
                 if asked {

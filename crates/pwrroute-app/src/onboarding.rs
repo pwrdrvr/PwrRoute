@@ -811,53 +811,6 @@ pub fn install(cx: &mut App) {
     crate::browser_scan::on_complete(cx, Rc::new(refresh_browsers));
 }
 
-fn refresh_browser_model(
-    model: &mut FirstRunModel,
-    browsers: Vec<BrowserChoice>,
-    access_pane: bool,
-) {
-    let before = model.still_blocked().len();
-    model.browsers = browsers;
-    let blocked: Vec<_> = model
-        .browsers
-        .iter()
-        .filter(|browser| browser.profiles_blocked)
-        .map(|browser| browser.label.clone())
-        .collect();
-    if model.access.is_none() && access_pane && !blocked.is_empty() {
-        model.access = Some(ProfileAccess {
-            browsers: blocked,
-            ..Default::default()
-        });
-    } else if let Some(access) = model.access.as_mut() {
-        for label in blocked {
-            if !access.browsers.iter().any(|known| known.name == label.name) {
-                access.browsers.push(label);
-            }
-        }
-        if before > model.still_blocked().len() {
-            model.access.as_mut().unwrap().still_blocked = false;
-        }
-    }
-}
-
-/// Refresh only discovered browsers; retain the person's setup choices.
-pub fn refresh_browsers(cx: &mut App) {
-    if crate::browser_scan::is_loading(cx) || crate::browser_scan::error(cx).is_some() {
-        return;
-    }
-    let browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
-    for window in cx.windows() {
-        if let Some(window) = window.downcast::<FirstRun>() {
-            let _ = window.update(cx, |view, _, cx| {
-                refresh_browser_model(&mut view.model, browsers.clone(), cfg!(target_os = "macos"));
-                view.preselect(cx);
-                cx.notify();
-            });
-        }
-    }
-}
-
 impl gpui_kit::Global for Open {}
 
 /// Opens first run over the machine's facts, with the Everything else
@@ -1047,10 +1000,6 @@ impl Render for Preparing {
                     }))
             }))
     }
-}
-
-pub fn install(cx: &mut App) {
-    crate::browser_scan::on_complete(cx, Rc::new(refresh_browsers));
 }
 
 fn restart_opening(cx: &mut App) {
@@ -1289,13 +1238,13 @@ mod tests {
         let fallback = model.fallback.clone();
         let mut browser = chrome();
         browser.profiles_blocked = true;
-        refresh_browser_model(&mut model, vec![browser.clone()], true);
+        model.refresh_browsers(vec![browser.clone()], true);
         assert_eq!(model.access.as_ref().unwrap().browsers.len(), 1);
         assert_eq!(model.still_blocked().len(), 1);
         model.access.as_mut().unwrap().skipped = true;
         model.access.as_mut().unwrap().still_blocked = true;
         browser.profiles_blocked = false;
-        refresh_browser_model(&mut model, vec![browser], true);
+        model.refresh_browsers(vec![browser], true);
         assert!(model.access.as_ref().unwrap().skipped);
         assert!(!model.access.as_ref().unwrap().still_blocked);
         assert!(model.still_blocked().is_empty());
