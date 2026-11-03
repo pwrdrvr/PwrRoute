@@ -127,10 +127,10 @@ pub fn load(cx: &mut App) {
                 .and_then(|field| field.problem.clone());
             model.configuration = configuration;
             model.pending.remove(&super::Pane::ShortLinks);
-            if let Some(field) = model.configuration.everything_else.as_mut() {
-                if problem.is_some() {
-                    field.problem = problem;
-                }
+            if let (Some(field), Some(problem)) =
+                (model.configuration.everything_else.as_mut(), problem)
+            {
+                field.problem = Some(problem);
             }
         },
     );
