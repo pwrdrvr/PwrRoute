@@ -803,7 +803,7 @@ fn persist_copied_source(
             crate::sync::edit_settings(|sync| sync.config = Some(true), cx)
                 .map_err(|error| format!("Sync settings not saved: {error:#}"))
         },
-        |source, cx| apply_source_saved(source, cx, crate::importer_view::set_source_and_show),
+        |source, cx| crate::importer_view::set_source_and_show(source.clone(), cx),
     )
 }
 
@@ -823,39 +823,6 @@ fn combine_copy_saves(sync: Result<(), String>, source: Result<(), String>) -> R
         (Ok(()), Ok(())) => Ok(()),
         (Err(sync), Ok(())) => Err(sync),
         (_, Err(source)) => Err(format!("Source choice not saved: {source}")),
-    }
-}
-
-// The audited main helper returns (), while import durability #172 returns
-// its save Result. Preserve that Result when integrated; on main verify the
-// small settings file because its legacy helper reports failures only to logs.
-fn apply_source_saved<R: SourceSaveResult>(
-    source: &crate::settings_store::SourceSettings,
-    cx: &mut App,
-    apply: impl FnOnce(crate::settings_store::SourceSettings, &mut App) -> R,
-) -> Result<(), String> {
-    apply(source.clone(), cx).saved(source, cx)
-}
-
-trait SourceSaveResult {
-    fn saved(self, source: &crate::settings_store::SourceSettings, cx: &App) -> Result<(), String>;
-}
-impl SourceSaveResult for Result<(), String> {
-    fn saved(self, _: &crate::settings_store::SourceSettings, _: &App) -> Result<(), String> {
-        self
-    }
-}
-impl SourceSaveResult for () {
-    fn saved(self, source: &crate::settings_store::SourceSettings, cx: &App) -> Result<(), String> {
-        let store = crate::settings_store::store(cx).ok_or("settings are not loaded")?;
-        let dir = store.read(cx).dir().ok_or("no settings directory")?;
-        let saved =
-            crate::settings_store::Settings::load(dir).map_err(|error| format!("{error:#}"))?;
-        if saved.source == *source {
-            Ok(())
-        } else {
-            Err("Source choice is active for this session but was not saved.".into())
-        }
     }
 }
 
@@ -1317,9 +1284,9 @@ mod tests {
         gated_copy(cx, DuringCopy::EqualSource);
     }
 
-    #[gpui_kit::test]
-    fn the_real_source_save_result_keeps_a_copied_config_retry(
+    fn real_source_save_failure(
         cx: &mut gpui_kit::TestAppContext,
+        competing_choice: bool,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
@@ -1358,13 +1325,38 @@ mod tests {
         // different discoverable config appears beside the published file.
         std::fs::write(home.join(".finicky.ts"), "unrelated later config").unwrap();
         std::fs::remove_dir(data.join("settings.json.saving")).unwrap();
-        cx.update(|cx| retry_copied_with(cx, persist_copied_source)).unwrap();
+        if competing_choice {
+            cx.update(|cx| {
+                let source = cx.global::<CopiedConfig>().0.as_ref().unwrap().clone();
+                crate::importer_view::set_source_and_show(source, cx).unwrap();
+            });
+        }
+        let result = cx.update(|cx| retry_copied_with(cx, persist_copied_source));
+        if competing_choice {
+            assert!(result.is_err(), "a later equal source application invalidates this retry");
+        } else {
+            result.unwrap();
+            cx.update(|cx| assert!(cx.global::<CopiedConfig>().0.is_none()));
+        }
         let saved = crate::settings_store::Settings::load(&data).unwrap();
         assert_eq!(saved.source.config.as_ref(), Some(&copied));
         assert!(!saved.source.visual_only);
         assert!(saved.sync.syncs_config());
         assert_eq!(std::fs::read(&copied).unwrap(), bytes);
-        cx.update(|cx| assert!(cx.global::<CopiedConfig>().0.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn the_real_source_save_result_keeps_a_copied_config_retry(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        real_source_save_failure(cx, false);
+    }
+
+    #[gpui_kit::test]
+    fn a_copied_config_retry_refuses_a_later_equal_source_choice(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        real_source_save_failure(cx, true);
     }
 
     fn copied_but_not_saved(cx: &mut gpui_kit::TestAppContext, sync_fails: bool) {
