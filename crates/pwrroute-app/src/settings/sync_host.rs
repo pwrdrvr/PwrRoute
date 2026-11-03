@@ -586,30 +586,37 @@ const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 /// written to `~/.{name}`, never over a config already here, then put in
 /// charge with Also sync on so it keeps up.
 fn prepare_folder_config(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let env = pwrroute_engine::discovery::Environment::current();
+    prepare_folder_config_at(name, &env, || pwrroute_sync::Folder::new(root).settled(name))
+}
+
+fn prepare_folder_config_at(
+    name: &str,
+    env: &pwrroute_engine::discovery::Environment,
+    read: impl FnOnce() -> anyhow::Result<Vec<u8>>,
+) -> anyhow::Result<PathBuf> {
     use anyhow::Context as _;
     use pwrroute_engine::discovery;
     if crate::sync::config_name(Path::new(name)).as_deref() != Some(name) {
         anyhow::bail!("{name} is not a Finicky config");
     }
-    let env = discovery::Environment::current();
-    if let Some(found) = discovery::config_candidates(&env)
+    if let Some(found) = discovery::config_candidates(env)
         .into_iter()
         .find(|p| p.is_file())
     {
-        let home = std::env::home_dir();
         anyhow::bail!(
             "{} is already here",
-            crate::config_view::display_path(&found, home.as_deref())
+            crate::config_view::display_path(&found, env.home.as_deref())
         );
     }
-    let bytes = pwrroute_sync::Folder::new(root).settled(name)?;
+    let bytes = read()?;
     if bytes.len() > MAX_CONFIG_BYTES {
         anyhow::bail!("{name} is too big to be a config");
     }
     if let pwrroute_sync::Content::Invalid(why) = crate::sync::check_config(&bytes) {
         anyhow::bail!("{name}: {why}");
     }
-    let home = std::env::home_dir().context("no home folder")?;
+    let home = env.home.as_deref().context("no home folder")?;
     let path = home.join(format!(".{name}"));
     write_new(&path, &bytes).with_context(|| format!("cannot write ~/.{name}"))?;
     Ok(path)
@@ -633,27 +640,7 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
         let result = work.await;
         cx.update(|cx| {
             cx.set_global(CopyingConfig(false));
-            let result = result.and_then(|path| {
-                let current = crate::settings_store::store(cx)
-                    .map(|store| store.read(cx).settings().source.clone());
-                anyhow::ensure!(
-                    expected == current,
-                    "routing source changed while the config was copied"
-                );
-                crate::sync::edit_settings(|sync| sync.config = Some(true), cx)?;
-                let mut source = current.unwrap_or_default();
-                source.visual_only = false;
-                let env = pwrroute_engine::discovery::Environment::current();
-                source.config = (!pwrroute_engine::discovery::config_candidates(&env)
-                    .contains(&path))
-                .then(|| path.clone());
-                if !source.dismissed.contains(&path) {
-                    source.dismissed.push(path);
-                }
-                crate::importer_view::set_source_and_show(source, cx);
-                super::configuration_host::refresh(cx);
-                Ok(())
-            });
+            let result = result.and_then(|path| finish_folder_config(expected, path, cx));
             match result {
                 Ok(()) => refresh(cx),
                 Err(error) => report(format!("Not changed: {error:#}."), cx),
@@ -661,6 +648,28 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
         });
     })
     .detach();
+    Ok(())
+}
+
+fn finish_folder_config(expected: Option<crate::settings_store::SourceSettings>, path: PathBuf, cx: &mut App) -> anyhow::Result<()> {
+    let current = crate::settings_store::store(cx)
+        .map(|store| store.read(cx).settings().source.clone());
+    anyhow::ensure!(
+        expected == current,
+        "routing source changed while the config was copied"
+    );
+    crate::sync::edit_settings(|sync| sync.config = Some(true), cx)?;
+    let mut source = current.unwrap_or_default();
+    source.visual_only = false;
+    let env = pwrroute_engine::discovery::Environment::current();
+    source.config = (!pwrroute_engine::discovery::config_candidates(&env)
+        .contains(&path))
+    .then(|| path.clone());
+    if !source.dismissed.contains(&path) {
+        source.dismissed.push(path);
+    }
+    crate::importer_view::set_source_and_show(source, cx);
+    super::configuration_host::refresh(cx);
     Ok(())
 }
 
@@ -897,6 +906,51 @@ mod tests {
     use pwrroute_engine::{Binding, Destination, Rule, RuleSet};
     use pwrroute_sync::{FileStatus, Kind, Machine};
     use std::collections::BTreeMap;
+
+    fn gated_copy(cx: &mut gpui_kit::TestAppContext, change_source: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let env = pwrroute_engine::discovery::Environment { home: Some(home.clone()), ..Default::default() };
+        let expected = cx.update(|cx| {
+            crate::settings_store::install(crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))), None, cx);
+            Some(crate::settings_store::store(cx).unwrap().read(cx).settings().source.clone())
+        });
+        let (entered, reading) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || prepare_folder_config_at("finicky.js", &env, || {
+            entered.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())
+        }));
+        reading.recv().unwrap();
+        if change_source {
+            cx.update(|cx| crate::settings_store::store(cx).unwrap().update(cx, |store, _| {
+                store.update(|settings| settings.source.visual_only = true).unwrap();
+            }));
+        } else {
+            std::fs::write(home.join(".finicky.ts"), "fixture config that arrived meanwhile").unwrap();
+        }
+        release.send(()).unwrap();
+        let prepared = worker.join().unwrap().unwrap();
+        assert!(!home.join(".finicky.js").exists(), "remote preparation must not publish a discoverable config before revalidation");
+        let result = cx.update(|cx| finish_folder_config(expected, prepared, cx));
+        assert!(result.is_err(), "stale source or discovery must refuse commit");
+        assert!(!home.join(".finicky.js").exists());
+        if change_source {
+            cx.update(|cx| assert!(crate::settings_store::store(cx).unwrap().read(cx).settings().source.visual_only));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn changed_source_during_remote_preparation_never_publishes_a_config(cx: &mut gpui_kit::TestAppContext) {
+        gated_copy(cx, true);
+    }
+
+    #[gpui_kit::test]
+    fn a_config_discovered_during_remote_preparation_prevents_publication(cx: &mut gpui_kit::TestAppContext) {
+        gated_copy(cx, false);
+    }
 
     fn rules() -> RulesFile {
         RulesFile {
