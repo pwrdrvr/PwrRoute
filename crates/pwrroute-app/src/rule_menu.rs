@@ -30,7 +30,7 @@ use pwrroute_router::Privacy;
 
 use crate::app::{Leave, PwrRoute, Screen, Selection};
 use crate::rules_model::{Destination, Matcher, Rule};
-use crate::rules_store::{Removed, RulesStore};
+use crate::rules_store::Removed;
 use crate::theme::{self, mono, text};
 use crate::try_it::Probe;
 use crate::widgets::{ButtonKind, badge, badge_for, button, menu_card, menu_row, paragraph};

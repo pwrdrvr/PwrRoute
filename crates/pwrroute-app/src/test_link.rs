@@ -160,7 +160,8 @@ impl TestLink {
     pub fn new(
         config: Option<PathBuf>,
         home: Option<&Path>,
-            rules: RulesFile,
+        worker: crate::engine_worker::Client,
+        rules: RulesFile,
         cx: &mut App,
     ) -> Self {
         Self {

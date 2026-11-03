@@ -947,7 +947,7 @@ impl PwrRoute {
                 let _ = this.update(cx, |this, cx| {
                     this.sync_with_disk(cx);
                     if this.engine_revision != revision || !crate::engine_worker::unchanged(&stamps) { return; }
-                    let Some(record) = record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
+                    let Some(record) = crate::activity_actions::record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
                     match winner {
                         Ok(handler) if save => this.save_example_to(key, handler, cx),
                         Ok(handler) => {
@@ -1473,7 +1473,7 @@ impl PwrRoute {
     }
 
     fn save_example_to(&mut self, key: RowKey, handler: Option<usize>, cx: &mut Context<'_, Self>) {
-        let Some(record) = record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
+        let Some(record) = crate::activity_actions::record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
         let url = matched_url(&record).to_owned();
         match handler {
             Some(handler) => {

@@ -3,7 +3,7 @@
 //! impacts and saved examples cannot monopolize interactive previews.
 use std::{
     array,
-    sync::{Arc, Condvar, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{Arc, Condvar, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}},
     thread,
     time::{Duration, Instant},
 };
@@ -15,7 +15,9 @@ type Step = Box<dyn FnMut() -> bool>;
 type Factory = Box<dyn FnOnce(Cancel) -> Step + Send>;
 struct Pending { at: Instant, cancel: Cancel, factory: Factory }
 struct Queue { pending: [Option<Pending>; LANES], tokens: [Option<Cancel>; LANES], closed: bool }
-struct Shared { queue: Mutex<Queue>, wake: Condvar }
+struct Shared { queue: Mutex<Queue>, wake: Condvar, active: AtomicUsize }
+struct Running { cancel: Cancel, step: Step, shared: Arc<Shared> }
+impl Drop for Running { fn drop(&mut self) { self.shared.active.fetch_sub(1, Ordering::Release); self.shared.wake.notify_all(); } }
 
 #[derive(Clone)]
 pub struct Cancel(Arc<AtomicBool>);
@@ -33,25 +35,27 @@ impl EngineWorker {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue { pending: array::from_fn(|_| None), tokens: array::from_fn(|_| None), closed: false }),
             wake: Condvar::new(),
+            active: AtomicUsize::new(0),
         });
         let worker = shared.clone();
         thread::Builder::new().name("pwrroute-ui-engine".into()).spawn(move || {
-            let mut running: [Option<(Cancel, Step)>; LANES] = array::from_fn(|_| None);
+            let mut running: [Option<Running>; LANES] = array::from_fn(|_| None);
             let mut next = 0;
             loop {
                 let mut queue = worker.queue.lock().unwrap();
                 if queue.closed { break; }
                 let now = Instant::now();
                 for (lane, task) in running.iter_mut().enumerate() {
-                    if task.as_ref().is_some_and(|(cancel, _)| cancel.cancelled()) { *task = None; }
+                    if task.as_ref().is_some_and(|task| task.cancel.cancelled()) { *task = None; }
                     if queue.pending[lane].as_ref().is_some_and(|job| job.at <= now) {
                         let job = queue.pending[lane].take().unwrap();
                         // Construct engines outside the queue lock: submitting or
                         // closing must never wait for config evaluation.
+                        worker.active.fetch_add(1, Ordering::Release);
                         drop(queue);
                         let cancel = job.cancel;
                         let step = (job.factory)(cancel.clone());
-                        *task = Some((cancel, step));
+                        *task = Some(Running { cancel, step, shared: worker.clone() });
                         queue = worker.queue.lock().unwrap();
                     }
                 }
@@ -59,8 +63,8 @@ impl EngineWorker {
                 if let Some(lane) = lane {
                     drop(queue);
                     next = (lane + 1) % LANES;
-                    let (cancel, step) = running[lane].as_mut().unwrap();
-                    if cancel.cancelled() || step() { running[lane] = None; }
+                    let task = running[lane].as_mut().unwrap();
+                    if task.cancel.cancelled() || (task.step)() { running[lane] = None; }
                 } else {
                     let delay = queue.pending.iter().flatten().map(|job| job.at.saturating_duration_since(Instant::now())).min();
                     drop(match delay {
@@ -88,6 +92,8 @@ impl Client {
     /// cancel both the old result and the remainder of its batch.
     pub fn submit<T: Send + 'static, F, S>(&self, lane: Lane, debounce: Duration, build: F) -> async_channel::Receiver<T>
     where F: FnOnce(Cancel) -> S + Send + 'static, S: FnMut() -> Option<T> + 'static {
+        #[cfg(test)]
+        let debounce = { let _ = debounce; Duration::ZERO };
         let (tx, rx) = async_channel::bounded(1);
         let cancel = Cancel(Arc::new(AtomicBool::new(false)));
         let factory: Factory = Box::new(move |cancel| {
@@ -191,4 +197,26 @@ impl gpui_kit::Global for Service {}
 pub fn service(cx: &mut gpui_kit::App) -> Client {
     if cx.try_global::<Service>().is_none() { cx.set_global(Service(EngineWorker::new())); }
     cx.global::<Service>().0.client()
+}
+
+#[cfg(test)]
+impl Client {
+    fn wait_idle(&self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let queue = self.shared.queue.lock().unwrap();
+            if queue.pending.iter().all(Option::is_none) && self.shared.active.load(Ordering::Acquire) == 0 { return; }
+            assert!(Instant::now() < deadline, "UI engine worker did not settle");
+            drop(self.shared.wake.wait_timeout(queue, Duration::from_millis(10)).unwrap());
+        }
+    }
+}
+#[cfg(test)]
+pub fn settle(cx: &mut gpui_kit::App) {
+    for window in cx.windows() {
+        if let Some(window) = window.downcast::<crate::app::PwrRoute>() {
+            if let Ok(client) = window.read(cx).map(|app| app.engine_worker.client()) { client.wait_idle(); }
+        }
+    }
+    if let Some(service) = cx.try_global::<Service>() { service.0.wait_idle(); }
 }

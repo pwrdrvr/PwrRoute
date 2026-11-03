@@ -847,6 +847,8 @@ impl PwrRoute {
     /// The store holds the file again: the rows, the selection (cleared
     /// when its row is gone), the rail, and every engine over the rules.
     fn reloaded(&mut self, cx: &mut Context<'_, Self>) {
+        self.engine_revision += 1;
+        self.engine_worker.cancel(Lane::Impact);
         // The rows may be other rules now: a menu, a drag or an Undo for
         // one of them would land on the wrong one.
         self.row_actions = crate::rule_menu::RowActions::default();
@@ -856,10 +858,10 @@ impl PwrRoute {
         self.follow_draft();
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
-        self.rebuild_rail(cx);
         self.test.set_rules(self.store.written());
         self.probe.set_rules(self.store.edited());
         self.tests.set_rules(self.store.edited());
+        self.rebuild_rail(cx);
         if self.tests.counts() != (0, 0) {
             self.schedule_tests(cx);
         }

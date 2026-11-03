@@ -90,6 +90,7 @@ fn open(cx: &mut TestAppContext) -> (Entity<PwrRoute>, &mut VisualTestContext) {
 fn saved(cx: &mut VisualTestContext, path: &Path) -> RulesFile {
     cx.executor().advance_clock(crate::app::SAVE_DEBOUNCE);
     cx.run_until_parked();
+    draw(cx);
     RulesFile::load(path).expect("read the rules back")
 }
 
@@ -101,6 +102,13 @@ fn save_rule(cx: &mut VisualTestContext) {
 }
 
 fn draw(cx: &mut VisualTestContext) {
+    // Worker completion is an external wake; GPUI's virtual executor does
+    // not wait for OS threads. Join the work, then deliver its callbacks.
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|_, cx| crate::engine_worker::settle(cx));
+    }
+    cx.run_until_parked();
     cx.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
@@ -196,6 +204,7 @@ fn type_sample(cx: &mut VisualTestContext) {
 }
 
 fn trace(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> TraceView {
+    draw(cx);
     view.read_with(cx, |app, _| app.test.outcome.clone())
         .expect("Test a link ran")
         .expect("the trace resolved")
@@ -7590,7 +7599,7 @@ fn an_old_short_link_expansion_cannot_replace_a_new_test(cx: &mut TestAppContext
         assert!(app.test.expanding);
         app.test.url.text = "https://example.com/new".into();
         app.test.run(cx);
-        assert!(!app.test.expanding);
+        assert!(app.test.expanding);
     });
     let latest = trace(&view, cx);
     cx.run_until_parked();
@@ -7693,7 +7702,7 @@ fn changing_config_source_invalidates_the_old_test_instance_request(cx: &mut Tes
         app.set_config(Some(off), cx);
         app.test.url.text = "https://go.example.com/neutral".into();
         app.test.run(cx);
-        assert!(!app.test.expanding);
+        assert!(app.test.expanding);
     });
     let latest = trace(&view, cx);
     assert_eq!(latest.result.title, "Safari");
