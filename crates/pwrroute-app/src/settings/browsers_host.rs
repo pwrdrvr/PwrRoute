@@ -31,7 +31,10 @@ pub fn load(cx: &mut App) {
     settings::load(cx, super::Pane::Browsers, move || {
         let facts = facts(hidden);
         build(&apps, &facts, default)
-    }, |model, browsers| model.browsers = browsers);
+    }, |model, mut browsers| {
+        browsers.default = model.browsers.default.clone();
+        model.browsers = browsers;
+    });
 }
 
 /// What the model is built from besides the scan: the rules and the

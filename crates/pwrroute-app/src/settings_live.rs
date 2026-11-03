@@ -45,7 +45,8 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
 pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
     if let SettingsRequest::LoadPane(pane) = request {
         use crate::settings::{self, Pane};
-        match pane.load_key() {
+        let pane = pane.load_key();
+        cx.defer(move |cx| match pane {
             Pane::Browsers => browsers_host::load(cx),
             Pane::Configuration => configuration_host::load(cx),
             Pane::Privacy => privacy_host::load(cx),
@@ -54,7 +55,7 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
             Pane::Updates => settings::load(cx, Pane::Updates, updates_host::model,
                 |model, updates| model.updates = updates),
             _ => {}
-        }
+        });
         return;
     }
     let handled = appearance::handle_settings_request(request, cx)

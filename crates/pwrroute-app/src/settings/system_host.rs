@@ -11,7 +11,7 @@ use std::{
 
 use gpui_kit::{App, SharedString};
 
-use super::model::{About, Diagnostics, Experimental, Listener, SettingsRequest};
+use super::model::{About, Diagnostics, Experimental, Listener, LocalAgents, SettingsRequest};
 use crate::build_info::BuildInfo;
 use crate::config_view::display_path;
 use crate::router::{self, RoutingSource};
@@ -56,6 +56,14 @@ pub fn load(cx: &mut App) {
         facts.yield_browser_focus = experimental.yield_browser_focus;
         build_diagnostics(&facts)
     }, |model, diagnostics| model.diagnostics = diagnostics);
+}
+
+/// Compatibility for Help's copy action; Settings uses the background loader.
+pub fn diagnostics(cx: &App, agents: &LocalAgents) -> Diagnostics {
+    let mut facts = facts(settings_store::router(cx));
+    facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
+    facts.yield_browser_focus = experimental(cx).yield_browser_focus;
+    build_diagnostics(&facts)
 }
 
 pub fn experimental(cx: &App) -> Experimental {

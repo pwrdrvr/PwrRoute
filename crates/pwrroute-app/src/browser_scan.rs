@@ -107,7 +107,7 @@ struct ScanGlobal {
     again: bool,
     callbacks: Vec<Rc<dyn Fn(&mut App)>>,
     #[cfg(test)]
-    producer: Option<std::sync::Arc<dyn Fn() -> Vec<DetectedApp> + Send + Sync>>,
+    producer: Option<std::sync::Arc<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>> + Send + Sync>>,
 }
 
 impl Global for ScanGlobal {}
@@ -162,8 +162,8 @@ fn start(cx: &mut App, force: bool) {
     cx.update_global(|scan: &mut ScanGlobal, _| scan.running = true);
     let work = cx.background_executor().spawn(async move {
         #[cfg(test)]
-        if let Some(producer) = producer { return producer(); }
-        scan(&env)
+        if let Some(producer) = producer { return producer().await; }
+        self::scan(&env)
     });
     cx.spawn(async move |cx| {
         let apps = work.await;
@@ -302,6 +302,50 @@ mod tests {
     use pwrroute_browsers::Platform;
 
     use super::*;
+
+    #[gpui_kit::test]
+    fn scan_readers_share_work_and_rescan_publishes_only_the_latest_result(cx: &mut gpui_kit::TestAppContext) {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let (_dir, env) = machine_with(&[]);
+        let started = Arc::new(AtomicUsize::new(0));
+        let (release, wait) = async_channel::bounded(2);
+        let calls = started.clone();
+        let completed = Rc::new(std::cell::Cell::new(0));
+        let observed = completed.clone();
+        cx.update(|cx| {
+            install(env, cx);
+            cx.update_global(|scan: &mut ScanGlobal, _| scan.producer = Some(Arc::new(move || {
+                let index = calls.fetch_add(1, Ordering::SeqCst);
+                let wait = wait.clone();
+                Box::pin(async move {
+                    wait.recv().await.unwrap();
+                    vec![DetectedApp { name: format!("Browser {index}"), bundle_id: None,
+                        location: "/fixture/browser".into(), profiles: vec![], directories: vec![], profiles_blocked: false }]
+                })
+            })));
+            on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
+            assert!(apps(cx).is_empty());
+            assert!(choices(cx).is_empty());
+            assert!(installed(cx).is_empty());
+            assert!(is_loading(cx));
+            assert!(!has_run(cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        cx.update(|cx| { rescan(cx); rescan(cx); });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        assert_eq!(started.load(Ordering::SeqCst), 2, "rescan requests coalesce");
+        assert_eq!(completed.get(), 0, "superseded scan is not published");
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(apps(cx)[0].name, "Browser 1");
+            assert!(has_run(cx));
+            assert!(!is_loading(cx));
+            assert_eq!(completed.get(), 1);
+        });
+    }
 
     /// A fixture machine with one `.app` of `bundle_id` under
     /// `/Applications`. Safari is in the catalog, so a bundle id is all the

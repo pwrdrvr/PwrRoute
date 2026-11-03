@@ -344,6 +344,10 @@ pub fn update_if(cx: &mut App, edit: impl FnOnce(&mut SettingsModel) -> Option<(
 /// Invalidates only a pane that has been requested in this window. Unvisited
 /// panes stay lazy. A running producer is allowed to finish, then reruns once.
 pub fn reload(cx: &mut App, pane: Pane) {
+    cx.defer(move |cx| reload_now(cx, pane));
+}
+
+fn reload_now(cx: &mut App, pane: Pane) {
     let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
     if let Some(handle) = open {
         let _ = handle.update(cx, |view, _, cx| {
@@ -367,6 +371,18 @@ pub fn load<T: Send + 'static>(
     produce: impl FnOnce() -> T + Send + 'static,
     apply: impl FnOnce(&mut SettingsModel, T) + 'static,
 ) {
+    load_async(cx, pane, async move {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
+            .map_err(|_| "Could not load this pane. Try again.".to_owned())
+    }, apply);
+}
+
+fn load_async<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T) + 'static,
+) {
     let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else { return; };
     let pane = pane.load_key();
     let Ok(start) = handle.update(cx, |view, _, _| {
@@ -379,10 +395,7 @@ pub fn load<T: Send + 'static>(
         }
     }) else { return; };
     if !start { return; }
-    let work = cx.background_executor().spawn(async move {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
-            .map_err(|_| "Could not load this pane. Try again.".to_owned())
-    });
+    let work = cx.background_executor().spawn(produce);
     cx.spawn(async move |cx| {
         let result = work.await;
         let _ = handle.update(cx, |view, _, cx| {
