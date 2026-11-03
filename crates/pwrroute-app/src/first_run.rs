@@ -4068,4 +4068,106 @@ mod tests {
         let later = cx.debug_bounds("first-run-later").unwrap();
         assert!(later.bottom() <= body.bottom(), "{later:?} in {body:?}");
     }
+    fn gated_shared_scan(cx: &mut TestAppContext, cached: Vec<crate::browser_scan::DetectedApp>)
+        -> async_channel::Sender<Result<Vec<crate::browser_scan::DetectedApp>, String>>
+    {
+        let (release, results) = async_channel::bounded(4);
+        cx.update(|cx| {
+            crate::browser_scan::install_fixture(cached, cx);
+            crate::browser_scan::set_test_producer(cx, std::sync::Arc::new(move || {
+                let results = results.clone();
+                Box::pin(async move { results.recv().await.unwrap() })
+            }));
+            crate::onboarding::install(cx);
+        });
+        release
+    }
+
+    fn scan_app(blocked: bool) -> crate::browser_scan::DetectedApp {
+        crate::browser_scan::DetectedApp { name: "Google Chrome".into(), bundle_id: Some("com.google.Chrome".into()),
+            location: "/fixture/chrome".into(), profiles: if blocked { vec![] } else { vec!["Work".into()] },
+            directories: if blocked { vec![] } else { vec!["Profile 1".into()] }, profiles_blocked: blocked }
+    }
+
+    fn use_shared_scan(view: &Entity<FirstRun>, cx: &mut VisualTestContext) {
+        view.update(cx, |this, _| {
+            let hooks = crate::onboarding::hooks();
+            this.hooks.on_rescan = hooks.on_rescan;
+            this.hooks.on_reread = hooks.on_reread;
+        });
+    }
+
+    #[gpui_kit::test]
+    fn pending_empty_scan_is_loading_and_failure_retries_without_stale_fallback_write(cx: &mut TestAppContext) {
+        let release = gated_shared_scan(cx, vec![]);
+        let mut model = plain();
+        model.browsers.clear();
+        model.fallback = None;
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |this, cx| { this.look_again(cx); this.preselect(cx); });
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert!(view.read_with(cx, |this, _| this.model.everything_else_detail().starts_with("Looking for browsers")));
+        assert!(calls.fallbacks.borrow().is_empty());
+        release.try_send(Err("contrived scan failure".into())).unwrap();
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert_eq!(view.read_with(cx, |this, _| this.model.browser_error.clone()), Some("contrived scan failure".into()));
+        assert!(calls.fallbacks.borrow().is_empty());
+        assert!(calls.imports.borrow().is_empty());
+        view.update(cx, |this, cx| this.look_again(cx));
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert!(calls.fallbacks.borrow().is_empty());
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert!(view.read_with(cx, |this, _| this.model.browser_error.is_none()));
+        assert_eq!(calls.fallbacks.borrow().len(), 1, "only a fresh successful explicit rescan can preselect");
+    }
+
+    #[gpui_kit::test]
+    fn blocked_rescan_preserves_choice_and_suppresses_superseded_scan(cx: &mut TestAppContext) {
+        let release = gated_shared_scan(cx, vec![scan_app(true)]);
+        let model = blocked();
+        let chosen = model.fallback.clone();
+        let config = model.finicky.clone();
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |this, cx| { this.recheck_access(true, cx); this.preselect(cx); });
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        // A newer explicit scan supersedes the one already running.
+        view.update(cx, |this, cx| this.look_again(cx));
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert_eq!(view.read_with(cx, |this, _| this.model.fallback.clone()), chosen);
+        assert!(calls.fallbacks.borrow().is_empty());
+        release.try_send(Err("contrived latest failure".into())).unwrap();
+        cx.run_until_parked();
+        assert_eq!(view.read_with(cx, |this, _| this.model.fallback.clone()), chosen);
+        assert_eq!(view.read_with(cx, |this, _| this.model.finicky.clone()), config);
+        assert!(view.read_with(cx, |this, _| this.model.browser_error.is_some()));
+        assert!(calls.fallbacks.borrow().is_empty());
+        assert!(calls.precedences.borrow().is_empty());
+        assert!(calls.imports.borrow().is_empty());
+        assert!(calls.finishes.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn closing_first_run_during_scan_never_preselects_or_reopens(cx: &mut TestAppContext) {
+        let release = gated_shared_scan(cx, vec![]);
+        let mut model = plain();
+        model.browsers.clear(); model.fallback = None;
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |this, cx| this.look_again(cx));
+        cx.update(|window, _| window.remove_window());
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(calls.fallbacks.borrow().is_empty());
+        assert!(calls.precedences.borrow().is_empty());
+        assert!(calls.imports.borrow().is_empty());
+        cx.update(|_, cx| assert!(cx.windows().iter().all(|w| w.downcast::<FirstRun>().is_none())));
+    }
+
 }
