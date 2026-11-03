@@ -2530,7 +2530,7 @@ mod worker_integration_tests {
                 }
             }
         }
-        cx.update(crate::assets::load_fonts);
+        cx.update(|cx| crate::assets::load_fonts(cx));
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path().join("PwrRoute");
         let target = data.join("rules.json");
