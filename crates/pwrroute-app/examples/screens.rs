@@ -222,6 +222,9 @@ mod tray {
 
     /// View's rows: nothing to show here.
     pub fn show_screen(_: crate::app::Screen, _: &mut gpui_kit::App) {}
+
+    /// The update banner: no live tray here.
+    pub fn follow_updates(_: &mut gpui_kit::App) {}
 }
 #[cfg(target_os = "macos")]
 use tray_model as model;
@@ -238,6 +241,7 @@ enum TrayCommand {
     MakeDefault,
     HeldLinks,
     Sync,
+    RestartToUpdate,
     Quit,
 }
 
@@ -313,6 +317,9 @@ mod help {
 
     pub fn install(_: &mut gpui_kit::App) {}
 
+    /// The update toast's Release notes: nothing opens here.
+    pub fn open_link(_: &str, _: &mut gpui_kit::App) {}
+
     pub fn diagnostics_report(_: &mut gpui_kit::App) -> String {
         "PwrRoute 0.2.0 (debug, aarch64)\n".to_owned()
     }
@@ -329,6 +336,14 @@ mod update_channel;
 #[cfg(target_os = "macos")]
 #[path = "../src/updater.rs"]
 mod updater;
+// The update toast, the strip chip and the tray banner: nothing installs
+// their notices here, so none is drawn.
+#[cfg(target_os = "macos")]
+#[path = "../src/toast.rs"]
+mod toast;
+#[cfg(target_os = "macos")]
+#[path = "../src/update_notice.rs"]
+mod update_notice;
 
 /// As `main.rs` places the traffic lights, for the first-run window.
 #[cfg(target_os = "macos")]
