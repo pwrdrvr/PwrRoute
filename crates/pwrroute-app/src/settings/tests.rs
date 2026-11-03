@@ -80,6 +80,7 @@ fn queued_reopened_pane(cx: &mut TestAppContext, error: bool) {
         })
         .unwrap();
     cx.update(|cx| {
+        super::reload_now(cx, Pane::Privacy);
         super::load(
             cx,
             Pane::Privacy,

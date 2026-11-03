@@ -349,6 +349,10 @@ fn reload_now(cx: &mut App, pane: Pane) {
         let _ = handle.update(cx, |view, _, cx| {
             if let Some(load) = view.loads.get_mut(&pane) {
                 load.invalidate();
+                if view.model.problems.remove(&pane).is_some() {
+                    view.model.pending.insert(pane);
+                    cx.notify();
+                }
             } else if view.requested.remove(&pane) || view.pane == pane {
                 view.model.pending.insert(pane);
                 view.model.problems.remove(&pane);
