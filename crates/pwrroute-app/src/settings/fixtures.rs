@@ -16,6 +16,8 @@ use super::model::{
 
 pub fn model() -> SettingsModel {
     SettingsModel {
+        pending: Default::default(),
+        problems: Default::default(),
         general: general(),
         local_agents: local_agents(),
         configuration: configuration(),

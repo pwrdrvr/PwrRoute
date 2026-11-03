@@ -23,14 +23,18 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
     configuration_host::follow(window, cx);
     let local_agents = mcp::local_agents(cx);
     SettingsModel {
+        pending: [crate::settings::Pane::Browsers, crate::settings::Pane::Configuration,
+            crate::settings::Pane::Privacy, crate::settings::Pane::Sync,
+            crate::settings::Pane::Diagnostics, crate::settings::Pane::Updates].into(),
+        problems: Default::default(),
         general: appearance::general(cx),
-        browsers: browsers_host::model(cx),
-        configuration: configuration_host::model(cx),
-        sync: sync_host::model(cx),
-        privacy: privacy_host::model(cx),
-        updates: updates_host::model(),
+        browsers: browsers_host::initial(cx),
+        configuration: configuration_host::initial(),
+        sync: Default::default(),
+        privacy: privacy_host::build(None, None, None, None),
+        updates: updates_host::initial(),
         experimental: system_host::experimental(cx),
-        diagnostics: system_host::diagnostics(cx, &local_agents),
+        diagnostics: system_host::build_diagnostics(&Default::default()),
         about: system_host::about(),
         local_agents,
     }
@@ -39,6 +43,20 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
 /// Hands `request` to the first producer that answers it. The one request
 /// no producer takes is logged: nothing acts on the OS by default.
 pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
+    if let SettingsRequest::LoadPane(pane) = request {
+        use crate::settings::{self, Pane};
+        match pane.load_key() {
+            Pane::Browsers => browsers_host::load(cx),
+            Pane::Configuration => configuration_host::load(cx),
+            Pane::Privacy => privacy_host::load(cx),
+            Pane::Sync => sync_host::load(cx),
+            Pane::Diagnostics => system_host::load(cx),
+            Pane::Updates => settings::load(cx, Pane::Updates, updates_host::model,
+                |model, updates| model.updates = updates),
+            _ => {}
+        }
+        return;
+    }
     let handled = appearance::handle_settings_request(request, cx)
         || default_browser::handle_settings_request(request, cx)
         || privacy_host::handle_request(request, cx)

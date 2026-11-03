@@ -11,7 +11,7 @@ use std::{
 
 use gpui_kit::{App, SharedString};
 
-use super::model::{About, Diagnostics, Experimental, Listener, LocalAgents, SettingsRequest};
+use super::model::{About, Diagnostics, Experimental, Listener, SettingsRequest};
 use crate::build_info::BuildInfo;
 use crate::config_view::display_path;
 use crate::router::{self, RoutingSource};
@@ -45,10 +45,17 @@ pub struct Facts {
 
 /// The Diagnostics pane as things stand. `agents` is the Local agents
 /// model built for the same window.
-pub fn diagnostics(cx: &App, agents: &LocalAgents) -> Diagnostics {
-    let mut facts = facts(cx);
-    facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
-    build_diagnostics(&facts)
+pub fn load(cx: &mut App) {
+    let router = settings_store::router(cx);
+    let experimental = experimental(cx);
+    let mut agents = None;
+    settings::update(cx, |model| agents = Some((model.local_agents.listener.clone(), model.local_agents.endpoint.clone())));
+    settings::load(cx, super::Pane::Diagnostics, move || {
+        let mut facts = facts(router);
+        facts.agents = agents;
+        facts.yield_browser_focus = experimental.yield_browser_focus;
+        build_diagnostics(&facts)
+    }, |model, diagnostics| model.diagnostics = diagnostics);
 }
 
 pub fn experimental(cx: &App) -> Experimental {
@@ -61,8 +68,8 @@ pub fn experimental(cx: &App) -> Experimental {
 }
 
 /// Everything but the MCP door, read from this process and the OS.
-fn facts(cx: &App) -> Facts {
-    let dry_run = settings_store::router(cx)
+fn facts(router: Option<pwrroute_router::RouterHandle>) -> Facts {
+    let dry_run = router
         .and_then(|router| router.status().ok())
         .is_some_and(|status| status.dry_run);
     Facts {
@@ -77,7 +84,7 @@ fn facts(cx: &App) -> Facts {
         agents: None,
         log: crate::diag_log::path().map(Path::to_path_buf),
         build: BuildInfo::current(),
-        yield_browser_focus: experimental(cx).yield_browser_focus,
+        yield_browser_focus: None,
     }
 }
 
@@ -274,13 +281,7 @@ pub fn refresh_diagnostics(cx: &mut App) {
     if !settings::is_open(cx) {
         return;
     }
-    let mut facts = facts(cx);
-    settings::update(cx, move |model| {
-        let agents = &model.local_agents;
-        facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
-        model.experimental.yield_browser_focus = facts.yield_browser_focus;
-        model.diagnostics = build_diagnostics(&facts);
-    });
+    settings::reload(cx, super::Pane::Diagnostics);
 }
 
 #[cfg(test)]

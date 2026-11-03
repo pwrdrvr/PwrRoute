@@ -30,16 +30,13 @@ pub const EXPORT_NAME: &str = "pwrroute-activity.json";
 
 /// The pane's model as things stand: the store, the router and the
 /// `rules.json` the router routes by.
-pub fn model(cx: &App) -> Privacy {
+pub fn load(cx: &mut App) {
     let store = settings_store::store(cx).map(|store| store.read(cx).clone());
     let router = settings_store::router(cx);
-    let rules = discovery::rules_path(&discovery::Environment::current());
-    build(
-        store.as_ref(),
-        router.as_ref(),
-        std::env::home_dir().as_deref(),
-        rules.as_deref(),
-    )
+    super::load(cx, super::Pane::Privacy, move || {
+        let rules = discovery::rules_path(&discovery::Environment::current());
+        build(store.as_ref(), router.as_ref(), std::env::home_dir().as_deref(), rules.as_deref())
+    }, |model, privacy| model.privacy = privacy);
 }
 
 /// The model from its parts. `store` is `None` only before `install` ran
@@ -228,22 +225,15 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
                 hours: *hours,
             };
             save(cx, |settings| settings.activity.keep = retention);
-            if let Some(router) = settings_store::router(cx) {
-                let _ = router.set_retention(retention);
-            }
-            // Activity and the tray follow the swept buffer.
-            if let Some(feed) = activity::feed(cx) {
-                feed.update(cx, |feed, cx| {
-                    feed.reload();
-                    cx.notify();
-                });
-            }
-            refresh(cx);
+            command(cx, move |router, _| {
+                if let Some(router) = router { let _ = router.set_retention(retention); }
+            });
         }
         SettingsRequest::SetJournal(level) => {
             save(cx, |settings| settings.activity.journal = *level);
-            apply_journal(cx);
-            refresh(cx);
+            command(cx, |router, config| {
+                if let Some(router) = router { let _ = router.set_journal(config); }
+            });
         }
         SettingsRequest::RevealJournal => {
             if let Some(dir) = journal_dir(cx) {
@@ -251,8 +241,15 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
             }
         }
         SettingsRequest::ClearJournal => {
-            clear_journal(cx);
-            refresh(cx);
+            let dir = journal_dir(cx);
+            command(cx, move |router, config| {
+                if let Some(router) = &router { let _ = router.set_journal(None); }
+                if let Some(dir) = dir { delete_journal_files(&dir); }
+                if let Some(router) = &router {
+                    let _ = router.set_journal(config);
+                    router.clear_recent();
+                }
+            });
         }
         SettingsRequest::ClearRecent => {
             clear_recent(cx);
@@ -279,19 +276,35 @@ fn journal_dir(cx: &App) -> Option<PathBuf> {
     settings_store::store(cx).and_then(|store| store.read(cx).journal_dir())
 }
 
-/// Hands the router the journal as the settings now name it.
-fn apply_journal(cx: &mut App) {
+/// Serialize router commands; dispatch I/O may delay a reply indefinitely,
+/// but it never occupies GPUI or allows newer commands to overtake older ones.
+struct Commands(async_channel::Sender<Box<dyn FnOnce() + Send>>);
+impl gpui_kit::Global for Commands {}
+
+fn command(cx: &mut App, action: impl FnOnce(Option<RouterHandle>, Option<JournalConfig>) + Send + 'static) {
+    if !cx.has_global::<Commands>() {
+        let (sender, receiver) = async_channel::bounded::<Box<dyn FnOnce() + Send>>(16);
+        cx.set_global(Commands(sender));
+        cx.spawn(async move |cx| {
+            while let Ok(command) = receiver.recv().await {
+                cx.background_executor().spawn(async move { command(); }).await;
+                cx.update(|cx| {
+                    if let Some(feed) = activity::feed(cx) {
+                        feed.update(cx, |feed, cx| { feed.reload(); cx.notify(); });
+                    }
+                    refresh(cx);
+                });
+            }
+        }).detach();
+    }
+    let router = settings_store::router(cx);
     let config = settings_store::store(cx).and_then(|store| store.read(cx).journal());
-    if let Some(router) = settings_store::router(cx) {
-        let _ = router.set_journal(config);
+    if cx.global::<Commands>().0.try_send(Box::new(move || action(router, config))).is_err() {
+        log::warn!("settings: privacy command queue is full");
     }
 }
 
-/// Reads the model again into the open window.
-fn refresh(cx: &mut App) {
-    let privacy = model(cx);
-    super::update(cx, move |model| model.privacy = privacy);
-}
+fn refresh(cx: &mut App) { super::reload(cx, super::Pane::Privacy); }
 
 /// Shows the journal's directory in Finder or the file manager, creating
 /// it (owner only) when the journal is on but has not written yet. Opens
@@ -320,22 +333,6 @@ fn reveal(dir: &Path, cx: &App) {
         })
         .unwrap_or_else(|| dir.to_path_buf());
     cx.reveal_path(&newest);
-}
-
-/// Closes the journal, deletes its files, reopens it if it is still on,
-/// and forgets the links in memory with them.
-fn clear_journal(cx: &mut App) {
-    let router = settings_store::router(cx);
-    // Closed first: the open day's file would otherwise be written to after
-    // it is unlinked (and could not be deleted at all on Windows).
-    if let Some(router) = &router {
-        let _ = router.set_journal(None);
-    }
-    if let Some(dir) = journal_dir(cx) {
-        delete_journal_files(&dir);
-    }
-    apply_journal(cx);
-    clear_recent(cx);
 }
 
 /// Deletes every `activity-*.jsonl` under `dir`, reporting what could not
@@ -385,11 +382,13 @@ pub fn export(cx: &mut App) {
         .or_else(std::env::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
     let chosen = cx.prompt_for_new_path(&directory, Some(EXPORT_NAME));
-    cx.spawn(async move |_| match chosen.await {
+    cx.spawn(async move |cx| match chosen.await {
         Ok(Ok(Some(path))) => {
-            if let Err(error) = write_export(&router, &path) {
-                log::warn!("cannot export Activity to {}: {error}", path.display());
-            }
+            cx.background_executor().spawn(async move {
+                if let Err(error) = write_export(&router, &path) {
+                    log::warn!("cannot export Activity to {}: {error}", path.display());
+                }
+            }).await;
         }
         Ok(Ok(None)) => {}
         Ok(Err(error)) => log::warn!("the save dialog failed: {error:#}"),

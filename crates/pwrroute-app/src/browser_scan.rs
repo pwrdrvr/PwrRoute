@@ -7,7 +7,7 @@
 //! names, from `pwrroute_browsers`, and whether the OS kept a profile list
 //! from it (`DetectedApp::profiles_blocked`). Nothing here holds a URL.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use gpui_kit::{App, BorrowAppContext as _, Global};
 use pwrroute_browsers::{Env, detect_installed, read_profiles};
@@ -103,6 +103,11 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
 struct ScanGlobal {
     env: Env,
     apps: Option<Vec<DetectedApp>>,
+    running: bool,
+    again: bool,
+    callbacks: Vec<Rc<dyn Fn(&mut App)>>,
+    #[cfg(test)]
+    producer: Option<std::sync::Arc<dyn Fn() -> Vec<DetectedApp> + Send + Sync>>,
 }
 
 impl Global for ScanGlobal {}
@@ -110,7 +115,8 @@ impl Global for ScanGlobal {}
 /// Makes `env` the machine the scan reads. Nothing is read until
 /// [`apps`] is first asked.
 pub fn install(env: Env, cx: &mut App) {
-    cx.set_global(ScanGlobal { env, apps: None });
+    cx.set_global(ScanGlobal { env, apps: None, running: false, again: false,
+        callbacks: Vec::new(), #[cfg(test)] producer: None });
 }
 
 /// A scan a test or screenshot supplies, in place of reading the machine.
@@ -119,6 +125,7 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
     cx.set_global(ScanGlobal {
         env: Env::fixture(pwrroute_browsers::Platform::current(), std::env::temp_dir()),
         apps: Some(apps),
+        running: false, again: false, callbacks: Vec::new(), producer: None,
     });
 }
 
@@ -126,12 +133,55 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
 /// Before [`install`] (the window harness) the real machine is read each
 /// time, as the pickers always did.
 pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
-    if !cx.has_global::<ScanGlobal>() {
-        return scan(&environment());
+    if !cx.has_global::<ScanGlobal>() { return Vec::new(); }
+    if !has_run(cx) { start(cx, false); }
+    cx.global::<ScanGlobal>().apps.clone().unwrap_or_default()
+}
+
+pub fn is_loading(cx: &App) -> bool {
+    cx.try_global::<ScanGlobal>().is_some_and(|scan| scan.running)
+}
+
+/// Register once per consumer, during installation. Called on GPUI after each
+/// completed scan, including the initial one; never from the scanning thread.
+pub fn on_complete(cx: &mut App, callback: Rc<dyn Fn(&mut App)>) {
+    if !cx.has_global::<ScanGlobal>() { install(environment(), cx); }
+    cx.update_global(|scan: &mut ScanGlobal, _| scan.callbacks.push(callback));
+}
+
+fn start(cx: &mut App, force: bool) {
+    let Some(scan) = cx.try_global::<ScanGlobal>() else { return; };
+    if scan.running {
+        if force { cx.update_global(|scan: &mut ScanGlobal, _| scan.again = true); }
+        return;
     }
-    cx.update_global(|global: &mut ScanGlobal, _| {
-        global.apps.get_or_insert_with(|| scan(&global.env)).clone()
-    })
+    if !force && scan.apps.is_some() { return; }
+    let env = scan.env.clone();
+    #[cfg(test)]
+    let producer = scan.producer.clone();
+    cx.update_global(|scan: &mut ScanGlobal, _| scan.running = true);
+    let work = cx.background_executor().spawn(async move {
+        #[cfg(test)]
+        if let Some(producer) = producer { return producer(); }
+        scan(&env)
+    });
+    cx.spawn(async move |cx| {
+        let apps = work.await;
+        cx.update(|cx| {
+            let (again, callbacks) = cx.update_global(|scan: &mut ScanGlobal, _| {
+                scan.running = false;
+                let again = std::mem::take(&mut scan.again);
+                if !again { scan.apps = Some(apps); }
+                (again, scan.callbacks.clone())
+            });
+            if again { start(cx, true); return; }
+            refresh_windows(cx);
+            crate::settings::reload(cx, crate::settings::Pane::Browsers);
+            crate::settings::reload(cx, crate::settings::Pane::Configuration);
+            crate::settings::reload(cx, crate::settings::Pane::Sync);
+            for callback in callbacks { callback(cx); }
+        });
+    }).detach();
 }
 
 /// Whether the scan has run, so [`location_of`] can answer.
@@ -162,14 +212,8 @@ pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
 /// re-reads each time its window comes to the front: the same scan as
 /// [`rescan`], but the icons stay, as the apps did not change.
 pub fn reread(cx: &mut App) -> Vec<DetectedApp> {
-    if !cx.has_global::<ScanGlobal>() {
-        return scan(&environment());
-    }
-    cx.update_global(|global: &mut ScanGlobal, _| {
-        let apps = scan(&global.env);
-        global.apps = Some(apps.clone());
-        apps
-    })
+    start(cx, true);
+    cx.try_global::<ScanGlobal>().and_then(|scan| scan.apps.clone()).unwrap_or_default()
 }
 
 /// What a scan found, for the diagnostic log: each app's name and how
@@ -234,6 +278,7 @@ pub fn installed(cx: &mut App) -> Vec<Installed> {
 /// rescan or a hidden app changed.
 pub fn refresh_windows(cx: &mut App) {
     let choices = choices(cx);
+    let installed = installed(cx);
     let windows: Vec<_> = cx
         .windows()
         .into_iter()
@@ -241,8 +286,10 @@ pub fn refresh_windows(cx: &mut App) {
         .collect();
     for window in windows {
         let choices = choices.clone();
+        let installed = installed.clone();
         let _ = window.update(cx, |app, _, cx| {
             app.browsers = choices;
+            app.installed = installed;
             cx.notify();
         });
     }

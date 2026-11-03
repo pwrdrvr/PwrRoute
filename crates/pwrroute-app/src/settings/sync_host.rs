@@ -523,55 +523,37 @@ fn when(ms: u64) -> String {
 
 /// The pane as the running app stands, looking for cloud folders again:
 /// for the window opening.
-pub fn model(cx: &mut App) -> Sync {
-    if let Some(feed) = crate::sync::feed(cx) {
-        feed.update(cx, |feed, _| feed.look_for_places());
-    }
-    current(cx)
-}
-
-/// The pane with the cloud folders found when it opened: a pass or a
-/// change redraws it without listing `~/Library/CloudStorage` again.
-fn current(cx: &mut App) -> Sync {
+pub fn load(cx: &mut App) {
     let Some(feed) = crate::sync::feed(cx) else {
-        return Sync::default();
+        super::load(cx, super::Pane::Sync, Sync::default, |model, sync| model.sync = sync);
+        return;
     };
-    let (status, places) = {
-        let feed = feed.read(cx);
-        (feed.status.clone(), feed.places.clone())
-    };
+    let status = feed.read(cx).status.clone();
     let settings = crate::settings_store::store(cx)
-        .map(|store| store.read(cx).settings().sync.clone())
-        .unwrap_or_default();
-    let rules = crate::sync::rules_path()
-        .and_then(|p| RulesFile::load(&p).ok())
-        .unwrap_or_default();
-    let machine = crate::sync::machine();
-    let home = std::env::home_dir();
-    let config = crate::router::config_in_charge()
-        .map(|p| crate::config_view::display_path(&p, home.as_deref()));
+        .map(|store| store.read(cx).settings().sync.clone()).unwrap_or_default();
     let choices = crate::browser_scan::choices(cx);
     let installed = crate::browser_scan::installed(cx);
-    build(&Facts {
-        status: &status,
-        targets: &settings.targets,
-        places: &places,
-        rules: &rules,
-        machine: &machine,
-        computer_name: &crate::sync::computer_name(),
-        config,
-        config_found: pwrroute_engine::discovery::config_candidates(
-            &pwrroute_engine::discovery::Environment::current(),
-        )
-        .iter()
-        .any(|path| path.is_file()),
-        config_on: settings.syncs_config(),
-        choices: &choices,
-        installed: &installed,
-        home: home.as_deref(),
-        here: here(),
-        when: &when,
-    })
+    super::load(cx, super::Pane::Sync, move || {
+        let places = pwrroute_sync::detect(&pwrroute_sync::Env::current());
+        let rules = crate::sync::rules_path().and_then(|p| RulesFile::load(&p).ok()).unwrap_or_default();
+        let machine = crate::sync::machine();
+        let home = std::env::home_dir();
+        let config = crate::router::config_in_charge()
+            .map(|p| crate::config_view::display_path(&p, home.as_deref()));
+        let sync = build(&Facts {
+            status: &status, targets: &settings.targets, places: &places,
+            rules: &rules, machine: &machine, computer_name: &crate::sync::computer_name(),
+            config, config_found: pwrroute_engine::discovery::config_candidates(
+                &pwrroute_engine::discovery::Environment::current()).iter().any(|path| path.is_file()),
+            config_on: settings.syncs_config(), choices: &choices, installed: &installed,
+            home: home.as_deref(), here: here(), when: &when,
+        });
+        (sync, places)
+    }, |model, (sync, _)| {
+        let problem = model.sync.problem.clone();
+        model.sync = sync;
+        model.sync.problem = problem;
+    });
 }
 
 /// A config bigger than this is not one to copy (sync's own limit).
@@ -643,17 +625,15 @@ pub fn refresh(cx: &mut App) {
     if !super::is_open(cx) {
         return;
     }
-    let sync = current(cx);
-    super::update(cx, |model| model.sync = sync);
+    super::reload(cx, super::Pane::Sync);
 }
 
 fn report(problem: String, cx: &mut App) {
     if !super::is_open(cx) {
         return;
     }
-    let mut sync = current(cx);
-    sync.problem = Some(problem.into());
-    super::update(cx, |model| model.sync = sync);
+    super::update(cx, |model| model.sync.problem = Some(problem.into()));
+    refresh(cx);
 }
 
 /// Answers Sync's requests; `false` for any other.

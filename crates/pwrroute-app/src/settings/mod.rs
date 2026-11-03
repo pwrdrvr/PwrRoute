@@ -34,7 +34,7 @@ mod tests;
 mod updates;
 pub mod updates_host;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::theme::px;
@@ -116,6 +116,11 @@ pub enum Pane {
 }
 
 impl Pane {
+    /// Config Files and Short Links share one engine evaluation.
+    pub fn load_key(self) -> Self {
+        if self == Self::ShortLinks { Self::Configuration } else { self }
+    }
+
     pub const ALL: [Self; 11] = [
         Self::About,
         Self::General,
@@ -336,12 +341,80 @@ pub fn update_if(cx: &mut App, edit: impl FnOnce(&mut SettingsModel) -> Option<(
     }
 }
 
+/// Invalidates only a pane that has been requested in this window. Unvisited
+/// panes stay lazy. A running producer is allowed to finish, then reruns once.
+pub fn reload(cx: &mut App, pane: Pane) {
+    let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
+    if let Some(handle) = open {
+        let _ = handle.update(cx, |view, _, cx| {
+            let pane = pane.load_key();
+            if let Some(dirty) = view.loads.get_mut(&pane) {
+                *dirty = true;
+            } else if view.requested.remove(&pane) || view.pane.load_key() == pane {
+                view.model.pending.insert(pane);
+                view.model.problems.remove(&pane);
+                cx.notify();
+            }
+        });
+    }
+}
+
+/// Runs a pure producer offthread, tied to this exact window. Refreshes while
+/// it runs coalesce into one replacement; its stale result is never installed.
+pub fn load<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl FnOnce() -> T + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T) + 'static,
+) {
+    let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else { return; };
+    let pane = pane.load_key();
+    let Ok(start) = handle.update(cx, |view, _, _| {
+        if let Some(dirty) = view.loads.get_mut(&pane) {
+            *dirty = true;
+            false
+        } else {
+            view.loads.insert(pane, false);
+            true
+        }
+    }) else { return; };
+    if !start { return; }
+    let work = cx.background_executor().spawn(async move {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
+            .map_err(|_| "Could not load this pane. Try again.".to_owned())
+    });
+    cx.spawn(async move |cx| {
+        let result = work.await;
+        let _ = handle.update(cx, |view, _, cx| {
+            let dirty = view.loads.remove(&pane).unwrap_or(true);
+            if dirty {
+                view.requested.remove(&pane);
+            } else {
+                view.model.pending.remove(&pane);
+                view.model.problems.remove(&pane);
+                match result {
+                    Ok(value) => {
+                        apply(&mut view.model, value);
+                        if pane == Pane::Privacy {
+                            view.privacy = privacy::State::new(&view.model.privacy, cx);
+                        }
+                    },
+                    Err(error) => { view.model.problems.insert(pane, error.into()); }
+                }
+            }
+            cx.notify();
+        });
+    }).detach();
+}
+
 /// The Settings window's view.
 pub struct SettingsWindow {
     pub focus: FocusHandle,
     menu_bar: Entity<MenuBar>,
     pub pane: Pane,
     pub model: SettingsModel,
+    requested: HashSet<Pane>,
+    loads: HashMap<Pane, bool>,
     /// Cards folded shut, by id. A reading position, not a preference, so
     /// it lives as long as the window.
     collapsed: HashSet<&'static str>,
@@ -381,6 +454,8 @@ impl SettingsWindow {
             // Browsers, not About: it is the pane people open Settings for.
             pane: Pane::Browsers,
             model,
+            requested: HashSet::new(),
+            loads: HashMap::new(),
             collapsed: HashSet::new(),
             copied: None,
             agents,
@@ -512,6 +587,20 @@ impl SettingsWindow {
     }
 
     fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
+        let pane = self.pane.load_key();
+        if self.model.pending.contains(&pane) || self.model.problems.contains_key(&pane) {
+            if self.model.pending.contains(&pane) && self.requested.insert(pane) {
+                self.request(SettingsRequest::LoadPane(pane), window, cx);
+            }
+            let problem = self.model.problems.get(&pane);
+            return div()
+                .child(text(self.pane.label(), 22.0, 600.0, theme::text_primary()))
+                .child(text(problem.cloned().unwrap_or_else(|| "Loading…".into()),
+                    13.0, 400.0, theme::text_secondary()))
+                .when(problem.is_some(), |body| body.child(request_button(
+                    "settings-retry", "Try again", Kind::Default, false,
+                    SettingsRequest::LoadPane(pane), cx)));
+        }
         match self.pane {
             Pane::General => general::pane(self, cx),
             Pane::Browsers => browsers::pane(self, cx),

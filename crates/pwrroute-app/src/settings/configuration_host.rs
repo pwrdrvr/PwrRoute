@@ -103,25 +103,34 @@ pub struct ConfigFacts {
 }
 
 /// The pane's model as things stand.
-pub fn model(cx: &mut App) -> Configuration {
-    let facts = facts(cx);
-    remember(stamp(&facts), cx);
-    build(&facts, SystemTime::now())
+pub fn initial() -> Configuration {
+    build(&Facts::default(), SystemTime::now())
 }
 
-/// The scan less the apps hidden in Settings › Browsers.
-fn browsers(cx: &mut App) -> Vec<DetectedApp> {
+pub fn load(cx: &mut App) {
     let apps = browser_scan::apps(cx);
     let hidden = settings_store::store(cx)
-        .map(|store| store.read(cx).settings().browsers.clone())
-        .unwrap_or_default();
-    apps.into_iter()
-        .filter(|app| !hidden.is_hidden(app.id()))
-        .collect()
+        .map(|store| store.read(cx).settings().browsers.clone()).unwrap_or_default();
+    let browsers = apps.into_iter().filter(|app| !hidden.is_hidden(app.id())).collect();
+    let source = router::routing_source();
+    settings::load(cx, super::Pane::Configuration,
+        move || build(&facts(source, browsers), SystemTime::now()),
+        |model, configuration| {
+            let problem = model.configuration.everything_else.as_ref().and_then(|field| field.problem.clone());
+            model.configuration = configuration;
+            if let Some(field) = model.configuration.everything_else.as_mut() { field.problem = problem; }
+        });
 }
 
-fn facts(cx: &mut App) -> Facts {
-    let source = router::routing_source();
+/// Cached readback for the save handler; evaluating the config is asynchronous.
+pub fn model(cx: &mut App) -> Configuration {
+    refresh(cx);
+    let mut value = initial();
+    settings::update(cx, |model| value = model.configuration.clone());
+    value
+}
+
+fn facts(source: RoutingSource, browsers: Vec<DetectedApp>) -> Facts {
     let environment = discovery::Environment::current();
     let rules_path = discovery::rules_path(&environment);
     let rules = rules_path
@@ -187,7 +196,7 @@ fn facts(cx: &mut App) -> Facts {
         config_files,
         finicky_rules: discovery::find_finicky_rules(&environment).map(FinickyRulesFacts::read),
         home: std::env::home_dir(),
-        browsers: browsers(cx),
+        browsers,
     }
 }
 
@@ -899,84 +908,24 @@ pub fn not_saved(reason: &str) -> String {
     format!("Not saved: {}.", reason.trim().trim_end_matches('.'))
 }
 
-/// What the pane was last built from, cheaply: the router's word on the
-/// source and the two files' times. Another writer (the Rules banner's
-/// switch, an editor, an agent) changes one of them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Stamp {
-    source: RoutingSource,
-    rules: Option<SystemTime>,
-    config: Option<SystemTime>,
-    finicky_rules: Option<SystemTime>,
-}
-
-fn stamp(facts: &Facts) -> Stamp {
-    Stamp {
-        source: facts.source.clone(),
-        rules: facts.rules_modified,
-        config: facts.source.config.as_deref().and_then(modified),
-        finicky_rules: facts
-            .finicky_rules
-            .as_ref()
-            .and_then(|found| found.modified),
-    }
-}
-
-/// The stamp now, without evaluating the config.
-fn current_stamp() -> Stamp {
-    let source = router::routing_source();
-    let rules = live_rules_path().as_deref().and_then(modified);
-    let config = source.config.as_deref().and_then(modified);
-    Stamp {
-        source,
-        rules,
-        config,
-        finicky_rules: discovery::find_finicky_rules(&discovery::Environment::current())
-            .as_deref()
-            .and_then(modified),
-    }
-}
-
-/// Keeps the pane current: the stamp it was built from, and the entity
-/// that observes the window coming to the front.
-struct Follower {
-    seen: Option<Stamp>,
-}
-
-struct FollowerGlobal(Entity<Follower>);
-
+/// Revalidate a visited pane after activation. Disk reads and engine loads
+/// happen in its producer, never in the activation callback.
+struct FollowerGlobal(Entity<()>);
 impl Global for FollowerGlobal {}
 
-fn follower(cx: &mut App) -> Entity<Follower> {
-    if let Some(global) = cx.try_global::<FollowerGlobal>() {
-        return global.0.clone();
-    }
-    let follower = cx.new(|_| Follower { seen: None });
-    cx.set_global(FollowerGlobal(follower.clone()));
-    follower
-}
-
-fn remember(stamp: Stamp, cx: &mut App) {
-    follower(cx).update(cx, |follower, _| follower.seen = Some(stamp));
-}
-
-/// Reads the pane again whenever the Settings `window` comes to the front
-/// and something it was built from changed since: the Rules banner's
-/// switch, an editor or an agent may have written `rules.json`, or the
-/// router may have reloaded the config.
 pub fn follow(window: &mut Window, cx: &mut App) {
-    follower(cx).update(cx, |_, cx| {
-        cx.observe_window_activation(window, |follower, window, cx| {
-            if !window.is_window_active() {
-                return;
-            }
-            let now = current_stamp();
-            if follower.seen.as_ref() != Some(&now) {
-                follower.seen = Some(now);
-                cx.defer(refresh);
-            }
-        })
-        .detach();
+    let observer = match cx.try_global::<FollowerGlobal>() {
+        Some(global) => global.0.clone(),
+        None => {
+            let observer = cx.new(|_| ());
+            cx.set_global(FollowerGlobal(observer.clone()));
+            observer
+        }
+    };
+    observer.update(cx, |_, cx| {
+        cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() { cx.defer(refresh); }
+        }).detach();
     });
 }
 
@@ -1009,8 +958,7 @@ pub(crate) fn refresh(cx: &mut App) {
     if !settings::is_open(cx) {
         return;
     }
-    let configuration = model(cx);
-    settings::update(cx, move |model| model.configuration = configuration);
+    settings::reload(cx, super::Pane::Configuration);
     super::system_host::refresh_diagnostics(cx);
 }
 

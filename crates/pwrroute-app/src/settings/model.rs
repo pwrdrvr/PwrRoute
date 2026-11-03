@@ -20,6 +20,9 @@ pub use crate::update_channel::Slot;
 /// Everything the Settings window draws.
 #[derive(Clone, Debug)]
 pub struct SettingsModel {
+    /// Live panes start empty and load only when selected. Fixtures are ready.
+    pub pending: std::collections::HashSet<super::Pane>,
+    pub problems: std::collections::HashMap<super::Pane, SharedString>,
     pub general: General,
     pub local_agents: LocalAgents,
     pub configuration: Configuration,
@@ -866,6 +869,7 @@ pub struct About {
 /// the window acts on the OS itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsRequest {
+    LoadPane(super::Pane),
     /// General: Theme, saved and applied at once.
     SetTheme(ThemeChoice),
     /// General: the Dark theme and the Light theme, saved and applied at

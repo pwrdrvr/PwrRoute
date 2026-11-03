@@ -17,9 +17,21 @@ use crate::widgets::badge_for;
 use crate::{default_browser, settings};
 
 /// The pane's model as things stand.
-pub fn model(cx: &mut App) -> Browsers {
+pub fn initial(cx: &App) -> Browsers {
+    build(&[], &Facts::default(), default_browser::card(cx))
+}
+
+pub fn load(cx: &mut App) {
     let apps = browser_scan::apps(cx);
-    build(&apps, &facts(cx), default_browser::card(cx))
+    // Empty is not a result while the initial scan is still running.
+    if !browser_scan::has_run(cx) && browser_scan::is_loading(cx) { return; }
+    let hidden = settings_store::store(cx)
+        .map(|store| store.read(cx).settings().browsers.clone()).unwrap_or_default();
+    let default = default_browser::card(cx);
+    settings::load(cx, super::Pane::Browsers, move || {
+        let facts = facts(hidden);
+        build(&apps, &facts, default)
+    }, |model, browsers| model.browsers = browsers);
 }
 
 /// What the model is built from besides the scan: the rules and the
@@ -32,12 +44,9 @@ pub struct Facts {
     pub home: Option<std::path::PathBuf>,
 }
 
-fn facts(cx: &App) -> Facts {
+fn facts(hidden: BrowserSettings) -> Facts {
     let rules = discovery::rules_path(&discovery::Environment::current())
         .and_then(|path| RulesFile::load(&path).ok())
-        .unwrap_or_default();
-    let hidden = settings_store::store(cx)
-        .map(|store| store.read(cx).settings().browsers.clone())
         .unwrap_or_default();
     Facts {
         rules,
@@ -185,11 +194,8 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
 
 /// Reads the model again into the open window, when there is one.
 fn refresh(cx: &mut App) {
-    if !settings::is_open(cx) {
-        return;
-    }
-    let browsers = model(cx);
-    settings::update(cx, move |model| model.browsers = browsers);
+    settings::reload(cx, super::Pane::Browsers);
+    settings::reload(cx, super::Pane::Configuration);
 }
 
 #[cfg(test)]
