@@ -800,9 +800,7 @@ fn persist_copied_source(
             crate::sync::edit_settings(|sync| sync.config = Some(true), cx)
                 .map_err(|error| format!("Sync settings not saved: {error:#}"))
         },
-        |source, cx| {
-            apply_source_saved(source, cx, crate::importer_view::set_source_and_show)
-        },
+        |source, cx| apply_source_saved(source, cx, crate::importer_view::set_source_and_show),
     )
 }
 
@@ -829,7 +827,8 @@ fn combine_copy_saves(sync: Result<(), String>, source: Result<(), String>) -> R
 // its save Result. Preserve that Result when integrated; on main verify the
 // small settings file because its legacy helper reports failures only to logs.
 fn apply_source_saved<R: SourceSaveResult>(
-    source: &crate::settings_store::SourceSettings, cx: &mut App,
+    source: &crate::settings_store::SourceSettings,
+    cx: &mut App,
     apply: impl FnOnce(crate::settings_store::SourceSettings, &mut App) -> R,
 ) -> Result<(), String> {
     apply(source.clone(), cx).saved(source, cx)
