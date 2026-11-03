@@ -363,7 +363,8 @@ mod tests {
             now,
         );
         assert_eq!(model.state, UpdateState::Ready("0.1.1".into()));
-        // Picked another slot: the download is not offered.
+        // Picked another slot: neither the download nor its check result
+        // says anything about whether this slot is up to date.
         let beta = UpdateSettings::picked(Slot::BETA_LATEST);
         let model = build(
             &copy,
@@ -371,7 +372,8 @@ mod tests {
             &with(held("0.1.1", Slot::STABLE_LATEST, false)),
             now,
         );
-        assert_eq!(model.state, UpdateState::UpToDate);
+        assert_eq!(model.state, UpdateState::NeverChecked);
+        assert_eq!(model.last_checked, None);
         // An older release for the slot picked: Restart to switch.
         let model = build(
             &copy,
