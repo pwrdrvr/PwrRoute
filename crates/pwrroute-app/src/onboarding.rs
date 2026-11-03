@@ -1081,7 +1081,9 @@ pub fn refresh_browsers(cx: &mut App) {
         if let Some(window) = window.downcast::<FirstRun>() {
             let _ = window.update(cx, |view, _, cx| {
                 view.browser_scan_completed(browsers.clone(), loading, error.clone(), cx);
-                if !loading && error.is_none() { view.preselect(cx); }
+                if !loading && error.is_none() {
+                    view.preselect(cx);
+                }
             });
         }
     }
