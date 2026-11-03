@@ -9,7 +9,10 @@
 //! Velopack's own GitHub source is: 60 requests an hour per address, and a
 //! check takes two.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, atomic::AtomicBool},
+    time::{Duration, Instant},
+};
 
 use serde::Deserialize;
 use ureq::{
@@ -51,15 +54,39 @@ struct ApiAsset {
 /// update to: published, with `releases.<channel>.json` attached.
 pub fn fetch(channel: &str) -> Result<Vec<Release>, String> {
     let agent = agent();
-    let latest = latest_tag(&agent)?;
+    let started = Instant::now();
+    fetch_with(channel, &AtomicBool::new(false), &|request, _timeout| {
+        get(&agent, &request.url())
+    }, &|| started.elapsed())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Request {
+    Latest,
+    Page(usize),
+}
+
+impl Request {
+    fn url(self) -> String {
+        match self {
+            Self::Latest => format!("{API}/releases/latest"),
+            Self::Page(page) => format!("{API}/releases?per_page={PER_PAGE}&page={page}"),
+        }
+    }
+}
+
+fn fetch_with(
+    channel: &str,
+    _cancelled: &AtomicBool,
+    transport: &(impl Fn(Request, Duration) -> Result<Option<String>, String> + Sync),
+    _elapsed: &(impl Fn() -> Duration + Sync),
+) -> Result<Vec<Release>, String> {
+    let latest = latest_tag(transport(Request::Latest, TIMEOUT)?)?;
     let feed = feed_name(channel);
     let mut releases = Vec::new();
     let mut seen_latest = latest.is_none();
     for page in 1..=MAX_PAGES {
-        let body = get(
-            &agent,
-            &format!("{API}/releases?per_page={PER_PAGE}&page={page}"),
-        )?
+        let body = transport(Request::Page(page), TIMEOUT)?
         .ok_or_else(|| "GitHub has no release list for PwrRoute".to_owned())?;
         let (usable, listed, tags) = parse_page(&body, &feed)?;
         releases.extend(usable);
@@ -98,12 +125,12 @@ fn parse_page(body: &str, feed: &str) -> Result<(Vec<Release>, usize, Vec<String
 }
 
 /// The newest promoted release's tag; `None` while nothing is promoted.
-fn latest_tag(agent: &Agent) -> Result<Option<String>, String> {
+fn latest_tag(body: Option<String>) -> Result<Option<String>, String> {
     #[derive(Deserialize)]
     struct Latest {
         tag_name: String,
     }
-    let Some(body) = get(agent, &format!("{API}/releases/latest"))? else {
+    let Some(body) = body else {
         return Ok(None);
     };
     serde_json::from_str::<Latest>(&body)
@@ -151,6 +178,174 @@ fn agent() -> Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    };
+
+    // Timeouts are deadlock guards only; overlap is proved by both
+    // transports entering before either is allowed to return.
+    const GUARD: Duration = Duration::from_secs(5);
+
+    #[derive(Default)]
+    struct Gate(Mutex<bool>, Condvar);
+
+    impl Gate {
+        fn wait(&self) {
+            let open = self.0.lock().unwrap();
+            drop(self.1.wait_while(open, |open| !*open).unwrap());
+        }
+
+        fn open(&self) {
+            *self.0.lock().unwrap() = true;
+            self.1.notify_all();
+        }
+    }
+
+    fn page(count: usize, tag: &str) -> String {
+        serde_json::to_string(&vec![serde_json::json!({
+            "tag_name": tag,
+            "prerelease": true,
+            "assets": [{"name": "releases.osx.json"}]
+        }); count]).unwrap()
+    }
+
+    #[test]
+    fn initial_requests_overlap_and_page_one_is_reused() {
+        let gate = Gate::default();
+        let (entered, entries) = mpsc::channel();
+        let cancelled = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| fetch_with("osx", &cancelled, &|request, _| {
+                entered.send(request).unwrap();
+                gate.wait();
+                match request {
+                    Request::Latest => Ok(Some(r#"{"tag_name":"v0.1.0"}"#.into())),
+                    Request::Page(1) => Ok(Some(page(PER_PAGE, "v0.1.0"))),
+                    other => panic!("unnecessary request: {other:?}"),
+                }
+            }, &|| Duration::ZERO));
+            let first = entries.recv_timeout(GUARD).unwrap();
+            let second = entries.recv_timeout(GUARD);
+            gate.open();
+            let releases = worker.join().unwrap().unwrap();
+            assert_ne!(first, second.expect("both requests must enter before either returns"));
+            assert_eq!(releases.len(), PER_PAGE);
+            assert!(entries.try_recv().is_err(), "page one must not be fetched again");
+        });
+    }
+
+    #[test]
+    fn pagination_stops_at_the_anchor_even_without_its_platform_feed() {
+        let requests = Mutex::new(Vec::new());
+        let releases = fetch_with("osx", &AtomicBool::new(false), &|request, _| {
+            requests.lock().unwrap().push(request);
+            Ok(Some(match request {
+                Request::Latest => r#"{"tag_name":"v0.1.0"}"#.into(),
+                Request::Page(1) => page(PER_PAGE, "v0.2.0-alpha.1"),
+                Request::Page(2) => page(PER_PAGE, "v0.1.0")
+                    .replace("releases.osx.json", "releases.win.json"),
+                other => panic!("unnecessary request: {other:?}"),
+            }))
+        }, &|| Duration::ZERO).unwrap();
+        assert_eq!(releases.len(), PER_PAGE);
+        assert_eq!(requests.into_inner().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn missing_anchor_stops_at_a_short_page_or_the_page_limit() {
+        for short_page in [Some(2), None] {
+            let pages = Mutex::new(Vec::new());
+            let releases = fetch_with("osx", &AtomicBool::new(false), &|request, _| {
+                Ok(Some(match request {
+                    Request::Latest => r#"{"tag_name":"missing"}"#.into(),
+                    Request::Page(number) => {
+                        pages.lock().unwrap().push(number);
+                        page(if short_page == Some(number) { 0 } else { PER_PAGE }, "v0.2.0-alpha.1")
+                    }
+                }))
+            }, &|| Duration::ZERO).unwrap();
+            let expected = short_page.unwrap_or(MAX_PAGES);
+            assert_eq!(pages.into_inner().unwrap(), (1..=expected).collect::<Vec<_>>());
+            assert_eq!(releases.len(), PER_PAGE * if short_page.is_some() { 1 } else { MAX_PAGES });
+        }
+    }
+
+    #[test]
+    fn no_promoted_release_needs_only_page_one_and_no_releases_is_empty() {
+        for count in [0, PER_PAGE] {
+            let releases = fetch_with("osx", &AtomicBool::new(false), &|request, _| match request {
+                Request::Latest => Ok(None),
+                Request::Page(1) => Ok(Some(page(count, "v0.2.0-alpha.1"))),
+                other => panic!("unnecessary request: {other:?}"),
+            }, &|| Duration::ZERO).unwrap();
+            assert_eq!(releases.len(), count);
+        }
+        let error = fetch_with("osx", &AtomicBool::new(false), &|_, _| Ok(None), &|| Duration::ZERO).unwrap_err();
+        assert_eq!(error, "GitHub has no release list for PwrRoute");
+    }
+
+    #[test]
+    fn errors_do_not_turn_partial_pages_into_channel_fallbacks() {
+        for failure in [Request::Latest, Request::Page(1), Request::Page(2)] {
+            let error = fetch_with("osx", &AtomicBool::new(false), &|request, _| {
+                if request == failure { return Err("rate limited or unavailable".into()); }
+                Ok(Some(match request {
+                    Request::Latest => r#"{"tag_name":"missing"}"#.into(),
+                    Request::Page(_) => page(PER_PAGE, "v0.2.0-alpha.1"),
+                }))
+            }, &|| Duration::ZERO).unwrap_err();
+            assert_eq!(error, "rate limited or unavailable");
+        }
+        let error = fetch_with("osx", &AtomicBool::new(false), &|request, _| {
+            Ok(Some(match request {
+                Request::Latest => "{".into(),
+                Request::Page(_) => "[]".into(),
+            }))
+        }, &|| Duration::ZERO).unwrap_err();
+        assert!(error.contains("latest release did not parse"));
+    }
+
+    #[test]
+    fn pagination_uses_the_remaining_total_budget_and_discards_partial_results() {
+        let elapsed = AtomicU64::new(0);
+        let page_timeouts = Mutex::new(Vec::new());
+        let result = fetch_with("osx", &AtomicBool::new(false), &|request, timeout| {
+            Ok(Some(match request {
+                Request::Latest => r#"{"tag_name":"missing"}"#.into(),
+                Request::Page(number) => {
+                    page_timeouts.lock().unwrap().push((number, timeout));
+                    elapsed.store(if number == 1 { 7 } else { 20 }, Ordering::SeqCst);
+                    page(PER_PAGE, "v0.2.0-alpha.1")
+                }
+            }))
+        }, &|| Duration::from_secs(elapsed.load(Ordering::SeqCst)));
+        assert!(result.unwrap_err().contains("timed out"));
+        assert_eq!(page_timeouts.into_inner().unwrap(), [
+            (1, Duration::from_secs(20)), (2, Duration::from_secs(13))
+        ]);
+    }
+
+    #[test]
+    fn cancellation_prevents_requests_and_discards_in_flight_results() {
+        let cancelled = AtomicBool::new(true);
+        let result = fetch_with("osx", &cancelled, &|_, _| panic!("cancelled before starting"), &|| Duration::ZERO);
+        assert!(result.unwrap_err().contains("cancelled"));
+
+        cancelled.store(false, Ordering::SeqCst);
+        let result = fetch_with("osx", &cancelled, &|request, _| {
+            Ok(Some(match request {
+                Request::Latest => r#"{"tag_name":"missing"}"#.into(),
+                Request::Page(1) => {
+                    cancelled.store(true, Ordering::SeqCst);
+                    page(PER_PAGE, "v0.2.0-alpha.1")
+                }
+                other => panic!("request after cancellation: {other:?}"),
+            }))
+        }, &|| Duration::ZERO);
+        assert!(result.unwrap_err().contains("cancelled"));
+    }
 
     #[test]
     fn a_page_keeps_published_releases_with_this_platforms_feed() {
