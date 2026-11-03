@@ -1321,12 +1321,12 @@ impl Worker {
                 // Retention can change while a reserved hold expands.
                 // Never hold a link that would have nowhere to wait.
                 Some(Took::Held(sent)) if self.recent.retention().count > 0 => {
-                        record.steps.push(Step::Held {
-                            held: sent,
-                            skipped: skipped_handler(&record.steps),
-                            browser: (browser.app_type != AppType::None).then(|| browser.clone()),
-                        });
-                        held = true;
+                    record.steps.push(Step::Held {
+                        held: sent,
+                        skipped: skipped_handler(&record.steps),
+                        browser: (browser.app_type != AppType::None).then(|| browser.clone()),
+                    });
+                    held = true;
                 }
                 Some(Took::Held(_)) | None => {}
             },

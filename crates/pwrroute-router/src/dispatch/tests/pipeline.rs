@@ -787,7 +787,15 @@ fn count_retention_keeps_newest_receipts_when_old_expansion_completes_last() {
         [third.id, second.id]
     );
     assert!(handle.get(first).is_none());
-    assert_eq!(handle.journal(2).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), [third.id, second.id]);
+    assert_eq!(
+        handle
+            .journal(2)
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
+        [third.id, second.id]
+    );
 }
 
 #[test]
@@ -805,8 +813,13 @@ fn override_to_pwrroute_is_refused_without_launching_or_fallback() {
     let launcher = DryRunLauncher::new();
     let router = Router::spawn(Options::default(), None, launcher.clone()).unwrap();
     let handle = router.handle();
-    handle.set_paused(Some(PauseTarget { browser: "PwrRoute".into(), profile: String::new() }));
-    let record = handle.dispatch_and_wait(link("https://example.com/self")).unwrap();
+    handle.set_paused(Some(PauseTarget {
+        browser: "PwrRoute".into(),
+        profile: String::new(),
+    }));
+    let record = handle
+        .dispatch_and_wait(link("https://example.com/self"))
+        .unwrap();
     assert_eq!(record.outcome, Outcome::Failed);
     assert!(launcher.launched().is_empty());
 }
@@ -815,27 +828,59 @@ fn override_to_pwrroute_is_refused_without_launching_or_fallback() {
 fn fallback_waits_for_its_browser_and_release_passes_over_an_armed_override() {
     let (entered, events) = mpsc::channel();
     let gate = Gate::default();
-    let router = Router::spawn(Options { fallback: FallbackSource::fixed("Fast", ""), ..Options::default() },
+    let router = Router::spawn(
+        Options {
+            fallback: FallbackSource::fixed("Fast", ""),
+            ..Options::default()
+        },
         Some(policy_factory(Arc::new(Mutex::new(ShortLinks::off())))),
-        ParallelLaunch { entered, gate: gate.clone(), fail_slow: true }).unwrap();
+        ParallelLaunch {
+            entered,
+            gate: gate.clone(),
+            fail_slow: true,
+        },
+    )
+    .unwrap();
     let _release = Release(gate.clone());
     let handle = router.handle();
     handle.set_hold(Some(SendScope::next(1)));
-    let held = handle.dispatch_and_wait(link("https://fast.example/held")).unwrap();
+    let held = handle
+        .dispatch_and_wait(link("https://fast.example/held"))
+        .unwrap();
     let blocked = handle.dispatch(link("https://fast.example/slow")).unwrap();
     assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Fast");
-    let fallback = handle.dispatch(link("https://slow.example/private")).unwrap();
+    let fallback = handle
+        .dispatch(link("https://slow.example/private"))
+        .unwrap();
     assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Slow");
-    handle.set_send_to(Some(SendTo::next(Destination { browser: "Other".into(), profile: String::new(), private: false })));
-    let other = handle.dispatch_and_wait(link("https://fast.example/other")).unwrap();
+    handle.set_send_to(Some(SendTo::next(Destination {
+        browser: "Other".into(),
+        profile: String::new(),
+        private: false,
+    })));
+    let other = handle
+        .dispatch_and_wait(link("https://fast.example/other"))
+        .unwrap();
     assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Other");
     assert_eq!(other.outcome, Outcome::Opened);
     assert!(handle.get(fallback).is_none());
-    assert!(events.try_recv().is_err(), "fallback bypassed its busy browser");
+    assert!(
+        events.try_recv().is_err(),
+        "fallback bypassed its busy browser"
+    );
     // An explicitly released link uses its destination, without consuming
     // the send that will govern the next ordinary dispatch.
     handle.set_send_to(Some(next(1)));
-    let released = handle.open_not_opened(held.id, OpenAs::In(Destination { browser: "Released".into(), profile: String::new(), private: false })).unwrap();
+    let released = handle
+        .open_not_opened(
+            held.id,
+            OpenAs::In(Destination {
+                browser: "Released".into(),
+                profile: String::new(),
+                private: false,
+            }),
+        )
+        .unwrap();
     assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Released");
     assert_eq!(released.browser.unwrap().name, "Released");
     assert_eq!(handle.send_to().unwrap().scope, SendScope::next(1));
@@ -851,7 +896,10 @@ fn fallback_waits_for_its_browser_and_release_passes_over_an_armed_override() {
 
 #[test]
 fn full_mailbox_replacement_joins_watcher_and_retains_eventual_refresh() {
-    struct JoinWatcher { trigger: Gate, thread: Option<std::thread::JoinHandle<()>> }
+    struct JoinWatcher {
+        trigger: Gate,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
     impl Drop for JoinWatcher {
         fn drop(&mut self) {
             self.trigger.open();
@@ -859,7 +907,9 @@ fn full_mailbox_replacement_joins_watcher_and_retains_eventual_refresh() {
         }
     }
     impl Resolver for JoinWatcher {
-        fn resolve(&self, _: &EngineLink, _: Option<&Opener>) -> Result<Resolved> { anyhow::bail!("unused") }
+        fn resolve(&self, _: &EngineLink, _: Option<&Opener>) -> Result<Resolved> {
+            anyhow::bail!("unused")
+        }
     }
     let (handle_tx, handle_rx) = mpsc::channel::<RouterHandle>();
     let (watcher_tx, watcher_rx) = mpsc::channel();
@@ -871,7 +921,10 @@ fn full_mailbox_replacement_joins_watcher_and_retains_eventual_refresh() {
             thread_gate.wait();
             watcher_tx.send(handle.refresh()).unwrap();
         });
-        Ok(Box::new(JoinWatcher { trigger, thread: Some(thread) }))
+        Ok(Box::new(JoinWatcher {
+            trigger,
+            thread: Some(thread),
+        }))
     });
     let router = Router::spawn(Options::default(), Some(factory), DryRunLauncher::new()).unwrap();
     let handle = router.handle();
@@ -886,7 +939,10 @@ fn full_mailbox_replacement_joins_watcher_and_retains_eventual_refresh() {
         Box::new(move || {
             entered.send(()).unwrap();
             build_gate.wait();
-            Ok(Box::new(PolicyResolver { policy: Arc::new(Mutex::new(ShortLinks::off())), refreshed }))
+            Ok(Box::new(PolicyResolver {
+                policy: Arc::new(Mutex::new(ShortLinks::off())),
+                refreshed,
+            }))
         })
     };
     let h = handle.clone();
@@ -896,12 +952,22 @@ fn full_mailbox_replacement_joins_watcher_and_retains_eventual_refresh() {
     // slot with controls that do not themselves refresh an idle resolver.
     let (applied, replies) = mpsc::channel();
     for _ in 0..128 {
-        assert!(handle.tx.try_send(Command::SetRetention { retention: Retention::default(), reply: applied.clone() }).is_ok());
+        assert!(
+            handle
+                .tx
+                .try_send(Command::SetRetention {
+                    retention: Retention::default(),
+                    reply: applied.clone()
+                })
+                .is_ok()
+        );
     }
     _release.0.open();
     assert!(watcher_rx.recv_timeout(DEADLINE).unwrap().is_ok());
     assert_eq!(replaced.recv_timeout(DEADLINE).unwrap(), Ok(Ok(())));
-    for _ in 0..128 { replies.recv_timeout(DEADLINE).unwrap(); }
+    for _ in 0..128 {
+        replies.recv_timeout(DEADLINE).unwrap();
+    }
     // One refresh belongs to Replace. The second must come from the dirty
     // wake whose try_send failed: no Status or dispatch can mask its loss.
     assert!(refreshed.load(Ordering::SeqCst) >= 2);

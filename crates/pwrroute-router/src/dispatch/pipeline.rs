@@ -68,11 +68,16 @@ impl Admission {
         tx.send(command).map_err(|_| RouterGone)
     }
 
-    pub(super) fn refresh(&self, tx: &mpsc::SyncSender<Command>) -> std::result::Result<(), RouterGone> {
+    pub(super) fn refresh(
+        &self,
+        tx: &mpsc::SyncSender<Command>,
+    ) -> std::result::Result<(), RouterGone> {
         // A watcher can be joined during resolver replacement on the owner.
         // It must never block waiting for that owner's full command mailbox.
         let budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
-        if budget.closed { return Err(RouterGone); }
+        if budget.closed {
+            return Err(RouterGone);
+        }
         self.refresh_requested.store(true, Ordering::SeqCst);
         match tx.try_send(Command::Refresh) {
             Ok(()) | Err(mpsc::TrySendError::Full(_)) => Ok(()),
@@ -454,7 +459,11 @@ impl Worker {
                 }
                 Command::Shutdown => stopping = true,
             }
-            if self.admission.refresh_requested.swap(false, Ordering::SeqCst) {
+            if self
+                .admission
+                .refresh_requested
+                .swap(false, Ordering::SeqCst)
+            {
                 self.refresh_config();
             }
             self.pump();
@@ -638,7 +647,9 @@ impl Worker {
     ) {
         if is_self(&browser) {
             let mut record = record;
-            record.steps.push(Step::LaunchFailed { message: "the fallback browser is PwrRoute itself".into() });
+            record.steps.push(Step::LaunchFailed {
+                message: "the fallback browser is PwrRoute itself".into(),
+            });
             record.outcome = Outcome::Failed;
             self.finish(job, record);
             return;

@@ -523,13 +523,24 @@ mod tests {
         let config = JournalConfig::new(dir.path(), JournalMode::Full);
         let mut journal = Journal::new(config.clone());
         for (id, when) in [
-            (10, NOON + 2), (9, NOON + 1), (1, NOON - 86_400),
-            (8, NOON + 1), (7, NOON - 2), (6, NOON - 86_400 + 1),
+            (10, NOON + 2),
+            (9, NOON + 1),
+            (1, NOON - 86_400),
+            (8, NOON + 1),
+            (7, NOON - 2),
+            (6, NOON - 86_400 + 1),
         ] {
             journal.append(&record(id, at(when), Privacy::Full));
         }
         assert_eq!(journal.error(), None);
-        let ids = |limit| config.read(limit).unwrap().iter().map(|r| r.id.0).collect::<Vec<_>>();
+        let ids = |limit| {
+            config
+                .read(limit)
+                .unwrap()
+                .iter()
+                .map(|r| r.id.0)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(ids(2), [10, 9]);
         assert_eq!(ids(3), [10, 9, 8]);
         assert_eq!(ids(10), [10, 9, 8, 7, 6, 1]);
