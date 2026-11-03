@@ -1019,6 +1019,261 @@ fn leaving_a_changed_draft_asks_save_or_discard_first(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn deferred_rule_navigation_is_cancelled_when_disk_reloads(cx: &mut TestAppContext) {
+    let dir = scratch("leave-reload");
+    let path = dir.join("rules.json");
+    written_by_someone_else(&path, 3);
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    view.update(cx, |app, cx| {
+        app.store.set_profile(0, "Draft");
+        app.refresh(cx);
+    });
+    click(cx, "handler-1");
+    assert!(view.read_with(cx, |app, _| app.leaving.is_some()));
+
+    // [A, B, C] -> [X, A, B, C]: B's old index now holds the draft A.
+    let mut file = RulesFile::load(&path).unwrap();
+    let mut inserted = file.rules[2].clone();
+    inserted.patterns = vec!["inserted.example/*".into()];
+    file.rules.insert(0, inserted);
+    file.save(&path).unwrap();
+    view.update(cx, |app, cx| {
+        assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
+        assert_eq!(app.selection, Some(Selection::Handler(1)));
+        assert!(app.store.draft_changed());
+        assert_eq!(app.store.draft_conflict(), None);
+        assert!(app.leaving.is_none(), "a row index cannot survive reload");
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("leave-question").is_none());
+    assert_eq!(RulesFile::load(&path).unwrap().rules[1].profile, "");
+    // The destination can be chosen again using its new position.
+    click(cx, "handler-2");
+    click(cx, crate::editor::LEAVE_SAVE_ID);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(2))
+    );
+    assert_eq!(RulesFile::load(&path).unwrap().rules[1].profile, "Draft");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn answering_deferred_rule_navigation_checks_disk_before_save_or_discard(cx: &mut TestAppContext) {
+    let dir = scratch("leave-answer-reload");
+    let path = dir.join("rules.json");
+    written_by_someone_else(&path, 3);
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    for answer in [
+        crate::app::LeaveAnswer::Save,
+        crate::app::LeaveAnswer::Discard,
+    ] {
+        view.update(cx, |app, cx| {
+            app.store.set_profile(0, "Draft");
+            app.refresh(cx);
+        });
+        click(cx, "handler-1");
+        // No activation/dispatch check before the answer. Change B itself;
+        // the old destination must not be opened, saved or discarded into.
+        let mut file = RulesFile::load(&path).unwrap();
+        file.rules[1].profile.push('x');
+        file.save(&path).unwrap();
+        view.update_in(cx, |app, window, cx| app.answer_leave(answer, window, cx));
+        assert!(view.read_with(cx, |app, _| app.leaving.is_none()));
+        assert_eq!(
+            view.read_with(cx, |app, _| app.selection),
+            Some(Selection::Handler(0))
+        );
+        assert!(view.read_with(cx, |app, _| app.store.draft_changed()));
+        assert_eq!(RulesFile::load(&path).unwrap().rules[0].profile, "");
+        draw(cx);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn deferred_rule_navigation_cancels_for_reordered_or_removed_rewrites(cx: &mut TestAppContext) {
+    let dir = scratch("leave-rewrite-reload");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    for remove in [false, true] {
+        view.update(cx, |app, cx| {
+            app.select(Selection::Rewrite(0), cx);
+            app.store
+                .set_pattern(Selection::Rewrite(0), 0, "draft.example/*");
+            app.refresh(cx);
+            app.select(Selection::Rewrite(1), cx);
+            assert!(app.leaving.is_some());
+        });
+        let mut file = RulesFile::load(&path).unwrap();
+        if remove {
+            file.rewrites.remove(1);
+        } else {
+            file.rewrites.swap(1, 2);
+        }
+        file.save(&path).unwrap();
+        view.update(cx, |app, cx| {
+            // refresh has its own disk check, distinct from sync_with_disk.
+            app.refresh(cx);
+            assert!(app.leaving.is_none());
+            assert_eq!(app.selection, Some(Selection::Rewrite(0)));
+            assert!(app.store.draft_changed());
+        });
+        view.update_in(cx, |app, window, cx| {
+            app.discard_draft(window, cx);
+            assert!(app.undo_discard(window, cx));
+            assert!(app.store.draft_changed());
+            app.discard_draft(window, cx);
+        });
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn deferred_rule_navigation_keeps_the_prompt_when_save_fails(cx: &mut TestAppContext) {
+    let store = RulesStore::from_file(None, fixtures::rules_file(), true, None);
+    let (view, cx) = open_store(cx, None, store);
+    // A valid draft in a store whose write is refused: no config directory.
+    view.update(cx, |app, cx| {
+        app.store.set_profile(0, "Draft");
+        app.refresh(cx);
+    });
+    click(cx, "handler-1");
+    view.update_in(cx, |app, window, cx| {
+        app.answer_leave(crate::app::LeaveAnswer::Save, window, cx);
+        assert!(app.leaving.is_some());
+        assert!(app.store.draft_changed());
+        assert!(
+            app.draft_note
+                .as_ref()
+                .unwrap()
+                .contains("No configuration directory")
+        );
+        assert_eq!(app.selection, Some(Selection::Handler(0)));
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("leave-question").is_some());
+    click(cx, crate::editor::LEAVE_KEEP_ID);
+    assert!(view.read_with(cx, |app, _| app.leaving.is_none()));
+    assert!(view.read_with(cx, |app, _| app.store.draft_changed()));
+}
+
+#[gpui_kit::test]
+fn deferred_duplicate_is_cancelled_when_disk_reloads(cx: &mut TestAppContext) {
+    use crate::app::LeaveAnswer;
+    let dir = scratch("duplicate-reload");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let original = RulesFile::load(&path).unwrap();
+    for change in 0..3 {
+        view.update_in(cx, |app, window, cx| {
+            app.store.set_profile(0, "Draft");
+            app.refresh(cx);
+            app.duplicate_rule(Selection::Handler(1), window, cx);
+            assert!(app.leaving.is_some());
+        });
+        let mut file = original.clone();
+        if change == 1 {
+            file.rules.remove(1);
+        } else {
+            file.rules.swap(1, 2);
+        }
+        file.save(&path).unwrap();
+        view.update_in(cx, |app, window, cx| {
+            if change != 2 {
+                assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
+            }
+            // The last case discovers the reload only when Save is pressed.
+            app.answer_leave(LeaveAnswer::Save, window, cx);
+            assert!(app.leaving.is_none());
+            assert!(app.store.draft_changed());
+            assert_eq!(app.selection, Some(Selection::Handler(0)));
+            assert_eq!(app.store.handler_count(), file.rules.len());
+            app.discard_draft(window, cx);
+        });
+        assert_eq!(RulesFile::load(&path).unwrap(), file);
+        original.save(&path).unwrap();
+        view.update(cx, |app, cx| app.reload_rules(cx));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn deferred_duplicate_follows_a_never_saved_draft_removal(cx: &mut TestAppContext) {
+    let dir = scratch("duplicate-new-draft");
+    let path = dir.join("rules.json");
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    let original = RulesFile::load(&path).unwrap();
+    view.update_in(cx, |app, window, cx| {
+        let new = app.store.add_handler();
+        app.store.move_to(Selection::Handler(new), 0);
+        app.selection = Some(Selection::Handler(0));
+        app.refresh(cx);
+        assert!(app.store.draft_is_new());
+        app.duplicate_rule(Selection::Handler(2), window, cx);
+        app.answer_leave(crate::app::LeaveAnswer::Discard, window, cx);
+        assert_eq!(app.selection, Some(Selection::Handler(2)));
+    });
+    let file = RulesFile::load(&path).unwrap();
+    assert_eq!(file.rules.len(), original.rules.len() + 1);
+    assert_eq!(file.rules[2].patterns, original.rules[1].patterns);
+    // Duplicating the never-saved draft itself, then Discard, has no source.
+    view.update_in(cx, |app, window, cx| {
+        app.add_handler(window, cx);
+        let new = app.selection.unwrap();
+        app.duplicate_rule(new, window, cx);
+        app.answer_leave(crate::app::LeaveAnswer::Discard, window, cx);
+        assert_eq!(app.store.handler_count(), file.rules.len());
+        assert!(app.leaving.is_none());
+    });
+    assert_eq!(RulesFile::load(&path).unwrap(), file);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn deferred_actions_without_row_targets_survive_reload(cx: &mut TestAppContext) {
+    use crate::app::{Leave, LeaveAnswer};
+    let dir = scratch("leave-independent-reload");
+    let path = dir.join("rules.json");
+    written_by_someone_else(&path, 3);
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    view.update_in(cx, |app, window, cx| {
+        app.store.set_profile(0, "Draft");
+        app.refresh(cx);
+        app.add_handler(window, cx);
+    });
+    // Change the draft's own rule, retaining its conflict handling.
+    let mut file = RulesFile::load(&path).unwrap();
+    file.rules[0].browser = "Safari".into();
+    file.save(&path).unwrap();
+    view.update_in(cx, |app, window, cx| {
+        assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
+        assert_eq!(
+            app.store.draft_conflict(),
+            Some(crate::rules_store::Conflict::Changed)
+        );
+        assert!(app.leaving.is_some());
+        app.answer_leave(LeaveAnswer::Discard, window, cx);
+        assert!(app.store.draft_is_new(), "Then started the new rule");
+        assert_eq!(app.selection, Some(Selection::Handler(3)));
+        assert!(app.ask_before_leaving(Leave::Deselect, cx));
+        app.reload_rules(cx);
+        assert!(app.leaving.is_some());
+        app.answer_leave(LeaveAnswer::Discard, window, cx);
+        assert_eq!(app.selection, None);
+        assert!(app.undo_discard(window, cx));
+        assert!(app.ask_before_leaving(Leave::Close, cx));
+        app.reload_rules(cx);
+        assert!(app.leaving.is_some());
+        app.answer_leave(LeaveAnswer::Discard, window, cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.cx.update(|cx| cx.windows().is_empty()));
+    assert_eq!(RulesFile::load(&path).unwrap(), file);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
 fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
     let dir = scratch("add");
     let path = dir.join("rules.json");

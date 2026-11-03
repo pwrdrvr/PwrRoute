@@ -28,7 +28,7 @@ use gpui_kit::{
 use pwrroute_engine::Opener;
 use pwrroute_router::Privacy;
 
-use crate::app::{PwrRoute, Screen, Selection};
+use crate::app::{Leave, PwrRoute, Screen, Selection};
 use crate::rules_model::{Destination, Matcher, Rule};
 use crate::rules_store::{Removed, RulesStore};
 use crate::theme::{self, mono, text};
@@ -389,12 +389,8 @@ impl PwrRoute {
     ) {
         self.row_actions.menu = None;
         if self.store.draft_changed() {
-            self.leave_draft_then(
-                "duplicating it",
-                move |this, window, cx| this.duplicate_rule(selection, window, cx),
-                window,
-                cx,
-            );
+            self.ask_before_leaving(Leave::Duplicate(selection), cx);
+            window.focus(&self.focus, cx);
             return;
         }
         let Some(copy) = self.store.duplicate(selection) else {
