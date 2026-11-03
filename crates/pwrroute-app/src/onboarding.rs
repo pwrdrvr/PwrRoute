@@ -800,6 +800,31 @@ mod tests {
         Rc::new(|_, _| panic!("this test turns no config off"))
     }
 
+    /// A private directory at the staging-file path makes the save fail on
+    /// every platform, including when the test runs as root.
+    #[gpui_kit::test]
+    fn keep_file_is_not_complete_when_its_state_cannot_be_saved(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("state.json.saving")).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            None,
+            Some(importer_config()),
+            no_source(),
+            Rc::new(|_, _| {}),
+        );
+        let window = cx.update(|cx| first_run::open(FirstRunModel::fixture(), hooks, cx).unwrap());
+        let mut view = VisualTestContext::from_window(window.into(), cx);
+        press(&mut view, "first-run-keep");
+        assert_eq!(
+            window.read_with(&view, |view, _| view.model.import).unwrap(),
+            None,
+            "an unsaved choice must leave the config step pending"
+        );
+        assert_eq!(State::load(dir.path()).unwrap().import, None);
+    }
+
     fn fixture_home() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
     }
