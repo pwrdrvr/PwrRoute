@@ -225,23 +225,45 @@ impl Os {
     }
 }
 
-/// The glue's state: the last answer, and whether a request is out.
+/// A request's baseline and grace belong to that request, not to the last
+/// observation: an unavailable read can change the latter without answering
+/// the former.
+struct PendingRequest {
+    kind: DefaultRequest,
+    before: DefaultState,
+    /// Poll reads left after activation before a known answer counts as no.
+    grace: Option<u64>,
+}
+
+impl PendingRequest {
+    fn finished(&self, state: &DefaultState, deadline: bool) -> bool {
+        match state {
+            // A missing answer cannot establish a refusal, even after
+            // activation grace. Only the hard deadline ends this wait.
+            DefaultState::Unknown => deadline,
+            DefaultState::PwrRoute => true,
+            DefaultState::Other(_) | DefaultState::OtherCopy(_) => {
+                deadline
+                    || self.grace == Some(0)
+                    || (self.before != DefaultState::Unknown && *state != self.before)
+            }
+        }
+    }
+}
+
+/// The glue's state: the last observation, and whether a request is out.
 pub struct Registrar {
     os: Os,
     pub state: DefaultState,
     /// A request went out and the OS has not answered since: the window
     /// says it is waiting.
-    pub pending: Option<DefaultRequest>,
+    pending: Option<PendingRequest>,
     /// The last request ended with the same browser as before: the OS said
     /// no, or the reader did. Shown once, until the next change.
     pub kept: bool,
     /// Counts requests. A poll stops when a newer request has started its
     /// own, so "Ask again" never leaves two running.
     generation: u64,
-    /// The window came back to the front while a request was out: how many
-    /// more poll reads may still find the old answer before it counts as
-    /// no ([`ACTIVATION_GRACE`]).
-    grace: Option<u64>,
 }
 
 impl Registrar {
@@ -253,7 +275,6 @@ impl Registrar {
             pending: None,
             kept: false,
             generation: 0,
-            grace: None,
         }
     }
 
@@ -262,11 +283,10 @@ impl Registrar {
         self.pending.is_some()
     }
 
-    /// Re-reads the OS. `settled` says the OS had its chance to answer (the
-    /// poll ran out, or ran [`ACTIVATION_GRACE`] past the window's return):
-    /// an unchanged answer then means the request was refused, and the
-    /// window stops waiting.
-    fn refresh(&mut self, settled: bool, cx: &mut Context<'_, Self>) {
+    /// Re-reads the OS without treating an unavailable observation as an
+    /// answer. `deadline` ends the wait even if the answer remains unknown;
+    /// activation grace can settle only a known answer.
+    fn refresh(&mut self, deadline: bool, cx: &mut Context<'_, Self>) {
         let started = std::time::Instant::now();
         let state = self.os.read();
         let took = started.elapsed();
@@ -276,15 +296,21 @@ impl Registrar {
                 took.as_millis()
             );
         }
-        if state != self.state {
-            self.state = state;
-            self.pending = None;
-            self.grace = None;
+        let changed = state != self.state;
+        self.state = state;
+        if changed {
             self.kept = false;
-            cx.notify();
-        } else if settled && self.pending.take().is_some() {
-            self.grace = None;
-            self.kept = !self.state.is_default();
+        }
+        let finished = self
+            .pending
+            .take_if(|pending| pending.finished(&self.state, deadline));
+        if let Some(pending) = &finished {
+            self.kept = matches!(
+                self.state,
+                DefaultState::Other(_) | DefaultState::OtherCopy(_)
+            ) && self.state == pending.before;
+        }
+        if changed || finished.is_some() {
             cx.notify();
         }
     }
@@ -294,28 +320,28 @@ impl Registrar {
     /// catch up before an unchanged answer counts as no.
     fn activated(&mut self, cx: &mut Context<'_, Self>) {
         self.refresh(false, cx);
-        if self.waiting() && self.grace.is_none() {
-            self.grace = Some(reads_in(ACTIVATION_GRACE));
+        if let Some(pending) = &mut self.pending {
+            pending.grace.get_or_insert(reads_in(ACTIVATION_GRACE));
         }
     }
 
     /// One read of the request's poll. `last`: the poll has run its
     /// [`POLL_FOR`].
     fn poll(&mut self, last: bool, cx: &mut Context<'_, Self>) {
-        let grace_over = match &mut self.grace {
-            Some(left) => {
-                *left = left.saturating_sub(1);
-                *left == 0
-            }
-            None => false,
-        };
-        self.refresh(last || grace_over, cx);
+        if let Some(left) = self
+            .pending
+            .as_mut()
+            .and_then(|pending| pending.grace.as_mut())
+        {
+            *left = left.saturating_sub(1);
+        }
+        self.refresh(last, cx);
     }
 
     /// The Settings › Browsers card for this state.
     pub fn card(&self) -> DefaultBrowser {
         let note = match (&self.pending, self.kept, &self.state) {
-            (Some(request), _, _) => Some(waiting_note(*request).into()),
+            (Some(pending), _, _) => Some(waiting_note(pending.kind).into()),
             (None, true, DefaultState::Other(name)) => {
                 Some(format!("{name} is still the default.").into())
             }
@@ -419,10 +445,10 @@ pub fn card(cx: &App) -> DefaultBrowser {
     )
 }
 
-/// Re-reads the OS now. `settled`: see [`Registrar::refresh`].
-pub fn refresh(settled: bool, cx: &mut App) {
+/// Re-reads the OS now. `deadline`: see [`Registrar::refresh`].
+pub fn refresh(deadline: bool, cx: &mut App) {
     if let Some(registrar) = registrar(cx) {
-        registrar.update(cx, |registrar, cx| registrar.refresh(settled, cx));
+        registrar.update(cx, |registrar, cx| registrar.refresh(deadline, cx));
     }
 }
 
@@ -490,9 +516,12 @@ pub fn request(cx: &mut App) -> anyhow::Result<DefaultRequest> {
     let os = registrar.read(cx).os.clone();
     let request = (os.set_default)()?;
     let generation = registrar.update(cx, |registrar, cx| {
-        registrar.pending = Some(request);
+        registrar.pending = Some(PendingRequest {
+            kind: request,
+            before: registrar.state.clone(),
+            grace: None,
+        });
         registrar.kept = false;
-        registrar.grace = None;
         registrar.generation += 1;
         cx.notify();
         registrar.generation
@@ -995,10 +1024,8 @@ mod tests {
 
         // A later observation still propagates, without retroactively
         // calling the timed-out request a refusal or asking the OS again.
-        *os_status.borrow_mut() = Some(status(
-            Some("com.google.Chrome"),
-            Some("com.google.Chrome"),
-        ));
+        *os_status.borrow_mut() =
+            Some(status(Some("com.google.Chrome"), Some("com.google.Chrome")));
         cx.update(|cx| refresh(false, cx));
         assert_eq!(cx.update(|cx| super::card(cx)).note, None);
         assert_eq!(requests.get(), 1);
@@ -1008,7 +1035,8 @@ mod tests {
     fn an_unavailable_read_preserves_the_activation_grace(cx: &mut TestAppContext) {
         let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
         let os_status = Rc::new(RefCell::new(Some(chrome())));
-        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), Rc::new(Cell::new(0))), cx));
+        let registrar =
+            cx.update(|cx| install(Os::fake(os_status.clone(), Rc::new(Cell::new(0))), cx));
         cx.update(|cx| request(cx).unwrap());
         cx.update(activated);
 
@@ -1025,6 +1053,69 @@ mod tests {
             cx.update(|cx| super::card(cx)).note.as_deref(),
             Some("Google Chrome is still the default.")
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_new_request_while_unknown_gets_its_own_deadline_and_grace(cx: &mut TestAppContext) {
+        let chrome = || status(Some("com.google.Chrome"), Some("com.google.Chrome"));
+        let os_status = Rc::new(RefCell::new(Some(chrome())));
+        let requests = Rc::new(Cell::new(0));
+        let registrar = cx.update(|cx| install(Os::fake(os_status.clone(), requests.clone()), cx));
+        cx.update(|cx| request(cx).unwrap());
+        cx.update(activated);
+        *os_status.borrow_mut() = None;
+        for _ in 0..reads_in(ACTIVATION_GRACE) {
+            tick(cx);
+        }
+        assert!(registrar.read_with(cx, |r, _| r.waiting()));
+
+        cx.update(|cx| request(cx).unwrap());
+        *os_status.borrow_mut() = Some(chrome());
+        for _ in 1..reads_in(POLL_FOR) {
+            tick(cx);
+            assert!(
+                registrar.read_with(cx, |r, _| r.waiting()),
+                "neither the old grace nor the old deadline may settle the new request"
+            );
+        }
+        tick(cx);
+        assert!(!registrar.read_with(cx, |r, _| r.waiting()));
+        assert_eq!(requests.get(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn both_schemes_must_be_ours_before_the_request_succeeds(cx: &mut TestAppContext) {
+        let os_status = Rc::new(RefCell::new(Some(status(
+            Some("com.google.Chrome"),
+            Some("com.google.Chrome"),
+        ))));
+        let os = Os {
+            set_default: Rc::new(|| Ok(DefaultRequest::OpenedSettings)),
+            ..Os::fake(os_status.clone(), Rc::new(Cell::new(0)))
+        };
+        let registrar = cx.update(|cx| install(os, cx));
+        cx.update(|cx| request(cx).unwrap());
+        for (http, https) in [
+            (Some(pwrroute_os::BUNDLE_ID), None),
+            (Some(pwrroute_os::BUNDLE_ID), Some("com.google.Chrome")),
+            (Some("com.google.Chrome"), Some(pwrroute_os::BUNDLE_ID)),
+        ] {
+            *os_status.borrow_mut() = Some(status(http, https));
+            tick(cx);
+            assert!(!cx.update(|cx| state(cx).is_default()));
+            assert!(registrar.read_with(cx, |r, _| r.waiting()));
+            assert_eq!(
+                cx.update(|cx| super::card(cx)).note.as_deref(),
+                Some(waiting_note(DefaultRequest::OpenedSettings))
+            );
+        }
+        *os_status.borrow_mut() = Some(status(
+            Some(pwrroute_os::BUNDLE_ID),
+            Some(pwrroute_os::BUNDLE_ID),
+        ));
+        tick(cx);
+        assert!(cx.update(|cx| state(cx).is_default()));
+        assert!(!registrar.read_with(cx, |r, _| r.waiting()));
     }
 
     /// The field report: the dialog is approved, the window comes back to
