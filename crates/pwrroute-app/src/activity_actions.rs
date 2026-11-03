@@ -198,7 +198,7 @@ pub struct AddRule {
     pub collision_error: Option<String>,
     match_request: std::rc::Rc<()>,
     check_request: std::rc::Rc<()>,
-    verified: Option<(engine::Rule, usize, u64)>,
+    verified: Option<(engine::Rule, usize, u64, crate::engine_worker::Stamps)>,
     open_after_check: bool,
     /// Matches: hosts near the link's (its own, each domain offered and
     /// its `www`), each with whether the patterns take the link on that
@@ -1456,7 +1456,7 @@ impl PwrRoute {
             Position::Top => 0,
             Position::Bottom => self.store.handler_count(),
         };
-        if sheet.verified.as_ref() != Some(&(rule.clone(), at, self.engine_revision)) {
+        if !sheet.verified.as_ref().is_some_and(|(checked, index, revision, stamps)| checked == &rule && *index == at && *revision == self.engine_revision && crate::engine_worker::unchanged(stamps)) {
             self.check_new_rule(rule, at, cx);
             return false;
         }
@@ -1549,14 +1549,14 @@ impl PwrRoute {
         let Some(sheet) = &mut self.actions.sheet else {
             return;
         };
-        let mut rules = self.store.edited();
+        let mut rules = self.store.written();
         if let Some(same) = rules.rules.iter().position(|r| same_rule(r, &rule)) {
             sheet.problem = Some(Problem {
                 kind: ProblemKind::Duplicate,
                 text: format!("Rule {} is already this rule. Nothing was added.", same + 1),
                 advice: "Change the pattern, browser or position to add a different rule.",
             });
-            sheet.verified = Some((rule, at, self.engine_revision));
+            sheet.verified = Some((rule, at, self.engine_revision, Vec::new()));
             cx.notify();
             return;
         }
@@ -1612,7 +1612,7 @@ impl PwrRoute {
                             Ok(problem) => {
                                 let ready = problem.is_none();
                                 sheet.problem = problem;
-                                sheet.verified = Some((rule, at, revision));
+                                sheet.verified = Some((rule, at, revision, stamps));
                                 if ready && this.add_rule_checked(open_after, cx) && open_after {
                                     this.open_not_opened(key, open_as, cx);
                                 }

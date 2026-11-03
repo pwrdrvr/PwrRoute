@@ -7936,3 +7936,27 @@ fn engine_work_collision_revision_never_claims_old_pattern_is_clear(cx: &mut Tes
         assert!(sheet.collision_error.is_none());
     });
 }
+
+#[gpui_kit::test]
+fn engine_work_add_rechecks_config_changed_after_warning_before_commit(cx: &mut TestAppContext) {
+    let dir = scratch("recheck-sheet-config");
+    let config = dir.join("config.js");
+    std::fs::write(&config, "export default { defaultBrowser: 'Safari', handlers: [{ match: '*', browser: 'Safari' }] }").unwrap();
+    std::fs::File::open(&config).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10)).unwrap();
+    let (view, cx) = open_activity(cx, &dir, Some(config.clone()));
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    view.update(cx, |app, cx| app.set_add_rule(|s| { s.browser = "Firefox".into(); s.pattern.set("github.com/*"); }, cx));
+    view.update(cx, |app, cx| { assert!(!app.add_rule_from_sheet(cx)); });
+    draw(cx);
+    assert!(sheet_problem(&view, cx).is_some());
+    let before = view.read_with(cx, |app, _| app.store.written());
+    std::fs::write(&config, "export default { defaultBrowser: 'Firefox' }").unwrap();
+    std::fs::File::open(&config).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20)).unwrap();
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx), "stale warning allowed a write without rechecking config");
+        assert_eq!(app.store.written(), before);
+    });
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()), "fresh validation can add the rule");
+}
