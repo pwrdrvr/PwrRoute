@@ -1066,24 +1066,31 @@ impl PwrRoute {
         self.engine_tasks[lane as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((winner, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
-                    (|this: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>| {
                     this.sync_with_disk(cx);
                     if this.engine_revision != revision || !crate::engine_worker::unchanged(&stamps) {
-                        if save { this.actions.note = Some((key, "The rules changed before the example could be saved. Try again.".into())); }
-                        return;
-                    }
-                    let Some(record) = crate::activity_actions::record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
-                    match winner {
-                        Ok(handler) if save => this.save_example_to(key, handler, cx),
-                        Ok(handler) => {
-                            let choice = handler.map_or_else(|| Save::Test { expects: opened_label(&record) }, |handler| Save::Example {
-                                handler, pattern: this.handlers.get(handler).and_then(|h| h.patterns.first().cloned()),
-                            });
-                            if let Some(menu) = &mut this.actions.menu && menu.key == key { menu.save = Some(choice); }
+                        if save {
+                            this.actions.note = Some((key, "The rules changed before the example could be saved. Try again.".into()));
                         }
-                        Err(_) => { this.actions.note = Some((key, "The rules could not be checked. Try again after fixing the config.".into())); }
+                    } else if let Some(record) = crate::activity_actions::record(key, cx).filter(|r| r.privacy == Privacy::Full) {
+                        match winner {
+                            Ok(handler) if save => this.save_example_to(key, handler, cx),
+                            Ok(handler) => {
+                                let choice = handler.map_or_else(
+                                    || Save::Test { expects: opened_label(&record) },
+                                    |handler| Save::Example {
+                                        handler,
+                                        pattern: this.handlers.get(handler).and_then(|h| h.patterns.first().cloned()),
+                                    },
+                                );
+                                if let Some(menu) = &mut this.actions.menu && menu.key == key {
+                                    menu.save = Some(choice);
+                                }
+                            }
+                            Err(_) => {
+                                this.actions.note = Some((key, "The rules could not be checked. Try again after fixing the config.".into()));
+                            }
+                        }
                     }
-                    })(this, cx);
                     if save { this.finish_example_save(key, cx); }
                     cx.notify();
                 });

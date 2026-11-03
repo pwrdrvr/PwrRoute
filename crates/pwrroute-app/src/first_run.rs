@@ -4289,8 +4289,12 @@ mod tests {
             view.recheck_access(false, cx);
         });
         assert!(view.read_with(cx, |v, _| v.model.browsers_loading));
+        // The activation reread coalesces one follow-up; the shared scanner
+        // discards the first snapshot and completes after the second.
+        release.try_send(Ok(vec![scan_app(true)])).unwrap();
         release.try_send(Ok(vec![scan_app(true)])).unwrap();
         cx.run_until_parked();
+        assert!(!view.read_with(cx, |v, _| v.model.browsers_loading));
         assert!(view.read_with(cx, |v, _| v.model.access.as_ref().unwrap().still_blocked));
         assert!(calls.fallbacks.borrow().is_empty());
         view.update(cx, |view, cx| view.recheck_access(true, cx));
