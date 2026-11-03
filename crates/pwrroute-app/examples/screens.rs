@@ -392,18 +392,32 @@ fn setup(cx: &mut gpui_kit::App) {
 /// Fixture overrides run after initial config evaluation, and captures wait
 /// for actual worker completions rather than recording a loading frame.
 #[cfg(target_os = "macos")]
-fn settle_engine(cx: &mut gpui_kit::HeadlessAppContext, handle: gpui_kit::WindowHandle<app::PwrRoute>) {
+fn settle_engine(
+    cx: &mut gpui_kit::HeadlessAppContext,
+    handle: gpui_kit::WindowHandle<app::PwrRoute>,
+) {
     cx.allow_parking();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut idle = false;
     loop {
         cx.run_until_parked();
-        let ready = cx.update_window(handle.into(), |view, _, cx| {
-            view.downcast::<app::PwrRoute>().unwrap().read(cx).engine_worker.is_idle()
-        }).expect("read fixture worker");
-        if ready && idle { return; }
+        let ready = cx
+            .update_window(handle.into(), |view, _, cx| {
+                view.downcast::<app::PwrRoute>()
+                    .unwrap()
+                    .read(cx)
+                    .engine_worker
+                    .is_idle()
+            })
+            .expect("read fixture worker");
+        if ready && idle {
+            return;
+        }
         idle = ready;
-        assert!(std::time::Instant::now() < deadline, "fixture engine did not complete");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture engine did not complete"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
