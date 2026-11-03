@@ -240,6 +240,7 @@ enum TrayCommand {
     TogglePause,
     MakeDefault,
     HeldLinks,
+    CatchNext,
     Sync,
     RestartToUpdate,
     Quit,
@@ -260,6 +261,9 @@ fn open_all_held(_: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn make_rule_for(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
+
+#[cfg(target_os = "macos")]
+fn catch_next(_: bool, _: &mut gpui_kit::App) {}
 
 #[cfg(target_os = "macos")]
 fn copy_held(_: pwrroute_router::DispatchId, _: &mut gpui_kit::App) {}
@@ -866,6 +870,51 @@ fn main() {
         );
     });
 
+    // Tray Quick Add Rule 2c/2d: the sheet over a link "Add a rule for the
+    // next link" caught, still waiting, with a destination picked: Discard,
+    // Save and Save and open link.
+    shoot("app-2c-add-rule-caught", None, &|app, window, cx| {
+        let records = fixtures::activity();
+        activity::install_feed(activity::Feed::from_records(records.clone()), cx);
+        app.activity.load(records);
+        app.browsers = vec![
+            activity_actions::BrowserChoice {
+                name: "Google Chrome".into(),
+                profiles: vec!["Personal".into(), "Work".into()],
+            },
+            activity_actions::BrowserChoice {
+                name: "Firefox".into(),
+                profiles: vec!["default-release".into()],
+            },
+            activity_actions::BrowserChoice {
+                name: "Safari".into(),
+                profiles: Vec::new(),
+            },
+        ];
+        app.navigate(Screen::Activity, window, cx);
+        app.add_rule_from(
+            activity::RowKey {
+                id: pwrroute_router::DispatchId(2),
+                journaled: false,
+            },
+            activity_actions::SheetFrom::Caught,
+            window,
+            cx,
+        );
+        app.set_add_rule(
+            |sheet| {
+                // Contrived: the fixture record opened, so say it waits.
+                sheet.waiting = true;
+                sheet.choose(destinations::Choice {
+                    browser: "Google Chrome".into(),
+                    profile: "Work".into(),
+                    private: false,
+                });
+            },
+            cx,
+        );
+    });
+
     // Add Rule From an App 1b and 1c: a long contrived sign-in link Slack
     // sent, folded to two lines, then with "Any link from Slack" chosen.
     fn long_sign_in_link(app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) {
@@ -1150,8 +1199,14 @@ fn main() {
             sub: Some("Dropbox, iCloud".into()),
             tone: tray::model::SyncTone::Ok,
         });
+        let mut catching = base.clone();
+        catching.catching = true;
         let shots = [
             ("tray-1a", model, Unfolded::default()),
+            // Tray Quick Add Rule 1a: "+ Rule" on the row under the pointer.
+            ("tray-quick-rule", base.clone(), Unfolded::default()),
+            // Tray Quick Add Rule 2b: the next link is caught for a rule.
+            ("tray-catching", catching, Unfolded::default()),
             ("tray-synced", synced, Unfolded::default()),
             (
                 "tray-send-choose",
@@ -1208,6 +1263,9 @@ fn main() {
                                 cx,
                             );
                             dropdown.unfolded = unfolded;
+                            if name == "tray-quick-rule" {
+                                dropdown.hovered_recent = Some(0);
+                            }
                             dropdown
                         })
                     },

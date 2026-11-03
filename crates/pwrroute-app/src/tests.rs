@@ -16,7 +16,7 @@ use pwrroute_router::{
 };
 
 use crate::activity::{self, EMPTY_ID, Feed, Filter, RowKey};
-use crate::activity_actions::{BrowserChoice, RowMenu, Save};
+use crate::activity_actions::{AddRule, BrowserChoice, RowMenu, Save, SheetFrom};
 use crate::app::{PwrRoute, ROOT_ID, Screen, Selection};
 use crate::fixtures;
 use crate::rules_model::{Destination, Matcher, RowBadge};
@@ -2193,6 +2193,114 @@ fn activity_adds_a_rule_from_a_record(cx: &mut TestAppContext) {
     assert!(!file.rules[0].private);
     assert_eq!(file.rules.len(), 8);
     assert_eq!(file.tests.len(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A link caught for a rule (design: Tray Quick Add Rule 2c, 2d) waits in
+/// the router; its sheet offers Discard, Save and Save and open link.
+/// Discard leaves it waiting; Save and open link writes the rule and opens
+/// the link, so nothing waits after.
+#[gpui_kit::test]
+fn a_caught_link_is_saved_and_opened_from_its_sheet(cx: &mut TestAppContext) {
+    let dir = scratch("caught-link");
+    let path = dir.join("rules.json");
+    // No `on_dispatch`: the test scheduler forbids the dispatch thread
+    // waking a task.
+    let router =
+        Router::spawn(Options::default(), None, DryRunLauncher::new()).expect("spawn the router");
+    let handle = router.handle();
+    handle.catch_next(true);
+    let caught = handle
+        .dispatch_and_wait(Link::new(
+            "https://tickets.example.com/browse/DEMO-7",
+            Source::CommandLine,
+        ))
+        .expect("routed");
+    assert_eq!(caught.outcome, Outcome::NotOpened);
+    assert!(caught.held_for_rule());
+    assert!(!handle.catching_next(), "one link only");
+    assert_eq!(handle.pending(), [caught.id]);
+
+    // Sent from this thread, as `on_dispatch` would have.
+    let (sender, dispatched) = async_channel::unbounded();
+    sender.try_send(caught.clone()).expect("open");
+    cx.update(|cx| activity::install(handle.clone(), dispatched, cx));
+    let (view, cx) = open_store(cx, None, fixture_store(&dir));
+    click(cx, "nav-activity");
+    let key = RowKey {
+        id: caught.id,
+        journaled: false,
+    };
+    let open_sheet = |view: &Entity<PwrRoute>, cx: &mut VisualTestContext| {
+        view.update_in(cx, |app, window, cx| {
+            app.add_rule_from(key, SheetFrom::Caught, window, cx);
+        });
+        draw(cx);
+    };
+    open_sheet(&view, cx);
+    let (waiting, eyebrow) = view.read_with(cx, |app, _| {
+        let sheet = app.actions.sheet.as_ref().expect("the sheet is open");
+        (sheet.waiting, sheet.eyebrow())
+    });
+    assert!(waiting);
+    assert!(eyebrow.starts_with("Caught by the menu bar"), "{eyebrow}");
+    assert!(eyebrow.ends_with("not opened"), "{eyebrow}");
+    assert!(cx.debug_bounds("add-rule-save").is_some());
+    assert!(cx.debug_bounds("add-rule-save-open").is_some());
+
+    // Discard: nothing written, and the link still waits.
+    click(cx, "add-rule-cancel");
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    assert_eq!(handle.pending(), [caught.id]);
+    let before = saved(cx, &path).rules.len();
+
+    open_sheet(&view, cx);
+    // No scan here and the link never opened, so the lanes hold only
+    // Don't open: pick a browser as a pill would.
+    view.update(cx, |app, cx| {
+        app.set_add_rule(
+            |sheet| {
+                sheet.choose(crate::destinations::Choice {
+                    browser: "Firefox".into(),
+                    profile: "Work".into(),
+                    private: false,
+                });
+            },
+            cx,
+        );
+    });
+    draw(cx);
+    let chosen = view.read_with(cx, |app, _| {
+        app.actions
+            .sheet
+            .as_ref()
+            .and_then(AddRule::open_as)
+            .expect("a browser is picked")
+    });
+    click(cx, "add-rule-save-open");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("add-rule-sheet").is_none());
+    assert!(handle.pending().is_empty(), "opened by the new rule");
+    let file = saved(cx, &path);
+    assert_eq!(file.rules.len(), before + 1);
+    let released = handle.recent();
+    assert_eq!(
+        released[0].released_from(),
+        Some(caught.id),
+        "the link opened as a new record"
+    );
+    // In the destination picked, whatever runs before the new rule.
+    let pwrroute_router::OpenAs::In(destination) = chosen else {
+        panic!("a picked browser opens there");
+    };
+    assert_eq!(
+        released[0]
+            .browser
+            .as_ref()
+            .map(|browser| browser.name.clone()),
+        Some(destination.browser)
+    );
+    drop(router);
     let _ = std::fs::remove_dir_all(dir);
 }
 

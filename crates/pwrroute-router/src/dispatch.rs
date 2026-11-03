@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -543,6 +543,9 @@ impl Override {
 /// The override the handle writes and the dispatch thread reads.
 type Slot = Arc<Mutex<Option<Override>>>;
 
+/// Whether the next link is caught for a rule ([`RouterHandle::catch_next`]).
+type Catch = Arc<AtomicBool>;
+
 /// What the dispatch thread took from the override for one link.
 enum Took {
     Paused(PauseTarget),
@@ -660,6 +663,8 @@ impl Router {
         let worker_journal = Arc::clone(&journal);
         let slot: Slot = Arc::default();
         let worker_slot = Arc::clone(&slot);
+        let catch: Catch = Arc::default();
+        let worker_catch = Arc::clone(&catch);
         let next_id = Arc::new(AtomicU64::new(1));
         let worker_next_id = Arc::clone(&next_id);
         let thread = thread::Builder::new()
@@ -676,6 +681,7 @@ impl Router {
                     journal: options.journal.clone().map(Journal::new),
                     journal_config: worker_journal,
                     slot: worker_slot,
+                    catch: worker_catch,
                     next_id: worker_next_id,
                     network,
                     options,
@@ -688,6 +694,7 @@ impl Router {
                 recent,
                 journal,
                 slot,
+                catch,
                 next_id,
                 on_received,
                 diagnostic_log,
@@ -736,6 +743,10 @@ pub struct RouterHandle {
     ///
     /// [`set_override`]: Self::set_override
     slot: Slot,
+    /// "Add a rule for the next link" is armed: the next link from the OS
+    /// is held for a rule. Beside the slot, not in it, so a pause, a send
+    /// or a hold in force stays on and resumes from the link after.
+    catch: Catch,
     next_id: Arc<AtomicU64>,
     on_received: Option<ReceivedCallback>,
     diagnostic_log: Option<PathBuf>,
@@ -1040,6 +1051,30 @@ impl RouterHandle {
         self.recent.pending()
     }
 
+    /// Arms (or, `false`, cancels) "Add a rule for the next link": the
+    /// next link from the OS (an Apple Event or the command line, never an
+    /// agent's or the app's own `Api` link) is resolved, recorded and not
+    /// opened, with [`Step::Held`]'s `held` [`Sent::ForRule`], so the user
+    /// can write a rule for it and open it from Activity. It passes over a
+    /// pause, a send or a hold for that one link without counting it; they
+    /// apply again from the link after. One link, then it disarms. A link
+    /// whose rule keeps less than the whole link ([`Privacy::Host`] or
+    /// [`Privacy::None`]) is not caught: it opens by the rules and the
+    /// catch waits for the next. Arming
+    /// while Activity keeps nothing in memory does nothing: the link would
+    /// have nowhere to wait. Memory only.
+    ///
+    /// [`Sent::ForRule`]: crate::trace::Sent::ForRule
+    pub fn catch_next(&self, armed: bool) {
+        let armed = armed && self.recent.retention().count > 0;
+        self.catch.store(armed, Ordering::SeqCst);
+    }
+
+    /// Whether the next link will be caught for a rule.
+    pub fn catching_next(&self) -> bool {
+        self.catch.load(Ordering::SeqCst)
+    }
+
     fn slot(&self) -> std::sync::MutexGuard<'_, Option<Override>> {
         self.slot.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1132,6 +1167,9 @@ struct Worker {
     journal_config: Arc<Mutex<Option<JournalConfig>>>,
     /// The handle's pause, send or hold, read once per dispatch.
     slot: Slot,
+    /// The handle's "Add a rule for the next link", taken by the first
+    /// link from the OS.
+    catch: Catch,
     /// The handle's counter: a link opened later gets a new id.
     next_id: Arc<AtomicU64>,
     /// `Options::network`, or the real one once a short link needed it.
@@ -1315,7 +1353,10 @@ impl Worker {
         let mut privacy = privacy;
         let mut held = false;
         match mode {
-            Mode::Dispatch => match self.take_override() {
+            Mode::Dispatch => match self
+                .take_catch(record.link.source, privacy)
+                .or_else(|| self.take_override())
+            {
                 Some(Took::Paused(target)) => {
                     record.steps.push(Step::Paused {
                         skipped: skipped_handler(&record.steps),
@@ -1566,6 +1607,24 @@ impl Worker {
                 Err(())
             }
         }
+    }
+
+    /// The link held for a rule, when "Add a rule for the next link" is
+    /// armed and the link came from the OS: it disarms, and the slot is
+    /// not touched, so a send's or a hold's count is not used. Disarms
+    /// without taking the link while Activity keeps nothing: it would have
+    /// nowhere to wait. A link whose rule keeps less than the whole link
+    /// (`privacy` below `Full`) passes by and the catch stays armed: a
+    /// counted-only record keeps nothing waiting, so the link would be
+    /// lost, and a host-only one has no URL to write a rule from.
+    fn take_catch(&self, source: crate::link::Source, privacy: Privacy) -> Option<Took> {
+        if source == crate::link::Source::Api || privacy != Privacy::Full {
+            return None;
+        }
+        if !self.catch.swap(false, Ordering::SeqCst) {
+            return None;
+        }
+        (self.recent.retention().count > 0).then_some(Took::Held(crate::trace::Sent::ForRule))
     }
 
     /// What takes this link from the rules, if anything. A `Next` send or

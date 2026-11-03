@@ -43,6 +43,7 @@ use self::model::{
 };
 use self::native::{NativeTray, TrayEvent};
 use crate::activity::{self, Feed};
+use crate::activity_actions::SheetFrom;
 use crate::app::{PwrRoute, Screen};
 use crate::default_browser;
 use crate::widgets::badge_for;
@@ -71,6 +72,9 @@ pub enum TrayCommand {
     ChooseWhere,
     /// The native menu's "Held links (N)…": Activity, where they wait.
     HeldLinks,
+    /// "Add a rule for the next link…": arms the catch, or cancels it
+    /// (design: Tray Quick Add Rule 2a, 2e).
+    CatchNext,
     /// Ask the OS to make PwrRoute the default browser: the dropdown's row
     /// while another app has it.
     MakeDefault,
@@ -82,7 +86,7 @@ pub enum TrayCommand {
 }
 
 impl TrayCommand {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::OpenMain,
         Self::TestLink,
         Self::Rules,
@@ -96,6 +100,7 @@ impl TrayCommand {
         Self::HoldHour,
         Self::ChooseWhere,
         Self::HeldLinks,
+        Self::CatchNext,
         Self::MakeDefault,
         Self::Sync,
         Self::RestartToUpdate,
@@ -119,6 +124,7 @@ impl TrayCommand {
             Self::HoldHour => "pwrroute.hold-hour",
             Self::ChooseWhere => "pwrroute.send-choose",
             Self::HeldLinks => "pwrroute.held",
+            Self::CatchNext => "pwrroute.catch-next",
             Self::MakeDefault => "pwrroute.make-default",
             Self::Sync => "pwrroute.sync",
             Self::RestartToUpdate => "pwrroute.restart-to-update",
@@ -166,6 +172,9 @@ struct Tray {
     dropdown_closed_at: Option<Instant>,
     /// Ticks every second while a send or a hold has a time left.
     clock: Option<gpui_kit::Task<()>>,
+    /// The newest dispatch the feed had when the tray last looked: a link
+    /// held for a rule after it opens Add a rule, once.
+    seen: Option<DispatchId>,
 }
 
 impl Global for Tray {}
@@ -214,6 +223,7 @@ pub fn install(router: Option<RouterHandle>, cx: &mut App) {
         dropdown: None,
         dropdown_closed_at: None,
         clock: None,
+        seen: activity::feed(cx).and_then(|feed| newest(feed.read(cx))),
     });
     cx.spawn(async move |cx| {
         while let Ok(event) = received.recv().await {
@@ -496,8 +506,63 @@ fn sync_feed(model: &Entity<TrayModel>, feed: &Entity<Feed>, cx: &mut App) {
         cx.notify();
     });
     refresh_can_hold(model, cx);
-    // A dispatch may have used up the last of a count.
+    // A dispatch may have used up the last of a count, or the catch.
     sync_override(model, cx);
+    open_caught(feed, cx);
+}
+
+/// The newest dispatch in the feed.
+fn newest(feed: &Feed) -> Option<DispatchId> {
+    feed.records().iter().map(|record| record.id).max()
+}
+
+/// A link "Add a rule for the next link" held, new since the tray last
+/// looked and still waiting, brings the main window forward on Activity
+/// with Add a rule open for it (design: Tray Quick Add Rule 2c).
+fn open_caught(feed: &Entity<Feed>, cx: &mut App) {
+    if !cx.try_global::<Tray>().is_some_and(|tray| tray.live) {
+        return;
+    }
+    let seen = cx.global::<Tray>().seen;
+    let newest = newest(feed.read(cx)).max(seen);
+    if newest == seen {
+        return;
+    }
+    cx.global_mut::<Tray>().seen = newest;
+    let feed = feed.read(cx);
+    let pending = feed.pending();
+    let caught = feed
+        .records()
+        .iter()
+        .filter(|record| seen.is_none_or(|seen| record.id > seen))
+        .filter(|record| record.held_for_rule() && pending.contains(&record.id))
+        .map(|record| record.id)
+        .max();
+    if let Some(id) = caught {
+        cx.defer(move |cx| open_rule_sheet(id, SheetFrom::Caught, cx));
+    }
+}
+
+/// Arms "Add a rule for the next link", or cancels it: the router first,
+/// then the model both surfaces draw. Arming needs somewhere for the link
+/// to wait, as Hold does ([`TrayModel::can_hold`]).
+pub fn catch_next(armed: bool, cx: &mut App) {
+    let Some(model) = model(cx) else {
+        return;
+    };
+    let armed = match router(cx) {
+        Some(router) => {
+            router.catch_next(armed);
+            router.catching_next()
+        }
+        None => armed && model.read(cx).can_hold,
+    };
+    model.update(cx, |model, cx| {
+        if model.catching != armed {
+            model.catching = armed;
+            cx.notify();
+        }
+    });
 }
 
 fn handle(event: TrayEvent, cx: &mut App) {
@@ -614,6 +679,10 @@ pub fn run(command: TrayCommand, cx: &mut App) {
         }
         TrayCommand::ChooseWhere => show_screen(Screen::Overview, cx),
         TrayCommand::HeldLinks => show_screen(Screen::Activity, cx),
+        TrayCommand::CatchNext => {
+            let armed = model(cx).is_some_and(|model| model.read(cx).catching);
+            catch_next(!armed, cx);
+        }
         // A click, as the Settings button is: the one way to the OS.
         TrayCommand::MakeDefault => {
             default_browser::handle_settings_request(
@@ -669,6 +738,7 @@ pub fn install_for_test(
         dropdown: None,
         dropdown_closed_at: None,
         clock: None,
+        seen: None,
     });
     model
 }
@@ -871,9 +941,14 @@ pub fn sync_override(model: &Entity<TrayModel>, cx: &mut App) {
         return;
     };
     let routing = routing_of(router.override_in_force().as_ref());
+    let catching = router.catching_next();
     model.update(cx, |model, cx| {
         if model.routing != routing {
             model.routing = routing;
+            cx.notify();
+        }
+        if model.catching != catching {
+            model.catching = catching;
             cx.notify();
         }
     });
@@ -889,6 +964,7 @@ fn refresh_can_hold(model: &Entity<TrayModel>, cx: &mut App) {
     let can_hold = router.retention().memory.count > 0;
     if !can_hold {
         router.set_hold(None);
+        router.catch_next(false);
     }
     model.update(cx, |model, cx| {
         if model.can_hold != can_hold {
@@ -897,6 +973,10 @@ fn refresh_can_hold(model: &Entity<TrayModel>, cx: &mut App) {
         }
         if !can_hold && model.holding().is_some() {
             model.routing = Routing::Active;
+            cx.notify();
+        }
+        if !can_hold && model.catching {
+            model.catching = false;
             cx.notify();
         }
     });
@@ -967,9 +1047,16 @@ fn open_held_all(links: Vec<(DispatchId, OpenAs)>, cx: &mut App) {
         .detach();
 }
 
-/// Make a rule…: the main window on Activity, with Add a rule open for the
-/// held link's record.
+/// Make a rule… and a recent link's "+ Rule": the main window on
+/// Activity, with Add a rule open for the link's record (design: Tray Quick
+/// Add Rule 1b).
 pub fn make_rule_for(id: DispatchId, cx: &mut App) {
+    open_rule_sheet(id, SheetFrom::MenuBar, cx);
+}
+
+/// The main window on Activity with Add a rule open for `id`, saying where
+/// the sheet came from.
+fn open_rule_sheet(id: DispatchId, from_where: SheetFrom, cx: &mut App) {
     show_screen(Screen::Activity, cx);
     let main = cx
         .windows()
@@ -980,7 +1067,9 @@ pub fn make_rule_for(id: DispatchId, cx: &mut App) {
             id,
             journaled: false,
         };
-        let _ = main.update(cx, |app, window, cx| app.add_rule(key, window, cx));
+        let _ = main.update(cx, |app, window, cx| {
+            app.add_rule_from(key, from_where, window, cx);
+        });
     }
 }
 

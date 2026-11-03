@@ -935,9 +935,11 @@ fn rule_label(steps: &[Step]) -> String {
     if let Some(sent) = sent {
         parts.push(sent.short().to_owned());
     } else if let Some(held) = held {
-        // "held", "held 2 of 3": the hold's words, as the trace line's.
+        // "held", "held 2 of 3", "held for a rule": the hold's words, as
+        // the trace line's.
         parts.push(match held {
             pwrroute_router::Sent::Next { nth, of } if of > 1 => format!("held {nth} of {of}"),
+            pwrroute_router::Sent::ForRule => "held for a rule".to_owned(),
             _ => "held".to_owned(),
         });
     } else if paused {

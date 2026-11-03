@@ -90,6 +90,15 @@ pub fn menu_entries(model: &TrayModel) -> Vec<MenuEntry> {
     });
     sync.chain([
         Item(TrayCommand::OpenMain, "Open PwrRoute".into()),
+        Check(
+            TrayCommand::CatchNext,
+            if model.catching {
+                "Add a rule for the next link \u{00b7} waiting".to_owned()
+            } else {
+                "Add a rule for the next link".to_owned()
+            },
+            model.catching,
+        ),
         Item(TrayCommand::TestLink, "Test a link\u{2026}".into()),
         Separator,
         Check(
@@ -409,6 +418,7 @@ mod tests {
             labels,
             [
                 "Open PwrRoute",
+                "Add a rule for the next link",
                 "Test a link\u{2026}",
                 "-",
                 "Route by rules",
@@ -461,6 +471,21 @@ mod tests {
             held(&holding),
             Some(("Held links (2)\u{2026}".to_owned(), true))
         );
+
+        // Armed, "Add a rule for the next link" is checked and says it
+        // waits, beside whatever the switch says (design: Tray Quick Add
+        // Rule 2e).
+        let mut catching = TrayModel::fixture(SystemTime::now());
+        catching.catching = true;
+        assert_eq!(
+            checked(&catching),
+            [TrayCommand::CatchNext, TrayCommand::SendRules]
+        );
+        assert!(menu_entries(&catching).contains(&MenuEntry::Check(
+            TrayCommand::CatchNext,
+            "Add a rule for the next link \u{00b7} waiting".into(),
+            true
+        )));
     }
 
     #[test]

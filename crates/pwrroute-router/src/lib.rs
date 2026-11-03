@@ -21,6 +21,8 @@
 //!   user chose, for the next few links or all of them ([`SendTo`]), with
 //!   [`Step::Sent`]. [`RouterHandle::set_hold`] records links and opens
 //!   none, with [`Step::Held`]. The three share one [`Override`] slot.
+//!   [`RouterHandle::catch_next`] holds just the next link from the OS for
+//!   a rule, beside the slot, passing over whichever is on.
 //! - A link that was not opened (held, or a rule that opens nothing) waits
 //!   in Activity: [`RouterHandle::open_not_opened`] opens it later, as a
 //!   new dispatch with [`Step::Released`].
