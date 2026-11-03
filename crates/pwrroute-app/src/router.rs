@@ -649,6 +649,7 @@ fn describe_source(
 /// Opens browsers with pwrroute-browsers. What reaches stderr and the trace
 /// never carries the URL: [`LaunchError`]'s `Display` and every [`Note`] are
 /// free of it, and `open`'s stderr, which may quote it, stays unread.
+#[derive(Clone)]
 pub struct BrowserLauncher {
     inner: pwrroute_browsers::Launcher,
     yield_browser_focus: Arc<AtomicBool>,
@@ -697,6 +698,17 @@ impl BrowserLauncher {
 }
 
 impl Launcher for BrowserLauncher {
+    fn fork(&self) -> Option<Box<dyn Launcher>> {
+        Some(Box::new(self.clone()))
+    }
+
+    fn ordering_key(&self, browser: &Browser) -> String {
+        let catalog = pwrroute_browsers::Catalog::builtin();
+        catalog.find(&browser.name)
+            .or_else(|| catalog.find_by_path(crate::browser_scan::environment().platform, Path::new(&browser.name)))
+            .map_or_else(|| browser.name.to_ascii_lowercase(), |entry| entry.id.clone())
+    }
+
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()> {
         self.launch_observed(browser, &mut |_| {})
     }

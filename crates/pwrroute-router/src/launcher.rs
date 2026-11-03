@@ -13,6 +13,19 @@ use pwrroute_engine::Browser;
 pub trait Launcher: Send + 'static {
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()>;
 
+    /// An independent launcher for a bounded I/O lane. None keeps all
+    /// launches serial on one I/O thread. Clones must share any live options.
+    fn fork(&self) -> Option<Box<dyn Launcher>> {
+        None
+    }
+
+    /// Equal keys serialize attempts, across profiles too. Called on the
+    /// resolver thread: use only in-memory catalog data, never I/O. Forkable
+    /// launchers must canonicalize aliases of the same application.
+    fn ordering_key(&self, browser: &Browser) -> String {
+        browser.name.to_ascii_lowercase()
+    }
+
     /// Reports progress while launching. Messages must contain only fixed
     /// labels, counts and timings: never URLs, arguments, browser/profile
     /// names or error text. The router adds the link id and logs at Info,
@@ -69,6 +82,13 @@ impl Launcher for DryRunLauncher {
 
 /// So the app can pick a launcher at runtime (dry run or real).
 impl Launcher for Box<dyn Launcher> {
+    fn fork(&self) -> Option<Box<dyn Launcher>> {
+        (**self).fork()
+    }
+
+    fn ordering_key(&self, browser: &Browser) -> String {
+        (**self).ordering_key(browser)
+    }
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()> {
         (**self).launch(browser)
     }
