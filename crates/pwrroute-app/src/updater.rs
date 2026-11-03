@@ -345,6 +345,21 @@ fn set_state(edit: impl FnOnce(&mut State)) {
     }
 }
 
+/// A download's percent: never a change Settings › Updates draws, so it
+/// skips [`set_state`]'s snapshot of the whole state.
+fn set_percent(percent: u8) {
+    if let Some(download) = &mut STATE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .download
+    {
+        download.percent = Some(percent);
+    }
+    if let Some(changed) = CHANGED.get() {
+        let _ = changed.try_send(false);
+    }
+}
+
 /// Whether going from `before` to `after` changes what Settings › Updates
 /// draws: everything but the download in flight, which only the update
 /// toast shows (`update_notice`). A download reports every percent, so
@@ -733,11 +748,7 @@ fn download(
                 let percent = u8::try_from(percent.clamp(0, 100)).unwrap_or(0);
                 if last != Some(percent) {
                     last = Some(percent);
-                    set_state(|state| {
-                        if let Some(download) = &mut state.download {
-                            download.percent = Some(percent);
-                        }
-                    });
+                    set_percent(percent);
                 }
             }
         });
