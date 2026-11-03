@@ -81,9 +81,19 @@ impl Harness {
     }
 
     pub async fn start_in(state_dir: PathBuf, approver: Arc<FakeApprover>, config: Config) -> Self {
+        Self::start_in_with(state_dir, approver, config, |_| {}).await
+    }
+
+    pub async fn start_in_with(
+        state_dir: PathBuf,
+        approver: Arc<FakeApprover>,
+        config: Config,
+        customize: impl FnOnce(&mut pwrroute_mcp::Backends),
+    ) -> Self {
         let endpoint = config.endpoint.clone();
         let agents = Agents::open(Some(&state_dir)).expect("open the state dir");
-        let (backends, router, rules) = fake::backends();
+        let (mut backends, router, rules) = fake::backends();
+        customize(&mut backends);
         let audit = Arc::new(MemoryAudit::default());
         let server = McpServer::start(
             config,

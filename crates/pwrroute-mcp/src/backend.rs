@@ -230,6 +230,17 @@ pub trait RulesTester: Send + Sync + 'static {
 
     /// Which of `urls` `pattern` matches, by Finicky's own `isMatch`.
     fn collisions(&self, pattern: &str, urls: &[String]) -> anyhow::Result<Vec<String>>;
+
+    /// Matches each pattern against the same URLs, returning one list per
+    /// input pattern in order. Threaded backends override this to use one
+    /// engine snapshot; the default keeps existing implementations usable.
+    fn collisions_batch(
+        &self,
+        patterns: &[String],
+        urls: &[String],
+    ) -> anyhow::Result<Vec<Vec<String>>> {
+        patterns.iter().map(|p| self.collisions(p, urls)).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -280,6 +280,47 @@ impl RulesTester for EngineTester {
     }
 }
 
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_collision_batch_reads_the_loader_once_and_preserves_duplicate_positions() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = reads.clone();
+        let tester = EngineTester::over(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            ("1".to_owned(), RulesFile::default())
+        }, Limits::default()).unwrap();
+        let patterns = ["docs.example.org/*", "*.example.org/*", "docs.example.org/*"].map(str::to_owned);
+        let urls = ["https://wiki.example.org/b", "https://docs.example.org/a", "https://elsewhere.example/"].map(str::to_owned);
+        let result = tester.collisions_batch(&patterns, &urls).unwrap();
+        assert_eq!(result, vec![vec![urls[1].clone()], vec![urls[0].clone(), urls[1].clone()], vec![urls[1].clone()]]);
+        assert_eq!(reads.load(Ordering::SeqCst), 2, "initial load plus exactly one batch job");
+    }
+
+    #[test]
+    fn a_collision_batch_preserves_loader_errors_and_the_thread_can_recover() {
+        struct FailingLoader { engine: Engine, reads: usize }
+        impl Loader for FailingLoader {
+            fn engine(&mut self) -> Result<&Engine> {
+                self.reads += 1;
+                if self.reads == 1 { anyhow::bail!("fixture reload failed"); }
+                Ok(&self.engine)
+            }
+        }
+        let tester = EngineTester { thread: EngineThread::spawn("batch-errors", || {
+            Ok(FailingLoader { engine: build(&RulesFile::default(), Limits::default())?, reads: 0 })
+        }).unwrap() };
+        let patterns = ["example.org/*".to_owned()];
+        let urls = ["https://example.org/page".to_owned()];
+        let error = tester.collisions_batch(&patterns, &urls).unwrap_err();
+        assert!(error.to_string().contains("fixture reload failed"), "{error:#}");
+        assert_eq!(tester.collisions_batch(&patterns, &urls).unwrap(), vec![urls.to_vec()]);
+    }
+}
+
 /// A default step's summary when `rules.json`'s default took the link:
 /// no config in charge, or `"precedence": "pwrroute"`. The router's
 /// records say it the same way (`live.rs`).
