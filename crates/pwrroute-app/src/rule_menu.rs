@@ -325,7 +325,7 @@ impl PwrRoute {
                 None
             }
         });
-        cx.spawn(async move |this, cx| {
+        self.engine_tasks[crate::engine_worker::Lane::Impact as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((baseline, counts, stamps)) = result.recv().await {
                 let _ = this.update(cx, |this, cx| {
                     if this.engine_revision == revision && std::rc::Rc::ptr_eq(&this.row_actions.request, &request)
@@ -336,7 +336,7 @@ impl PwrRoute {
                     }
                 });
             }
-        }).detach();
+        }));
         None
     }
 

@@ -361,13 +361,14 @@ fn open_inner(
         if first_run { model.start_at_source(); }
         model
     });
-    cx.spawn(async move |cx| {
+    let task = cx.spawn(async move |cx| {
         if let Ok(model) = result.recv().await {
             let _ = window.update(cx, |this, _, cx| {
                 if Rc::ptr_eq(&this.request, &request) { this.model = model; this.loading = false; cx.notify(); }
             });
         }
-    }).detach();
+    });
+    crate::engine_worker::hold(cx, crate::engine_worker::Lane::Import, task);
 }
 
 /// Shows `model` in the importer, opening it when none is open. An open
@@ -468,6 +469,7 @@ pub struct Importer {
 impl Importer {
     pub fn new(model: ImportModel, cx: &mut Context<'_, Self>) -> Self {
         cx.on_release(|this: &mut Self, cx| {
+            crate::engine_worker::cancel_service(cx, crate::engine_worker::Lane::Import);
             if let Some(from) = this.from_first_run.take() {
                 let outcome = this
                     .saved

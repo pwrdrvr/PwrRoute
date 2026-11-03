@@ -136,6 +136,7 @@ pub struct PwrRoute {
     /// Try it's engine over the rules as edited, which Activity's Add a
     /// rule sheet also asks about collisions.
     pub(crate) probe: Probe,
+    pub(crate) engine_tasks: [Option<gpui_kit::Task<()>>; 8],
     pub(crate) engine_worker: EngineWorker,
     pub(crate) engine_revision: u64,
     preview_request: u64,
@@ -253,6 +254,7 @@ impl PwrRoute {
             selection: None,
             rail: None,
             probe: Probe::at_home(config.clone(), home.as_deref(), store.edited()),
+            engine_tasks: std::array::from_fn(|_| None),
             engine_revision: 0,
             preview_request: 0,
             config_request: 0,
@@ -827,6 +829,7 @@ impl PwrRoute {
         self.config_loaded = SystemTime::now();
         self.describe_config(cx);
         self.probe = Probe::at_home(config.clone(), self.home.as_deref(), self.store.edited());
+        self.engine_tasks[Lane::Tests as usize] = None;
         self.tests = TestRuns::new(config.clone(), self.store.edited());
         self.test = TestLink::new(
             config,
@@ -984,7 +987,7 @@ impl PwrRoute {
                 Some((result, probe.stamps()))
             }
         });
-        cx.spawn(async move |this, cx| {
+        self.engine_tasks[Lane::Preview as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((result, stamps)) = result.recv().await {
                 let _ = this.update(cx, |this, cx| {
                     if this.preview_request == request && this.engine_revision == revision && this.selection == Some(selection) {
@@ -994,7 +997,7 @@ impl PwrRoute {
                     }
                 });
             }
-        }).detach();
+        }));
     }
 
     /// Copies a part of the build (the rail's build block) and shows its
@@ -1572,13 +1575,17 @@ impl PwrRoute {
     pub(crate) fn schedule_tests(&mut self, cx: &mut Context<'_, Self>) {
         let (request, config, rules) = self.tests.begin();
         let result = self.engine_worker.submit(Lane::Tests, Duration::ZERO, move |_| crate::try_it::test_steps(config, rules));
-        cx.spawn(async move |this, cx| {
-            if let Ok(report) = result.recv().await {
+        self.engine_tasks[Lane::Tests as usize] = Some(cx.spawn(async move |this, cx| {
+            if let Ok((report, stamps)) = result.recv().await {
                 let _ = this.update(cx, |this, cx| {
+                    if !crate::engine_worker::unchanged(&stamps) {
+                        if this.tests.is_current(&request) { this.schedule_tests(cx); }
+                        return;
+                    }
                     if this.tests.complete(request, report) { cx.notify(); }
                 });
             }
-        }).detach();
+        }));
     }
 
     fn describe_config(&mut self, cx: &mut Context<'_, Self>) {
@@ -1597,7 +1604,7 @@ impl PwrRoute {
             let stamps = engine.as_ref().map(crate::engine_worker::stamps).unwrap_or_default();
             (config, description, stamps)
         });
-        cx.spawn(async move |this, cx| {
+        self.engine_tasks[Lane::Config as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((config, description, stamps)) = result.recv().await {
                 let _ = this.update(cx, |this, cx| {
                     if this.config_request == request {
@@ -1608,7 +1615,7 @@ impl PwrRoute {
                     }
                 });
             }
-        }).detach();
+        }));
     }
 }
 

@@ -191,12 +191,12 @@ pub fn unchanged(stamps: &Stamps) -> bool {
     stamps.iter().all(|(path, at)| modified(path) == *at)
 }
 
-struct Service(EngineWorker);
+struct Service { tasks: [Option<gpui_kit::Task<()>>; LANES], worker: EngineWorker }
 impl gpui_kit::Global for Service {}
 /// Standalone importer/onboarding operations use one process-owned worker.
 pub fn service(cx: &mut gpui_kit::App) -> Client {
-    if cx.try_global::<Service>().is_none() { cx.set_global(Service(EngineWorker::new())); }
-    cx.global::<Service>().0.client()
+    if cx.try_global::<Service>().is_none() { cx.set_global(Service { tasks: array::from_fn(|_| None), worker: EngineWorker::new() }); }
+    cx.global::<Service>().worker.client()
 }
 
 #[cfg(test)]
@@ -218,5 +218,16 @@ pub fn settle(cx: &mut gpui_kit::App) {
             if let Ok(client) = window.read(cx).map(|app| app.engine_worker.client()) { client.wait_idle(); }
         }
     }
-    if let Some(service) = cx.try_global::<Service>() { service.0.wait_idle(); }
+    if let Some(service) = cx.try_global::<Service>() { service.worker.wait_idle(); }
+}
+
+pub fn hold(cx: &mut gpui_kit::App, lane: Lane, task: gpui_kit::Task<()>) {
+    cx.global_mut::<Service>().tasks[lane as usize] = Some(task);
+}
+
+pub fn cancel_service(cx: &mut gpui_kit::App, lane: Lane) {
+    if let Some(service) = cx.try_global_mut::<Service>() {
+        service.tasks[lane as usize] = None;
+        service.worker.cancel(lane);
+    }
 }

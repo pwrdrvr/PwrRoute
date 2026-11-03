@@ -232,7 +232,7 @@ pub struct TestRuns {
     rules: RulesFile,
     report: Option<Result<TestReport, String>>,
     ran_at: Option<SystemTime>,
-    request: u64,
+    request: Rc<()>,
 }
 
 impl TestRuns {
@@ -242,7 +242,7 @@ impl TestRuns {
             rules,
             report: None,
             ran_at: None,
-            request: 0,
+            request: Rc::new(()),
         }
     }
 
@@ -251,7 +251,7 @@ impl TestRuns {
         if self.rules != rules {
             self.rules = rules;
             self.report = None;
-            self.request += 1;
+            self.request = Rc::new(());
         }
     }
 
@@ -268,14 +268,16 @@ impl TestRuns {
         self.report.as_ref().expect("just set")
     }
 
-    pub fn begin(&mut self) -> (u64, Option<PathBuf>, RulesFile) {
-        self.request += 1;
+    pub fn begin(&mut self) -> (Rc<()>, Option<PathBuf>, RulesFile) {
+        self.request = Rc::new(());
         self.report = None;
-        (self.request, self.config.clone(), self.rules.clone())
+        (self.request.clone(), self.config.clone(), self.rules.clone())
     }
 
-    pub fn complete(&mut self, request: u64, report: Result<TestReport, String>) -> bool {
-        if self.request != request { return false; }
+    pub fn is_current(&self, request: &Rc<()>) -> bool { Rc::ptr_eq(&self.request, request) }
+
+    pub fn complete(&mut self, request: Rc<()>, report: Result<TestReport, String>) -> bool {
+        if !Rc::ptr_eq(&self.request, &request) { return false; }
         self.report = Some(report);
         self.ran_at = Some(SystemTime::now());
         true
@@ -962,7 +964,7 @@ mod tests {
 
 /// One saved assertion per scheduler turn, with the synced rules and no
 /// machine overrides (the same semantics as Engine::test_rules).
-pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> Option<Result<TestReport, String>> {
+pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> Option<(Result<TestReport, String>, crate::engine_worker::Stamps)> {
     let loaded = crate::router::engine_as_routed(
         &pwrroute_engine::Sources { config, rules: rules.clone(), ..Default::default() },
         Rc::new(NativeHost::new()), Limits::default(),
@@ -971,6 +973,7 @@ pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> 
         Ok(engine) => (Some(engine), None),
         Err(error) => (None, Some(Err(error))),
     };
+    let stamps = engine.as_ref().map(crate::engine_worker::stamps).unwrap_or_default();
     let mut sources = Vec::new();
     for (i, rule) in rules.rules.iter().enumerate() {
         for j in 0..rule.examples.len() { sources.push(TestSource::RuleExample { rule: i, example: j }); }
@@ -981,7 +984,7 @@ pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> 
     for i in 0..rules.tests.len() { sources.push(TestSource::Test { test: i }); }
     let mut sources = sources.into_iter();
     let mut report = TestReport::default();
-    move || {
+    let mut step = move || {
         if let Some(error) = error.take() { return Some(error); }
         let Some(source) = sources.next() else { return Some(Ok(std::mem::take(&mut report))); };
         let mut single = rules.clone();
@@ -1006,4 +1009,6 @@ pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> 
             Err(e) => { engine.take(); Some(Err(format!("The tests did not run: {e:#}"))) }
         }
     }
+    ;
+    move || step().map(|report| (report, stamps.clone()))
 }

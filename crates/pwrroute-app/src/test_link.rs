@@ -131,6 +131,7 @@ pub struct TestLink {
     /// The run was saved as this test (its index in `tests`) since the
     /// last run.
     pub saved_as: Option<usize>,
+    task: Option<gpui_kit::Task<()>>,
     worker: crate::engine_worker::Client,
     config: Option<PathBuf>,
     /// The config as the user knows it (`~/.finicky.ts`), for the trace's
@@ -176,6 +177,7 @@ impl TestLink {
                 .as_deref()
                 .map(|path| crate::config_view::display_path(path, home)),
             config,
+            task: None,
             worker,
             rules,
             run: None,
@@ -228,6 +230,7 @@ impl TestLink {
     /// Resolves the field's URL and records the trace. An empty field is
     /// nothing to test, not an error.
     pub fn run(&mut self, cx: &mut Context<'_, PwrRoute>) {
+        self.task = None;
         self.request_token = Rc::new(());
         self.worker.cancel(crate::engine_worker::Lane::Link);
         self.expanding = false;
@@ -273,7 +276,7 @@ impl TestLink {
         });
         // opener is also needed by the UI; re-read its immutable choice.
         let opener = self.opener();
-        cx.spawn(async move |this, cx| {
+        self.task = Some(cx.spawn(async move |this, cx| {
             if let Ok(result) = worker.recv().await {
                 let _ = this.update(cx, |this, cx| {
                     if !Rc::ptr_eq(&this.test.request_token, &request_token) { return; }
@@ -290,7 +293,7 @@ impl TestLink {
                     cx.notify();
                 });
             }
-        }).detach();
+        }));
     }
 
     fn finish(&mut self, result: Result<Trace, String>, opener: Option<OpenerChoice>, started: Instant) {
@@ -367,6 +370,7 @@ impl TestLink {
             return;
         }
         self.rules = rules;
+        self.task = None;
         self.request_token = Rc::new(());
         self.worker.cancel(crate::engine_worker::Lane::Link);
         self.expanding = false;

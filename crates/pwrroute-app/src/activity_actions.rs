@@ -942,7 +942,7 @@ impl PwrRoute {
             let winner = trace.map(|trace| trace.winner().filter(|step| step.source == pwrroute_engine::Source::Rules && step.stage == pwrroute_engine::Stage::Handler).map(|step| step.index));
             (winner, probe.stamps())
         });
-        cx.spawn(async move |this, cx| {
+        self.engine_tasks[crate::engine_worker::Lane::Activity as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((winner, stamps)) = result.recv().await {
                 let _ = this.update(cx, |this, cx| {
                     this.sync_with_disk(cx);
@@ -961,7 +961,7 @@ impl PwrRoute {
                     cx.notify();
                 });
             }
-        }).detach();
+        }));
     }
 
     /// The `rules.json` rule a record's link joins as an example: the one
