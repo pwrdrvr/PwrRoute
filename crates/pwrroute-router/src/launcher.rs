@@ -6,10 +6,11 @@ use pwrroute_engine::Browser;
 
 /// Opens a resolved link in a browser.
 ///
-/// The router calls it on its dispatch thread, one link at a time, with the
+/// The router calls it on a bounded I/O lane with the
 /// engine's [`Browser`]: the app (by name, bundle id or path), the URL after
 /// every rewrite, the profile, extra arguments, and whether to open in the
-/// background. It is never called for `browser: null`.
+/// background. Ready attempts sharing an ordering key run one at a time.
+/// It is never called for `browser: null`.
 pub trait Launcher: Send + 'static {
     fn launch(&mut self, browser: &Browser) -> anyhow::Result<()>;
 

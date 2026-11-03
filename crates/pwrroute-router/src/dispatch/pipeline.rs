@@ -13,12 +13,13 @@ struct Budget {
 
 pub(super) struct Admission {
     budget: Mutex<Budget>,
+    send_lock: Mutex<()>,
     changed: Condvar,
 }
 
 impl Default for Admission {
     fn default() -> Self {
-        Self { budget: Mutex::new(Budget { used: 0, closed: false }), changed: Condvar::new() }
+        Self { budget: Mutex::new(Budget { used: 0, closed: false }), send_lock: Mutex::new(()), changed: Condvar::new() }
     }
 }
 
@@ -33,24 +34,26 @@ impl Admission {
         Ok(Permit(self.clone()))
     }
 
-    pub(super) fn send(&self, tx: &mpsc::Sender<Command>, command: Command) -> std::result::Result<(), RouterGone> {
+    pub(super) fn send(&self, tx: &mpsc::SyncSender<Command>, command: Command) -> std::result::Result<(), RouterGone> {
+        let _send = self.send_lock.lock().unwrap_or_else(PoisonError::into_inner);
         let budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
         if budget.closed {
-            // Drop a command's permit only after releasing the budget lock.
             drop(budget);
             return Err(RouterGone);
         }
-        let result = tx.send(command);
         drop(budget);
-        // SendError owns the command, which may own a permit.
-        result.map_err(|_| RouterGone)
+        // Never hold the budget while waiting for the bounded mailbox:
+        // the owner must be able to release completed work's permits.
+        tx.send(command).map_err(|_| RouterGone)
     }
 
-    pub(super) fn close(&self, tx: &mpsc::Sender<Command>) {
+    pub(super) fn close(&self, tx: &mpsc::SyncSender<Command>) {
+        let _send = self.send_lock.lock().unwrap_or_else(PoisonError::into_inner);
         let mut budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
         budget.closed = true;
-        let _ = tx.send(Command::Shutdown);
+        drop(budget);
         self.changed.notify_all();
+        let _ = tx.send(Command::Shutdown);
     }
 }
 
@@ -95,12 +98,31 @@ struct Job {
     expand_us: u64,
     started: Instant,
     expanding: bool,
+    cancelled: Arc<AtomicBool>,
 }
 
 struct Expand {
     id: DispatchId,
     url: String,
     policy: ShortLinks,
+    cancelled: Arc<AtomicBool>,
+}
+
+/// Policy invalidation cancels subsequent HTTP requests, including GET
+/// after HEAD. The in-flight request retains Network's bounded deadline;
+/// no timed-out worker is detached or replaced by another request thread.
+struct CheckedNetwork<'a> {
+    network: &'a (dyn Network + Send + Sync),
+    cancelled: &'a AtomicBool,
+}
+
+impl Network for CheckedNetwork<'_> {
+    fn request(&self, method: pwrroute_engine::Method, url: &str, timeout: Duration) -> Result<pwrroute_engine::Reply> {
+        if self.cancelled.load(Ordering::SeqCst) { anyhow::bail!("shortener policy changed"); }
+        let reply = self.network.request(method, url, timeout)?;
+        if self.cancelled.load(Ordering::SeqCst) { anyhow::bail!("shortener policy changed"); }
+        Ok(reply)
+    }
 }
 
 pub(super) struct Expanded {
@@ -176,7 +198,7 @@ pub(super) struct Pipeline {
 }
 
 impl Pipeline {
-    pub(super) fn new(launcher: Box<dyn Launcher>, tx: mpsc::Sender<Command>, network: Option<Arc<dyn Network + Send + Sync>>) -> std::io::Result<Self> {
+    pub(super) fn new(launcher: Box<dyn Launcher>, tx: mpsc::SyncSender<Command>, network: Option<Arc<dyn Network + Send + Sync>>) -> std::io::Result<Self> {
         let dry_run = launcher.is_dry_run();
         let mut launchers = Vec::new();
         let template = if let Some(fork) = launcher.fork() {
@@ -215,7 +237,9 @@ impl Pipeline {
                 let started = Instant::now();
                 let link = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let network = client.get_or_init(|| Arc::new(pwrroute_engine::HttpNetwork::new()));
-                    item.policy.expand(&item.url, network.as_ref())
+                    let checked = CheckedNetwork { network: network.as_ref(), cancelled: &item.cancelled };
+                    let link = item.policy.expand(&item.url, &checked);
+                    if item.cancelled.load(Ordering::SeqCst) { EngineLink::new(&item.url) } else { link }
                 })).unwrap_or_else(|_| EngineLink::new(&item.url));
                 let _ = tx.send(Command::Expanded { lane, job: Expanded {
                     id: item.id, link, micros: Timings::micros(started.elapsed()).max(1),
@@ -251,15 +275,17 @@ impl Worker {
                         Ok(resolver) => { self.resolver = Ok(resolver); Ok(()) },
                         Err(e) => Err(e),
                     };
+                    self.refresh_config();
                     let _ = reply.send(result);
                 }
                 Command::Status { reply } => {
+                    let (_, config_error) = self.refresh_config();
                     let _ = reply.send(RouterStatus {
-                        config_error: self.in_charge().err(), dry_run: self.io.dry_run,
+                        config_error, dry_run: self.io.dry_run,
                         journal_error: self.journal.as_ref().and_then(|j| j.error().map(str::to_owned)),
                     });
                 }
-                Command::Refresh => { let _ = self.in_charge(); }
+                Command::Refresh => { self.refresh_config(); }
                 Command::SetRetention { retention, reply } => {
                     self.recent.set_retention(retention);
                     self.options.retention = retention;
@@ -292,6 +318,18 @@ impl Worker {
         }
     }
 
+    fn refresh_config(&mut self) -> (Option<ShortLinks>, Option<String>) {
+        let refreshed = self.in_charge();
+        let policy = refreshed.as_ref().ok().and_then(|resolver| resolver.short_links());
+        let error = refreshed.err();
+        for job in &self.io.waiting {
+            if job.expanding && job.policy != policy {
+                job.cancelled.store(true, Ordering::SeqCst);
+            }
+        }
+        (policy, error)
+    }
+
     fn update_launch_logging(&self) {
         self.io.log_enabled.store(self.options.diagnostic_log.is_some() && keeps_links(self.recent.retention(), self.options.journal.as_ref()), Ordering::Relaxed);
     }
@@ -299,7 +337,7 @@ impl Worker {
     fn accept(&mut self, request: Queued, mode: Mode, reply: Reply) {
         let started = Instant::now();
         let url = normalize_url(&request.link.url).ok();
-        let policy = if url.is_some() { self.in_charge().ok().and_then(Resolver::short_links) } else { None };
+        let policy = if url.is_some() { self.refresh_config().0 } else { None };
         let state_waits = self.io.waiting.iter().any(|job| matches!(job.reservation, Reservation::Ordered));
         let reservation = if mode != Mode::Dispatch || url.is_none() {
             Reservation::Ready(None)
@@ -313,7 +351,7 @@ impl Worker {
             _ => Some(EngineLink::new(url.as_deref().unwrap_or(&request.link.url))),
         };
         self.io.outstanding += 1;
-        self.io.waiting.push_back(Job { request, mode, reply, reservation, policy, expanded, expand_us: 0, started, expanding: false });
+        self.io.waiting.push_back(Job { request, mode, reply, reservation, policy, expanded, expand_us: 0, started, expanding: false, cancelled: Arc::new(AtomicBool::new(false)) });
     }
 
     fn pump(&mut self) {
@@ -323,12 +361,12 @@ impl Worker {
         loop {
             let Some(lane) = self.io.expand.iter().position(|lane| lane.busy.is_none()) else { break; };
             let Some(index) = self.io.waiting.iter().position(|job| job.expanded.is_none() && !job.expanding) else { break; };
-            let policy = self.in_charge().ok().and_then(Resolver::short_links);
+            let policy = self.refresh_config().0;
             let job = &mut self.io.waiting[index];
             let url = normalize_url(&job.request.link.url).expect("expansion has a valid URL");
             job.policy = policy;
             if let Some(policy) = job.policy.as_ref().filter(|policy| policy.is_short(&url)) {
-                let item = Expand { id: job.request.id, url, policy: policy.clone() };
+                let item = Expand { id: job.request.id, url, policy: policy.clone(), cancelled: job.cancelled.clone() };
                 job.expanding = true;
                 self.io.expand[lane].send(item, String::new());
             } else { job.expanded = Some(EngineLink::new(url)); }
@@ -343,10 +381,8 @@ impl Worker {
             });
             let Some(index) = ready else { break; };
             let mut job = self.io.waiting.remove(index).unwrap();
-            let refreshed = self.in_charge();
-            let policy = refreshed.as_ref().ok().and_then(|resolver| resolver.short_links());
-            let refresh_error = refreshed.err();
-            let expanded = if policy == job.policy {
+            let (policy, refresh_error) = self.refresh_config();
+            let expanded = if policy == job.policy && !job.cancelled.load(Ordering::SeqCst) {
                 job.expanded.take().unwrap()
             } else {
                 // Routing uses the current, refreshed config. Never combine

@@ -169,6 +169,7 @@ fn different_browsers_progress_but_same_browser_profiles_and_fallback_wait() {
     assert!(handle.get(slow).is_none());
     assert_eq!(fast.outcome, Outcome::Opened);
     let same = handle.dispatch(link("https://slow.example/second")).unwrap();
+    handle.status().unwrap();
     // A second profile/alias must share the first browser's lane too.
     handle.set_send_to(Some(SendTo::next(Destination { browser: "Slow Alias".into(), profile: "Work".into(), private: false })));
     let alias = handle.dispatch(link("https://slow.example/third")).unwrap();
@@ -310,23 +311,24 @@ fn catch_waits_for_earlier_private_resolution_then_preserves_next_counter() {
 
 #[test]
 fn policy_changes_discard_inflight_expansion_and_status_is_a_refresh_barrier() {
-    struct Redirect { gate: Gate, entered: mpsc::Sender<()> }
+    struct Redirect { gate: Gate, entered: mpsc::Sender<()>, following: Arc<AtomicU64> }
     impl Network for Redirect {
         fn request(&self, _: Method, url: &str, _: Duration) -> Result<Reply> {
             if url.contains("bit.ly") {
                 self.entered.send(()).unwrap();
                 self.gate.wait();
                 Ok(Reply { status: 302, location: Some("https://slow.example/landed".into()) })
-            } else { Ok(Reply { status: 200, location: None }) }
+            } else { self.following.fetch_add(1, Ordering::SeqCst); Ok(Reply { status: 200, location: None }) }
         }
     }
     let (entered, started) = mpsc::channel();
     let gate = Gate::default();
     let policy = Arc::new(Mutex::new(ShortLinks::default()));
+    let following = Arc::new(AtomicU64::new(0));
     let refreshed = Arc::new(AtomicU64::new(0));
     let factory = { let policy = policy.clone(); let refreshed = refreshed.clone();
         Box::new(move || Ok(Box::new(PolicyResolver { policy, refreshed }) as Box<dyn Resolver>)) };
-    let router = Router::spawn(Options { network: Some(Arc::new(Redirect { gate: gate.clone(), entered })), ..Options::default() },
+    let router = Router::spawn(Options { network: Some(Arc::new(Redirect { gate: gate.clone(), entered, following: following.clone() })), ..Options::default() },
         Some(factory), DryRunLauncher::new()).unwrap();
     let _release = Release(gate.clone());
     let handle = router.handle();
@@ -339,6 +341,7 @@ fn policy_changes_discard_inflight_expansion_and_status_is_a_refresh_barrier() {
     gate.open();
     drop(router);
     let record = handle.get(id).unwrap();
+    assert_eq!(following.load(Ordering::SeqCst), 0, "policy invalidation must cancel further requests");
     assert_eq!(record.final_url.as_deref(), Some("https://bit.ly/slow"));
     assert_eq!(record.browser.unwrap().name, "Fast");
     assert!(!record.steps.iter().any(|s| matches!(s, Step::Expanded { .. })));
@@ -423,4 +426,51 @@ fn cancelling_catch_and_changing_mode_while_privacy_is_pending_commits_once() {
     assert_eq!(sent_step(&handle.get(first).unwrap()).unwrap().0, Sent::Next { nth: 1, of: 2 });
     assert_eq!(sent_step(&handle.get(second).unwrap()).unwrap().0, Sent::Next { nth: 2, of: 2 });
     assert!(handle.pending().is_empty());
+}
+
+#[test]
+fn expiry_boundary_and_rejected_normalization_do_not_consume_next() {
+    let deadline = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+    let mut send = next(2);
+    send.scope = SendScope::All { until: Some(deadline) };
+    let mut slot = Some(Override::Sending(send));
+    assert!(matches!(take_override_from(&mut slot, false, deadline - Duration::from_nanos(1)), Some(Took::Sent(_, Sent::All))));
+    assert!(take_override_from(&mut slot, false, deadline).is_none());
+    assert!(slot.is_none());
+
+    let router = Router::spawn(Options::default(), None, DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
+    handle.set_send_to(Some(next(2)));
+    for invalid in [" ", "https://", "relative/path"] {
+        let record = handle.dispatch_and_wait(link(invalid)).unwrap();
+        assert!(record.steps.iter().any(|s| matches!(s, Step::Rejected { .. })));
+    }
+    assert_eq!(handle.send_to().unwrap().scope, SendScope::next(2));
+    let valid = handle.dispatch_and_wait(link("  https://example.com/trimmed \n")).unwrap();
+    assert_eq!(sent_step(&valid).unwrap().0, Sent::Next { nth: 1, of: 2 });
+    assert_eq!(valid.final_url.as_deref(), Some("https://example.com/trimmed"));
+}
+
+#[test]
+fn count_retention_keeps_newest_receipts_when_old_expansion_completes_last() {
+    let (entered, started) = mpsc::channel();
+    let gate = Gate::default();
+    let (recorded, delivered) = mpsc::channel();
+    let router = Router::spawn(Options {
+        retention: Retention { count: 2, hours: 0 },
+        network: Some(Arc::new(BlockNetwork { entered, gate: gate.clone() })),
+        on_dispatch: Some(Arc::new(move |r| { recorded.send(r.id).unwrap(); })),
+        ..Options::default()
+    }, Some(policy_factory(Arc::new(Mutex::new(ShortLinks::default())))), DryRunLauncher::new()).unwrap();
+    let _release = Release(gate.clone());
+    let handle = router.handle();
+    let first = handle.dispatch(link("https://bit.ly/oldest")).unwrap();
+    started.recv_timeout(DEADLINE).unwrap();
+    let second = handle.dispatch_and_wait(link("https://fast.example/second")).unwrap();
+    let third = handle.dispatch_and_wait(link("https://fast.example/third")).unwrap();
+    gate.open();
+    drop(router);
+    assert_eq!(delivered.try_iter().collect::<Vec<_>>(), [second.id, third.id, first]);
+    assert_eq!(handle.recent().iter().map(|r| r.id).collect::<Vec<_>>(), [third.id, second.id]);
+    assert!(handle.get(first).is_none());
 }

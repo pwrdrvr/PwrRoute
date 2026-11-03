@@ -1,4 +1,4 @@
-//! The dispatch thread: normalize, resolve, launch, record.
+//! The resolver owner: normalize, schedule bounded I/O, resolve, record.
 
 use std::{
     path::{Path, PathBuf},
@@ -146,7 +146,8 @@ fn rule_steps(trace: &Trace) -> Vec<Step> {
 pub type ResolverFactory = Box<dyn FnOnce() -> Result<Box<dyn Resolver>> + Send>;
 
 /// Called on the dispatch thread after each recorded dispatch (not for Test
-/// a link). Keep it quick: the next link waits for it.
+/// a link). Keep it quick and do not call blocking router methods: this
+/// callback runs on the resolver owner.
 pub type DispatchCallback = Arc<dyn Fn(&DispatchRecord) + Send + Sync>;
 
 /// Called on the thread that hands a link to the router (AppKit's, for an
@@ -162,7 +163,7 @@ pub const SLOW_DISPATCH: Duration = Duration::from_millis(500);
 /// Where the fallback browser comes from: asked each time a link needs it,
 /// so a choice saved while the router runs (first run, an edit of
 /// `rules.json`) applies from the next link, without a restart. Keep the
-/// call cheap; it runs on the dispatch thread, though only when a link
+/// call cheap; it runs on the resolver owner, though only when a link
 /// falls back.
 #[derive(Clone)]
 pub struct FallbackSource(Arc<dyn Fn() -> Option<(String, String)> + Send + Sync>);
@@ -231,8 +232,8 @@ pub struct Options {
     pub diagnostic_log: Option<PathBuf>,
     /// What expands short links: the one request a dispatch makes off the
     /// machine, to the shortener's host, as Finicky made it. `None`, the
-    /// default, is the real network ([`HttpNetwork`]), built on the dispatch
-    /// thread the first time a short link arrives; tests pass a fake.
+    /// default, is the real network (`pwrroute_engine::HttpNetwork`), built on an
+    /// I/O lane the first time a short link arrives; tests pass a fake.
     pub network: Option<Arc<dyn Network + Send + Sync>>,
 }
 
@@ -661,7 +662,7 @@ impl Router {
         resolver: Option<ResolverFactory>,
         launcher: impl Launcher,
     ) -> std::io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(128);
         let admission = Arc::new(Admission::default());
         let io = Pipeline::new(Box::new(launcher), tx.clone(), options.network.clone())?;
         let on_received = options.on_received.clone();
@@ -737,7 +738,7 @@ impl std::error::Error for RouterGone {}
 /// Feeds and reads a [`Router`] from any thread.
 #[derive(Clone)]
 pub struct RouterHandle {
-    tx: mpsc::Sender<Command>,
+    tx: mpsc::SyncSender<Command>,
     admission: Arc<Admission>,
     recent: Arc<RecentDispatches>,
     /// The journal as it is on: what [`retention`](Self::retention) and
@@ -1043,13 +1044,15 @@ impl RouterHandle {
         how: OpenAs,
     ) -> std::result::Result<DispatchRecord, OpenLaterError> {
         let (reply, rx) = mpsc::channel();
+        let received = Instant::now();
+        let received_at = SystemTime::now();
         let permit = self.admission.acquire()?;
         self.send(Command::Release {
             permit,
             from: id,
             how,
-            received: Instant::now(),
-            received_at: SystemTime::now(),
+            received,
+            received_at,
             reply,
         })?;
         rx.recv().map_err(|_| OpenLaterError::Gone(RouterGone))?
@@ -1148,14 +1151,16 @@ impl RouterHandle {
     }
 
     fn request(&self, link: Link, forwarded: bool) -> std::result::Result<Queued, RouterGone> {
+        let received = Instant::now();
+        let received_at = SystemTime::now();
         let permit = self.admission.acquire()?;
         Ok(Queued {
             _permit: permit,
             id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)),
             link,
             forwarded,
-            received: Instant::now(),
-            received_at: SystemTime::now(),
+            received,
+            received_at,
         })
     }
 
@@ -1452,26 +1457,7 @@ impl Worker {
     fn take_override(&self) -> Option<Took> {
         let keeps_nothing = self.recent.retention().count == 0;
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.as_ref().is_some_and(|o| {
-            o.expired(SystemTime::now()) || (keeps_nothing && matches!(o, Override::Holding(_)))
-        }) {
-            *slot = None;
-        }
-        let (took, used_up) = match slot.as_mut()? {
-            Override::Paused(target) => (Took::Paused(target.clone()), false),
-            Override::Sending(send) => {
-                let (sent, used_up) = send.scope.take();
-                (Took::Sent(send.destination.clone(), sent), used_up)
-            }
-            Override::Holding(scope) => {
-                let (held, used_up) = scope.take();
-                (Took::Held(held), used_up)
-            }
-        };
-        if used_up {
-            *slot = None;
-        }
-        Some(took)
+        take_override_from(&mut slot, keeps_nothing, SystemTime::now())
     }
 
     /// The fallback browser with `url`: [`Options::fallback`] as it is now,
@@ -1489,6 +1475,31 @@ impl Worker {
             privacy: Privacy::Full,
         }
     }
+}
+
+/// One admission/ordered-Catch commit, with an explicit clock so the
+/// expiry boundary can be tested without racing a wall-clock timer.
+fn take_override_from(slot: &mut Option<Override>, keeps_nothing: bool, now: SystemTime) -> Option<Took> {
+    if slot.as_ref().is_some_and(|o| {
+        o.expired(now) || (keeps_nothing && matches!(o, Override::Holding(_)))
+    }) {
+        *slot = None;
+    }
+    let (took, used_up) = match slot.as_mut()? {
+        Override::Paused(target) => (Took::Paused(target.clone()), false),
+        Override::Sending(send) => {
+            let (sent, used_up) = send.scope.take();
+            (Took::Sent(send.destination.clone(), sent), used_up)
+        }
+        Override::Holding(scope) => {
+            let (held, used_up) = scope.take();
+            (Took::Held(held), used_up)
+        }
+    };
+    if used_up {
+        *slot = None;
+    }
+    Some(took)
 }
 
 /// The most links one `Next` send can take.
