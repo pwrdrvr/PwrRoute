@@ -290,7 +290,12 @@ impl PwrRoute {
         to: usize,
         cx: &mut Context<'_, Self>,
     ) -> Option<usize> {
-        if self.row_actions.baseline.as_ref().is_some_and(|baseline| !crate::engine_worker::unchanged(&baseline.stamps)) {
+        if self
+            .row_actions
+            .baseline
+            .as_ref()
+            .is_some_and(|baseline| !crate::engine_worker::unchanged(&baseline.stamps))
+        {
             self.row_actions.forget_counts();
         }
         if let Some(count) = self.row_actions.impacts.get(&(selection, to)) {
@@ -321,11 +326,13 @@ impl PwrRoute {
             move |_| {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
                 let mut probe = Probe::from_input(input).with_rules(saved);
-                let mut baseline = baseline.filter(|b| crate::engine_worker::unchanged(&b.stamps)).unwrap_or(Baseline {
-                    links,
-                    now: Vec::new(),
-                    stamps: Vec::new(),
-                });
+                let mut baseline = baseline
+                    .filter(|b| crate::engine_worker::unchanged(&b.stamps))
+                    .unwrap_or(Baseline {
+                        links,
+                        now: Vec::new(),
+                        stamps: Vec::new(),
+                    });
                 let mut stamps = baseline.stamps.clone();
                 let mut moves = moves.into_iter();
                 let mut current: Option<((Selection, usize), Probe, usize, usize)> = None;
@@ -375,7 +382,8 @@ impl PwrRoute {
         );
         self.engine_tasks[crate::engine_worker::Lane::Impact as usize] =
             Some(cx.spawn(async move |this, cx| {
-                if let Ok((mut baseline, counts, stamps)) = crate::engine_worker::receive(result).await
+                if let Ok((mut baseline, counts, stamps)) =
+                    crate::engine_worker::receive(result).await
                 {
                     let _ = this.update(cx, |this, cx| {
                         if this.engine_revision == revision

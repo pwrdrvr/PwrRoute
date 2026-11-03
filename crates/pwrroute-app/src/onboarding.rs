@@ -177,7 +177,9 @@ pub struct FinickyFound {
 
 impl FinickyFound {
     #[cfg(test)]
-    fn read(path: PathBuf) -> Self { Self::read_with_stamps(path).0 }
+    fn read(path: PathBuf) -> Self {
+        Self::read_with_stamps(path).0
+    }
 
     /// Evaluate and review on the engine owner, retaining every module the
     /// review depends on until first run can actually open.
@@ -186,22 +188,28 @@ impl FinickyFound {
         let engine = match Engine::load(&path, Rc::new(NativeHost::new()), Limits::default()) {
             Ok(engine) => engine,
             Err(error) => {
-                return (Self {
-                    error: Some(format!("{error:#}")),
-                    path,
-                    ..Self::default()
-                }, before);
+                return (
+                    Self {
+                        error: Some(format!("{error:#}")),
+                        path,
+                        ..Self::default()
+                    },
+                    before,
+                );
             }
         };
         let stamps = crate::engine_worker::dependencies(before, &engine);
         let description = match engine.describe() {
             Ok(description) => description,
             Err(error) => {
-                return (Self {
-                    error: Some(format!("{error:#}")),
-                    path,
-                    ..Self::default()
-                }, stamps);
+                return (
+                    Self {
+                        error: Some(format!("{error:#}")),
+                        path,
+                        ..Self::default()
+                    },
+                    stamps,
+                );
             }
         };
         let (rewrites, handlers, default) = description.map_or((0, 0, None), |config| {
@@ -236,15 +244,18 @@ impl FinickyFound {
             ),
             None => (None, None),
         };
-        (Self {
-            path,
-            rewrites,
-            handlers,
-            importable,
-            default_browser,
-            default_profile,
-            error: None,
-        }, stamps)
+        (
+            Self {
+                path,
+                rewrites,
+                handlers,
+                importable,
+                default_browser,
+                default_profile,
+                error: None,
+            },
+            stamps,
+        )
     }
 }
 
@@ -2549,15 +2560,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config.js");
         let dependency = dir.path().join("policy.js");
-        fs::write(&config, "import browser from './policy.js'; export default { defaultBrowser: browser };").unwrap();
+        fs::write(
+            &config,
+            "import browser from './policy.js'; export default { defaultBrowser: browser };",
+        )
+        .unwrap();
         fs::write(&dependency, "export default 'Safari';").unwrap();
-        fs::File::open(&dependency).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10)).unwrap();
+        fs::File::open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
+            .unwrap();
         let (found, stamps) = FinickyFound::read_with_stamps(config);
         assert_eq!(found.default_browser.as_deref(), Some("Safari"));
         assert!(crate::engine_worker::unchanged(&stamps));
         fs::write(&dependency, "export default 'Firefox';").unwrap();
-        fs::File::open(&dependency).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20)).unwrap();
-        assert!(!crate::engine_worker::unchanged(&stamps), "queued first-run review ignored its imported module");
+        fs::File::open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
+            .unwrap();
+        assert!(
+            !crate::engine_worker::unchanged(&stamps),
+            "queued first-run review ignored its imported module"
+        );
     }
-
 }

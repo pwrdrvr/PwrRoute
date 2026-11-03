@@ -301,7 +301,9 @@ impl TestLink {
                     use std::task::Poll;
                     let engine = match &engine {
                         Ok(engine) => engine,
-                        Err(error) => return Poll::Ready(Some((Err(error.clone()), stamps.clone()))),
+                        Err(error) => {
+                            return Poll::Ready(Some((Err(error.clone()), stamps.clone())));
+                        }
                     };
                     if link.is_none() {
                         if !engine.short_links().is_short(&url) {
@@ -312,26 +314,34 @@ impl TestLink {
                                 let url = url.clone();
                                 let network = network.clone();
                                 expansion = Some(io.submit(wake.clone(), move || {
-                                    let network = network.unwrap_or_else(|| Arc::new(HttpNetwork::new()));
+                                    let network =
+                                        network.unwrap_or_else(|| Arc::new(HttpNetwork::new()));
                                     policy.expand(&url, network.as_ref())
                                 }));
                             }
                             match expansion.as_ref().unwrap().try_recv() {
                                 Ok(expanded) => link = Some(expanded),
                                 Err(async_channel::TryRecvError::Empty) => return Poll::Pending,
-                                Err(async_channel::TryRecvError::Closed) => return Poll::Ready(Some((Err("Link test cancelled".into()), stamps.clone()))),
+                                Err(async_channel::TryRecvError::Closed) => {
+                                    return Poll::Ready(Some((
+                                        Err("Link test cancelled".into()),
+                                        stamps.clone(),
+                                    )));
+                                }
                             }
                         }
                     }
                     // The same engine and immutable expansion policy are retained
                     // while parked. Reject changed modules before executing a trace.
                     let trace = if crate::engine_worker::unchanged(&stamps) {
-                        engine.trace(link.as_ref().unwrap(), engine_opener.as_ref())
+                        engine
+                            .trace(link.as_ref().unwrap(), engine_opener.as_ref())
                             .map_err(|e| format!("The rules failed: {e:#}"))
-                    } else { Err("Config changed while expanding the link".into()) };
+                    } else {
+                        Err("Config changed while expanding the link".into())
+                    };
                     Poll::Ready(Some((trace, stamps.clone())))
                 }
-
             },
         );
         // opener is also needed by the UI; re-read its immutable choice.

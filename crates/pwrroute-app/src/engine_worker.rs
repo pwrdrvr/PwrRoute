@@ -25,7 +25,11 @@ pub enum Lane {
     CheckRule,
 }
 pub const LANES: usize = 10;
-enum Progress { Yield, Waiting, Done }
+enum Progress {
+    Yield,
+    Waiting,
+    Done,
+}
 type Step = Box<dyn FnMut() -> Progress>;
 type Factory = Box<dyn FnOnce(Cancel) -> Step + Send>;
 struct Pending {
@@ -145,17 +149,25 @@ impl EngineWorker {
                             queue = worker.queue.lock().unwrap();
                         }
                     }
-                    let lane = (0..LANES)
-                        .map(|i| (next + i) % LANES)
-                        .find(|i| running[*i].as_ref().is_some_and(|task| task.wake.ready.load(Ordering::Acquire)));
+                    let lane = (0..LANES).map(|i| (next + i) % LANES).find(|i| {
+                        running[*i]
+                            .as_ref()
+                            .is_some_and(|task| task.wake.ready.load(Ordering::Acquire))
+                    });
                     if let Some(lane) = lane {
                         drop(queue);
                         next = (lane + 1) % LANES;
                         let task = running[lane].as_mut().unwrap();
                         task.wake.ready.store(false, Ordering::Release);
-                        match if task.cancel.cancelled() { Progress::Done } else { (task.step)() } {
+                        match if task.cancel.cancelled() {
+                            Progress::Done
+                        } else {
+                            (task.step)()
+                        } {
                             Progress::Done => running[lane] = None,
-                            Progress::Yield => { task.wake.ready.store(true, Ordering::Release); }
+                            Progress::Yield => {
+                                task.wake.ready.store(true, Ordering::Release);
+                            }
                             Progress::Waiting => {}
                         }
                     } else {
@@ -223,25 +235,38 @@ impl Client {
 
     /// Pending parks this lane without busy polling; `wake` resumes it.
     pub fn submit_poll<T: Send + 'static, F, S>(
-        &self, lane: Lane, debounce: Duration, build: F,
+        &self,
+        lane: Lane,
+        debounce: Duration,
+        build: F,
     ) -> async_channel::Receiver<T>
     where
         F: FnOnce(Cancel, Wake) -> S + Send + 'static,
         S: FnMut() -> std::task::Poll<Option<T>> + 'static,
     {
         #[cfg(test)]
-        let debounce = { let _ = debounce; Duration::ZERO };
+        let debounce = {
+            let _ = debounce;
+            Duration::ZERO
+        };
         let (tx, rx) = async_channel::bounded(1);
         let cancel = Cancel(Arc::new(AtomicBool::new(false)));
-        let wake = Wake { ready: Arc::new(AtomicBool::new(true)), shared: Arc::downgrade(&self.shared) };
+        let wake = Wake {
+            ready: Arc::new(AtomicBool::new(true)),
+            shared: Arc::downgrade(&self.shared),
+        };
         let ready = wake.clone();
         let factory: Factory = Box::new(move |cancel| {
             let mut step = build(cancel.clone(), ready);
             Box::new(move || {
-                if cancel.cancelled() || tx.is_closed() { return Progress::Done; }
+                if cancel.cancelled() || tx.is_closed() {
+                    return Progress::Done;
+                }
                 match step() {
                     std::task::Poll::Ready(Some(result)) => {
-                        if !cancel.cancelled() { let _ = tx.try_send(result); }
+                        if !cancel.cancelled() {
+                            let _ = tx.try_send(result);
+                        }
                         Progress::Done
                     }
                     std::task::Poll::Ready(None) => Progress::Yield,
@@ -251,9 +276,16 @@ impl Client {
         });
         let mut queue = self.shared.queue.lock().unwrap();
         let i = lane as usize;
-        if let Some(old) = queue.tokens[i].replace(cancel.clone()) { old.cancel(); }
+        if let Some(old) = queue.tokens[i].replace(cancel.clone()) {
+            old.cancel();
+        }
         if !queue.closed {
-            queue.pending[i] = Some(Pending { at: Instant::now() + debounce, cancel, factory, wake });
+            queue.pending[i] = Some(Pending {
+                at: Instant::now() + debounce,
+                cancel,
+                factory,
+                wake,
+            });
         }
         self.shared.wake.notify_one();
         rx
@@ -286,49 +318,94 @@ impl Drop for EngineWorker {
 // latest pending request. In-flight HTTP observes the existing network
 // timeout; cancellation suppresses its result and all subsequent engine work.
 type IoJob = Box<dyn FnOnce() + Send>;
-struct IoQueue { pending: Option<IoJob>, latest: Option<Cancel>, closed: bool }
-struct IoShared { queue: Mutex<IoQueue>, wake: Condvar }
-pub struct IoWorker { client: IoClient }
+struct IoQueue {
+    pending: Option<IoJob>,
+    latest: Option<Cancel>,
+    closed: bool,
+}
+struct IoShared {
+    queue: Mutex<IoQueue>,
+    wake: Condvar,
+}
+pub struct IoWorker {
+    client: IoClient,
+}
 #[derive(Clone)]
-pub struct IoClient { shared: Arc<IoShared> }
+pub struct IoClient {
+    shared: Arc<IoShared>,
+}
 impl IoWorker {
     pub fn new() -> Self {
-        let shared = Arc::new(IoShared { queue: Mutex::new(IoQueue { pending: None, latest: None, closed: false }), wake: Condvar::new() });
+        let shared = Arc::new(IoShared {
+            queue: Mutex::new(IoQueue {
+                pending: None,
+                latest: None,
+                closed: false,
+            }),
+            wake: Condvar::new(),
+        });
         let worker = shared.clone();
-        thread::Builder::new().name("pwrroute-link-io".into()).spawn(move || loop {
-            let mut queue = worker.queue.lock().unwrap();
-            while queue.pending.is_none() && !queue.closed { queue = worker.wake.wait(queue).unwrap(); }
-            if queue.closed { break; }
-            let job = queue.pending.take().unwrap();
-            drop(queue);
-            job();
-        }).expect("start link I/O worker");
-        Self { client: IoClient { shared } }
+        thread::Builder::new()
+            .name("pwrroute-link-io".into())
+            .spawn(move || {
+                loop {
+                    let mut queue = worker.queue.lock().unwrap();
+                    while queue.pending.is_none() && !queue.closed {
+                        queue = worker.wake.wait(queue).unwrap();
+                    }
+                    if queue.closed {
+                        break;
+                    }
+                    let job = queue.pending.take().unwrap();
+                    drop(queue);
+                    job();
+                }
+            })
+            .expect("start link I/O worker");
+        Self {
+            client: IoClient { shared },
+        }
     }
-    pub fn client(&self) -> IoClient { self.client.clone() }
-    pub fn cancel(&self) { self.client.cancel(); }
+    pub fn client(&self) -> IoClient {
+        self.client.clone()
+    }
+    pub fn cancel(&self) {
+        self.client.cancel();
+    }
 }
 impl IoClient {
     fn cancel(&self) {
         let mut queue = self.shared.queue.lock().unwrap();
-        if let Some(token) = queue.latest.take() { token.cancel(); }
+        if let Some(token) = queue.latest.take() {
+            token.cancel();
+        }
         queue.pending = None;
     }
-    pub fn submit<T: Send + 'static>(&self, wake: Wake, work: impl FnOnce() -> T + Send + 'static) -> async_channel::Receiver<T> {
+    pub fn submit<T: Send + 'static>(
+        &self,
+        wake: Wake,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> async_channel::Receiver<T> {
         let (tx, rx) = async_channel::bounded(1);
         let cancel = Cancel(Arc::new(AtomicBool::new(false)));
         let token = cancel.clone();
         let job = Box::new(move || {
             if !token.cancelled() && !tx.is_closed() {
                 let result = work();
-                if !token.cancelled() { let _ = tx.try_send(result); }
+                if !token.cancelled() {
+                    let _ = tx.try_send(result);
+                }
             }
             drop(tx);
             wake.wake();
         });
         let mut queue = self.shared.queue.lock().unwrap();
-        if let Some(old) = queue.latest.replace(cancel) { old.cancel(); }
-        if !queue.closed { queue.pending = Some(job); }
+        if let Some(old) = queue.latest.replace(cancel) {
+            old.cancel();
+        }
+        if !queue.closed {
+            queue.pending = Some(job);
+        }
         self.shared.wake.notify_one();
         rx
     }
@@ -337,7 +414,9 @@ impl Drop for IoWorker {
     fn drop(&mut self) {
         let mut queue = self.client.shared.queue.lock().unwrap();
         queue.closed = true;
-        if let Some(token) = queue.latest.take() { token.cancel(); }
+        if let Some(token) = queue.latest.take() {
+            token.cancel();
+        }
         queue.pending = None;
         self.client.shared.wake.notify_one();
     }
@@ -356,7 +435,11 @@ pub fn stamps(engine: &pwrroute_engine::Engine) -> Stamps {
 }
 /// Preserve every version evaluated by a batch, without repeated entries.
 pub fn retain_stamps(all: &mut Stamps, observed: Stamps) {
-    for entry in observed { if !all.contains(&entry) { all.push(entry); } }
+    for entry in observed {
+        if !all.contains(&entry) {
+            all.push(entry);
+        }
+    }
 }
 
 fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {

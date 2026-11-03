@@ -7989,7 +7989,12 @@ struct GatedLinkNetwork {
     release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 impl pwrroute_engine::Network for GatedLinkNetwork {
-    fn request(&self, _: pwrroute_engine::Method, _: &str, _: std::time::Duration) -> anyhow::Result<pwrroute_engine::Reply> {
+    fn request(
+        &self,
+        _: pwrroute_engine::Method,
+        _: &str,
+        _: std::time::Duration,
+    ) -> anyhow::Result<pwrroute_engine::Reply> {
         if let Some(release) = self.release.lock().unwrap().take() {
             self.entered.send(()).unwrap();
             release.recv().unwrap();
@@ -7999,26 +8004,43 @@ impl pwrroute_engine::Network for GatedLinkNetwork {
 }
 
 #[gpui_kit::test]
-fn engine_review_gated_link_http_does_not_block_preview_and_superseded_result(cx: &mut TestAppContext) {
+fn engine_review_gated_link_http_does_not_block_preview_and_superseded_result(
+    cx: &mut TestAppContext,
+) {
     let (view, cx) = open(cx);
     let (entered, started) = std::sync::mpsc::channel();
     let (release, blocked) = std::sync::mpsc::channel();
-    let gate = EngineGate { release: Some(release), _result: async_channel::bounded(1).1 };
+    let gate = EngineGate {
+        release: Some(release),
+        _result: async_channel::bounded(1).1,
+    };
     view.update(cx, |app, cx| {
-        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork { entered, release: std::sync::Mutex::new(Some(blocked)) }));
+        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork {
+            entered,
+            release: std::sync::Mutex::new(Some(blocked)),
+        }));
         app.test.url.text = "https://bit.ly/neutral".into();
         app.test.run(cx);
     });
-    started.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    started
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
     let (completed, preview) = std::sync::mpsc::channel();
     let _result = view.read_with(cx, |app, _| {
         let input = app.probe.input();
-        app.engine_worker.once(crate::engine_worker::Lane::Preview, move || {
-            let result = crate::try_it::Probe::from_input(input).opens("https://example.com/independent", None);
-            let _ = completed.send(result);
-        })
+        app.engine_worker
+            .once(crate::engine_worker::Lane::Preview, move || {
+                let result = crate::try_it::Probe::from_input(input)
+                    .opens("https://example.com/independent", None);
+                let _ = completed.send(result);
+            })
     });
-    assert!(preview.recv_timeout(std::time::Duration::from_secs(5)).expect("HTTP blocked independent engine preview").is_some());
+    assert!(
+        preview
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("HTTP blocked independent engine preview")
+            .is_some()
+    );
     view.update(cx, |app, cx| {
         app.test.url.text = "https://example.com/latest".into();
         app.test.run(cx);
@@ -8032,25 +8054,62 @@ fn engine_review_cached_menu_baseline_rejects_changed_import(cx: &mut TestAppCon
     let dir = scratch("cached-impact-import");
     let config = dir.join("config.js");
     let dependency = dir.join("policy.js");
-    std::fs::write(&config, "import policy from './policy.js'; export default policy;").unwrap();
+    std::fs::write(
+        &config,
+        "import policy from './policy.js'; export default policy;",
+    )
+    .unwrap();
     let write = |text: &str, seconds| {
         std::fs::write(&dependency, text).unwrap();
-        std::fs::File::open(&dependency).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+        std::fs::File::open(&dependency)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            )
+            .unwrap();
     };
     write("export default { defaultBrowser: 'Safari' };", 10);
-    let base = fixtures::activity().into_iter().find(|r| r.privacy == Privacy::Full).unwrap();
-    let records = (0..24).map(|i| record_like(&base, 2000 + i, "https://example.com/a", Matched::Rule { index: 0 })).collect();
+    let base = fixtures::activity()
+        .into_iter()
+        .find(|r| r.privacy == Privacy::Full)
+        .unwrap();
+    let records = (0..24)
+        .map(|i| {
+            record_like(
+                &base,
+                2000 + i,
+                "https://example.com/a",
+                Matched::Rule { index: 0 },
+            )
+        })
+        .collect();
     cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
-    let rules: RulesFile = serde_json::from_str(r#"{"rules":[{"match":"*","browser":"Safari"},{"match":"*","browser":"Firefox"}]}"#).unwrap();
+    let rules: RulesFile = serde_json::from_str(
+        r#"{"rules":[{"match":"*","browser":"Safari"},{"match":"*","browser":"Firefox"}]}"#,
+    )
+    .unwrap();
     let (view, cx) = open_store(cx, Some(config), store_for(&dir, &rules));
-    view.update(cx, |app, cx| { app.impact(Selection::Handler(1), 0, cx); });
-    draw(cx);
-    view.update(cx, |app, cx| { assert_eq!(app.impact(Selection::Handler(1), 0, cx), Some(24)); });
-    write("export default { defaultBrowser: 'Firefox', handlers: [{ match: '*', browser: 'Firefox' }] };", 20);
-    view.update(cx, |app, cx| { assert_eq!(app.impact(Selection::Handler(0), 1, cx), None); });
+    view.update(cx, |app, cx| {
+        app.impact(Selection::Handler(1), 0, cx);
+    });
     draw(cx);
     view.update(cx, |app, cx| {
-        assert_ne!(app.impact(Selection::Handler(0), 1, cx), Some(24), "cached old baseline was compared with a new config");
+        assert_eq!(app.impact(Selection::Handler(1), 0, cx), Some(24));
+    });
+    write(
+        "export default { defaultBrowser: 'Firefox', handlers: [{ match: '*', browser: 'Firefox' }] };",
+        20,
+    );
+    view.update(cx, |app, cx| {
+        assert_eq!(app.impact(Selection::Handler(0), 1, cx), None);
+    });
+    draw(cx);
+    view.update(cx, |app, cx| {
+        assert_ne!(
+            app.impact(Selection::Handler(0), 1, cx),
+            Some(24),
+            "cached old baseline was compared with a new config"
+        );
     });
 }
 
