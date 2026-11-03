@@ -348,9 +348,7 @@ fn reload_now(cx: &mut App, pane: Pane) {
     if let Some(handle) = open {
         let _ = handle.update(cx, |view, _, cx| {
             if let Some(load) = view.loads.get_mut(&pane) {
-                match load {
-                    PaneLoad::Running(dirty) | PaneLoad::Queued(dirty) => *dirty = true,
-                }
+                load.invalidate();
             } else if view.requested.remove(&pane) || view.pane == pane {
                 view.model.pending.insert(pane);
                 view.model.problems.remove(&pane);
@@ -365,8 +363,8 @@ pub fn problem(cx: &mut App, pane: Pane, problem: String) {
         let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
         if let Some(handle) = open {
             let _ = handle.update(cx, |view, _, cx| {
-                if let Some(dirty) = view.loads.get_mut(&pane) {
-                    *dirty = true;
+            if let Some(load) = view.loads.get_mut(&pane) {
+                load.invalidate();
                 }
                 view.model.pending.remove(&pane);
                 view.model.problems.insert(pane, problem.into());
@@ -423,6 +421,14 @@ type QueuedLoad = Box<dyn FnOnce(&mut App)>;
 enum PaneLoad {
     Running(bool),
     Queued(bool),
+}
+
+impl PaneLoad {
+    fn invalidate(&mut self) {
+        match self {
+            Self::Running(dirty) | Self::Queued(dirty) => *dirty = true,
+        }
+    }
 }
 
 #[derive(Default)]
