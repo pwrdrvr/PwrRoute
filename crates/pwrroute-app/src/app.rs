@@ -136,7 +136,7 @@ pub struct PwrRoute {
     /// Try it's engine over the rules as edited, which Activity's Add a
     /// rule sheet also asks about collisions.
     pub(crate) probe: Probe,
-    pub(crate) engine_tasks: [Option<gpui_kit::Task<()>>; 8],
+    pub(crate) engine_tasks: [Option<gpui_kit::Task<()>>; crate::engine_worker::LANES],
     pub(crate) engine_worker: EngineWorker,
     pub(crate) engine_revision: u64,
     preview_request: u64,

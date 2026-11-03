@@ -9,8 +9,8 @@ use std::{
 };
 
 #[derive(Clone, Copy)]
-pub enum Lane { Preview, Tests, Link, Impact, Config, Import, Onboarding, Activity }
-const LANES: usize = 8;
+pub enum Lane { Preview, Tests, Link, Impact, Config, Import, Onboarding, Activity, Collisions, CheckRule }
+pub const LANES: usize = 10;
 type Step = Box<dyn FnMut() -> bool>;
 type Factory = Box<dyn FnOnce(Cancel) -> Step + Send>;
 struct Pending { at: Instant, cancel: Cancel, factory: Factory }
@@ -226,7 +226,8 @@ pub fn hold(cx: &mut gpui_kit::App, lane: Lane, task: gpui_kit::Task<()>) {
 }
 
 pub fn cancel_service(cx: &mut gpui_kit::App, lane: Lane) {
-    if let Some(service) = cx.try_global_mut::<Service>() {
+    if cx.try_global::<Service>().is_some() {
+        let service = cx.global_mut::<Service>();
         service.tasks[lane as usize] = None;
         service.worker.cancel(lane);
     }
