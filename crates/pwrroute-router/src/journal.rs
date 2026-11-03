@@ -529,14 +529,29 @@ mod tests {
     #[test]
     fn late_completion_does_not_recreate_a_pruned_receipt_day() {
         let dir = tempfile::tempdir().unwrap();
-        let config = JournalConfig { days: 1, ..JournalConfig::new(dir.path(), JournalMode::Full) };
+        let config = JournalConfig {
+            days: 1,
+            ..JournalConfig::new(dir.path(), JournalMode::Full)
+        };
         let mut journal = Journal::new(config.clone());
         journal.append(&record(1, at(NOON - 86_400), Privacy::Full));
         journal.append(&record(3, at(NOON), Privacy::Full));
         journal.append(&record(2, at(NOON - 86_400 + 1), Privacy::Full));
         assert_eq!(journal.error(), None);
-        assert!(!dir.path().join(Day::from(at(NOON - 86_400)).file_name()).exists());
-        assert_eq!(config.read(10).unwrap().iter().map(|r| r.id.0).collect::<Vec<_>>(), [3]);
+        assert!(
+            !dir.path()
+                .join(Day::from(at(NOON - 86_400)).file_name())
+                .exists()
+        );
+        assert_eq!(
+            config
+                .read(10)
+                .unwrap()
+                .iter()
+                .map(|r| r.id.0)
+                .collect::<Vec<_>>(),
+            [3]
+        );
     }
 
     #[test]
