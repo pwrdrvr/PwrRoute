@@ -556,4 +556,62 @@ mod tests {
         assert_ne!(finished.recv().unwrap(), thread::current().id());
         assert!(result.recv_blocking().is_err());
     }
+    fn io_wake() -> Wake { Wake { ready: Arc::new(AtomicBool::new(false)), shared: Weak::new() } }
+
+    #[test]
+    fn link_io_is_bounded_coalesced_and_shutdown_suppresses_results() {
+        let io = IoWorker::new();
+        let (entered, started) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let first = io.client().submit(io_wake(), move || { entered.send(()).unwrap(); blocked.recv().unwrap(); 0 });
+        started.recv().unwrap();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let mut latest = None;
+        for n in 1..1000 {
+            let ran = ran.clone();
+            latest = Some(io.client().submit(io_wake(), move || { ran.fetch_add(1, Ordering::Relaxed); n }));
+        }
+        assert!(io.client.shared.queue.lock().unwrap().pending.is_some());
+        release.send(()).unwrap();
+        assert_eq!(latest.unwrap().recv_blocking().unwrap(), 999);
+        assert_eq!(ran.load(Ordering::Relaxed), 1);
+        assert!(first.recv_blocking().is_err());
+
+        let (entered, started) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let active = io.client().submit(io_wake(), move || { entered.send(()).unwrap(); blocked.recv().unwrap(); 1 });
+        started.recv().unwrap();
+        let pending = io.client().submit(io_wake(), || panic!("closed I/O owner ran pending request"));
+        drop(io);
+        assert!(pending.recv_blocking().is_err());
+        release.send(()).unwrap();
+        assert!(active.recv_blocking().is_err());
+    }
+
+    #[test]
+    fn parked_engine_does_not_spin_and_retains_owner_state_until_woken() {
+        let worker = EngineWorker::new();
+        let (ready, started) = mpsc::channel();
+        let steps = Arc::new(AtomicUsize::new(0));
+        let ran = steps.clone();
+        let result = worker.submit_poll(Lane::Link, Duration::ZERO, move |_, wake| {
+            let owned = std::rc::Rc::new(42);
+            let mut ready = Some(ready);
+            move || {
+                ran.fetch_add(1, Ordering::Relaxed);
+                if let Some(ready) = ready.take() {
+                    ready.send(wake.clone()).unwrap();
+                    std::task::Poll::Pending
+                } else { std::task::Poll::Ready(Some(*owned)) }
+            }
+        });
+        let wake = started.recv().unwrap();
+        let preview = worker.once(Lane::Preview, || 7);
+        assert_eq!(preview.recv_blocking().unwrap(), 7);
+        assert_eq!(steps.load(Ordering::Relaxed), 1);
+        wake.wake();
+        assert_eq!(result.recv_blocking().unwrap(), 42);
+        assert_eq!(steps.load(Ordering::Relaxed), 2);
+    }
+
 }
