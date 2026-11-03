@@ -218,37 +218,42 @@ fn rules_keep_less(path: Option<&Path>) -> Option<SharedString> {
 
 /// The Settings requests this module answers. `false` for any other.
 pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
+    if matches!(request, SettingsRequest::SetRetention { .. } | SettingsRequest::SetJournal(_) | SettingsRequest::ClearJournal)
+        && !available(cx) { return true; }
     match request {
         SettingsRequest::SetRetention { count, hours } => {
             let retention = Retention {
                 count: *count,
                 hours: *hours,
             };
-            save(cx, |settings| settings.activity.keep = retention);
+            if !save(cx, |settings| settings.activity.keep = retention) { return true; }
             command(cx, move |router, _| {
-                if let Some(router) = router { let _ = router.set_retention(retention); }
+                if let Some(router) = router { router.set_retention(retention).map_err(|e| e.to_string())?; }
+                Ok(())
             });
         }
         SettingsRequest::SetJournal(level) => {
-            save(cx, |settings| settings.activity.journal = *level);
+            if !save(cx, |settings| settings.activity.journal = *level) { return true; }
             command(cx, |router, config| {
-                if let Some(router) = router { let _ = router.set_journal(config); }
+                if let Some(router) = router { router.set_journal(config).map_err(|e| e.to_string())?; }
+                Ok(())
             });
         }
         SettingsRequest::RevealJournal => {
             if let Some(dir) = journal_dir(cx) {
-                reveal(&dir, cx);
+                reveal(dir, cx);
             }
         }
         SettingsRequest::ClearJournal => {
             let dir = journal_dir(cx);
             command(cx, move |router, config| {
-                if let Some(router) = &router { let _ = router.set_journal(None); }
+                if let Some(router) = &router { router.set_journal(None).map_err(|e| e.to_string())?; }
                 if let Some(dir) = dir { delete_journal_files(&dir); }
                 if let Some(router) = &router {
-                    let _ = router.set_journal(config);
+                    router.set_journal(config).map_err(|e| e.to_string())?;
                     router.clear_recent();
                 }
+                Ok(())
             });
         }
         SettingsRequest::ClearRecent => {
@@ -261,15 +266,20 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
     true
 }
 
-fn save(cx: &mut App, edit: impl FnOnce(&mut crate::settings_store::Settings)) {
-    let Some(store) = settings_store::store(cx) else {
-        log::warn!("settings: no store; the change is not saved");
-        return;
+fn save(cx: &mut App, edit: impl FnOnce(&mut crate::settings_store::Settings)) -> bool {
+    let result = match settings_store::store(cx) {
+        Some(store) => store.update(cx, |store, _| {
+            let before = store.clone();
+            let result = store.update(edit).map_err(|error| format!("{error:#}"));
+            if result.is_err() { *store = before; }
+            result
+        }),
+        None => Err("no settings store".into()),
     };
-    let result = store.update(cx, |store, _| store.update(edit));
     if let Err(error) = result {
-        log::warn!("cannot save settings: {error:#}");
-    }
+        super::problem(cx, super::Pane::Privacy, format!("Not saved: {error}"));
+        false
+    } else { true }
 }
 
 fn journal_dir(cx: &App) -> Option<PathBuf> {
@@ -278,30 +288,40 @@ fn journal_dir(cx: &App) -> Option<PathBuf> {
 
 /// Serialize router commands; dispatch I/O may delay a reply indefinitely,
 /// but it never occupies GPUI or allows newer commands to overtake older ones.
-struct Commands(async_channel::Sender<Box<dyn FnOnce() + Send>>);
+type Command = Box<dyn FnOnce() -> Result<(), String> + Send>;
+struct Commands(async_channel::Sender<Command>);
 impl gpui_kit::Global for Commands {}
 
-fn command(cx: &mut App, action: impl FnOnce(Option<RouterHandle>, Option<JournalConfig>) + Send + 'static) {
+fn available(cx: &mut App) -> bool {
     if !cx.has_global::<Commands>() {
-        let (sender, receiver) = async_channel::bounded::<Box<dyn FnOnce() + Send>>(16);
+        let (sender, receiver) = async_channel::bounded::<Command>(16);
         cx.set_global(Commands(sender));
         cx.spawn(async move |cx| {
             while let Ok(command) = receiver.recv().await {
-                cx.background_executor().spawn(async move { command(); }).await;
+                let result = cx.background_executor().spawn(async move { command() }).await;
                 cx.update(|cx| {
                     if let Some(feed) = activity::feed(cx) {
                         feed.update(cx, |feed, cx| { feed.reload(); cx.notify(); });
                     }
-                    refresh(cx);
+                    match result {
+                        Ok(()) => refresh(cx),
+                        Err(error) => super::problem(cx, super::Pane::Privacy, format!("Could not apply: {error}")),
+                    }
                 });
             }
         }).detach();
     }
+    if cx.global::<Commands>().0.is_full() {
+        super::problem(cx, super::Pane::Privacy, "Still applying earlier changes. Try again.".into());
+        false
+    } else { true }
+}
+
+fn command(cx: &mut App, action: impl FnOnce(Option<RouterHandle>, Option<JournalConfig>) -> Result<(), String> + Send + 'static) {
     let router = settings_store::router(cx);
     let config = settings_store::store(cx).and_then(|store| store.read(cx).journal());
-    if cx.global::<Commands>().0.try_send(Box::new(move || action(router, config))).is_err() {
-        log::warn!("settings: privacy command queue is full");
-    }
+    // Capacity was reserved before saving; the only other consumer can free it.
+    let _ = cx.global::<Commands>().0.try_send(Box::new(move || action(router, config)));
 }
 
 fn refresh(cx: &mut App) { super::reload(cx, super::Pane::Privacy); }
@@ -309,30 +329,28 @@ fn refresh(cx: &mut App) { super::reload(cx, super::Pane::Privacy); }
 /// Shows the journal's directory in Finder or the file manager, creating
 /// it (owner only) when the journal is on but has not written yet. Opens
 /// no browser: the OS's file manager is asked for a directory.
-fn reveal(dir: &Path, cx: &App) {
-    if !dir.exists() {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt as _;
-            builder.mode(0o700);
+fn reveal(dir: PathBuf, cx: &mut App) {
+    let work = cx.background_executor().spawn(async move {
+        if !dir.exists() {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)] {
+                use std::os::unix::fs::DirBuilderExt as _;
+                builder.mode(0o700);
+            }
+            builder.create(&dir)?;
         }
-        if let Err(error) = builder.create(dir) {
-            log::warn!("cannot create {}: {error}", dir.display());
-            return;
+        let newest = list_journal_files(&dir).ok().and_then(|mut files| {
+            files.sort(); files.pop().map(|(_, path)| path)
+        }).unwrap_or(dir);
+        Ok::<_, io::Error>(newest)
+    });
+    cx.spawn(async move |cx| {
+        match work.await {
+            Ok(path) => cx.update(|cx| cx.reveal_path(&path)),
+            Err(error) => log::warn!("cannot reveal journal: {error}"),
         }
-    }
-    // The newest file, so the file manager selects it; the directory when
-    // there is none yet.
-    let newest = list_journal_files(dir)
-        .ok()
-        .and_then(|mut files| {
-            files.sort();
-            files.pop().map(|(_, path)| path)
-        })
-        .unwrap_or_else(|| dir.to_path_buf());
-    cx.reveal_path(&newest);
+    }).detach();
 }
 
 /// Deletes every `activity-*.jsonl` under `dir`, reporting what could not

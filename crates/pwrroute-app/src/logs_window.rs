@@ -151,6 +151,7 @@ pub struct LogsWindow {
     /// stays put.
     follows_tail: bool,
     pub include_diagnostics: bool,
+    copy_generation: u64,
     /// Long lines wrap; off, they scroll sideways.
     pub wrap: bool,
     /// With Wrap off: how far the text is scrolled left, and how far it can
@@ -201,6 +202,7 @@ impl LogsWindow {
             selection: None,
             follows_tail: false,
             include_diagnostics: prefs.include_diagnostics,
+            copy_generation: 0,
             wrap: prefs.wrap,
             h_offset: 0.0,
             h_max: 0.0,
@@ -630,9 +632,10 @@ impl LogsWindow {
         if indexes.is_empty() {
             return;
         }
+        self.copy_generation += 1;
+        let generation = self.copy_generation;
         let mut out = String::new();
         if self.include_diagnostics {
-            out.push_str(&crate::help::diagnostics_report(cx));
             out.push_str(&self.copy_header(&indexes));
             out.push('\n');
         }
@@ -640,15 +643,23 @@ impl LogsWindow {
             out.push_str(self.view.lines[index].raw());
             out.push('\n');
         }
-        cx.write_to_clipboard(ClipboardItem::new_string(out));
         let count = indexes.len();
         let lines = if count == 1 { "line" } else { "lines" };
-        let with = if self.include_diagnostics {
-            " with diagnostics"
+        if self.include_diagnostics {
+            let diagnostics = crate::help::diagnostics_report(cx);
+            self.set_note("Preparing diagnostics…".into(), cx);
+            cx.spawn(async move |view, cx| {
+                let report = diagnostics.await;
+                let _ = view.update(cx, |view, cx| {
+                    if view.copy_generation != generation { return; }
+                    cx.write_to_clipboard(ClipboardItem::new_string(format!("{report}{out}")));
+                    view.set_note(format!("Copied {count} {lines} with diagnostics"), cx);
+                });
+            }).detach();
         } else {
-            ""
-        };
-        self.set_note(format!("Copied {count} {lines}{with}"), cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(out));
+            self.set_note(format!("Copied {count} {lines}"), cx);
+        }
     }
 
     /// "Log lines: 215–219 (5 of 1,204; levels: Error, Warning, Info)",
@@ -684,6 +695,7 @@ impl LogsWindow {
     }
 
     fn copy_path(&mut self, cx: &mut Context<'_, Self>) {
+        self.copy_generation += 1;
         if let Some(tail) = &self.tail {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 tail.path.to_string_lossy().into_owned(),

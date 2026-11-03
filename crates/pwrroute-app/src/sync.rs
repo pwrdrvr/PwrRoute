@@ -174,8 +174,8 @@ impl SyncFeed {
 
     /// Looks for iCloud Drive, Google Drive and Dropbox folders. Only exact
     /// paths, and one listing of `~/Library/CloudStorage`.
-    pub fn look_for_places(&mut self) {
-        self.places = pwrroute_sync::detect(&pwrroute_sync::Env::current());
+    pub fn look_for_places() -> Vec<Place> {
+        pwrroute_sync::detect(&pwrroute_sync::Env::current())
     }
 }
 

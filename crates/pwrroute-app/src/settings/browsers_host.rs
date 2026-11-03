@@ -24,7 +24,11 @@ pub fn initial(cx: &App) -> Browsers {
 pub fn load(cx: &mut App) {
     let apps = browser_scan::apps(cx);
     // Empty is not a result while the initial scan is still running.
-    if !browser_scan::has_run(cx) && browser_scan::is_loading(cx) { return; }
+    if browser_scan::is_loading(cx) { return; }
+    if let Some(error) = browser_scan::error(cx) {
+        settings::problem(cx, super::Pane::Browsers, error);
+        return;
+    }
     let hidden = settings_store::store(cx)
         .map(|store| store.read(cx).settings().browsers.clone()).unwrap_or_default();
     let default = default_browser::card(cx);

@@ -69,14 +69,12 @@ pub struct Facts {
 pub struct FinickyRulesFacts {
     pub path: PathBuf,
     pub file: Result<RulesFile, String>,
-    pub modified: Option<SystemTime>,
 }
 
 impl FinickyRulesFacts {
     pub fn read(path: PathBuf) -> Self {
         Self {
             file: RulesFile::load(&path).map_err(|error| format!("{error:#}")),
-            modified: modified(&path),
             path,
         }
     }

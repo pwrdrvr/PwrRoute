@@ -363,6 +363,19 @@ fn reload_now(cx: &mut App, pane: Pane) {
     }
 }
 
+pub fn problem(cx: &mut App, pane: Pane, problem: String) {
+    cx.defer(move |cx| {
+        let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
+        if let Some(handle) = open {
+            let _ = handle.update(cx, |view, _, cx| {
+                view.model.pending.remove(&pane);
+                view.model.problems.insert(pane, problem.into());
+                cx.notify();
+            });
+        }
+    });
+}
+
 /// Runs a pure producer offthread, tied to this exact window. Refreshes while
 /// it runs coalesce into one replacement; its stale result is never installed.
 pub fn load<T: Send + 'static>(
@@ -371,17 +384,41 @@ pub fn load<T: Send + 'static>(
     produce: impl FnOnce() -> T + Send + 'static,
     apply: impl FnOnce(&mut SettingsModel, T) + 'static,
 ) {
-    load_async(cx, pane, async move {
+    load_with(cx, pane, produce, move |model, value, _| apply(model, value));
+}
+
+pub fn load_with<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl FnOnce() -> T + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T, &mut App) + 'static,
+) {
+    load_future(cx, pane, async move {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
             .map_err(|_| "Could not load this pane. Try again.".to_owned())
     }, apply);
 }
 
+#[cfg(test)]
 fn load_async<T: Send + 'static>(
     cx: &mut App,
     pane: Pane,
     produce: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
     apply: impl FnOnce(&mut SettingsModel, T) + 'static,
+) {
+    load_future(cx, pane, produce, move |model, value, _| apply(model, value));
+}
+
+type QueuedLoad = Box<dyn FnOnce(&mut App)>;
+#[derive(Default)]
+struct LoadJobs(HashMap<Pane, Option<QueuedLoad>>);
+impl Global for LoadJobs {}
+
+fn load_future<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T, &mut App) + 'static,
 ) {
     let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else { return; };
     let pane = pane.load_key();
@@ -395,6 +432,19 @@ fn load_async<T: Send + 'static>(
         }
     }) else { return; };
     if !start { return; }
+    if !cx.has_global::<LoadJobs>() { cx.set_global(LoadJobs::default()); }
+    if cx.global::<LoadJobs>().0.contains_key(&pane) {
+        let _ = handle.update(cx, |view, _, _| { view.loads.remove(&pane); });
+        cx.update_global(|jobs: &mut LoadJobs, _| {
+            jobs.0.insert(pane, Some(Box::new(move |cx| {
+                if cx.try_global::<OpenWindow>().and_then(|open| open.0) == Some(handle) {
+                    load_future(cx, pane, produce, apply);
+                }
+            })));
+        });
+        return;
+    }
+    cx.update_global(|jobs: &mut LoadJobs, _| { jobs.0.insert(pane, None); });
     let work = cx.background_executor().spawn(produce);
     cx.spawn(async move |cx| {
         let result = work.await;
@@ -407,7 +457,7 @@ fn load_async<T: Send + 'static>(
                 view.model.problems.remove(&pane);
                 match result {
                     Ok(value) => {
-                        apply(&mut view.model, value);
+                        apply(&mut view.model, value, cx);
                         if pane == Pane::Privacy {
                             view.privacy = privacy::State::new(&view.model.privacy, cx);
                         }
@@ -416,6 +466,10 @@ fn load_async<T: Send + 'static>(
                 }
             }
             cx.notify();
+        });
+        cx.update(|cx| {
+            let queued = cx.update_global(|jobs: &mut LoadJobs, _| jobs.0.remove(&pane).flatten());
+            if let Some(queued) = queued { queued(cx); }
         });
     }).detach();
 }
@@ -612,7 +666,7 @@ impl SettingsWindow {
                     13.0, 400.0, theme::text_secondary()))
                 .when(problem.is_some(), |body| body.child(request_button(
                     "settings-retry", "Try again", Kind::Default, false,
-                    SettingsRequest::LoadPane(pane), cx)));
+                    SettingsRequest::RetryPane(pane), cx)));
         }
         match self.pane {
             Pane::General => general::pane(self, cx),

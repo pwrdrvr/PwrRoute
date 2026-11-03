@@ -46,24 +46,30 @@ pub struct Facts {
 /// The Diagnostics pane as things stand. `agents` is the Local agents
 /// model built for the same window.
 pub fn load(cx: &mut App) {
+    let mut agents = None;
+    settings::update(cx, |model| agents = Some(model.local_agents.clone()));
+    let produce = snapshot(cx, agents.as_ref());
+    settings::load(cx, super::Pane::Diagnostics, produce,
+        |model, diagnostics| model.diagnostics = diagnostics);
+}
+
+/// Capture GPUI-owned values now; all OS/file/router reads happen when run.
+fn snapshot(cx: &App, agents: Option<&LocalAgents>) -> impl FnOnce() -> Diagnostics + Send + 'static {
     let router = settings_store::router(cx);
     let experimental = experimental(cx);
-    let mut agents = None;
-    settings::update(cx, |model| agents = Some((model.local_agents.listener.clone(), model.local_agents.endpoint.clone())));
-    settings::load(cx, super::Pane::Diagnostics, move || {
+    let agents = agents.map(|agents| (agents.listener.clone(), agents.endpoint.clone()));
+    move || {
         let mut facts = facts(router);
         facts.agents = agents;
         facts.yield_browser_focus = experimental.yield_browser_focus;
         build_diagnostics(&facts)
-    }, |model, diagnostics| model.diagnostics = diagnostics);
+    }
 }
 
-/// Compatibility for Help's copy action; Settings uses the background loader.
-pub fn diagnostics(cx: &App, agents: &LocalAgents) -> Diagnostics {
-    let mut facts = facts(settings_store::router(cx));
-    facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
-    facts.yield_browser_focus = experimental(cx).yield_browser_focus;
-    build_diagnostics(&facts)
+/// Help and Logs copy a complete report after the same background producer.
+pub fn diagnostics(cx: &App, agents: &LocalAgents) -> gpui_kit::Task<Diagnostics> {
+    let produce = snapshot(cx, Some(agents));
+    cx.background_executor().spawn(async move { produce() })
 }
 
 pub fn experimental(cx: &App) -> Experimental {

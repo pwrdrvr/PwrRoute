@@ -43,6 +43,11 @@ pub fn model(window: &mut Window, cx: &mut App) -> SettingsModel {
 /// Hands `request` to the first producer that answers it. The one request
 /// no producer takes is logged: nothing acts on the OS by default.
 pub fn handle_request(request: &SettingsRequest, cx: &mut App) {
+    if let SettingsRequest::RetryPane(pane) = request {
+        if *pane == crate::settings::Pane::Browsers { crate::browser_scan::rescan(cx); }
+        crate::settings::reload(cx, *pane);
+        return;
+    }
     if let SettingsRequest::LoadPane(pane) = request {
         use crate::settings::{self, Pane};
         let pane = pane.load_key();

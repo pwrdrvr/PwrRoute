@@ -533,8 +533,8 @@ pub fn load(cx: &mut App) {
         .map(|store| store.read(cx).settings().sync.clone()).unwrap_or_default();
     let choices = crate::browser_scan::choices(cx);
     let installed = crate::browser_scan::installed(cx);
-    super::load(cx, super::Pane::Sync, move || {
-        let places = pwrroute_sync::detect(&pwrroute_sync::Env::current());
+    super::load_with(cx, super::Pane::Sync, move || {
+        let places = crate::sync::SyncFeed::look_for_places();
         let rules = crate::sync::rules_path().and_then(|p| RulesFile::load(&p).ok()).unwrap_or_default();
         let machine = crate::sync::machine();
         let home = std::env::home_dir();
@@ -549,7 +549,8 @@ pub fn load(cx: &mut App) {
             home: home.as_deref(), here: here(), when: &when,
         });
         (sync, places)
-    }, |model, (sync, _)| {
+    }, move |model, (sync, places), cx| {
+        feed.update(cx, |feed, _| feed.places = places);
         let problem = model.sync.problem.clone();
         model.sync = sync;
         model.sync.problem = problem;

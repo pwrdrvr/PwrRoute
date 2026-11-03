@@ -103,6 +103,7 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
 struct ScanGlobal {
     env: Env,
     apps: Option<Vec<DetectedApp>>,
+    error: Option<String>,
     running: bool,
     again: bool,
     callbacks: Vec<Rc<dyn Fn(&mut App)>>,
@@ -115,7 +116,7 @@ impl Global for ScanGlobal {}
 /// Makes `env` the machine the scan reads. Nothing is read until
 /// [`apps`] is first asked.
 pub fn install(env: Env, cx: &mut App) {
-    cx.set_global(ScanGlobal { env, apps: None, running: false, again: false,
+    cx.set_global(ScanGlobal { env, apps: None, error: None, running: false, again: false,
         callbacks: Vec::new(), #[cfg(test)] producer: None });
 }
 
@@ -125,7 +126,7 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
     cx.set_global(ScanGlobal {
         env: Env::fixture(pwrroute_browsers::Platform::current(), std::env::temp_dir()),
         apps: Some(apps),
-        running: false, again: false, callbacks: Vec::new(), producer: None,
+        error: None, running: false, again: false, callbacks: Vec::new(), producer: None,
     });
 }
 
@@ -134,8 +135,12 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
 /// time, as the pickers always did.
 pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() { return Vec::new(); }
-    if !has_run(cx) { start(cx, false); }
+    if !has_run(cx) && error(cx).is_none() { start(cx, false); }
     cx.global::<ScanGlobal>().apps.clone().unwrap_or_default()
+}
+
+pub fn error(cx: &App) -> Option<String> {
+    cx.try_global::<ScanGlobal>().and_then(|scan| scan.error.clone())
 }
 
 pub fn is_loading(cx: &App) -> bool {
@@ -159,11 +164,12 @@ fn start(cx: &mut App, force: bool) {
     let env = scan.env.clone();
     #[cfg(test)]
     let producer = scan.producer.clone();
-    cx.update_global(|scan: &mut ScanGlobal, _| scan.running = true);
+    cx.update_global(|scan: &mut ScanGlobal, _| { scan.running = true; scan.error = None; });
     let work = cx.background_executor().spawn(async move {
         #[cfg(test)]
-        if let Some(producer) = producer { return producer().await; }
-        self::scan(&env)
+        if let Some(producer) = producer { return Ok(producer().await); }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self::scan(&env)))
+            .map_err(|_| "Could not scan browsers. Try again.".to_owned())
     });
     cx.spawn(async move |cx| {
         let apps = work.await;
@@ -171,8 +177,13 @@ fn start(cx: &mut App, force: bool) {
             let (again, callbacks) = cx.update_global(|scan: &mut ScanGlobal, _| {
                 scan.running = false;
                 let again = std::mem::take(&mut scan.again);
-                if !again { scan.apps = Some(apps); }
-                (again, scan.callbacks.clone())
+                if !again {
+                    match apps {
+                        Ok(apps) => scan.apps = Some(apps),
+                        Err(error) => scan.error = Some(error),
+                    }
+                }
+                (again, if scan.error.is_none() { scan.callbacks.clone() } else { Vec::new() })
             });
             if again { start(cx, true); return; }
             refresh_windows(cx);

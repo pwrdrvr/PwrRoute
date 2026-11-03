@@ -324,8 +324,8 @@ mod help {
     /// The update toast's Release notes: nothing opens here.
     pub fn open_link(_: &str, _: &mut gpui_kit::App) {}
 
-    pub fn diagnostics_report(_: &mut gpui_kit::App) -> String {
-        "PwrRoute 0.2.0 (debug, aarch64)\n".to_owned()
+    pub fn diagnostics_report(cx: &mut gpui_kit::App) -> gpui_kit::Task<String> {
+        cx.background_executor().spawn(async { "PwrRoute 0.2.0 (debug, aarch64)\n".to_owned() })
     }
 }
 #[cfg(target_os = "macos")]

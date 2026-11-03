@@ -870,6 +870,7 @@ pub struct About {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsRequest {
     LoadPane(super::Pane),
+    RetryPane(super::Pane),
     /// General: Theme, saved and applied at once.
     SetTheme(ThemeChoice),
     /// General: the Dark theme and the Light theme, saved and applied at
