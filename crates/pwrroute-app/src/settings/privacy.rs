@@ -103,8 +103,13 @@ mod lifecycle_tests {
 
     #[gpui_kit::test]
     fn loaded_values_refresh_untouched_fields_and_keep_a_draft(cx: &mut gpui_kit::TestAppContext) {
-        let (view, cx) = cx.add_window_view(|_, cx| SettingsWindow::new(
-            crate::settings::fixtures::model(), std::rc::Rc::new(|_, _, _| {}), cx));
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            SettingsWindow::new(
+                crate::settings::fixtures::model(),
+                std::rc::Rc::new(|_, _, _| {}),
+                cx,
+            )
+        });
         view.update(cx, |view, _| {
             let before = view.model.privacy.clone();
             view.privacy.count.set("draft");

@@ -482,7 +482,8 @@ fn load_future<T: Send + 'static>(
                         let before_name = view.model.sync.machine_name.clone();
                         apply(&mut view.model, value, cx);
                         view.privacy.refresh(&before_privacy, &view.model.privacy);
-                        view.sync.refresh(&before_name, &view.model.sync.machine_name);
+                        view.sync
+                            .refresh(&before_name, &view.model.sync.machine_name);
                     }
                     Err(error) => {
                         view.model.problems.insert(pane, error.into());

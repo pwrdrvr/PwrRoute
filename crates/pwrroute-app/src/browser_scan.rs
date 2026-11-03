@@ -101,7 +101,11 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
 
 type ScanCallback = Rc<dyn Fn(&mut App)>;
 #[cfg(test)]
-type ScanProducer = std::sync::Arc<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>> + Send + Sync>;
+type ScanProducer = std::sync::Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// The scan, once it has run, and the machine it reads.
 struct ScanGlobal {
@@ -131,11 +135,14 @@ pub fn install(env: Env, cx: &mut App) {
         #[cfg(test)]
         producer: None,
     });
-    on_complete(cx, Rc::new(|cx| {
-        refresh_windows(cx);
-        crate::settings::reload(cx, crate::settings::Pane::Configuration);
-        crate::settings::reload(cx, crate::settings::Pane::Sync);
-    }));
+    on_complete(
+        cx,
+        Rc::new(|cx| {
+            refresh_windows(cx);
+            crate::settings::reload(cx, crate::settings::Pane::Configuration);
+            crate::settings::reload(cx, crate::settings::Pane::Sync);
+        }),
+    );
 }
 
 /// A scan a test or screenshot supplies, in place of reading the machine.

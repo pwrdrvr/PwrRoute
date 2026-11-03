@@ -107,14 +107,12 @@ pub fn copy_diagnostics(cx: &mut App) {
     let report = diagnostics_report(cx);
     cx.spawn(async move |cx| {
         let report = report.await;
-        cx.update(|cx| {
-            match report {
-                Ok(report) => {
-                    cx.write_to_clipboard(ClipboardItem::new_string(report));
-                    log::info!(target: "pwrroute", "help: copied diagnostics info");
-                }
-                Err(error) => log::warn!("could not copy diagnostics: {error}"),
+        cx.update(|cx| match report {
+            Ok(report) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(report));
+                log::info!(target: "pwrroute", "help: copied diagnostics info");
             }
+            Err(error) => log::warn!("could not copy diagnostics: {error}"),
         });
     })
     .detach();

@@ -78,18 +78,25 @@ pub fn diagnostics(cx: &App, agents: &LocalAgents) -> gpui_kit::Task<Result<Diag
     use std::sync::atomic::{AtomicBool, Ordering};
     static PREPARING: AtomicBool = AtomicBool::new(false);
     if PREPARING.swap(true, Ordering::AcqRel) {
-        return cx.background_executor().spawn(async { Err("A diagnostics report is already being prepared. Try again.".into()) });
+        return cx.background_executor().spawn(async {
+            Err("A diagnostics report is already being prepared. Try again.".into())
+        });
     }
     let produce = snapshot(cx, Some(agents));
     let (sender, receiver) = async_channel::bounded(1);
+    cx.background_executor()
+        .spawn(async move {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
+                .map_err(|_| "Could not prepare diagnostics.".to_owned());
+            PREPARING.store(false, Ordering::Release);
+            let _ = sender.send(result).await;
+        })
+        .detach();
     cx.background_executor().spawn(async move {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
-            .map_err(|_| "Could not prepare diagnostics.".to_owned());
-        PREPARING.store(false, Ordering::Release);
-        let _ = sender.send(result).await;
-    }).detach();
-    cx.background_executor().spawn(async move {
-        receiver.recv().await.unwrap_or_else(|_| Err("Could not prepare diagnostics.".into()))
+        receiver
+            .recv()
+            .await
+            .unwrap_or_else(|_| Err("Could not prepare diagnostics.".into()))
     })
 }
 

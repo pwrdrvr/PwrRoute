@@ -95,10 +95,17 @@ fn a_closed_windows_pane_cannot_change_its_replacement(cx: &mut TestAppContext) 
     let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for count in [232, 343] {
         let started = started.clone();
-        cx.update(|cx| super::load(cx, Pane::Privacy, move || {
-            started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            count
-        }, |model, count| model.privacy.keep_count = count));
+        cx.update(|cx| {
+            super::load(
+                cx,
+                Pane::Privacy,
+                move || {
+                    started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    count
+                },
+                |model, count| model.privacy.keep_count = count,
+            )
+        });
     }
     cx.run_until_parked();
     assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 0);

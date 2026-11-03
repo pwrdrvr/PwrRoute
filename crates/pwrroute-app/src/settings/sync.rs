@@ -57,7 +57,9 @@ impl State {
     }
 
     pub fn refresh(&mut self, before: &str, after: &str) {
-        if self.name.text == before { self.name.set(after); }
+        if self.name.text == before {
+            self.name.set(after);
+        }
     }
 
     pub fn close(&mut self) {
@@ -70,7 +72,9 @@ mod lifecycle_tests {
     use super::*;
 
     #[gpui_kit::test]
-    fn the_initial_name_arrives_without_overwriting_a_later_draft(cx: &mut gpui_kit::TestAppContext) {
+    fn the_initial_name_arrives_without_overwriting_a_later_draft(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         let (view, cx) = cx.add_window_view(|_, cx| {
             let mut model = crate::settings::fixtures::model();
             model.sync.machine_name = "".into();

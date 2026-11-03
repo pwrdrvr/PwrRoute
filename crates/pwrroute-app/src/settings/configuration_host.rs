@@ -128,7 +128,9 @@ pub fn load(cx: &mut App) {
             model.configuration = configuration;
             model.pending.remove(&super::Pane::ShortLinks);
             if let Some(field) = model.configuration.everything_else.as_mut() {
-                if problem.is_some() { field.problem = problem; }
+                if problem.is_some() {
+                    field.problem = problem;
+                }
             }
         },
     );
