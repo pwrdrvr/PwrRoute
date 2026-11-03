@@ -18,7 +18,7 @@ pub(super) struct Completion {
 
 struct Step {
     health: Health,
-    manifest: Option<Manifest>,
+    manifest: ManifestObservation,
     result: Result<()>,
 }
 
@@ -33,14 +33,13 @@ enum Phase {
     Idle,
     Reading,
     Ready(Observation, Permit),
-    Writing(Write),
+    Writing(Write, ManifestObservation),
 }
 
 struct Run {
     index: usize,
     phase: Phase,
     cancel: Cancel,
-    now: u64,
     repeat: bool,
     resolution: Option<Resolution>,
 }
@@ -127,7 +126,6 @@ impl Coordinator {
                             index,
                             phase: Phase::Idle,
                             cancel: self.stop.child(),
-                            now,
                             repeat: false,
                             resolution: Some(Resolution {
                                 sha: remote_sha,
@@ -157,12 +155,15 @@ impl Coordinator {
                 match outcome {
                     Outcome::Read(observation) => run.phase = Phase::Ready(observation, permit),
                     Outcome::Written(result) => {
-                        let Phase::Writing(write) = &run.phase else {
+                        let Phase::Writing(write, observed_manifest) = &run.phase else {
                             self.runs.insert(target.root, run);
                             return true;
                         };
                         let item = self.syncer.items()[run.index].clone();
-                        let manifest = result.as_ref().ok().cloned();
+                        let manifest = match &result {
+                            Ok(manifest) => ManifestObservation::Observed(Some(manifest.clone())),
+                            Err(_) => observed_manifest.clone(),
+                        };
                         let health =
                             self.syncer
                                 .finish_push(&item, &target, write, result.map(|_| ()));
@@ -179,11 +180,16 @@ impl Coordinator {
                                 manifest,
                                 result: outcome,
                             },
+                            now,
                             publish,
                         );
                         // permit drops only after the actual syscall has returned
                     }
                     Outcome::Failed => {
+                        let manifest = match &run.phase {
+                            Phase::Writing(_, manifest) => manifest.clone(),
+                            _ => ManifestObservation::Unobserved,
+                        };
                         let item = self.syncer.items()[run.index].clone();
                         self.finish(
                             &target,
@@ -191,14 +197,15 @@ impl Coordinator {
                             &mut run,
                             Step {
                                 health: Health::Error("cloud worker failed".into()),
-                                manifest: None,
+                                manifest,
                                 result: Err(anyhow::anyhow!("cloud worker failed")),
                             },
+                            now,
                             publish,
                         );
                     }
                 }
-                self.retain_run(&target, run, now);
+                self.retain_run(&target, run);
             }
         }
         true
@@ -253,7 +260,6 @@ impl Coordinator {
                         index: 0,
                         phase: Phase::Idle,
                         cancel: self.stop.child(),
-                        now,
                         repeat: false,
                         resolution: None,
                     },
@@ -275,7 +281,7 @@ impl Coordinator {
                 continue;
             };
             if run.index >= self.syncer.items().len() {
-                self.retain_run(&target, run, now);
+                self.retain_run(&target, run);
                 continue;
             }
             let item = self.syncer.items()[run.index].clone();
@@ -304,9 +310,10 @@ impl Coordinator {
                                 &mut run,
                                 Step {
                                     health: Health::Error(e.to_string()),
-                                    manifest: None,
+                                    manifest: ManifestObservation::Unobserved,
                                     result: Err(e.into()),
                                 },
+                                now,
                                 publish,
                             );
                         }
@@ -344,7 +351,7 @@ impl Coordinator {
                         // The permit follows read -> write -> completion. A busy
                         // target never gets a second worker, even across retirement.
                         let operation = Operation::Write(write.clone());
-                        run.phase = Phase::Writing(write);
+                        run.phase = Phase::Writing(write, manifest.clone());
                         if let Err(e) = worker::spawn(
                             self.syncer.io.clone(),
                             target.clone(),
@@ -362,6 +369,7 @@ impl Coordinator {
                                     manifest,
                                     result: Err(e.into()),
                                 },
+                                now,
                                 publish,
                             );
                         }
@@ -375,13 +383,14 @@ impl Coordinator {
                                 manifest,
                                 result,
                             },
+                            now,
                             publish,
                         );
                     }
                 }
                 phase => run.phase = phase,
             }
-            self.retain_run(&target, run, now);
+            self.retain_run(&target, run);
         }
     }
 
@@ -391,6 +400,7 @@ impl Coordinator {
         item: &Item,
         run: &mut Run,
         step: Step,
+        now: u64,
         publish: &impl Fn(&Syncer),
     ) {
         let Step {
@@ -402,7 +412,7 @@ impl Coordinator {
         let resolving = run.resolution.is_some();
         let finished = resolving || run.index + 1 == self.syncer.items().len();
         self.syncer
-            .record(target, &item.name, health, manifest, run.now, finished);
+            .record(target, &item.name, health, manifest, now, finished);
         run.index = if resolving {
             self.syncer.items().len()
         } else {
@@ -424,14 +434,13 @@ impl Coordinator {
         publish(&self.syncer);
     }
 
-    fn retain_run(&mut self, target: &Target, mut run: Run, now: u64) {
+    fn retain_run(&mut self, target: &Target, mut run: Run) {
         if run.index < self.syncer.items().len() {
             self.runs.insert(target.root.clone(), run);
         } else if run.repeat {
             run.index = 0;
             run.phase = Phase::Idle;
             run.repeat = false;
-            run.now = now;
             self.syncer.begin_target(target);
             self.runs.insert(target.root.clone(), run);
         }
@@ -677,8 +686,31 @@ mod tests {
         let target = target(cloud.path());
         let local = data.path().join("rules.json");
         fs::write(&local, b"rules").unwrap();
-        target.folder().write("rules.json", b"rules", &Machine { id: "writer".into(), name: "Writer".into() }, 1, "test", None).unwrap();
-        target.folder().write("finicky.ts", b"config", &Machine::default(), 2, "test", None).unwrap();
+        target
+            .folder()
+            .write(
+                "rules.json",
+                b"rules",
+                &Machine {
+                    id: "writer".into(),
+                    name: "Writer".into(),
+                },
+                1,
+                "test",
+                None,
+            )
+            .unwrap();
+        target
+            .folder()
+            .write(
+                "finicky.ts",
+                b"config",
+                &Machine::default(),
+                2,
+                "test",
+                None,
+            )
+            .unwrap();
         let mut syncer = Syncer::new(data.path(), "test", "test");
         syncer.set_items(vec![item(local, "rules.json")]);
         syncer.set_targets(vec![target.clone()]);
@@ -696,19 +728,39 @@ mod tests {
 
     #[test]
     fn review_missing_or_invalid_manifest_clears_previous_status_metadata() {
-        for replacement in [None, Some(b"{ broken".as_slice()), Some(br#"{"format":999,"files":{}}"#.as_slice())] {
+        for replacement in [
+            None,
+            Some(b"{ broken".as_slice()),
+            Some(br#"{"format":999,"files":{}}"#.as_slice()),
+        ] {
             let (_data, _cloud, target, mut c) = status_fixture();
             let path = target.folder().file(crate::MANIFEST);
-            match replacement { Some(bytes) => fs::write(&path, bytes).unwrap(), None => fs::remove_file(&path).unwrap() }
+            match replacement {
+                Some(bytes) => fs::write(&path, bytes).unwrap(),
+                None => fs::remove_file(&path).unwrap(),
+            }
             c.tick(1_000, &|_| {});
-            assert_eq!(c.syncer.status().targets[0].folder_files.len(), 2, "starting a read retains the last known manifest");
+            assert_eq!(
+                c.syncer.status().targets[0].folder_files.len(),
+                2,
+                "starting a read retains the last known manifest"
+            );
             ready(&mut c, &target);
             c.drive(1_100, &|_| {});
             let status = &c.syncer.status().targets[0];
             assert_eq!(status.files[0].health, Health::InSync);
-            assert!(status.saved_by.is_none(), "completed absence clears authorship");
-            assert!(status.saved_at.is_none(), "completed absence clears saved time");
-            assert!(status.folder_files.is_empty(), "completed absence clears import candidates");
+            assert!(
+                status.saved_by.is_none(),
+                "completed absence clears authorship"
+            );
+            assert!(
+                status.saved_at.is_none(),
+                "completed absence clears saved time"
+            );
+            assert!(
+                status.folder_files.is_empty(),
+                "completed absence clears import candidates"
+            );
         }
     }
 
@@ -719,7 +771,16 @@ mod tests {
         c.tick(1_000, &|_| {});
         let cancel = c.runs[&target.root].cancel.clone();
         let permit = Permit::acquire(&c.admission, &target.root).unwrap();
-        c.command(Command::Completed(Box::new(Completion { target, cancel, permit, outcome: Outcome::Failed })), 1_100, &|_| {});
+        c.command(
+            Command::Completed(Box::new(Completion {
+                target,
+                cancel,
+                permit,
+                outcome: Outcome::Failed,
+            })),
+            1_100,
+            &|_| {},
+        );
         let after = &c.syncer.status().targets[0];
         assert_eq!(after.saved_by, before.saved_by);
         assert_eq!(after.saved_at, before.saved_at);
@@ -737,19 +798,40 @@ mod tests {
         let slow_observation = Disk.read(&slow, "rules.json", None, &Cancel::default());
         let fast_cloud = tempfile::tempdir().unwrap();
         let fast = target(fast_cloud.path());
-        fast.folder().write("rules.json", b"rules", &Machine::default(), 2, "test", None).unwrap();
-        c.command(Command::Targets(vec![slow.clone(), fast.clone()]), 2_000, &|_| {});
+        fast.folder()
+            .write("rules.json", b"rules", &Machine::default(), 2, "test", None)
+            .unwrap();
+        c.command(
+            Command::Targets(vec![slow.clone(), fast.clone()]),
+            2_000,
+            &|_| {},
+        );
         c.tick(2_000, &|_| {});
         ready(&mut c, &fast);
         c.drive(2_100, &|_| {});
         let fast_completed = c.syncer.status().last_pass;
-        c.command(Command::Completed(Box::new(Completion { target: slow.clone(), cancel: slow_cancel, permit: slow_permit, outcome: Outcome::Read(slow_observation) })), 3_000, &|_| {});
+        c.command(
+            Command::Completed(Box::new(Completion {
+                target: slow.clone(),
+                cancel: slow_cancel,
+                permit: slow_permit,
+                outcome: Outcome::Read(slow_observation),
+            })),
+            3_000,
+            &|_| {},
+        );
         c.drive(3_000, &|_| {});
         assert_eq!(fast_completed, Some(2_100));
-        assert_eq!(c.syncer.status().last_pass, Some(3_000), "an older run cannot move status back to its start time");
+        assert_eq!(
+            c.syncer.status().last_pass,
+            Some(3_000),
+            "an older run cannot move status back to its start time"
+        );
         assert_eq!(c.syncer.status().targets[0].last_synced, Some(3_000));
         assert_eq!(c.syncer.status().targets[1].last_synced, Some(2_100));
-        let state: serde_json::Value = serde_json::from_slice(&fs::read(data.path().join("sync/state.json")).unwrap()).unwrap();
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(data.path().join("sync/state.json")).unwrap())
+                .unwrap();
         assert_eq!(state["lastSynced"][slow.id()], 3_000);
         assert_eq!(state["lastSynced"][fast.id()], 2_100);
     }
@@ -772,14 +854,68 @@ mod tests {
         let write = write.unwrap();
         let manifest = Disk.write(&target, &write, &Cancel::default()).unwrap();
         let cancel = c.runs[&target.root].cancel.clone();
-        c.runs.get_mut(&target.root).unwrap().phase = Phase::Writing(write);
+        c.runs.get_mut(&target.root).unwrap().phase =
+            Phase::Writing(write, ManifestObservation::Unobserved);
         let permit = Permit::acquire(&c.admission, &target.root).unwrap();
-        c.command(Command::Completed(Box::new(Completion { target: target.clone(), cancel, permit, outcome: Outcome::Written(Ok(manifest)) })), 5_000, &|_| {});
+        c.command(
+            Command::Completed(Box::new(Completion {
+                target: target.clone(),
+                cancel,
+                permit,
+                outcome: Outcome::Written(Ok(manifest)),
+            })),
+            5_000,
+            &|_| {},
+        );
         assert_eq!(c.syncer.status().last_pass, Some(5_000));
         assert_eq!(c.syncer.status().targets[0].last_synced, Some(5_000));
-        assert_eq!(c.syncer.status().targets[0].saved_at, Some(1_000), "manifest attribution stays with the written content");
-        let state: serde_json::Value = serde_json::from_slice(&fs::read(data.path().join("sync/state.json")).unwrap()).unwrap();
+        assert_eq!(
+            c.syncer.status().targets[0].saved_at,
+            Some(1_000),
+            "manifest attribution stays with the written content"
+        );
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(data.path().join("sync/state.json")).unwrap())
+                .unwrap();
         assert_eq!(state["lastSynced"][target.id()], 5_000);
     }
 
+    #[test]
+    fn review_a_failed_write_keeps_the_preceding_manifest_absence_observation() {
+        for panic in [false, true] {
+            let (data, _cloud, target, mut c) = status_fixture();
+            fs::remove_file(target.folder().file(crate::MANIFEST)).unwrap();
+            fs::write(data.path().join("rules.json"), b"local edit").unwrap();
+            c.tick(1_000, &|_| {});
+            let item = c.syncer.items()[0].clone();
+            let observation = Disk.read(&target, &item.name, None, &Cancel::default());
+            let manifest = observation.manifest.clone();
+            let (_, write) = c.syncer.prepare(&item, &target, observation, 1_000);
+            c.runs.get_mut(&target.root).unwrap().phase = Phase::Writing(write.unwrap(), manifest);
+            let cancel = c.runs[&target.root].cancel.clone();
+            let permit = Permit::acquire(&c.admission, &target.root).unwrap();
+            let outcome = if panic {
+                Outcome::Failed
+            } else {
+                Outcome::Written(Err(anyhow::anyhow!("fake write failure")))
+            };
+            c.command(
+                Command::Completed(Box::new(Completion {
+                    target,
+                    cancel,
+                    permit,
+                    outcome,
+                })),
+                1_100,
+                &|_| {},
+            );
+            let status = &c.syncer.status().targets[0];
+            assert!(matches!(status.files[0].health, Health::Error(_)));
+            assert!(
+                status.saved_by.is_none()
+                    && status.saved_at.is_none()
+                    && status.folder_files.is_empty()
+            );
+        }
+    }
 }

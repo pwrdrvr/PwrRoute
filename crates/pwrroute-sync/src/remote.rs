@@ -38,9 +38,26 @@ impl Cancel {
     }
 }
 
+/// No usable manifest is a completed observation too. Keep it separate from
+/// operations that failed or were cancelled before looking at the manifest.
+#[derive(Clone)]
+pub(crate) enum ManifestObservation {
+    Unobserved,
+    Observed(Option<Manifest>),
+}
+
+impl ManifestObservation {
+    pub fn into_manifest(self) -> Option<Manifest> {
+        match self {
+            Self::Observed(manifest) => manifest,
+            Self::Unobserved => None,
+        }
+    }
+}
+
 pub(crate) struct Observation {
     pub file: Result<Option<Seen>, Health>,
-    pub manifest: Option<Manifest>,
+    pub manifest: ManifestObservation,
 }
 
 #[derive(Clone)]
@@ -160,9 +177,9 @@ impl Disk {
                 IoPoint::RemoteManifest,
                 &target.folder().file(folder::MANIFEST),
             );
-            manifest(target)
+            ManifestObservation::Observed(manifest(target))
         } else {
-            None
+            ManifestObservation::Unobserved
         };
         Observation { file, manifest }
     }
@@ -192,7 +209,7 @@ impl Remote for Disk {
                 write.name
             );
         }
-        let mut manifest = observed.manifest.unwrap_or_default();
+        let mut manifest = observed.manifest.into_manifest().unwrap_or_default();
         manifest.format = folder::FORMAT;
         manifest.saved_by = write.by.clone();
         manifest.saved_at = write.at;
@@ -376,5 +393,24 @@ mod tests {
             folder.manifest().unwrap().files["rules.json"].sha256,
             hash(b"latest")
         );
+    }
+    #[test]
+    fn cancellation_before_the_manifest_reports_no_observation() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = target(dir.path());
+        target
+            .folder()
+            .write("rules.json", b"rules", &Machine::default(), 1, "test", None)
+            .unwrap();
+        let cancel = Cancel::default();
+        let observation = Disk.read_with(&target, "rules.json", None, &cancel, |point, _| {
+            if point == IoPoint::RemoteRead {
+                cancel.cancel();
+            }
+        });
+        assert!(matches!(
+            observation.manifest,
+            ManifestObservation::Unobserved
+        ));
     }
 }

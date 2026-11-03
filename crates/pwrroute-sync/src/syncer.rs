@@ -35,7 +35,7 @@ use crate::{
     decide::{ConflictKind, Decision, Local, decide},
     folder::{FileEntry, Folder, Machine, Manifest, Stamp, hash, write_atomic},
     places::Kind,
-    remote::{Cancel, Observation, Write},
+    remote::{Cancel, ManifestObservation, Observation, Write},
     state::{Backup, State},
 };
 
@@ -429,7 +429,7 @@ impl Syncer {
         write: &mut Option<Write>,
     ) -> Health {
         let id = target.id();
-        let manifest = observed.manifest;
+        let manifest = observed.manifest.into_manifest();
         let remote = match observed.file {
             Ok(remote) => remote,
             Err(health) => {
@@ -747,7 +747,7 @@ impl Syncer {
         target: &Target,
         name: &str,
         health: Health,
-        manifest: Option<Manifest>,
+        manifest: ManifestObservation,
         now: u64,
         finished: bool,
     ) {
@@ -760,10 +760,18 @@ impl Syncer {
             if let Some(file) = status.files.iter_mut().find(|f| f.name == name) {
                 file.health = health;
             }
-            if let Some(manifest) = manifest {
-                status.saved_by = Some(manifest.saved_by);
-                status.saved_at = Some(manifest.saved_at);
-                status.folder_files = manifest.files;
+            match manifest {
+                ManifestObservation::Observed(Some(manifest)) => {
+                    status.saved_by = Some(manifest.saved_by);
+                    status.saved_at = Some(manifest.saved_at);
+                    status.folder_files = manifest.files;
+                }
+                ManifestObservation::Observed(None) => {
+                    status.saved_by = None;
+                    status.saved_at = None;
+                    status.folder_files.clear();
+                }
+                ManifestObservation::Unobserved => {}
             }
             if finished && status.files.iter().all(|f| f.health.in_step()) {
                 self.state.last_synced.insert(target.id(), now);

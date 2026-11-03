@@ -43,7 +43,7 @@ use anyhow::Result;
 
 use crate::{
     folder::Manifest,
-    remote::{Cancel, Observation, Write},
+    remote::{Cancel, ManifestObservation, Observation, Write},
     schedule::Schedule,
     syncer::{Choice, Item, Status, Syncer, Target},
 };
