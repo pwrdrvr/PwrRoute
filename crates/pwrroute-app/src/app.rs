@@ -11,8 +11,8 @@ use gpui_kit::{
     Subscription, Window, div,
 };
 
-use pwrroute_engine::{Description, Engine, Limits, NativeHost, discovery};
 use crate::engine_worker::{EngineWorker, Lane};
+use pwrroute_engine::{Description, Engine, Limits, NativeHost, discovery};
 
 use crate::activity::Activity;
 use crate::activity_actions::{self, Actions, BrowserChoice};
@@ -231,7 +231,9 @@ impl PwrRoute {
         store: RulesStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let in_charge = config.as_deref().map(|path| pending_config(path, home.as_deref()));
+        let in_charge = config
+            .as_deref()
+            .map(|path| pending_config(path, home.as_deref()));
         let described = None;
         // Pausing and resuming from the tray changes the Overview's hero.
         let tray = crate::tray::model(cx).map(|model| cx.observe(&model, |_, _, cx| cx.notify()));
@@ -828,7 +830,9 @@ impl PwrRoute {
         self.engine_revision += 1;
         self.engine_worker.cancel(Lane::Impact);
         self.config_pending = config.is_some();
-        self.config = config.as_deref().map(|path| pending_config(path, self.home.as_deref()));
+        self.config = config
+            .as_deref()
+            .map(|path| pending_config(path, self.home.as_deref()));
         self.visual_rules_expanded = false;
         self.described = None;
         self.config_loaded = SystemTime::now();
@@ -983,23 +987,35 @@ impl PwrRoute {
         }
         let sample = rail.sample.text.clone();
         rail.try_result = None;
-        if problems || sample.trim().is_empty() { return; }
+        if problems || sample.trim().is_empty() {
+            return;
+        }
         let input = self.probe.input();
         let request = self.preview_request;
         let revision = self.engine_revision;
-        let result = self.engine_worker.submit(Lane::Preview, Duration::from_millis(100), move |_| {
-            let mut probe = Probe::from_input(input);
-            move || {
-                let result = probe.run(&sample, opener.as_deref(), selection);
-                Some((result, probe.stamps()))
-            }
-        });
+        let result =
+            self.engine_worker
+                .submit(Lane::Preview, Duration::from_millis(100), move |_| {
+                    let mut probe = Probe::from_input(input);
+                    move || {
+                        let result = probe.run(&sample, opener.as_deref(), selection);
+                        Some((result, probe.stamps()))
+                    }
+                });
         self.engine_tasks[Lane::Preview as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((result, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
-                    if this.preview_request == request && this.engine_revision == revision && this.selection == Some(selection) {
-                        if !crate::engine_worker::unchanged(&stamps) { this.try_it(cx); return; }
-                        if let Some(rail) = &mut this.rail { rail.try_result = Some(result); }
+                    if this.preview_request == request
+                        && this.engine_revision == revision
+                        && this.selection == Some(selection)
+                    {
+                        if !crate::engine_worker::unchanged(&stamps) {
+                            this.try_it(cx);
+                            return;
+                        }
+                        if let Some(rail) = &mut this.rail {
+                            rail.try_result = Some(result);
+                        }
                         cx.notify();
                     }
                 });
@@ -1581,15 +1597,23 @@ impl PwrRoute {
 impl PwrRoute {
     pub(crate) fn schedule_tests(&mut self, cx: &mut Context<'_, Self>) {
         let (request, config, rules) = self.tests.begin();
-        let result = self.engine_worker.submit(Lane::Tests, Duration::ZERO, move |_| crate::try_it::test_steps(config, rules));
+        let result = self
+            .engine_worker
+            .submit(Lane::Tests, Duration::ZERO, move |_| {
+                crate::try_it::test_steps(config, rules)
+            });
         self.engine_tasks[Lane::Tests as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((report, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     if !crate::engine_worker::unchanged(&stamps) {
-                        if this.tests.is_current(&request) { this.schedule_tests(cx); }
+                        if this.tests.is_current(&request) {
+                            this.schedule_tests(cx);
+                        }
                         return;
                     }
-                    if this.tests.complete(request, report) { cx.notify(); }
+                    if this.tests.complete(request, report) {
+                        cx.notify();
+                    }
                 });
             }
         }));
@@ -1607,16 +1631,25 @@ impl PwrRoute {
         let result = self.engine_worker.once(Lane::Config, move || {
             let before = crate::engine_worker::primary(Some(&path));
             let engine = Engine::load(&path, Rc::new(NativeHost::new()), Limits::default());
-            let description = engine.as_ref().ok().and_then(|engine| engine.describe().ok().flatten());
+            let description = engine
+                .as_ref()
+                .ok()
+                .and_then(|engine| engine.describe().ok().flatten());
             let config = ConfigInCharge::new(&path, home.as_deref(), engine.as_ref());
-            let stamps = engine.as_ref().map_or_else(|_| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
+            let stamps = engine.as_ref().map_or_else(
+                |_| before.clone(),
+                |engine| crate::engine_worker::dependencies(before.clone(), engine),
+            );
             (config, description, stamps)
         });
         self.engine_tasks[Lane::Config as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((config, description, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     if this.config_request == request {
-                        if !crate::engine_worker::unchanged(&stamps) { this.describe_config(cx); return; }
+                        if !crate::engine_worker::unchanged(&stamps) {
+                            this.describe_config(cx);
+                            return;
+                        }
                         this.config = Some(config);
                         this.config_pending = false;
                         this.described = description;
@@ -1722,8 +1755,16 @@ impl Render for PwrRoute {
         // the Overview, so they agree.
         let status = overview::status(self, cx);
         let pane = match (self.screen, &self.config) {
-            (Screen::Overview | Screen::Rules, Some(_)) if self.config_pending => div().flex_1().p(theme::px(24.0))
-                .child(theme::text("Reading config…", 13.0, 500.0, theme::text_muted())).into_any_element(),
+            (Screen::Overview | Screen::Rules, Some(_)) if self.config_pending => div()
+                .flex_1()
+                .p(theme::px(24.0))
+                .child(theme::text(
+                    "Reading config…",
+                    13.0,
+                    500.0,
+                    theme::text_muted(),
+                ))
+                .into_any_element(),
             (Screen::Overview, _) => overview::pane(self, &status, window, cx).into_any_element(),
             (Screen::Rules, None) => rules_view::pane(self, cx).into_any_element(),
             (Screen::Rules, Some(config)) => config_view::pane(self, config, cx).into_any_element(),

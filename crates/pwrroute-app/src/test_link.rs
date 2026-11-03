@@ -33,8 +33,8 @@ use gpui_kit::{
     StrikethroughStyle, Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{
-    AppType, Expectation, HttpNetwork, Limits, NativeHost, Network, RouteTest,
-    RulesFile, Sources, Trace,
+    AppType, Expectation, HttpNetwork, Limits, Link, NativeHost, Network, RouteTest, RulesFile, Sources,
+    Trace,
 };
 
 use crate::app::PwrRoute;
@@ -260,35 +260,50 @@ impl TestLink {
         let request_token = Rc::clone(&self.request_token);
         let field = self.url.text.clone();
         let network = self.network.clone();
-        let sources = Sources { config: self.config.clone(), rules: self.rules.clone(), machine: crate::sync::machine() };
+        let sources = Sources {
+            config: self.config.clone(),
+            rules: self.rules.clone(),
+            machine: crate::sync::machine(),
+        };
         // Fetch the window's bounded worker without borrowing PwrRoute.
-        let worker = self.worker.once(crate::engine_worker::Lane::Link, move || {
+        let worker = self.worker.submit(crate::engine_worker::Lane::Link, Duration::ZERO, move |_| {
+            let before = crate::engine_worker::primary(sources.config.as_deref());
             let engine = crate::router::engine_as_routed(&sources, Rc::new(NativeHost::new()), Limits::default())
-                .map_err(|e| format!("The rules did not load: {e:#}"))?;
-            let stamps = crate::engine_worker::stamps(&engine);
-            let network = network.unwrap_or_else(|| Arc::new(HttpNetwork::new()));
-            let link = engine.short_links().expand(&url, network.as_ref());
+                .map_err(|e| format!("The rules did not load: {e:#}"));
+            let stamps = engine.as_ref().map_or_else(|_| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
             let engine_opener = opener.as_ref().map(|app| pwrroute_engine::Opener {
                 name: app.name.to_string(), bundle_id: app.bundle_id.to_string(), ..Default::default()
             });
-            let trace = engine.trace(&link, engine_opener.as_ref()).map_err(|e| format!("The rules failed: {e:#}"));
-            Ok::<_, String>((trace, stamps))
+            let mut link = None;
+            move || {
+                let engine = match &engine { Ok(engine) => engine, Err(error) => return Some((Err(error.clone()), stamps.clone())) };
+                if link.is_none() {
+                    link = Some(if engine.short_links().is_short(&url) {
+                        let network = network.clone().unwrap_or_else(|| Arc::new(HttpNetwork::new()));
+                        engine.short_links().expand(&url, network.as_ref())
+                    } else { Link::new(&url) });
+                    return None;
+                }
+                let trace = engine.trace(link.as_ref().unwrap(), engine_opener.as_ref())
+                    .map_err(|e| format!("The rules failed: {e:#}"));
+                Some((trace, stamps.clone()))
+            }
         });
         // opener is also needed by the UI; re-read its immutable choice.
         let opener = self.opener();
         self.task = Some(cx.spawn(async move |this, cx| {
             if let Ok(result) = crate::engine_worker::receive(worker).await {
                 let _ = this.update(cx, |this, cx| {
-                    if !Rc::ptr_eq(&this.test.request_token, &request_token) { return; }
+                    if !Rc::ptr_eq(&this.test.request_token, &request_token) {
+                        return;
+                    }
                     this.test.expanding = false;
-                    if this.test.url.text != field || this.test.opener() != opener { cx.notify(); return; }
-                    let trace = match result {
-                        Ok((trace, stamps)) => {
-                            if !crate::engine_worker::unchanged(&stamps) { this.test.run(cx); return; }
-                            trace
-                        }
-                        Err(error) => Err(error),
-                    };
+                    if this.test.url.text != field || this.test.opener() != opener {
+                        cx.notify();
+                        return;
+                    }
+                    let (trace, stamps) = result;
+                    if !crate::engine_worker::unchanged(&stamps) { this.test.run(cx); return; }
                     this.test.finish(trace, opener, started);
                     cx.notify();
                 });
@@ -296,15 +311,31 @@ impl TestLink {
         }));
     }
 
-    fn finish(&mut self, result: Result<Trace, String>, opener: Option<OpenerChoice>, started: Instant) {
+    fn finish(
+        &mut self,
+        result: Result<Trace, String>,
+        opener: Option<OpenerChoice>,
+        started: Instant,
+    ) {
         match result {
             Ok(trace) => {
                 let suggested = pwrroute_engine::suggest_rule(rules_url(&trace))
-                    .candidates.into_iter().next().and_then(|candidate| candidate.patterns.into_iter().next());
-                self.run = Some(Run { trace, opener, took: started.elapsed(), suggested });
+                    .candidates
+                    .into_iter()
+                    .next()
+                    .and_then(|candidate| candidate.patterns.into_iter().next());
+                self.run = Some(Run {
+                    trace,
+                    opener,
+                    took: started.elapsed(),
+                    suggested,
+                });
                 self.redraw();
             }
-            Err(error) => { self.run = None; self.outcome = Some(Err(error)); }
+            Err(error) => {
+                self.run = None;
+                self.outcome = Some(Err(error));
+            }
         }
     }
 
@@ -1016,12 +1047,7 @@ pub fn pane(
         None if app.test.expanding => Some(
             card()
                 .py(px(14.0))
-                .child(paragraph(
-                    "Testing link…",
-                    12.0,
-                    18.0,
-                    theme::text_muted(),
-                ))
+                .child(paragraph("Testing link…", 12.0, 18.0, theme::text_muted()))
                 .into_any_element(),
         ),
         None => None,

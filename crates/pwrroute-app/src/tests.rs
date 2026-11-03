@@ -7723,8 +7723,14 @@ fn engine_work_startup_returns_before_saved_tests_complete(cx: &mut TestAppConte
     let store = store_for(&dir, &rules_with_examples());
     cx.add_window_view(|_, cx| {
         let app = PwrRoute::with_store(None, Some(fixture_home()), store, cx);
-        assert!(app.tests.report().is_none(), "startup evaluated saved tests on GPUI");
-        assert!(app.tests.ran_at().is_none(), "pending tests must not look completed");
+        assert!(
+            app.tests.report().is_none(),
+            "startup evaluated saved tests on GPUI"
+        );
+        assert!(
+            app.tests.ran_at().is_none(),
+            "pending tests must not look completed"
+        );
         app
     });
 }
@@ -7741,15 +7747,24 @@ fn engine_work_test_link_returns_before_tracing(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn engine_work_menu_opens_before_impact_counts(cx: &mut TestAppContext) {
-    let records = vec![fixtures::activity().into_iter().find(|r| r.privacy == Privacy::Full).unwrap(); 24];
+    let records = vec![
+        fixtures::activity()
+            .into_iter()
+            .find(|r| r.privacy == Privacy::Full)
+            .unwrap();
+        24
+    ];
     cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
     let (view, cx) = open(cx);
     view.update(cx, |app, cx| {
         let menu = crate::rule_menu::MenuRow::Rule(Selection::Handler(2));
         app.toggle_row_actions(menu, cx);
         assert_eq!(app.row_actions.menu, Some(menu));
-        assert_eq!(app.impact(Selection::Handler(2), 0, cx), None,
-            "opening the menu evaluated recent links on GPUI");
+        assert_eq!(
+            app.impact(Selection::Handler(2), 0, cx),
+            None,
+            "opening the menu evaluated recent links on GPUI"
+        );
     });
 }
 
@@ -7758,17 +7773,27 @@ struct EngineGate {
     _result: async_channel::Receiver<()>,
 }
 impl Drop for EngineGate {
-    fn drop(&mut self) { if let Some(release) = self.release.take() { let _ = release.send(()); } }
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
 }
 fn gate_engine(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> EngineGate {
     let (entered, started) = std::sync::mpsc::channel();
     let (release, blocked) = std::sync::mpsc::channel();
-    let result = view.read_with(cx, |app, _| app.engine_worker.once(crate::engine_worker::Lane::Config, move || {
-        entered.send(()).unwrap();
-        blocked.recv().unwrap();
-    }));
+    let result = view.read_with(cx, |app, _| {
+        app.engine_worker
+            .once(crate::engine_worker::Lane::Config, move || {
+                entered.send(()).unwrap();
+                blocked.recv().unwrap();
+            })
+    });
     started.recv().unwrap();
-    EngineGate { release: Some(release), _result: result }
+    EngineGate {
+        release: Some(release),
+        _result: result,
+    }
 }
 
 #[gpui_kit::test]
@@ -7779,7 +7804,8 @@ fn engine_work_slow_job_keeps_menu_and_edits_immediate(cx: &mut TestAppContext) 
         let row = crate::rule_menu::MenuRow::Rule(Selection::Handler(2));
         app.toggle_row_actions(row, cx);
         assert_eq!(app.row_actions.menu, Some(row));
-        app.store.set_pattern(Selection::Handler(0), 0, "new.example.com/*");
+        app.store
+            .set_pattern(Selection::Handler(0), 0, "new.example.com/*");
         app.refresh(cx);
         assert_eq!(app.store.edited().rules[0].patterns[0], "new.example.com/*");
         assert!(app.rail.as_ref().unwrap().try_result.is_none());
@@ -7805,14 +7831,21 @@ fn engine_work_ready_old_preview_cannot_replace_new_edit_or_source(cx: &mut Test
         app.try_it(cx);
     });
     // Completion is ready, but GPUI has not delivered it yet.
-    view.read_with(cx, |app, _| app.engine_worker.client()).wait_idle();
+    view.read_with(cx, |app, _| app.engine_worker.client())
+        .wait_idle();
     view.update(cx, |app, cx| {
         app.set_config(Some(two.clone()), cx);
-        app.store.set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
+        app.store
+            .set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
         app.refresh(cx);
     });
     draw(cx);
-    let (path, result) = view.read_with(cx, |app, _| (app.config.as_ref().unwrap().file.clone(), app.rail.as_ref().unwrap().try_result.clone()));
+    let (path, result) = view.read_with(cx, |app, _| {
+        (
+            app.config.as_ref().unwrap().file.clone(),
+            app.rail.as_ref().unwrap().try_result.clone(),
+        )
+    });
     assert_eq!(path, two);
     let result = format!("{result:?}");
     assert!(result.contains("Firefox"), "{result}");
@@ -7826,20 +7859,43 @@ fn engine_work_sheet_rejects_changed_validation_and_cancelled_identity(cx: &mut 
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
     let before = view.read_with(cx, |app, _| app.store.written());
-    view.update(cx, |app, cx| app.set_add_rule(|s| { s.browser = "Firefox".into(); s.pattern.set("github.com/*"); }, cx));
+    view.update(cx, |app, cx| {
+        app.set_add_rule(
+            |s| {
+                s.browser = "Firefox".into();
+                s.pattern.set("github.com/*");
+            },
+            cx,
+        )
+    });
     let gate = gate_engine(&view, cx);
     view.update(cx, |app, cx| {
         assert!(!app.add_rule_from_sheet(cx));
-        app.set_add_rule(|s| { s.browser = "Safari".into(); s.only_from = !s.only_from; s.position = crate::activity_actions::Position::Bottom; }, cx);
+        app.set_add_rule(
+            |s| {
+                s.browser = "Safari".into();
+                s.only_from = !s.only_from;
+                s.position = crate::activity_actions::Position::Bottom;
+            },
+            cx,
+        );
         assert_eq!(app.store.written(), before);
     });
     drop(gate);
     draw(cx);
-    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before, "stale validation added a different rule");
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.written()),
+        before,
+        "stale validation added a different rule"
+    );
     // A second gated check belongs to this sheet alone.
     let gate = gate_engine(&view, cx);
-    view.update(cx, |app, cx| { assert!(!app.add_rule_from_sheet(cx)); });
-    view.update_in(cx, |app, window, cx| { app.cancel_add_rule(window, cx); });
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx));
+    });
+    view.update_in(cx, |app, window, cx| {
+        app.cancel_add_rule(window, cx);
+    });
     drop(gate);
     draw(cx);
     assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()));
@@ -7858,9 +7914,18 @@ fn engine_work_collision_revision_never_claims_old_pattern_is_clear(cx: &mut Tes
         app.add_rule_input_changed(cx);
         app.set_add_rule(|s| s.pattern.set("never.example.com/*"), cx);
         app.add_rule_input_changed(cx);
-        app.store.set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
+        app.store
+            .set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
         app.refresh(cx);
-        assert_eq!(app.actions.sheet.as_ref().unwrap().collision_error.as_deref(), Some("Checking matches…"));
+        assert_eq!(
+            app.actions
+                .sheet
+                .as_ref()
+                .unwrap()
+                .collision_error
+                .as_deref(),
+            Some("Checking matches…")
+        );
     });
     drop(gate);
     draw(cx);

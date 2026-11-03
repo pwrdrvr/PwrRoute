@@ -90,7 +90,10 @@ impl RowActions {
     /// How many recent links the counts weigh, once a menu or drag read
     /// them.
     pub fn weighed(&self) -> Option<usize> {
-        self.baseline.as_ref().filter(|b| b.now.len() == b.links.len()).map(|baseline| baseline.links.len())
+        self.baseline
+            .as_ref()
+            .filter(|b| b.now.len() == b.links.len())
+            .map(|baseline| baseline.links.len())
     }
 
     fn forget_counts(&mut self) {
@@ -271,7 +274,8 @@ impl PwrRoute {
 
     pub fn close_row_actions(&mut self, cx: &mut Context<'_, Self>) {
         if self.row_actions.menu.take().is_some() {
-            self.engine_worker.cancel(crate::engine_worker::Lane::Impact);
+            self.engine_worker
+                .cancel(crate::engine_worker::Lane::Impact);
             self.row_actions.forget_counts();
             cx.notify();
         }
@@ -279,12 +283,26 @@ impl PwrRoute {
 
     /// How many recent links moving `selection` to `to` would send
     /// elsewhere, worked out once per menu or drag.
-    pub fn impact(&mut self, selection: Selection, to: usize, cx: &mut Context<'_, Self>) -> Option<usize> {
-        if let Some(count) = self.row_actions.impacts.get(&(selection, to)) { return *count; }
-        let links = self.row_actions.baseline.as_ref().map(|b| b.links.clone()).or_else(|| recent_links(cx))?;
+    pub fn impact(
+        &mut self,
+        selection: Selection,
+        to: usize,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<usize> {
+        if let Some(count) = self.row_actions.impacts.get(&(selection, to)) {
+            return *count;
+        }
+        let links = self
+            .row_actions
+            .baseline
+            .as_ref()
+            .map(|b| b.links.clone())
+            .or_else(|| recent_links(cx))?;
         // A drag keeps only its latest target; a menu has at most four
         // distinct moves, even in a file containing thousands of rules.
-        if self.row_actions.drop.is_some() { self.row_actions.impacts.clear(); }
+        if self.row_actions.drop.is_some() {
+            self.row_actions.impacts.clear();
+        }
         self.row_actions.impacts.insert((selection, to), None);
         let moves: Vec<_> = self.row_actions.impacts.keys().copied().take(4).collect();
         let input = self.probe.input();
@@ -293,50 +311,73 @@ impl PwrRoute {
         let baseline = self.row_actions.baseline.clone();
         let request = self.row_actions.request.clone();
         let revision = self.engine_revision;
-        let result = self.engine_worker.submit(crate::engine_worker::Lane::Impact, std::time::Duration::ZERO, move |_| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            let mut probe = Probe::from_input(input).with_rules(saved);
-            let mut baseline = baseline.unwrap_or(Baseline { links, now: Vec::new() });
-            let mut moves = moves.into_iter();
-            let mut current: Option<((Selection, usize), Probe, usize, usize)> = None;
-            let mut counts = HashMap::new();
-            move || {
-                if std::time::Instant::now() >= deadline { return Some((baseline.clone(), counts.clone(), probe.stamps())); }
-                if baseline.now.len() < baseline.links.len() {
-                    let (url, opener) = &baseline.links[baseline.now.len()];
-                    baseline.now.push(opens(&mut probe, url, opener.as_ref()));
-                    return None;
-                }
-                if current.is_none() {
-                    let Some(key @ (selection, to)) = moves.next() else { return Some((baseline.clone(), counts.clone(), probe.stamps())); };
-                    let mut moved = store.clone();
-                    if moved.move_to(selection, to).is_none() { counts.insert(key, None); return None; }
-                    current = Some((key, probe.with_rules(moved.written()), 0, 0));
-                }
-                let (key, after, index, changed) = current.as_mut().unwrap();
-                let (url, opener) = &baseline.links[*index];
-                let next = opens(after, url, opener.as_ref());
-                if next.is_none() || baseline.now[*index].is_none() {
-                    counts.insert(*key, None); current = None; return None;
-                }
-                *changed += usize::from(next != baseline.now[*index]);
-                *index += 1;
-                if *index == baseline.links.len() { counts.insert(*key, Some(*changed)); current = None; }
-                None
-            }
-        });
-        self.engine_tasks[crate::engine_worker::Lane::Impact as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((baseline, counts, stamps)) = crate::engine_worker::receive(result).await {
-                let _ = this.update(cx, |this, cx| {
-                    if this.engine_revision == revision && std::rc::Rc::ptr_eq(&this.row_actions.request, &request)
-                        && crate::engine_worker::unchanged(&stamps) {
-                        this.row_actions.baseline = Some(baseline);
-                        this.row_actions.impacts.extend(counts);
-                        cx.notify();
-                    }
+        let result = self.engine_worker.submit(
+            crate::engine_worker::Lane::Impact,
+            std::time::Duration::ZERO,
+            move |_| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                let mut probe = Probe::from_input(input).with_rules(saved);
+                let mut baseline = baseline.unwrap_or(Baseline {
+                    links,
+                    now: Vec::new(),
                 });
-            }
-        }));
+                let mut moves = moves.into_iter();
+                let mut current: Option<((Selection, usize), Probe, usize, usize)> = None;
+                let mut counts = HashMap::new();
+                move || {
+                    if std::time::Instant::now() >= deadline {
+                        return Some((baseline.clone(), counts.clone(), probe.stamps()));
+                    }
+                    if baseline.now.len() < baseline.links.len() {
+                        let (url, opener) = &baseline.links[baseline.now.len()];
+                        baseline.now.push(opens(&mut probe, url, opener.as_ref()));
+                        return None;
+                    }
+                    if current.is_none() {
+                        let Some(key @ (selection, to)) = moves.next() else {
+                            return Some((baseline.clone(), counts.clone(), probe.stamps()));
+                        };
+                        let mut moved = store.clone();
+                        if moved.move_to(selection, to).is_none() {
+                            counts.insert(key, None);
+                            return None;
+                        }
+                        current = Some((key, probe.with_rules(moved.written()), 0, 0));
+                    }
+                    let (key, after, index, changed) = current.as_mut().unwrap();
+                    let (url, opener) = &baseline.links[*index];
+                    let next = opens(after, url, opener.as_ref());
+                    if next.is_none() || baseline.now[*index].is_none() {
+                        counts.insert(*key, None);
+                        current = None;
+                        return None;
+                    }
+                    *changed += usize::from(next != baseline.now[*index]);
+                    *index += 1;
+                    if *index == baseline.links.len() {
+                        counts.insert(*key, Some(*changed));
+                        current = None;
+                    }
+                    None
+                }
+            },
+        );
+        self.engine_tasks[crate::engine_worker::Lane::Impact as usize] =
+            Some(cx.spawn(async move |this, cx| {
+                if let Ok((baseline, counts, stamps)) = crate::engine_worker::receive(result).await
+                {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.engine_revision == revision
+                            && std::rc::Rc::ptr_eq(&this.row_actions.request, &request)
+                            && crate::engine_worker::unchanged(&stamps)
+                        {
+                            this.row_actions.baseline = Some(baseline);
+                            this.row_actions.impacts.extend(counts);
+                            cx.notify();
+                        }
+                    });
+                }
+            }));
         None
     }
 

@@ -346,25 +346,50 @@ fn open_inner(
             (RulesStore::load(rules).written(), std::env::home_dir())
         });
     let recent = recent_links(cx);
-    let loading = ImportModel::failed(&path, display_path(&path, home.as_deref()), "Reading config…".into());
+    let loading = ImportModel::failed(
+        &path,
+        display_path(&path, home.as_deref()),
+        "Reading config…".into(),
+    );
     show(loading, from_first_run, cx);
-    let Some(window) = importer_window(cx) else { return; };
+    let Some(window) = importer_window(cx) else {
+        return;
+    };
     let request = Rc::new(());
-    let _ = window.update(cx, |this, _, cx| { this.loading = true; this.request = request.clone(); cx.notify(); });
-    let result = crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Import, move || {
-        let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
-        let mut model = if path.extension().is_some_and(|ext| ext == "json") {
-            ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
-        } else {
-            ImportModel::read(&path, home.as_deref(), in_charge.as_deref(), &refs, existing)
-        };
-        if first_run { model.start_at_source(); }
-        model
+    let _ = window.update(cx, |this, _, cx| {
+        this.loading = true;
+        this.request = request.clone();
+        cx.notify();
     });
+    let result =
+        crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Import, move || {
+            let stamps = crate::engine_worker::primary(Some(&path));
+            let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
+            let mut model = if path.extension().is_some_and(|ext| ext == "json") {
+                ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
+            } else {
+                ImportModel::read(
+                    &path,
+                    home.as_deref(),
+                    in_charge.as_deref(),
+                    &refs,
+                    existing,
+                )
+            };
+            if first_run {
+                model.start_at_source();
+            }
+            (model, stamps)
+        });
     let task = cx.spawn(async move |cx| {
-        if let Ok(model) = crate::engine_worker::receive(result).await {
+        if let Ok((mut model, stamps)) = crate::engine_worker::receive(result).await {
+            if !crate::engine_worker::unchanged(&stamps) { model.problem = Some("Config changed while reviewing. Choose the file again to review its current contents.".into()); }
             let _ = window.update(cx, |this, _, cx| {
-                if Rc::ptr_eq(&this.request, &request) { this.model = model; this.loading = false; cx.notify(); }
+                if Rc::ptr_eq(&this.request, &request) {
+                    this.model = model;
+                    this.loading = false;
+                    cx.notify();
+                }
             });
         }
     });
@@ -507,7 +532,9 @@ impl Importer {
     }
 
     fn next(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        if self.loading { return; }
+        if self.loading {
+            return;
+        }
         match self.model.next_step() {
             Some(step) => {
                 self.model.step = step;
@@ -2425,23 +2452,34 @@ impl Render for Importer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let model = self.model.clone();
         let body = if self.loading {
-            div().flex_1().p(px(24.0)).child(text("Reading and reviewing config…", 13.0, 500.0, theme::text_muted())).into_any_element()
-        } else { match (&model.problem, model.step) {
-            (Some(problem_text), _) => problem(&model, problem_text, cx).into_any_element(),
-            (None, _) if model.rules_file.is_some() => rules_review(&model).into_any_element(),
-            (None, Step::Review) => div()
+            div()
                 .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .flex()
-                .child(list(&model, cx))
-                .child(detail(&model, cx))
-                .into_any_element(),
-            (None, Step::Place) => place(&model, cx).into_any_element(),
-            (None, Step::Source) => {
-                choose_source(&model, self.saved.is_some(), cx).into_any_element()
+
+                .p(px(24.0))
+                .child(text(
+                    "Reading and reviewing config…",
+                    13.0,
+                    500.0,
+                    theme::text_muted(),
+                ))
+                .into_any_element()
+        } else {
+            match (&model.problem, model.step) {
+                (Some(problem_text), _) => problem(&model, problem_text, cx).into_any_element(),
+                (None, _) if model.rules_file.is_some() => rules_review(&model).into_any_element(),
+                (None, Step::Review) => div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex()
+                    .child(list(&model, cx))
+                    .child(detail(&model, cx))
+                    .into_any_element(),
+                (None, Step::Place) => place(&model, cx).into_any_element(),
+                (None, Step::Source) => choose_source(&model, self.saved.is_some(), cx).into_any_element(),
             }
-        }};
+        };
+
         div()
             .id(ROOT_ID)
             .role(gpui_kit::Role::Dialog)

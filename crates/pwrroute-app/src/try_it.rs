@@ -119,11 +119,21 @@ impl Probe {
 
     /// Plain data only crosses the worker boundary.
     pub fn input(&self) -> (Option<PathBuf>, Option<String>, RulesFile) {
-        (self.config.clone(), self.config_name.clone(), self.rules.clone())
+        (
+            self.config.clone(),
+            self.config_name.clone(),
+            self.rules.clone(),
+        )
     }
 
     pub fn from_input(input: (Option<PathBuf>, Option<String>, RulesFile)) -> Self {
-        Self { config: input.0, config_name: input.1, rules: input.2, engine: None, loaded: Vec::new() }
+        Self {
+            config: input.0,
+            config_name: input.1,
+            rules: input.2,
+            engine: None,
+            loaded: Vec::new(),
+        }
     }
 
     pub fn stamps(&self) -> crate::engine_worker::Stamps {
@@ -143,7 +153,8 @@ impl Probe {
         if self.engine.is_none() {
             self.loaded = crate::engine_worker::primary(self.config.as_deref());
             let engine = load(self.config.as_deref(), &self.rules)?;
-            self.loaded = crate::engine_worker::dependencies(std::mem::take(&mut self.loaded), &engine);
+            self.loaded =
+                crate::engine_worker::dependencies(std::mem::take(&mut self.loaded), &engine);
             self.engine = Some(engine);
         }
         self.engine
@@ -205,6 +216,7 @@ impl Probe {
     /// The handler of `rules.json` that takes `url`, as from `opener`, by
     /// its position in the file; `None` when the default, a config handler
     /// or nothing takes it.
+    #[cfg(test)]
     pub fn winning_handler(&mut self, url: &str, opener: Option<&Opener>) -> Option<usize> {
         let trace = self.trace(url, opener).ok()?;
         let winner = trace.winner()?;
@@ -277,13 +289,21 @@ impl TestRuns {
     pub fn begin(&mut self) -> (Rc<()>, Option<PathBuf>, RulesFile) {
         self.request = Rc::new(());
         self.report = None;
-        (self.request.clone(), self.config.clone(), self.rules.clone())
+        (
+            self.request.clone(),
+            self.config.clone(),
+            self.rules.clone(),
+        )
     }
 
-    pub fn is_current(&self, request: &Rc<()>) -> bool { Rc::ptr_eq(&self.request, request) }
+    pub fn is_current(&self, request: &Rc<()>) -> bool {
+        Rc::ptr_eq(&self.request, request)
+    }
 
     pub fn complete(&mut self, request: Rc<()>, report: Result<TestReport, String>) -> bool {
-        if !Rc::ptr_eq(&self.request, &request) { return false; }
+        if !Rc::ptr_eq(&self.request, &request) {
+            return false;
+        }
         self.report = Some(report);
         self.ran_at = Some(SystemTime::now());
         true
@@ -970,53 +990,99 @@ mod tests {
 
 /// One saved assertion per scheduler turn, with the synced rules and no
 /// machine overrides (the same semantics as Engine::test_rules).
-pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> Option<(Result<TestReport, String>, crate::engine_worker::Stamps)> {
+pub fn test_steps(
+    config: Option<PathBuf>,
+    rules: RulesFile,
+) -> impl FnMut() -> Option<(Result<TestReport, String>, crate::engine_worker::Stamps)> {
     let before = crate::engine_worker::primary(config.as_deref());
     let loaded = crate::router::engine_as_routed(
-        &pwrroute_engine::Sources { config, rules: rules.clone(), ..Default::default() },
-        Rc::new(NativeHost::new()), Limits::default(),
-    ).map_err(|e| format!("The rules did not load: {e:#}"));
+        &pwrroute_engine::Sources {
+            config,
+            rules: rules.clone(),
+            ..Default::default()
+        },
+        Rc::new(NativeHost::new()),
+        Limits::default(),
+    )
+    .map_err(|e| format!("The rules did not load: {e:#}"));
     let (mut engine, mut error) = match loaded {
         Ok(engine) => (Some(engine), None),
         Err(error) => (None, Some(Err(error))),
     };
-    let stamps = engine.as_ref().map_or_else(|| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
+    let stamps = engine.as_ref().map_or_else(
+        || before.clone(),
+        |engine| crate::engine_worker::dependencies(before.clone(), engine),
+    );
     let mut sources = Vec::new();
     for (i, rule) in rules.rules.iter().enumerate() {
-        for j in 0..rule.examples.len() { sources.push(TestSource::RuleExample { rule: i, example: j }); }
+        for j in 0..rule.examples.len() {
+            sources.push(TestSource::RuleExample {
+                rule: i,
+                example: j,
+            });
+        }
     }
     for (i, rule) in rules.rewrites.iter().enumerate() {
-        for j in 0..rule.examples.len() { sources.push(TestSource::RewriteExample { rewrite: i, example: j }); }
+        for j in 0..rule.examples.len() {
+            sources.push(TestSource::RewriteExample {
+                rewrite: i,
+                example: j,
+            });
+        }
     }
-    for i in 0..rules.tests.len() { sources.push(TestSource::Test { test: i }); }
+    for i in 0..rules.tests.len() {
+        sources.push(TestSource::Test { test: i });
+    }
     let mut sources = sources.into_iter();
     let mut report = TestReport::default();
     let mut step = move || {
-        if let Some(error) = error.take() { return Some(error); }
-        let Some(source) = sources.next() else { return Some(Ok(std::mem::take(&mut report))); };
+        if let Some(error) = error.take() {
+            return Some(error);
+        }
+        let Some(source) = sources.next() else {
+            return Some(Ok(std::mem::take(&mut report)));
+        };
         let mut single = rules.clone();
-        for rule in &mut single.rules { rule.examples.clear(); }
-        for rule in &mut single.rewrites { rule.examples.clear(); }
+        for rule in &mut single.rules {
+            rule.examples.clear();
+        }
+        for rule in &mut single.rewrites {
+            rule.examples.clear();
+        }
         single.tests.clear();
         match source {
-            TestSource::RuleExample { rule, example } => single.rules[rule].examples.push(rules.rules[rule].examples[example].clone()),
-            TestSource::RewriteExample { rewrite, example } => single.rewrites[rewrite].examples.push(rules.rewrites[rewrite].examples[example].clone()),
+            TestSource::RuleExample { rule, example } => single.rules[rule]
+                .examples
+                .push(rules.rules[rule].examples[example].clone()),
+            TestSource::RewriteExample { rewrite, example } => single.rewrites[rewrite]
+                .examples
+                .push(rules.rewrites[rewrite].examples[example].clone()),
             TestSource::Test { test } => single.tests.push(rules.tests[test].clone()),
         }
         match single.run_tests(engine.as_ref().expect("loaded")) {
             Ok(part) => {
                 report.total += part.total;
                 report.passed += part.passed;
-                report.failures.extend(part.failures.into_iter().map(|mut f| { f.source = source; f }));
+                report
+                    .failures
+                    .extend(part.failures.into_iter().map(|mut f| {
+                        f.source = source;
+                        f
+                    }));
                 report.console.extend(part.console);
-                let over = report.console.len().saturating_sub(pwrroute_engine::ConsoleLog::CAPACITY);
+                let over = report
+                    .console
+                    .len()
+                    .saturating_sub(pwrroute_engine::ConsoleLog::CAPACITY);
                 report.console.drain(..over);
                 None
             }
-            Err(e) => { engine.take(); Some(Err(format!("The tests did not run: {e:#}"))) }
+            Err(e) => {
+                engine.take();
+                Some(Err(format!("The tests did not run: {e:#}")))
+            }
         }
-    }
-    ;
+    };
     move || step().map(|report| (report, stamps.clone()))
 }
 
@@ -1026,15 +1092,33 @@ mod worker_tests {
     #[test]
     fn saved_test_steps_match_engine_completion_and_failure() {
         let mut rules = crate::fixtures::rules_file();
-        rules.rules[0].examples = vec!["https://meet.google.com/contrived".into(), "https://unmatched.example.com/".into()];
-        rules.tests.push(pwrroute_engine::RouteTest { original_url: None, url: "https://example.com/".into(), opener: None,
-            expect: pwrroute_engine::Expectation { browser: "Firefox".into(), profile: None, url: None } });
+        rules.rules[0].examples = vec![
+            "https://meet.google.com/contrived".into(),
+            "https://unmatched.example.com/".into(),
+        ];
+        rules.tests.push(pwrroute_engine::RouteTest {
+            original_url: None,
+            url: "https://example.com/".into(),
+            opener: None,
+            expect: pwrroute_engine::Expectation {
+                browser: "Firefox".into(),
+                profile: None,
+                url: None,
+            },
+        });
         let expected = load(None, &rules).unwrap().test_rules(None).unwrap();
         assert!(expected.total > 0);
         let mut steps = test_steps(None, rules);
-        let report = loop { if let Some((report, _)) = steps() { break report.unwrap(); } };
+        let report = loop {
+            if let Some((report, _)) = steps() {
+                break report.unwrap();
+            }
+        };
         assert_eq!(report, expected);
-        let mut failed = test_steps(Some(PathBuf::from("/missing/contrived-config.js")), RulesFile::default());
+        let mut failed = test_steps(
+            Some(PathBuf::from("/missing/contrived-config.js")),
+            RulesFile::default(),
+        );
         assert!(failed().unwrap().0.is_err());
     }
     #[test]

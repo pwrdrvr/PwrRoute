@@ -542,7 +542,11 @@ pub fn hooks_with(
                             .unwrap_or_default();
 
                         let imported = imported(count, keeps_config, rules.as_deref());
-                        let result = crate::engine_worker::service(cx).submit(crate::engine_worker::Lane::Onboarding, std::time::Duration::ZERO, move |_| crate::try_it::test_steps(config, file));
+                        let result = crate::engine_worker::service(cx).submit(
+                            crate::engine_worker::Lane::Onboarding,
+                            std::time::Duration::ZERO,
+                            move |_| crate::try_it::test_steps(config, file),
+                        );
                         let reply = reply.clone();
                         let task = cx.spawn(async move |cx| {
                             if let Ok((report, _stamps)) = crate::engine_worker::receive(result).await {
@@ -558,7 +562,11 @@ pub fn hooks_with(
                                 cx.update(|cx| reply(Some((imported, summary)), cx));
                             }
                         });
-                        crate::engine_worker::hold(cx, crate::engine_worker::Lane::Onboarding, task);
+                        crate::engine_worker::hold(
+                            cx,
+                            crate::engine_worker::Lane::Onboarding,
+                            task,
+                        );
                         return;
 
                     }
@@ -810,21 +818,37 @@ pub fn open(cx: &mut App) {
         cx.activate(true);
         return;
     }
-    if cx.try_global::<Opening>().is_some() { return; }
+    if cx.try_global::<Opening>().is_some() {
+        return;
+    }
     refresh_browsers(cx);
     let facts = Facts::probe(cx);
     let config = crate::router::config_in_charge();
-    if config.is_none() { open_ready(facts, cx); return; }
+    if config.is_none() {
+        open_ready(facts, cx);
+        return;
+    }
     let request = Rc::new(());
     cx.set_global(Opening(request.clone()));
     let expected = config.clone();
-    let result = crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || config.map(FinickyFound::read));
+    let result = crate::engine_worker::service(cx)
+        .once(crate::engine_worker::Lane::Config, move || {
+            config.map(FinickyFound::read)
+        });
     let task = cx.spawn(async move |cx| {
         if let Ok(finicky) = crate::engine_worker::receive(result).await {
             cx.update(|cx| {
-                if !cx.try_global::<Opening>().is_some_and(|opening| Rc::ptr_eq(&opening.0, &request)) { return; }
+                if !cx
+                    .try_global::<Opening>()
+                    .is_some_and(|opening| Rc::ptr_eq(&opening.0, &request))
+                {
+                    return;
+                }
                 cx.remove_global::<Opening>();
-                if crate::router::config_in_charge() != expected { open(cx); return; }
+                if crate::router::config_in_charge() != expected {
+                    open(cx);
+                    return;
+                }
                 let mut facts = facts;
                 facts.finicky = finicky;
                 open_ready(facts, cx);

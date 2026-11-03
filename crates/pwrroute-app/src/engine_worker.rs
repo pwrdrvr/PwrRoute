@@ -3,118 +3,229 @@
 //! impacts and saved examples cannot monopolize interactive previews.
 use std::{
     array,
-    sync::{Arc, Condvar, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy)]
-pub enum Lane { Preview, Tests, Link, Impact, Config, Import, Onboarding, Activity, Collisions, CheckRule }
+pub enum Lane {
+    Preview,
+    Tests,
+    Link,
+    Impact,
+    Config,
+    Import,
+    Onboarding,
+    Activity,
+    Collisions,
+    CheckRule,
+}
 pub const LANES: usize = 10;
 type Step = Box<dyn FnMut() -> bool>;
 type Factory = Box<dyn FnOnce(Cancel) -> Step + Send>;
-struct Pending { at: Instant, cancel: Cancel, factory: Factory }
-struct Queue { pending: [Option<Pending>; LANES], tokens: [Option<Cancel>; LANES], closed: bool }
-struct Shared { queue: Mutex<Queue>, wake: Condvar, active: AtomicUsize }
-struct Running { cancel: Cancel, step: Step, shared: Arc<Shared> }
-impl Drop for Running { fn drop(&mut self) { self.shared.active.fetch_sub(1, Ordering::Release); self.shared.wake.notify_all(); } }
+struct Pending {
+    at: Instant,
+    cancel: Cancel,
+    factory: Factory,
+}
+struct Queue {
+    pending: [Option<Pending>; LANES],
+    tokens: [Option<Cancel>; LANES],
+    closed: bool,
+}
+struct Shared {
+    queue: Mutex<Queue>,
+    wake: Condvar,
+    active: AtomicUsize,
+}
+struct Running {
+    cancel: Cancel,
+    step: Step,
+    shared: Arc<Shared>,
+}
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.shared.active.fetch_sub(1, Ordering::Release);
+        self.shared.wake.notify_all();
+    }
+}
 
 #[derive(Clone)]
 pub struct Cancel(Arc<AtomicBool>);
 impl Cancel {
-    pub fn cancelled(&self) -> bool { self.0.load(Ordering::Acquire) }
-    fn cancel(&self) { self.0.store(true, Ordering::Release); }
+    pub fn cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+    fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
-pub struct EngineWorker { client: Client }
+pub struct EngineWorker {
+    client: Client,
+}
 #[derive(Clone)]
-pub struct Client { shared: Arc<Shared> }
-impl std::ops::Deref for EngineWorker { type Target = Client; fn deref(&self) -> &Client { &self.client } }
+pub struct Client {
+    shared: Arc<Shared>,
+}
+impl std::ops::Deref for EngineWorker {
+    type Target = Client;
+    fn deref(&self) -> &Client {
+        &self.client
+    }
+}
 impl EngineWorker {
     pub fn new() -> Self {
         let shared = Arc::new(Shared {
-            queue: Mutex::new(Queue { pending: array::from_fn(|_| None), tokens: array::from_fn(|_| None), closed: false }),
+            queue: Mutex::new(Queue {
+                pending: array::from_fn(|_| None),
+                tokens: array::from_fn(|_| None),
+                closed: false,
+            }),
             wake: Condvar::new(),
             active: AtomicUsize::new(0),
         });
         let worker = shared.clone();
-        thread::Builder::new().name("pwrroute-ui-engine".into()).spawn(move || {
-            let mut running: [Option<Running>; LANES] = array::from_fn(|_| None);
-            let mut next = 0;
-            loop {
-                let mut queue = worker.queue.lock().unwrap();
-                if queue.closed { break; }
-                let now = Instant::now();
-                for (lane, task) in running.iter_mut().enumerate() {
-                    if task.as_ref().is_some_and(|task| task.cancel.cancelled()) { *task = None; }
-                    if queue.pending[lane].as_ref().is_some_and(|job| job.at <= now) {
-                        let job = queue.pending[lane].take().unwrap();
-                        // Construct engines outside the queue lock: submitting or
-                        // closing must never wait for config evaluation.
-                        worker.active.fetch_add(1, Ordering::Release);
+        thread::Builder::new()
+            .name("pwrroute-ui-engine".into())
+            .spawn(move || {
+                let mut running: [Option<Running>; LANES] = array::from_fn(|_| None);
+                let mut next = 0;
+                loop {
+                    let mut queue = worker.queue.lock().unwrap();
+                    if queue.closed {
+                        break;
+                    }
+                    let now = Instant::now();
+                    for (lane, task) in running.iter_mut().enumerate() {
+                        if task.as_ref().is_some_and(|task| task.cancel.cancelled()) {
+                            *task = None;
+                        }
+                        if queue.pending[lane]
+                            .as_ref()
+                            .is_some_and(|job| job.at <= now)
+                        {
+                            let job = queue.pending[lane].take().unwrap();
+                            // Construct engines outside the queue lock: submitting or
+                            // closing must never wait for config evaluation.
+                            worker.active.fetch_add(1, Ordering::Release);
+                            drop(queue);
+                            let cancel = job.cancel;
+                            let step = (job.factory)(cancel.clone());
+                            *task = Some(Running {
+                                cancel,
+                                step,
+                                shared: worker.clone(),
+                            });
+                            queue = worker.queue.lock().unwrap();
+                        }
+                    }
+                    let lane = (0..LANES)
+                        .map(|i| (next + i) % LANES)
+                        .find(|i| running[*i].is_some());
+                    if let Some(lane) = lane {
                         drop(queue);
-                        let cancel = job.cancel;
-                        let step = (job.factory)(cancel.clone());
-                        *task = Some(Running { cancel, step, shared: worker.clone() });
-                        queue = worker.queue.lock().unwrap();
+                        next = (lane + 1) % LANES;
+                        let task = running[lane].as_mut().unwrap();
+                        if task.cancel.cancelled() || (task.step)() {
+                            running[lane] = None;
+                        }
+                    } else {
+                        let delay = queue
+                            .pending
+                            .iter()
+                            .flatten()
+                            .map(|job| job.at.saturating_duration_since(Instant::now()))
+                            .min();
+                        drop(match delay {
+                            Some(delay) => worker.wake.wait_timeout(queue, delay).unwrap().0,
+                            None => worker.wake.wait(queue).unwrap(),
+                        });
                     }
                 }
-                let lane = (0..LANES).map(|i| (next + i) % LANES).find(|i| running[*i].is_some());
-                if let Some(lane) = lane {
-                    drop(queue);
-                    next = (lane + 1) % LANES;
-                    let task = running[lane].as_mut().unwrap();
-                    if task.cancel.cancelled() || (task.step)() { running[lane] = None; }
-                } else {
-                    let delay = queue.pending.iter().flatten().map(|job| job.at.saturating_duration_since(Instant::now())).min();
-                    drop(match delay {
-                        Some(delay) => worker.wake.wait_timeout(queue, delay).unwrap().0,
-                        None => worker.wake.wait(queue).unwrap(),
-                    });
-                }
-            }
-            // No join on GPUI: any current call finishes under its existing
-            // engine/network deadline, then all engines are dropped here.
-        }).expect("start UI engine worker");
-        Self { client: Client { shared } }
+                // No join on GPUI: any current call finishes under its existing
+                // engine/network deadline, then all engines are dropped here.
+            })
+            .expect("start UI engine worker");
+        Self {
+            client: Client { shared },
+        }
     }
-    pub fn client(&self) -> Client { self.client.clone() }
+    pub fn client(&self) -> Client {
+        self.client.clone()
+    }
 }
 impl Client {
     pub fn cancel(&self, lane: Lane) {
         let mut queue = self.shared.queue.lock().unwrap();
-        if let Some(token) = queue.tokens[lane as usize].take() { token.cancel(); }
+        if let Some(token) = queue.tokens[lane as usize].take() {
+            token.cancel();
+        }
         queue.pending[lane as usize] = None;
         self.shared.wake.notify_one();
     }
 
     /// At most one pending and one running job per lane. Replacements
     /// cancel both the old result and the remainder of its batch.
-    pub fn submit<T: Send + 'static, F, S>(&self, lane: Lane, debounce: Duration, build: F) -> async_channel::Receiver<T>
-    where F: FnOnce(Cancel) -> S + Send + 'static, S: FnMut() -> Option<T> + 'static {
+    pub fn submit<T: Send + 'static, F, S>(
+        &self,
+        lane: Lane,
+        debounce: Duration,
+        build: F,
+    ) -> async_channel::Receiver<T>
+    where
+        F: FnOnce(Cancel) -> S + Send + 'static,
+        S: FnMut() -> Option<T> + 'static,
+    {
         #[cfg(test)]
-        let debounce = { let _ = debounce; Duration::ZERO };
+        let debounce = {
+            let _ = debounce;
+            Duration::ZERO
+        };
         let (tx, rx) = async_channel::bounded(1);
         let cancel = Cancel(Arc::new(AtomicBool::new(false)));
         let factory: Factory = Box::new(move |cancel| {
             let mut step = build(cancel.clone());
             Box::new(move || {
-                if cancel.cancelled() || tx.is_closed() { return true; }
+                if cancel.cancelled() || tx.is_closed() {
+                    return true;
+                }
                 match step() {
-                    Some(result) => { if !cancel.cancelled() { let _ = tx.try_send(result); } true }
+                    Some(result) => {
+                        if !cancel.cancelled() {
+                            let _ = tx.try_send(result);
+                        }
+                        true
+                    }
                     None => false,
                 }
             })
         });
         let mut queue = self.shared.queue.lock().unwrap();
         let i = lane as usize;
-        if let Some(old) = queue.tokens[i].replace(cancel.clone()) { old.cancel(); }
-        if !queue.closed { queue.pending[i] = Some(Pending { at: Instant::now() + debounce, cancel, factory }); }
+        if let Some(old) = queue.tokens[i].replace(cancel.clone()) {
+            old.cancel();
+        }
+        if !queue.closed {
+            queue.pending[i] = Some(Pending {
+                at: Instant::now() + debounce,
+                cancel,
+                factory,
+            });
+        }
         self.shared.wake.notify_one();
         rx
     }
 
-    pub fn once<T: Send + 'static>(&self, lane: Lane, work: impl FnOnce() -> T + Send + 'static) -> async_channel::Receiver<T> {
+    pub fn once<T: Send + 'static>(
+        &self,
+        lane: Lane,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> async_channel::Receiver<T> {
         self.submit(lane, Duration::ZERO, move |_| {
             let mut work = Some(work);
             move || Some(work.take().unwrap()())
@@ -125,7 +236,9 @@ impl Drop for EngineWorker {
     fn drop(&mut self) {
         let mut queue = self.shared.queue.lock().unwrap();
         queue.closed = true;
-        for cancel in queue.tokens.iter().flatten() { cancel.cancel(); }
+        for cancel in queue.tokens.iter().flatten() {
+            cancel.cancel();
+        }
         queue.pending = array::from_fn(|_| None);
         self.shared.wake.notify_one();
     }
@@ -140,11 +253,28 @@ mod tests {
         let worker = EngineWorker::new();
         let (entered, started) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
-        let first = worker.once(Lane::Preview, move || { entered.send(()).unwrap(); blocked.recv().unwrap(); 0 });
+        let first = worker.once(Lane::Preview, move || {
+            entered.send(()).unwrap();
+            blocked.recv().unwrap();
+            0
+        });
         started.recv().unwrap();
         let mut last = None;
-        for n in 1..1000 { last = Some(worker.once(Lane::Preview, move || n)); }
-        assert_eq!(worker.shared.queue.lock().unwrap().pending.iter().flatten().count(), 1);
+        for n in 1..1000 {
+            last = Some(worker.once(Lane::Preview, move || n));
+        }
+        assert_eq!(
+            worker
+                .shared
+                .queue
+                .lock()
+                .unwrap()
+                .pending
+                .iter()
+                .flatten()
+                .count(),
+            1
+        );
         release.send(()).unwrap();
         assert_eq!(last.unwrap().recv_blocking().unwrap(), 999);
         assert!(first.recv_blocking().is_err());
@@ -156,7 +286,14 @@ mod tests {
         let (release, blocked) = mpsc::channel();
         let batch = worker.submit(Lane::Impact, Duration::ZERO, move |_| {
             let mut first = true;
-            move || { if first { first = false; entered.send(()).unwrap(); blocked.recv().unwrap(); } None::<()> }
+            move || {
+                if first {
+                    first = false;
+                    entered.send(()).unwrap();
+                    blocked.recv().unwrap();
+                }
+                None::<()>
+            }
         });
         started.recv().unwrap();
         let interactive = worker.once(Lane::Preview, || 42);
@@ -170,7 +307,11 @@ mod tests {
         let worker = EngineWorker::new();
         let (entered, started) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
-        let active = worker.once(Lane::Tests, move || { entered.send(()).unwrap(); blocked.recv().unwrap(); 1 });
+        let active = worker.once(Lane::Tests, move || {
+            entered.send(()).unwrap();
+            blocked.recv().unwrap();
+            1
+        });
         started.recv().unwrap();
         let pending = worker.once(Lane::Config, || panic!("closed worker ran pending job"));
         drop(worker);
@@ -182,7 +323,14 @@ mod tests {
 
 pub type Stamps = Vec<(std::path::PathBuf, Option<std::time::SystemTime>)>;
 pub fn stamps(engine: &pwrroute_engine::Engine) -> Stamps {
-    engine.dependencies().into_iter().map(|path| { let at = modified(&path); (path, at) }).collect()
+    engine
+        .dependencies()
+        .into_iter()
+        .map(|path| {
+            let at = modified(&path);
+            (path, at)
+        })
+        .collect()
 }
 fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
@@ -191,11 +339,19 @@ pub fn unchanged(stamps: &Stamps) -> bool {
     stamps.iter().all(|(path, at)| modified(path) == *at)
 }
 
-struct Service { tasks: [Option<gpui_kit::Task<()>>; LANES], worker: EngineWorker }
+struct Service {
+    tasks: [Option<gpui_kit::Task<()>>; LANES],
+    worker: EngineWorker,
+}
 impl gpui_kit::Global for Service {}
 /// Standalone importer/onboarding operations use one process-owned worker.
 pub fn service(cx: &mut gpui_kit::App) -> Client {
-    if cx.try_global::<Service>().is_none() { cx.set_global(Service { tasks: array::from_fn(|_| None), worker: EngineWorker::new() }); }
+    if cx.try_global::<Service>().is_none() {
+        cx.set_global(Service {
+            tasks: array::from_fn(|_| None),
+            worker: EngineWorker::new(),
+        });
+    }
     cx.global::<Service>().worker.client()
 }
 
@@ -205,9 +361,18 @@ impl Client {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let queue = self.shared.queue.lock().unwrap();
-            if queue.pending.iter().all(Option::is_none) && self.shared.active.load(Ordering::Acquire) == 0 { return; }
+            if queue.pending.iter().all(Option::is_none)
+                && self.shared.active.load(Ordering::Acquire) == 0
+            {
+                return;
+            }
             assert!(Instant::now() < deadline, "UI engine worker did not settle");
-            drop(self.shared.wake.wait_timeout(queue, Duration::from_millis(10)).unwrap());
+            drop(
+                self.shared
+                    .wake
+                    .wait_timeout(queue, Duration::from_millis(10))
+                    .unwrap(),
+            );
         }
     }
 }
@@ -215,10 +380,14 @@ impl Client {
 pub fn settle(cx: &mut gpui_kit::App) {
     for window in cx.windows() {
         if let Some(window) = window.downcast::<crate::app::PwrRoute>() {
-            if let Ok(client) = window.read(cx).map(|app| app.engine_worker.client()) { client.wait_idle(); }
+            if let Ok(client) = window.read(cx).map(|app| app.engine_worker.client()) {
+                client.wait_idle();
+            }
         }
     }
-    if let Some(service) = cx.try_global::<Service>() { service.worker.wait_idle(); }
+    if let Some(service) = cx.try_global::<Service>() {
+        service.worker.wait_idle();
+    }
 }
 
 pub fn hold(cx: &mut gpui_kit::App, lane: Lane, task: gpui_kit::Task<()>) {
@@ -236,19 +405,28 @@ pub fn cancel_service(cx: &mut gpui_kit::App, lane: Lane) {
 /// GPUI's deterministic test scheduler forbids wakes from OS threads.
 /// Tests wait on the same result channel when the completion task is
 /// polled; production suspends without blocking the UI thread.
-pub async fn receive<T>(receiver: async_channel::Receiver<T>) -> Result<T, async_channel::RecvError> {
+pub async fn receive<T>(
+    receiver: async_channel::Receiver<T>,
+) -> Result<T, async_channel::RecvError> {
     #[cfg(test)]
-    { receiver.recv_blocking() }
+    {
+        receiver.recv_blocking()
+    }
     #[cfg(not(test))]
-    { receiver.recv().await }
+    {
+        receiver.recv().await
+    }
 }
 
 pub fn primary(path: Option<&std::path::Path>) -> Stamps {
-    path.map(|path| vec![(path.to_path_buf(), modified(path))]).unwrap_or_default()
+    path.map(|path| vec![(path.to_path_buf(), modified(path))])
+        .unwrap_or_default()
 }
 pub fn dependencies(mut before: Stamps, engine: &pwrroute_engine::Engine) -> Stamps {
     for entry in stamps(engine) {
-        if !before.iter().any(|(path, _)| path == &entry.0) { before.push(entry); }
+        if !before.iter().any(|(path, _)| path == &entry.0) {
+            before.push(entry);
+        }
     }
     before
 }
