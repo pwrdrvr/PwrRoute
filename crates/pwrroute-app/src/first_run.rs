@@ -1354,7 +1354,6 @@ impl FirstRun {
                     access.still_blocked = false;
                 }
             }
-            self.preselect(cx);
         }
         cx.notify();
     }
