@@ -1050,7 +1050,10 @@ fn deferred_rule_navigation_is_cancelled_when_disk_reloads(cx: &mut TestAppConte
     // The destination can be chosen again using its new position.
     click(cx, "handler-2");
     click(cx, crate::editor::LEAVE_SAVE_ID);
-    assert_eq!(view.read_with(cx, |app, _| app.selection), Some(Selection::Handler(2)));
+    assert_eq!(
+        view.read_with(cx, |app, _| app.selection),
+        Some(Selection::Handler(2))
+    );
     assert_eq!(RulesFile::load(&path).unwrap().rules[1].profile, "Draft");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -1061,7 +1064,10 @@ fn answering_deferred_rule_navigation_checks_disk_before_save_or_discard(cx: &mu
     let path = dir.join("rules.json");
     written_by_someone_else(&path, 3);
     let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
-    for answer in [crate::app::LeaveAnswer::Save, crate::app::LeaveAnswer::Discard] {
+    for answer in [
+        crate::app::LeaveAnswer::Save,
+        crate::app::LeaveAnswer::Discard,
+    ] {
         view.update(cx, |app, cx| {
             app.store.set_profile(0, "Draft");
             app.refresh(cx);
@@ -1074,7 +1080,10 @@ fn answering_deferred_rule_navigation_checks_disk_before_save_or_discard(cx: &mu
         file.save(&path).unwrap();
         view.update_in(cx, |app, window, cx| app.answer_leave(answer, window, cx));
         assert!(view.read_with(cx, |app, _| app.leaving.is_none()));
-        assert_eq!(view.read_with(cx, |app, _| app.selection), Some(Selection::Handler(0)));
+        assert_eq!(
+            view.read_with(cx, |app, _| app.selection),
+            Some(Selection::Handler(0))
+        );
         assert!(view.read_with(cx, |app, _| app.store.draft_changed()));
         assert_eq!(RulesFile::load(&path).unwrap().rules[0].profile, "");
         draw(cx);
@@ -1090,7 +1099,8 @@ fn deferred_rule_navigation_cancels_for_reordered_or_removed_rewrites(cx: &mut T
     for remove in [false, true] {
         view.update(cx, |app, cx| {
             app.select(Selection::Rewrite(0), cx);
-            app.store.set_pattern(Selection::Rewrite(0), 0, "draft.example/*");
+            app.store
+                .set_pattern(Selection::Rewrite(0), 0, "draft.example/*");
             app.refresh(cx);
             app.select(Selection::Rewrite(1), cx);
             assert!(app.leaving.is_some());
@@ -1133,7 +1143,12 @@ fn deferred_rule_navigation_keeps_the_prompt_when_save_fails(cx: &mut TestAppCon
         app.answer_leave(crate::app::LeaveAnswer::Save, window, cx);
         assert!(app.leaving.is_some());
         assert!(app.store.draft_changed());
-        assert!(app.draft_note.as_ref().unwrap().contains("No configuration directory"));
+        assert!(
+            app.draft_note
+                .as_ref()
+                .unwrap()
+                .contains("No configuration directory")
+        );
         assert_eq!(app.selection, Some(Selection::Handler(0)));
     });
     draw(cx);
@@ -1233,7 +1248,10 @@ fn deferred_actions_without_row_targets_survive_reload(cx: &mut TestAppContext) 
     file.save(&path).unwrap();
     view.update_in(cx, |app, window, cx| {
         assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
-        assert_eq!(app.store.draft_conflict(), Some(crate::rules_store::Conflict::Changed));
+        assert_eq!(
+            app.store.draft_conflict(),
+            Some(crate::rules_store::Conflict::Changed)
+        );
         assert!(app.leaving.is_some());
         app.answer_leave(LeaveAnswer::Discard, window, cx);
         assert!(app.store.draft_is_new(), "Then started the new rule");
@@ -1250,7 +1268,7 @@ fn deferred_actions_without_row_targets_survive_reload(cx: &mut TestAppContext) 
         app.answer_leave(LeaveAnswer::Discard, window, cx);
     });
     cx.run_until_parked();
-    assert!(cx.update(|_, cx| cx.windows().is_empty()));
+    assert!(cx.cx.update(|cx| cx.windows().is_empty()));
     assert_eq!(RulesFile::load(&path).unwrap(), file);
     let _ = std::fs::remove_dir_all(dir);
 }

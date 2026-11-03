@@ -77,13 +77,17 @@ pub type LeaveThen = Box<dyn FnOnce(&mut PwrRoute, &mut Window, &mut Context<'_,
 pub enum Leave {
     /// Another row.
     Select(Selection),
+    /// Copy a row, then open the copy. Like Select, its index is valid
+    /// only until the rules reload.
+    Duplicate(Selection),
     /// Back to the list ("‹ All rules", Esc in the stacked layout).
     Deselect,
     /// The window's close button or ⌘W.
     Close,
     /// Anything else that starts or opens another rule: Add rule, the
-    /// Overview's and Test a link's, Duplicate. `what` finishes the
-    /// question ("before starting a new rule?").
+    /// Overview's and Test a link's. Must not capture a row index: use a
+    /// typed transition above for those. `what` finishes the question
+    /// ("before starting a new rule?").
     Then { what: &'static str, then: LeaveThen },
 }
 
@@ -93,6 +97,7 @@ impl Leave {
         let to = match self {
             Self::Select(Selection::Handler(i)) => format!("opening rule {}", i + 1),
             Self::Select(Selection::Rewrite(i)) => format!("opening rewrite {}", i + 1),
+            Self::Duplicate(_) => "duplicating it".to_owned(),
             Self::Deselect => "going back to all rules".to_owned(),
             Self::Close => "closing the window".to_owned(),
             Self::Then { what, .. } => (*what).to_owned(),
@@ -480,36 +485,59 @@ impl PwrRoute {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(to) = self.leaving.take() else {
+        if answer == LeaveAnswer::KeepEditing {
+            self.leaving = None;
+            cx.notify();
             return;
-        };
+        }
+        if self.leaving.is_none() {
+            return;
+        }
+        // A prompt's row index may already be stale when the answer is
+        // pressed. Reload before touching the draft, and let reload cancel
+        // that transition while keeping the rebased draft to edit.
+        self.sync_with_disk(cx);
+        if self.leaving.is_none() {
+            return;
+        }
         let removed = match answer {
-            LeaveAnswer::KeepEditing => {
-                cx.notify();
-                return;
-            }
+            LeaveAnswer::KeepEditing => unreachable!("handled above"),
             LeaveAnswer::Save => {
-                if !self.save_draft(cx) {
+                if !self.write_draft(cx) {
                     // The note says why; the prompt stays.
-                    self.leaving = Some(to);
                     return;
                 }
                 None
             }
             LeaveAnswer::Discard => self.discard_draft(window, cx),
         };
+        // Keep ownership in the window until Save/Discard finishes:
+        // their refresh can also reload and invalidate a row transition.
+        let Some(to) = self.leaving.take() else {
+            return;
+        };
         // A never-saved rule left its list: rows below it moved up one.
         let shift = |selection: Selection| match (selection, removed) {
+            (selection, Some(gone)) if selection == gone => None,
             (Selection::Handler(i), Some(Selection::Handler(gone))) if i > gone => {
-                Selection::Handler(i - 1)
+                Some(Selection::Handler(i - 1))
             }
             (Selection::Rewrite(i), Some(Selection::Rewrite(gone))) if i > gone => {
-                Selection::Rewrite(i - 1)
+                Some(Selection::Rewrite(i - 1))
             }
-            (selection, _) => selection,
+            (selection, _) => Some(selection),
         };
         match to {
-            Leave::Select(selection) => self.select(shift(selection), cx),
+            Leave::Select(selection) => {
+                if let Some(selection) = shift(selection) {
+                    self.select(selection, cx);
+                }
+            }
+            Leave::Duplicate(selection) => {
+                if let Some(selection) = shift(selection) {
+                    self.duplicate_rule(selection, window, cx);
+                }
+            }
             Leave::Deselect => self.deselect(cx),
             Leave::Close => window.remove_window(),
             Leave::Then { then, .. } => then(self, window, cx),
@@ -523,12 +551,21 @@ impl PwrRoute {
     pub fn save_draft(&mut self, cx: &mut Context<'_, Self>) -> bool {
         // Another writer's change first: the draft rides on top of it.
         self.sync_with_disk(cx);
+        let saved = self.write_draft(cx);
+        if saved {
+            // A direct Save finishes any question about leaving.
+            self.leaving = None;
+        }
+        saved
+    }
+
+    /// Save after checking disk, keeping a deferred transition in the
+    /// window so a reload during refresh can still invalidate it.
+    fn write_draft(&mut self, cx: &mut Context<'_, Self>) -> bool {
         match self.store.save_draft() {
             Ok(()) => {
                 self.refresh(cx);
                 self.draft_note = None;
-                // Nothing is left to ask about.
-                self.leaving = None;
                 self.rebuild_rail_kept(cx);
                 if self.tests.counts() != (0, 0) {
                     self.tests.run();
@@ -638,6 +675,7 @@ impl PwrRoute {
         self.probe.set_rules(self.store.edited());
         self.tests.set_rules(self.store.edited());
         if disk == Disk::Reloaded {
+            self.cancel_row_leave();
             // The rail's fields held a rule that is gone: nothing was
             // unsaved, so they are rebuilt from the file.
             self.rebuild_rail(cx);
@@ -789,6 +827,7 @@ impl PwrRoute {
         // The rows may be other rules now: a menu, a drag or an Undo for
         // one of them would land on the wrong one.
         self.row_actions = crate::rule_menu::RowActions::default();
+        self.cancel_row_leave();
         self.selection = self.selection.filter(|s| self.in_store(*s));
         // The draft stays on its rule, wherever the file put it.
         self.follow_draft();
@@ -812,6 +851,14 @@ impl PwrRoute {
             self.overview.pin(None);
         }
         cx.notify();
+    }
+
+    /// Reload recreates store ids and may replace or reorder any row.
+    /// Cancel indexed work; the person can choose again against this file.
+    fn cancel_row_leave(&mut self) {
+        if matches!(self.leaving, Some(Leave::Select(_) | Leave::Duplicate(_))) {
+            self.leaving = None;
+        }
     }
 
     /// Checks the file each time the window comes to the front: an editor
