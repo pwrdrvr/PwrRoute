@@ -326,7 +326,7 @@ impl PwrRoute {
             }
         });
         self.engine_tasks[crate::engine_worker::Lane::Impact as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((baseline, counts, stamps)) = result.recv().await {
+            if let Ok((baseline, counts, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     if this.engine_revision == revision && std::rc::Rc::ptr_eq(&this.row_actions.request, &request)
                         && crate::engine_worker::unchanged(&stamps) {

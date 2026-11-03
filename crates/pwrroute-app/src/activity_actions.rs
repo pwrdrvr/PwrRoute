@@ -1002,7 +1002,7 @@ impl PwrRoute {
             (winner, probe.stamps())
         });
         self.engine_tasks[crate::engine_worker::Lane::Activity as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((winner, stamps)) = result.recv().await {
+            if let Ok((winner, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     this.sync_with_disk(cx);
                     if this.engine_revision != revision || !crate::engine_worker::unchanged(&stamps) { return; }
@@ -1267,7 +1267,7 @@ impl PwrRoute {
             }
         });
         self.engine_tasks[crate::engine_worker::Lane::Collisions as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((result, stamps)) = result.recv().await {
+            if let Ok((result, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     let Some(sheet) = &mut this.actions.sheet else { return; };
                     if sheet.key != key || !std::rc::Rc::ptr_eq(&sheet.match_request, &request) || this.engine_revision != revision { return; }
@@ -1487,7 +1487,7 @@ impl PwrRoute {
             (result, probe.stamps())
         });
         self.engine_tasks[crate::engine_worker::Lane::CheckRule as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((result, stamps)) = result.recv().await {
+            if let Ok((result, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     this.sync_with_disk(cx);
                     let Some(sheet) = &mut this.actions.sheet else { return; };

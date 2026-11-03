@@ -141,6 +141,7 @@ pub struct PwrRoute {
     pub(crate) engine_revision: u64,
     preview_request: u64,
     config_request: u64,
+    config_pending: bool,
     /// The file's examples and tests, run on every save.
     pub tests: TestRuns,
     /// A Finicky config is in charge: the Rules screen is option 1b.
@@ -243,6 +244,7 @@ impl PwrRoute {
         let updates = crate::update_notice::notices(cx)
             .map(|notices| cx.observe(&notices, |_, _, cx| cx.notify()));
         // Rules opens as a list: the editor appears on a click (or Down).
+        let config_pending = config.is_some();
         let engine_worker = EngineWorker::new();
         let mut this = Self {
             // A Tab stop, so Tab comes back round to the list and map keys.
@@ -258,6 +260,7 @@ impl PwrRoute {
             engine_revision: 0,
             preview_request: 0,
             config_request: 0,
+            config_pending,
             tests: TestRuns::new(config.clone(), store.edited()),
             test: TestLink::new(
                 config,
@@ -823,6 +826,7 @@ impl PwrRoute {
     pub fn set_config(&mut self, config: Option<PathBuf>, cx: &mut Context<'_, Self>) {
         self.engine_revision += 1;
         self.engine_worker.cancel(Lane::Impact);
+        self.config_pending = config.is_some();
         self.config = config.as_deref().map(|path| pending_config(path, self.home.as_deref()));
         self.visual_rules_expanded = false;
         self.described = None;
@@ -988,7 +992,7 @@ impl PwrRoute {
             }
         });
         self.engine_tasks[Lane::Preview as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((result, stamps)) = result.recv().await {
+            if let Ok((result, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     if this.preview_request == request && this.engine_revision == revision && this.selection == Some(selection) {
                         if !crate::engine_worker::unchanged(&stamps) { this.try_it(cx); return; }
@@ -1576,7 +1580,7 @@ impl PwrRoute {
         let (request, config, rules) = self.tests.begin();
         let result = self.engine_worker.submit(Lane::Tests, Duration::ZERO, move |_| crate::try_it::test_steps(config, rules));
         self.engine_tasks[Lane::Tests as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((report, stamps)) = result.recv().await {
+            if let Ok((report, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     if !crate::engine_worker::unchanged(&stamps) {
                         if this.tests.is_current(&request) { this.schedule_tests(cx); }
@@ -1598,18 +1602,20 @@ impl PwrRoute {
         self.config_request += 1;
         let request = self.config_request;
         let result = self.engine_worker.once(Lane::Config, move || {
+            let before = crate::engine_worker::primary(Some(&path));
             let engine = Engine::load(&path, Rc::new(NativeHost::new()), Limits::default());
             let description = engine.as_ref().ok().and_then(|engine| engine.describe().ok().flatten());
             let config = ConfigInCharge::new(&path, home.as_deref(), engine.as_ref());
-            let stamps = engine.as_ref().map(crate::engine_worker::stamps).unwrap_or_default();
+            let stamps = engine.as_ref().map_or_else(|| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
             (config, description, stamps)
         });
         self.engine_tasks[Lane::Config as usize] = Some(cx.spawn(async move |this, cx| {
-            if let Ok((config, description, stamps)) = result.recv().await {
+            if let Ok((config, description, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
                     if this.config_request == request {
                         if !crate::engine_worker::unchanged(&stamps) { this.describe_config(cx); return; }
                         this.config = Some(config);
+                        this.config_pending = false;
                         this.described = description;
                         cx.notify();
                     }
@@ -1620,7 +1626,9 @@ impl PwrRoute {
 }
 
 fn pending_config(path: &std::path::Path, home: Option<&std::path::Path>) -> ConfigInCharge {
-    ConfigInCharge::new(path, home, Err(&anyhow::anyhow!("Reading config…")))
+    let mut pending = ConfigInCharge::new(path, home, Err(&anyhow::anyhow!("Reading config…")));
+    pending.problem = None;
+    pending
 }
 
 /// Every main window checks the file now: an in-process agent write
@@ -1711,6 +1719,8 @@ impl Render for PwrRoute {
         // the Overview, so they agree.
         let status = overview::status(self, cx);
         let pane = match (self.screen, &self.config) {
+            (Screen::Overview | Screen::Rules, Some(_)) if self.config_pending => div().flex_1().p(theme::px(24.0))
+                .child(theme::text("Reading config…", 13.0, 500.0, theme::text_muted())).into_any_element(),
             (Screen::Overview, _) => overview::pane(self, &status, window, cx).into_any_element(),
             (Screen::Rules, None) => rules_view::pane(self, cx).into_any_element(),
             (Screen::Rules, Some(config)) => config_view::pane(self, config, cx).into_any_element(),

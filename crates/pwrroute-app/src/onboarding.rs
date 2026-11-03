@@ -545,7 +545,7 @@ pub fn hooks_with(
                         let result = crate::engine_worker::service(cx).submit(crate::engine_worker::Lane::Onboarding, std::time::Duration::ZERO, move |_| crate::try_it::test_steps(config, file));
                         let reply = reply.clone();
                         let task = cx.spawn(async move |cx| {
-                            if let Ok((report, _stamps)) = result.recv().await {
+                            if let Ok((report, _stamps)) = crate::engine_worker::receive(result).await {
                                 let report = if crate::engine_worker::unchanged(&_stamps) { report } else { Err("Config changed while tests ran".into()) };
                                 let summary = match report {
                                     Ok(report) => format!("Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.", report.passed, report.total),
@@ -820,7 +820,7 @@ pub fn open(cx: &mut App) {
     let expected = config.clone();
     let result = crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || config.map(FinickyFound::read));
     let task = cx.spawn(async move |cx| {
-        if let Ok(finicky) = result.recv().await {
+        if let Ok(finicky) = crate::engine_worker::receive(result).await {
             cx.update(|cx| {
                 if !cx.try_global::<Opening>().is_some_and(|opening| Rc::ptr_eq(&opening.0, &request)) { return; }
                 cx.remove_global::<Opening>();

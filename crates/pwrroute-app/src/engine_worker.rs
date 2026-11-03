@@ -232,3 +232,23 @@ pub fn cancel_service(cx: &mut gpui_kit::App, lane: Lane) {
         service.worker.cancel(lane);
     }
 }
+
+/// GPUI's deterministic test scheduler forbids wakes from OS threads.
+/// Tests wait on the same result channel when the completion task is
+/// polled; production suspends without blocking the UI thread.
+pub async fn receive<T>(receiver: async_channel::Receiver<T>) -> Result<T, async_channel::RecvError> {
+    #[cfg(test)]
+    { receiver.recv_blocking() }
+    #[cfg(not(test))]
+    { receiver.recv().await }
+}
+
+pub fn primary(path: Option<&std::path::Path>) -> Stamps {
+    path.map(|path| vec![(path.to_path_buf(), modified(path))]).unwrap_or_default()
+}
+pub fn dependencies(mut before: Stamps, engine: &pwrroute_engine::Engine) -> Stamps {
+    for entry in stamps(engine) {
+        if !before.iter().any(|(path, _)| path == &entry.0) { before.push(entry); }
+    }
+    before
+}

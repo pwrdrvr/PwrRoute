@@ -80,6 +80,7 @@ pub struct Probe {
     config_name: Option<String>,
     rules: RulesFile,
     engine: Option<Engine>,
+    loaded: crate::engine_worker::Stamps,
 }
 
 impl Probe {
@@ -100,6 +101,7 @@ impl Probe {
             config,
             rules,
             engine: None,
+            loaded: Vec::new(),
         }
     }
 
@@ -111,6 +113,7 @@ impl Probe {
             config_name: self.config_name.clone(),
             rules,
             engine: None,
+            loaded: Vec::new(),
         }
     }
 
@@ -120,11 +123,11 @@ impl Probe {
     }
 
     pub fn from_input(input: (Option<PathBuf>, Option<String>, RulesFile)) -> Self {
-        Self { config: input.0, config_name: input.1, rules: input.2, engine: None }
+        Self { config: input.0, config_name: input.1, rules: input.2, engine: None, loaded: Vec::new() }
     }
 
     pub fn stamps(&self) -> crate::engine_worker::Stamps {
-        self.engine.as_ref().map(crate::engine_worker::stamps).unwrap_or_default()
+        self.loaded.clone()
     }
 
     /// The rules changed: the next probe loads them.
@@ -138,7 +141,10 @@ impl Probe {
     /// The engine over the rules as they stand, built on first use.
     fn engine(&mut self) -> Result<&Engine, String> {
         if self.engine.is_none() {
-            self.engine = Some(load(self.config.as_deref(), &self.rules)?);
+            self.loaded = crate::engine_worker::primary(self.config.as_deref());
+            let engine = load(self.config.as_deref(), &self.rules)?;
+            self.loaded = crate::engine_worker::dependencies(std::mem::take(&mut self.loaded), &engine);
+            self.engine = Some(engine);
         }
         self.engine
             .as_ref()
@@ -965,6 +971,7 @@ mod tests {
 /// One saved assertion per scheduler turn, with the synced rules and no
 /// machine overrides (the same semantics as Engine::test_rules).
 pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> Option<(Result<TestReport, String>, crate::engine_worker::Stamps)> {
+    let before = crate::engine_worker::primary(config.as_deref());
     let loaded = crate::router::engine_as_routed(
         &pwrroute_engine::Sources { config, rules: rules.clone(), ..Default::default() },
         Rc::new(NativeHost::new()), Limits::default(),
@@ -973,7 +980,7 @@ pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> 
         Ok(engine) => (Some(engine), None),
         Err(error) => (None, Some(Err(error))),
     };
-    let stamps = engine.as_ref().map(crate::engine_worker::stamps).unwrap_or_default();
+    let stamps = engine.as_ref().map_or_else(|| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
     let mut sources = Vec::new();
     for (i, rule) in rules.rules.iter().enumerate() {
         for j in 0..rule.examples.len() { sources.push(TestSource::RuleExample { rule: i, example: j }); }

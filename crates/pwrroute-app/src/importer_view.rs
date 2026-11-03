@@ -362,7 +362,7 @@ fn open_inner(
         model
     });
     let task = cx.spawn(async move |cx| {
-        if let Ok(model) = result.recv().await {
+        if let Ok(model) = crate::engine_worker::receive(result).await {
             let _ = window.update(cx, |this, _, cx| {
                 if Rc::ptr_eq(&this.request, &request) { this.model = model; this.loading = false; cx.notify(); }
             });

@@ -277,7 +277,7 @@ impl TestLink {
         // opener is also needed by the UI; re-read its immutable choice.
         let opener = self.opener();
         self.task = Some(cx.spawn(async move |this, cx| {
-            if let Ok(result) = worker.recv().await {
+            if let Ok(result) = crate::engine_worker::receive(worker).await {
                 let _ = this.update(cx, |this, cx| {
                     if !Rc::ptr_eq(&this.test.request_token, &request_token) { return; }
                     this.test.expanding = false;
