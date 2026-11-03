@@ -2584,21 +2584,39 @@ mod tests {
         );
     }
     #[gpui_kit::test]
-    fn engine_review_import_changed_while_waiting_for_scan_cannot_open_old_setup(cx: &mut TestAppContext) {
+    fn engine_review_import_changed_while_waiting_for_scan_cannot_open_old_setup(
+        cx: &mut TestAppContext,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config.js");
         let dependency = dir.path().join("policy.js");
-        fs::write(&config, "import browser from './policy.js'; export default { defaultBrowser: browser };").unwrap();
+        fs::write(
+            &config,
+            "import browser from './policy.js'; export default { defaultBrowser: browser };",
+        )
+        .unwrap();
         fs::write(&dependency, "export default 'Safari';").unwrap();
-        fs::File::open(&dependency).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10)).unwrap();
+        fs::File::open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
+            .unwrap();
         let (found, stamps) = FinickyFound::read_with_stamps(config);
         let (release, wait) = async_channel::bounded(1);
         let original = cx.update(|cx| {
-            crate::browser_scan::install(pwrroute_browsers::Env::fixture(pwrroute_browsers::Platform::current(), dir.path().to_path_buf()), cx);
-            crate::browser_scan::set_test_producer(cx, std::sync::Arc::new(move || {
-                let wait = wait.clone();
-                Box::pin(async move { wait.recv().await.unwrap() })
-            }));
+            crate::browser_scan::install(
+                pwrroute_browsers::Env::fixture(
+                    pwrroute_browsers::Platform::current(),
+                    dir.path().to_path_buf(),
+                ),
+                cx,
+            );
+            crate::browser_scan::set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let wait = wait.clone();
+                    Box::pin(async move { wait.recv().await.unwrap() })
+                }),
+            );
             install(cx);
             let _ = crate::browser_scan::apps(cx);
             let mut facts = facts();
@@ -2617,11 +2635,18 @@ mod tests {
             token
         });
         fs::write(&dependency, "export default 'Firefox';").unwrap();
-        fs::File::open(&dependency).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20)).unwrap();
+        fs::File::open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
+            .unwrap();
         cx.update(|cx| {
             finish_opening(cx);
             assert!(!cx.has_global::<Open>(), "a stale review opened FirstRun");
-            assert!(!cx.try_global::<Opening>().is_some_and(|opening| Rc::ptr_eq(&opening.request, &original)), "the old review survived its dependency change");
+            assert!(
+                !cx.try_global::<Opening>()
+                    .is_some_and(|opening| Rc::ptr_eq(&opening.request, &original)),
+                "the old review survived its dependency change"
+            );
             if let Some(window) = cx.try_global::<Opening>().map(|opening| opening.window) {
                 let _ = window.update(cx, |_, window, _| window.remove_window());
             }
@@ -2633,5 +2658,4 @@ mod tests {
         assert!(!dir.path().join("rules.json").exists());
         assert!(!dir.path().join(STATE_FILE).exists());
     }
-
 }
