@@ -8212,21 +8212,46 @@ fn review_regression_menu_probe_cannot_cancel_explicit_example_save(cx: &mut Tes
     let dir = scratch("save-vs-menu");
     let base = fixtures::activity()[0].clone();
     let records = vec![
-        routed_by_rule(&base, 901, "https://tickets.example.com/save", 1, "Firefox", ""),
-        routed_by_rule(&base, 902, "https://docs.example.com/menu", 0, "Firefox", ""),
+        routed_by_rule(
+            &base,
+            901,
+            "https://tickets.example.com/save",
+            1,
+            "Firefox",
+            "",
+        ),
+        routed_by_rule(
+            &base,
+            902,
+            "https://docs.example.com/menu",
+            0,
+            "Firefox",
+            "",
+        ),
     ];
     cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
     let (view, cx) = open_store(cx, None, store_for(&dir, &attribution_rules()));
     let gate = gate_engine(&view, cx);
-    let save = RowKey { id: DispatchId(901), journaled: false };
-    let menu = RowKey { id: DispatchId(902), journaled: false };
+    let save = RowKey {
+        id: DispatchId(901),
+        journaled: false,
+    };
+    let menu = RowKey {
+        id: DispatchId(902),
+        journaled: false,
+    };
     view.update(cx, |app, cx| {
         app.save_record_as_example(save, cx);
         app.toggle_row_menu(menu, cx);
     });
     drop(gate);
     draw(cx);
-    assert!(view.read_with(cx, |app, _| app.store.written().rules[1].examples.iter().any(|s| s == "https://tickets.example.com/save")));
+    assert!(view.read_with(cx, |app, _| {
+        app.store.written().rules[1]
+            .examples
+            .iter()
+            .any(|s| s == "https://tickets.example.com/save")
+    }));
 }
 
 #[gpui_kit::test]
@@ -8237,13 +8262,58 @@ fn review_regression_failed_config_check_allows_explicit_add_anyway(cx: &mut Tes
     let (view, cx) = open_activity(cx, &dir, Some(config.clone()));
     click(cx, "activity-row-4");
     click(cx, "activity-add-rule-4");
-    view.update(cx, |app, cx| app.set_add_rule(|s| { s.browser = "Firefox".into(); s.pattern.set("new.example.com/*"); }, cx));
+    view.update(cx, |app, cx| {
+        app.set_add_rule(
+            |s| {
+                s.browser = "Firefox".into();
+                s.pattern.set("new.example.com/*");
+            },
+            cx,
+        )
+    });
     std::fs::write(&config, "export default {").unwrap();
     let before = view.read_with(cx, |app, _| app.store.written());
-    view.update(cx, |app, cx| { assert!(!app.add_rule_from_sheet(cx)); });
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx));
+    });
     draw(cx);
     assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
-    view.update(cx, |app, cx| { assert!(app.add_rule_from_sheet(cx), "explicit override repeated failed validation"); });
+    view.update(cx, |app, cx| {
+        app.set_add_rule(|sheet| sheet.pattern.set("changed.example.com/*"), cx);
+        assert!(!app.add_rule_from_sheet(cx), "changed rule reused unchecked validation");
+    });
     draw(cx);
-    assert_eq!(view.read_with(cx, |app, _| app.store.written().rules.len()), before.rules.len() + 1);
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
+    view.update(cx, |app, cx| {
+        assert!(
+            app.add_rule_from_sheet(cx),
+            "explicit override repeated failed validation"
+        );
+    });
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.written().rules.len()),
+        before.rules.len() + 1
+    );
+}
+
+#[gpui_kit::test]
+fn review_regression_example_commands_are_bounded_and_finish_in_order(cx: &mut TestAppContext) {
+    let dir = scratch("bounded-example-commands");
+    let base = fixtures::activity()[0].clone();
+    let records = (0..40).map(|i| routed_by_rule(&base, 1_100 + i, &format!("https://tickets.example.com/save-{i}"), 1, "Firefox", "")).collect();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, store_for(&dir, &attribution_rules()));
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        for i in 0..40 { app.save_record_as_example(RowKey { id: DispatchId(1_100 + i), journaled: false }, cx); }
+        assert!(app.actions.note.as_ref().unwrap().1.contains("Too many example saves"));
+        app.toggle_row_menu(RowKey { id: DispatchId(1_139), journaled: false }, cx);
+    });
+    drop(gate);
+    draw(cx);
+    let written = saved(cx, &dir.join("rules.json"));
+    assert_eq!(written.rules[1].examples.len(), 32);
+    for i in 0..32 { assert!(written.rules[1].examples.contains(&format!("https://tickets.example.com/save-{i}"))); }
+    assert!(!written.rules[1].examples.contains(&"https://tickets.example.com/save-39".to_owned()));
 }

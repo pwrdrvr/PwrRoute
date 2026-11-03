@@ -1013,7 +1013,10 @@ pub fn test_steps(
         || before.clone(),
         |engine| crate::engine_worker::dependencies(before.clone(), engine),
     );
-    let rules = engine.as_ref().map(|engine| engine.rules().clone()).unwrap_or(rules);
+    let rules = engine
+        .as_ref()
+        .map(|engine| engine.rules().clone())
+        .unwrap_or(rules);
     let mut sources = Vec::new();
     for (i, rule) in rules.rules.iter().enumerate() {
         for j in 0..rule.examples.len() {
@@ -1138,7 +1141,11 @@ mod worker_tests {
         assert_eq!(expected.total, 1);
         assert_eq!(expected.passed, 1);
         let mut steps = test_steps(None, rules);
-        let actual = loop { if let Some((report, _)) = steps() { break report.unwrap(); } };
+        let actual = loop {
+            if let Some((report, _)) = steps() {
+                break report.unwrap();
+            }
+        };
         assert_eq!(actual, expected);
     }
     #[test]

@@ -1319,23 +1319,40 @@ impl FirstRun {
         let (before, earlier_asked) = self.access_recheck.unwrap_or((before, false));
         self.access_recheck = Some((before, asked || earlier_asked));
         let browsers = (self.hooks.on_reread)(cx);
-        self.browser_scan_completed(browsers, crate::browser_scan::is_loading(cx), crate::browser_scan::error(cx), cx);
+        self.browser_scan_completed(
+            browsers,
+            crate::browser_scan::is_loading(cx),
+            crate::browser_scan::error(cx),
+            cx,
+        );
     }
 
     /// Apply a terminal shared scan without losing the explicit Check again
     /// request when activation also asks for a coalesced reread.
-    pub(crate) fn browser_scan_completed(&mut self, browsers: Vec<BrowserChoice>, loading: bool, error: Option<String>, cx: &mut Context<'_, Self>) {
+    pub(crate) fn browser_scan_completed(
+        &mut self,
+        browsers: Vec<BrowserChoice>,
+        loading: bool,
+        error: Option<String>,
+        cx: &mut Context<'_, Self>,
+    ) {
         let before = self.model.still_blocked().len();
         self.model.browsers_loading = loading;
         self.model.browser_error = error;
-        if loading { cx.notify(); return; }
+        if loading {
+            cx.notify();
+            return;
+        }
         let (before, asked) = self.access_recheck.take().unwrap_or((before, false));
         if self.model.browser_error.is_none() {
             self.model.browsers = browsers;
             let after = self.model.still_blocked().len();
             if let Some(access) = self.model.access.as_mut() {
-                if asked { access.still_blocked = after > 0 && after == before; }
-                else if after < before { access.still_blocked = false; }
+                if asked {
+                    access.still_blocked = after > 0 && after == before;
+                } else if after < before {
+                    access.still_blocked = false;
+                }
             }
             self.preselect(cx);
         }
@@ -4257,12 +4274,20 @@ mod tests {
         let mut model = plain();
         model.browsers = vec![BrowserChoice {
             label: BrowserLabel::new("Ch", "Google Chrome", None),
-            value: "com.google.Chrome".into(), profiles: vec![], profiles_blocked: true,
+            value: "com.google.Chrome".into(),
+            profiles: vec![],
+            profiles_blocked: true,
         }];
-        model.access = Some(ProfileAccess { browsers: vec![model.browsers[0].label.clone()], ..Default::default() });
+        model.access = Some(ProfileAccess {
+            browsers: vec![model.browsers[0].label.clone()],
+            ..Default::default()
+        });
         let (view, calls, cx) = open_with(cx, model);
         use_shared_scan(&view, cx);
-        view.update(cx, |view, cx| { view.recheck_access(true, cx); view.recheck_access(false, cx); });
+        view.update(cx, |view, cx| {
+            view.recheck_access(true, cx);
+            view.recheck_access(false, cx);
+        });
         assert!(view.read_with(cx, |v, _| v.model.browsers_loading));
         release.try_send(Ok(vec![scan_app(true)])).unwrap();
         cx.run_until_parked();
@@ -4273,5 +4298,4 @@ mod tests {
         cx.run_until_parked();
         assert!(!view.read_with(cx, |v, _| v.model.access.as_ref().unwrap().still_blocked));
     }
-
 }

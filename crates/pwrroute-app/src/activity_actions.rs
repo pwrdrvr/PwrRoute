@@ -1004,26 +1004,39 @@ impl PwrRoute {
 
     fn probe_record_example(&mut self, key: RowKey, save: bool, cx: &mut Context<'_, Self>) {
         if save {
-            if self.actions.example_saves.contains(&key) { return; }
+            if self.actions.example_saves.contains(&key) {
+                return;
+            }
             if self.actions.example_saves.len() >= 32 {
-                self.actions.note = Some((key, "Too many example saves are waiting. Try again after they finish.".into()));
+                self.actions.note = Some((
+                    key,
+                    "Too many example saves are waiting. Try again after they finish.".into(),
+                ));
                 cx.notify();
                 return;
             }
             self.actions.example_saves.push_back(key);
-            if self.actions.example_saves.len() > 1 { return; }
+            if self.actions.example_saves.len() > 1 {
+                return;
+            }
         }
         self.start_example_probe(key, save, cx);
     }
 
     fn finish_example_save(&mut self, key: RowKey, cx: &mut Context<'_, Self>) {
-        if self.actions.example_saves.front() == Some(&key) { self.actions.example_saves.pop_front(); }
-        if let Some(next) = self.actions.example_saves.front().copied() { self.start_example_probe(next, true, cx); }
+        if self.actions.example_saves.front() == Some(&key) {
+            self.actions.example_saves.pop_front();
+        }
+        if let Some(next) = self.actions.example_saves.front().copied() {
+            self.start_example_probe(next, true, cx);
+        }
     }
 
     fn start_example_probe(&mut self, key: RowKey, save: bool, cx: &mut Context<'_, Self>) {
         let Some(record) = record(key, cx) else {
-            if save { self.finish_example_save(key, cx); }
+            if save {
+                self.finish_example_save(key, cx);
+            }
             return;
         };
         let revision = self.engine_revision;
@@ -1031,23 +1044,25 @@ impl PwrRoute {
         let input = self.probe.input();
         let url = matched_url(&record).to_owned();
         let opener = engine_opener(&record);
-        let lane = if save { crate::engine_worker::Lane::ExampleSave } else { crate::engine_worker::Lane::Activity };
-        let result = self
-            .engine_worker
-            .once(lane, move || {
-                let mut probe = crate::try_it::Probe::from_input(input).with_rules(rules);
-                let trace = probe.trace(&url, opener.as_ref());
-                let winner = trace.map(|trace| {
-                    trace
-                        .winner()
-                        .filter(|step| {
-                            step.source == pwrroute_engine::Source::Rules
-                                && step.stage == pwrroute_engine::Stage::Handler
-                        })
-                        .map(|step| step.index)
-                });
-                (winner, probe.stamps())
+        let lane = if save {
+            crate::engine_worker::Lane::ExampleSave
+        } else {
+            crate::engine_worker::Lane::Activity
+        };
+        let result = self.engine_worker.once(lane, move || {
+            let mut probe = crate::try_it::Probe::from_input(input).with_rules(rules);
+            let trace = probe.trace(&url, opener.as_ref());
+            let winner = trace.map(|trace| {
+                trace
+                    .winner()
+                    .filter(|step| {
+                        step.source == pwrroute_engine::Source::Rules
+                            && step.stage == pwrroute_engine::Stage::Handler
+                    })
+                    .map(|step| step.index)
             });
+            (winner, probe.stamps())
+        });
         self.engine_tasks[lane as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((winner, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {

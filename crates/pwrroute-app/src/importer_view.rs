@@ -2456,7 +2456,6 @@ impl Render for Importer {
         let body = if self.loading {
             div()
                 .flex_1()
-
                 .p(px(24.0))
                 .child(text(
                     "Reading and reviewing config…",
@@ -2478,7 +2477,9 @@ impl Render for Importer {
                     .child(detail(&model, cx))
                     .into_any_element(),
                 (None, Step::Place) => place(&model, cx).into_any_element(),
-                (None, Step::Source) => choose_source(&model, self.saved.is_some(), cx).into_any_element(),
+                (None, Step::Source) => {
+                    choose_source(&model, self.saved.is_some(), cx).into_any_element()
+                }
             }
         };
 
@@ -2520,9 +2521,17 @@ impl Render for Importer {
 mod worker_integration_tests {
     use super::*;
     #[gpui_kit::test]
-    fn review_regression_queued_review_cannot_replace_saved_retry_stage(cx: &mut gpui_kit::TestAppContext) {
+    fn review_regression_queued_review_cannot_replace_saved_retry_stage(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         struct Gate(Option<std::sync::mpsc::Sender<()>>);
-        impl Drop for Gate { fn drop(&mut self) { if let Some(send) = self.0.take() { let _ = send.send(()); } } }
+        impl Drop for Gate {
+            fn drop(&mut self) {
+                if let Some(send) = self.0.take() {
+                    let _ = send.send(());
+                }
+            }
+        }
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("old.js");
         let staged = dir.path().join("saved.js");
@@ -2534,13 +2543,31 @@ mod worker_integration_tests {
         let (entered, started) = std::sync::mpsc::channel();
         let (send, receive) = std::sync::mpsc::channel();
         let gate = Gate(Some(send));
-        let _blocked = cx.update(|cx| crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || { entered.send(()).unwrap(); receive.recv().unwrap(); }));
+        let _blocked = cx.update(|cx| {
+            crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
+                entered.send(()).unwrap();
+                receive.recv().unwrap();
+            })
+        });
         started.recv().unwrap();
         cx.update(|cx| {
             open_inner(config, false, None, None, cx);
             assert!(importer_window(cx).unwrap().read(cx).unwrap().loading);
-            let model = ImportModel::failed(&staged, "saved retry".into(), "pending source save".into());
-            show_attempt(model, None, Some(SavedImport { count: 3, rules: receipt.clone(), source: None, source_revision: 0, keeps_config: true, source_error: Some("source pending".into()) }), cx);
+            let model =
+                ImportModel::failed(&staged, "saved retry".into(), "pending source save".into());
+            show_attempt(
+                model,
+                None,
+                Some(SavedImport {
+                    count: 3,
+                    rules: receipt.clone(),
+                    source: None,
+                    source_revision: 0,
+                    keeps_config: true,
+                    source_error: Some("source pending".into()),
+                }),
+                cx,
+            );
         });
         drop(gate);
         cx.update(crate::engine_worker::settle);

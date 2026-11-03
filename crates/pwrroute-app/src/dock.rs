@@ -11,7 +11,7 @@ use gpui_kit::App;
 #[cfg(any(target_os = "macos", test))]
 use crate::{
     app::PwrRoute, doc_window::DocWindow, first_run::FirstRun, logs_window::LogsWindow,
-    settings::SettingsWindow, onboarding::Preparing,
+    onboarding::Preparing, settings::SettingsWindow,
 };
 
 /// Start following the windows. Call once, before any window opens; the app

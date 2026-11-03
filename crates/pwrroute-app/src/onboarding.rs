@@ -288,13 +288,21 @@ pub struct Facts {
 
 impl Facts {
     fn refresh_saved(&mut self) {
-        if let Some(rules) = self.rules_path.as_deref().and_then(|path| RulesFile::load(path).ok()) {
+        if let Some(rules) = self
+            .rules_path
+            .as_deref()
+            .and_then(|path| RulesFile::load(path).ok())
+        {
             self.rules_default = rules.default_browser;
             self.rules_profile = rules.default_profile;
             self.rules = rules.rules.len();
             self.precedence = rules.precedence;
         }
-        if let Some(state) = self.state_dir.as_deref().and_then(|dir| State::load(dir).ok()) {
+        if let Some(state) = self
+            .state_dir
+            .as_deref()
+            .and_then(|dir| State::load(dir).ok())
+        {
             self.state = state;
         }
     }
@@ -601,7 +609,6 @@ pub fn hooks_with(
                             task,
                         );
                         return;
-
                     }
                 };
                 reply(result, cx);
@@ -2681,18 +2688,39 @@ mod tests {
         snapshot.finicky = None;
         snapshot.rules_path = Some(path.clone());
         snapshot.state_dir = Some(dir.path().to_owned());
-        RulesFile { default_browser: "org.mozilla.firefox".into(), default_profile: "Saved profile".into(), ..Default::default() }.save(&path).unwrap();
+        RulesFile {
+            default_browser: "org.mozilla.firefox".into(),
+            default_profile: "Saved profile".into(),
+            ..Default::default()
+        }
+        .save(&path)
+        .unwrap();
         State::default().save(dir.path()).unwrap();
         snapshot.refresh_saved();
         let current = model(&snapshot, None);
         assert_eq!(current.fallback.as_ref().unwrap().name.as_str(), "Firefox");
         assert_eq!(snapshot.rules_profile, "Saved profile");
-        State { fallback: Some("com.google.Chrome".into()), fallback_profile: Some("Saved state".into()), ..Default::default() }.save(dir.path()).unwrap();
+        State {
+            fallback: Some("com.google.Chrome".into()),
+            fallback_profile: Some("Saved state".into()),
+            ..Default::default()
+        }
+        .save(dir.path())
+        .unwrap();
         snapshot.refresh_saved();
         let current = model(&snapshot, None);
-        assert_eq!(current.fallback.as_ref().unwrap().name.as_str(), "Google Chrome");
-        assert_eq!(snapshot.state.fallback_profile.as_deref(), Some("Saved state"));
-        assert_eq!(RulesFile::load(&path).unwrap().default_browser, "org.mozilla.firefox");
+        assert_eq!(
+            current.fallback.as_ref().unwrap().name.as_str(),
+            "Google Chrome"
+        );
+        assert_eq!(
+            snapshot.state.fallback_profile.as_deref(),
+            Some("Saved state")
+        );
+        assert_eq!(
+            RulesFile::load(&path).unwrap().default_browser,
+            "org.mozilla.firefox"
+        );
     }
 
     #[gpui_kit::test]
@@ -2700,5 +2728,4 @@ mod tests {
         cx.add_window_view(|_, _| Preparing { failure: None });
         cx.update(|cx| assert!(crate::dock::has_dock_window(cx)));
     }
-
 }
