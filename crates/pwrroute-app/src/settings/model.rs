@@ -697,6 +697,7 @@ impl Diagnostics {
 /// destinations and rule sets mean here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sync {
+    pub copy_retry: bool,
     /// This machine's name in sync status and manifests.
     pub machine_name: SharedString,
     /// The computer's own name: what an empty name falls back to.
@@ -871,6 +872,7 @@ pub struct About {
 pub enum SettingsRequest {
     LoadPane(super::Pane),
     RetryPane(super::Pane),
+    RetryCopiedConfig,
     /// General: Theme, saved and applied at once.
     SetTheme(ThemeChoice),
     /// General: the Dark theme and the Light theme, saved and applied at
