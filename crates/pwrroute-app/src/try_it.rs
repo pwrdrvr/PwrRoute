@@ -1121,6 +1121,25 @@ mod worker_tests {
         );
         assert!(failed().unwrap().0.is_err());
     }
+
+    #[test]
+    fn review_regression_saved_examples_use_resolved_destinations_and_sets() {
+        let rules: RulesFile = serde_json::from_str(r#"{
+            "defaultBrowser":"Safari",
+            "destinations":[{"name":"Work","browser":"Firefox","profile":"Work"}],
+            "sets":[{"name":"Off","enabled":false}],
+            "rules":[
+                {"match":"destination.example/*","destination":"Work","examples":["https://destination.example/a"]},
+                {"match":"disabled.example/*","browser":"Firefox","set":"Off","examples":["https://disabled.example/a"]}
+            ]
+        }"#).unwrap();
+        let expected = load(None, &rules).unwrap().test_rules(None).unwrap();
+        assert_eq!(expected.total, 1);
+        assert_eq!(expected.passed, 1);
+        let mut steps = test_steps(None, rules);
+        let actual = loop { if let Some((report, _)) = steps() { break report.unwrap(); } };
+        assert_eq!(actual, expected);
+    }
     #[test]
     fn saved_test_result_tokens_reject_edits_new_requests_and_new_sources() {
         let mut runs = TestRuns::new(None, RulesFile::default());

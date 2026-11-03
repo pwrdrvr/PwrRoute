@@ -8,7 +8,7 @@
 
 use gpui_kit::App;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 use crate::{
     app::PwrRoute, doc_window::DocWindow, first_run::FirstRun, logs_window::LogsWindow,
     settings::SettingsWindow,
@@ -62,8 +62,8 @@ pub fn after_link(yield_to_browser: bool) {
 }
 
 /// Whether a window that wants the Dock icon is open.
-#[cfg(target_os = "macos")]
-fn has_dock_window(cx: &App) -> bool {
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn has_dock_window(cx: &App) -> bool {
     cx.windows().into_iter().any(|window| {
         window.downcast::<PwrRoute>().is_some()
             || window.downcast::<FirstRun>().is_some()

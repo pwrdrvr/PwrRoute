@@ -8206,3 +8206,44 @@ fn engine_review_closing_link_owner_cancels_gated_completion(cx: &mut TestAppCon
     draw(cx);
     assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
 }
+
+#[gpui_kit::test]
+fn review_regression_menu_probe_cannot_cancel_explicit_example_save(cx: &mut TestAppContext) {
+    let dir = scratch("save-vs-menu");
+    let base = fixtures::activity()[0].clone();
+    let records = vec![
+        routed_by_rule(&base, 901, "https://tickets.example.com/save", 1, "Firefox", ""),
+        routed_by_rule(&base, 902, "https://docs.example.com/menu", 0, "Firefox", ""),
+    ];
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, store_for(&dir, &attribution_rules()));
+    let gate = gate_engine(&view, cx);
+    let save = RowKey { id: DispatchId(901), journaled: false };
+    let menu = RowKey { id: DispatchId(902), journaled: false };
+    view.update(cx, |app, cx| {
+        app.save_record_as_example(save, cx);
+        app.toggle_row_menu(menu, cx);
+    });
+    drop(gate);
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.store.written().rules[1].examples.iter().any(|s| s == "https://tickets.example.com/save")));
+}
+
+#[gpui_kit::test]
+fn review_regression_failed_config_check_allows_explicit_add_anyway(cx: &mut TestAppContext) {
+    let dir = scratch("add-unchecked");
+    let config = dir.join("config.js");
+    std::fs::write(&config, "export default { defaultBrowser: 'Safari' }").unwrap();
+    let (view, cx) = open_activity(cx, &dir, Some(config.clone()));
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    view.update(cx, |app, cx| app.set_add_rule(|s| { s.browser = "Firefox".into(); s.pattern.set("new.example.com/*"); }, cx));
+    std::fs::write(&config, "export default {").unwrap();
+    let before = view.read_with(cx, |app, _| app.store.written());
+    view.update(cx, |app, cx| { assert!(!app.add_rule_from_sheet(cx)); });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
+    view.update(cx, |app, cx| { assert!(app.add_rule_from_sheet(cx), "explicit override repeated failed validation"); });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.store.written().rules.len()), before.rules.len() + 1);
+}

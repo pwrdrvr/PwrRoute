@@ -2515,3 +2515,44 @@ impl Render for Importer {
             .child(footer(&model, self.saved.as_ref(), cx))
     }
 }
+
+#[cfg(test)]
+mod worker_integration_tests {
+    use super::*;
+    #[gpui_kit::test]
+    fn review_regression_queued_review_cannot_replace_saved_retry_stage(cx: &mut gpui_kit::TestAppContext) {
+        struct Gate(Option<std::sync::mpsc::Sender<()>>);
+        impl Drop for Gate { fn drop(&mut self) { if let Some(send) = self.0.take() { let _ = send.send(()); } } }
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("old.js");
+        let staged = dir.path().join("saved.js");
+        let rules_path = dir.path().join("rules.json");
+        std::fs::write(&config, "export default { defaultBrowser: 'Safari' }").unwrap();
+        let file = RulesFile::default();
+        file.save(&rules_path).unwrap();
+        let receipt = SavedRules::new(Some(&rules_path), file);
+        let (entered, started) = std::sync::mpsc::channel();
+        let (send, receive) = std::sync::mpsc::channel();
+        let gate = Gate(Some(send));
+        let _blocked = cx.update(|cx| crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || { entered.send(()).unwrap(); receive.recv().unwrap(); }));
+        started.recv().unwrap();
+        cx.update(|cx| {
+            open_inner(config, false, None, None, cx);
+            assert!(importer_window(cx).unwrap().read(cx).unwrap().loading);
+            let model = ImportModel::failed(&staged, "saved retry".into(), "pending source save".into());
+            show_attempt(model, None, Some(SavedImport { count: 3, rules: receipt.clone(), source: None, source_revision: 0, keeps_config: true, source_error: Some("source pending".into()) }), cx);
+        });
+        drop(gate);
+        cx.update(crate::engine_worker::settle);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let view = importer_window(cx).unwrap().read(cx).unwrap();
+            assert!(!view.loading);
+            assert_eq!(view.model.path, staged);
+            assert_eq!(view.saved.as_ref().unwrap().count, 3);
+            assert!(view.saved.as_ref().unwrap().validate(cx).is_ok());
+            receipt.invalidate();
+            assert!(view.saved.as_ref().unwrap().validate(cx).is_err());
+        });
+    }
+}

@@ -282,9 +282,13 @@ pub struct Facts {
     /// list (macOS's Files & Folders): a browser whose list was kept from
     /// PwrRoute then gets first run's access step.
     pub access_pane: bool,
+    rules_path: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
 }
 
 impl Facts {
+    fn refresh_saved(&mut self) { let _ = (&self.rules_path, &self.state_dir); }
+
     /// Reads the machine: the OS's answer on the default browser (already
     /// read by [`default_browser`]), the installed browsers (the shared
     /// scan), the config the router chose, `rules.json` and `state.json`.
@@ -307,6 +311,8 @@ impl Facts {
             precedence: rules.precedence,
             state,
             access_pane: cfg!(target_os = "macos"),
+            rules_path: discovery::rules_path(&env),
+            state_dir: pwrroute_os::data_dir(),
         }
     }
 }
@@ -1041,6 +1047,7 @@ fn finish_opening(cx: &mut App) {
         return;
     }
     let mut facts = opening.facts.clone();
+    facts.refresh_saved();
     facts.browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
     facts.handler = default_browser::state(cx);
     cx.remove_global::<Opening>();
@@ -1315,6 +1322,8 @@ mod tests {
             precedence: Precedence::Config,
             state: State::default(),
             access_pane: true,
+            rules_path: None,
+            state_dir: None,
         }
     }
 
@@ -2666,4 +2675,32 @@ mod tests {
         assert!(!dir.path().join("rules.json").exists());
         assert!(!dir.path().join(STATE_FILE).exists());
     }
+    #[test]
+    fn review_regression_setup_refreshes_rules_and_state_before_preselection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.json");
+        let mut snapshot = facts();
+        snapshot.finicky = None;
+        snapshot.rules_path = Some(path.clone());
+        snapshot.state_dir = Some(dir.path().to_owned());
+        RulesFile { default_browser: "org.mozilla.firefox".into(), default_profile: "Saved profile".into(), ..Default::default() }.save(&path).unwrap();
+        State::default().save(dir.path()).unwrap();
+        snapshot.refresh_saved();
+        let current = model(&snapshot, None);
+        assert_eq!(current.fallback.as_ref().unwrap().name.as_ref(), "Firefox");
+        assert_eq!(snapshot.rules_profile, "Saved profile");
+        State { fallback: Some("com.google.Chrome".into()), fallback_profile: Some("Saved state".into()), ..Default::default() }.save(dir.path()).unwrap();
+        snapshot.refresh_saved();
+        let current = model(&snapshot, None);
+        assert_eq!(current.fallback.as_ref().unwrap().name.as_ref(), "Google Chrome");
+        assert_eq!(snapshot.state.fallback_profile.as_deref(), Some("Saved state"));
+        assert_eq!(RulesFile::load(&path).unwrap().default_browser, "org.mozilla.firefox");
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_preparing_is_a_dock_window(cx: &mut TestAppContext) {
+        cx.add_window_view(|_, _| Preparing { failure: None });
+        cx.update(|cx| assert!(crate::dock::has_dock_window(cx)));
+    }
+
 }

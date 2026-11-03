@@ -4242,4 +4242,27 @@ mod tests {
                 .all(|w| w.downcast::<FirstRun>().is_none())
         );
     }
+    #[gpui_kit::test]
+    fn review_regression_explicit_access_recheck_survives_async_scan(cx: &mut TestAppContext) {
+        let release = gated_shared_scan(cx, vec![scan_app(true)]);
+        let mut model = plain();
+        model.browsers = vec![BrowserChoice {
+            label: BrowserLabel::new("Ch", "Google Chrome", None),
+            value: "com.google.Chrome".into(), profiles: vec![], profiles_blocked: true,
+        }];
+        model.access = Some(ProfileAccess { browsers: vec![model.browsers[0].label.clone()], ..Default::default() });
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |view, cx| { view.recheck_access(true, cx); view.recheck_access(false, cx); });
+        assert!(view.read_with(cx, |v, _| v.model.browsers_loading));
+        release.try_send(Ok(vec![scan_app(true)])).unwrap();
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |v, _| v.model.access.as_ref().unwrap().still_blocked));
+        assert!(calls.fallbacks.borrow().is_empty());
+        view.update(cx, |view, cx| view.recheck_access(true, cx));
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |v, _| v.model.access.as_ref().unwrap().still_blocked));
+    }
+
 }
