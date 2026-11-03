@@ -870,7 +870,10 @@ mod tests {
         assert!(!settings_changed(&downloading, &ticked), "a percent tick");
         let mut started = downloading.clone();
         started.download = None;
-        assert!(!settings_changed(&started, &downloading), "a download starts");
+        assert!(
+            !settings_changed(&started, &downloading),
+            "a download starts"
+        );
 
         let mut done = downloading.clone();
         done.checking = false;
@@ -889,7 +892,10 @@ mod tests {
         let mut restarting = downloading.clone();
         restarting.restarting = true;
         assert!(settings_changed(&downloading, &restarting), "restarting");
-        assert!(!settings_changed(&downloading, &downloading.clone()), "no change");
+        assert!(
+            !settings_changed(&downloading, &downloading.clone()),
+            "no change"
+        );
     }
 
     #[test]
