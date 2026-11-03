@@ -1019,6 +1019,70 @@ fn leaving_a_changed_draft_asks_save_or_discard_first(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn deferred_rule_navigation_is_cancelled_when_disk_reloads(cx: &mut TestAppContext) {
+    let dir = scratch("leave-reload");
+    let path = dir.join("rules.json");
+    written_by_someone_else(&path, 3);
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    view.update(cx, |app, cx| {
+        app.store.set_profile(0, "Draft");
+        app.refresh(cx);
+    });
+    click(cx, "handler-1");
+    assert!(view.read_with(cx, |app, _| app.leaving.is_some()));
+
+    // [A, B, C] -> [X, A, B, C]: B's old index now holds the draft A.
+    let mut file = RulesFile::load(&path).unwrap();
+    let mut inserted = file.rules[2].clone();
+    inserted.patterns = vec!["inserted.example/*".into()];
+    file.rules.insert(0, inserted);
+    file.save(&path).unwrap();
+    view.update(cx, |app, cx| {
+        assert_eq!(app.sync_with_disk(cx), crate::rules_store::Disk::Reloaded);
+        assert_eq!(app.selection, Some(Selection::Handler(1)));
+        assert!(app.store.draft_changed());
+        assert_eq!(app.store.draft_conflict(), None);
+        assert!(app.leaving.is_none(), "a row index cannot survive reload");
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("leave-question").is_none());
+    assert_eq!(RulesFile::load(&path).unwrap().rules[1].profile, "");
+    // The destination can be chosen again using its new position.
+    click(cx, "handler-2");
+    click(cx, crate::editor::LEAVE_SAVE_ID);
+    assert_eq!(view.read_with(cx, |app, _| app.selection), Some(Selection::Handler(2)));
+    assert_eq!(RulesFile::load(&path).unwrap().rules[1].profile, "Draft");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn answering_deferred_rule_navigation_checks_disk_before_save_or_discard(cx: &mut TestAppContext) {
+    let dir = scratch("leave-answer-reload");
+    let path = dir.join("rules.json");
+    written_by_someone_else(&path, 3);
+    let (view, cx) = open_store(cx, None, RulesStore::load(Some(path.clone())));
+    for answer in [crate::app::LeaveAnswer::Save, crate::app::LeaveAnswer::Discard] {
+        view.update(cx, |app, cx| {
+            app.store.set_profile(0, "Draft");
+            app.refresh(cx);
+        });
+        click(cx, "handler-1");
+        // No activation/dispatch check before the answer. Change B itself;
+        // the old destination must not be opened, saved or discarded into.
+        let mut file = RulesFile::load(&path).unwrap();
+        file.rules[1].profile.push('x');
+        file.save(&path).unwrap();
+        view.update_in(cx, |app, window, cx| app.answer_leave(answer, window, cx));
+        assert!(view.read_with(cx, |app, _| app.leaving.is_none()));
+        assert_eq!(view.read_with(cx, |app, _| app.selection), Some(Selection::Handler(0)));
+        assert!(view.read_with(cx, |app, _| app.store.draft_changed()));
+        assert_eq!(RulesFile::load(&path).unwrap().rules[0].profile, "");
+        draw(cx);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
 fn a_new_handler_is_a_draft_until_it_is_complete(cx: &mut TestAppContext) {
     let dir = scratch("add");
     let path = dir.join("rules.json");
