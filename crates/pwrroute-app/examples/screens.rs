@@ -198,6 +198,8 @@ mod tray {
         None
     }
 
+    pub fn refresh_browsers(_: &mut gpui_kit::App) {}
+
     /// Overview's switch, For row, Back to rules and Next link here:
     /// drawn only.
     pub fn set_mode(_: crate::tray_model::Mode, _: &mut gpui_kit::App) {}
