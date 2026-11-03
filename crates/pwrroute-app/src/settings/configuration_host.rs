@@ -119,21 +119,17 @@ pub fn load(cx: &mut App) {
         cx,
         super::Pane::Configuration,
         move || build(&facts(source, browsers), SystemTime::now()),
-        |model, configuration| {
-            let problem = model
-                .configuration
-                .everything_else
-                .as_ref()
-                .and_then(|field| field.problem.clone());
-            model.configuration = configuration;
-            model.pending.remove(&super::Pane::ShortLinks);
-            if let (Some(field), Some(problem)) =
-                (model.configuration.everything_else.as_mut(), problem)
-            {
-                field.problem = Some(problem);
-            }
-        },
+        apply_configuration,
     );
+}
+
+pub(super) fn apply_configuration(model: &mut super::model::SettingsModel, configuration: Configuration) {
+    let problem = model.configuration.everything_else.as_ref().and_then(|field| field.problem.clone());
+    model.configuration = configuration;
+    model.pending.remove(&super::Pane::ShortLinks);
+    if let (Some(field), Some(problem)) = (model.configuration.everything_else.as_mut(), problem) {
+        field.problem = Some(problem);
+    }
 }
 
 /// Short Links needs no browser scan, rule descriptions or import probes.
