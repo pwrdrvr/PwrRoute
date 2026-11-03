@@ -563,7 +563,7 @@ const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 /// Use it on this Mac (Settings Sections 2a): the folder's settled config
 /// written to `~/.{name}`, never over a config already here, then put in
 /// charge with Also sync on so it keeps up.
-fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()> {
+fn prepare_folder_config(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
     use anyhow::Context as _;
     use pwrroute_engine::discovery;
     if crate::sync::config_name(Path::new(name)).as_deref() != Some(name) {
@@ -590,23 +590,44 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
     let home = std::env::home_dir().context("no home folder")?;
     let path = home.join(format!(".{name}"));
     write_new(&path, &bytes).with_context(|| format!("cannot write ~/.{name}"))?;
-    crate::sync::edit_settings(|sync| sync.config = Some(true), cx)?;
-    // Discovery finds `~/.finicky.js` or `.ts` first now; another extension
-    // is kept in charge by path. The Rules screen's "Found …" notice would
-    // only ask what the reader just answered.
-    let mut source = crate::settings_store::store(cx)
-        .map(|store| store.read(cx).settings().source.clone())
-        .unwrap_or_default();
-    source.visual_only = false;
-    source.config = (!discovery::config_candidates(&env).contains(&path)).then(|| path.clone());
-    if !source.dismissed.contains(&path) {
-        source.dismissed.push(path);
+    Ok(path)
+}
+
+struct CopyingConfig(bool);
+impl gpui_kit::Global for CopyingConfig {}
+
+fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()> {
+    if cx.try_global::<CopyingConfig>().is_some_and(|copy| copy.0) {
+        anyhow::bail!("still copying the earlier config");
     }
-    let source_saved = crate::importer_view::set_source_and_show(source, cx);
-    super::configuration_host::refresh(cx);
-    source_saved
-        .map_err(anyhow::Error::msg)
-        .context("Config copied; retry saving its source from Rules")
+    cx.set_global(CopyingConfig(true));
+    let expected = crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+    let (root, name) = (root.to_path_buf(), name.to_owned());
+    let work = cx.background_executor().spawn(async move { prepare_folder_config(&root, &name) });
+    cx.spawn(async move |cx| {
+        let result = work.await;
+        cx.update(|cx| {
+            cx.set_global(CopyingConfig(false));
+            let result = result.and_then(|path| {
+                let current = crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+                anyhow::ensure!(expected == current, "routing source changed while the config was copied");
+                crate::sync::edit_settings(|sync| sync.config = Some(true), cx)?;
+                let mut source = current.unwrap_or_default();
+                source.visual_only = false;
+                let env = pwrroute_engine::discovery::Environment::current();
+                source.config = (!pwrroute_engine::discovery::config_candidates(&env).contains(&path)).then(|| path.clone());
+                if !source.dismissed.contains(&path) { source.dismissed.push(path); }
+                crate::importer_view::set_source_and_show(source, cx);
+                super::configuration_host::refresh(cx);
+                Ok(())
+            });
+            match result {
+                Ok(()) => refresh(cx),
+                Err(error) => report(format!("Not changed: {error:#}."), cx),
+            }
+        });
+    }).detach();
+    Ok(())
 }
 
 /// Writes `bytes` to `path` whole or not at all, and never over a file

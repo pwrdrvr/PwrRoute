@@ -41,7 +41,7 @@ use crate::theme::px;
 use gpui_kit::base::{Button, TestSupportExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
+    AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
     FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
     Render, ScrollAnchor, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point,
@@ -368,6 +368,7 @@ pub fn problem(cx: &mut App, pane: Pane, problem: String) {
         let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
         if let Some(handle) = open {
             let _ = handle.update(cx, |view, _, cx| {
+                if let Some(dirty) = view.loads.get_mut(&pane) { *dirty = true; }
                 view.model.pending.remove(&pane);
                 view.model.problems.insert(pane, problem.into());
                 cx.notify();
