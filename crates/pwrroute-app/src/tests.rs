@@ -7953,6 +7953,7 @@ fn engine_work_add_rechecks_config_changed_after_warning_before_commit(cx: &mut 
         app.set_add_rule(
             |s| {
                 s.browser = "Firefox".into();
+                s.position = crate::activity_actions::Position::Top;
                 s.pattern.set("github.com/*");
             },
             cx,
