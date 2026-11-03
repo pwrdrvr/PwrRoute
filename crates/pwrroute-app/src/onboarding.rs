@@ -1151,6 +1151,38 @@ mod tests {
         );
     }
 
+    #[gpui_kit::test]
+    fn review_cached_import_cannot_complete_after_a_competing_source_choice(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let rules = dir.path().join("rules.json");
+        let mut settings = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        settings.update(|settings| settings.source.config = Some(importer_config())).unwrap();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        fs::create_dir(dir.path().join("state.json.saving")).unwrap();
+        let hooks = hooks_with(Some(dir.path().to_path_buf()), Some(rules.clone()), Some(importer_config()), Rc::new(crate::importer_view::set_source_and_show), Rc::new(|_, _| {}));
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let choose = |choice, cx: &mut TestAppContext| {
+            let heard = replies.clone();
+            cx.update(|cx| (hooks.on_import)(choice, Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)), cx));
+        };
+        choose(ImportChoice::Import, cx);
+        let window = importer_window(cx).unwrap();
+        window.update(cx, |view, _, _| view.model.source = crate::importer::SourceChoice::VisualOnly).unwrap();
+        let mut importer = VisualTestContext::from_window(window.into(), cx);
+        press(&mut importer, crate::importer_view::NEXT_ID);
+        assert!(crate::settings_store::Settings::load(dir.path()).unwrap().source.visual_only);
+        let written = fs::read(&rules).unwrap();
+        choose(ImportChoice::KeepFile, cx);
+        assert!(!crate::settings_store::Settings::load(dir.path()).unwrap().source.visual_only);
+        fs::remove_dir(dir.path().join("state.json.saving")).unwrap();
+        choose(ImportChoice::Import, cx);
+        assert!(matches!(replies.borrow().last(), Some(ImportOutcome::Failed { .. })),
+            "cached visual-only completion must be rejected after Keep changed the source: {:?}", replies.borrow());
+        assert_eq!(State::load(dir.path()).unwrap().import, None);
+        assert_eq!(fs::read(&rules).unwrap(), written);
+    }
+
     fn fixture_home() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
     }
