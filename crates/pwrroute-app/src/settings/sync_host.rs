@@ -734,7 +734,10 @@ fn stage_config(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
 }
 
 #[derive(Default)]
-struct CopiedConfig(Option<crate::settings_store::SourceSettings>, SourceSnapshot);
+struct CopiedConfig(
+    Option<crate::settings_store::SourceSettings>,
+    SourceSnapshot,
+);
 impl gpui_kit::Global for CopiedConfig {}
 
 #[derive(Debug)]
@@ -1151,12 +1154,7 @@ mod tests {
             0,
             "source persistence must not run on contention"
         );
-        cx.update(|cx| {
-            assert_eq!(
-                SourceSnapshot::capture(cx),
-                expected
-            )
-        });
+        cx.update(|cx| assert_eq!(SourceSnapshot::capture(cx), expected));
         drop(held);
         let prepared = prepare();
         cx.update(|cx| {
@@ -1207,13 +1205,11 @@ mod tests {
             let mut store =
                 crate::settings_store::SettingsStore::load(Some(dir.path().join("data")));
             if matches!(change, DuringCopy::EqualSource) {
-                store.update(|settings| settings.source.visual_only = true).unwrap();
+                store
+                    .update(|settings| settings.source.visual_only = true)
+                    .unwrap();
             }
-            crate::settings_store::install(
-                store,
-                None,
-                cx,
-            );
+            crate::settings_store::install(store, None, cx);
             SourceSnapshot::capture(cx)
         });
         let (entered, reading) = std::sync::mpsc::channel();
@@ -1238,7 +1234,8 @@ mod tests {
             });
         } else if matches!(change, DuringCopy::EqualSource) {
             cx.update(|cx| {
-                crate::importer_view::set_source_and_show(expected.source.clone().unwrap(), cx).unwrap();
+                crate::importer_view::set_source_and_show(expected.source.clone().unwrap(), cx)
+                    .unwrap();
             });
         } else {
             std::fs::write(
@@ -1302,17 +1299,16 @@ mod tests {
         gated_copy(cx, DuringCopy::EqualSource);
     }
 
-    fn real_source_save_failure(
-        cx: &mut gpui_kit::TestAppContext,
-        competing_choice: bool,
-    ) {
+    fn real_source_save_failure(cx: &mut gpui_kit::TestAppContext, competing_choice: bool) {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let data = dir.path().join("data");
         std::fs::create_dir(&home).unwrap();
         let expected = cx.update(|cx| {
             let mut store = crate::settings_store::SettingsStore::load(Some(data.clone()));
-            store.update(|settings| settings.source.visual_only = true).unwrap();
+            store
+                .update(|settings| settings.source.visual_only = true)
+                .unwrap();
             crate::settings_store::install(store, None, cx);
             SourceSnapshot::capture(cx)
         });
@@ -1323,19 +1319,34 @@ mod tests {
                 ..Default::default()
             },
             || Ok(b"export default { defaultBrowser: 'Safari' };".to_vec()),
-        ).unwrap();
+        )
+        .unwrap();
         let copied = home.canonicalize().unwrap().join(".finicky.js");
         std::fs::create_dir(data.join("settings.json.saving")).unwrap();
-        let error = cx.update(|cx| finish_folder_config(expected, prepared, cx)).unwrap_err();
+        let error = cx
+            .update(|cx| finish_folder_config(expected, prepared, cx))
+            .unwrap_err();
         assert!(error.is::<CopiedNotSaved>());
         assert!(error.to_string().contains("Source choice not saved"));
         assert!(error.to_string().contains("session only"));
         assert!(copied.is_file());
-        assert!(crate::settings_store::Settings::load(&data).unwrap().source.visual_only);
+        assert!(
+            crate::settings_store::Settings::load(&data)
+                .unwrap()
+                .source
+                .visual_only
+        );
         cx.update(|cx| {
             let retained = cx.global::<CopiedConfig>().0.as_ref().unwrap();
             assert_eq!(retained.config.as_ref(), Some(&copied));
-            assert_eq!(crate::settings_store::store(cx).unwrap().read(cx).settings().source, *retained);
+            assert_eq!(
+                crate::settings_store::store(cx)
+                    .unwrap()
+                    .read(cx)
+                    .settings()
+                    .source,
+                *retained
+            );
         });
         let bytes = std::fs::read(&copied).unwrap();
         // Persistence retry owns no discovery or provider work, even after a
@@ -1350,10 +1361,18 @@ mod tests {
         }
         let revision = cx.update(|cx| crate::importer_view::source_revision(cx));
         let result = cx.update(|cx| retry_copied_with(cx, persist_copied_source));
-        cx.update(|cx| assert_eq!(crate::importer_view::source_revision(cx), revision,
-            "retry must not apply the source again"));
+        cx.update(|cx| {
+            assert_eq!(
+                crate::importer_view::source_revision(cx),
+                revision,
+                "retry must not apply the source again"
+            )
+        });
         if competing_choice {
-            assert!(result.is_err(), "a later equal source application invalidates this retry");
+            assert!(
+                result.is_err(),
+                "a later equal source application invalidates this retry"
+            );
         } else {
             result.unwrap();
             cx.update(|cx| assert!(cx.global::<CopiedConfig>().0.is_none()));
@@ -1366,9 +1385,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_real_source_save_result_keeps_a_copied_config_retry(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
+    fn the_real_source_save_result_keeps_a_copied_config_retry(cx: &mut gpui_kit::TestAppContext) {
         real_source_save_failure(cx, false);
     }
 
