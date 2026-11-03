@@ -3418,9 +3418,11 @@ mod tests {
             [2]
         );
         assert_eq!(feed.records()[0].privacy, Privacy::None);
+        assert!(feed.records()[0].steps.is_empty());
+        assert!(feed.records()[0].browser.is_none());
         assert_eq!(feed.today(at).routed, 2);
         assert_eq!(feed.today(at).private, 1);
-        assert_eq!(feed.tally(at).rule(HitKey::Rule(2)), 1);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(2)), 0);
     }
 
     #[test]
@@ -3449,7 +3451,7 @@ mod tests {
         assert_eq!(feed.today(at).routed, 2);
         assert_eq!(feed.today(at).private, 1);
         assert_eq!(feed.tally(at).rule(HitKey::Rule(3)), 1);
-        assert_eq!(feed.tally(at).rule(HitKey::Rule(4)), 1);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(4)), 0);
         assert_eq!(feed.tally(at).rule(HitKey::Rule(2)), 0);
         assert_eq!(
             feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),

@@ -2450,12 +2450,9 @@ fn the_add_rule_sheet_offers_the_domain_and_every_subdomain(cx: &mut TestAppCont
         (97, "https://notexample.com/"),
         (98, "https://dash.example.com/somefolder/page?tab=billing"),
     ] {
-        feed.push(record_like(
-            &records[2],
-            id,
-            url,
-            Matched::Default { owner: None },
-        ));
+        let mut completion = record_like(&records[2], id, url, Matched::Default { owner: None });
+        completion.received_at -= std::time::Duration::from_nanos(id - 94);
+        feed.push(completion);
     }
     cx.update(|cx| activity::install_feed(Feed::from_records(feed), cx));
     let (view, cx) = open_store(cx, None, fixture_store(&dir));
@@ -3673,7 +3670,7 @@ fn activity_names_the_rule_and_saves_its_example_from_the_record(cx: &mut TestAp
                 "Firefox",
                 "",
             ),
-            now,
+            now - Duration::from_nanos(1),
         ),
         // Routed as rule 2 before the file last changed: a rule has since
         // gone in above, and rule 2 now is tickets.example.com's.
