@@ -71,6 +71,9 @@ mod destinations;
 #[cfg(target_os = "macos")]
 #[path = "../src/editor.rs"]
 mod editor;
+#[cfg(target_os = "macos")]
+#[path = "../src/engine_worker.rs"]
+mod engine_worker;
 /// The test hook's probes, inert: the real hook needs the app's menu and
 /// `main`, which this example does not compile.
 #[cfg(target_os = "macos")]
@@ -1503,13 +1506,13 @@ fn main() {
                 },
             )
         } else {
-            importer::ImportModel::read(
+            importer::ImportModel::read_with_stamps(
                 &importer_config,
                 None,
                 Some(&importer_config),
                 &[],
                 existing,
-            )
+            ).0
         };
         // Shown as the design names it, not by the fixture's path.
         model.shown = if name == "importer-finicky-rules" {

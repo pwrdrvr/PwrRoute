@@ -223,6 +223,9 @@ pub struct FirstRunModel {
     /// What the Everything else select offers: the browsers found on this
     /// machine.
     pub browsers: Vec<BrowserChoice>,
+    /// A shared scan is pending; cached choices stay intact until completion.
+    pub browsers_loading: bool,
+    pub browser_error: Option<String>,
     /// The config step's subject. `None`: no Finicky config was found, and
     /// the window has two steps.
     pub finicky: Option<FinickyConfig>,
@@ -333,6 +336,7 @@ impl FirstRunModel {
     /// browser found. With the config's browser comes its profile, when
     /// the browser has one by that name. `None` with no browsers at all.
     pub fn preselection(&self) -> Option<(Fallback, Picked)> {
+        if self.browsers_loading || self.browser_error.is_some() { return None; }
         let find = |value: &str| {
             self.browsers.iter().find(|choice| {
                 choice.value.eq_ignore_ascii_case(value)
@@ -503,6 +507,8 @@ impl FirstRunModel {
 
     /// The access step's paragraph (6a-6c).
     pub fn access_detail(&self) -> String {
+        if self.browsers_loading { return "Reading browser profiles…".into(); }
+        if let Some(error) = &self.browser_error { return error.clone(); }
         let Some(access) = &self.access else {
             return String::new();
         };
@@ -654,6 +660,8 @@ impl FirstRunModel {
 
     /// The Everything else step's paragraph.
     pub fn everything_else_detail(&self) -> String {
+        if self.browsers_loading { return "Looking for browsers… Your saved choice stays in place.".into(); }
+        if let Some(error) = &self.browser_error { return error.clone(); }
         if self.browsers.is_empty() {
             return format!(
                 "No browsers found on {}. PwrRoute needs at least one to send links to.",
@@ -1169,6 +1177,7 @@ impl FirstRun {
     /// [`FirstRunModel::preselection`] names and saves it at once, so the
     /// step starts done and stays editable.
     pub fn preselect(&mut self, cx: &mut Context<'_, Self>) {
+        if self.model.browsers_loading || self.model.browser_error.is_some() { return; }
         if self.model.fallback.is_some() {
             return;
         }
@@ -1211,6 +1220,7 @@ impl FirstRun {
 
     /// A browser from the Everything else list, at its default profile.
     fn choose_fallback(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        if self.model.browsers_loading || self.model.browser_error.is_some() { return; }
         self.picking = Picking::None;
         if let Some(choice) = self.model.browsers.get(index).cloned() {
             let label = choice.label.clone();
@@ -1230,6 +1240,7 @@ impl FirstRun {
     /// A profile from the profile list: 0 is "Default profile", then the
     /// chosen browser's profiles in order.
     fn choose_profile(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        if self.model.browsers_loading || self.model.browser_error.is_some() { return; }
         self.picking = Picking::None;
         let Some(browser) = self.model.fallback_choice().cloned() else {
             cx.notify();
@@ -1287,7 +1298,11 @@ impl FirstRun {
             return;
         }
         let before = self.model.still_blocked().len();
-        self.model.browsers = (self.hooks.on_reread)(cx);
+        let browsers = (self.hooks.on_reread)(cx);
+        self.model.browsers_loading = crate::browser_scan::is_loading(cx);
+        self.model.browser_error = crate::browser_scan::error(cx);
+        if self.model.browsers_loading { cx.notify(); return; }
+        self.model.browsers = browsers;
         let after = self.model.still_blocked().len();
         if let Some(access) = self.model.access.as_mut() {
             if asked {
@@ -1310,7 +1325,10 @@ impl FirstRun {
     /// "Look again": read the machine's browsers again, and pick one when
     /// there is one now.
     fn look_again(&mut self, cx: &mut Context<'_, Self>) {
-        self.model.browsers = (self.hooks.on_rescan)(cx);
+        let browsers = (self.hooks.on_rescan)(cx);
+        self.model.browsers_loading = crate::browser_scan::is_loading(cx);
+        self.model.browser_error = crate::browser_scan::error(cx);
+        if !self.model.browsers_loading && self.model.browser_error.is_none() { self.model.browsers = browsers; }
         self.preselect(cx);
         cx.notify();
     }
@@ -2429,7 +2447,8 @@ fn everything_else_body(
     cx: &mut Context<'_, FirstRun>,
 ) -> Div {
     let body = div().flex().flex_col().gap(px(8.0));
-    if model.browsers.is_empty() {
+    if model.browsers_loading { return body.child(paragraph(model.everything_else_detail())); }
+    if model.browsers.is_empty() || model.browser_error.is_some() {
         return body.child(paragraph(model.everything_else_detail())).when(
             state != StepState::Todo,
             |body| {

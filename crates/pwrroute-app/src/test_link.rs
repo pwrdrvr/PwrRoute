@@ -145,6 +145,7 @@ pub struct TestLink {
     /// test after any of them changes builds it again.
     run: Option<Run>,
     request_token: Rc<()>,
+    /// Loading, expanding or tracing on the worker.
     pub expanding: bool,
     /// Tests inject a network; the real client is created off the UI thread.
     pub(crate) network: Option<Arc<dyn Network + Send + Sync>>,
@@ -154,8 +155,8 @@ pub struct TestLink {
 
 impl TestLink {
     /// `config` is the Finicky config in charge, if any (`home` shortens
-    /// its path to `~/…`), and `engine` the engine the window already loaded
-    /// it in (config alone). `rules` is the visual rules file as the router
+    /// its path to `~/…`). `worker` owns the engines; `rules` is the visual
+    /// rules file as the router
     /// reads it: with a config in charge the two route together, in the
     /// order `rules.json`'s `precedence` says, and so does this.
     pub fn new(

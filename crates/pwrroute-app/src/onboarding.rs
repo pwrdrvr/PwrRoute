@@ -31,9 +31,9 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use gpui_kit::{App, AppContext as _, Context, DisplayId, IntoElement as _, ParentElement as _, Render, Styled as _, Subscription, Window, WindowHandle};
+use gpui_kit::{App, AppContext as _, Context, DisplayId, ParentElement as _, Render, Styled as _, Subscription, Window, WindowHandle};
 use pwrroute_engine::{
-    AppType, BrowserSpec, DefaultHost, Engine, Limits, Precedence, RulesFile, discovery,
+    AppType, BrowserSpec, NativeHost, Engine, Limits, Precedence, RulesFile, discovery,
 };
 use serde::{Deserialize, Serialize};
 
@@ -178,7 +178,7 @@ impl FinickyFound {
     /// default. A config that fails to load is still found, with the
     /// reason.
     pub fn read(path: PathBuf) -> Self {
-        let engine = match Engine::load(&path, Rc::new(DefaultHost), Limits::default()) {
+        let engine = match Engine::load(&path, Rc::new(NativeHost::new()), Limits::default()) {
             Ok(engine) => engine,
             Err(error) => {
                 return Self {
@@ -929,10 +929,23 @@ fn finish_opening(cx: &mut App) {
 
 /// Updates browser facts only; setup choices and config review stay intact.
 pub fn refresh_browsers(cx: &mut App) {
-    if crate::browser_scan::is_loading(cx) { return; }
+    let loading = crate::browser_scan::is_loading(cx);
+    let error = crate::browser_scan::error(cx);
     let browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
-    if let Some(window) = cx.try_global::<Open>().map(|open| open.window) {
-        let _ = window.update(cx, |view, _, cx| { view.model.browsers = browsers; view.preselect(cx); cx.notify(); });
+    for window in cx.windows() {
+        if let Some(window) = window.downcast::<FirstRun>() {
+            let _ = window.update(cx, |view, _, cx| {
+                let before = view.model.still_blocked().len();
+                view.model.browsers_loading = loading;
+                view.model.browser_error = error.clone();
+                if !loading && error.is_none() {
+                    view.model.browsers = browsers.clone();
+                    if view.model.still_blocked().len() < before && let Some(access) = &mut view.model.access { access.still_blocked = false; }
+                    view.preselect(cx);
+                }
+                cx.notify();
+            });
+        }
     }
     finish_opening(cx);
 }

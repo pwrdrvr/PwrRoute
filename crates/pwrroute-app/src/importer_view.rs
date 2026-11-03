@@ -363,18 +363,20 @@ fn open_inner(
     });
     let result =
         crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Import, move || {
-            let stamps = crate::engine_worker::primary(Some(&path));
+            let mut stamps = crate::engine_worker::primary(Some(&path));
             let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
             let mut model = if path.extension().is_some_and(|ext| ext == "json") {
                 ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
             } else {
-                ImportModel::read(
+                let (model, dependencies) = ImportModel::read_with_stamps(
                     &path,
                     home.as_deref(),
                     in_charge.as_deref(),
                     &refs,
                     existing,
-                )
+                );
+                stamps = dependencies;
+                model
             };
             if first_run {
                 model.start_at_source();
