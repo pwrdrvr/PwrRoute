@@ -2553,8 +2553,11 @@ mod worker_integration_tests {
         }"#).unwrap();
         file.save(&source).unwrap();
         let hooks = crate::onboarding::hooks_with(
-            Some(data.clone()), Some(target.clone()), None,
-            Rc::new(|_, _| Ok(())), Rc::new(|_, _| panic!("copy opens no main window")),
+            Some(data.clone()),
+            Some(target.clone()),
+            None,
+            Rc::new(|_, _| Ok(())),
+            Rc::new(|_, _| panic!("copy opens no main window")),
         );
         let mut model = crate::first_run::FirstRunModel::fixture();
         model.finicky = None;
@@ -2562,7 +2565,9 @@ mod worker_integration_tests {
         let first = cx.update(|cx| crate::first_run::open(model, hooks.clone(), cx).unwrap());
         {
             let mut visual = gpui_kit::VisualTestContext::from_window(first.into(), cx);
-            visual.update(|window, cx| { window.draw(cx).clear(cx); });
+            visual.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
             let bounds = visual.debug_bounds("first-run-copy-finicky-rules").unwrap();
             visual.simulate_click(bounds.center(), gpui_kit::Modifiers::none());
         }
@@ -2579,26 +2584,41 @@ mod worker_integration_tests {
             })
         });
         started.recv().unwrap();
-        cx.update(|cx| { review.update(cx, |this, window, cx| this.import(window, cx)).unwrap(); });
+        cx.update(|cx| {
+            review
+                .update(cx, |this, window, cx| this.import(window, cx))
+                .unwrap();
+        });
         // The copy has committed, but its saved-test summary is still queued.
         assert_eq!(RulesFile::load(&target).unwrap(), file);
         cx.update(|cx| {
             assert!(first.read(cx).unwrap().model.copying_rules);
             if change == 0 {
                 let browser = first.read(cx).unwrap().model.browsers[0].clone();
-                (hooks.on_fallback)(crate::first_run::Fallback {
-                    browser: browser.clone(), profile: Some("Work".into()),
-                }, cx).unwrap();
-                first.update(cx, |this, _, _| {
-                    let mut label = browser.label;
-                    label.profile = Some("Work".into());
-                    this.model.fallback = Some(label);
-                }).unwrap();
+                (hooks.on_fallback)(
+                    crate::first_run::Fallback {
+                        browser: browser.clone(),
+                        profile: Some("Work".into()),
+                    },
+                    cx,
+                )
+                .unwrap();
+                first
+                    .update(cx, |this, _, _| {
+                        let mut label = browser.label;
+                        label.profile = Some("Work".into());
+                        this.model.fallback = Some(label);
+                    })
+                    .unwrap();
             } else if change == 1 {
                 let mut current = RulesFile::load(&target).unwrap();
                 current.rules.clear();
                 current.save(&target).unwrap();
-                first.update(cx, |this, _, _| { this.model.rules = 0; }).unwrap();
+                first
+                    .update(cx, |this, _, _| {
+                        this.model.rules = 0;
+                    })
+                    .unwrap();
             } else {
                 std::fs::write(&target, "a newer unfinished edit").unwrap();
             }
@@ -2616,13 +2636,22 @@ mod worker_integration_tests {
             let model = &first.read(cx).unwrap().model;
             assert!(!model.copying_rules);
             let expected_rules = if change == 0 { 1 } else { shown_before.0 };
-            assert_eq!(model.rules, expected_rules, "late summary replaced the current rule count");
+            assert_eq!(
+                model.rules, expected_rules,
+                "late summary replaced the current rule count"
+            );
             if change == 0 {
                 let fallback = model.fallback.as_ref().unwrap();
-                assert_eq!(fallback.name, "Google Chrome", "late summary replaced the new fallback");
+                assert_eq!(
+                    fallback.name, "Google Chrome",
+                    "late summary replaced the new fallback"
+                );
                 assert_eq!(fallback.profile.as_deref(), Some("Work"));
             } else if change == 2 {
-                assert_eq!(model.fallback, shown_before.1, "unreadable facts replaced the current choice");
+                assert_eq!(
+                    model.fallback, shown_before.1,
+                    "unreadable facts replaced the current choice"
+                );
             }
             let status = model.rules_import_status.as_deref().unwrap();
             assert!(status.starts_with("Copied 2 entries."), "{status}");
@@ -2644,7 +2673,9 @@ mod worker_integration_tests {
     }
 
     #[gpui_kit::test]
-    fn review_regression_import_summary_does_not_invent_unreadable_facts(cx: &mut gpui_kit::TestAppContext) {
+    fn review_regression_import_summary_does_not_invent_unreadable_facts(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         delayed_copy_summary(cx, 2);
     }
 

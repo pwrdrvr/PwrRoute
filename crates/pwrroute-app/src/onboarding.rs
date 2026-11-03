@@ -631,7 +631,9 @@ pub fn hooks_with(
                 reply(result, cx);
             });
             let rules = copy_rules_path.clone();
-            cx.defer(move |cx| crate::importer_view::open_from_first_run_session(path, rules, on_done, session, cx));
+            cx.defer(move |cx| {
+                crate::importer_view::open_from_first_run_session(path, rules, on_done, session, cx)
+            });
         }),
         on_fallback: Rc::new(move |choice: first_run::Fallback, _| {
             edit_rules(fallback_rules.as_deref(), |rules| {

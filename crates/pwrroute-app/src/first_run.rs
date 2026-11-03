@@ -2227,11 +2227,14 @@ fn rules_import_card(model: &FirstRunModel, cx: &mut Context<'_, FirstRun>) -> D
                             if let Some(result) = result {
                                 if let Some(imported) = result.current {
                                     this.model.rules = imported.rules;
-                                    this.model.fallback = (!imported.default_browser.is_empty()).then(|| label_for(
-                                        &this.model.browsers,
-                                        &imported.default_browser,
-                                        &imported.default_profile,
-                                    ));
+                                    this.model.fallback = (!imported.default_browser.is_empty())
+                                        .then(|| {
+                                            label_for(
+                                                &this.model.browsers,
+                                                &imported.default_browser,
+                                                &imported.default_profile,
+                                            )
+                                        });
                                 }
                                 this.model.rules_import_status = Some(result.summary);
                             }
