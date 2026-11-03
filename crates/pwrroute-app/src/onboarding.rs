@@ -176,6 +176,10 @@ pub struct FinickyFound {
 }
 
 impl FinickyFound {
+    fn read_with_stamps(path: PathBuf) -> (Self, crate::engine_worker::Stamps) {
+        let stamps = crate::engine_worker::primary(Some(&path));
+        (Self::read(path), stamps)
+    }
     /// Reads the config at `path`: evaluating it, as the Rules screen does,
     /// to count its rules and the ones that import, and to read its
     /// default. A config that fails to load is still found, with the
@@ -891,8 +895,8 @@ fn prepare(facts: Facts, config: Option<PathBuf>, cx: &mut App) {
     if config.is_some() {
         let result =
             crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
-                let stamps = crate::engine_worker::primary(config.as_deref());
-                (config.map(FinickyFound::read), stamps)
+                let (found, stamps) = FinickyFound::read_with_stamps(config.unwrap());
+                (Some(found), stamps)
             });
         let token = request.clone();
         let task = cx.spawn(async move |cx| {
@@ -2536,4 +2540,20 @@ mod tests {
             assert!(crate::settings_store::store(cx).is_none());
         });
     }
+    #[test]
+    fn engine_review_first_run_config_tracks_imported_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.js");
+        let dependency = dir.path().join("policy.js");
+        fs::write(&config, "import browser from './policy.js'; export default { defaultBrowser: browser };").unwrap();
+        fs::write(&dependency, "export default 'Safari';").unwrap();
+        fs::File::open(&dependency).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10)).unwrap();
+        let (found, stamps) = FinickyFound::read_with_stamps(config);
+        assert_eq!(found.default_browser.as_deref(), Some("Safari"));
+        assert!(crate::engine_worker::unchanged(&stamps));
+        fs::write(&dependency, "export default 'Firefox';").unwrap();
+        fs::File::open(&dependency).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20)).unwrap();
+        assert!(!crate::engine_worker::unchanged(&stamps), "queued first-run review ignored its imported module");
+    }
+
 }
