@@ -2451,7 +2451,8 @@ fn the_add_rule_sheet_offers_the_domain_and_every_subdomain(cx: &mut TestAppCont
         (98, "https://dash.example.com/somefolder/page?tab=billing"),
     ] {
         let mut completion = record_like(&records[2], id, url, Matched::Default { owner: None });
-        completion.received_at -= std::time::Duration::from_nanos(id - 94);
+        // Windows SystemTime cannot represent a one-nanosecond fixture gap.
+        completion.received_at -= std::time::Duration::from_micros(id - 94);
         feed.push(completion);
     }
     cx.update(|cx| activity::install_feed(Feed::from_records(feed), cx));
@@ -3670,7 +3671,8 @@ fn activity_names_the_rule_and_saves_its_example_from_the_record(cx: &mut TestAp
                 "Firefox",
                 "",
             ),
-            now - Duration::from_nanos(1),
+            // Keep this receipt older on Windows as well as Unix.
+            now - Duration::from_micros(1),
         ),
         // Routed as rule 2 before the file last changed: a rule has since
         // gone in above, and rule 2 now is tickets.example.com's.
