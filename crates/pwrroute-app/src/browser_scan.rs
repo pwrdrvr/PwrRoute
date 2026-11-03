@@ -102,8 +102,9 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
 type ScanCallback = Rc<dyn Fn(&mut App)>;
 #[cfg(test)]
 pub(crate) type ScanProducer = std::sync::Arc<
-    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<DetectedApp>, String>> + Send>>
-        + Send
+    dyn Fn() -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<DetectedApp>, String>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -392,7 +393,9 @@ mod tests {
         let observed = completed.clone();
         cx.update(|cx| {
             install(env, cx);
-            set_test_producer(cx, Arc::new(move || {
+            set_test_producer(
+                cx,
+                Arc::new(move || {
                     let index = calls.fetch_add(1, Ordering::SeqCst);
                     let wait = wait.clone();
                     Box::pin(async move {
@@ -406,7 +409,8 @@ mod tests {
                             profiles_blocked: false,
                         }])
                     })
-                }));
+                }),
+            );
             on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
             assert!(apps(cx).is_empty());
             assert!(choices(cx).is_empty());
@@ -468,32 +472,54 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_failed_rescan_notifies_consumers_keeps_cached_apps_and_can_retry(cx: &mut gpui_kit::TestAppContext) {
+    fn a_failed_rescan_notifies_consumers_keeps_cached_apps_and_can_retry(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         let completed = Rc::new(std::cell::Cell::new(0));
         let observed = completed.clone();
         let (release, wait) = async_channel::bounded(2);
         cx.update(|cx| {
-            install_fixture(vec![DetectedApp { name: "Cached browser".into(), bundle_id: None,
-                location: "/fixture/browser".into(), profiles: vec![], directories: vec![], profiles_blocked: false }], cx);
-            set_test_producer(cx, std::sync::Arc::new(move || {
-                let wait = wait.clone();
-                Box::pin(async move { wait.recv().await.unwrap() })
-            }));
+            install_fixture(
+                vec![DetectedApp {
+                    name: "Cached browser".into(),
+                    bundle_id: None,
+                    location: "/fixture/browser".into(),
+                    profiles: vec![],
+                    directories: vec![],
+                    profiles_blocked: false,
+                }],
+                cx,
+            );
+            set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let wait = wait.clone();
+                    Box::pin(async move { wait.recv().await.unwrap() })
+                }),
+            );
             on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
             rescan(cx);
             assert!(is_loading(cx));
             assert_eq!(apps(cx)[0].name, "Cached browser");
         });
         cx.run_until_parked();
-        release.try_send(Err("Fixture scan blocked".into())).unwrap();
+        release
+            .try_send(Err("Fixture scan blocked".into()))
+            .unwrap();
         cx.run_until_parked();
         cx.update(|cx| {
             assert!(!is_loading(cx));
             assert_eq!(error(cx).as_deref(), Some("Fixture scan blocked"));
             assert_eq!(apps(cx)[0].name, "Cached browser");
         });
-        assert_eq!(completed.get(), 1, "failure is a completion consumers must observe");
-        cx.update(|cx| { rescan(cx); });
+        assert_eq!(
+            completed.get(),
+            1,
+            "failure is a completion consumers must observe"
+        );
+        cx.update(|cx| {
+            rescan(cx);
+        });
         release.try_send(Ok(Vec::new())).unwrap();
         cx.run_until_parked();
         cx.update(|cx| {
