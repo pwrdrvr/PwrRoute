@@ -140,6 +140,7 @@ pub fn install(env: Env, cx: &mut App) {
         cx,
         Rc::new(|cx| {
             refresh_windows(cx);
+            crate::tray::refresh_browsers(cx);
             crate::settings::reload(cx, crate::settings::Pane::Configuration);
             crate::settings::reload(cx, crate::settings::Pane::Sync);
         }),

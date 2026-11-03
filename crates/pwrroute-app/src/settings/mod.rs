@@ -347,8 +347,8 @@ fn reload_now(cx: &mut App, pane: Pane) {
     let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
     if let Some(handle) = open {
         let _ = handle.update(cx, |view, _, cx| {
-            if let Some(dirty) = view.loads.get_mut(&pane) {
-                *dirty = true;
+            if let Some(load) = view.loads.get_mut(&pane) {
+                match load { PaneLoad::Running(dirty) | PaneLoad::Queued(dirty) => *dirty = true }
             } else if view.requested.remove(&pane) || view.pane == pane {
                 view.model.pending.insert(pane);
                 view.model.problems.remove(&pane);
@@ -417,6 +417,12 @@ fn load_async<T: Send + 'static>(
 }
 
 type QueuedLoad = Box<dyn FnOnce(&mut App)>;
+
+enum PaneLoad {
+    Running(bool),
+    Queued(bool),
+}
+
 #[derive(Default)]
 struct LoadJobs(HashMap<Pane, Option<QueuedLoad>>);
 impl Global for LoadJobs {}
@@ -431,12 +437,10 @@ fn load_future<T: Send + 'static>(
         return;
     };
     let Ok(start) = handle.update(cx, |view, _, _| {
-        if let Some(dirty) = view.loads.get_mut(&pane) {
-            *dirty = true;
-            false
-        } else {
-            view.loads.insert(pane, false);
-            true
+        match view.loads.get_mut(&pane) {
+            Some(PaneLoad::Running(dirty)) => { *dirty = true; false }
+            Some(PaneLoad::Queued(dirty)) => { *dirty = false; true }
+            None => { view.loads.insert(pane, PaneLoad::Running(false)); true }
         }
     }) else {
         return;
@@ -449,14 +453,24 @@ fn load_future<T: Send + 'static>(
     }
     if cx.global::<LoadJobs>().0.contains_key(&pane) {
         let _ = handle.update(cx, |view, _, _| {
-            view.loads.remove(&pane);
+            view.loads.insert(pane, PaneLoad::Queued(false));
         });
         cx.update_global(|jobs: &mut LoadJobs, _| {
             jobs.0.insert(
                 pane,
                 Some(Box::new(move |cx| {
                     if cx.try_global::<OpenWindow>().and_then(|open| open.0) == Some(handle) {
-                        load_future(cx, pane, produce, apply);
+                        let ready = handle.update(cx, |view, _, cx| {
+                            if matches!(view.loads.remove(&pane), Some(PaneLoad::Queued(false))) {
+                                true
+                            } else {
+                                view.requested.remove(&pane);
+                                view.model.pending.insert(pane);
+                                cx.notify();
+                                false
+                            }
+                        }).unwrap_or(false);
+                        if ready { load_future(cx, pane, produce, apply); }
                     }
                 })),
             );
@@ -470,7 +484,7 @@ fn load_future<T: Send + 'static>(
     cx.spawn(async move |cx| {
         let result = work.await;
         let _ = handle.update(cx, |view, _, cx| {
-            let dirty = view.loads.remove(&pane).unwrap_or(true);
+            let dirty = !matches!(view.loads.remove(&pane), Some(PaneLoad::Running(false)));
             if dirty {
                 view.requested.remove(&pane);
             } else {
@@ -509,7 +523,7 @@ pub struct SettingsWindow {
     pub pane: Pane,
     pub model: SettingsModel,
     requested: HashSet<Pane>,
-    loads: HashMap<Pane, bool>,
+    loads: HashMap<Pane, PaneLoad>,
     /// Cards folded shut, by id. A reading position, not a preference, so
     /// it lives as long as the window.
     collapsed: HashSet<&'static str>,

@@ -740,6 +740,9 @@ struct CopiedConfig(
 );
 impl gpui_kit::Global for CopiedConfig {}
 
+struct CopyProblem(Option<String>);
+impl gpui_kit::Global for CopyProblem {}
+
 #[derive(Debug)]
 struct CopiedNotSaved(String);
 impl std::fmt::Display for CopiedNotSaved {
@@ -803,6 +806,7 @@ fn finish_copy_save(result: Result<(), String>, cx: &mut App) -> anyhow::Result<
     match result {
         Ok(()) => {
             cx.set_global(CopiedConfig(None, SourceSnapshot::capture(cx)));
+            cx.set_global(CopyProblem(None));
             cx.defer(|cx| {
                 super::update(cx, |model| {
                     model.sync.problem = None;
@@ -871,7 +875,12 @@ fn combine_copy_saves(sync: Result<(), String>, source: Result<(), String>) -> R
 fn report_copy(result: anyhow::Result<()>, cx: &mut App) {
     match result {
         Ok(()) => refresh(cx),
-        Err(error) if error.is::<CopiedNotSaved>() => report(error.to_string(), cx),
+        Err(error) if error.is::<CopiedNotSaved>() => {
+            let problem = error.to_string();
+            let pending = cx.try_global::<CopiedConfig>().is_some_and(|copy| copy.0.is_some());
+            cx.set_global(CopyProblem(pending.then(|| problem.clone())));
+            report(problem, cx);
+        }
         Err(error) => report(format!("Not changed: {error:#}."), cx),
     }
 }
@@ -892,6 +901,14 @@ fn report(problem: String, cx: &mut App) {
         super::update(cx, |model| model.sync.problem = Some(problem.into()));
         refresh(cx);
     });
+}
+
+fn action_succeeded(cx: &mut App) {
+    cx.defer(|cx| {
+        let copy_problem = cx.try_global::<CopyProblem>().and_then(|problem| problem.0.clone());
+        super::update(cx, |model| model.sync.problem = copy_problem.map(Into::into));
+    });
+    refresh(cx);
 }
 
 /// Answers Sync's requests; `false` for any other.
@@ -995,7 +1012,7 @@ pub fn handle_request(request: &SettingsRequest, cx: &mut App) -> bool {
         _ => return false,
     };
     match outcome {
-        Ok(()) => refresh(cx),
+        Ok(()) => action_succeeded(cx),
         Err(e) => report(format!("Not changed: {e:#}."), cx),
     }
     true
@@ -1104,6 +1121,38 @@ mod tests {
     use pwrroute_engine::{Binding, Destination, Rule, RuleSet};
     use pwrroute_sync::{FileStatus, Kind, Machine};
     use std::collections::BTreeMap;
+
+    #[gpui_kit::test]
+    fn review_an_unrelated_success_keeps_the_copied_config_error(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            crate::assets::load_fonts(cx);
+            let mut store = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+            store.update(|_| {}).unwrap();
+            crate::settings_store::install(store, None, cx);
+            super::super::install(cx);
+            cx.set_global(super::super::SettingsHost {
+                model: std::rc::Rc::new(|_, _| super::super::fixtures::model()),
+                on_request: std::rc::Rc::new(|_, _, _| {}),
+            });
+            super::super::open(cx, Some(super::super::Pane::Sync));
+            cx.set_global(CopiedConfig(Some(Default::default()), SourceSnapshot::capture(cx)));
+            report_copy(Err(CopiedNotSaved("Config copied, source choice not saved: fixture".into()).into()), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| { handle_request(&SettingsRequest::SetSyncConfig(true), cx); });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            for window in cx.windows() {
+                if let Some(window) = window.downcast::<super::super::SettingsWindow>() {
+                    window.update(cx, |view, _, cx| {
+                        apply_sync(&mut view.model, Sync::default(), cx);
+                        assert!(view.model.sync.problem.as_ref().unwrap().starts_with("Config copied,"));
+                    }).unwrap();
+                }
+            }
+        });
+    }
 
     #[gpui_kit::test]
     fn a_held_local_writer_refuses_publication_and_source_then_succeeds_after_release(

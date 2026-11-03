@@ -1088,6 +1088,13 @@ pub fn copy_held(id: DispatchId, cx: &mut App) {
 }
 
 /// What the destination lanes offer, as the scan has it now.
+pub(crate) fn refresh_browsers(cx: &mut App) {
+    if let Some(model) = model(cx) {
+        refresh_destinations(&model, cx);
+    }
+}
+
+/// What the destination lanes offer, as the scan has it now.
 #[cfg_attr(
     not(target_os = "macos"),
     allow(dead_code, reason = "only macOS has the dropdown")

@@ -224,6 +224,7 @@ fn main() -> ExitCode {
         );
         // The one browser scan, read when a picker or Settings first asks.
         browser_scan::install(browser_scan::environment(), cx);
+        onboarding::install(cx);
         // Each app's own icon on its badge, read when a badge first draws.
         app_icons::install(cx);
         cx.set_global(importer_view::ImporterHost {
