@@ -600,6 +600,11 @@ impl Worker {
             );
             record.timings.queue_us = Timings::micros(job.started - job.request.received);
             record.timings.expand_us = job.expand_us;
+            if !matches!(record.steps.first(), Some(Step::Rejected { .. })) {
+                // Preserve the trace contract: expansion is inside resolve,
+                // including time waiting for an expansion lane or Catch.
+                record.timings.resolve_us = Timings::micros(job.started.elapsed());
+            }
             if job.mode == Mode::Test || record.browser.is_none() {
                 self.finish(job, record);
             } else {
