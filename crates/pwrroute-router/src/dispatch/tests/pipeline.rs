@@ -747,9 +747,11 @@ fn expiry_boundary_and_rejected_normalization_do_not_consume_next() {
 fn count_retention_keeps_newest_receipts_when_old_expansion_completes_last() {
     let (entered, started) = mpsc::channel();
     let gate = Gate::default();
+    let dir = tempfile::tempdir().unwrap();
     let (recorded, delivered) = mpsc::channel();
     let router = Router::spawn(
         Options {
+            journal: Some(JournalConfig::new(dir.path(), JournalMode::Full)),
             retention: Retention { count: 2, hours: 0 },
             network: Some(Arc::new(BlockNetwork {
                 entered,
@@ -785,6 +787,7 @@ fn count_retention_keeps_newest_receipts_when_old_expansion_completes_last() {
         [third.id, second.id]
     );
     assert!(handle.get(first).is_none());
+    assert_eq!(handle.journal(2).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), [third.id, second.id]);
 }
 
 #[test]
@@ -844,4 +847,64 @@ fn fallback_waits_for_its_browser_and_release_passes_over_an_armed_override() {
     assert!(fallback.browser.as_ref().unwrap().private);
     assert_eq!(fallback.privacy, Privacy::Host);
     assert_eq!(events.try_iter().count(), 1);
+}
+
+#[test]
+fn full_mailbox_replacement_joins_watcher_and_retains_eventual_refresh() {
+    struct JoinWatcher { trigger: Gate, thread: Option<std::thread::JoinHandle<()>> }
+    impl Drop for JoinWatcher {
+        fn drop(&mut self) {
+            self.trigger.open();
+            self.thread.take().unwrap().join().unwrap();
+        }
+    }
+    impl Resolver for JoinWatcher {
+        fn resolve(&self, _: &EngineLink, _: Option<&Opener>) -> Result<Resolved> { anyhow::bail!("unused") }
+    }
+    let (handle_tx, handle_rx) = mpsc::channel::<RouterHandle>();
+    let (watcher_tx, watcher_rx) = mpsc::channel();
+    let factory: ResolverFactory = Box::new(move || {
+        let handle = handle_rx.recv().unwrap();
+        let trigger = Gate::default();
+        let thread_gate = trigger.clone();
+        let thread = std::thread::spawn(move || {
+            thread_gate.wait();
+            watcher_tx.send(handle.refresh()).unwrap();
+        });
+        Ok(Box::new(JoinWatcher { trigger, thread: Some(thread) }))
+    });
+    let router = Router::spawn(Options::default(), Some(factory), DryRunLauncher::new()).unwrap();
+    let handle = router.handle();
+    handle_tx.send(handle.clone()).unwrap();
+    handle.status().unwrap();
+    let build_gate = Gate::default();
+    let _release = Release(build_gate.clone());
+    let (entered, started) = mpsc::channel();
+    let refreshed = Arc::new(AtomicU64::new(0));
+    let factory: ResolverFactory = {
+        let refreshed = refreshed.clone();
+        Box::new(move || {
+            entered.send(()).unwrap();
+            build_gate.wait();
+            Ok(Box::new(PolicyResolver { policy: Arc::new(Mutex::new(ShortLinks::off())), refreshed }))
+        })
+    };
+    let h = handle.clone();
+    let replaced = background(move || h.replace_resolver(factory));
+    started.recv_timeout(DEADLINE).unwrap();
+    // The owner is inside the replacement factory. Fill every mailbox
+    // slot with controls that do not themselves refresh an idle resolver.
+    let (applied, replies) = mpsc::channel();
+    for _ in 0..128 {
+        assert!(handle.tx.try_send(Command::SetRetention { retention: Retention::default(), reply: applied.clone() }).is_ok());
+    }
+    _release.0.open();
+    assert!(watcher_rx.recv_timeout(DEADLINE).unwrap().is_ok());
+    assert_eq!(replaced.recv_timeout(DEADLINE).unwrap(), Ok(Ok(())));
+    for _ in 0..128 { replies.recv_timeout(DEADLINE).unwrap(); }
+    // One refresh belongs to Replace. The second must come from the dirty
+    // wake whose try_send failed: no Status or dispatch can mask its loss.
+    assert!(refreshed.load(Ordering::SeqCst) >= 2);
+    handle.status().unwrap();
+    drop(router);
 }

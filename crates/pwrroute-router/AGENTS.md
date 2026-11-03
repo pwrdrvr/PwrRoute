@@ -11,7 +11,9 @@ runs on every platform.
 - **Admission is backpressure, not a busy error.** At most 64 links are
   admitted, through record delivery; a full budget blocks OS/IPC/API/release
   submitters before acceptance. The command mailbox holds at most 128 messages.
-  Status/control bypass the link budget. Shutdown closes admission, wakes
+  Status/control bypass the link budget. Refresh coalesces through a dirty bit
+  when the mailbox is full, so replacing a resolver can join its watcher.
+  Shutdown closes admission, wakes
   blocked submitters with `RouterGone`, drains accepted records and joins lanes.
   Never turn transient saturation into `RouterGone` or discard an OS click.
 - **Ordering is explicit.** Four expansion lanes let ordinary links pass a
@@ -126,15 +128,17 @@ runs on every platform.
   `None`, a private rule) passes by and the catch stays armed: a `None`
   record keeps nothing waiting, so the link would be lost.
   `DispatchRecord::held_for_rule()` reads it from the steps; the app opens
-  Add a rule for it. Memory only.
+  Add a rule for it. While privacy is pending, following state decisions
+  commit in admission order using the live mode: a cancellation or mode change
+  before that commit governs the deferred chain. Memory only.
 - **A link that was not opened waits, in memory, to be opened.**
   `Worker::record` hands `RecentDispatches::push_waiting` the whole link
   (URL and opener) of every `NotOpened` record that keeps anything; it
   waits beside its record and leaves with it (count, age, Clear, a
-  retention of nothing), so nothing waits that Activity cannot show. This
-  is the one exception to "a `Host` record never held the full URL outside
-  the dispatch thread": its whole link stays in the buffer's memory, never
-  on disk, so Open can open it. A `None` record keeps nothing waiting.
+  retention of nothing), so nothing waits that Activity cannot show. Its whole
+  link stays in the buffer's memory, never on disk, so Open can open it. Raw
+  launch URLs also live temporarily in their I/O lane; raw records and opener
+  data stay on the owner. A `None` record keeps nothing waiting.
   `RouterHandle::open_not_opened(id, OpenAs)` takes it on the dispatch
   thread and dispatches it again past any override, with its source and
   opener and `Step::Released { from, chosen }`: `OpenAs::Rules` (the

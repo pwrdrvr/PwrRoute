@@ -14,7 +14,7 @@
 
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, BufRead, Write},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -121,14 +121,21 @@ pub fn read_recent(dir: &Path, limit: usize) -> io::Result<Vec<DispatchRecord>> 
     let mut files = journal_files(dir)?;
     files.sort_unstable_by_key(|(day, _)| std::cmp::Reverse(*day));
     for (_, path) in files {
-        let text = fs::read_to_string(&path)?;
-        for line in text.lines().rev() {
-            if let Ok(record) = serde_json::from_str::<DispatchRecord>(line) {
-                records.push(record);
-                if records.len() == limit {
-                    return Ok(records);
+        // Slow I/O can append an older receipt after a newer one. Scan
+        // this day in bounded memory, retaining only its newest `limit`.
+        for line in io::BufReader::new(fs::File::open(path)?).lines() {
+            if let Ok(record) = serde_json::from_str::<DispatchRecord>(&line?) {
+                let index = records.partition_point(|other: &DispatchRecord| {
+                    (other.received_at, other.id) > (record.received_at, record.id)
+                });
+                if index < limit {
+                    records.insert(index, record);
+                    records.truncate(limit);
                 }
             }
+        }
+        if records.len() == limit {
+            return Ok(records);
         }
     }
     Ok(records)
@@ -508,6 +515,24 @@ mod tests {
             }
         }
         record
+    }
+
+    #[test]
+    fn newest_receipts_survive_late_appends_ties_and_multiple_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = JournalConfig::new(dir.path(), JournalMode::Full);
+        let mut journal = Journal::new(config.clone());
+        for (id, when) in [
+            (10, NOON + 2), (9, NOON + 1), (1, NOON - 86_400),
+            (8, NOON + 1), (7, NOON - 2), (6, NOON - 86_400 + 1),
+        ] {
+            journal.append(&record(id, at(when), Privacy::Full));
+        }
+        assert_eq!(journal.error(), None);
+        let ids = |limit| config.read(limit).unwrap().iter().map(|r| r.id.0).collect::<Vec<_>>();
+        assert_eq!(ids(2), [10, 9]);
+        assert_eq!(ids(3), [10, 9, 8]);
+        assert_eq!(ids(10), [10, 9, 8, 7, 6, 1]);
     }
 
     #[test]
