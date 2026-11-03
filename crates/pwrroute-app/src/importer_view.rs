@@ -2520,6 +2520,109 @@ impl Render for Importer {
 #[cfg(test)]
 mod worker_integration_tests {
     use super::*;
+
+    fn delayed_copy_summary(cx: &mut gpui_kit::TestAppContext, change_fallback: bool) {
+        struct Gate(Option<std::sync::mpsc::Sender<()>>);
+        impl Drop for Gate {
+            fn drop(&mut self) {
+                if let Some(send) = self.0.take() {
+                    let _ = send.send(());
+                }
+            }
+        }
+        cx.update(crate::assets::load_fonts);
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("PwrRoute");
+        let target = data.join("rules.json");
+        let source = dir.path().join("Finicky/rules.json");
+        let file: RulesFile = serde_json::from_str(r#"{
+            "defaultBrowser":"org.mozilla.firefox",
+            "rules":[{"match":"example.com/*", "browser":"com.apple.Safari", "examples":["https://example.com/a"]}],
+            "tests":[{"url":"https://example.com/a", "expect":{"browser":"com.apple.Safari"}}]
+        }"#).unwrap();
+        file.save(&source).unwrap();
+        let hooks = crate::onboarding::hooks_with(
+            Some(data.clone()), Some(target.clone()), None,
+            Rc::new(|_, _| Ok(())), Rc::new(|_, _| panic!("copy opens no main window")),
+        );
+        let mut model = crate::first_run::FirstRunModel::fixture();
+        model.finicky = None;
+        model.finicky_rules = Some((source, "Finicky/rules.json".into()));
+        let first = cx.update(|cx| crate::first_run::open(model, hooks.clone(), cx).unwrap());
+        {
+            let mut visual = gpui_kit::VisualTestContext::from_window(first.into(), cx);
+            visual.update(|window, cx| { window.draw(cx).clear(cx); });
+            let bounds = visual.debug_bounds("first-run-copy-finicky-rules").unwrap();
+            visual.simulate_click(bounds.center(), gpui_kit::Modifiers::none());
+        }
+        cx.update(crate::engine_worker::settle);
+        cx.run_until_parked();
+        let review = cx.update(|cx| importer_window(cx).unwrap());
+        let (entered, started) = std::sync::mpsc::channel();
+        let (send, receive) = std::sync::mpsc::channel();
+        let gate = Gate(Some(send));
+        let _blocked = cx.update(|cx| {
+            crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
+                entered.send(()).unwrap();
+                receive.recv().unwrap();
+            })
+        });
+        started.recv().unwrap();
+        cx.update(|cx| { review.update(cx, |this, window, cx| this.import(window, cx)).unwrap(); });
+        // The copy has committed, but its saved-test summary is still queued.
+        assert_eq!(RulesFile::load(&target).unwrap(), file);
+        cx.update(|cx| {
+            assert!(first.read(cx).unwrap().model.copying_rules);
+            if change_fallback {
+                let browser = first.read(cx).unwrap().model.browsers[0].clone();
+                (hooks.on_fallback)(crate::first_run::Fallback {
+                    browser: browser.clone(), profile: Some("Work".into()),
+                }, cx).unwrap();
+                first.update(cx, |this, _, _| {
+                    let mut label = browser.label;
+                    label.profile = Some("Work".into());
+                    this.model.fallback = Some(label);
+                }).unwrap();
+            } else {
+                let mut current = RulesFile::load(&target).unwrap();
+                current.rules.clear();
+                current.save(&target).unwrap();
+                first.update(cx, |this, _, _| { this.model.rules = 0; }).unwrap();
+            }
+        });
+        let current = RulesFile::load(&target).unwrap();
+        let state_before = std::fs::read(data.join("state.json")).ok();
+        drop(gate);
+        cx.update(crate::engine_worker::settle);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let model = &first.read(cx).unwrap().model;
+            assert!(!model.copying_rules);
+            assert_eq!(model.rules, current.rules.len(), "late summary replaced the current rule count");
+            if change_fallback {
+                let fallback = model.fallback.as_ref().unwrap();
+                assert_eq!(fallback.name, "Google Chrome", "late summary replaced the new fallback");
+                assert_eq!(fallback.profile.as_deref(), Some("Work"));
+            }
+            let status = model.rules_import_status.as_deref().unwrap();
+            assert!(status.starts_with("Copied 2 entries."), "{status}");
+            assert!(status.contains("changed"), "{status}");
+            assert!(!status.contains("2 of 2 passed"), "{status}");
+        });
+        assert_eq!(RulesFile::load(&target).unwrap(), current);
+        assert_eq!(std::fs::read(data.join("state.json")).ok(), state_before);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_import_summary_keeps_newer_fallback(cx: &mut gpui_kit::TestAppContext) {
+        delayed_copy_summary(cx, true);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_import_summary_keeps_newer_rules(cx: &mut gpui_kit::TestAppContext) {
+        delayed_copy_summary(cx, false);
+    }
+
     #[gpui_kit::test]
     fn review_regression_queued_review_cannot_replace_saved_retry_stage(
         cx: &mut gpui_kit::TestAppContext,
