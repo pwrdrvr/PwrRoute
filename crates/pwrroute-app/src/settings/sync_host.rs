@@ -1097,44 +1097,104 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[gpui_kit::test]
-    fn a_held_local_writer_refuses_publication_and_source_then_succeeds_after_release(cx: &mut gpui_kit::TestAppContext) {
+    fn a_held_local_writer_refuses_publication_and_source_then_succeeds_after_release(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir(&home).unwrap();
-        let env = pwrroute_engine::discovery::Environment { home: Some(home.clone()), ..Default::default() };
+        let env = pwrroute_engine::discovery::Environment {
+            home: Some(home.clone()),
+            ..Default::default()
+        };
         let destination = home.join(".finicky.js");
         let expected = cx.update(|cx| {
-            crate::settings_store::install(crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))), None, cx);
-            Some(crate::settings_store::store(cx).unwrap().read(cx).settings().source.clone())
+            crate::settings_store::install(
+                crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))),
+                None,
+                cx,
+            );
+            Some(
+                crate::settings_store::store(cx)
+                    .unwrap()
+                    .read(cx)
+                    .settings()
+                    .source
+                    .clone(),
+            )
         });
-        let prepare = || prepare_folder_config_at("finicky.js", &env,
-            || Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())).unwrap();
+        let prepare = || {
+            prepare_folder_config_at("finicky.js", &env, || {
+                Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())
+            })
+            .unwrap()
+        };
         let prepared = prepare();
         let held = pwrroute_sync::LocalFile::try_lock(&destination).unwrap();
         let resolved = held.path().to_path_buf();
         let persisted = std::rc::Rc::new(std::cell::Cell::new(0));
         let observed = persisted.clone();
-        let result = cx.update(|cx| finish_folder_config_with(expected.clone(), prepared, cx, |_, _| {
-            observed.set(observed.get() + 1);
-            Ok(())
-        }));
-        let error = result.expect_err("a cooperating local writer must refuse the final publication");
-        assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), std::io::ErrorKind::WouldBlock);
+        let result = cx.update(|cx| {
+            finish_folder_config_with(expected.clone(), prepared, cx, |_, _| {
+                observed.set(observed.get() + 1);
+                Ok(())
+            })
+        });
+        let error =
+            result.expect_err("a cooperating local writer must refuse the final publication");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert!(!destination.exists());
-        assert_eq!(persisted.get(), 0, "source persistence must not run on contention");
-        cx.update(|cx| assert_eq!(Some(crate::settings_store::store(cx).unwrap().read(cx).settings().source.clone()), expected));
+        assert_eq!(
+            persisted.get(),
+            0,
+            "source persistence must not run on contention"
+        );
+        cx.update(|cx| {
+            assert_eq!(
+                Some(
+                    crate::settings_store::store(cx)
+                        .unwrap()
+                        .read(cx)
+                        .settings()
+                        .source
+                        .clone()
+                ),
+                expected
+            )
+        });
         drop(held);
         let prepared = prepare();
-        cx.update(|cx| finish_folder_config_with(expected, prepared, cx, |source, cx| {
-            observed.set(observed.get() + 1);
-            assert_eq!(source.config.as_ref(), Some(&resolved));
-            crate::settings_store::store(cx).unwrap().update(cx, |store, _| {
-                store.update(|settings| settings.source = source.clone()).map_err(|error| error.to_string())
+        cx.update(|cx| {
+            finish_folder_config_with(expected, prepared, cx, |source, cx| {
+                observed.set(observed.get() + 1);
+                assert_eq!(source.config.as_ref(), Some(&resolved));
+                crate::settings_store::store(cx)
+                    .unwrap()
+                    .update(cx, |store, _| {
+                        store
+                            .update(|settings| settings.source = source.clone())
+                            .map_err(|error| error.to_string())
+                    })
             })
-        })).unwrap();
+        })
+        .unwrap();
         assert!(resolved.is_file());
         assert_eq!(persisted.get(), 1);
-        cx.update(|cx| assert_eq!(crate::settings_store::store(cx).unwrap().read(cx).settings().source.config.as_ref(), Some(&resolved)));
+        cx.update(|cx| {
+            assert_eq!(
+                crate::settings_store::store(cx)
+                    .unwrap()
+                    .read(cx)
+                    .settings()
+                    .source
+                    .config
+                    .as_ref(),
+                Some(&resolved)
+            )
+        });
     }
 
     fn gated_copy(cx: &mut gpui_kit::TestAppContext, change_source: bool) {
