@@ -576,7 +576,9 @@ pub fn load(cx: &mut App) {
             let problem = model.sync.problem.clone();
             model.sync = sync;
             model.sync.problem = problem;
-            model.sync.copy_retry = cx.try_global::<CopiedConfig>().is_some_and(|copy| copy.0.is_some());
+            model.sync.copy_retry = cx
+                .try_global::<CopiedConfig>()
+                .is_some_and(|copy| copy.0.is_some());
         },
     );
 }
@@ -589,7 +591,9 @@ const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 /// charge with Also sync on so it keeps up.
 fn prepare_folder_config(root: &Path, name: &str) -> anyhow::Result<PreparedConfig> {
     let env = pwrroute_engine::discovery::Environment::current();
-    prepare_folder_config_at(name, &env, || pwrroute_sync::Folder::new(root).settled(name))
+    prepare_folder_config_at(name, &env, || {
+        pwrroute_sync::Folder::new(root).settled(name)
+    })
 }
 
 fn prepare_folder_config_at(
@@ -620,8 +624,13 @@ fn prepare_folder_config_at(
     }
     let home = env.home.as_deref().context("no home folder")?;
     let path = home.join(format!(".{name}"));
-    let staging = stage_config(&path, &bytes).with_context(|| format!("cannot prepare ~/.{name}"))?;
-    Ok(PreparedConfig { path, staging, candidates: discovery::config_candidates(env) })
+    let staging =
+        stage_config(&path, &bytes).with_context(|| format!("cannot prepare ~/.{name}"))?;
+    Ok(PreparedConfig {
+        path,
+        staging,
+        candidates: discovery::config_candidates(env),
+    })
 }
 
 struct CopyingConfig(bool);
@@ -662,7 +671,10 @@ struct PreparedConfig {
 impl PreparedConfig {
     fn publish(&self) -> anyhow::Result<()> {
         if let Some(found) = self.candidates.iter().find(|path| path.is_file()) {
-            anyhow::bail!("{} appeared while the config was being prepared", found.display());
+            anyhow::bail!(
+                "{} appeared while the config was being prepared",
+                found.display()
+            );
         }
         std::fs::hard_link(&self.staging, &self.path)?;
         Ok(())
@@ -670,17 +682,24 @@ impl PreparedConfig {
 }
 
 impl Drop for PreparedConfig {
-    fn drop(&mut self) { let _ = std::fs::remove_file(&self.staging); }
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.staging);
+    }
 }
 
 fn stage_config(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
     use std::io::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let staging = path.with_extension(format!("pwrroute-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let staging = path.with_extension(format!(
+        "pwrroute-{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)] {
+    #[cfg(unix)]
+    {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
@@ -699,27 +718,40 @@ impl gpui_kit::Global for CopiedConfig {}
 #[derive(Debug)]
 struct CopiedNotSaved(String);
 impl std::fmt::Display for CopiedNotSaved {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.0.fmt(f) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 impl std::error::Error for CopiedNotSaved {}
 
-fn finish_folder_config(expected: Option<crate::settings_store::SourceSettings>, prepared: PreparedConfig, cx: &mut App) -> anyhow::Result<()> {
+fn finish_folder_config(
+    expected: Option<crate::settings_store::SourceSettings>,
+    prepared: PreparedConfig,
+    cx: &mut App,
+) -> anyhow::Result<()> {
     finish_folder_config_with(expected, prepared, cx, persist_copied_source)
 }
 
 fn finish_folder_config_with(
-    expected: Option<crate::settings_store::SourceSettings>, prepared: PreparedConfig,
+    expected: Option<crate::settings_store::SourceSettings>,
+    prepared: PreparedConfig,
     cx: &mut App,
     persist: impl FnOnce(&crate::settings_store::SourceSettings, &mut App) -> Result<(), String>,
 ) -> anyhow::Result<()> {
-    let current = crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
-    anyhow::ensure!(expected == current, "routing source changed while the config was prepared");
+    let current =
+        crate::settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+    anyhow::ensure!(
+        expected == current,
+        "routing source changed while the config was prepared"
+    );
     prepared.publish()?;
     let mut source = current.unwrap_or_default();
     source.visual_only = false;
     // Pin the copied file: saving again must not discover a different config.
     source.config = Some(prepared.path.clone());
-    if !source.dismissed.contains(&prepared.path) { source.dismissed.push(prepared.path.clone()); }
+    if !source.dismissed.contains(&prepared.path) {
+        source.dismissed.push(prepared.path.clone());
+    }
     cx.set_global(CopiedConfig(Some(source)));
     retry_copied_with(cx, persist)
 }
@@ -728,7 +760,10 @@ fn retry_copied_with(
     cx: &mut App,
     persist: impl FnOnce(&crate::settings_store::SourceSettings, &mut App) -> Result<(), String>,
 ) -> anyhow::Result<()> {
-    let source = cx.try_global::<CopiedConfig>().and_then(|copy| copy.0.clone()).ok_or_else(|| anyhow::anyhow!("no copied config to save"))?;
+    let source = cx
+        .try_global::<CopiedConfig>()
+        .and_then(|copy| copy.0.clone())
+        .ok_or_else(|| anyhow::anyhow!("no copied config to save"))?;
     match persist(&source, cx) {
         Ok(()) => {
             cx.set_global(CopiedConfig(None));
@@ -742,8 +777,12 @@ fn retry_copied_with(
 
 /// Both writes are attempted after publication. An earlier sync-settings
 /// failure must not bypass the source helper's session state and retry notice.
-fn persist_copied_source(source: &crate::settings_store::SourceSettings, cx: &mut App) -> Result<(), String> {
-    let sync = crate::sync::edit_settings(|sync| sync.config = Some(true), cx).map_err(|error| format!("Sync settings: {error:#}"));
+fn persist_copied_source(
+    source: &crate::settings_store::SourceSettings,
+    cx: &mut App,
+) -> Result<(), String> {
+    let sync = crate::sync::edit_settings(|sync| sync.config = Some(true), cx)
+        .map_err(|error| format!("Sync settings: {error:#}"));
     let applied = crate::importer_view::set_source_and_show(source.clone(), cx).saved(source, cx);
     combine_copy_saves(sync, applied)
 }
@@ -763,14 +802,21 @@ trait SourceSaveResult {
     fn saved(self, source: &crate::settings_store::SourceSettings, cx: &App) -> Result<(), String>;
 }
 impl SourceSaveResult for Result<(), String> {
-    fn saved(self, _: &crate::settings_store::SourceSettings, _: &App) -> Result<(), String> { self }
+    fn saved(self, _: &crate::settings_store::SourceSettings, _: &App) -> Result<(), String> {
+        self
+    }
 }
 impl SourceSaveResult for () {
     fn saved(self, source: &crate::settings_store::SourceSettings, cx: &App) -> Result<(), String> {
         let store = crate::settings_store::store(cx).ok_or("settings are not loaded")?;
         let dir = store.read(cx).dir().ok_or("no settings directory")?;
-        let saved = crate::settings_store::Settings::load(dir).map_err(|error| format!("{error:#}"))?;
-        if saved.source == *source { Ok(()) } else { Err("Source choice is active for this session but was not saved.".into()) }
+        let saved =
+            crate::settings_store::Settings::load(dir).map_err(|error| format!("{error:#}"))?;
+        if saved.source == *source {
+            Ok(())
+        } else {
+            Err("Source choice is active for this session but was not saved.".into())
+        }
     }
 }
 
@@ -792,7 +838,9 @@ pub fn refresh(cx: &mut App) {
 
 fn report(problem: String, cx: &mut App) {
     cx.defer(move |cx| {
-        if !super::is_open(cx) { return; }
+        if !super::is_open(cx) {
+            return;
+        }
         super::update(cx, |model| model.sync.problem = Some(problem.into()));
         refresh(cx);
     });
@@ -1013,44 +1061,89 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir(&home).unwrap();
-        let env = pwrroute_engine::discovery::Environment { home: Some(home.clone()), ..Default::default() };
+        let env = pwrroute_engine::discovery::Environment {
+            home: Some(home.clone()),
+            ..Default::default()
+        };
         let expected = cx.update(|cx| {
-            crate::settings_store::install(crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))), None, cx);
-            Some(crate::settings_store::store(cx).unwrap().read(cx).settings().source.clone())
+            crate::settings_store::install(
+                crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))),
+                None,
+                cx,
+            );
+            Some(
+                crate::settings_store::store(cx)
+                    .unwrap()
+                    .read(cx)
+                    .settings()
+                    .source
+                    .clone(),
+            )
         });
         let (entered, reading) = std::sync::mpsc::channel();
         let (release, wait) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || prepare_folder_config_at("finicky.js", &env, || {
-            entered.send(()).unwrap();
-            wait.recv().unwrap();
-            Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())
-        }));
+        let worker = std::thread::spawn(move || {
+            prepare_folder_config_at("finicky.js", &env, || {
+                entered.send(()).unwrap();
+                wait.recv().unwrap();
+                Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())
+            })
+        });
         reading.recv().unwrap();
         if change_source {
-            cx.update(|cx| crate::settings_store::store(cx).unwrap().update(cx, |store, _| {
-                store.update(|settings| settings.source.visual_only = true).unwrap();
-            }));
+            cx.update(|cx| {
+                crate::settings_store::store(cx)
+                    .unwrap()
+                    .update(cx, |store, _| {
+                        store
+                            .update(|settings| settings.source.visual_only = true)
+                            .unwrap();
+                    })
+            });
         } else {
-            std::fs::write(home.join(".finicky.ts"), "fixture config that arrived meanwhile").unwrap();
+            std::fs::write(
+                home.join(".finicky.ts"),
+                "fixture config that arrived meanwhile",
+            )
+            .unwrap();
         }
         release.send(()).unwrap();
         let prepared = worker.join().unwrap().unwrap();
-        assert!(!home.join(".finicky.js").exists(), "remote preparation must not publish a discoverable config before revalidation");
+        assert!(
+            !home.join(".finicky.js").exists(),
+            "remote preparation must not publish a discoverable config before revalidation"
+        );
         let result = cx.update(|cx| finish_folder_config(expected, prepared, cx));
-        assert!(result.is_err(), "stale source or discovery must refuse commit");
+        assert!(
+            result.is_err(),
+            "stale source or discovery must refuse commit"
+        );
         assert!(!home.join(".finicky.js").exists());
         if change_source {
-            cx.update(|cx| assert!(crate::settings_store::store(cx).unwrap().read(cx).settings().source.visual_only));
+            cx.update(|cx| {
+                assert!(
+                    crate::settings_store::store(cx)
+                        .unwrap()
+                        .read(cx)
+                        .settings()
+                        .source
+                        .visual_only
+                )
+            });
         }
     }
 
     #[gpui_kit::test]
-    fn changed_source_during_remote_preparation_never_publishes_a_config(cx: &mut gpui_kit::TestAppContext) {
+    fn changed_source_during_remote_preparation_never_publishes_a_config(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         gated_copy(cx, true);
     }
 
     #[gpui_kit::test]
-    fn a_config_discovered_during_remote_preparation_prevents_publication(cx: &mut gpui_kit::TestAppContext) {
+    fn a_config_discovered_during_remote_preparation_prevents_publication(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         gated_copy(cx, false);
     }
 
@@ -1058,50 +1151,88 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir(&home).unwrap();
-        let env = pwrroute_engine::discovery::Environment { home: Some(home.clone()), ..Default::default() };
-        let prepared = prepare_folder_config_at("finicky.js", &env,
-            || Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())).unwrap();
+        let env = pwrroute_engine::discovery::Environment {
+            home: Some(home.clone()),
+            ..Default::default()
+        };
+        let prepared = prepare_folder_config_at("finicky.js", &env, || {
+            Ok(b"export default { defaultBrowser: 'Safari' };".to_vec())
+        })
+        .unwrap();
         let path = home.join(".finicky.js");
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
         let observed = calls.clone();
         let expected = cx.update(|cx| {
-            crate::settings_store::install(crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))), None, cx);
-            Some(crate::settings_store::store(cx).unwrap().read(cx).settings().source.clone())
+            crate::settings_store::install(
+                crate::settings_store::SettingsStore::load(Some(dir.path().join("data"))),
+                None,
+                cx,
+            );
+            Some(
+                crate::settings_store::store(cx)
+                    .unwrap()
+                    .read(cx)
+                    .settings()
+                    .source
+                    .clone(),
+            )
         });
-        let result = cx.update(|cx| finish_folder_config_with(expected, prepared, cx, |source, _| {
-            assert_eq!(source.config.as_ref(), Some(&path));
-            // Even when the first settings save fails, invoke the source save.
-            let sync = if sync_fails { Err("sync-save fixture failure".into()) } else { Ok(()) };
-            observed.set(observed.get() + 1);
-            let source = if sync_fails { Ok(()) } else { Err("source-save fixture failure".into()) };
-            combine_copy_saves(sync, source)
-        }));
+        let result = cx.update(|cx| {
+            finish_folder_config_with(expected, prepared, cx, |source, _| {
+                assert_eq!(source.config.as_ref(), Some(&path));
+                // Even when the first settings save fails, invoke the source save.
+                let sync = if sync_fails {
+                    Err("sync-save fixture failure".into())
+                } else {
+                    Ok(())
+                };
+                observed.set(observed.get() + 1);
+                let source = if sync_fails {
+                    Ok(())
+                } else {
+                    Err("source-save fixture failure".into())
+                };
+                combine_copy_saves(sync, source)
+            })
+        });
         let error = result.unwrap_err();
         assert!(error.is::<CopiedNotSaved>());
         assert!(error.to_string().starts_with("Config copied,"));
         assert!(path.is_file());
         assert_eq!(calls.get(), 1);
-        cx.update(|cx| assert!(cx.global::<CopiedConfig>().0.is_some(), "retain source-only retry"));
+        cx.update(|cx| {
+            assert!(
+                cx.global::<CopiedConfig>().0.is_some(),
+                "retain source-only retry"
+            )
+        });
         let before = std::fs::read(&path).unwrap();
         // New discovery state must not cause the persistence retry to copy or
         // discover again: it reuses the exact previously copied source.
         std::fs::write(home.join(".finicky.ts"), "arrived after publication").unwrap();
-        cx.update(|cx| retry_copied_with(cx, |source, _| {
-            assert_eq!(source.config.as_ref(), Some(&path));
-            Ok(())
-        })).unwrap();
+        cx.update(|cx| {
+            retry_copied_with(cx, |source, _| {
+                assert_eq!(source.config.as_ref(), Some(&path));
+                Ok(())
+            })
+        })
+        .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(calls.get(), 1, "no preparation/provider retry");
         cx.update(|cx| assert!(cx.global::<CopiedConfig>().0.is_none()));
     }
 
     #[gpui_kit::test]
-    fn a_sync_settings_save_failure_after_publication_keeps_source_only_retry(cx: &mut gpui_kit::TestAppContext) {
+    fn a_sync_settings_save_failure_after_publication_keeps_source_only_retry(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         copied_but_not_saved(cx, true);
     }
 
     #[gpui_kit::test]
-    fn a_source_save_failure_after_publication_keeps_source_only_retry(cx: &mut gpui_kit::TestAppContext) {
+    fn a_source_save_failure_after_publication_keeps_source_only_retry(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         copied_but_not_saved(cx, false);
     }
 

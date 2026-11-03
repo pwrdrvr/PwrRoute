@@ -110,9 +110,16 @@ pub fn pane(
                 theme::danger_text(),
             )))
         })
-        .when(sync.copy_retry, |pane| pane.child(super::request_button(
-            "sync-retry-copied-config", "Retry saving source/sync settings", Kind::Primary,
-            false, SettingsRequest::RetryCopiedConfig, cx)))
+        .when(sync.copy_retry, |pane| {
+            pane.child(super::request_button(
+                "sync-retry-copied-config",
+                "Retry saving source/sync settings",
+                Kind::Primary,
+                false,
+                SettingsRequest::RetryCopiedConfig,
+                cx,
+            ))
+        })
         .when(sync.folders.is_empty(), |pane| {
             pane.child(what_syncs(this, cx))
         })
