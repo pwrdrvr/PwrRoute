@@ -977,21 +977,42 @@ fn full_mailbox_replacement_joins_watcher_and_retains_eventual_refresh() {
 
 #[test]
 fn resolver_replacement_during_expansion_uses_current_rules_and_privacy() {
-    struct Redirect { gate: Gate, entered: mpsc::Sender<()> }
+    struct Redirect {
+        gate: Gate,
+        entered: mpsc::Sender<()>,
+    }
     impl Network for Redirect {
         fn request(&self, _: Method, url: &str, _: Duration) -> Result<Reply> {
             if url.contains("bit.ly") {
                 self.entered.send(()).unwrap();
                 self.gate.wait();
-                Ok(Reply { status: 302, location: Some("https://github.com/new".into()) })
-            } else { Ok(Reply { status: 200, location: None }) }
+                Ok(Reply {
+                    status: 302,
+                    location: Some("https://github.com/new".into()),
+                })
+            } else {
+                Ok(Reply {
+                    status: 200,
+                    location: None,
+                })
+            }
         }
     }
     let (entered, started) = mpsc::channel();
     let gate = Gate::default();
     let launcher = DryRunLauncher::new();
-    let router = Router::spawn(Options { network: Some(Arc::new(Redirect { gate: gate.clone(), entered })), ..Options::default() },
-        Some(rules_factory(github_rules())), launcher.clone()).unwrap();
+    let router = Router::spawn(
+        Options {
+            network: Some(Arc::new(Redirect {
+                gate: gate.clone(),
+                entered,
+            })),
+            ..Options::default()
+        },
+        Some(rules_factory(github_rules())),
+        launcher.clone(),
+    )
+    .unwrap();
     let _release = Release(gate.clone());
     let handle = router.handle();
     let id = handle.dispatch(link("https://bit.ly/old-config")).unwrap();
@@ -999,7 +1020,10 @@ fn resolver_replacement_during_expansion_uses_current_rules_and_privacy() {
     let mut updated = github_rules();
     updated.rules[0].browser = "Updated Browser".into();
     updated.rules[0].privacy = Some(Privacy::Host.into());
-    handle.replace_resolver(rules_factory(updated)).unwrap().unwrap();
+    handle
+        .replace_resolver(rules_factory(updated))
+        .unwrap()
+        .unwrap();
     assert_eq!(handle.status().unwrap().config_error, None);
     gate.open();
     drop(router);
