@@ -225,6 +225,17 @@ impl ImportSession {
         self.0.borrow_mut().take();
     }
 
+    /// Check a delayed result against the saved rules/Undo receipt and source
+    /// revision without retrying persistence or applying another source choice.
+    pub(crate) fn validate_completed(&self, cx: &App) -> Result<(), String> {
+        self.0
+            .borrow()
+            .as_ref()
+            .ok_or("The import is no longer pending. Review it again.")?
+            .1
+            .validate(cx)
+    }
+
     /// Only an unchanged committed stage can complete a cached first-run
     /// answer. Retry persistence without replacing an active CLI override.
     pub(crate) fn revalidate_completed(&self, cx: &mut App) -> Result<(), String> {
@@ -2521,7 +2532,7 @@ impl Render for Importer {
 mod worker_integration_tests {
     use super::*;
 
-    fn delayed_copy_summary(cx: &mut gpui_kit::TestAppContext, change_fallback: bool) {
+    fn delayed_copy_summary(cx: &mut gpui_kit::TestAppContext, change: u8) {
         struct Gate(Option<std::sync::mpsc::Sender<()>>);
         impl Drop for Gate {
             fn drop(&mut self) {
@@ -2573,7 +2584,7 @@ mod worker_integration_tests {
         assert_eq!(RulesFile::load(&target).unwrap(), file);
         cx.update(|cx| {
             assert!(first.read(cx).unwrap().model.copying_rules);
-            if change_fallback {
+            if change == 0 {
                 let browser = first.read(cx).unwrap().model.browsers[0].clone();
                 (hooks.on_fallback)(crate::first_run::Fallback {
                     browser: browser.clone(), profile: Some("Work".into()),
@@ -2583,14 +2594,20 @@ mod worker_integration_tests {
                     label.profile = Some("Work".into());
                     this.model.fallback = Some(label);
                 }).unwrap();
-            } else {
+            } else if change == 1 {
                 let mut current = RulesFile::load(&target).unwrap();
                 current.rules.clear();
                 current.save(&target).unwrap();
                 first.update(cx, |this, _, _| { this.model.rules = 0; }).unwrap();
+            } else {
+                std::fs::write(&target, "a newer unfinished edit").unwrap();
             }
         });
-        let current = RulesFile::load(&target).unwrap();
+        let current = std::fs::read(&target).unwrap();
+        let shown_before = cx.update(|cx| {
+            let model = &first.read(cx).unwrap().model;
+            (model.rules, model.fallback.clone())
+        });
         let state_before = std::fs::read(data.join("state.json")).ok();
         drop(gate);
         cx.update(crate::engine_worker::settle);
@@ -2598,29 +2615,37 @@ mod worker_integration_tests {
         cx.update(|cx| {
             let model = &first.read(cx).unwrap().model;
             assert!(!model.copying_rules);
-            assert_eq!(model.rules, current.rules.len(), "late summary replaced the current rule count");
-            if change_fallback {
+            let expected_rules = if change == 0 { 1 } else { shown_before.0 };
+            assert_eq!(model.rules, expected_rules, "late summary replaced the current rule count");
+            if change == 0 {
                 let fallback = model.fallback.as_ref().unwrap();
                 assert_eq!(fallback.name, "Google Chrome", "late summary replaced the new fallback");
                 assert_eq!(fallback.profile.as_deref(), Some("Work"));
+            } else if change == 2 {
+                assert_eq!(model.fallback, shown_before.1, "unreadable facts replaced the current choice");
             }
             let status = model.rules_import_status.as_deref().unwrap();
             assert!(status.starts_with("Copied 2 entries."), "{status}");
             assert!(status.contains("changed"), "{status}");
             assert!(!status.contains("2 of 2 passed"), "{status}");
         });
-        assert_eq!(RulesFile::load(&target).unwrap(), current);
+        assert_eq!(std::fs::read(&target).unwrap(), current);
         assert_eq!(std::fs::read(data.join("state.json")).ok(), state_before);
     }
 
     #[gpui_kit::test]
     fn review_regression_import_summary_keeps_newer_fallback(cx: &mut gpui_kit::TestAppContext) {
-        delayed_copy_summary(cx, true);
+        delayed_copy_summary(cx, 0);
     }
 
     #[gpui_kit::test]
     fn review_regression_import_summary_keeps_newer_rules(cx: &mut gpui_kit::TestAppContext) {
-        delayed_copy_summary(cx, false);
+        delayed_copy_summary(cx, 1);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_import_summary_does_not_invent_unreadable_facts(cx: &mut gpui_kit::TestAppContext) {
+        delayed_copy_summary(cx, 2);
     }
 
     #[gpui_kit::test]

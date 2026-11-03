@@ -1067,8 +1067,16 @@ type ImportHook = Rc<dyn Fn(ImportChoice, ImportReply, &mut App)>;
 /// A hook that answers: the browsers read again, or why a request failed.
 type Ask<T> = Rc<dyn Fn(&mut App) -> T>;
 
+/// A copy's historical result and current saved facts. If the current file
+/// cannot be read, retain the window's choices and show the summary only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RulesImportResult {
+    pub current: Option<Imported>,
+    pub summary: String,
+}
+
 /// A copied file’s resulting rules and test summary; None when cancelled.
-pub type RulesImportReply = Rc<dyn Fn(Option<(Imported, String)>, &mut App)>;
+pub type RulesImportReply = Rc<dyn Fn(Option<RulesImportResult>, &mut App)>;
 pub type RulesImportHook = Rc<dyn Fn(std::path::PathBuf, RulesImportReply, &mut App)>;
 
 /// How the window was left.
@@ -2216,16 +2224,16 @@ fn rules_import_card(model: &FirstRunModel, cx: &mut Context<'_, FirstRun>) -> D
                     let reply: RulesImportReply = Rc::new(move |result, cx| {
                         let _ = weak.update(cx, |this, cx| {
                             this.model.copying_rules = false;
-                            if let Some((imported, status)) = result {
-                                this.model.rules = imported.rules;
-                                if !imported.default_browser.is_empty() {
-                                    this.model.fallback = Some(label_for(
+                            if let Some(result) = result {
+                                if let Some(imported) = result.current {
+                                    this.model.rules = imported.rules;
+                                    this.model.fallback = (!imported.default_browser.is_empty()).then(|| label_for(
                                         &this.model.browsers,
                                         &imported.default_browser,
                                         &imported.default_profile,
                                     ));
                                 }
-                                this.model.rules_import_status = Some(status);
+                                this.model.rules_import_status = Some(result.summary);
                             }
                             cx.notify();
                         });

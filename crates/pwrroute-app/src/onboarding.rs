@@ -568,6 +568,8 @@ pub fn hooks_with(
     FirstRunHooks {
         on_import_rules: Rc::new(move |path, reply, cx| {
             let rules = copy_rules_path.clone();
+            let session = crate::importer_view::ImportSession::default();
+            let completed = session.clone();
             let on_done: crate::importer_view::OnDone = Rc::new(move |outcome, cx| {
                 let result = match outcome {
                     crate::importer_view::ImportOutcome::Cancelled => None,
@@ -582,25 +584,40 @@ pub fn hooks_with(
                             .and_then(|path| RulesFile::load(path).ok())
                             .unwrap_or_default();
 
-                        let imported = imported(count, keeps_config, rules.as_deref());
                         let result = crate::engine_worker::service(cx).submit(
                             crate::engine_worker::Lane::Onboarding,
                             std::time::Duration::ZERO,
                             move |_| crate::try_it::test_steps(config, file),
                         );
                         let reply = reply.clone();
+                        let completed = completed.clone();
+                        let rules = rules.clone();
                         let task = cx.spawn(async move |cx| {
                             if let Ok((report, _stamps)) = crate::engine_worker::receive(result).await {
-                                let report = if crate::engine_worker::unchanged(&_stamps) { report } else { Err("Config changed while tests ran".into()) };
-                                let summary = match report {
-                                    Ok(report) => format!("Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.", report.passed, report.total),
-                                    Err(_) => format!("Copied {count} entries. Saved examples and tests could not run; see Rules for details."),
-                                };
-                                let summary = match &source_error {
-                                    Some(reason) => format!("{summary} {reason}"),
-                                    None => summary,
-                                };
-                                cx.update(|cx| reply(Some((imported, summary)), cx));
+                                cx.update(|cx| {
+                                    let unchanged = completed.validate_completed(cx).is_ok()
+                                        && crate::engine_worker::unchanged(&_stamps);
+                                    let summary = if !unchanged {
+                                        format!("Copied {count} entries. Rules, source or config changed while tests ran; run saved examples and tests again in Rules.")
+                                    } else {
+                                        match report {
+                                            Ok(report) => format!("Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.", report.passed, report.total),
+                                            Err(_) => format!("Copied {count} entries. Saved examples and tests could not run; see Rules for details."),
+                                        }
+                                    };
+                                    let summary = match &source_error {
+                                        Some(reason) => format!("{summary} {reason}"),
+                                        None => summary,
+                                    };
+                                    // The copy count is historical; these facts describe the file
+                                    // now, including a later fallback choice, edit or Undo.
+                                    let current = rules.as_deref().and_then(|path| RulesFile::load(path).ok()).map(|file| Imported {
+                                        count, keeps_config, rules: file.rules.len(),
+                                        default_browser: file.default_browser,
+                                        default_profile: file.default_profile,
+                                    });
+                                    reply(Some(first_run::RulesImportResult { current, summary }), cx);
+                                });
                             }
                         });
                         crate::engine_worker::hold(
@@ -614,7 +631,7 @@ pub fn hooks_with(
                 reply(result, cx);
             });
             let rules = copy_rules_path.clone();
-            cx.defer(move |cx| crate::importer_view::open_from_first_run(path, rules, on_done, cx));
+            cx.defer(move |cx| crate::importer_view::open_from_first_run_session(path, rules, on_done, session, cx));
         }),
         on_fallback: Rc::new(move |choice: first_run::Fallback, _| {
             edit_rules(fallback_rules.as_deref(), |rules| {
@@ -2282,9 +2299,11 @@ mod tests {
         assert_eq!(RulesFile::load(&target).unwrap(), file);
         assert_eq!(fs::read(source).unwrap(), original);
         let replies = replies.borrow();
-        let Some((imported, summary)) = &replies[1] else {
+        let Some(result) = &replies[1] else {
             panic!("import completed")
         };
+        let imported = result.current.as_ref().unwrap();
+        let summary = &result.summary;
         assert_eq!(imported.rules, 1);
         assert!(summary.contains("2 of 2 passed"), "{summary}");
     }
