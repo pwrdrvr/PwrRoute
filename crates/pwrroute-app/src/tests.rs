@@ -3410,6 +3410,57 @@ fn review_keep_preserves_the_active_override_and_stored_source(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn review_keep_persistence_retry_preserves_the_active_override(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let config = importer_config();
+    let mut settings = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+    settings
+        .update(|settings| settings.source.visual_only = true)
+        .unwrap();
+    let source = settings.settings().source.clone();
+    cx.update(|cx| crate::settings_store::install(settings, None, cx));
+    let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(dir.path()));
+    std::fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
+    cx.cx.update(|cx| {
+        crate::importer_view::open_with(config.clone(), true, Some(config.clone()), cx)
+    });
+    let window = importer_window(cx).unwrap();
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    let button = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .unwrap();
+    importer.simulate_click(button.center(), Modifiers::default());
+    let window = importer_window(cx).expect("the persistence error is shown");
+    assert_eq!(
+        view.read_with(cx, |app, _| app
+            .config
+            .as_ref()
+            .map(|config| config.file.clone())),
+        Some(config.clone())
+    );
+    window
+        .update(&mut cx.cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    std::fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
+    click(cx, crate::importer_view::SOURCE_RETRY_ID);
+    assert_eq!(
+        view.read_with(cx, |app, _| app
+            .config
+            .as_ref()
+            .map(|config| config.file.clone())),
+        Some(config)
+    );
+    assert_eq!(
+        crate::settings_store::Settings::load(dir.path())
+            .unwrap()
+            .source,
+        source
+    );
+}
+
+#[gpui_kit::test]
 fn review_source_retry_cannot_outlive_undo_import(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let rules = dir.path().join("rules.json");

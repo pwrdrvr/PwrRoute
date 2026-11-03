@@ -1234,6 +1234,58 @@ mod tests {
         assert_eq!(fs::read(&rules).unwrap(), written);
     }
 
+    #[gpui_kit::test]
+    fn review_cached_keep_detects_a_competing_equal_source(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings =
+            crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        settings
+            .update(|settings| settings.source.visual_only = true)
+            .unwrap();
+        let source = settings.settings().source.clone();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        fs::create_dir(dir.path().join("state.json.saving")).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            Some(dir.path().join("rules.json")),
+            Some(importer_config()),
+            Rc::new(crate::importer_view::set_source_and_show),
+            Rc::new(|_, _| {}),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let choose = |choice, cx: &mut TestAppContext| {
+            let heard = replies.clone();
+            cx.update(|cx| {
+                (hooks.on_import)(
+                    choice,
+                    Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                    cx,
+                )
+            });
+        };
+        choose(ImportChoice::Import, cx);
+        let window = importer_window(cx).unwrap();
+        let mut importer = VisualTestContext::from_window(window.into(), cx);
+        press(&mut importer, crate::importer_view::NEXT_ID);
+        choose(ImportChoice::DontUse, cx);
+        // Selecting Don't use replaces any CLI override even though the
+        // source settings bytes equal the earlier Keep import's settings.
+        assert_eq!(
+            crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source,
+            source
+        );
+        fs::remove_dir(dir.path().join("state.json.saving")).unwrap();
+        choose(ImportChoice::Import, cx);
+        assert!(matches!(
+            replies.borrow().last(),
+            Some(ImportOutcome::Failed { .. })
+        ));
+        assert_eq!(State::load(dir.path()).unwrap().import, None);
+    }
+
     fn fixture_home() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
     }

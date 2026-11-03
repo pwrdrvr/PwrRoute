@@ -171,6 +171,7 @@ struct SavedImport {
     count: usize,
     rules: SavedRules,
     source: Option<SourceSettings>,
+    source_revision: u64,
     keeps_config: bool,
     source_error: Option<String>,
 }
@@ -181,7 +182,7 @@ impl SavedImport {
         if let Some(source) = &self.source {
             let unchanged = settings_store::store(cx)
                 .is_some_and(|store| store.read(cx).settings().source == *source);
-            if !unchanged {
+            if !unchanged || self.source_revision != source_revision(cx) {
                 self.rules.invalidate();
                 return Err("The source choice changed since this import. Review the import again before completing it.".to_owned());
             }
@@ -619,6 +620,7 @@ fn finish(
                     count: done.count,
                     rules: done.saved_rules.clone(),
                     source: None,
+                    source_revision: 0,
                     keeps_config: model.final_source() == SourceChoice::KeepConfig,
                     source_error: None,
                 })
@@ -655,6 +657,7 @@ fn finish_for_first_run(
                     count: done.count,
                     rules: done.saved_rules.clone(),
                     source: None,
+                    source_revision: 0,
                     keeps_config: model.final_source() == SourceChoice::KeepConfig,
                     source_error: None,
                 })
@@ -674,6 +677,7 @@ fn finish_for_first_run(
         count: plan.count(),
         rules: SavedRules::new(store.path(), plan.file),
         source: None,
+        source_revision: 0,
         keeps_config: model.final_source() == SourceChoice::KeepConfig,
         source_error: None,
     };
@@ -682,6 +686,7 @@ fn finish_for_first_run(
 
 fn finish_source(model: &ImportModel, mut saved: SavedImport, cx: &mut App) -> SavedImport {
     let result = switch_source(model, cx);
+    saved.source_revision = source_revision(cx);
     saved.source = settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
     saved.source_error = result.err().map(|reason| format!(
         "{} saved to rules.json. {reason} Retry saving the source; the rules will not be imported again.",
@@ -726,11 +731,24 @@ fn switch_source(model: &ImportModel, cx: &mut App) -> Result<(), String> {
     }
 }
 
+/// Explicit source applications are competing choices even when they
+/// write the same settings (for example, replacing a CLI override).
+#[derive(Default)]
+struct SourceRevision(u64);
+
+impl Global for SourceRevision {}
+
+fn source_revision(cx: &App) -> u64 {
+    cx.try_global::<SourceRevision>()
+        .map_or(0, |revision| revision.0)
+}
+
 #[derive(Clone)]
 struct SourceNotice {
     source: SourceSettings,
     reason: String,
     apply: bool,
+    source_revision: u64,
     rules: Option<SavedRules>,
 }
 
@@ -738,7 +756,19 @@ impl Global for SourceNotice {}
 
 impl SourceNotice {
     fn retry(&self, app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Result<(), String> {
+        if self.source_revision != source_revision(cx) {
+            if let Some(rules) = &self.rules {
+                rules.invalidate();
+            }
+            return Err("The source choice changed. Review it again before saving.".to_owned());
+        }
         let result = (|| {
+            if !self.apply
+                && settings_store::store(cx)
+                    .is_none_or(|store| store.read(cx).settings().source != self.source)
+            {
+                return Err("The source choice changed. Review it again before saving.".to_owned());
+            }
             if let Some(rules) = &self.rules {
                 rules.check()?;
             }
@@ -766,9 +796,6 @@ impl SourceNotice {
 fn persist_source(source: SourceSettings, apply: bool, cx: &mut App) -> Result<(), String> {
     let saved = match settings_store::store(cx) {
         Some(store) => store.update(cx, |store, _| {
-            if !apply && store.settings().source != source {
-                return Err("The source choice changed. Review it again before saving.".to_owned());
-            }
             store.update(|settings| settings.source = source.clone())
                 .map_err(|error| format!("Source is used for this session only: {error:#}. The previous source may return after restart."))
         }),
@@ -784,6 +811,7 @@ fn persist_source(source: SourceSettings, apply: bool, cx: &mut App) -> Result<(
             source,
             reason: reason.clone(),
             apply,
+            source_revision: source_revision(cx),
             rules: None,
         }),
     }
@@ -799,6 +827,7 @@ pub(crate) struct SourceApplied {
 }
 
 pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> SourceApplied {
+    cx.set_global(SourceRevision(source_revision(cx).saturating_add(1)));
     let choice = source.choice(discovery::config_candidates(
         &discovery::Environment::current(),
     ));
@@ -943,7 +972,7 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
                 .debug_selector(|| "source-not-saved".into())
                 .child(banner_text(
                     "Source choice not saved".to_owned(),
-                    notice.reason,
+                    notice.reason.clone(),
                 ))
                 .child(
                     small_button(SOURCE_RETRY_ID, "Retry saving source", false)
