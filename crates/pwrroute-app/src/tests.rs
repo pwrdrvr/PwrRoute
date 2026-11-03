@@ -7705,3 +7705,41 @@ fn changing_config_source_invalidates_the_old_test_instance_request(cx: &mut Tes
         "the old instance must not finish into the new one"
     );
 }
+
+// Engine work must be scheduled, even for fast configs: these assertions
+// execute inside one GPUI update, before any completion can be delivered.
+#[gpui_kit::test]
+fn engine_work_startup_returns_before_saved_tests_complete(cx: &mut TestAppContext) {
+    let dir = scratch("async-startup-tests");
+    let store = store_for(&dir, &rules_with_examples());
+    cx.add_window_view(|_, cx| {
+        let app = PwrRoute::with_store(None, Some(fixture_home()), store, cx);
+        assert!(app.tests.report().is_none(), "startup evaluated saved tests on GPUI");
+        assert!(app.tests.ran_at().is_none(), "pending tests must not look completed");
+        app
+    });
+}
+
+#[gpui_kit::test]
+fn engine_work_test_link_returns_before_tracing(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |app, cx| {
+        app.test.url.text = "https://example.com/worker".into();
+        app.test.run(cx);
+        assert!(app.test.outcome.is_none(), "Test a link traced on GPUI");
+    });
+}
+
+#[gpui_kit::test]
+fn engine_work_menu_opens_before_impact_counts(cx: &mut TestAppContext) {
+    let records = vec![fixtures::activity().into_iter().find(|r| r.privacy == Privacy::Full).unwrap(); 24];
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open(cx);
+    view.update(cx, |app, cx| {
+        let menu = crate::rule_menu::MenuRow::Rule(Selection::Handler(2));
+        app.toggle_row_actions(menu, cx);
+        assert_eq!(app.row_actions.menu, Some(menu));
+        assert_eq!(app.impact(Selection::Handler(2), 0, cx), None,
+            "opening the menu evaluated recent links on GPUI");
+    });
+}
