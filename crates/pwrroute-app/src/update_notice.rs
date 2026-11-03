@@ -60,8 +60,8 @@ pub enum Toast {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Notices {
     /// Check for Updates… is waiting for the check after this many have
-    /// finished (`State::finished`): the one it started, or the one that
-    /// was already running.
+    /// finished (`State::finished`), including its coalesced follow-up
+    /// when an automatic check was already running.
     asked: Option<u64>,
     /// The last answer, until its countdown ends or another replaces it.
     answer: Option<(Answer, u64)>,
@@ -93,7 +93,7 @@ impl Notices {
             return None;
         }
         self.asked = None;
-        let outcome = state.last.as_ref().map(|(_, outcome)| outcome)?;
+        let outcome = &state.last.as_ref()?.outcome;
         let answer = answer_of(outcome, ready)?;
         self.generation += 1;
         self.answer = Some((answer, self.generation));
@@ -401,7 +401,11 @@ mod tests {
         state.checking = false;
         state.download = None;
         state.finished += 1;
-        state.last = Some((SystemTime::now(), outcome));
+        state.last = Some(updater::LastCheck {
+            at: SystemTime::UNIX_EPOCH,
+            slot: crate::update_channel::Slot::STABLE_LATEST,
+            outcome,
+        });
     }
 
     #[test]
@@ -458,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn a_menu_check_waits_for_the_check_already_running() {
+    fn a_menu_check_waits_for_its_manual_follow_up_to_the_running_check() {
         let mut notices = Notices::default();
         let mut state = State {
             checking: true,
@@ -466,8 +470,13 @@ mod tests {
             ..State::default()
         };
         notices.ask(state.finished);
-        // The running check has not ended: still waiting.
         assert_eq!(notices.follow(&state, None), None);
+        // The automatic check ends, but the manual follow-up has already
+        // been reserved. Its permission to switch back must be answered.
+        finished(&mut state, Outcome::UpToDate("0.14.0".into()));
+        state.checking = true;
+        assert_eq!(notices.follow(&state, None), None);
+        assert_eq!(notices.toast(&state, None), Some(Toast::Checking));
         finished(&mut state, Outcome::UpToDate("0.14.0".into()));
         assert!(notices.follow(&state, None).is_some());
     }

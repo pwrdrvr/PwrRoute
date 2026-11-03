@@ -34,10 +34,7 @@ use std::{
     cmp::Ordering as Precedence,
     fmt, fs,
     path::{Path, PathBuf},
-    sync::{
-        Mutex, OnceLock, PoisonError,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Mutex, OnceLock, PoisonError},
     thread,
     time::{Duration, SystemTime},
 };
@@ -61,12 +58,6 @@ const HELD_FILE: &str = "updates.json";
 /// design's "At startup and every 6 hours while running". A Velopack
 /// install only; a dev build has nothing to check.
 pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-
-/// One check at a time: a second "Check for Updates…" while the startup
-/// check is still downloading would only contend for Velopack's lock.
-static CHECKING: AtomicBool = AtomicBool::new(false);
-/// A restart to update is under way: a second press waits for it.
-static RESTARTING: AtomicBool = AtomicBool::new(false);
 
 /// What [`run_startup_hooks`] tells Velopack, apart from the hooks. Kept
 /// as data so a test can hold the policy without a Velopack install.
@@ -205,10 +196,13 @@ impl Trigger {
 /// What the updater has said so far this launch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
+    /// Changes with the selected slot, invalidating surfaces' ready cache
+    /// even when the running worker and held package have not changed.
+    pub selection_generation: u64,
     /// A check is running now.
     pub checking: bool,
-    /// The last check that finished, and when.
-    pub last: Option<(SystemTime, Outcome)>,
+    /// The last check for the current selection, its slot, and when.
+    pub last: Option<LastCheck>,
     /// The published releases the last check read, or why it could not.
     pub releases: Option<Result<Vec<Release>, String>>,
     /// The package downloaded and not installed yet, and its slot.
@@ -221,6 +215,14 @@ pub struct State {
     /// Restart to update was pressed and has not failed: the process is
     /// about to be replaced ([`restart_in_background`]).
     pub restarting: bool,
+}
+
+/// A result belongs to the slot that was captured when its check started.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LastCheck {
+    pub at: SystemTime,
+    pub slot: Slot,
+    pub outcome: Outcome,
 }
 
 /// A download in progress.
@@ -267,39 +269,154 @@ pub fn ready() -> Option<Ready> {
     }
 }
 
-static STATE: Mutex<State> = Mutex::new(State {
-    checking: false,
-    last: None,
-    releases: None,
-    held: None,
-    download: None,
-    finished: 0,
-    restarting: false,
-});
+/// A reservation for one worker. IDs also protect against late download
+/// progress; generations distinguish A → B → A selection changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Check {
+    id: u64,
+    generation: u64,
+    slot: Slot,
+    trigger: Trigger,
+}
 
-/// The release channel as `settings.json` has it; [`set_selection`] keeps
-/// it current. `None` until the settings are read: the defaults.
-static SELECTION: Mutex<Option<UpdateSettings>> = Mutex::new(None);
+/// Owns both admission and publication under one lock. `State` is only a
+/// snapshot: its `checking` flag is derived from the active reservation.
+#[derive(Default)]
+struct Coordinator {
+    selection: UpdateSettings,
+    generation: u64,
+    next_id: u64,
+    active: Option<Check>,
+    queued: Option<Check>,
+    last: Option<LastCheck>,
+    releases: Option<Result<Vec<Release>, String>>,
+    held: Option<Held>,
+    download: Option<Download>,
+    finished: u64,
+    restarting: bool,
+}
+
+impl Coordinator {
+    fn snapshot(&self) -> State {
+        State {
+            selection_generation: self.generation,
+            checking: self.active.is_some(),
+            last: self.last.clone(),
+            releases: self.releases.clone(),
+            held: self.held.clone(),
+            download: self.download.clone(),
+            finished: self.finished,
+            restarting: self.restarting,
+        }
+    }
+
+    fn select(&mut self, settings: UpdateSettings, installed: &str) -> Option<Check> {
+        let before = self.selection.resolve(installed);
+        self.selection = settings;
+        if settings.resolve(installed) == before {
+            return None;
+        }
+        self.generation += 1;
+        self.last = None;
+        self.download = None;
+        // A manual request's downgrade permission belongs to its selection.
+        self.queued = None;
+        self.request(Trigger::Selection, installed)
+    }
+
+    /// At most one follow-up, for the latest selection. A manual request
+    /// upgrades that follow-up, and automatic requests cannot demote it.
+    fn request(&mut self, trigger: Trigger, installed: &str) -> Option<Check> {
+        if let Some(active) = self.active {
+            let same = active.generation == self.generation;
+            if same && (!trigger.is_manual() || active.trigger.is_manual()) {
+                return None;
+            }
+            if let Some(queued) = &mut self.queued {
+                if trigger.is_manual() {
+                    queued.trigger = trigger;
+                }
+                return None;
+            }
+        }
+        self.next_id += 1;
+        let check = Check {
+            id: self.next_id,
+            generation: self.generation,
+            slot: self.selection.resolve(installed),
+            trigger,
+        };
+        if self.active.is_some() {
+            self.queued = Some(check);
+            None
+        } else {
+            self.active = Some(check);
+            Some(check)
+        }
+    }
+
+    fn finish(&mut self, check: Check, outcome: Outcome, at: SystemTime) -> Option<Check> {
+        if self.active != Some(check) {
+            return None;
+        }
+        self.download = None;
+        self.finished += 1;
+        if check.generation == self.generation {
+            self.last = Some(LastCheck {
+                at,
+                slot: check.slot,
+                outcome,
+            });
+        }
+        // Reserve the next worker before releasing the lock: no idle gap
+        // in which another request or an old completion can take its place.
+        self.active = self.queued.take();
+        self.active
+    }
+
+    fn percent(&mut self, check: Check, percent: u8) {
+        if self.active == Some(check)
+            && check.generation == self.generation
+            && let Some(download) = &mut self.download
+        {
+            download.percent = Some(percent);
+        }
+    }
+
+    fn begin_restart(&mut self) -> bool {
+        if self.restarting {
+            return false;
+        }
+        self.restarting = true;
+        true
+    }
+}
+
+static UPDATER: OnceLock<Mutex<Coordinator>> = OnceLock::new();
+
+fn coordinator() -> &'static Mutex<Coordinator> {
+    UPDATER.get_or_init(|| Mutex::new(Coordinator::default()))
+}
 
 /// The release channel as `settings.json` has it.
 pub fn selection() -> UpdateSettings {
-    SELECTION
+    coordinator()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .unwrap_or_default()
+        .selection
 }
 
-/// Follows `settings` from now on. When the slot in force changes, the
-/// new slot is checked at once, forward only, and the window redrawn: a
-/// download held for the old slot is neither shown nor installed now.
+/// Follows `settings` from now on. A new slot is checked forward only,
+/// after the running check if necessary. Held packages retain their slot.
 pub fn set_selection(settings: UpdateSettings) {
     let installed = installed_version();
-    let before = selection().resolve(&installed);
-    *SELECTION.lock().unwrap_or_else(PoisonError::into_inner) = Some(settings);
-    if settings.resolve(&installed) != before {
-        check_in_background(Trigger::Selection);
+    let check = update(|updater| updater.select(settings, &installed));
+    // The inferred/picked label and ready-package filter can change even
+    // when the check snapshot itself did not.
+    changed(true);
+    if let Some(check) = check {
+        spawn_check(check);
     }
-    set_state(|_| {});
 }
 
 /// The version this copy reports: Velopack's manifest, else the crate's.
@@ -330,34 +447,46 @@ pub fn on_change(listener: Listener) {
 
 /// The updater's state as it stands.
 pub fn state() -> State {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    coordinator()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .snapshot()
 }
 
-fn set_state(edit: impl FnOnce(&mut State)) {
-    let settings = {
-        let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = state.clone();
-        edit(&mut state);
-        settings_changed(&before, &state)
-    };
+fn changed(settings: bool) {
     if let Some(changed) = CHANGED.get() {
         let _ = changed.try_send(settings);
     }
 }
 
-/// A download's percent: never a change Settings › Updates draws, so it
-/// skips [`set_state`]'s snapshot of the whole state.
-fn set_percent(percent: u8) {
-    if let Some(download) = &mut STATE
+fn update<R>(edit: impl FnOnce(&mut Coordinator) -> R) -> R {
+    let (result, settings) = {
+        let mut updater = coordinator().lock().unwrap_or_else(PoisonError::into_inner);
+        let before = updater.snapshot();
+        let result = edit(&mut updater);
+        (result, settings_changed(&before, &updater.snapshot()))
+    };
+    changed(settings);
+    result
+}
+
+/// Worker writes must still own the active reservation. A held package
+/// remains real even when its selection generation is no longer current.
+fn update_check(check: Check, edit: impl FnOnce(&mut Coordinator)) {
+    update(|updater| {
+        if updater.active == Some(check) {
+            edit(updater);
+        }
+    });
+}
+
+/// Percent ticks only wake the toast; they avoid cloning the release list.
+fn set_percent(check: Check, percent: u8) {
+    coordinator()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .download
-    {
-        download.percent = Some(percent);
-    }
-    if let Some(changed) = CHANGED.get() {
-        let _ = changed.try_send(false);
-    }
+        .percent(check, percent);
+    changed(false);
 }
 
 /// Whether going from `before` to `after` changes what Settings › Updates
@@ -368,6 +497,7 @@ fn set_percent(percent: u8) {
 pub fn settings_changed(before: &State, after: &State) -> bool {
     // Every field by name, so a new one has to be sorted here.
     let State {
+        selection_generation,
         checking,
         last,
         releases,
@@ -376,7 +506,8 @@ pub fn settings_changed(before: &State, after: &State) -> bool {
         finished,
         restarting,
     } = before;
-    *checking != after.checking
+    *selection_generation != after.selection_generation
+        || *checking != after.checking
         || *last != after.last
         || *releases != after.releases
         || *held != after.held
@@ -396,10 +527,10 @@ pub fn install(cx: &mut App) {
     }
     if let Some(store) = crate::settings_store::store(cx) {
         let settings = store.read(cx).settings().updates;
-        *SELECTION.lock().unwrap_or_else(PoisonError::into_inner) = Some(settings);
+        update(|updater| updater.selection = settings);
     }
     if let Some(held) = load_held() {
-        set_state(|state| state.held = Some(held));
+        update(|updater| updater.held = Some(held));
     }
     cx.spawn(async move |cx| {
         while let Ok(first) = rx.recv().await {
@@ -469,34 +600,39 @@ pub fn installation() -> Installation {
 /// Check for an update, and download it, on a thread of its own: Velopack's
 /// client blocks, and a download can take a while.
 pub fn check_in_background(trigger: Trigger) {
-    if CHECKING.swap(true, Ordering::AcqRel) {
-        log(trigger, &Outcome::AlreadyChecking);
-        return;
+    let installed = installed_version();
+    match update(|updater| updater.request(trigger, &installed)) {
+        Some(check) => spawn_check(check),
+        None => log(trigger, &Outcome::AlreadyChecking),
     }
-    set_state(|state| state.checking = true);
-    let spawned = thread::Builder::new()
-        .name("pwrroute-updater".to_owned())
-        .spawn(move || {
-            let outcome = check_and_download(trigger);
-            CHECKING.store(false, Ordering::Release);
-            log(trigger, &outcome);
-            set_state(|state| {
-                state.checking = false;
-                state.download = None;
-                state.finished += 1;
-                state.last = Some((SystemTime::now(), outcome));
+}
+
+fn finish_check(check: Check, outcome: Outcome) -> Option<Check> {
+    log(check.trigger, &outcome);
+    update(|updater| updater.finish(check, outcome, SystemTime::now()))
+}
+
+fn spawn_check(mut check: Check) {
+    loop {
+        let spawned = thread::Builder::new()
+            .name("pwrroute-updater".to_owned())
+            .spawn(move || {
+                let mut check = check;
+                loop {
+                    let outcome = check_and_download(check);
+                    match finish_check(check, outcome) {
+                        Some(next) => check = next,
+                        None => break,
+                    }
+                }
             });
-        });
-    if let Err(error) = spawned {
-        CHECKING.store(false, Ordering::Release);
-        let outcome = Outcome::Failed(error.to_string());
-        log(trigger, &outcome);
-        set_state(|state| {
-            state.checking = false;
-            state.download = None;
-            state.finished += 1;
-            state.last = Some((SystemTime::now(), outcome));
-        });
+        match spawned {
+            Ok(_) => break,
+            Err(error) => match finish_check(check, Outcome::Failed(error.to_string())) {
+                Some(next) => check = next,
+                None => break,
+            },
+        }
     }
 }
 
@@ -530,14 +666,12 @@ pub fn restart_to_update() -> Result<(), String> {
 /// One restart at a time ([`State::restarting`]); a failed one clears
 /// it, so the surfaces offer Restart again.
 pub fn restart_in_background() {
-    if RESTARTING.swap(true, Ordering::AcqRel) {
+    if !update(Coordinator::begin_restart) {
         return;
     }
-    set_state(|state| state.restarting = true);
     let failed = |error: String| {
         log::warn!("updates: could not restart to update: {error}");
-        RESTARTING.store(false, Ordering::Release);
-        set_state(|state| state.restarting = false);
+        update(|updater| updater.restarting = false);
     };
     let spawned = thread::Builder::new()
         .name("pwrroute-restart".to_owned())
@@ -666,7 +800,7 @@ fn plan(
     }
 }
 
-fn check_and_download(trigger: Trigger) -> Outcome {
+fn check_and_download(check: Check) -> Outcome {
     // The installed version (Velopack's sq.version), not the one compiled
     // in: packages are stamped separately from Cargo.toml.
     let locator = match locator::auto_locate_app_manifest(LocationContext::FromCurrentExe) {
@@ -674,9 +808,9 @@ fn check_and_download(trigger: Trigger) -> Outcome {
         Err(error) => return Outcome::NotInstalled(error.to_string()),
     };
     let installed = locator.get_manifest_version().to_string();
-    let slot = selection().resolve(&installed);
+    let slot = check.slot;
     let releases = github_releases::fetch(&locator.get_manifest_channel());
-    set_state(|state| state.releases = Some(releases.clone()));
+    update_check(check, |updater| updater.releases = Some(releases.clone()));
     let releases = match releases {
         Ok(releases) => releases,
         Err(error) => return Outcome::Failed(error),
@@ -684,8 +818,14 @@ fn check_and_download(trigger: Trigger) -> Outcome {
     let target = update_channel::select(&releases, slot);
     let held = load_held().filter(|held| package_exists(&locator, held));
     // A package Velopack no longer has is not ready to install.
-    set_state(|state| state.held = held.clone());
-    let (tag, switch_back) = match plan(&installed, slot, target.as_ref(), held.as_ref(), trigger) {
+    update_check(check, |updater| updater.held = held.clone());
+    let (tag, switch_back) = match plan(
+        &installed,
+        slot,
+        target.as_ref(),
+        held.as_ref(),
+        check.trigger,
+    ) {
         Plan::Done(outcome) => return outcome,
         Plan::Download { tag, switch_back } => (tag, switch_back),
     };
@@ -701,7 +841,7 @@ fn check_and_download(trigger: Trigger) -> Outcome {
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => {
             let target = &update.TargetFullRelease;
-            if let Err(error) = download(&manager, &update, switch_back) {
+            if let Err(error) = download(check, &manager, &update, switch_back) {
                 return Outcome::Failed(error.to_string());
             }
             let held = Held {
@@ -711,7 +851,7 @@ fn check_and_download(trigger: Trigger) -> Outcome {
                 switch_back,
             };
             save_held(&held);
-            set_state(|state| state.held = Some(held.clone()));
+            update_check(check, |updater| updater.held = Some(held.clone()));
             if switch_back {
                 Outcome::SwitchReady(held.version)
             } else {
@@ -727,16 +867,19 @@ fn check_and_download(trigger: Trigger) -> Outcome {
 
 /// Downloads `update`, keeping [`State::download`]'s percent current.
 fn download(
+    check: Check,
     manager: &UpdateManager,
     update: &velopack::UpdateInfo,
     switch_back: bool,
 ) -> Result<(), velopack::Error> {
-    set_state(|state| {
-        state.download = Some(Download {
-            version: update.TargetFullRelease.Version.clone(),
-            switch_back,
-            percent: None,
-        });
+    update_check(check, |updater| {
+        if check.generation == updater.generation {
+            updater.download = Some(Download {
+                version: update.TargetFullRelease.Version.clone(),
+                switch_back,
+                percent: None,
+            });
+        }
     });
     let (progress, percents) = std::sync::mpsc::channel::<i16>();
     // Ends when Velopack drops the sender, at the end of the download.
@@ -748,7 +891,7 @@ fn download(
                 let percent = u8::try_from(percent.clamp(0, 100)).unwrap_or(0);
                 if last != Some(percent) {
                     last = Some(percent);
-                    set_percent(percent);
+                    set_percent(check, percent);
                 }
             }
         });
@@ -861,6 +1004,232 @@ fn log(trigger: Trigger, outcome: &Outcome) {
 mod tests {
     use super::*;
 
+    const INSTALLED: &str = "0.2.0";
+
+    fn finish(updater: &mut Coordinator, check: Check, outcome: Outcome) -> Option<Check> {
+        updater.finish(check, outcome, SystemTime::UNIX_EPOCH)
+    }
+
+    #[test]
+    fn a_selection_change_in_flight_checks_the_new_slot_before_settling() {
+        let mut updater = Coordinator::default();
+        let old = updater.request(Trigger::Startup, INSTALLED).unwrap();
+        assert_eq!(old.slot, Slot::STABLE_LATEST);
+        updater.download = Some(Download {
+            version: "0.3.0".into(),
+            switch_back: false,
+            percent: Some(20),
+        });
+        let before = updater.snapshot();
+        assert_eq!(
+            updater.select(UpdateSettings::picked(Slot::BETA_LATEST), INSTALLED),
+            None
+        );
+        assert!(updater.snapshot().checking);
+        assert!(
+            settings_changed(&before, &updater.snapshot()),
+            "selection invalidates the ready cache"
+        );
+        updater.percent(old, 100);
+        assert_eq!(
+            updater.download, None,
+            "the old generation's progress is hidden"
+        );
+        // The old download can still finish physically. It stays recorded
+        // for its own slot while the selected slot's follow-up runs.
+        updater.held = Some(held("0.3.0", old.slot, false));
+        let new = finish(&mut updater, old, Outcome::UpToDate(INSTALLED.into())).unwrap();
+        assert_eq!(new.slot, Slot::BETA_LATEST);
+        assert_eq!(new.trigger, Trigger::Selection);
+        assert!(
+            updater.snapshot().checking,
+            "the next worker is already reserved"
+        );
+        assert_eq!(
+            updater.last, None,
+            "the old slot cannot answer for the new one"
+        );
+        assert!(updater.held.as_ref().unwrap().is_for(old.slot));
+        assert_eq!(
+            ready_in(INSTALLED, &updater.selection, &updater.snapshot()),
+            None
+        );
+        assert_eq!(
+            finish(
+                &mut updater,
+                new,
+                Outcome::NothingPublished(new.slot.to_string())
+            ),
+            None
+        );
+        let state = updater.snapshot();
+        assert!(!state.checking);
+        assert_eq!(state.last.unwrap().slot, Slot::BETA_LATEST);
+        assert_eq!(state.finished, 2);
+    }
+
+    #[test]
+    fn an_idle_selection_change_invalidates_the_previous_result() {
+        let mut updater = Coordinator::default();
+        let check = updater.request(Trigger::Menu, INSTALLED).unwrap();
+        finish(&mut updater, check, Outcome::UpToDate(INSTALLED.into()));
+        // An explicit pick of the inferred slot only changes the label.
+        assert_eq!(
+            updater.select(UpdateSettings::picked(check.slot), INSTALLED),
+            None
+        );
+        assert!(updater.last.is_some());
+        assert!(!updater.snapshot().checking);
+        let next = updater
+            .select(UpdateSettings::picked(Slot::BETA_LATEST), INSTALLED)
+            .unwrap();
+        assert_eq!(updater.last, None);
+        assert!(updater.snapshot().checking);
+        finish(&mut updater, next, Outcome::Failed("offline".into()));
+        assert_eq!(updater.last.unwrap().slot, next.slot);
+    }
+
+    #[test]
+    fn rapid_selection_changes_coalesce_even_when_returning_to_the_original_slot() {
+        let mut updater = Coordinator::default();
+        let old = updater.request(Trigger::Startup, INSTALLED).unwrap();
+        for slot in [
+            Slot::BETA_LATEST,
+            Slot::BETA_PRERELEASE,
+            Slot::STABLE_LATEST,
+        ] {
+            assert_eq!(
+                updater.select(UpdateSettings::picked(slot), INSTALLED),
+                None
+            );
+            assert_eq!(updater.queued.unwrap().slot, slot);
+        }
+        let new = finish(&mut updater, old, Outcome::UpToDate(INSTALLED.into())).unwrap();
+        assert_eq!(new.slot, old.slot);
+        assert_ne!(new.generation, old.generation);
+        assert_eq!(
+            updater.last, None,
+            "returning to A does not revive A's old check"
+        );
+        assert_eq!(updater.queued, None, "only the final selection is checked");
+        finish(&mut updater, new, Outcome::UpToDate(INSTALLED.into()));
+        assert_eq!(updater.finished, 2);
+    }
+
+    #[test]
+    fn manual_requests_during_auto_checks_retain_downgrade_permission() {
+        let target = Release::new("v0.1.0", false);
+        for automatic in [Trigger::Startup, Trigger::Timer, Trigger::Selection] {
+            for manual in [Trigger::Menu, Trigger::Settings] {
+                let mut updater = Coordinator::default();
+                let old = updater.request(automatic, INSTALLED).unwrap();
+                assert_eq!(
+                    plan(INSTALLED, old.slot, Some(&target), None, old.trigger),
+                    Plan::Done(Outcome::UpToDate(INSTALLED.into()))
+                );
+                assert_eq!(updater.request(manual, INSTALLED), None);
+                let queued = updater.queued.unwrap();
+                // Repeated clicks and timer ticks cannot add more work or
+                // strip the manual request's permission.
+                updater.request(manual, INSTALLED);
+                updater.request(Trigger::Timer, INSTALLED);
+                assert_eq!(updater.queued, Some(queued));
+                let next = finish(&mut updater, old, Outcome::UpToDate(INSTALLED.into())).unwrap();
+                assert_eq!(next, queued);
+                assert_eq!(
+                    plan(INSTALLED, next.slot, Some(&target), None, next.trigger),
+                    Plan::Download {
+                        tag: target.tag.clone(),
+                        switch_back: true
+                    }
+                );
+                assert_eq!(updater.request(manual, INSTALLED), None);
+                assert_eq!(
+                    updater.queued, None,
+                    "an active manual check can answer repeated clicks"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_manual_follow_up_is_upgraded_only_for_its_own_selection() {
+        let mut updater = Coordinator::default();
+        let old = updater.request(Trigger::Startup, INSTALLED).unwrap();
+        updater.select(UpdateSettings::picked(Slot::BETA_LATEST), INSTALLED);
+        updater.request(Trigger::Menu, INSTALLED);
+        assert!(updater.queued.unwrap().trigger.is_manual());
+        updater.select(UpdateSettings::picked(Slot::BETA_PRERELEASE), INSTALLED);
+        let next = finish(&mut updater, old, Outcome::UpToDate(INSTALLED.into())).unwrap();
+        assert_eq!(next.slot, Slot::BETA_PRERELEASE);
+        assert_eq!(
+            next.trigger,
+            Trigger::Selection,
+            "manual permission cannot cross slots"
+        );
+    }
+
+    #[test]
+    fn late_completions_and_progress_cannot_clobber_a_new_worker() {
+        let mut updater = Coordinator::default();
+        let old = updater.request(Trigger::Startup, INSTALLED).unwrap();
+        updater.request(Trigger::Menu, INSTALLED);
+        let next = finish(&mut updater, old, Outcome::UpToDate(INSTALLED.into())).unwrap();
+        updater.download = Some(Download {
+            version: "0.1.0".into(),
+            switch_back: true,
+            percent: Some(20),
+        });
+        let before = updater.snapshot();
+        assert_eq!(
+            finish(&mut updater, old, Outcome::Failed("late failure".into())),
+            None
+        );
+        updater.percent(old, 100);
+        assert_eq!(updater.snapshot(), before);
+        updater.percent(next, 40);
+        assert_eq!(updater.download.as_ref().unwrap().percent, Some(40));
+        finish(&mut updater, next, Outcome::SwitchReady("0.1.0".into()));
+        let before = updater.snapshot();
+        // The other ordering: an old completion after the new one ended.
+        finish(&mut updater, old, Outcome::Failed("late failure".into()));
+        assert_eq!(updater.snapshot(), before);
+        // And after an independent new request has already started.
+        let newest = updater.request(Trigger::Timer, INSTALLED).unwrap();
+        let before = updater.snapshot();
+        finish(&mut updater, next, Outcome::Failed("late failure".into()));
+        assert_eq!(updater.snapshot(), before);
+        assert_eq!(updater.active, Some(newest));
+    }
+
+    #[test]
+    fn checking_and_restarting_do_not_own_the_held_package() {
+        let package = held("0.3.0", Slot::STABLE_LATEST, false);
+        let mut updater = Coordinator {
+            held: Some(package.clone()),
+            ..Coordinator::default()
+        };
+        let check = updater.request(Trigger::Timer, INSTALLED).unwrap();
+        assert!(ready_in(INSTALLED, &updater.selection, &updater.snapshot()).is_some());
+        assert!(updater.begin_restart());
+        assert!(!updater.begin_restart());
+        finish(&mut updater, check, Outcome::Failed("offline".into()));
+        assert_eq!(updater.held, Some(package.clone()));
+        assert!(updater.snapshot().restarting);
+        updater.restarting = false;
+        assert!(updater.begin_restart(), "a failed restart can be retried");
+        let new = updater
+            .select(UpdateSettings::picked(Slot::BETA_LATEST), INSTALLED)
+            .unwrap();
+        assert_eq!(updater.held, Some(package));
+        assert_eq!(
+            ready_in(INSTALLED, &updater.selection, &updater.snapshot()),
+            None
+        );
+        finish(&mut updater, new, Outcome::Failed("offline".into()));
+        assert!(updater.held.is_some());
+    }
+
     /// A download's percent is the toast's alone; everything else is
     /// Settings › Updates' too, so only those changes rebuild the pane.
     #[test]
@@ -898,7 +1267,11 @@ mod tests {
         });
         assert!(settings_changed(&downloading, &held), "held");
         let mut answered = downloading.clone();
-        answered.last = Some((SystemTime::UNIX_EPOCH, Outcome::UpToDate("0.14.0".into())));
+        answered.last = Some(LastCheck {
+            at: SystemTime::UNIX_EPOCH,
+            slot: Slot::STABLE_LATEST,
+            outcome: Outcome::UpToDate("0.14.0".into()),
+        });
         assert!(settings_changed(&downloading, &answered), "last");
         let mut restarting = downloading.clone();
         restarting.restarting = true;
@@ -981,8 +1354,11 @@ mod tests {
     fn a_dev_build_reports_it_is_not_installed() {
         // The test binary is not in a Velopack layout, so the manager cannot
         // load and nothing reaches the network.
+        let check = Coordinator::default()
+            .request(Trigger::Menu, INSTALLED)
+            .unwrap();
         assert!(matches!(
-            check_and_download(Trigger::Menu),
+            check_and_download(check),
             Outcome::NotInstalled(_)
         ));
     }
