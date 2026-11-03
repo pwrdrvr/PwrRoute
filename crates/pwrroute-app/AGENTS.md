@@ -1007,7 +1007,7 @@ their own modules.
   on quit. `updater::ready` is the downloaded release this slot offers
   (`ready_in`, the filter Settings › Updates uses); it reads the manifest
   from disk, so surfaces read `update_notice`'s cache instead. Every
-  `set_state` wakes the `on_change` listeners, but Settings › Updates is
+  state transition wakes the `on_change` listeners, but Settings › Updates is
   rebuilt (another manifest read) only when `settings_changed` says it
   draws the change: a download's percent is the toast's alone, so its
   ticks skip the pane, and `update_notice::follow` keeps its cached ready

@@ -59,7 +59,8 @@ pub fn build(
     // A download for another slot is neither shown nor installed: the
     // rule the toast, the tray and the strip follow too.
     let held = updater::ready_in(&version, selection, state);
-    let state_shown = match (not_updatable, state.checking, held.as_ref(), &state.last) {
+    let last = state.last.as_ref().filter(|last| last.slot == slot);
+    let state_shown = match (not_updatable, state.checking, held.as_ref(), last) {
         (Some(why), _, _, _) => UpdateState::NotUpdatable(why.into()),
         (None, true, _, _) => UpdateState::Checking,
         (None, false, Some(held), _) if held.switch_back => {
@@ -67,14 +68,12 @@ pub fn build(
         }
         (None, false, Some(held), _) => UpdateState::Ready(held.version.clone().into()),
         (None, false, None, None) => UpdateState::NeverChecked,
-        (None, false, None, Some((_, outcome))) => match outcome {
+        (None, false, None, Some(last)) => match &last.outcome {
             Outcome::AlreadyChecking => UpdateState::Checking,
             Outcome::NotInstalled(why) => {
                 UpdateState::NotUpdatable(format!("This copy cannot update itself: {why}.").into())
             }
             Outcome::NothingPublished(_) => UpdateState::NothingPublished,
-            // Ready for the slot it was held for: up to date on this one
-            // until the check the new pick started says otherwise.
             Outcome::UpToDate(_)
             | Outcome::Downloaded(_)
             | Outcome::Pending(_)
@@ -91,7 +90,7 @@ pub fn build(
         version: version.into(),
         install: install.into(),
         state: state_shown,
-        last_checked: state.last.as_ref().map(|(at, _)| clock(*at, now)),
+        last_checked: last.map(|last| clock(last.at, now)),
     }
 }
 
@@ -195,7 +194,7 @@ mod tests {
 
     use super::*;
     use crate::update_channel::Release;
-    use crate::updater::Held;
+    use crate::updater::{Held, LastCheck};
 
     fn velopack(version: &str) -> Installation {
         Installation::Velopack {
@@ -210,7 +209,11 @@ mod tests {
     fn state(checking: bool, last: Option<(SystemTime, Outcome)>) -> State {
         State {
             checking,
-            last,
+            last: last.map(|(at, outcome)| LastCheck {
+                at,
+                slot: Slot::STABLE_LATEST,
+                outcome,
+            }),
             ..State::default()
         }
     }
@@ -348,10 +351,11 @@ mod tests {
     fn a_download_shows_only_for_the_slot_it_was_held_for() {
         let now = local(12, 0, 0);
         let with = |held: Held| State {
-            last: Some((
-                SystemTime::from(now),
-                Outcome::Downloaded(held.version.clone()),
-            )),
+            last: Some(LastCheck {
+                at: SystemTime::from(now),
+                slot: Slot::from_key(&held.slot).unwrap(),
+                outcome: Outcome::Downloaded(held.version.clone()),
+            }),
             held: Some(held),
             ..State::default()
         };
@@ -382,6 +386,22 @@ mod tests {
             now,
         );
         assert_eq!(model.state, UpdateState::SwitchReady("0.0.9".into()));
+    }
+
+    #[test]
+    fn another_slots_outcome_and_timestamp_never_describe_the_selected_slot() {
+        let now = local(12, 0, 0);
+        let beta = UpdateSettings::picked(Slot::BETA_LATEST);
+        for outcome in [
+            Outcome::UpToDate("0.2.0".into()),
+            Outcome::NothingPublished(Slot::STABLE_LATEST.to_string()),
+            Outcome::Failed("offline".into()),
+        ] {
+            let old = state(false, Some((SystemTime::from(now), outcome)));
+            let model = build(&velopack("0.2.0"), &beta, &old, now);
+            assert_eq!(model.state, UpdateState::NeverChecked);
+            assert_eq!(model.last_checked, None);
+        }
     }
 
     #[test]
