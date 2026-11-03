@@ -619,9 +619,11 @@ fn use_folder_config(root: &Path, name: &str, cx: &mut App) -> anyhow::Result<()
     if !source.dismissed.contains(&path) {
         source.dismissed.push(path);
     }
-    crate::importer_view::set_source_and_show(source, cx);
+    let source_saved = crate::importer_view::set_source_and_show(source, cx);
     super::configuration_host::refresh(cx);
-    Ok(())
+    source_saved
+        .map_err(anyhow::Error::msg)
+        .context("Config copied; retry saving its source from Rules")
 }
 
 /// Writes `bytes` to `path` whole or not at all, and never over a file

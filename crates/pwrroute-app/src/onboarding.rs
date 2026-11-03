@@ -122,13 +122,21 @@ fn edit_state(dir: Option<&Path>, edit: impl FnOnce(&mut State)) {
     let Some(dir) = dir else {
         return;
     };
-    let result = State::load(dir).and_then(|mut state| {
-        edit(&mut state);
-        state.save(dir)
-    });
+    let result = save_state(Some(dir), edit);
     if let Err(error) = result {
         log::warn!("cannot save first-run state: {error:#}");
     }
+}
+
+/// Persist a source-choice answer before reporting that step complete.
+fn save_state(dir: Option<&Path>, edit: impl FnOnce(&mut State)) -> Result<(), String> {
+    let dir = dir.ok_or("no data directory: first-run choice is not saved")?;
+    State::load(dir)
+        .and_then(|mut state| {
+            edit(&mut state);
+            state.save(dir)
+        })
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// Loads, edits and saves `rules.json`; `Err` is why it was not saved,
@@ -479,7 +487,8 @@ pub type OpenMain = Rc<dyn Fn(Option<DisplayId>, &mut App)>;
 /// (`importer_view::set_source`, which calls `router::choose_source`), and
 /// shows an open main window the config now in charge
 /// (`importer_view::set_source_and_show`).
-pub type SetSource = Rc<dyn Fn(crate::settings_store::SourceSettings, &mut App)>;
+pub type SetSource =
+    Rc<dyn Fn(crate::settings_store::SourceSettings, &mut App) -> Result<(), String>>;
 
 /// `rules.json` after an import, for the window: its rules and default.
 fn imported(count: usize, keeps_config: bool, rules_path: Option<&Path>) -> Imported {
@@ -513,6 +522,8 @@ pub fn hooks_with(
     let fallback_rules = rules_path.clone();
     let precedence_rules = rules_path.clone();
     let copy_rules_path = rules_path.clone();
+    let pending_import = Rc::new(std::cell::RefCell::new(None::<Imported>));
+    let import_session = crate::importer_view::ImportSession::default();
     FirstRunHooks {
         on_import_rules: Rc::new(move |path, reply, cx| {
             let rules = copy_rules_path.clone();
@@ -522,6 +533,7 @@ pub fn hooks_with(
                     crate::importer_view::ImportOutcome::Imported {
                         count,
                         keeps_config,
+                        source_error,
                     } => {
                         let config = crate::router::config_in_charge();
                         let file = rules
@@ -546,6 +558,10 @@ pub fn hooks_with(
                             Err(_) => format!(
                                 "Copied {count} entries. Saved examples and tests could not run; see Rules for details."
                             ),
+                        };
+                        let summary = match source_error {
+                            Some(reason) => format!("{summary} {reason}"),
+                            None => summary,
                         };
                         Some((imported(count, keeps_config, rules.as_deref()), summary))
                     }
@@ -572,22 +588,52 @@ pub fn hooks_with(
             })
         }),
         on_import: Rc::new(move |choice, reply, cx| match choice {
-            ImportChoice::KeepFile => {
-                edit_state(import_dir.as_deref(), |state| state.import = Some(choice));
-            }
-            // The router stops reading the config, from the next link.
-            ImportChoice::DontUse => {
-                edit_state(import_dir.as_deref(), |state| state.import = Some(choice));
-                let mut source = crate::settings_store::store(cx)
-                    .map(|store| store.read(cx).settings().source.clone())
-                    .unwrap_or_default();
-                source.visual_only = true;
-                source.config = None;
-                set_source(source, cx);
+            ImportChoice::KeepFile | ImportChoice::DontUse => {
+                let result = (|| {
+                    let mut source = crate::settings_store::store(cx)
+                        .map(|store| store.read(cx).settings().source.clone())
+                        .unwrap_or_default();
+                    source.visual_only = choice == ImportChoice::DontUse;
+                    source.config = if source.visual_only {
+                        None
+                    } else {
+                        config.clone()
+                    };
+                    set_source(source, cx)?;
+                    save_state(import_dir.as_deref(), |state| state.import = Some(choice))
+                        .map_err(|reason| format!("Source saved, but the first-run choice was not saved: {reason}. Try again."))
+                })();
+                let outcome = match result {
+                    Ok(()) => ImportOutcome::Chosen(choice),
+                    Err(reason) => ImportOutcome::Failed {
+                        imported: None,
+                        reason,
+                    },
+                };
+                cx.defer(move |cx| reply(outcome, cx));
             }
             // The importer on Choose source, every proven rule checked; it
             // writes rules.json and answers when it closes.
             ImportChoice::Import => {
+                let retry = pending_import.borrow().clone();
+                if let Some(done) = retry {
+                    let outcome = match import_session.revalidate_completed(cx) {
+                        Ok(()) => record_import(import_dir.as_deref(), done, &pending_import),
+                        Err(reason) => {
+                            pending_import.borrow_mut().take();
+                            import_session.clear();
+                            ImportOutcome::Failed {
+                                imported: None,
+                                reason,
+                            }
+                        }
+                    };
+                    if matches!(outcome, ImportOutcome::Imported(_)) {
+                        import_session.clear();
+                    }
+                    cx.defer(move |cx| reply(outcome, cx));
+                    return;
+                }
                 // Answered on the next turn: the window is still mid-update.
                 let Some(path) = config.clone() else {
                     cx.defer(move |cx| reply(ImportOutcome::Cancelled, cx));
@@ -595,24 +641,37 @@ pub fn hooks_with(
                 };
                 let dir = import_dir.clone();
                 let rules = rules_path.clone();
+                let pending = pending_import.clone();
+                let completion_session = import_session.clone();
                 let on_done: crate::importer_view::OnDone = Rc::new(move |outcome, cx| {
                     let outcome = match outcome {
                         crate::importer_view::ImportOutcome::Cancelled => ImportOutcome::Cancelled,
                         crate::importer_view::ImportOutcome::Imported {
                             count,
                             keeps_config,
+                            source_error,
                         } => {
-                            edit_state(dir.as_deref(), |state| {
-                                state.import = Some(ImportChoice::Import);
-                            });
-                            ImportOutcome::Imported(imported(count, keeps_config, rules.as_deref()))
+                            let done = imported(count, keeps_config, rules.as_deref());
+                            match source_error {
+                                Some(reason) => ImportOutcome::Failed {
+                                    imported: Some(done),
+                                    reason,
+                                },
+                                None => record_import(dir.as_deref(), done, &pending),
+                            }
                         }
                     };
+                    if matches!(outcome, ImportOutcome::Imported(_)) {
+                        completion_session.clear();
+                    }
                     reply(outcome, cx);
                 });
                 let rules = rules_path.clone();
+                let session = import_session.clone();
                 cx.defer(move |cx| {
-                    crate::importer_view::open_from_first_run(path, rules, on_done, cx);
+                    crate::importer_view::open_from_first_run_session(
+                        path, rules, on_done, session, cx,
+                    );
                 });
             }
         }),
@@ -650,6 +709,30 @@ pub fn hooks_with(
             mark_completed(finish_dir.as_deref());
             open_main(finished.display, cx);
         }),
+    }
+}
+
+/// Rules and source are already saved. Retrying a failed state write must
+/// only record the answer, without importing the same group a second time.
+fn record_import(
+    dir: Option<&Path>,
+    done: Imported,
+    pending: &std::cell::RefCell<Option<Imported>>,
+) -> ImportOutcome {
+    match save_state(dir, |state| state.import = Some(ImportChoice::Import)) {
+        Ok(()) => {
+            pending.take();
+            ImportOutcome::Imported(done)
+        }
+        Err(reason) => {
+            *pending.borrow_mut() = Some(done.clone());
+            ImportOutcome::Failed {
+                imported: Some(done),
+                reason: format!(
+                    "Rules and source saved, but the first-run choice was not saved: {reason}. Try Import again to save the choice."
+                ),
+            }
+        }
     }
 }
 
@@ -797,9 +880,412 @@ mod tests {
         }
     }
 
-    /// A `set_source` for tests that never turn the config off.
+    /// A successful source sink for tests; never changes the process router.
     fn no_source() -> SetSource {
-        Rc::new(|_, _| panic!("this test turns no config off"))
+        Rc::new(|_, _| Ok(()))
+    }
+
+    /// A private directory at the staging-file path makes the save fail on
+    /// every platform, including when the test runs as root.
+    #[gpui_kit::test]
+    fn keep_file_is_not_complete_when_its_state_cannot_be_saved(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("state.json.saving")).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            None,
+            Some(importer_config()),
+            no_source(),
+            Rc::new(|_, _| {}),
+        );
+        let window = cx.update(|cx| first_run::open(FirstRunModel::fixture(), hooks, cx).unwrap());
+        let mut view = VisualTestContext::from_window(window.into(), cx);
+        press(&mut view, "first-run-keep");
+        assert_eq!(
+            window
+                .read_with(&view, |view, _| view.model.import)
+                .unwrap(),
+            None,
+            "an unsaved choice must leave the config step pending"
+        );
+        assert_eq!(State::load(dir.path()).unwrap().import, None);
+        assert!(
+            window
+                .read_with(&view, |view, _| view.model.import_error.is_some())
+                .unwrap()
+        );
+        assert!(view.debug_bounds("first-run-config-error").is_some());
+        fs::remove_dir(dir.path().join("state.json.saving")).unwrap();
+        press(&mut view, "first-run-keep");
+        assert_eq!(
+            window
+                .read_with(&view, |view, _| view.model.import)
+                .unwrap(),
+            Some(ImportChoice::KeepFile)
+        );
+        assert!(
+            window
+                .read_with(&view, |view, _| view.model.import_error.is_none())
+                .unwrap()
+        );
+        assert_eq!(
+            State::load(dir.path()).unwrap().import,
+            Some(ImportChoice::KeepFile)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn dont_use_reports_session_only_and_retries_the_equal_runtime_source(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let config = importer_config();
+        let mut store = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        store
+            .update(|settings| settings.source.config = Some(config.clone()))
+            .unwrap();
+        cx.update(|cx| crate::settings_store::install(store, None, cx));
+        fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            None,
+            Some(config.clone()),
+            Rc::new(crate::importer_view::set_source_and_show),
+            Rc::new(|_, _| {}),
+        );
+        let window = cx.update(|cx| first_run::open(FirstRunModel::fixture(), hooks, cx).unwrap());
+        let mut view = VisualTestContext::from_window(window.into(), cx);
+        press(&mut view, "first-run-dont-use");
+        assert_eq!(
+            window
+                .read_with(&view, |view, _| view.model.import)
+                .unwrap(),
+            None
+        );
+        let error = window
+            .read_with(&view, |view, _| view.model.import_error.clone())
+            .unwrap()
+            .unwrap();
+        assert!(error.contains("session only"), "{error}");
+        assert!(view.update(|_, cx| {
+            crate::settings_store::store(cx)
+                .unwrap()
+                .read(cx)
+                .settings()
+                .source
+                .visual_only
+        }));
+        let disk = crate::settings_store::Settings::load(dir.path()).unwrap();
+        assert!(!disk.source.visual_only);
+        assert_eq!(disk.source.config, Some(config));
+        assert_eq!(State::load(dir.path()).unwrap().import, None);
+        fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
+        press(&mut view, "first-run-dont-use");
+        assert_eq!(
+            window
+                .read_with(&view, |view, _| view.model.import)
+                .unwrap(),
+            Some(ImportChoice::DontUse)
+        );
+        assert!(
+            crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source
+                .visual_only
+        );
+        assert_eq!(
+            State::load(dir.path()).unwrap().import,
+            Some(ImportChoice::DontUse)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn source_retry_after_import_never_writes_the_rules_again(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        for close_before_retry in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let rules = dir.path().join("rules.json");
+            let mut settings =
+                crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+            settings
+                .update(|settings| settings.source.config = Some(importer_config()))
+                .unwrap();
+            cx.update(|cx| crate::settings_store::install(settings, None, cx));
+            fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
+            let hooks = hooks_with(
+                Some(dir.path().to_path_buf()),
+                Some(rules.clone()),
+                Some(importer_config()),
+                no_source(),
+                Rc::new(|_, _| panic!("import opens no main window")),
+            );
+            let replies = Rc::new(RefCell::new(Vec::new()));
+            let heard = replies.clone();
+            cx.update(|cx| {
+                (hooks.on_import)(
+                    ImportChoice::Import,
+                    Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                    cx,
+                )
+            });
+            let window = importer_window(cx).unwrap();
+            window
+                .update(cx, |view, _, _| {
+                    view.model.source = crate::importer::SourceChoice::VisualOnly
+                })
+                .unwrap();
+            let mut review = VisualTestContext::from_window(window.into(), cx);
+            press(&mut review, crate::importer_view::NEXT_ID);
+            let window = importer_window(cx).expect("source failure keeps the importer open");
+            let written = fs::read(&rules).unwrap();
+            let count = RulesFile::load(&rules).unwrap().rules.len();
+            assert!(count > 0);
+            let reason = window
+                .read_with(cx, |view, _| view.model.refused.clone())
+                .unwrap()
+                .unwrap();
+            assert!(
+                reason.contains("saved to rules.json") && reason.contains("session only"),
+                "{reason}"
+            );
+            assert!(
+                replies.borrow().is_empty(),
+                "not reported as a completed import"
+            );
+            assert_eq!(State::load(dir.path()).unwrap().import, None);
+            let window = if close_before_retry {
+                window
+                    .update(cx, |_, window, _| window.remove_window())
+                    .unwrap();
+                cx.run_until_parked();
+                assert!(matches!(
+                    replies.borrow().as_slice(),
+                    [ImportOutcome::Failed {
+                        imported: Some(_),
+                        ..
+                    }]
+                ));
+                let heard = replies.clone();
+                cx.update(|cx| {
+                    (hooks.on_import)(
+                        ImportChoice::Import,
+                        Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                        cx,
+                    )
+                });
+                importer_window(cx).expect("reopening resumes the saved source stage")
+            } else {
+                window
+            };
+            let mut review = VisualTestContext::from_window(window.into(), cx);
+            press(&mut review, "importer-source-0");
+            assert_eq!(
+                window.read_with(cx, |view, _| view.model.source).unwrap(),
+                crate::importer::SourceChoice::VisualOnly,
+                "a pending source stage retains the choice that already applied to the session"
+            );
+            // A source-only retry succeeds even though any rules write would fail.
+            fs::create_dir(dir.path().join("rules.json.saving")).unwrap();
+            fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
+            let mut review = VisualTestContext::from_window(window.into(), cx);
+            press(&mut review, crate::importer_view::NEXT_ID);
+            assert!(importer_window(cx).is_none());
+            assert_eq!(fs::read(&rules).unwrap(), written);
+            let replies = replies.borrow();
+            let Some(ImportOutcome::Imported(done)) = replies.last() else {
+                panic!("{replies:?}")
+            };
+            assert_eq!(replies.len(), if close_before_retry { 2 } else { 1 });
+            assert_eq!(done.rules, count);
+            assert!(done.count > 0);
+            assert!(!done.keeps_config);
+            assert!(
+                crate::settings_store::Settings::load(dir.path())
+                    .unwrap()
+                    .source
+                    .visual_only
+            );
+            assert_eq!(
+                State::load(dir.path()).unwrap().import,
+                Some(ImportChoice::Import)
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn import_state_retry_does_not_reopen_or_reimport(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let rules = dir.path().join("rules.json");
+        let mut settings =
+            crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        settings
+            .update(|settings| settings.source.config = Some(importer_config()))
+            .unwrap();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        fs::create_dir(dir.path().join("state.json.saving")).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            Some(rules.clone()),
+            Some(importer_config()),
+            no_source(),
+            Rc::new(|_, _| {}),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let start = |cx: &mut TestAppContext| {
+            let heard = replies.clone();
+            cx.update(|cx| {
+                (hooks.on_import)(
+                    ImportChoice::Import,
+                    Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                    cx,
+                )
+            });
+        };
+        start(cx);
+        let window = importer_window(cx).unwrap();
+        let mut review = VisualTestContext::from_window(window.into(), cx);
+        press(&mut review, crate::importer_view::NEXT_ID);
+        assert!(importer_window(cx).is_none());
+        assert!(matches!(
+            replies.borrow().as_slice(),
+            [ImportOutcome::Failed {
+                imported: Some(_),
+                ..
+            }]
+        ));
+        let written = fs::read(&rules).unwrap();
+        fs::create_dir(dir.path().join("rules.json.saving")).unwrap();
+        fs::remove_dir(dir.path().join("state.json.saving")).unwrap();
+        start(cx);
+        assert!(importer_window(cx).is_none());
+        assert!(matches!(
+            replies.borrow().as_slice(),
+            [_, ImportOutcome::Imported(_)]
+        ));
+        assert_eq!(fs::read(&rules).unwrap(), written);
+        assert_eq!(
+            State::load(dir.path()).unwrap().import,
+            Some(ImportChoice::Import)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn review_cached_import_cannot_complete_after_a_competing_source_choice(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let rules = dir.path().join("rules.json");
+        let mut settings =
+            crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        settings
+            .update(|settings| settings.source.config = Some(importer_config()))
+            .unwrap();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        fs::create_dir(dir.path().join("state.json.saving")).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            Some(rules.clone()),
+            Some(importer_config()),
+            Rc::new(crate::importer_view::set_source_and_show),
+            Rc::new(|_, _| {}),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let choose = |choice, cx: &mut TestAppContext| {
+            let heard = replies.clone();
+            cx.update(|cx| {
+                (hooks.on_import)(
+                    choice,
+                    Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                    cx,
+                )
+            });
+        };
+        choose(ImportChoice::Import, cx);
+        let window = importer_window(cx).unwrap();
+        window
+            .update(cx, |view, _, _| {
+                view.model.source = crate::importer::SourceChoice::VisualOnly
+            })
+            .unwrap();
+        let mut importer = VisualTestContext::from_window(window.into(), cx);
+        press(&mut importer, crate::importer_view::NEXT_ID);
+        assert!(
+            crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source
+                .visual_only
+        );
+        let written = fs::read(&rules).unwrap();
+        choose(ImportChoice::KeepFile, cx);
+        assert!(
+            !crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source
+                .visual_only
+        );
+        fs::remove_dir(dir.path().join("state.json.saving")).unwrap();
+        choose(ImportChoice::Import, cx);
+        assert!(
+            matches!(replies.borrow().last(), Some(ImportOutcome::Failed { .. })),
+            "cached visual-only completion must be rejected after Keep changed the source: {:?}",
+            replies.borrow()
+        );
+        assert_eq!(State::load(dir.path()).unwrap().import, None);
+        assert_eq!(fs::read(&rules).unwrap(), written);
+    }
+
+    #[gpui_kit::test]
+    fn review_cached_keep_detects_a_competing_equal_source(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings =
+            crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        settings
+            .update(|settings| settings.source.visual_only = true)
+            .unwrap();
+        let source = settings.settings().source.clone();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        fs::create_dir(dir.path().join("state.json.saving")).unwrap();
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            Some(dir.path().join("rules.json")),
+            Some(importer_config()),
+            Rc::new(crate::importer_view::set_source_and_show),
+            Rc::new(|_, _| {}),
+        );
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let choose = |choice, cx: &mut TestAppContext| {
+            let heard = replies.clone();
+            cx.update(|cx| {
+                (hooks.on_import)(
+                    choice,
+                    Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                    cx,
+                )
+            });
+        };
+        choose(ImportChoice::Import, cx);
+        let window = importer_window(cx).unwrap();
+        let mut importer = VisualTestContext::from_window(window.into(), cx);
+        press(&mut importer, crate::importer_view::NEXT_ID);
+        choose(ImportChoice::DontUse, cx);
+        // Selecting Don't use replaces any CLI override even though the
+        // source settings bytes equal the earlier Keep import's settings.
+        assert_eq!(
+            crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source,
+            source
+        );
+        fs::remove_dir(dir.path().join("state.json.saving")).unwrap();
+        choose(ImportChoice::Import, cx);
+        assert!(matches!(
+            replies.borrow().last(),
+            Some(ImportOutcome::Failed { .. })
+        ));
+        assert_eq!(State::load(dir.path()).unwrap().import, None);
     }
 
     #[test]
@@ -1017,6 +1503,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data_dir = dir.path().join("PwrRoute");
         let rules_path = data_dir.join("rules.json");
+        let mut settings = crate::settings_store::SettingsStore::load(Some(data_dir.clone()));
+        settings
+            .update(|settings| settings.source.config = Some(importer_config()))
+            .unwrap();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
         let hooks = hooks_with(
             Some(data_dir.clone()),
             Some(rules_path.clone()),
@@ -1186,7 +1677,10 @@ mod tests {
             Some(data_dir.clone()),
             None,
             Some(config),
-            Rc::new(move |source, _| saved.borrow_mut().push(source)),
+            Rc::new(move |source, _| {
+                saved.borrow_mut().push(source);
+                Ok(())
+            }),
             Rc::new(|_, _| {}),
         );
         let replies = Rc::new(RefCell::new(Vec::new()));
@@ -1210,12 +1704,14 @@ mod tests {
             State::load(&data_dir).unwrap().import,
             Some(ImportChoice::DontUse)
         );
-        // Answered at once: nothing to reply.
-        assert!(replies.borrow().is_empty());
+        assert_eq!(
+            *replies.borrow(),
+            [ImportOutcome::Chosen(ImportChoice::DontUse)]
+        );
 
-        // Keep changes no source.
+        // Keep explicitly restores the config, even after a session-only choice.
         cx.update(|cx| (hooks.on_import)(ImportChoice::KeepFile, Rc::new(|_, _| {}), cx));
-        assert_eq!(sources.borrow().len(), 1);
+        assert_eq!(sources.borrow().len(), 2);
     }
 
     /// The fixture config: its counts, its fixed default, what imports.
@@ -1348,6 +1844,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data_dir = dir.path().join("PwrRoute");
         let rules_path = data_dir.join("rules.json");
+        let mut settings = crate::settings_store::SettingsStore::load(Some(data_dir.clone()));
+        settings
+            .update(|settings| settings.source.config = Some(importer_config()))
+            .unwrap();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
         let hooks = hooks_with(
             Some(data_dir.clone()),
             Some(rules_path.clone()),

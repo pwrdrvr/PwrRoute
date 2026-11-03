@@ -587,9 +587,10 @@ impl PwrRoute {
         {
             source.dismissed.push(file);
         }
-        if let Some(config) = crate::importer_view::set_source(source, cx) {
-            self.set_config(config, cx);
-        }
+        let applied = crate::importer_view::set_source(source, cx);
+        self.set_config(applied.config, cx);
+        // A failed write keeps routing for this session. The source notice
+        // remains above the visual rules, with a persistence retry.
     }
 }
 
